@@ -1,10 +1,18 @@
-"""Sort kernels — sort_indices and sort for Marrow arrays.
+"""Sort kernels — the `SortIndices` kernel and the `sort` / `sort_indices`
+delegators.
 
-Phase 1: single-column sort_indices.
-  - Primitive arrays: PDQsort (pair-based) for N < 32768; parallel LSD radix for N ≥ 32768.
+`SortIndices.apply` holds the typed leaves:
+  - PrimitiveArray[T]: PDQsort (pair-based) for N < 32768; parallel LSD radix
+    for N ≥ 32768. Values wider than 64 bits (decimal128/256) have no UInt64
+    radix key and always take the comparison path.
   - BoolArray: O(N) counting sort.
-  - StringArray: stdlib comparison sort.
-Phase 2 (future): multi-column permutation refinement on StructArray.
+  - BinaryLikeArray[T]: stdlib comparison sort (bytewise lexicographic).
+
+`SortIndices.dispatch` resolves a runtime dtype through the `dispatch_over_*`
+family. Temporal, interval, and decimal32/64 columns sort through their
+order-preserving integer `storage_type()`; dictionary columns sort by their
+decoded values. `SortIndices.multi` composes single-column permutations into a
+multi-key ordering, and `sort` is `take` under that permutation.
 
 Measured throughput (int64, Apple M-series, parallel where applicable):
   N=1K:    7.9 µs PDQsort  vs Polars  14.7 µs (1.9x faster)
@@ -27,34 +35,27 @@ from std.algorithm.functional import sync_parallelize
 from std.sys import size_of
 
 from ..arrays import (
+    BinaryLikeArray,
     BoolArray,
     PrimitiveArray,
-    StringArray,
     StructArray,
     AnyArray,
     Int32Array,
 )
-from ..buffers import Buffer, Bitmap
+from ..buffers import Buffer
 from ..dtypes import (
+    BinaryLikeType,
+    NumericType,
     PrimitiveType,
     bool_ as bool_dt,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
-    string,
     Int32Type,
 )
-from ..builders import array as _primitive_array
+from ..utils import dispatch_over_binarylike, dispatch_over_numeric
+from .aggregate import reinterpret_array
+from .cast import cast
 from .execution import ExecutionContext
 from .filter import take as _take
+from .helpers import Kernel
 from .partition import radix_histogram
 
 
@@ -346,202 +347,429 @@ def _radix_sort_indices[
     return idx_buf^.to_immutable()
 
 
-def array(
-    sorted_valid: Buffer[],
-    n_valid: Int,
-    null_list: List[Int32],
-    n: Int,
-    nulls_first: Bool,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    """Merge sorted valid indices and null indices into the final Int32Array."""
-    var out = Buffer.alloc_uninit[DType.int32](n)
-    var ov = out.view[DType.int32](0, n)
-    var sv = sorted_valid.view[DType.int32](0, n_valid)
-    var n_null = n - n_valid
-    var null_off = 0 if nulls_first else n_valid
-    var valid_off = n_null if nulls_first else 0
-    for i in range(n_null):
-        ov.unsafe_set(null_off + i, null_list[i])
-    for i in range(n_valid):
-        ov.unsafe_set(valid_off + i, sv.unsafe_get(i))
-    return Int32Array(
-        length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=out^.to_immutable(),
-    )
+struct SortIndices(Kernel):
+    """Sort-permutation kernel — the indices that would sort a column.
 
+    The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
+    runtime-typed array to the matching leaf via the ``dispatch_over_*`` family
+    rather than a per-dtype ladder, so adding a dtype to a family covers it
+    without touching this file. ``multi`` composes single-column permutations
+    into a multi-key ordering.
 
-def sort_indices[
-    T: PrimitiveType
-](
-    arr: PrimitiveArray[T],
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    stable: Bool = False,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    """Return the indices that would sort a typed primitive array."""
-    var n = len(arr)
-    if n == 0:
-        return _primitive_array(int32)
+    Every entry point returns *indices* — materializing the sorted values is
+    ``take`` under the permutation, which is what the free ``sort`` does.
 
-    var n_null = arr.null_count()
-    var n_valid = n - n_null
+    Not sortable: the nested types (Arrow gives them no total order), `null`,
+    and the month-day-nano interval (>64 bits and outside the decimal family).
+    """
 
-    # Partition: collect valid and null original row indices in one scan.
-    var null_list = List[Int32](capacity=max(n_null, 1))
-    var valid_buf = Buffer.alloc_uninit[DType.int32](max(n_valid, 1))
-    var vv = valid_buf.view[DType.int32](0, n_valid)
-    var vi = 0
-    for i in range(n):
-        if arr.is_valid(i):
-            vv.unsafe_set(vi, Int32(i))
-            vi += 1
+    comptime name = "sort_indices"
+
+    @staticmethod
+    def dispatch(
+        array: AnyArray,
+        ascending: Bool = True,
+        nulls_first: Bool = True,
+        stable: Bool = False,
+        limit: Optional[Int] = None,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> Int32Array:
+        """Return the indices that would sort ``array``.
+
+        Args:
+            array: Input array (runtime-typed).
+            ascending: Sort direction. ``True`` = smallest first.
+            nulls_first: Where to place null elements in the output.
+            stable: Preserve relative order of equal elements.
+            limit: If set, return only the first ``limit`` indices (top-K).
+                Phase 1: implemented as full sort + truncation. Phase 3 will
+                add O(N) quickselect.
+            ctx: Execution context — controls CPU thread count and GPU device.
+
+        Returns:
+            Int32Array of sorted row indices (length = min(limit, len(array))).
+        """
+        var dt = array.dtype()
+        var result: Int32Array
+
+        if dt == bool_dt:
+            result = SortIndices.apply(
+                array.as_bool(), ascending, nulls_first, ctx
+            )
+        elif dt.is_numeric():
+
+            @parameter
+            def numeric[T: NumericType](d: T) raises -> Int32Array:
+                return SortIndices.apply(
+                    array.as_primitive[T](), ascending, nulls_first, stable, ctx
+                )
+
+            result = dispatch_over_numeric[numeric](dt)
+        elif dt.is_binary_like():
+
+            @parameter
+            def binarylike[T: BinaryLikeType](d: T) raises -> Int32Array:
+                return SortIndices.apply(
+                    array.as_binary_like[T](),
+                    ascending,
+                    nulls_first,
+                    stable,
+                    ctx,
+                )
+
+            result = dispatch_over_binarylike[binarylike](dt)
+        elif dt.is_dictionary():
+            # Order by the *decoded* values: dictionary index order is an
+            # encoding artefact (`ordered=False` is the norm), not a value order.
+            result = SortIndices.dispatch(
+                cast(array, dt.as_dictionary().value_type().copy(), False, ctx),
+                ascending,
+                nulls_first,
+                stable,
+                None,
+                ctx,
+            )
+        elif dt.is_decimal128():
+            result = SortIndices.apply(
+                array.as_decimal128(), ascending, nulls_first, stable, ctx
+            )
+        elif dt.is_decimal256():
+            result = SortIndices.apply(
+                array.as_decimal256(), ascending, nulls_first, stable, ctx
+            )
+        elif dt.is_primitive():
+            # Temporal, interval, and decimal32/64 are stored as signed integers
+            # of the same width, and that mapping is order-preserving — so sort
+            # the `storage_type()` reinterpretation and reuse the numeric leaf
+            # instead of instantiating one sort per logical dtype. The result is
+            # a permutation, so nothing has to be relabelled back.
+            result = SortIndices.dispatch(
+                reinterpret_array(array, dt.storage_type()),
+                ascending,
+                nulls_first,
+                stable,
+                None,
+                ctx,
+            )
         else:
-            null_list.append(Int32(i))
+            raise Error(t"sort_indices: unsupported dtype {dt}")
 
-    # Sort valid indices: radix for large arrays, PDQsort for small.
-    var sorted_valid: Buffer[]
-    if n_valid <= 1:
-        sorted_valid = valid_buf^.to_immutable()
-    elif n_valid < _RADIX_THRESHOLD:
-        sorted_valid = _comparison_sort_indices[T](
-            arr, valid_buf^, n_valid, ascending
+        if limit:
+            var k = min(limit.value(), len(result))
+            return Int32Array(
+                length=k,
+                nulls=0,
+                offset=0,
+                bitmap=None,
+                buffer=result.buffer,
+            )
+        return result^
+
+    @staticmethod
+    def multi(
+        array: StructArray,
+        key_indices: List[Int],
+        ascending: List[Bool],
+        nulls_first: Bool = True,
+        stable: Bool = False,
+        limit: Optional[Int] = None,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> Int32Array:
+        """The permutation that orders a StructArray by several key columns.
+
+        Multi-column sort is done column-wise (no row comparator): LSD-style
+        stable passes, least-significant key first — each pass is one
+        ``dispatch`` over a single reordered column plus a gather to compose the
+        permutation, so a later (more-significant) key sorts primarily while the
+        earlier passes survive as tie-breakers via stability.
+
+        Args:
+            array: Input StructArray.
+            key_indices: Column indices to sort by, most-significant first.
+            ascending: Per-key sort direction.
+            nulls_first: Where to place null rows.
+            stable: Preserve relative order of equal rows (single-key path only;
+                the multi-key path is always stable by construction).
+            limit: If set, return only the first ``limit`` indices.
+            ctx: Execution context.
+        """
+        if len(key_indices) == 0:
+            raise Error("sort: key_indices must not be empty")
+        if len(key_indices) != len(ascending):
+            raise Error(
+                "sort: key_indices and ascending must have the same length"
+            )
+
+        if len(key_indices) == 1:
+            return SortIndices.dispatch(
+                array.field(key_indices[0]),
+                ascending[0],
+                nulls_first,
+                stable,
+                limit,
+                ctx,
+            )
+
+        # Multi-column, column-oriented LSD: stable-sort by the least-significant
+        # key first, then successively by more-significant keys. Each pass sorts
+        # one reordered column and gathers to compose the running permutation;
+        # every pass is stable, so a less-significant key's order is preserved as
+        # the tie-break under a more-significant one.
+        var last = len(key_indices) - 1
+        var perm = SortIndices.dispatch(
+            array.field(key_indices[last]),
+            ascending=ascending[last],
+            nulls_first=nulls_first,
+            stable=True,
+            ctx=ctx,
         )
-    else:
-        sorted_valid = _radix_sort_indices[T](
+        for i in reversed(range(last)):
+            var reordered = _take(array.field(key_indices[i]), perm)
+            var local = SortIndices.dispatch(
+                reordered,
+                ascending=ascending[i],
+                nulls_first=nulls_first,
+                stable=True,
+                ctx=ctx,
+            )
+            perm = _take(perm, local, ctx)
+
+        if limit:
+            var lim = limit.value()
+            if lim < len(perm):
+                perm = perm.slice(0, lim)
+        return perm^
+
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](
+        arr: PrimitiveArray[T],
+        ascending: Bool = True,
+        nulls_first: Bool = True,
+        stable: Bool = False,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> Int32Array:
+        """Return the indices that would sort a typed primitive array."""
+        var n = len(arr)
+        if n == 0:
+            return Int32Array.empty(Int32Type())
+
+        var n_null = arr.null_count()
+        var n_valid = n - n_null
+
+        # Partition: collect valid and null original row indices in one scan.
+        var null_list = List[Int32](capacity=max(n_null, 1))
+        var valid_buf = Buffer.alloc_uninit[DType.int32](max(n_valid, 1))
+        var vv = valid_buf.view[DType.int32](0, n_valid)
+        var vi = 0
+        for i in range(n):
+            if arr.is_valid(i):
+                vv.unsafe_set(vi, Int32(i))
+                vi += 1
+            else:
+                null_list.append(Int32(i))
+
+        var sorted_valid = SortIndices._sort_valid[T](
             arr, valid_buf^, n_valid, ascending, ctx
         )
+        return SortIndices._assemble(
+            sorted_valid, n_valid, null_list, n, nulls_first
+        )
 
-    return array(sorted_valid, n_valid, null_list, n, nulls_first, ctx)
+    @staticmethod
+    def _sort_valid[
+        T: PrimitiveType
+    ](
+        arr: PrimitiveArray[T],
+        var valid_buf: Buffer[mut=True],
+        n_valid: Int,
+        ascending: Bool,
+        ctx: ExecutionContext,
+    ) raises -> Buffer[]:
+        """Order the `n_valid` non-null row indices held in `valid_buf`."""
+        if n_valid <= 1:
+            return valid_buf^.to_immutable()
 
-
-def sort_indices(
-    array: BoolArray,
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    """O(N) counting sort for bool arrays.
-
-    Enumerates indices into three bins (null, false, true) in one pass,
-    then assembles the output in the requested order.
-    """
-    var n = len(array)
-    if n == 0:
-        return _primitive_array(int32)
-
-    var null_list = List[Int32]()
-    var false_list = List[Int32]()
-    var true_list = List[Int32]()
-    var bv = array.values()  # offset-adjusted BitmapView for data bits
-    for i in range(n):
-        if not array.is_valid(i):
-            null_list.append(Int32(i))
-        elif bv.test(i):
-            true_list.append(Int32(i))
+        comptime if size_of[Scalar[T.native]]() <= 8:
+            if n_valid < _RADIX_THRESHOLD:
+                return _comparison_sort_indices[T](
+                    arr, valid_buf^, n_valid, ascending
+                )
+            else:
+                return _radix_sort_indices[T](
+                    arr, valid_buf^, n_valid, ascending, ctx
+                )
         else:
-            false_list.append(Int32(i))
+            # decimal128 / decimal256 exceed the UInt64 radix key, so the
+            # comparison path — which compares the native values directly — is
+            # the only correct one.
+            return _comparison_sort_indices[T](
+                arr, valid_buf^, n_valid, ascending
+            )
 
-    var out = Buffer.alloc_uninit[DType.int32](n)
-    var ov = out.view[DType.int32](0, n)
-    var pos = 0
-    if nulls_first:
-        for i in range(len(null_list)):
-            ov.unsafe_set(pos, null_list[i])
-            pos += 1
-    if ascending:
-        for i in range(len(false_list)):
-            ov.unsafe_set(pos, false_list[i])
-            pos += 1
-        for i in range(len(true_list)):
-            ov.unsafe_set(pos, true_list[i])
-            pos += 1
-    else:
-        for i in range(len(true_list)):
-            ov.unsafe_set(pos, true_list[i])
-            pos += 1
-        for i in range(len(false_list)):
-            ov.unsafe_set(pos, false_list[i])
-            pos += 1
-    if not nulls_first:
-        for i in range(len(null_list)):
-            ov.unsafe_set(pos, null_list[i])
-            pos += 1
+    @staticmethod
+    def _assemble(
+        sorted_valid: Buffer[],
+        n_valid: Int,
+        null_list: List[Int32],
+        n: Int,
+        nulls_first: Bool,
+    ) raises -> Int32Array:
+        """Merge sorted valid indices and null indices into the final Int32Array.
+        """
+        var out = Buffer.alloc_uninit[DType.int32](n)
+        var ov = out.view[DType.int32](0, n)
+        var sv = sorted_valid.view[DType.int32](0, n_valid)
+        var n_null = n - n_valid
+        var null_off = 0 if nulls_first else n_valid
+        var valid_off = n_null if nulls_first else 0
+        for i in range(n_null):
+            ov.unsafe_set(null_off + i, null_list[i])
+        for i in range(n_valid):
+            ov.unsafe_set(valid_off + i, sv.unsafe_get(i))
+        return Int32Array(
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=out^.to_immutable(),
+        )
 
-    return Int32Array(
-        length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=out^.to_immutable(),
-    )
+    @staticmethod
+    def apply(
+        arr: BoolArray,
+        ascending: Bool = True,
+        nulls_first: Bool = True,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> Int32Array:
+        """O(N) counting sort for bool arrays.
 
+        Enumerates indices into three bins (null, false, true) in one pass,
+        then assembles the output in the requested order.
+        """
+        var n = len(arr)
+        if n == 0:
+            return Int32Array.empty(Int32Type())
 
-def sort_indices(
-    array: StringArray,
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    stable: Bool = False,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    """Comparison sort for string arrays using the Mojo stdlib sort."""
-    var n = len(array)
-    if n == 0:
-        return _primitive_array(int32)
+        var null_list = List[Int32]()
+        var false_list = List[Int32]()
+        var true_list = List[Int32]()
+        var bv = arr.values()  # offset-adjusted BitmapView for data bits
+        for i in range(n):
+            if not arr.is_valid(i):
+                null_list.append(Int32(i))
+            elif bv.test(i):
+                true_list.append(Int32(i))
+            else:
+                false_list.append(Int32(i))
 
-    var n_null = array.null_count()
-    var n_valid = n - n_null
-
-    var valid_list = List[Int32](capacity=max(n_valid, 1))
-    var null_list = List[Int32](capacity=max(n_null, 1))
-    for i in range(n):
-        if array.is_valid(i):
-            valid_list.append(Int32(i))
-        else:
-            null_list.append(Int32(i))
-
-    if n_valid > 1:
-
-        @parameter
-        def cmp_asc(a: Int32, b: Int32) -> Bool:
-            return array.unsafe_get(UInt(a)) < array.unsafe_get(UInt(b))
-
-        @parameter
-        def cmp_desc(a: Int32, b: Int32) -> Bool:
-            return array.unsafe_get(UInt(b)) < array.unsafe_get(UInt(a))
-
+        var out = Buffer.alloc_uninit[DType.int32](n)
+        var ov = out.view[DType.int32](0, n)
+        var pos = 0
+        if nulls_first:
+            for i in range(len(null_list)):
+                ov.unsafe_set(pos, null_list[i])
+                pos += 1
         if ascending:
-            if stable:
-                _sort_impl[cmp_asc, stable=True](valid_list)
-            else:
-                _sort_impl[cmp_asc](valid_list)
+            for i in range(len(false_list)):
+                ov.unsafe_set(pos, false_list[i])
+                pos += 1
+            for i in range(len(true_list)):
+                ov.unsafe_set(pos, true_list[i])
+                pos += 1
         else:
-            if stable:
-                _sort_impl[cmp_desc, stable=True](valid_list)
+            for i in range(len(true_list)):
+                ov.unsafe_set(pos, true_list[i])
+                pos += 1
+            for i in range(len(false_list)):
+                ov.unsafe_set(pos, false_list[i])
+                pos += 1
+        if not nulls_first:
+            for i in range(len(null_list)):
+                ov.unsafe_set(pos, null_list[i])
+                pos += 1
+
+        return Int32Array(
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=out^.to_immutable(),
+        )
+
+    @staticmethod
+    def apply[
+        T: BinaryLikeType
+    ](
+        arr: BinaryLikeArray[T],
+        ascending: Bool = True,
+        nulls_first: Bool = True,
+        stable: Bool = False,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> Int32Array:
+        """Comparison sort for binary-like arrays (string, large_string, binary,
+        large_binary) using the Mojo stdlib sort — bytewise lexicographic, which
+        is Arrow's ordering for all four."""
+        var n = len(arr)
+        if n == 0:
+            return Int32Array.empty(Int32Type())
+
+        var n_null = arr.null_count()
+        var n_valid = n - n_null
+
+        var valid_list = List[Int32](capacity=max(n_valid, 1))
+        var null_list = List[Int32](capacity=max(n_null, 1))
+        for i in range(n):
+            if arr.is_valid(i):
+                valid_list.append(Int32(i))
             else:
-                _sort_impl[cmp_desc](valid_list)
+                null_list.append(Int32(i))
 
-    var out = Buffer.alloc_uninit[DType.int32](n)
-    var ov = out.view[DType.int32](0, n)
-    var n_null_ = len(null_list)
-    var null_off = 0 if nulls_first else n_valid
-    var valid_off = n_null_ if nulls_first else 0
-    for i in range(n_null_):
-        ov.unsafe_set(null_off + i, null_list[i])
-    for i in range(n_valid):
-        ov.unsafe_set(valid_off + i, valid_list[i])
+        if n_valid > 1:
 
-    return Int32Array(
-        length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=out^.to_immutable(),
-    )
+            @parameter
+            def cmp_asc(a: Int32, b: Int32) -> Bool:
+                return arr.unsafe_get(UInt(a)) < arr.unsafe_get(UInt(b))
+
+            @parameter
+            def cmp_desc(a: Int32, b: Int32) -> Bool:
+                return arr.unsafe_get(UInt(b)) < arr.unsafe_get(UInt(a))
+
+            if ascending:
+                if stable:
+                    _sort_impl[cmp_asc, stable=True](valid_list)
+                else:
+                    _sort_impl[cmp_asc](valid_list)
+            else:
+                if stable:
+                    _sort_impl[cmp_desc, stable=True](valid_list)
+                else:
+                    _sort_impl[cmp_desc](valid_list)
+
+        var out = Buffer.alloc_uninit[DType.int32](n)
+        var ov = out.view[DType.int32](0, n)
+        var n_null_ = len(null_list)
+        var null_off = 0 if nulls_first else n_valid
+        var valid_off = n_null_ if nulls_first else 0
+        for i in range(n_null_):
+            ov.unsafe_set(null_off + i, null_list[i])
+        for i in range(n_valid):
+            ov.unsafe_set(valid_off + i, valid_list[i])
+
+        return Int32Array(
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=out^.to_immutable(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Public API — thin free delegators to the SortIndices kernel
+# (``pc.sort_indices`` / ``Table.sort_by``).
+# ---------------------------------------------------------------------------
 
 
 def sort_indices(
@@ -552,88 +780,43 @@ def sort_indices(
     limit: Optional[Int] = None,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
-    """Return indices that would sort ``array``.
+    """Return the indices that would sort ``array``."""
+    return SortIndices.dispatch(
+        array, ascending, nulls_first, stable, limit, ctx
+    )
 
-    Args:
-        array: Input array (runtime-typed).
-        ascending: Sort direction. ``True`` = smallest first.
-        nulls_first: Where to place null elements in the output.
-        stable: Preserve relative order of equal elements.
-        limit: If set, return only the first ``limit`` indices (top-K).
-            Phase 1: implemented as full sort + truncation. Phase 3 will
-            add O(N) quickselect.
-        ctx: Execution context — controls CPU thread count and GPU device.
 
-    Returns:
-        Int32Array of sorted row indices (length = min(limit, len(array))).
-    """
-    var result: Int32Array
+def sort_indices[
+    T: PrimitiveType
+](
+    array: PrimitiveArray[T],
+    ascending: Bool = True,
+    nulls_first: Bool = True,
+    stable: Bool = False,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> Int32Array:
+    return SortIndices.apply(array, ascending, nulls_first, stable, ctx)
 
-    if array.dtype() == bool_dt:
-        result = sort_indices(
-            array.as_bool().copy(), ascending, nulls_first, ctx
-        )
-    elif array.dtype() == int8:
-        result = sort_indices(
-            array.as_int8(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == int16:
-        result = sort_indices(
-            array.as_int16(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == int32:
-        result = sort_indices(
-            array.as_int32(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == int64:
-        result = sort_indices(
-            array.as_int64(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == uint8:
-        result = sort_indices(
-            array.as_uint8(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == uint16:
-        result = sort_indices(
-            array.as_uint16(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == uint32:
-        result = sort_indices(
-            array.as_uint32(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == uint64:
-        result = sort_indices(
-            array.as_uint64(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == float16:
-        result = sort_indices(
-            array.as_float16(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == float32:
-        result = sort_indices(
-            array.as_float32(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype() == float64:
-        result = sort_indices(
-            array.as_float64(), ascending, nulls_first, stable, ctx
-        )
-    elif array.dtype().is_string():
-        result = sort_indices(
-            array.as_string(), ascending, nulls_first, stable, ctx
-        )
-    else:
-        raise Error(t"sort_indices: unsupported dtype {array.dtype()}")
 
-    if limit:
-        var k = min(limit.value(), len(result))
-        return Int32Array(
-            length=k,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=result.buffer,
-        )
-    return result^
+def sort_indices(
+    array: BoolArray,
+    ascending: Bool = True,
+    nulls_first: Bool = True,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> Int32Array:
+    return SortIndices.apply(array, ascending, nulls_first, ctx)
+
+
+def sort_indices[
+    T: BinaryLikeType
+](
+    array: BinaryLikeArray[T],
+    ascending: Bool = True,
+    nulls_first: Bool = True,
+    stable: Bool = False,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> Int32Array:
+    return SortIndices.apply(array, ascending, nulls_first, stable, ctx)
 
 
 def sort(
@@ -645,69 +828,11 @@ def sort(
     limit: Optional[Int] = None,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> StructArray:
-    """Sort a StructArray by the specified key columns.
-
-    Multi-column sort is done column-wise (no row comparator): LSD-style stable
-    passes, least-significant key first — each pass is one ``sort_indices`` over
-    a single reordered column plus a gather to compose the permutation, so a
-    later (more-significant) key sorts primarily while the earlier passes survive
-    as tie-breakers via stability.
-
-    Args:
-        array: Input StructArray.
-        key_indices: Column indices to sort by, most-significant first.
-        ascending: Per-key sort direction.
-        nulls_first: Where to place null rows.
-        stable: Preserve relative order of equal rows (single-key path only;
-            the multi-key path is always stable by construction).
-        limit: If set, return only the first ``limit`` rows.
-        ctx: Execution context.
-
-    Returns:
-        A new StructArray with rows in sorted order.
-    """
-    if len(key_indices) == 0:
-        raise Error("sort: key_indices must not be empty")
-    if len(key_indices) != len(ascending):
-        raise Error("sort: key_indices and ascending must have the same length")
-
-    if len(key_indices) == 1:
-        var indices = sort_indices(
-            array.field(key_indices[0]),
-            ascending[0],
-            nulls_first,
-            stable,
-            limit,
-            ctx,
-        )
-        return _take(array, indices)
-
-    # Multi-column, column-oriented LSD: stable-sort by the least-significant
-    # key first, then successively by more-significant keys. Each pass sorts one
-    # reordered column and gathers to compose the running permutation; every
-    # pass is stable, so a less-significant key's order is preserved as the
-    # tie-break under a more-significant one.
-    var last = len(key_indices) - 1
-    var perm = sort_indices(
-        array.field(key_indices[last]),
-        ascending=ascending[last],
-        nulls_first=nulls_first,
-        stable=True,
-        ctx=ctx,
+    """Sort a StructArray by the specified key columns — ``take`` under the
+    permutation from ``SortIndices.multi``."""
+    return _take(
+        array,
+        SortIndices.multi(
+            array, key_indices, ascending, nulls_first, stable, limit, ctx
+        ),
     )
-    for i in reversed(range(last)):
-        var reordered = _take(array.field(key_indices[i]), perm)
-        var local = sort_indices(
-            reordered,
-            ascending=ascending[i],
-            nulls_first=nulls_first,
-            stable=True,
-            ctx=ctx,
-        )
-        perm = _take(perm, local, ctx)
-
-    if limit:
-        var lim = limit.value()
-        if lim < len(perm):
-            perm = perm.slice(0, lim)
-    return _take(array, perm)

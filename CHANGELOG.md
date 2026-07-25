@@ -2,7 +2,52 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **`sort_indices` and `rapidhash` now accept every Arrow dtype** — temporal
+  (date/time/timestamp/duration), interval, `large_string`, `large_binary`,
+  `binary`, decimal (32/64/128/256), and dictionary. Both were hand-written
+  `if dtype == … elif …` ladders that stopped at bool/numeric/string and then
+  raised, so `GROUP BY` on any temporal key and `ORDER BY <timestamp>` failed
+  outright (`docs/code-quality-review.md` D5; ClickBench Q8, Q19, Q24–27, Q35,
+  Q36, Q40, Q43 — the `hits` table is keyed on `EventDate`/`EventTime`).
+  Supersedes FU-1, which tracked only the `large_string` half.
+
+  Behavioural notes: a dictionary column now hashes and orders by its *decoded*
+  values, so it matches the equivalent plain column; and `decimal128`/`decimal256`
+  hash by folding both 64-bit limbs instead of truncating to the low one — a
+  truncating hash would have merged distinct groups, since group-by buckets on
+  the hash alone.
+
 ### Refactors
+
+- **`hashing.mojo` → `RapidHash`, `sort.mojo` → `SortIndices`** — the last two
+  kernel modules with no `Kernel` struct, and (not coincidentally) exactly the
+  two with dtype-coverage gaps: with no single `dispatch`, each new dtype had to
+  be remembered in a hand-written ladder, and wasn't. Both now follow the
+  three-tier pattern (typed `apply` leaves, one `dispatch`), with thin free
+  delegators kept for the call sites that bind a hasher as a comptime function
+  value (`SwissHashTable[hasher]`) or match PyArrow (`sort_indices`, `sort`).
+  `sort`'s multi-key body moved to `SortIndices.multi`, which returns the
+  permutation, leaving `sort` as `take ∘ SortIndices.multi`. The public free
+  function literally named `array()` in `sort.mojo` — which forced
+  `import array as _primitive_array` in its own file — is now
+  `SortIndices._assemble`. Verified-dead `hash_identity` (×3) deleted.
+
+- **Completed the `dispatch_over_*` family** (`marrow/utils.mojo`): added
+  `dispatch_over_primitive`, `dispatch_over_integer`, `dispatch_over_temporal`,
+  and `dispatch_over_listlike` alongside the existing numeric / floating /
+  string-like / binary-like members, so there is one member per dtype-family
+  trait and a kernel never has to spell out its own ladder. They now reach the
+  variant through the new `AnyDataType.variant()` accessor instead of the
+  private `dt._v`.
+
+- **`AnyDataType.storage_type()`** (`marrow/dtypes.mojo`) — the same-width
+  signed-integer dtype a fixed-width logical type is stored as. Generalizes
+  `temporal_backing_dtype` to interval and decimal32/64, and lets the
+  value- and order-preserving kernels route those columns through the
+  already-instantiated integer path rather than growing one arm (and one kernel
+  instantiation) per logical dtype.
 
 - **Broke the `dtypes` ⇄ `arrays`/`scalars` circular import.** `DataType` declared
   `comptime ScalarType` / `comptime ArrayType` companion types on the trait and on

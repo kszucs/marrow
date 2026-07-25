@@ -6,6 +6,7 @@ from marrow.testing import TestSuite
 from marrow.arrays import (
     AnyArray,
     BoolArray,
+    DictionaryArray,
     Int32Array,
     PrimitiveArray,
     StringArray,
@@ -14,10 +15,13 @@ from marrow.arrays import (
 from marrow.builders import (
     array,
     BoolBuilder,
+    Date32Builder,
+    Decimal128Builder,
     Int8Builder,
     Int16Builder,
     Int32Builder,
     Int64Builder,
+    LargeStringBuilder,
     UInt8Builder,
     UInt16Builder,
     UInt32Builder,
@@ -26,6 +30,7 @@ from marrow.builders import (
     Float32Builder,
     Float64Builder,
     StringBuilder,
+    TimestampBuilder,
 )
 from marrow.dtypes import (
     PrimitiveType,
@@ -42,6 +47,10 @@ from marrow.dtypes import (
     float64,
     bool_ as _bool_dtype,
     string as _string_dtype,
+    date32,
+    decimal128,
+    microsecond,
+    timestamp,
     Field,
 )
 from marrow.tabular import record_batch
@@ -936,6 +945,112 @@ def test_sort_indices_parallel_context() raises:
     var idx = sort_indices(a, ctx=ExecutionContext.parallel())
     assert_equal(len(idx), N)
     _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# Temporal / large_string / decimal / dictionary
+#
+# These dtypes used to fall off the end of the dispatch ladder and raise, which
+# broke `ORDER BY` on any timestamp column (docs/code-quality-review.md D5).
+# The permutation is asserted directly — `_assert_sorted` only knows the
+# numeric/bool/string dtypes.
+# ---------------------------------------------------------------------------
+
+
+def _assert_perm(idx: Int32Array, expected: List[Int]) raises:
+    assert_equal(len(idx), len(expected))
+    for i in range(len(expected)):
+        assert_equal(_idx(idx, i), expected[i])
+
+
+def test_sort_indices_date32() raises:
+    var b = Date32Builder(date32(), 4)
+    for d in [19000, 18500, 19100, 18800]:
+        b.append(Scalar[int32.native](d))
+    var a: AnyArray = b.finish()
+    _assert_perm(sort_indices(a), [1, 3, 0, 2])
+    _assert_perm(sort_indices(a, ascending=False), [2, 0, 3, 1])
+
+
+def test_sort_indices_timestamp_negative() raises:
+    """Pre-epoch timestamps are negative int64 — the signed sign-flip in the key
+    encoding must keep them below the positive ones."""
+    var b = TimestampBuilder(timestamp(microsecond, "UTC"), 4)
+    for t in [1_000, -5_000, 0, -1]:
+        b.append(Scalar[int64.native](t))
+    var a: AnyArray = b.finish()
+    _assert_perm(sort_indices(a), [1, 3, 2, 0])
+
+
+def test_sort_indices_timestamp_nulls() raises:
+    var b = TimestampBuilder(timestamp(microsecond), 4)
+    b.append(Scalar[int64.native](30))
+    b.append_null()
+    b.append(Scalar[int64.native](10))
+    b.append(Scalar[int64.native](20))
+    var a: AnyArray = b.finish()
+    _assert_perm(sort_indices(a, nulls_first=False), [2, 3, 0, 1])
+    _assert_perm(sort_indices(a, nulls_first=True), [1, 2, 3, 0])
+
+
+def test_sort_indices_large_string() raises:
+    var b = LargeStringBuilder(4)
+    for s in ["pear", "apple", "fig", "banana"]:
+        b.append(s)
+    var a: AnyArray = b.finish()
+    _assert_perm(sort_indices(a), [1, 3, 2, 0])
+    _assert_perm(sort_indices(a, ascending=False), [0, 2, 3, 1])
+
+
+def test_sort_indices_decimal128() raises:
+    """decimal128 has no UInt64 radix key, so it takes the comparison path —
+    including values that differ only above bit 63."""
+    var b = Decimal128Builder(decimal128(38, 0), 3)
+    b.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
+    b.append(Scalar[DType.int128](-1))
+    b.append(Scalar[DType.int128](5))
+    var a: AnyArray = b.finish()
+    _assert_perm(sort_indices(a), [1, 2, 0])
+
+
+def test_sort_indices_dictionary() raises:
+    """Ordering follows the decoded values, not the dictionary index order."""
+    var values = StringBuilder(3)
+    values.append("pear")  # index 0
+    values.append("apple")  # index 1
+    values.append("fig")  # index 2
+    var ib = Int32Builder(3)
+    for i in [0, 1, 2]:
+        ib.append(Int32(i))
+    var a: AnyArray = DictionaryArray.from_arrays(ib.finish(), values.finish())
+    _assert_perm(sort_indices(a), [1, 2, 0])
+
+
+def test_sort_struct_timestamp_key() raises:
+    """ORDER BY <timestamp> through the StructArray path — the sorted column
+    keeps its logical dtype (unit + timezone)."""
+    var ts = TimestampBuilder(timestamp(microsecond, "UTC"), 3)
+    for t in [300, 100, 200]:
+        ts.append(Scalar[int64.native](t))
+    var v = Int32Builder(3)
+    for x in [3, 1, 2]:
+        v.append(Int32(x))
+    var cols = List[AnyArray]()
+    cols.append(ts.finish().to_any())
+    cols.append(v.finish().to_any())
+    var sa = record_batch(cols^, names=["t", "v"]).to_struct_array()
+
+    var result = sort(sa, [0], [True])
+    ref k = result.field(0).as_timestamp()
+    assert_equal(k[0].value(), 100)
+    assert_equal(k[1].value(), 200)
+    assert_equal(k[2].value(), 300)
+    assert_true(
+        result.field(0).dtype() == timestamp(microsecond, "UTC").to_any()
+    )
+    ref vals = result.field(1).as_int32()
+    assert_equal(vals[0].value(), 1)
+    assert_equal(vals[2].value(), 3)
 
 
 def main() raises:

@@ -26,8 +26,12 @@ from .dtypes import (
     AnyDataType,
     BinaryLikeType,
     FloatingType,
+    IntegerType,
+    ListLikeType,
     NumericType,
+    PrimitiveType,
     StringLikeType,
+    TemporalType,
 )
 
 
@@ -270,7 +274,28 @@ def variant_dispatch_raises[
 # from `func`. A dtype outside the family raises (the family trait bound filters
 # it out, so no arm matches) — the aggregate boundary relies on this to reject
 # non-numeric columns catchably.
+#
+# One member per dtype family trait in `dtypes.mojo`, so a kernel never has to
+# spell out its own ladder: adding a dtype to `AnyDataType.VariantType` extends
+# every family it conforms to at once. Pick the *narrowest* family that covers
+# the leaf — each member instantiates `func` once per conforming variant arm, so
+# `dispatch_over_primitive` costs roughly twice `dispatch_over_numeric` in code
+# size.
 # ---------------------------------------------------------------------------
+
+
+def dispatch_over_primitive[
+    R: AnyType,
+    //,
+    func: def[T: PrimitiveType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve any runtime fixed-width dtype to its comptime type and run `func`.
+
+    The widest family — numeric, temporal, interval, and decimal. Prefer a
+    narrower member where one fits: this one instantiates `func` for every
+    fixed-width type in the variant.
+    """
+    return variant_dispatch_raises[PrimitiveType, func=func](dt.variant())
 
 
 def dispatch_over_numeric[
@@ -279,7 +304,16 @@ def dispatch_over_numeric[
     func: def[T: NumericType](T) raises capturing[_] -> R,
 ](dt: AnyDataType) raises -> R:
     """Resolve a runtime numeric dtype to its comptime type and run `func`."""
-    return variant_dispatch_raises[NumericType, func=func](dt._v)
+    return variant_dispatch_raises[NumericType, func=func](dt.variant())
+
+
+def dispatch_over_integer[
+    R: AnyType,
+    //,
+    func: def[T: IntegerType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime integer dtype to its comptime type and run `func`."""
+    return variant_dispatch_raises[IntegerType, func=func](dt.variant())
 
 
 def dispatch_over_floating[
@@ -288,7 +322,22 @@ def dispatch_over_floating[
     func: def[T: FloatingType](T) raises capturing[_] -> R,
 ](dt: AnyDataType) raises -> R:
     """Resolve a runtime floating dtype to its comptime type and run `func`."""
-    return variant_dispatch_raises[FloatingType, func=func](dt._v)
+    return variant_dispatch_raises[FloatingType, func=func](dt.variant())
+
+
+def dispatch_over_temporal[
+    R: AnyType,
+    //,
+    func: def[T: TemporalType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime date/time/timestamp/duration dtype to its comptime type
+    and run `func`.
+
+    Only needed when the *logical* type matters (unit, timezone). Kernels that
+    are value- or order-preserving should instead reinterpret the column through
+    `AnyDataType.storage_type()` and reuse the integer path.
+    """
+    return variant_dispatch_raises[TemporalType, func=func](dt.variant())
 
 
 def dispatch_over_stringlike[
@@ -298,7 +347,7 @@ def dispatch_over_stringlike[
 ](dt: AnyDataType) raises -> R:
     """Resolve a runtime string-like dtype to its comptime type and run `func`.
     """
-    return variant_dispatch_raises[StringLikeType, func=func](dt._v)
+    return variant_dispatch_raises[StringLikeType, func=func](dt.variant())
 
 
 def dispatch_over_binarylike[
@@ -308,4 +357,14 @@ def dispatch_over_binarylike[
 ](dt: AnyDataType) raises -> R:
     """Resolve a runtime binary-like dtype to its comptime type and run `func`.
     """
-    return variant_dispatch_raises[BinaryLikeType, func=func](dt._v)
+    return variant_dispatch_raises[BinaryLikeType, func=func](dt.variant())
+
+
+def dispatch_over_listlike[
+    R: AnyType,
+    //,
+    func: def[T: ListLikeType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime list/large_list/map dtype to its comptime type and run
+    `func`."""
+    return variant_dispatch_raises[ListLikeType, func=func](dt.variant())
