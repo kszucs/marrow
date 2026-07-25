@@ -39,6 +39,7 @@ from ..dtypes import (
     AnyDataType,
     PrimitiveType,
     NumericType,
+    TemporalType,
     BinaryLikeType,
     ListLikeType,
     Int8Type,
@@ -71,7 +72,6 @@ from std.algorithm.functional import sync_parallelize
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
 from .helpers import Kernel
-from .aggregate import reinterpret_array, temporal_backing_dtype
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +150,15 @@ struct Filter(Kernel):
         elif dt.is_dictionary():
             return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
         elif dt.is_temporal():
-            # Reinterpret to the integer backing, filter via the numeric path,
-            # then relabel the output back to the temporal dtype.
-            var backing = temporal_backing_dtype(dt)
-            var filtered = Filter.dispatch(
-                reinterpret_array(array, backing), mask, ctx
-            )
-            return reinterpret_array(filtered, dt)
+            # `apply` is bound on `PrimitiveType`, which every temporal type
+            # satisfies, so the typed leaf takes the column directly and the
+            # result carries the temporal dtype by construction — no
+            # reinterpret-to-integer and no relabel back.
+            @parameter
+            def temporal[T: TemporalType](d: T) raises -> AnyArray:
+                return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
+
+            return dt.dispatch_temporal[temporal]()
         else:
             raise Error("filter: unsupported dtype ", dt)
 
@@ -663,13 +665,15 @@ struct Take(Kernel):
         elif dt.is_dictionary():
             return Take.apply(array.as_dictionary(), indices, ctx).to_any()
         elif dt.is_temporal():
-            # Reinterpret to the integer backing, gather via the numeric path,
-            # then relabel the output back to the temporal dtype.
-            var backing = temporal_backing_dtype(dt)
-            var gathered = Take.dispatch(
-                reinterpret_array(array, backing), indices, ctx
-            )
-            return reinterpret_array(gathered, dt)
+            # See `Filter.dispatch`: the typed leaf accepts a temporal column
+            # directly and preserves its dtype, so no reinterpret is needed.
+            @parameter
+            def temporal[T: TemporalType](d: T) raises -> AnyArray:
+                return Take.apply(
+                    array.as_primitive[T](), indices, ctx
+                ).to_any()
+
+            return dt.dispatch_temporal[temporal]()
         else:
             raise Error("take: unsupported dtype ", dt)
 

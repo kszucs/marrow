@@ -40,9 +40,13 @@ Tasks marked **⚠️ BINSIZE** must additionally run and report:
 ```bash
 pixi run binary_size
 ```
-Current gate numbers at `d0ecad7` (post Mojo `dev2026072406` upgrade):
-**fused `query_streaming` = 1,357,160 bytes stripped, ratio 11.7×.**
-Report before/after; the ratio must not regress.
+**The gate is the fused (AOT) binary — `query_streaming` stripped size.** That is the
+number the small-binary/DCE property is about. `query_dynvalue` / `query_runtime` size is
+**explicitly not a goal for now**; a change that shrinks the fused binary at the runtime
+binary's expense is a *win*, not a trade-off. (It may become a goal in the distant future.)
+
+Report the fused stripped size before/after. Re-measure the baseline on your own base commit —
+the pre-upgrade figures were ~12% stale after a compiler bump.
 
 > The pre-upgrade figures (1,538,824 / 11.3×) are **stale** — the compiler upgrade alone shrank
 > both the fused and runtime binaries by ~10%. Always re-measure the baseline on your own base
@@ -219,18 +223,34 @@ An aggregate is currently represented **four** ways: a comptime `AggKernel` stru
 rule that duplicates the kernel's own `AccType` algebra. 51 references outside `aggregate.mojo`,
 40 of them in `groupby.mojo`.
 
-**Target: the kernel is the only representation.** Exactly one runtime→comptime boundary:
+**Target: the kernel is the only representation.** Exactly one runtime→comptime boundary,
+keyed on the name directly with no tag in between:
 
 ```mojo
-def dispatch_agg[job: def[K: AggKernel]() raises](name: String) raises
+trait AggKernel(Kernel):
+    comptime name: String                            # already from Kernel — the inverse of lookup
+    comptime is_distinct: Bool = False               # replaces agg_is_distinct(tag)
+    comptime AccType[V: PrimitiveType]: PrimitiveType
+    @staticmethod
+    def acc_dtype(input: AnyDataType) raises -> AnyDataType   # replaces agg_out_dtype(tag, dt)
+
+def dispatch_agg[
+    job: def[K: AggKernel]() raises capturing[_] -> None
+](name: String) raises:
+    if name == SumKernel.name: job[SumKernel]()
+    elif name == MinKernel.name: job[MinKernel]()
+    ...
 ```
 
-Everything downstream is typed. Consequences:
-- `AGG_*` constants, `agg_tag_from_name`, `for_agg_tag`, `_agg_name(tag)` all disappear — the
-  name resolves straight to a kernel, and `K.name` is the inverse.
-- `agg_is_distinct(tag)` becomes a comptime property of the kernel, so `groupby`'s
-  `avoid_thread_local` guard is derived rather than re-listed.
-- `agg_out_dtype(tag, dt)` collapses into the kernel's own accumulator algebra (below).
+Everything downstream is typed. Deleted: the eight `AGG_*` constants, `agg_tag_from_name`,
+`for_agg_tag`, `agg_is_distinct`, `agg_out_dtype`, `_agg_name`.
+
+**Wrinkle — the distinct aggregates.** `count_distinct` / `approx_count_distinct` currently have
+tags but *no kernel struct*, because they carry a hash set / HLL sketch rather than a scalar
+accumulator and so cannot use `AggState`. For `dispatch_agg` to cover the whole surface they need
+kernel structs too, with `is_distinct = True` selecting the alternate execution path. Note
+`groupby`'s `avoid_thread_local` guard currently re-lists "distinct, or string min/max" by hand;
+both should become comptime properties so the guard is *derived*, not maintained in parallel.
 
 **Prerequisite — widen `AggState` to `PrimitiveType`** so temporal min/max/count work natively:
 
@@ -272,10 +292,20 @@ correctness anywhere:
 | `RapidHash` | `T: PrimitiveType` | no |
 | `AggState` | `V: NumericType` | yes **until Q2.5** |
 
-The one real cost is monomorphization: reinterpreting funnels ~15 logical primitive types into 4
-integer widths, so a kernel body is instantiated 4× rather than 15×. Measure with
-`pixi run binary_size` and record the delta — that number is the actual justification, and nothing
-currently records it.
+**Measured, and the monomorphization argument does not survive it.** Reinterpreting funnels ~15
+logical primitive types into 4 integer widths, so removing it instantiates more kernel bodies —
+but that cost lands almost entirely on the *runtime* binary, which is not what the project
+optimises for:
+
+| | before | after | delta |
+|---|---|---|---|
+| **fused** `query_streaming` | 1,357,176 | **1,274,584** | **−82,592 (−6.1%)** |
+| runtime `query_dynvalue` | 15,859,016 | 16,684,776 | +825,760 (+5.2%) |
+| ratio | 11.7× | **13.1×** | improved |
+
+The fused binary *shrank*, because it no longer links `reinterpret_array` / `storage_type` at all.
+So the reinterpret was buying runtime-binary size — which is out of focus — at the fused binary's
+expense.
 
 
 

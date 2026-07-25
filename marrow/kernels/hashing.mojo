@@ -15,7 +15,8 @@ Public API — the ``RapidHash`` kernel:
   - ``RapidHash.dispatch``: runtime-typed dispatch, routed through the
     ``AnyDataType.dispatch_*`` family rather than a hand-written dtype ladder.
     Temporal, interval, and decimal32/64 columns are hashed through their
-    integer ``storage_type()``; dictionary columns through their decoded values,
+    typed leaf (bound on ``PrimitiveType``); dictionary columns through their
+    decoded values,
     so a dictionary-encoded key hashes identically to the plain column.
   - ``rapidhash``: thin free delegators (PyArrow has no equivalent, but the
     hash-table parameter ``SwissHashTable[hasher]`` binds one as a value).
@@ -40,7 +41,6 @@ from ..arrays import (
 from ..builders import UInt64Builder
 from ..buffers import Buffer
 from ..views import apply
-from .aggregate import reinterpret_array
 from .cast import cast
 from .execution import ExecutionContext
 from .helpers import Kernel
@@ -326,12 +326,15 @@ struct RapidHash(Kernel):
         elif dt.is_decimal256():
             return RapidHash.apply(keys.as_decimal256(), ctx)
         elif dt.is_primitive():
-            # Temporal, interval, and decimal32/64 hash bit-identically to their
-            # integer `storage_type()`, so reinterpret and reuse the numeric
-            # leaf instead of instantiating one hash kernel per logical dtype.
-            return RapidHash.dispatch(
-                reinterpret_array(keys, dt.storage_type()), ctx
-            )
+            # `apply` is bound on `PrimitiveType`, so temporal, interval and
+            # decimal32/64 columns hash through the typed leaf directly — the
+            # hash only reads the value bytes via `T.native`, never the logical
+            # dtype. No reinterpret to an integer backing is needed.
+            @parameter
+            def primitive[T: PrimitiveType](d: T) raises -> UInt64Array:
+                return RapidHash.apply(keys.as_primitive[T](), ctx)
+
+            return dt.dispatch_primitive[primitive]()
         else:
             raise Error("rapidhash: unsupported dtype ", dt)
 

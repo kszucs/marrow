@@ -4,6 +4,25 @@
 
 ### Refactors
 
+- **`filter`, `take`, `sort` and `hashing` no longer reinterpret temporal columns.**
+  Every typed kernel leaf is bound on `PrimitiveType`, which the temporal, interval
+  and decimal types already satisfy — so the dispatch layer now hands the column
+  straight to the leaf via `dispatch_temporal` / `dispatch_primitive` instead of
+  reinterpreting it to an integer backing and relabelling the result. For
+  `filter`/`take` this is also *more* correct: the output is a `PrimitiveArray[T]`
+  whose dtype is preserved by construction, rather than stripped and reattached.
+  `AnyDataType.storage_type()` is deleted (no callers remain).
+
+  Cost is monomorphization — ~15 logical primitive types now instantiate the
+  kernels rather than 4 integer widths — but it lands on the runtime binary, not
+  the AOT one: the **fused `query_streaming` binary shrank 6.1%** (1,357,176 →
+  1,274,584 bytes stripped) since it no longer links the reinterpret machinery,
+  while `query_dynvalue` grew 5.2%. Fused size is what the small-binary property
+  is about, so this is a win on the metric that matters.
+
+
+### Refactors
+
 - **`dispatch_over_*` are now methods on `AnyDataType`** (`dt.dispatch_numeric[f]()`
   rather than `dispatch_over_numeric[f](dt)`), across 47 call sites. They existed
   only to read `AnyDataType._v` — a private field — from another module, so as

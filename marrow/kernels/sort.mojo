@@ -10,7 +10,7 @@ delegators.
 
 `SortIndices.dispatch` resolves a runtime dtype through the `AnyDataType.dispatch_*`
 family. Temporal, interval, and decimal32/64 columns sort through their
-order-preserving integer `storage_type()`; dictionary columns sort by their
+typed leaf (bound on `PrimitiveType`); dictionary columns sort by their
 decoded values. `SortIndices.multi` composes single-column permutations into a
 multi-key ordering, and `sort` is `take` under that permutation.
 
@@ -50,7 +50,6 @@ from ..dtypes import (
     bool_ as bool_dt,
     Int32Type,
 )
-from .aggregate import reinterpret_array
 from .cast import cast
 from .execution import ExecutionContext
 from .filter import take as _take
@@ -437,19 +436,17 @@ struct SortIndices(Kernel):
                 array.as_decimal256(), ascending, nulls_first, stable, ctx
             )
         elif dt.is_primitive():
-            # Temporal, interval, and decimal32/64 are stored as signed integers
-            # of the same width, and that mapping is order-preserving — so sort
-            # the `storage_type()` reinterpretation and reuse the numeric leaf
-            # instead of instantiating one sort per logical dtype. The result is
-            # a permutation, so nothing has to be relabelled back.
-            result = SortIndices.dispatch(
-                reinterpret_array(array, dt.storage_type()),
-                ascending,
-                nulls_first,
-                stable,
-                None,
-                ctx,
-            )
+            # `apply` is bound on `PrimitiveType`, so temporal, interval and
+            # decimal32/64 columns sort through the typed leaf directly — the
+            # sort only ever reads `T.native` and validity, never the logical
+            # dtype. No reinterpret to an integer backing is needed.
+            @parameter
+            def primitive[T: PrimitiveType](d: T) raises -> Int32Array:
+                return SortIndices.apply(
+                    array.as_primitive[T](), ascending, nulls_first, stable, ctx
+                )
+
+            result = dt.dispatch_primitive[primitive]()
         else:
             raise Error(t"sort_indices: unsupported dtype {dt}")
 
