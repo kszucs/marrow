@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Breaking
+
+- **The compute functions live only in `marrow.compute` now** — the 24 duplicates at
+  package top level (`marrow.add`, `marrow.sum`, …) are removed, matching PyArrow,
+  which exposes them only under `pyarrow.compute`. This resolves a real hazard
+  rather than tidying: `filter` / `take` / `sort_indices` each existed three times
+  (top level, `compute.py`, and as `Array` methods) with **contradictory
+  `null_placement` defaults**, so the same call meant different things depending on
+  the spelling. It also stops `min`/`max`/`sum`/`any`/`all`/`filter` shadowing
+  Python builtins at package scope. Migration is mechanical:
+  `ma.sum(x)` → `ma.compute.sum(x)`.
+
+### Fixes
+
+- **`marrow.compute` no longer silently ignores keyword arguments.** `skip_nulls=False`,
+  `mode=` on `count_distinct`, `boundscheck=False` on `take`, and multi-key `sort_keys`
+  were all accepted and dropped, so e.g. `pc.sum(a, skip_nulls=False)` returned the
+  *skip-nulls* answer — a wrong result, not a missing feature. They now raise
+  `NotImplementedError`.
+
+- **`marrow.compute` can use a parallel/GPU context.** Every function hard-wired
+  `_serial()`; they now take and honour `ctx`.
+
+### Refactors
+
+- Removed four dead public functions (`list_array_from_arrays`,
+  `fixed_size_list_array_from_arrays`, `struct_array_from_arrays`,
+  `read_ipc_stream_schema`) — no callers anywhere. PyArrow spells the survivors as
+  `ListArray.from_arrays` classmethods, not free functions.
+
+
 ### Fixes
 
 - **`filter` and `take` now support decimal and interval columns.** Their dispatch

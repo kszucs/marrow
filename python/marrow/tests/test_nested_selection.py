@@ -67,20 +67,20 @@ ARRAYS = [c[1] for c in CASES]
 
 @pytest.mark.parametrize("arr", ARRAYS, ids=IDS)
 def test_filter_matches_pyarrow(arr):
-    got = pa.array(ma.filter(ma.array(arr), ma.array(_MASK))).to_pylist()
+    got = pa.array(ma.compute.filter(ma.array(arr), ma.array(_MASK))).to_pylist()
     assert got == arr.filter(pa.array(_MASK)).to_pylist()
 
 
 @pytest.mark.parametrize("arr", ARRAYS, ids=IDS)
 def test_take_matches_pyarrow(arr):
     idx = ma.array(_IDX, type=ma.int32())
-    got = pa.array(ma.take(ma.array(arr), idx)).to_pylist()
+    got = pa.array(ma.compute.take(ma.array(arr), idx)).to_pylist()
     assert got == arr.take(pa.array(_IDX, type=pa.int32())).to_pylist()
 
 
 @pytest.mark.parametrize("arr", ARRAYS, ids=IDS)
 def test_drop_null_matches_pyarrow(arr):
-    got = pa.array(ma.drop_null(ma.array(arr))).to_pylist()
+    got = pa.array(ma.compute.drop_null(ma.array(arr))).to_pylist()
     assert got == arr.drop_null().to_pylist()
 
 

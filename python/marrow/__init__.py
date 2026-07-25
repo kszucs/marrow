@@ -454,131 +454,6 @@ def table(data, names=None):
     return Table.wrap(_ma.table(data, names))
 
 
-def list_array_from_arrays(offsets, values, mask=None):
-    return Array.wrap(
-        _ma.list_array_from_arrays(offsets.unwrap(), values.unwrap(), mask)
-    )
-
-
-def fixed_size_list_array_from_arrays(values, type, mask=None):
-    return Array.wrap(
-        _ma.fixed_size_list_array_from_arrays(values.unwrap(), type, mask)
-    )
-
-
-def struct_array_from_arrays(arrays, fields, mask=None):
-    return Array.wrap(
-        _ma.struct_array_from_arrays([a.unwrap() for a in arrays], fields, mask)
-    )
-
-
-# ── Compute functions ──────────────────────────────────────────────────────────
-
-
-def add(left, right, ctx=None):
-    return Array.wrap(_ma.add(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def subtract(left, right, ctx=None):
-    return Array.wrap(_ma.subtract(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def multiply(left, right, ctx=None):
-    return Array.wrap(_ma.multiply(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def divide(left, right, ctx=None):
-    return Array.wrap(_ma.divide(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def sum(a, ctx=None):
-    return Scalar.wrap(_ma.sum(a.unwrap(), ctx or _serial()))
-
-
-def product(a, ctx=None):
-    return Scalar.wrap(_ma.product(a.unwrap(), ctx or _serial()))
-
-
-def min(a, ctx=None):
-    return Scalar.wrap(_ma.min(a.unwrap(), ctx or _serial()))
-
-
-def max(a, ctx=None):
-    return Scalar.wrap(_ma.max(a.unwrap(), ctx or _serial()))
-
-
-def mean(a, ctx=None):
-    return Scalar.wrap(_ma.mean(a.unwrap(), ctx or _serial()))
-
-
-def count_distinct(a, ctx=None):
-    return Scalar.wrap(_ma.count_distinct(a.unwrap(), ctx or _serial()))
-
-
-def approx_count_distinct(a, ctx=None):
-    return Scalar.wrap(_ma.approx_count_distinct(a.unwrap(), ctx or _serial()))
-
-
-def any(a, ctx=None):
-    return _ma.any(a.unwrap(), ctx or _serial())
-
-
-def all(a, ctx=None):
-    return _ma.all(a.unwrap(), ctx or _serial())
-
-
-def equal(left, right, ctx=None):
-    return Array.wrap(_ma.equal(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def not_equal(left, right, ctx=None):
-    return Array.wrap(_ma.not_equal(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def less(left, right, ctx=None):
-    return Array.wrap(_ma.less(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def less_equal(left, right, ctx=None):
-    return Array.wrap(_ma.less_equal(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def greater(left, right, ctx=None):
-    return Array.wrap(_ma.greater(left.unwrap(), right.unwrap(), ctx or _serial()))
-
-
-def greater_equal(left, right, ctx=None):
-    return Array.wrap(
-        _ma.greater_equal(left.unwrap(), right.unwrap(), ctx or _serial())
-    )
-
-
-def filter(array, mask, ctx=None):
-    return Array.wrap(_ma.filter(array.unwrap(), mask.unwrap(), ctx or _serial()))
-
-
-def drop_null(array, ctx=None):
-    return Array.wrap(_ma.drop_null(array.unwrap(), ctx or _serial()))
-
-
-def take(array, indices, ctx=None):
-    return Array.wrap(_ma.take(array.unwrap(), indices.unwrap(), ctx or _serial()))
-
-
-def sort_indices(array, ascending=True, null_placement="at_start", ctx=None):
-    asc = ascending if ascending is not None else True
-    nulls_first = null_placement != "at_end" if null_placement is not None else True
-    return Array.wrap(
-        _ma.sort_indices(array.unwrap(), asc, nulls_first, ctx or _serial())
-    )
-
-
-def sort(array, ascending=True, null_placement="at_start", ctx=None):
-    asc = ascending if ascending is not None else True
-    nulls_first = null_placement != "at_end" if null_placement is not None else True
-    return Array.wrap(_ma.sort(array.unwrap(), asc, nulls_first, ctx or _serial()))
-
-
 # ── IPC ────────────────────────────────────────────────────────────────────────
 
 
@@ -610,3 +485,8 @@ def read_ipc_file_schema(path):
 
 def read_ipc_stream_schema(path):
     return RecordBatch.wrap(_ma.read_ipc_stream_schema(path))
+
+
+# Imported last: `compute` pulls Array/Scalar/RecordBatch back out of this
+# module, so it can only be bound once those exist.
+from . import compute  # noqa: E402

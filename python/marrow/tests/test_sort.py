@@ -5,8 +5,8 @@ Covers:
   - array.sort(order, null_placement)
   - array.take(indices)
   - record_batch.sort_by(by, null_placement)
-  - ma.sort_indices(array, *, ascending, null_placement)
-  - ma.sort(array, *, ascending, null_placement)
+  - ma.compute.sort_indices(array, *, ascending, null_placement)
+  - ma.compute.sort(array, *, ascending, null_placement)
 """
 
 import pytest
@@ -130,19 +130,19 @@ def test_take_strings():
 
 def test_module_sort_indices_ascending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = ma.sort_indices(arr, ascending=True, null_placement="at_start")
+    idx = ma.compute.sort_indices(arr, [("", "ascending")], null_placement="at_start")
     assert arr_to_pylist(idx) == [1, 2, 0]
 
 
 def test_module_sort_indices_descending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = ma.sort_indices(arr, ascending=False, null_placement="at_start")
+    idx = ma.compute.sort_indices(arr, [("", "descending")], null_placement="at_start")
     assert arr_to_pylist(idx) == [0, 2, 1]
 
 
 def test_module_sort_indices_defaults():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = ma.sort_indices(arr)
+    idx = ma.compute.sort_indices(arr)
     assert arr_to_pylist(idx) == [1, 2, 0]
 
 
@@ -151,19 +151,19 @@ def test_module_sort_indices_defaults():
 
 def test_module_sort_ascending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    result = ma.sort(arr, ascending=True, null_placement="at_start")
+    result = ma.compute.sort(arr, [("", "ascending")], null_placement="at_start")
     assert arr_to_pylist(result) == [1, 2, 3]
 
 
 def test_module_sort_descending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    result = ma.sort(arr, ascending=False, null_placement="at_start")
+    result = ma.compute.sort(arr, [("", "descending")], null_placement="at_start")
     assert arr_to_pylist(result) == [3, 2, 1]
 
 
 def test_module_sort_defaults():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    result = ma.sort(arr)
+    result = ma.compute.sort(arr)
     assert arr_to_pylist(result) == [1, 2, 3]
 
 

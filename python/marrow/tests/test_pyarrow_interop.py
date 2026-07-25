@@ -489,7 +489,7 @@ def test_mojo_add_pyarrow_arrays(pa_type: pa.DType) -> None:
     pa_b = pa.array([10, 20, 30], type=pa_type())
     a = ma.array(pa_a)
     b = ma.array(pa_b)
-    result = ma.add(a, b, None)
+    result = ma.compute.add(a, b, ctx=None)
     assert len(result) == 3
     assert result.null_count() == 0
     out = pa.array(result)
@@ -504,7 +504,7 @@ def test_mojo_add_pyarrow_float(pa_type: pa.DType) -> None:
     pa_b = pa.array([0.5, 1.5, 2.5], type=pa_type())
     a = ma.array(pa_a)
     b = ma.array(pa_b)
-    result = ma.add(a, b, None)
+    result = ma.compute.add(a, b, ctx=None)
     assert len(result) == 3
     out = pa.array(result)
     assert out[0].as_py() == pytest.approx(1.5)
@@ -516,7 +516,7 @@ def test_mojo_add_pyarrow_float(pa_type: pa.DType) -> None:
 def test_mojo_add_pyarrow_nulls_propagate(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, None, 3], type=pa_type())
     pa_b = pa.array([10, 20, 30], type=pa_type())
-    result = ma.add(ma.array(pa_a), ma.array(pa_b), None)
+    result = ma.compute.add(ma.array(pa_a), ma.array(pa_b), ctx=None)
     assert len(result) == 3
     assert result.null_count() == 1
     out = pa.array(result)
@@ -532,7 +532,7 @@ def test_mojo_add_pyarrow_nulls_propagate(pa_type: pa.DType) -> None:
 def test_mojo_sub_pyarrow_arrays(pa_type: pa.DType) -> None:
     pa_a = pa.array([10, 20, 30], type=pa_type())
     pa_b = pa.array([1, 2, 3], type=pa_type())
-    result = ma.subtract(ma.array(pa_a), ma.array(pa_b), None)
+    result = ma.compute.subtract(ma.array(pa_a), ma.array(pa_b), ctx=None)
     assert len(result) == 3
     out = pa.array(result)
     assert out[0].as_py() == 9
@@ -544,7 +544,7 @@ def test_mojo_sub_pyarrow_arrays(pa_type: pa.DType) -> None:
 def test_mojo_sub_pyarrow_nulls_propagate(pa_type: pa.DType) -> None:
     pa_a = pa.array([10, None, 30], type=pa_type())
     pa_b = pa.array([1, 2, None], type=pa_type())
-    result = ma.subtract(ma.array(pa_a), ma.array(pa_b), None)
+    result = ma.compute.subtract(ma.array(pa_a), ma.array(pa_b), ctx=None)
     assert len(result) == 3
     assert result.null_count() == 2
 
@@ -556,7 +556,7 @@ def test_mojo_sub_pyarrow_nulls_propagate(pa_type: pa.DType) -> None:
 def test_mojo_mul_pyarrow_arrays(pa_type: pa.DType) -> None:
     pa_a = pa.array([2, 3, 4], type=pa_type())
     pa_b = pa.array([5, 6, 7], type=pa_type())
-    result = ma.multiply(ma.array(pa_a), ma.array(pa_b), None)
+    result = ma.compute.multiply(ma.array(pa_a), ma.array(pa_b), ctx=None)
     assert len(result) == 3
     out = pa.array(result)
     assert out[0].as_py() == 10
@@ -571,7 +571,7 @@ def test_mojo_mul_pyarrow_arrays(pa_type: pa.DType) -> None:
 def test_mojo_div_pyarrow_arrays(pa_type: pa.DType) -> None:
     pa_a = pa.array([10, 20, 30], type=pa_type())
     pa_b = pa.array([2, 4, 5], type=pa_type())
-    result = ma.divide(ma.array(pa_a), ma.array(pa_b), None)
+    result = ma.compute.divide(ma.array(pa_a), ma.array(pa_b), ctx=None)
     assert len(result) == 3
     out = pa.array(result)
     assert out[0].as_py() == 5
@@ -585,49 +585,49 @@ def test_mojo_div_pyarrow_arrays(pa_type: pa.DType) -> None:
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_mojo_sum_pyarrow_int(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, 2, 3, 4], type=pa_type())
-    assert ma.sum(ma.array(pa_a), None) == 10.0
+    assert ma.compute.sum(ma.array(pa_a), ctx=None) == 10.0
 
 
 @pytest.mark.parametrize("pa_type", FLOAT_TYPES)
 def test_mojo_sum_pyarrow_float(pa_type: pa.DType) -> None:
     pa_a = pa.array([1.5, 2.5, 3.0], type=pa_type())
-    assert ma.sum(ma.array(pa_a), None) == pytest.approx(7.0)
+    assert ma.compute.sum(ma.array(pa_a), ctx=None) == pytest.approx(7.0)
 
 
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_mojo_sum_pyarrow_skips_nulls(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, None, 3, None], type=pa_type())
-    assert ma.sum(ma.array(pa_a), None) == 4.0
+    assert ma.compute.sum(ma.array(pa_a), ctx=None) == 4.0
 
 
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_mojo_min_pyarrow(pa_type: pa.DType) -> None:
     pa_a = pa.array([3, 1, 4, 1, 5], type=pa_type())
-    assert ma.min(ma.array(pa_a), None) == 1.0
+    assert ma.compute.min(ma.array(pa_a), ctx=None) == 1.0
 
 
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_mojo_max_pyarrow(pa_type: pa.DType) -> None:
     pa_a = pa.array([3, 1, 4, 1, 5], type=pa_type())
-    assert ma.max(ma.array(pa_a), None) == 5.0
+    assert ma.compute.max(ma.array(pa_a), ctx=None) == 5.0
 
 
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_mojo_min_pyarrow_skips_nulls(pa_type: pa.DType) -> None:
     pa_a = pa.array([3, None, 1, None], type=pa_type())
-    assert ma.min(ma.array(pa_a), None) == 1.0
+    assert ma.compute.min(ma.array(pa_a), ctx=None) == 1.0
 
 
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_mojo_max_pyarrow_skips_nulls(pa_type: pa.DType) -> None:
     pa_a = pa.array([3, None, 5, None], type=pa_type())
-    assert ma.max(ma.array(pa_a), None) == 5.0
+    assert ma.compute.max(ma.array(pa_a), ctx=None) == 5.0
 
 
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_mojo_product_pyarrow(pa_type: pa.DType) -> None:
     pa_a = pa.array([2, 3, 4], type=pa_type())
-    assert ma.product(ma.array(pa_a), None) == 24.0
+    assert ma.compute.product(ma.array(pa_a), ctx=None) == 24.0
 
 
 # ── filter ───────────────────────────────────────────────────────────────────
@@ -637,7 +637,7 @@ def test_mojo_product_pyarrow(pa_type: pa.DType) -> None:
 def test_mojo_filter_pyarrow_arrays(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, 2, 3, 4, 5], type=pa_type())
     pa_mask = pa.array([True, False, True, False, True])
-    result = ma.filter(ma.array(pa_a), ma.array(pa_mask))
+    result = ma.compute.filter(ma.array(pa_a), ma.array(pa_mask))
     assert len(result) == 3
     out = pa.array(result)
     assert out[0].as_py() == 1
@@ -649,7 +649,7 @@ def test_mojo_filter_pyarrow_arrays(pa_type: pa.DType) -> None:
 def test_mojo_filter_pyarrow_preserves_nulls(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, None, 3, None, 5], type=pa_type())
     pa_mask = pa.array([True, True, True, False, True])
-    result = ma.filter(ma.array(pa_a), ma.array(pa_mask))
+    result = ma.compute.filter(ma.array(pa_a), ma.array(pa_mask))
     assert len(result) == 4
     assert result.null_count() == 1
 
@@ -658,7 +658,7 @@ def test_mojo_filter_pyarrow_preserves_nulls(pa_type: pa.DType) -> None:
 def test_mojo_filter_pyarrow_all_false(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, 2, 3], type=pa_type())
     pa_mask = pa.array([False, False, False])
-    result = ma.filter(ma.array(pa_a), ma.array(pa_mask))
+    result = ma.compute.filter(ma.array(pa_a), ma.array(pa_mask))
     assert len(result) == 0
 
 
@@ -669,7 +669,7 @@ def test_mojo_filter_pyarrow_all_false(pa_type: pa.DType) -> None:
 def test_pyarrow_to_mojo_compute_to_pyarrow(pa_type: pa.DType) -> None:
     pa_a = pa.array([7, 42, -1], type=pa_type())
     pa_b = pa.array([3, 8, 1], type=pa_type())
-    result = ma.add(ma.array(pa_a), ma.array(pa_b), None)
+    result = ma.compute.add(ma.array(pa_a), ma.array(pa_b), ctx=None)
     out = pa.array(result)
     assert out.type == pa_type()
     assert out[0].as_py() == 10
@@ -681,7 +681,7 @@ def test_pyarrow_to_mojo_compute_to_pyarrow(pa_type: pa.DType) -> None:
 def test_pyarrow_to_mojo_compute_to_pyarrow_with_nulls(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, None, 3, None], type=pa_type())
     pa_b = pa.array([10, 20, None, 40], type=pa_type())
-    result = ma.add(ma.array(pa_a), ma.array(pa_b), None)
+    result = ma.compute.add(ma.array(pa_a), ma.array(pa_b), ctx=None)
     out = pa.array(result)
     assert out.type == pa_type()
     assert out[0].as_py() == 11
@@ -693,7 +693,7 @@ def test_pyarrow_to_mojo_compute_to_pyarrow_with_nulls(pa_type: pa.DType) -> Non
 @pytest.mark.parametrize("pa_type", INT_TYPES)
 def test_pyarrow_to_mojo_drop_nulls(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, None, 3, None, 5], type=pa_type())
-    result = ma.drop_null(ma.array(pa_a))
+    result = ma.compute.drop_null(ma.array(pa_a))
     assert len(result) == 3
     assert result.null_count() == 0
     out = pa.array(result)

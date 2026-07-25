@@ -86,21 +86,21 @@ def duck_con(int64_arrays, float64_arrays):
 def test_marrow_sort_indices_int64(benchmark, int64_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
     arr = int64_arrays["ma"]
-    benchmark(ma.sort_indices, arr)
+    benchmark(ma.compute.sort_indices, arr)
 
 
 @pytest.mark.benchmark(group="sort_int64")
 def test_marrow_sort_indices_int64_serial(benchmark, int64_arrays, n):
     benchmark.extra_info.update(lib="marrow_serial", n=n)
     arr = int64_arrays["ma"]
-    benchmark(ma.sort_indices, arr, ctx=ma.ExecutionContext.serial())
+    benchmark(ma.compute.sort_indices, arr, ctx=ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="sort_int64")
 def test_marrow_sort_int64(benchmark, int64_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
     arr = int64_arrays["ma"]
-    benchmark(ma.sort, arr)
+    benchmark(ma.compute.sort, arr)
 
 
 @pytest.mark.benchmark(group="sort_int64")
@@ -141,21 +141,21 @@ def test_duckdb_sort_int64(benchmark, duck_con, n):
 def test_marrow_sort_indices_float64(benchmark, float64_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
     arr = float64_arrays["ma"]
-    benchmark(ma.sort_indices, arr)
+    benchmark(ma.compute.sort_indices, arr)
 
 
 @pytest.mark.benchmark(group="sort_float64")
 def test_marrow_sort_indices_float64_serial(benchmark, float64_arrays, n):
     benchmark.extra_info.update(lib="marrow_serial", n=n)
     arr = float64_arrays["ma"]
-    benchmark(ma.sort_indices, arr, ctx=ma.ExecutionContext.serial())
+    benchmark(ma.compute.sort_indices, arr, ctx=ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="sort_float64")
 def test_marrow_sort_float64(benchmark, float64_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
     arr = float64_arrays["ma"]
-    benchmark(ma.sort, arr)
+    benchmark(ma.compute.sort, arr)
 
 
 @pytest.mark.benchmark(group="sort_float64")
