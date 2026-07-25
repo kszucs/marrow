@@ -19,6 +19,7 @@ REPO_ROOT = HERE.parent.parent
 
 NAMES = [
     "query_streaming",
+    "query_streaming_agg",
     "query_dynvalue",
     "query_runtime",
 ]

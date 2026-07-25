@@ -732,6 +732,49 @@ A step that does not move its number is a signal to stop and understand why, not
 each measurement with `pixi run binary_size` — fusion monomorphises per aggregate-set, and the AOT
 binary is the gate.
 
+
+##### Q6.1 BASELINE — measured 2026-07-25, `complete` @ `fc78bff` (M-series, `pixi run -e bench pytest --benchmark --competition`)
+
+`marrow-dynamic` vs the reference engines, group-by sum/mean. **marrow wins 9 of 10.**
+
+| shape | marrow | pyarrow | polars | duckdb |
+|---|---|---|---|---|
+| sum[10k_g10] | **46.2 µs** | 109 µs | 613 µs | 348 µs |
+| sum[100k_g10] | 486 µs | **430 µs** | 655 µs | 1.12 ms |
+| sum[1m_g10] | **724 µs** | 3.48 ms | 918 µs | 4.03 ms |
+| sum[1m_g1k] | **814 µs** | 3.46 ms | 1.78 ms | 6.45 ms |
+| sum[1m_g100k] | **2.11 ms** | 5.42 ms | 2.58 ms | 40.3 ms |
+| mean[1m_g10] | **714 µs** | 4.27 ms | 1.66 ms | 3.99 ms |
+| mean[1m_g100k] | **2.12 ms** | 7.17 ms | 2.63 ms | 39.6 ms |
+
+**Read this correctly.** The dynamic-path target is already met, so the work is not about rescuing
+a deficit. But the margin over **polars is only 1.2–1.3× at 1M rows** — polars is the real
+competitor and everything else is far back. That thin margin is what fusion must open up, and it is
+the number to watch. Note also all rows are single-aggregate: fusion's win is amortising across
+*multiple* aggregates, so **the baseline is missing the very shape that matters** — add
+N-aggregate variants before drawing conclusions.
+
+##### Q6.1 BASELINE — AOT binary size, same commit (`pixi run binary_size`, stripped)
+
+| variant | ratio | note |
+|---|---|---|
+| `query_streaming` (filter+project) | 1.0× | the old gate |
+| **`query_streaming_agg`** (group-by, 2 aggs) | **7.8×** | added 2026-07-25 |
+| `query_dynvalue` / `query_runtime` | 12.8× | full interpreter |
+
+**The finding that justifies Q2.5 quantitatively:** a *fused* aggregate query still weighs 61% of
+the full interpreter. Aggregation gets almost no DCE benefit today, because runtime tags force the
+dtype × aggregate fanout to be retained. Per-module symbol counts locate it precisely:
+
+| module | filter+project | +aggregate |
+|---|---|---|
+| `kernels::execution` | 30 | **1,052** |
+| `views` | 40 | **863** |
+| `dtypes` | 255 | **771** |
+| `kernels::hashing` | 0 | **225** |
+
+Tag removal should collapse these; if it does not, the premise is wrong and we should know early.
+
 ##### Sequencing
 
 0. **Q6.1 baseline first** — record the cross-engine table *before* any change, including the
