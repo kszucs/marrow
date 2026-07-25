@@ -115,13 +115,19 @@ struct Filter(Kernel):
         var dt = array.dtype()
         if dt == bool_:
             return Filter.apply(array.as_bool(), mask, ctx).to_any()
-        elif dt.is_numeric():
+        elif dt.is_primitive():
+            # One arm for every fixed-width type: `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and decimal
+            # columns all reach the same leaf and keep their dtype. The
+            # numeric and temporal arms this replaces were identical apart
+            # from the trait bound, and between them left interval and
+            # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def numeric[T: NumericType](d: T) raises -> AnyArray:
+            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
                 return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
 
-            return dt.dispatch_numeric[numeric]()
+            return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
@@ -149,16 +155,6 @@ struct Filter(Kernel):
             return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_any()
         elif dt.is_dictionary():
             return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
-        elif dt.is_temporal():
-            # `apply` is bound on `PrimitiveType`, which every temporal type
-            # satisfies, so the typed leaf takes the column directly and the
-            # result carries the temporal dtype by construction — no
-            # reinterpret-to-integer and no relabel back.
-            @parameter
-            def temporal[T: TemporalType](d: T) raises -> AnyArray:
-                return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
-
-            return dt.dispatch_temporal[temporal]()
         else:
             raise Error("filter: unsupported dtype ", dt)
 
@@ -628,15 +624,21 @@ struct Take(Kernel):
         var dt = array.dtype()
         if dt == bool_:
             return Take.apply(array.as_bool(), indices, ctx).to_any()
-        elif dt.is_numeric():
+        elif dt.is_primitive():
+            # One arm for every fixed-width type: `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and decimal
+            # columns all reach the same leaf and keep their dtype. The
+            # numeric and temporal arms this replaces were identical apart
+            # from the trait bound, and between them left interval and
+            # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def numeric[T: NumericType](d: T) raises -> AnyArray:
+            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
                 return Take.apply(
                     array.as_primitive[T](), indices, ctx
                 ).to_any()
 
-            return dt.dispatch_numeric[numeric]()
+            return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
@@ -664,16 +666,6 @@ struct Take(Kernel):
             return Take.apply(array.as_fixed_size_list(), indices, ctx).to_any()
         elif dt.is_dictionary():
             return Take.apply(array.as_dictionary(), indices, ctx).to_any()
-        elif dt.is_temporal():
-            # See `Filter.dispatch`: the typed leaf accepts a temporal column
-            # directly and preserves its dtype, so no reinterpret is needed.
-            @parameter
-            def temporal[T: TemporalType](d: T) raises -> AnyArray:
-                return Take.apply(
-                    array.as_primitive[T](), indices, ctx
-                ).to_any()
-
-            return dt.dispatch_temporal[temporal]()
         else:
             raise Error("take: unsupported dtype ", dt)
 
@@ -717,7 +709,11 @@ struct Take(Kernel):
 
         # SIMD gather loop: load W indices, gather W values in parallel.
         # Null indices are masked out (get default value 0).
-        comptime W = simd_byte_width() // size_of[Scalar[native]]()
+        # Floored at 1: types wider than a SIMD register (decimal256 at 32
+        # bytes) would otherwise yield W == 0, which is not a legal store
+        # width. At W == 1 the "vector" gather degenerates to a scalar one,
+        # which is what those types want anyway.
+        comptime W = max(1, simd_byte_width() // size_of[Scalar[native]]())
         var i = 0
         var bitmap = Optional[Bitmap[]](None)
         var null_count = 0

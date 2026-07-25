@@ -360,6 +360,14 @@ Kernels in `marrow/kernels/` are implemented as typed overloads first, with a ty
 
 See `marrow/kernels/concat.mojo` and `marrow/kernels/filter.mojo` for examples.
 
+**Dispatch on the widest family the typed leaf accepts.** A leaf bound on `PrimitiveType` takes
+temporal, interval and decimal columns as-is, so it needs one `dt.dispatch_primitive[...]` arm —
+not one per family, and never a reinterpret to an integer backing. Two arms differing only by
+trait bound usually means the narrower bound is masking a defect rather than encoding a
+constraint: `filter`/`take` had separate numeric and temporal arms that silently left decimal and
+interval unsupported, hiding a SIMD gather width that computed to 0 for types wider than a
+register.
+
 ## Releasing to prefix.dev
 
 Marrow is published to [prefix.dev](https://prefix.dev/channels/marrow) as a conda package via rattler-build. The release is triggered automatically by pushing a git tag.

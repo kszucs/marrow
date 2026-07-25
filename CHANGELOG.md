@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **`filter` and `take` now support decimal and interval columns.** Their dispatch
+  had separate `is_numeric()` and `is_temporal()` arms — identical apart from the
+  trait bound — and `is_numeric()` is integer-or-float only, so decimal and
+  interval columns fell through to `unsupported dtype`. Both arms collapse into a
+  single `dispatch_primitive` one, since the typed leaf is bound on
+  `PrimitiveType` and accepts all of them directly.
+
+  This was masked by a latent bug: `Take.apply` computed its gather width as
+  `simd_byte_width() // size_of[...]`, which is **0** for types wider than a SIMD
+  register (decimal256 at 32 bytes) and is not a legal store width. The width is
+  now floored at 1, where the vector gather degenerates to a scalar one — which
+  is what those types want anyway. The narrow arms had been hiding this by never
+  instantiating the wide types.
+
+
 ### Refactors
 
 - **`filter`, `take`, `sort` and `hashing` no longer reinterpret temporal columns.**
