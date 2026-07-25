@@ -810,6 +810,11 @@ struct AnyDataType(
     def __init__[T: DataType](out self, var value: T):
         self._v = Self.VariantType(value^)
 
+    def variant(ref self) -> ref[self._v] Self.VariantType:
+        """The underlying `Variant` — the dispatch surface the
+        `utils.dispatch_over_*` family resolves a runtime dtype through."""
+        return self._v
+
     def to_any(deinit self) -> AnyDataType:
         return self^
 
@@ -847,6 +852,35 @@ struct AnyDataType(
             return t.byte_width()
 
         return variant_dispatch[PrimitiveType, func=f](self._v)
+
+    def storage_type(self) raises -> AnyDataType:
+        """The signed-integer dtype this type's values are physically stored as.
+
+        Identity for the signed integers, and the same-width signed integer for
+        the fixed-width *logical* types — date/time/timestamp/duration,
+        the interval types, and decimal32/decimal64. Because the mapping is both
+        value- and order-preserving, pairing it with `reinterpret_array` lets
+        value-agnostic kernels (filter/take/hash) and order-preserving ones
+        (sort/min/max) route a logical column through the already-instantiated
+        integer path instead of growing one arm per logical dtype.
+
+        Raises for bool (bit-packed, not byte-addressable), for the non-fixed-
+        width types, and for values wider than 64 bits (decimal128/decimal256,
+        month_day_nano_interval) — no Arrow integer type is that wide.
+        """
+        if self.is_bool():
+            raise Error("storage_type: bool is bit-packed, not integer-backed")
+        var width = self.byte_width()
+        if width == 1:
+            return AnyDataType(int8)
+        elif width == 2:
+            return AnyDataType(int16)
+        elif width == 4:
+            return AnyDataType(int32)
+        elif width == 8:
+            return AnyDataType(int64)
+        else:
+            raise Error(t"storage_type: no integer backing for {self}")
 
     # --- convenience predicates ---
 

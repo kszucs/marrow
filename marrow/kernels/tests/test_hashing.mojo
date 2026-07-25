@@ -1,8 +1,17 @@
 from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, PrimitiveArray, StringArray
-from marrow.builders import array, PrimitiveBuilder, StringBuilder
+from marrow.arrays import AnyArray, DictionaryArray, PrimitiveArray, StringArray
+from marrow.builders import (
+    array,
+    Date32Builder,
+    Decimal128Builder,
+    Int32Builder,
+    LargeStringBuilder,
+    PrimitiveBuilder,
+    StringBuilder,
+    TimestampBuilder,
+)
 from marrow.dtypes import (
     int32,
     int64,
@@ -10,6 +19,10 @@ from marrow.dtypes import (
     uint64,
     float64,
     bool_,
+    date32,
+    decimal128,
+    microsecond,
+    timestamp,
     Int32Type,
     Int64Type,
     UInt8Type,
@@ -18,6 +31,7 @@ from marrow.dtypes import (
 )
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
+from marrow.kernels.groupby import GroupBy
 from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 
 
@@ -196,6 +210,163 @@ def test_hash_dispatch_struct() raises:
     assert_equal(len(h), 3)
     # (1,3) == (1,3) but row 0 and 2 same
     assert_equal(h[0], h[2])
+
+
+# ---------------------------------------------------------------------------
+# hash_ — temporal, large_string, decimal, dictionary
+#
+# These dtypes used to fall off the end of the dispatch ladder and raise, which
+# broke `GROUP BY` on any temporal key (docs/code-quality-review.md D5).
+# ---------------------------------------------------------------------------
+
+
+def _date32(var days: List[Int]) raises -> AnyArray:
+    var b = Date32Builder(date32(), len(days))
+    for d in days:
+        b.append(Scalar[int32.native](d))
+    return b.finish()
+
+
+def _timestamp(var micros: List[Int]) raises -> AnyArray:
+    var b = TimestampBuilder(timestamp(microsecond, "UTC"), len(micros))
+    for m in micros:
+        b.append(Scalar[int64.native](m))
+    return b.finish()
+
+
+def test_hash_date32() raises:
+    """A date32 column hashes as its int32 storage type."""
+    var d = _date32([19000, 18500, 19000])
+    var h = rapidhash(d)
+    assert_equal(len(h), 3)
+    assert_equal(h[0], h[2])
+    assert_true(h[0] != h[1])
+    # Identical to hashing the same days as plain int32 — the reinterpret path
+    # must not perturb the hash.
+    var i = array([19000, 18500, 19000], int32)
+    assert_true(rapidhash(i) == h)
+
+
+def test_hash_timestamp() raises:
+    """A timestamp column (int64 storage) hashes and dedups by value."""
+    var t = _timestamp([1_700_000_000_000_000, 1_600_000_000_000_000])
+    var h = rapidhash(t)
+    assert_equal(len(h), 2)
+    assert_true(h[0] != h[1])
+
+
+def test_hash_timestamp_nulls() raises:
+    var b = TimestampBuilder(timestamp(microsecond), 3)
+    b.append(Scalar[int64.native](10))
+    b.append_null()
+    b.append(Scalar[int64.native](10))
+    var t: AnyArray = b.finish()
+    var h = rapidhash(t)
+    assert_equal(h[1].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
+    assert_equal(h[0], h[2])
+
+
+def test_hash_large_string() raises:
+    """large_string hashes identically to string for the same bytes."""
+    var lb = LargeStringBuilder(3)
+    lb.append("foo")
+    lb.append("bar")
+    lb.append("foo")
+    var large: AnyArray = lb.finish()
+
+    var sb = StringBuilder(3)
+    sb.append("foo")
+    sb.append("bar")
+    sb.append("foo")
+    var small: AnyArray = sb.finish()
+
+    var h = rapidhash(large)
+    assert_equal(h[0], h[2])
+    assert_true(rapidhash(small) == h)
+
+
+def test_hash_decimal128_high_bits() raises:
+    """decimal128 folds both 64-bit limbs — values that differ only above bit 63
+    must not collide (group-by buckets on the hash alone)."""
+    var b = Decimal128Builder(decimal128(38, 0), 3)
+    b.append(Scalar[DType.int128](1))
+    b.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
+    b.append(Scalar[DType.int128](1))
+    var d: AnyArray = b.finish()
+    var h = rapidhash(d)
+    assert_equal(h[0], h[2])
+    assert_true(h[0] != h[1])
+
+
+def test_hash_dictionary_matches_decoded() raises:
+    """A dictionary column hashes like the plain column it encodes."""
+    var values = StringBuilder(2)
+    values.append("red")
+    values.append("blue")
+    var ib = Int32Builder(4)
+    for i in [0, 1, 0, 1]:
+        ib.append(Int32(i))
+    var dict_arr: AnyArray = DictionaryArray.from_arrays(
+        ib.finish(), values.finish()
+    )
+
+    var plain = StringBuilder(4)
+    for s in ["red", "blue", "red", "blue"]:
+        plain.append(s)
+    var plain_arr: AnyArray = plain.finish()
+
+    var h = rapidhash(dict_arr)
+    assert_equal(len(h), 4)
+    assert_true(rapidhash(plain_arr) == h)
+
+
+# ---------------------------------------------------------------------------
+# GROUP BY over a temporal key — the M1 blocker this dispatch gap caused
+# (ClickBench Q19/35/36/40/43 all group on EventDate/EventTime).
+# ---------------------------------------------------------------------------
+
+
+def test_groupby_date32_key() raises:
+    var keys = _date32([19000, 18500, 19000, 18500, 19000])
+    var vals: AnyArray = array([1, 2, 3, 4, 5], int32)
+    var result = GroupBy(keys).sum(vals)
+
+    assert_equal(result.num_rows(), 2)
+    assert_true(result.schema.fields[0].dtype == date32().to_any())
+    ref k = result.columns[0].as_date32()
+    assert_equal(k[0].value(), 19000)
+    assert_equal(k[1].value(), 18500)
+    ref s = result.columns[1].as_int64()
+    assert_equal(s[0].value(), 9)  # 1 + 3 + 5
+    assert_equal(s[1].value(), 6)  # 2 + 4
+
+
+def test_groupby_timestamp_key() raises:
+    var keys = _timestamp([1_000, 2_000, 1_000])
+    var vals: AnyArray = array([10, 20, 30], int32)
+    var result = GroupBy(keys).sum(vals)
+
+    assert_equal(result.num_rows(), 2)
+    assert_true(
+        result.schema.fields[0].dtype == timestamp(microsecond, "UTC").to_any()
+    )
+    ref s = result.columns[1].as_int64()
+    assert_equal(s[0].value(), 40)
+    assert_equal(s[1].value(), 20)
+
+
+def test_groupby_large_string_key() raises:
+    var lb = LargeStringBuilder(4)
+    for s in ["a", "b", "a", "b"]:
+        lb.append(s)
+    var keys: AnyArray = lb.finish()
+    var vals: AnyArray = array([1, 2, 3, 4], int32)
+    var result = GroupBy(keys).sum(vals)
+
+    assert_equal(result.num_rows(), 2)
+    ref s = result.columns[1].as_int64()
+    assert_equal(s[0].value(), 4)
+    assert_equal(s[1].value(), 6)
 
 
 def main() raises:
