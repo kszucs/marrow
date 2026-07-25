@@ -223,6 +223,22 @@ An aggregate is currently represented **four** ways: a comptime `AggKernel` stru
 rule that duplicates the kernel's own `AccType` algebra. 51 references outside `aggregate.mojo`,
 40 of them in `groupby.mojo`.
 
+**Scope (owner directive, 2026-07-25).** Three things, together:
+
+1. **Runtime aggregate dispatch leaves the kernel layer entirely.** The `AGG_*` tags,
+   `agg_tag_from_name`, `for_agg_tag` and `agg_out_dtype` do not belong in
+   `marrow/kernels/aggregate.mojo` — they are a *runtime plan* concern, so they belong with the
+   expression layer (`marrow/expr/dynamic.mojo` or alongside it). `AggKernel`'s own docstring
+   already states the rule and the file breaks it: *"a kernel is a pure type, so any runtime
+   `name -> kernel` selection lives in the expression layer, **never here**."* After this, the
+   kernel layer holds only comptime types; nothing in it knows about names, tags, or plans.
+2. **`reinterpret_array` removed outright** — including `groupby`'s remaining uses. See Q2.6 for
+   why it is unnecessary everywhere else; `groupby` is the last holdout and falls out of the
+   `AggState` rework below.
+3. **The free-standing functions become kernels.** `count_distinct` / `approx_count_distinct`
+   (and their `_grouped` variants) get real kernel structs, so `dispatch` covers the whole
+   aggregate surface rather than special-casing them.
+
 **Target: the kernel is the only representation.** Exactly one runtime→comptime boundary,
 keyed on the name directly with no tag in between:
 
@@ -298,6 +314,15 @@ So the `NumericType` bound is not load-bearing for the fold — it is a conseque
 (`PrimitiveBuilder[Acc]()`, `PrimitiveScalar[Acc](value)`), which the reverted attempt tried to
 work around by threading a dtype instance through `acc_instance` and eight construction sites,
 and which cascaded into the `Value` tower via `Reduction`'s `NumericValue` conformance.
+
+**Prerequisite decision — make this before touching `groupby.mojo`.** `AggState` currently holds
+`PrimitiveBuilder[Self.Acc]`, a *logical* builder, and there is no `DType`-based builder. So the
+physical rework needs one of: (a) add a physical `PrimitiveBuilder` over a `DType`, or (b) have
+`AggState` own a `Buffer` + `BufferView[A]` and hand-manage growth. That choice determines all
+four methods (`update`, `finish`, `into_partials`, `merge`) *and* their eight call sites, so pick
+it first. Supporting evidence for the physical direction: the whole-array reduce helpers
+(`aggregate.mojo:56, :82`) already project to `K.AccType[V].native` — only `AggState` still
+carries the logical type.
 
 **Preferred design — parameterise the state on the physical type and label at the boundary:**
 
