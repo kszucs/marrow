@@ -634,6 +634,39 @@ policy against costs that are about to change.
 - **Numerical parity.** Fusing must not change fold order in a way that alters float results
   versus the unfused path; parity tests should compare fused and per-column results.
 
+##### Two paths, one substrate — and both must win
+
+Both frontends must be excellent, and they are excellent in *different comparisons*. Stating the
+targets separately matters, because a design that is good for one can quietly be bad for the other.
+
+| path | who it is compared against | target |
+|---|---|---|
+| **dynamic (F1)** — Python/ibis, runtime-planned | polars, pyarrow, duckdb, chdb — all themselves runtime-planned | **match or beat.** This is the apples-to-apples comparison; it is the one an evaluator will actually run. |
+| **fused (F2)** — AOT comptime DSL | the same engines, none of which can do this | **decisively beat**, by a margin that grows with aggregate count. This is the differentiator. |
+
+**The rule that keeps the dynamic path fast: dispatch is amortised over a vector, never paid per
+row.** One resolution per `(chunk × aggregate)`, then a tight typed loop — which is precisely why
+polars and pyarrow are fast, and where an interpreter naively written would lose by an order of
+magnitude. The tag-removal step in Q2.5 is what makes this structural rather than incidental:
+once the kernel *is* the aggregate, the dynamic path resolves a kernel once per chunk and then runs
+the same typed code the fused path runs.
+
+**The rule that makes the fused path decisive: zero dispatch and one pass.** All aggregates for a
+group updated in registers, per-kernel comptime offsets into the accumulator blob, no per-aggregate
+revisit of the input. ClickHouse reaches for a JIT to approximate this; marrow gets it at comptime,
+which is the whole bet.
+
+**One substrate, or the two paths drift.** Both must bottom out in the *same* `core[W]` SIMD
+functors. If the dynamic path ever grows its own copy of the arithmetic, every optimisation has to
+be done twice, they diverge in edge cases, and the benchmark stops comparing like with like. The
+fused path is then "the same kernels with the dispatch removed and the loop fused" — not a
+different implementation. This is the property that makes "great results on both" achievable rather
+than a matter of maintaining two competing codebases.
+
+**So the benchmark table carries both as separate rows, always** — `marrow-aot` *and*
+`marrow-dynamic`, alongside every competitor. A change that speeds the fused path while regressing
+the dynamic one is a **regression**, not a trade, and only a two-row table makes that visible.
+
 **Q6.1 — Cross-engine aggregate benchmark, with the AOT path measured** · *gates every Q2.5 round* ·
 Owns: `python/marrow/tests/bench_*.py`, `marrow/kernels/tests/bench_*.mojo`,
 `benchmarks/aggregates/` (new), `pixi.toml` (bench tasks) ·
@@ -662,6 +695,8 @@ on the other), so a small merge script can print one table across both runners r
 anyone to eyeball two.
 
 **Done when:**
+- Every table carries **both `marrow-aot` and `marrow-dynamic` rows** (see above) —
+  a fused-path win that regresses the dynamic path is a regression, and one row would hide it.
 - A **baseline is recorded in this document** — a committed table of marrow-AOT / marrow-dynamic /
   pyarrow / polars / duckdb across the group-by shapes that matter (low- vs high-cardinality keys,
   1 vs N aggregates, with and without nulls). N-aggregate cases are essential: they are precisely
