@@ -8,7 +8,7 @@ delegators.
   - BoolArray: O(N) counting sort.
   - BinaryLikeArray[T]: stdlib comparison sort (bytewise lexicographic).
 
-`SortIndices.dispatch` resolves a runtime dtype through the `dispatch_over_*`
+`SortIndices.dispatch` resolves a runtime dtype through the `AnyDataType.dispatch_*`
 family. Temporal, interval, and decimal32/64 columns sort through their
 order-preserving integer `storage_type()`; dictionary columns sort by their
 decoded values. `SortIndices.multi` composes single-column permutations into a
@@ -50,7 +50,6 @@ from ..dtypes import (
     bool_ as bool_dt,
     Int32Type,
 )
-from ..utils import dispatch_over_binarylike, dispatch_over_numeric
 from .aggregate import reinterpret_array
 from .cast import cast
 from .execution import ExecutionContext
@@ -351,7 +350,7 @@ struct SortIndices(Kernel):
     """Sort-permutation kernel — the indices that would sort a column.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``dispatch_over_*`` family
+    runtime-typed array to the matching leaf via the ``AnyDataType.dispatch_*`` family
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. ``multi`` composes single-column permutations
     into a multi-key ordering.
@@ -404,7 +403,7 @@ struct SortIndices(Kernel):
                     array.as_primitive[T](), ascending, nulls_first, stable, ctx
                 )
 
-            result = dispatch_over_numeric[numeric](dt)
+            result = dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
@@ -417,7 +416,7 @@ struct SortIndices(Kernel):
                     ctx,
                 )
 
-            result = dispatch_over_binarylike[binarylike](dt)
+            result = dt.dispatch_binarylike[binarylike]()
         elif dt.is_dictionary():
             # Order by the *decoded* values: dictionary index order is an
             # encoding artefact (`ordered=False` is the norm), not a value order.

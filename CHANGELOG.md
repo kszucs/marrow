@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **`dispatch_over_*` are now methods on `AnyDataType`** (`dt.dispatch_numeric[f]()`
+  rather than `dispatch_over_numeric[f](dt)`), across 47 call sites. They existed
+  only to read `AnyDataType._v` — a private field — from another module, so as
+  methods the accessor is unnecessary and `_v` is private again. This also removed
+  the last import cycle: `utils.mojo` imported nine dtype names solely for these,
+  while `dtypes.mojo` imported `variant_dispatch` back. `utils.mojo` now has no
+  local imports at all, and the module graph is fully acyclic.
+
+
 ### Fixes
 
 - **`sort_indices` and `rapidhash` now accept every Arrow dtype** — temporal

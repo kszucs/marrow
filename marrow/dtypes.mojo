@@ -810,10 +810,86 @@ struct AnyDataType(
     def __init__[T: DataType](out self, var value: T):
         self._v = Self.VariantType(value^)
 
-    def variant(ref self) -> ref[self._v] Self.VariantType:
-        """The underlying `Variant` — the dispatch surface the
-        `utils.dispatch_over_*` family resolves a runtime dtype through."""
-        return self._v
+    def dispatch_primitive[
+        R: AnyType,
+        //,
+        func: def[T: PrimitiveType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve any runtime fixed-width dtype to its comptime type and run `func`.
+
+        The widest family — numeric, temporal, interval, and decimal. Prefer a
+        narrower member where one fits: this one instantiates `func` for every
+        fixed-width type in the variant.
+        """
+        return variant_dispatch_raises[PrimitiveType, func=func](self._v)
+
+    def dispatch_numeric[
+        R: AnyType,
+        //,
+        func: def[T: NumericType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime numeric dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[NumericType, func=func](self._v)
+
+    def dispatch_integer[
+        R: AnyType,
+        //,
+        func: def[T: IntegerType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime integer dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[IntegerType, func=func](self._v)
+
+    def dispatch_floating[
+        R: AnyType,
+        //,
+        func: def[T: FloatingType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime floating dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[FloatingType, func=func](self._v)
+
+    def dispatch_temporal[
+        R: AnyType,
+        //,
+        func: def[T: TemporalType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime date/time/timestamp/duration dtype to its comptime type
+        and run `func`.
+
+        Only needed when the *logical* type matters (unit, timezone). Kernels that
+        are value- or order-preserving should instead reinterpret the column through
+        `AnyDataType.storage_type()` and reuse the integer path.
+        """
+        return variant_dispatch_raises[TemporalType, func=func](self._v)
+
+    def dispatch_stringlike[
+        R: AnyType,
+        //,
+        func: def[T: StringLikeType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime string-like dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[StringLikeType, func=func](self._v)
+
+    def dispatch_binarylike[
+        R: AnyType,
+        //,
+        func: def[T: BinaryLikeType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime binary-like dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[BinaryLikeType, func=func](self._v)
+
+    def dispatch_listlike[
+        R: AnyType,
+        //,
+        func: def[T: ListLikeType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime list/large_list/map dtype to its comptime type and run
+        `func`."""
+        return variant_dispatch_raises[ListLikeType, func=func](self._v)
 
     def to_any(deinit self) -> AnyDataType:
         return self^

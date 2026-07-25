@@ -12,7 +12,7 @@ fast path.
 
 Runtime ``name -> kernel`` selection lives in the expression layer
 (``marrow/expr``), mirroring ``DynValue``'s tag switch. The runtime *data* dtype
-is resolved to the comptime ``V`` at the boundary via ``dispatch_over_numeric``
+is resolved to the comptime ``V`` at the boundary via `AnyDataType.dispatch_numeric`
 (``marrow.utils``), so ``AggState[K, V]`` itself is fully typed with no dispatch.
 """
 
@@ -34,7 +34,6 @@ from ..scalars import (
     Float64Scalar,
     StringScalar,
 )
-from ..utils import dispatch_over_numeric, dispatch_over_stringlike
 from ..views import reduce
 from .helpers import Kernel
 from .execution import ExecutionContext
@@ -68,7 +67,7 @@ def _reduce_widened[
             )
         return PrimitiveScalar[K.AccType[V]](value).to_any()
 
-    return dispatch_over_numeric[run](array.dtype())
+    return array.dtype().dispatch_numeric[run]()
 
 
 def _reduce_widened_typed[
@@ -77,7 +76,7 @@ def _reduce_widened_typed[
     array: PrimitiveArray[V], ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> PrimitiveScalar[K.AccType[V]]:
     """Fully-typed counterpart of `_reduce_widened` — the input dtype `V` is known
-    at comptime, so there is no `dispatch_over_numeric` and no erased scalar. The
+    at comptime, so there is no `AnyDataType.dispatch_numeric` and no erased scalar. The
     lane cast to the `K.AccType[V]` accumulator is fused into the SIMD `reduce`.
     """
     comptime Acc = K.AccType[V].native
@@ -164,7 +163,7 @@ trait AggKernel(Kernel):
             state.update(gids, array.as_primitive[V](), 1)
             return state.finish(1)[0]
 
-        return dispatch_over_numeric[job](array.dtype())
+        return array.dtype().dispatch_numeric[job]()
 
     @staticmethod
     def reduce[
@@ -219,7 +218,7 @@ trait AggKernel(Kernel):
         def leaf[T: NumericType](d: T) raises -> AnyScalar:
             return Self.apply(array.as_primitive[T](), ctx)
 
-        return dispatch_over_numeric[leaf](array.dtype())
+        return array.dtype().dispatch_numeric[leaf]()
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +556,7 @@ def _minmax_string_scalar(array: AnyArray, is_min: Bool) raises -> AnyScalar:
             return StringScalar.null().to_any()
         return StringScalar(String(sa.unsafe_get(UInt(best)))).to_any()
 
-    return dispatch_over_stringlike[leaf](array.dtype())
+    return array.dtype().dispatch_stringlike[leaf]()
 
 
 def min_max_string_grouped(
@@ -594,7 +593,7 @@ def min_max_string_grouped(
                 out.append(sa.unsafe_get(UInt(best[g])))
         return out.finish().to_any()
 
-    return dispatch_over_stringlike[leaf](value.dtype())
+    return value.dtype().dispatch_stringlike[leaf]()
 
 
 def count_valid_grouped(
@@ -714,7 +713,7 @@ def agg_out_dtype(tag: UInt8, value_dtype: AnyDataType) raises -> AnyDataType:
             def by_value[V: NumericType](d: V) raises:
                 box.append(AnyDataType(K.AccType[V]()))
 
-            dispatch_over_numeric[by_value](value_dtype)
+            value_dtype.dispatch_numeric[by_value]()
 
         for_agg_tag[by_kind](tag)
         return box[0].copy()
@@ -842,7 +841,7 @@ struct AllKernel(BoolReduceKernel):
 #
 # `acc` is a real `PrimitiveBuilder[K.AccType[V]]` (not erased), so `update` /
 # `finish` carry no dtype dispatch at all — the runtime dtype was resolved once
-# at the boundary by `dispatch_over_numeric`. The count column drives NULL output for
+# at the boundary by `AnyDataType.dispatch_numeric`. The count column drives NULL output for
 # empty/all-null groups and the `mean` divisor. A richer aggregate (variance,
 # distinct, ...) pairs its kernel with a different state struct of this shape.
 #
@@ -857,7 +856,7 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
     (`Acc = K.AccType[V]`), `update` takes a `PrimitiveArray[V]`, and `finish`
     returns a `PrimitiveArray[Acc]` — no `AnyBuilder`/`AnyArray`/`AnyScalar`
     anywhere, so the hot loops are fully monomorphized. The runtime dtype was
-    resolved once at the boundary (`dispatch_over_numeric`) before this type existed.
+    resolved once at the boundary (`AnyDataType.dispatch_numeric`) before this type existed.
     A richer aggregate (variance, distinct, ...) pairs its kernel with a
     different state struct of this shape."""
 

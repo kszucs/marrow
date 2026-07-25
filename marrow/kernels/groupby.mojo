@@ -33,7 +33,6 @@ from .hashing import rapidhash
 from .execution import ExecutionContext
 from .filter import take
 from .concat import concat
-from ..utils import dispatch_over_numeric
 from .aggregate import (
     AggKernel,
     AggState,
@@ -381,7 +380,7 @@ struct GroupBy(Movable):
             state.update(gids, value.as_primitive[V](), num_groups)
             return state.finish(num_groups).to_any()
 
-        var agg_col = dispatch_over_numeric[by_value](value.dtype())
+        var agg_col = value.dtype().dispatch_numeric[by_value]()
 
         var kfields = grouper.key_fields(keys)
         var result_fields = List[Field]()
@@ -477,7 +476,7 @@ struct GroupBy(Movable):
                 part_acc[t] = parts[0].copy().to_any()
                 part_cnt[t] = parts[1].copy()
 
-            dispatch_over_numeric[by_value](value.dtype())
+            value.dtype().dispatch_numeric[by_value]()
 
         sync_parallelize[worker](num_threads)
 
@@ -500,7 +499,7 @@ struct GroupBy(Movable):
                 )
             return gstate.finish(gg.num_groups()).to_any()
 
-        var agg_col = dispatch_over_numeric[merge_value](value.dtype())
+        var agg_col = value.dtype().dispatch_numeric[merge_value]()
 
         var kfields = gg.key_fields(keys)
         var out_fields = List[Field]()
@@ -575,7 +574,7 @@ struct GroupBy(Movable):
 
             return (
                 first.finish(),
-                dispatch_over_numeric[by_value](value.dtype()),
+                value.dtype().dispatch_numeric[by_value](),
             )
 
         var hashes = rapidhash(keys, ctx)
@@ -610,7 +609,7 @@ struct GroupBy(Movable):
             return AnyDataType(K.AccType[V]())
 
         out_fields.append(
-            Field(K.name, dispatch_over_numeric[agg_dtype](value.dtype()))
+            Field(K.name, value.dtype().dispatch_numeric[agg_dtype]())
         )
 
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
@@ -872,7 +871,7 @@ struct GroupBy(Movable):
                 state.update(gids, value.as_primitive[V](), num_groups)
                 box.append(state.finish(num_groups).to_any())
 
-            dispatch_over_numeric[by_value](value.dtype())
+            value.dtype().dispatch_numeric[by_value]()
 
         for_agg_tag[run](tag)
         return box[0].copy()
@@ -961,7 +960,7 @@ struct GroupBy(Movable):
                         part_acc[slot] = parts[0].copy().to_any()
                         part_cnt[slot] = parts[1].copy()
 
-                    dispatch_over_numeric[by_value](vchunk.dtype())
+                    vchunk.dtype().dispatch_numeric[by_value]()
 
                 for_agg_tag[run_local](tags[j])
 
@@ -1006,7 +1005,7 @@ struct GroupBy(Movable):
                         )
                     box.append(gstate.finish(ngg).to_any())
 
-                dispatch_over_numeric[by_value](values[j].dtype())
+                values[j].dtype().dispatch_numeric[by_value]()
 
             for_agg_tag[run_merge](tags[j])
             out_fields.append(

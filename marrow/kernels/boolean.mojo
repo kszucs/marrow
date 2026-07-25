@@ -36,7 +36,6 @@ from ..dtypes import (
     Float64Type,
     bool_ as bool_dt,
 )
-from ..utils import dispatch_over_numeric, dispatch_over_floating
 from ..views import BitmapView, apply
 from .helpers import Kernel
 from .execution import ExecutionContext
@@ -392,7 +391,7 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
                 buffer=result.to_immutable(),
             )
 
-        return dispatch_over_floating[leaf](arr.dtype())
+        return arr.dtype().dispatch_floating[leaf]()
 
 
 struct IsNullKernel(NullPredicateKernel):
@@ -461,7 +460,7 @@ def is_null(
     def leaf[T: NumericType](d: T) raises -> AnyArray:
         return is_null(arr.as_primitive[T](), ctx).to_any()
 
-    return dispatch_over_numeric[leaf](arr.dtype())
+    return arr.dtype().dispatch_numeric[leaf]()
 
 
 # ---------------------------------------------------------------------------
@@ -514,4 +513,4 @@ def select(
             ctx,
         ).to_any()
 
-    return dispatch_over_numeric[leaf](then_.dtype())
+    return then_.dtype().dispatch_numeric[leaf]()

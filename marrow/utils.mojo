@@ -22,18 +22,6 @@ from std.builtin.rebind import downcast
 from std.os import abort
 from std.sys import has_accelerator, CompilationTarget, size_of
 
-from .dtypes import (
-    AnyDataType,
-    BinaryLikeType,
-    FloatingType,
-    IntegerType,
-    ListLikeType,
-    NumericType,
-    PrimitiveType,
-    StringLikeType,
-    TemporalType,
-)
-
 
 # ---------------------------------------------------------------------------
 # Little-endian byte / bit / varint primitives
@@ -268,7 +256,7 @@ def variant_dispatch_raises[
 #
 # Thin wrappers over `variant_dispatch_raises` that fix the trait to a dtype
 # family, so a kernel's runtime dispatch reads as
-# `dispatch_over_numeric[leaf](array.dtype())` instead of an 11-way
+# `array.dtype().dispatch_numeric[leaf]()` instead of an 11-way
 # `if dtype == int8 ... elif ...` cascade. `func` receives the runtime dtype
 # resolved to its concrete comptime type `T`; the return type `R` is inferred
 # from `func`. A dtype outside the family raises (the family trait bound filters
@@ -279,92 +267,6 @@ def variant_dispatch_raises[
 # spell out its own ladder: adding a dtype to `AnyDataType.VariantType` extends
 # every family it conforms to at once. Pick the *narrowest* family that covers
 # the leaf — each member instantiates `func` once per conforming variant arm, so
-# `dispatch_over_primitive` costs roughly twice `dispatch_over_numeric` in code
+# `AnyDataType.dispatch_primitive` costs roughly twice `AnyDataType.dispatch_numeric` in code
 # size.
 # ---------------------------------------------------------------------------
-
-
-def dispatch_over_primitive[
-    R: AnyType,
-    //,
-    func: def[T: PrimitiveType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve any runtime fixed-width dtype to its comptime type and run `func`.
-
-    The widest family — numeric, temporal, interval, and decimal. Prefer a
-    narrower member where one fits: this one instantiates `func` for every
-    fixed-width type in the variant.
-    """
-    return variant_dispatch_raises[PrimitiveType, func=func](dt.variant())
-
-
-def dispatch_over_numeric[
-    R: AnyType,
-    //,
-    func: def[T: NumericType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime numeric dtype to its comptime type and run `func`."""
-    return variant_dispatch_raises[NumericType, func=func](dt.variant())
-
-
-def dispatch_over_integer[
-    R: AnyType,
-    //,
-    func: def[T: IntegerType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime integer dtype to its comptime type and run `func`."""
-    return variant_dispatch_raises[IntegerType, func=func](dt.variant())
-
-
-def dispatch_over_floating[
-    R: AnyType,
-    //,
-    func: def[T: FloatingType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime floating dtype to its comptime type and run `func`."""
-    return variant_dispatch_raises[FloatingType, func=func](dt.variant())
-
-
-def dispatch_over_temporal[
-    R: AnyType,
-    //,
-    func: def[T: TemporalType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime date/time/timestamp/duration dtype to its comptime type
-    and run `func`.
-
-    Only needed when the *logical* type matters (unit, timezone). Kernels that
-    are value- or order-preserving should instead reinterpret the column through
-    `AnyDataType.storage_type()` and reuse the integer path.
-    """
-    return variant_dispatch_raises[TemporalType, func=func](dt.variant())
-
-
-def dispatch_over_stringlike[
-    R: AnyType,
-    //,
-    func: def[T: StringLikeType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime string-like dtype to its comptime type and run `func`.
-    """
-    return variant_dispatch_raises[StringLikeType, func=func](dt.variant())
-
-
-def dispatch_over_binarylike[
-    R: AnyType,
-    //,
-    func: def[T: BinaryLikeType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime binary-like dtype to its comptime type and run `func`.
-    """
-    return variant_dispatch_raises[BinaryLikeType, func=func](dt.variant())
-
-
-def dispatch_over_listlike[
-    R: AnyType,
-    //,
-    func: def[T: ListLikeType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime list/large_list/map dtype to its comptime type and run
-    `func`."""
-    return variant_dispatch_raises[ListLikeType, func=func](dt.variant())

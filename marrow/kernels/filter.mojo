@@ -68,7 +68,6 @@ from ..dtypes import (
 )
 from std.algorithm.functional import sync_parallelize
 
-from ..utils import dispatch_over_numeric, dispatch_over_binarylike
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
 from .helpers import Kernel
@@ -122,7 +121,7 @@ struct Filter(Kernel):
             def numeric[T: NumericType](d: T) raises -> AnyArray:
                 return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
 
-            return dispatch_over_numeric[numeric](dt)
+            return dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
@@ -131,7 +130,7 @@ struct Filter(Kernel):
                     array.as_binary_like[T](), mask, ctx
                 ).to_any()
 
-            return dispatch_over_binarylike[binarylike](dt)
+            return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
             return Filter.apply(array.as_null(), mask, ctx).to_any()
         elif dt.is_fixed_size_binary():
@@ -635,7 +634,7 @@ struct Take(Kernel):
                     array.as_primitive[T](), indices, ctx
                 ).to_any()
 
-            return dispatch_over_numeric[numeric](dt)
+            return dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
@@ -644,7 +643,7 @@ struct Take(Kernel):
                     array.as_binary_like[T](), indices, ctx
                 ).to_any()
 
-            return dispatch_over_binarylike[binarylike](dt)
+            return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
             return Take.apply(array.as_null(), indices, ctx).to_any()
         elif dt.is_fixed_size_binary():

@@ -13,7 +13,7 @@ Public API — the ``RapidHash`` kernel:
     - StructArray: per-column hash with combining (multi-key)
     - ListLikeArray[T] / FixedSizeListArray: fold the child hashes per row
   - ``RapidHash.dispatch``: runtime-typed dispatch, routed through the
-    ``dispatch_over_*`` family rather than a hand-written dtype ladder.
+    ``AnyDataType.dispatch_*`` family rather than a hand-written dtype ladder.
     Temporal, interval, and decimal32/64 columns are hashed through their
     integer ``storage_type()``; dictionary columns through their decoded values,
     so a dictionary-encoded key hashes identically to the plain column.
@@ -39,11 +39,6 @@ from ..arrays import (
 )
 from ..builders import UInt64Builder
 from ..buffers import Buffer
-from ..utils import (
-    dispatch_over_binarylike,
-    dispatch_over_listlike,
-    dispatch_over_numeric,
-)
 from ..views import apply
 from .aggregate import reinterpret_array
 from .cast import cast
@@ -272,7 +267,7 @@ struct RapidHash(Kernel):
     """Column hashing kernel — one ``UInt64`` per row.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``dispatch_over_*`` family
+    runtime-typed array to the matching leaf via the ``AnyDataType.dispatch_*`` family
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. Null elements hash to ``NULL_HASH_SENTINEL`` so
     that "null == null" holds for grouping and joining (Arrow's `hash_*`
@@ -299,21 +294,21 @@ struct RapidHash(Kernel):
             def numeric[T: NumericType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_primitive[T](), ctx)
 
-            return dispatch_over_numeric[numeric](dt)
+            return dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
             def binarylike[T: BinaryLikeType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_binary_like[T](), ctx)
 
-            return dispatch_over_binarylike[binarylike](dt)
+            return dt.dispatch_binarylike[binarylike]()
         elif dt.is_list_like() or dt.is_map():
 
             @parameter
             def listlike[T: ListLikeType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_list_like[T](), ctx)
 
-            return dispatch_over_listlike[listlike](dt)
+            return dt.dispatch_listlike[listlike]()
         elif dt.is_struct():
             return RapidHash.apply(keys.as_struct(), ctx)
         elif dt.is_fixed_size_list():

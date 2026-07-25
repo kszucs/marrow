@@ -46,7 +46,6 @@ from ..dtypes import (
     StringLikeType,
     bool_ as bool_dt,
 )
-from ..utils import dispatch_over_numeric
 from .helpers import Kernel, bitmap_and
 from .execution import ExecutionContext
 
@@ -189,7 +188,7 @@ trait BinaryCompareKernel(Kernel):
                 left.as_large_string(), right.as_large_string()
             ).to_any()
         else:
-            return dispatch_over_numeric[leaf](left.dtype())
+            return left.dtype().dispatch_numeric[leaf]()
 
 
 # ---------------------------------------------------------------------------
