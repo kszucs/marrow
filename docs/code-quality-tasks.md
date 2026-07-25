@@ -277,6 +277,36 @@ by type, so the two unify here rather than one being deleted.
 **Payoff:** removes the last blocker to deleting `reinterpret_array` (see below), gives native
 temporal reductions instead of reinterpret-and-relabel, and leaves one place to add an aggregate.
 
+### ⚠️ Attempted 2026-07-25 — reverted. Read this before retrying.
+
+Stage A (the widening) was implemented and **compiled**, but broke the expression layer:
+
+```
+expr/values.mojo:1705: 'Reduction[K, A]' does not implement all requirements for 'NumericValue'
+  comptime member 'OutType' type 'PrimitiveType' does not conform to required 'NumericType'
+```
+
+**The widening cascades into the fused expression tower.** `Reduction[K, A]` declares
+`OutType = K.AccType[A.OutType]` and conforms to `NumericValue`, whose `OutType` must be a
+`NumericType`. Widening `AccType`'s return to `PrimitiveType` breaks that conformance, and there
+is no `PrimitiveValue` tier to move `Reduction` to. **Any retry must plan for a new tier in the
+`Value` trait tower (`NumericValue` / `BoolValue` / `StringValue` / …), not just the kernel layer.**
+
+What did work, and is worth keeping in a retry:
+- The `Aggregate` / `AggKernel(Aggregate)` trait split.
+- **`acc_instance[V](input) -> AccType[V]`** — the comptime-typed counterpart of `acc_dtype`. This
+  is the piece that gets past the `Defaultable` wall without a downcast: `min`/`max` return the
+  input's own dtype (unit and timezone intact), the widening aggregates return a defaultable
+  numeric one. Routing through `AnyDataType` instead needs the private `_as`, i.e. trades one leak
+  for another.
+- Threading the accumulator instance through `AggState.__init__(input_dtype)` and its 8
+  construction sites, plus `agg_out_dtype` / `agg_dtype`, which all default-construct `AccType[V]`.
+
+**Process note:** the widening compiled cleanly against `test_aggregate` and `test_groupby` (23 and
+32 passing) while the expr layer was broken — a per-file `check` is not proof the library builds.
+Run `check_lib`, or at minimum `check marrow/expr/tests/test_streaming.mojo`, before believing a
+kernel-layer change is done.
+
 **Q2.6 — Delete `reinterpret_array`** · Depends: Q2.5 for the `groupby` half ·
 Owns: `marrow/kernels/{filter,sort,hashing,groupby,aggregate}.mojo` ·
 
