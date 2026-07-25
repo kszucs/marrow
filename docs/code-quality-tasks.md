@@ -259,6 +259,39 @@ already names: an `Aggregate` node that carries **comptime** aggregate kernels, 
 `List[String]` of function names exists to interpret. Until such a fused aggregate spec exists,
 this gate cannot move — no amount of tag relocation will do it.
 
+**Step 3a done (2026-07-25) — and the size prediction was wrong *again*. Record it.**
+`AggFunc` now lets a plan node carry a comptime kernel (`AggFunc.typed[SumKernel, Int64Type]()`),
+the whole `AGG_*` tag vocabulary is deleted, and `dispatch_agg[job](name)` is the single
+runtime→comptime boundary. New gate `query_streaming_agg_fused.mojo` expresses the same query
+through it. Measured on `complete` @ `80ebc10`+:
+
+| binary | stripped | ratio | `AggState` syms | `expr::aggregates` syms |
+|---|---|---|---|---|
+| `query_streaming` (filter+project) | 1,307,624 | 1.0x | 0 | 0 |
+| `query_streaming_agg_fused` | 9,963,344 | **7.6x** | 1 | 2 (`_fold_grouped_typed`) |
+| `query_streaming_agg` (runtime name) | 10,260,688 | **7.8x** | 22 | 27 |
+
+The monomorphisation **works** — the fused binary contains exactly two aggregate leaves,
+`_fold_grouped_typed[SumKernel, Int64Type]` and `[MinKernel, Int64Type]`, and no name switch,
+no `agg_grouped`, no `dispatch_numeric` over the kernels. It is worth **2.9 %**.
+
+*The aggregate identity was never the fanout driver.* Per-module, the fused and runtime-named
+aggregate binaries are all but identical (`kernels::execution` 1051 vs 1054, `views` 863 vs 863,
+`dtypes` 744 vs 772, `hashing` 225 vs 225) and both are ~7.6x the filter+project baseline. What
+costs is the **grouping**, which is runtime-dtype in both: `HashGrouper.consume_keys` →
+`kernels/hashing.mojo` (which imports `kernels/cast`) pulls in **797 `marrow::kernels::cast`
+symbols — 20 % of the fused binary's total** — plus `concat`/`take` over `AnyArray`. Closing the
+next order of magnitude needs a **comptime key spec** (fused grouping), not more work on the
+aggregate side; Q1.1's `hashing`/`sort` dtype-ladder rework is the adjacent lever.
+
+Second lesson, measured: **an erased box pays for every field, for every kernel its name switch
+can produce.** The first cut put `whole` / `partials` / `merge` on `AggFunc` alongside
+`out_dtype` / `grouped`; that alone took `query_streaming_agg` from 10.26 MB to 13.48 MB
+(**+3.2 MB, +24 %**, 7.8x → 10.3x) for three capabilities a relational plan never calls.
+Splitting them into `AggFold` — built only by the eager `GroupBy` drivers, resolved through the
+same `dispatch_agg` — restored the 7.8x exactly. Keep erased boxes minimal, and if a capability
+has one caller, give it its own box.
+
 **Target: the kernel is the only representation.** Exactly one runtime→comptime boundary,
 keyed on the name directly with no tag in between:
 

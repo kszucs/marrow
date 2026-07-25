@@ -42,7 +42,7 @@ from ..tabular import RecordBatch
 from .values import AnyValue
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
-from .aggregates import agg_tag_from_name, agg_out_dtype
+from .aggregates import AggFunc
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -291,26 +291,30 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             fields.append(Field(name, k.execute(probe).dtype()))
             key_exprs.append(AnyValue(k^))
 
-        # Aggregate output dtype comes from the kernel's accumulator algebra —
-        # `agg_out_dtype` is the single home of that rule (sum widens integers to
-        # int64; min/max preserve the input dtype, including string/temporal;
-        # count and the distinct counts are int64; mean is float64).
+        # Resolve each function *name* to its comptime kernel once, here — the
+        # only interpretation step on this path. The output dtype then comes from
+        # the kernel's own accumulator algebra (`AggFunc.out_dtype`: sum widens
+        # integers to int64; min/max preserve the input dtype, including
+        # string/temporal; count and the distinct counts are int64; mean is
+        # float64).
         var val_exprs = List[AnyValue]()
+        var agg_funcs = List[AggFunc]()
         for i in range(len(values)):
             var v = values[i].resolve_names(input_schema)
-            var tag = agg_tag_from_name(funcs[i])
+            var f = AggFunc(funcs[i])
             var out_name = names[i] if len(names) != 0 else funcs[i]
             fields.append(
-                Field(out_name, agg_out_dtype(tag, v.execute(probe).dtype()))
+                Field(out_name, f.out_dtype(v.execute(probe).dtype()))
             )
             val_exprs.append(AnyValue(v^))
+            agg_funcs.append(f^)
 
         return AnyRelation(
             Aggregate(
                 input=self,
                 keys=key_exprs^,
                 aggs=val_exprs^,
-                funcs=funcs.copy(),
+                funcs=agg_funcs^,
                 schema=Schema(fields=fields^),
             )
         )
@@ -717,12 +721,17 @@ struct Sort(Relation):
 
 
 struct Aggregate(Relation):
-    """Grouped aggregation — the descriptive node (keys, aggregates, schema)."""
+    """Grouped aggregation — the descriptive node (keys, aggregates, schema).
+
+    ``funcs[i]`` is the ``AggFunc`` applied to ``aggs[i]``. It holds a *comptime*
+    kernel, so a plan built from fused values and ``AggFunc.typed[...]`` carries
+    no function-name interpretation at all; ``AnyRelation.aggregate`` produces the
+    same node from runtime names."""
 
     var input: AnyRelation
     var keys: List[AnyValue]
     var aggs: List[AnyValue]
-    var funcs: List[String]
+    var funcs: List[AggFunc]
     var _schema: Schema
 
     def __init__(
@@ -731,7 +740,7 @@ struct Aggregate(Relation):
         var input: AnyRelation,
         var keys: List[AnyValue],
         var aggs: List[AnyValue],
-        var funcs: List[String],
+        var funcs: List[AggFunc],
         var schema: Schema,
     ):
         self.input = input^

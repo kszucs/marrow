@@ -32,7 +32,7 @@ from ..kernels.aggregate import (
     reinterpret_array,
     temporal_backing_dtype,
 )
-from .aggregates import agg_tag_from_name, aggregate_column
+from .aggregates import AggFunc
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet import (
@@ -564,11 +564,13 @@ struct AggregateProcessor(Processor):
     Keys are grouped by a keys-only ``HashGrouper`` *as morsels arrive*, so the
     grouping is incremental; only the per-batch group ids and the evaluated value
     columns are buffered. On emit, each aggregate's chunks are ``concat``-ed once
-    and handed to ``aggregate_column`` — the same per-column entry point the
+    and handed to ``AggFunc.grouped`` — the same per-column entry point the
     runtime multi-aggregate driver uses — so the whole routing (distinct
     kernels, string/temporal min/max, non-numeric ``count``, typed ``AggState``
-    folds) is shared rather than duplicated here. Keys and aggregate inputs are
-    arbitrary ``AnyValue`` expressions, evaluated per morsel.
+    folds) is shared rather than duplicated here. An ``AggFunc`` carries a
+    *comptime* kernel, so a fused plan reaches ``AggState[K, V]`` with no
+    function-name interpretation anywhere in between. Keys and aggregate inputs
+    are arbitrary ``AnyValue`` expressions, evaluated per morsel.
 
     ``HAVING`` needs no node of its own: a ``Filter`` on top of the ``Aggregate``
     relation evaluates its predicate against the aggregate's *output* batch, so
@@ -578,9 +580,9 @@ struct AggregateProcessor(Processor):
     var input: AnyProcessor
     var keys: List[AnyValue]
     var aggs: List[AnyValue]
+    var funcs: List[AggFunc]
     var _schema: Schema
     var _grouper: HashGrouper
-    var _tags: List[UInt8]
     var _ctx: ExecutionContext
     var _emitted: Bool
 
@@ -590,18 +592,16 @@ struct AggregateProcessor(Processor):
         var input: AnyProcessor,
         var keys: List[AnyValue],
         var aggs: List[AnyValue],
-        var funcs: List[String],
+        var funcs: List[AggFunc],
         var schema: Schema,
         var ctx: ExecutionContext,
     ) raises:
         self.input = input^
         self.keys = keys^
         self.aggs = aggs^
+        self.funcs = funcs^
         self._schema = schema^
         self._grouper = HashGrouper()
-        self._tags = List[UInt8]()
-        for i in range(len(funcs)):
-            self._tags.append(agg_tag_from_name(funcs[i]))
         self._ctx = ctx^
         self._emitted = False
 
@@ -690,12 +690,10 @@ struct AggregateProcessor(Processor):
         var cols = List[AnyArray]()
         for i in range(len(grouped_keys)):
             cols.append(self._as_declared(i, grouped_keys[i].copy()))
-        for i in range(len(self._tags)):
+        for i in range(len(self.funcs)):
             var value = concat(value_chunks[i], self._ctx)
             value_chunks[i].clear()
-            cols.append(
-                aggregate_column(gids, value, num_groups, self._tags[i])
-            )
+            cols.append(self.funcs[i].grouped(gids, value, num_groups))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 

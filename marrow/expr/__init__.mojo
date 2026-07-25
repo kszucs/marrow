@@ -68,6 +68,7 @@ from .dynamic import (
     XOR,
 )
 from ..kernels.execution import ExecutionContext
+from .aggregates import AggFunc
 from .execution import (
     # Execution layer (processors built by Relation.to_processor)
     Processor,

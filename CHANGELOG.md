@@ -2,8 +2,43 @@
 
 ## [Unreleased]
 
+### Features
+
+- **The relational layer can express a *comptime* aggregate — `AggFunc`.** An aggregate is
+  no longer a `String` in a plan node: `Aggregate` (and `AggregateProcessor`) now carry
+  `List[AggFunc]`, a closed erasure over a comptime `AggKernel`. Three ways to build one,
+  all landing on the same kernels:
+  `AggFunc.typed[SumKernel, Int64Type]()` (fused/AOT — kernel *and* input dtype comptime,
+  so the plan holds a direct pointer to `AggState[K, V]` with no dispatch left),
+  `AggFunc.of[SumKernel]()` (kernel comptime, dtype resolved per column), and
+  `AggFunc("sum")` (the dynamic frontend's entry). This closes the F1/F2 gap that
+  `benchmarks/binary_size/query_streaming_agg.mojo` documented by construction: a fused plan
+  now contains no function-name switch at all. `AnyRelation.aggregate(keys, values, funcs,
+  names)` and the Python `group_by(...).aggregate([...])` binding are unchanged in signature
+  and behaviour; they resolve names to `AggFunc` once, at plan-build time.
+- **`benchmarks/binary_size/query_streaming_agg_fused.mojo`** — the same
+  `SELECT name, sum(a), min(b) ... GROUP BY name` as `query_streaming_agg.mojo` but through
+  the comptime-kernel spec. The delta between the two is the cost of a runtime aggregate
+  identity.
+
 ### Refactors
 
+- **The aggregate tag vocabulary is deleted.** `AGG_SUM`…`AGG_APPROX_COUNT_DISTINCT`,
+  `agg_tag_from_name`, `agg_name_from_tag`, `agg_is_distinct`, `for_agg_tag`, the
+  tag-keyed `agg_out_dtype`/`aggregate_column`/`_agg_over_gids`/`_whole_col` are gone. What
+  replaces them is one generic body per concern, parameterised on the kernel
+  (`agg_out_dtype[K]` / `agg_grouped[K]` / `agg_whole[K]`), and one name switch,
+  `dispatch_agg[job](name)`, keyed on the kernels' own `name`. The output-dtype rule now
+  *is* the kernel's accumulator algebra (`AggKernel.AccType`) for numeric inputs, with a
+  rule of its own only for the non-numeric cases; and the temporal-`min`/`max` reinterpret in
+  `aggregate_grouped` is derived from `out_dtype` rather than re-listed. Aggregate results and
+  output dtypes are unchanged.
+- **`AggFold`** splits the eager `GroupBy` drivers' extra capabilities (whole-array reduce,
+  thread-local partial + merge) out of `AggFunc`. Every field of an erased box is live code
+  for every kernel its name switch can produce, so carrying them on the box a *plan* holds
+  cost the aggregate binary-size gate **+3.2 MB (+24 %)** for capabilities a relational plan
+  never calls. Both boxes resolve through the same `dispatch_agg`, so there is still exactly
+  one list of kernels.
 - **Runtime aggregate routing left the kernel layer.** `marrow/kernels/aggregate.mojo`
   documented `for_agg_tag` as "the one place a runtime function name resolves to a comptime
   `AggKernel`" while `AggKernel`'s own docstring says such selection "lives in the expression

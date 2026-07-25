@@ -1,25 +1,21 @@
-"""Binary-size gate for *aggregation* with a **runtime-named** aggregate.
+"""Binary-size gate for a fully **fused** aggregation.
 
-`SELECT name, sum(a), min(b) FROM orders GROUP BY name` — fused comptime values
-(`col`) for the key and the aggregate inputs, but the aggregate *identity*
-resolved from a function name (`AggFunc("sum")`), as the Python / ibis frontend
-does.
+`SELECT name, sum(a), min(b) FROM orders GROUP BY name` — the same query as
+`query_streaming_agg.mojo`, but the aggregates are `AggFunc.typed[K, V]()`:
+kernel *and* input dtype are comptime, so the plan holds a direct pointer to
+`AggState[SumKernel, Int64Type]` / `AggState[MinKernel, Int64Type]`.
 
-Why this file exists: `query_streaming.mojo` is filter+project only, so the AOT
-size gate was blind to the aggregate path. Fusion monomorphises per
-aggregate-set — exactly the change that can blow code size up — and without an
-aggregate query in the gate that regression would go unnoticed.
-
-Its pair, `query_streaming_agg_fused.mojo`, expresses the **same** query with
-comptime kernels (`AggFunc.typed[SumKernel, Int64Type]()`). The delta between
-the two is the measurement: it is exactly the cost of the aggregate identity
-(and the input dtype) being runtime rather than comptime.
+Nothing interprets an aggregate here — no function-name switch, no per-dtype
+`dispatch_numeric` ladder over six kernels. Everything the runtime-named variant
+must keep alive is dead code in this binary, and the delta between the two
+stripped sizes is precisely the cost of a runtime aggregate identity.
 
     pixi run binary_size
 """
 
 from marrow.builders import array
-from marrow.dtypes import int64, string, field
+from marrow.dtypes import Int64Type, int64, string, field
+from marrow.kernels.aggregate import SumKernel, MinKernel
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.aggregates import AggFunc
@@ -43,8 +39,8 @@ def main() raises:
     aggs.append(AnyValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
-    funcs.append(AggFunc("sum"))
-    funcs.append(AggFunc("min"))
+    funcs.append(AggFunc.typed[SumKernel, Int64Type]())
+    funcs.append(AggFunc.typed[MinKernel, Int64Type]())
 
     var agg = Aggregate(
         input=AnyRelation(InMemoryTable(batch=batch)),
