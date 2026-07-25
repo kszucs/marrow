@@ -89,11 +89,18 @@ The harness compiles runners to `.test_runners/test_runner_<hash>` (content-
 hashed, stable across runs).  Re-running the same test selection skips
 recompilation (~1 s vs ~5 s cold).
 
-Tests run sequentially by default. Use `*_parallel` task variants (e.g.
-`test_mojo_parallel`) to enable `--dist=loadfile` parallelism, which groups
-all tests from the same `.mojo` file on the same worker so the compiled binary
-is reused.  Benchmark tasks always pass `-n0` to disable parallelism for
-accurate timing.
+Tests run sequentially by default, but **prefer the `*_parallel` variants for
+any full-suite run** — measured on this repo, `pixi run test_parallel` completes
+the suite in **8m16s versus 38m30s** for `pixi run test`, a 4.7x speedup, with
+identical results. `--dist=loadfile` groups all tests from one `.mojo` file onto
+the same worker so its compiled runner is built once and reused; without that,
+parallelism would recompile the same binary per worker and could be slower.
+
+`test_parallel` omits `-v` by default (with `-n auto` the per-test lines from
+several workers interleave); pass it explicitly when you want per-test output:
+`pixi run test_parallel -v`.
+
+Benchmark tasks always pass `-n0` to disable parallelism for accurate timing.
 
 The Python shared library (`python/libmarrow.so`) is rebuilt automatically by
 `conftest.py` before each test session — no manual `build_python` step needed.
