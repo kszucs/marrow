@@ -315,6 +315,42 @@ So the `NumericType` bound is not load-bearing for the fold — it is a conseque
 work around by threading a dtype instance through `acc_instance` and eight construction sites,
 and which cascaded into the `Value` tower via `Reduction`'s `NumericValue` conformance.
 
+### Decided: split `aggregate_runtime`; names belong to `DynValue`
+
+`GroupBy.aggregate_runtime(values, tags)` is the only reason the kernel layer knows about names
+or tags, and it knows about them because it bundles **two** responsibilities:
+
+1. **group once** — hash the keys a single time, and
+2. **apply N heterogeneous aggregates** to that grouping.
+
+Only (2) needs runtime dispatch (the N aggregates are different kernels chosen at runtime, so no
+single comptime `K` covers them). (1) is why they were fused — to avoid re-hashing per aggregate.
+**Splitting them removes the need for names in the kernel layer entirely:**
+
+```mojo
+# kernel layer — pure comptime, no names, no tags
+def group(keys) -> Grouping                        # gids + num_groups, hashed once
+def aggregate[K: AggKernel](g: Grouping, value)    # one typed aggregate
+```
+
+The caller groups once, then loops its aggregate list resolving **name → kernel in its own
+layer**, calling the typed method per column. Hash-once is preserved because `Grouping` is passed
+in — that property came from the bundling, not from the dispatch.
+
+**`DynValue` owns the name/tag routing** (`marrow/expr/dynamic.mojo`). It is the runtime-plan
+frontend, so this is where a `String` becomes a kernel; `AggKernel`'s docstring already says
+runtime `name -> kernel` selection "lives in the expression layer, never here". The AOT frontend
+names kernels as types and pays no dispatch at all, which is what the small-binary property wants.
+
+Deleted from the kernel layer: the eight `AGG_*` constants, `agg_tag_from_name`, `for_agg_tag`,
+`agg_is_distinct`, `agg_out_dtype`, `_agg_name`, **and `aggregate_runtime` itself**.
+`python/bindings/tabular.mojo` calls `aggregate_runtime` directly today and must be re-pointed
+through the expression layer.
+
+**Prerequisite: the `Grouping` value type (RC7 / Q4.1).** `(gids, num_groups)` currently travels
+as two loose parameters across 8+ signatures with nothing checking `num_groups > max(gids)`. It
+was logged as an independent cleanup; it is actually the enabling piece here, so do it first.
+
 ### Simplifications the new design should absorb
 
 **`_reduce_widened` / `_reduce_widened_typed` are the same function twice.** The typed one's own
