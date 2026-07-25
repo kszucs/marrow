@@ -701,6 +701,17 @@ anyone to eyeball two.
   pyarrow / polars / duckdb across the group-by shapes that matter (low- vs high-cardinality keys,
   1 vs N aggregates, with and without nulls). N-aggregate cases are essential: they are precisely
   what fusion targets, and a 1-aggregate benchmark would show none of the win.
+- **Correction (verified 2026-07-25, do not re-plan around the old assumption):** there is **no
+  fused aggregate path today** — `execution.mojo:697` routes through `self._tags[i]` →
+  `GroupBy.aggregate_column`, the runtime tag mechanism, *even in the fused streaming path*. So the
+  `marrow-aot` group-by row is the **deliverable of the fusion work, not a precondition**. Step 0
+  therefore records `marrow-dynamic` + competitors only; the `marrow-aot` row goes from *absent* to
+  *top of table*, which is a clean demonstration rather than a gap.
+- **The binary-size gate is currently blind to this work.** `benchmarks/binary_size/query_streaming.mojo`
+  is `SELECT a, name FROM orders WHERE a > b` — filter/project, **no aggregation at all**. Fusion
+  monomorphises per aggregate-set, precisely the change that can blow up code size, and today's gate
+  would not notice. **Add an aggregate query to the gate before starting fusion**, or the size
+  criterion protects nothing.
 - Paired `*_aot.mojo` benchmarks exist for the group-by and ClickBench shapes, following the
   `BenchSuite`/`Benchmark` pattern in CLAUDE.md — **including `keep(data)` after `b.iter[call]()`**,
   or ASAP destruction frees the input mid-benchmark.
