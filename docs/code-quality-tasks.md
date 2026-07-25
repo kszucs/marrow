@@ -315,6 +315,33 @@ So the `NumericType` bound is not load-bearing for the fold — it is a conseque
 work around by threading a dtype instance through `acc_instance` and eight construction sites,
 and which cascaded into the `Value` tower via `Reduction`'s `NumericValue` conformance.
 
+### Simplifications the new design should absorb
+
+**`_reduce_widened` / `_reduce_widened_typed` are the same function twice.** The typed one's own
+docstring calls it "the fully-typed counterpart of `_reduce_widened`" — yet the erased one
+*re-implements* the reduce body rather than dispatching into it. It should be one line:
+
+```mojo
+# erased = resolve the dtype, then call the typed one
+return array.dtype().dispatch_numeric[λ V: _reduce_widened_typed[K, V](...)]()
+```
+
+Both are also module-level free functions whose only callers are `AggKernel.reduce`'s defaults, so
+they should be **static methods on the trait**, not free functions in the kernel module (they are
+in the Q3.1 census for exactly this).
+
+**The kernels are near-duplicate pairs.** `MinKernel` / `MaxKernel` differ only in `identity`
+(`MAX_FINITE` vs `MIN_FINITE`) and `combine` (`math.min` vs `math.max`); `SumKernel` /
+`ProductKernel` only in `identity` (0 vs 1) and `combine` (`+` vs `*`) — their `AccType`,
+`finalize` and (post-Q2.5) `acc_dtype` bodies are identical. This is the same shape already
+collapsed elsewhere in the codebase via an op-struct parameter (`ConditionalBinary[K]` with
+`CoalesceOp`/`NullifOp`, and the fifteen shells in `expr/values.mojo`) — apply it here so a new
+fold kernel is a few lines rather than a copied struct.
+
+**Runtime `is_min: Bool` flags should become the kernel type.** `_minmax_temporal_scalar`,
+`_minmax_string_scalar` and `min_max_string_grouped` all take a boolean to say which of min/max
+they are, in a file that otherwise parameterises on `K: AggKernel`. Pass the kernel.
+
 **Prerequisite decision — make this before touching `groupby.mojo`.** `AggState` currently holds
 `PrimitiveBuilder[Self.Acc]`, a *logical* builder, and there is no `DType`-based builder. So the
 physical rework needs one of: (a) add a physical `PrimitiveBuilder` over a `DType`, or (b) have
