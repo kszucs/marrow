@@ -209,6 +209,76 @@ through. Then remove `_span()` and make `PageReader` chunk-relative.
 
 ## Tier 2 — root causes (removes classes of future bugs)
 
+**Q2.5 — Aggregates: kernels as the only representation** · *large, do in a worktree* ·
+Depends: — · Owns: `marrow/kernels/aggregate.mojo`, `marrow/kernels/groupby.mojo`,
+`marrow/expr/relations.mojo`, `marrow/expr/execution.mojo`, `python/bindings/tabular.mojo`
+(+ their tests) · ⚠️ BINSIZE
+
+An aggregate is currently represented **four** ways: a comptime `AggKernel` struct, a runtime
+`AGG_*` `UInt8` tag, a `String` name, and — for output typing — a separate `agg_out_dtype(tag, dt)`
+rule that duplicates the kernel's own `AccType` algebra. 51 references outside `aggregate.mojo`,
+40 of them in `groupby.mojo`.
+
+**Target: the kernel is the only representation.** Exactly one runtime→comptime boundary:
+
+```mojo
+def dispatch_agg[job: def[K: AggKernel]() raises](name: String) raises
+```
+
+Everything downstream is typed. Consequences:
+- `AGG_*` constants, `agg_tag_from_name`, `for_agg_tag`, `_agg_name(tag)` all disappear — the
+  name resolves straight to a kernel, and `K.name` is the inverse.
+- `agg_is_distinct(tag)` becomes a comptime property of the kernel, so `groupby`'s
+  `avoid_thread_local` guard is derived rather than re-listed.
+- `agg_out_dtype(tag, dt)` collapses into the kernel's own accumulator algebra (below).
+
+**Prerequisite — widen `AggState` to `PrimitiveType`** so temporal min/max/count work natively:
+
+```mojo
+comptime AccType[V: PrimitiveType]: PrimitiveType     # was NumericType in both positions
+struct AggState[K: AggKernel, V: PrimitiveType]
+```
+
+This does **not** compile on its own. Widening the *return* bound drops `Defaultable` (since
+`trait NumericType(Defaultable, PrimitiveType)`), and `_reduce_widened`/`_reduce_widened_typed`
+build accumulators with the single-argument `PrimitiveScalar[Acc](value)` constructor, which needs
+it. That constraint is **correct**: temporal types carry a unit and timezone, so a temporal scalar
+cannot be conjured without its dtype instance. The fix is to thread it:
+
+```mojo
+@staticmethod
+def acc_dtype(input: AnyDataType) raises -> AnyDataType   # on AggKernel
+```
+— `Min`/`Max` → `input`; `Sum`/`Product` → `Int64Type()`/`Float64Type()` by physical width;
+`Count` → `Int64Type()`; `Mean` → `Float64Type()`. Then use the two-argument
+`PrimitiveScalar[Acc](value, dtype)`. `agg_out_dtype` is exactly this rule keyed by tag instead of
+by type, so the two unify here rather than one being deleted.
+
+**Payoff:** removes the last blocker to deleting `reinterpret_array` (see below), gives native
+temporal reductions instead of reinterpret-and-relabel, and leaves one place to add an aggregate.
+
+**Q2.6 — Delete `reinterpret_array`** · Depends: Q2.5 for the `groupby` half ·
+Owns: `marrow/kernels/{filter,sort,hashing,groupby,aggregate}.mojo` ·
+
+`reinterpret_array` (+ `AnyDataType.storage_type()` and `temporal_backing_dtype`) exists because
+the *dispatch layer* routes temporal columns through the **numeric** branch — even though every
+typed leaf is already bound on `PrimitiveType`, which temporal satisfies. It is not needed for
+correctness anywhere:
+
+| kernel | leaf bound | reinterpret needed? |
+|---|---|---|
+| `Filter` / `Take` | `T: PrimitiveType` | no — and removing it is *more* correct: today it strips the dtype and relabels it back, versus returning `PrimitiveArray[T]` with the dtype preserved by construction |
+| `SortIndices` | `T: PrimitiveType` | no |
+| `RapidHash` | `T: PrimitiveType` | no |
+| `AggState` | `V: NumericType` | yes **until Q2.5** |
+
+The one real cost is monomorphization: reinterpreting funnels ~15 logical primitive types into 4
+integer widths, so a kernel body is instantiated 4× rather than 15×. Measure with
+`pixi run binary_size` and record the delta — that number is the actual justification, and nothing
+currently records it.
+
+
+
 **Q2.1 — Add the missing accessors (RC1)** · Depends: — · Owns: `marrow/dtypes.mojo`,
 `marrow/buffers.mojo`, `marrow/builders.mojo`, `marrow/utils.mojo`, `marrow/expr/values.mojo` ·
 ⚠️ BINSIZE · Done when no type reaches into another's `_`-prefixed fields:
