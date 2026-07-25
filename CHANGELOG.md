@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **Fused mixed-width numeric comparison no longer truncates.** `NumericCompare`
+  took the *left* operand's native type and cast the right operand down into it,
+  so `col("a", int32) > col("b", int64)` silently narrowed every int64 value.
+  It now compares in the promoted domain of both operands — the same
+  `promote[L, R]` rule `NumericBinary` already used, so `a > b` and `a + b` can
+  no longer disagree about widening. The SIMD lane width is a separate question
+  (a narrower dtype yields a *larger* `W`, which would overflow a wider
+  operand's load), so that is now expressed by a dedicated `wider[L, R]` alias
+  which `BoolBinary` also reuses in place of its hand-inlined copy.
+
+- **Fused `Any` / `All` no longer ignore nulls.** Two `AnyKernel`/`AllKernel`
+  pairs existed — one in `kernels/boolean.mojo` that counted set bits with **no
+  validity mask**, and the null-correct pair in `kernels/aggregate.mojo` that
+  `kernels/__init__.mojo` re-exports. The expression layer imported the former,
+  so a null slot whose data bit happened to be set read as `True`. The duplicate
+  is deleted and the expression layer now binds the correct pair.
+
+- **`DynValue.name()` no longer leaks operator payloads as column names.**
+  `_name` is overloaded to carry the LIKE/ILIKE pattern and the `date_trunc`
+  unit, and `name()` returned it unconditionally — so a `LIKE` node reported
+  `"%foo%"` and a `DATE_TRUNC` node `"day"` as its output column name. It now
+  returns an empty string unless the node is a `LOAD`.
+
+- **`BoolScalar.repeat` added.** `AnyScalar.repeat` raised
+  `unsupported dtype bool`, so broadcasting a boolean scalar to an array was
+  impossible — surfaced by the new `Any`/`All` parity tests.
+
+
 ### Refactors
 
 - **Renamed the `Scalar` trait to `ArrowScalar`** (`marrow/scalars.mojo`). The

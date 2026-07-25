@@ -211,8 +211,16 @@ struct DynValue(
         return self._kind_data
 
     def name(self) -> String:
-        """Return the column name for a named LOAD node (empty otherwise)."""
-        return self._name
+        """Return the column name for a named LOAD node (empty otherwise).
+
+        ``_name`` is overloaded: it also carries the LIKE/ILIKE pattern and the
+        ``date_trunc`` unit. The tag check is what keeps a ``LIKE`` node from
+        reporting ``"%foo%"`` — and a ``DATE_TRUNC`` node ``"day"`` — as its
+        output column name."""
+        if self._tag == LOAD:
+            return self._name.copy()
+        else:
+            return String()
 
     def execute(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate against *batch*. This is the ``AnyValue``-box entry point the

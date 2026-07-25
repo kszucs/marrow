@@ -45,7 +45,7 @@ from ..arrays import (
     BinaryLikeArray,
     StringArray,
 )
-from ..scalars import AnyScalar, PrimitiveScalar, StringScalar
+from ..scalars import AnyScalar, BoolScalar, PrimitiveScalar, StringScalar
 from ..buffers import Buffer, Bitmap
 from ..builders import Int64Builder, BinaryLikeBuilder
 from ..views import apply, BitmapView
@@ -99,6 +99,9 @@ from ..kernels.aggregate import (
     MaxKernel,
     ProductKernel,
     CountKernel,
+    BoolReduceKernel,
+    AnyKernel,
+    AllKernel,
 )
 from ..kernels.string import (
     LengthKernel,
@@ -148,9 +151,6 @@ from ..kernels.boolean import (
     NotNullKernel,
     IsNanKernel,
     IsInfKernel,
-    BoolReduceKernel,
-    AnyKernel,
-    AllKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from ..kernels.helpers import bitmap_and
@@ -237,6 +237,15 @@ def _rank[T: DataType]() -> Int:
 
 comptime promote[L: NumericType, R: NumericType] = L if (
     _rank[L]() >= _rank[R]()
+) else R
+
+# Lane width, a different question from `promote`: the bit-packing driver sizes
+# `W` from a DType, and a narrower one yields a *larger* `W`, so a wider operand's
+# load would overflow the SIMD register. Every bool node whose operands may differ
+# in width picks `wider` of the two; `promote` (where floats outrank ints
+# regardless of bit width) decides the *value* domain, not the register size.
+comptime wider[L: DType, R: DType] = L if (
+    bit_width_of[L]() >= bit_width_of[R]()
 ) else R
 
 
@@ -830,7 +839,12 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = BoolType
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime NativeType = Self.L.OutType.native
+    # Compare in the promoted domain of BOTH operands — the same rule as
+    # `NumericBinary`, so `a > b` and `a + b` never disagree about widening.
+    comptime ArgType = promote[Self.L.OutType, Self.R.OutType]
+    comptime NativeType = wider[
+        Self.L.OutType.native, Self.R.OutType.native
+    ]
     var l: Self.L
     var r: Self.R
 
@@ -845,11 +859,13 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
     ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
         DType.bool, W
     ]:
-        var a = self.l.vectorwise[W](batch, ctx, slot, idx)
-        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[
-            Self.NativeType
+        var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[
+            Self.ArgType.native
         ]()
-        return Self.K.core[Self.NativeType, W](a, b)
+        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[
+            Self.ArgType.native
+        ]()
+        return Self.K.core[Self.ArgType.native, W](a, b)
 
     def validity(
         self, batch: RecordBatch
@@ -883,9 +899,7 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     # size the SIMD width by the WIDER operand — a narrow one (e.g. an int32 bool
     # breaker) must not shrink W below what a wider sibling's load (int64) needs, or
     # `SIMD[int64, W]` overflows the register.
-    comptime NativeType = Self.L.NativeType if bit_width_of[
-        Self.L.NativeType
-    ]() >= bit_width_of[Self.R.NativeType]() else Self.R.NativeType
+    comptime NativeType = wider[Self.L.NativeType, Self.R.NativeType]
     var l: Self.L
     var r: Self.R
 
@@ -991,7 +1005,7 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
         var arr = (
             into_array(self.a.execute(batch), batch.num_rows()).as_bool().copy()
         )
-        ctx.append(Self.K.reduce(arr))
+        ctx.append(BoolScalar(Self.K.reduce(arr)).to_any())
 
     @always_inline
     def vectorwise[
