@@ -277,7 +277,47 @@ by type, so the two unify here rather than one being deleted.
 **Payoff:** removes the last blocker to deleting `reinterpret_array` (see below), gives native
 temporal reductions instead of reinterpret-and-relabel, and leaves one place to add an aggregate.
 
-### ⚠️ Attempted 2026-07-25 — reverted. Read this before retrying.
+### ⚠️ Do NOT widen `AggState`'s logical bound — make the fold physical instead
+
+Asking *what does `AggState` actually use* changes the prerequisite completely.
+
+`AggState[K, V]` holds `acc: PrimitiveBuilder[K.AccType[V]]` + `cnt: Int64Builder`, but every
+operation immediately projects to the physical type:
+
+| method | works on |
+|---|---|
+| `update` | `comptime A = Self.Acc.native` — SIMD `K.combine` over physical values |
+| `merge` | raw accumulators + counts — physical |
+| `into_partials` | typed arrays purely as a carrier |
+| `finish` | physical fold, then builds `PrimitiveArray[Self.Acc]` |
+
+**The logical dtype is used in exactly one place: constructing the output array in `finish()`.**
+
+So the `NumericType` bound is not load-bearing for the fold — it is a consequence of holding
+*logical* builders eagerly. That is what produces the whole `Defaultable` wall
+(`PrimitiveBuilder[Acc]()`, `PrimitiveScalar[Acc](value)`), which the reverted attempt tried to
+work around by threading a dtype instance through `acc_instance` and eight construction sites,
+and which cascaded into the `Value` tower via `Reduction`'s `NumericValue` conformance.
+
+**Preferred design — parameterise the state on the physical type and label at the boundary:**
+
+```mojo
+struct AggState[K: AggKernel, A: DType]        # physical accumulator
+    def finish(mut self, num_groups: Int, out_dtype: ...) -> ...   # caller supplies the dtype
+```
+
+- No `Defaultable` problem — physical `DType`s are always constructible, so `acc_instance` and
+  the dtype threading are unnecessary.
+- **No cascade into the `Value` tower** — `Reduction`'s `OutType` is decided by the caller, so
+  the `NumericValue` conformance failure never arises.
+- Temporal min/max works because the fold is physical and the logical dtype is attached at the
+  boundary — the same shape as the `filter`/`sort`/`hashing` fix in Q2.6, where the leaf only
+  ever needed `T.native`.
+
+This is the same root cause as `reinterpret_array`: **a layer demanding logical types when it
+only uses physical ones.**
+
+### Reverted attempt (2026-07-25) — kept for the traps it found
 
 Stage A (the widening) was implemented and **compiled**, but broke the expression layer:
 
