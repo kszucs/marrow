@@ -559,6 +559,70 @@ which removes the extra pass that splitting grouping from aggregation otherwise 
 the split free on the path that matters and keeps it explicit on the path that needs it (F1).
 It also means **`Grouping` must not become mandatory**: the fused path never wants one.
 
+##### Pluggable grouping strategies
+
+Grouping already has three implementations chosen at construction — serial, thread-local partial
+aggregation, and radix partitioning — selected by `GroupBy._choose_strategy(keys, num_threads)`
+from row count plus a strided-sample cardinality estimate. The mechanism exists; what is missing
+is a **seam**, so a fourth strategy can be added for a skewed distribution without editing the
+aggregate path, and so tuning one case cannot silently cost another.
+
+**Separate the three things that are currently entangled:**
+
+```mojo
+struct GroupStats:
+    """Everything the policy is allowed to look at. Measured once, cheaply."""
+    var num_rows: Int
+    var est_groups: Int          # existing strided sample
+    var max_group_share: Float64 # NEW: largest sampled group as a fraction of the sample
+    var num_key_cols: Int
+    var num_threads: Int
+    var has_unmergeable_agg: Bool  # distinct / string min-max cannot use the merge path
+
+trait GroupStrategy:
+    comptime name: String
+    @staticmethod
+    def suitable(stats: GroupStats) -> Bool   # correctness/capability filter
+    @staticmethod
+    def rank(stats: GroupStats) -> Int        # preference among the suitable ones
+```
+
+- **Stats** — what is measured, as a value rather than as arguments threaded through.
+- **Policy** — `suitable`/`rank`, *pure functions over stats*. Today the policy is embedded in
+  `_choose_strategy` and can only be exercised by running a whole group-by; as pure functions it is
+  **unit-testable directly** ("skewed + high-cardinality + 8 threads selects X"), which is what
+  makes tuning safe.
+- **Mechanism** — one struct per strategy.
+
+**Selection stays closed.** Iterate a comptime list of registered strategies and take the
+highest-ranked suitable one. This must **not** become a runtime trait object: `marrow.aot`
+depends on closed erasure and no open dispatchers, so an open registry would break the
+binary-size property. Adding a strategy is a struct plus one entry in that list; removing one is a
+deletion.
+
+**Note this also fixes an existing wart.** `avoid_thread_local` today hand-lists "distinct, or
+string min/max" at the call site — that becomes `has_unmergeable_agg` in the stats, derived from
+comptime kernel properties, and the guard disappears into `suitable`.
+
+**Skew is the motivating case.** The current estimator answers "how many groups?" but not "are
+they even?" — a single dominant key defeats radix partitioning, since one partition gets most of
+the rows. `max_group_share` from the same strided sample is nearly free to compute, and enables
+strategies that specifically target skew (pre-aggregate hot keys before partitioning; salt a heavy
+hitter across partitions and merge). None of that should be built now — the point is that the seam
+makes it addable **without touching the aggregate path**.
+
+**This has a hard dependency on Q6.1.** "Improve one scenario without hurting others" is
+unverifiable unless each strategy can be benchmarked in isolation, so the harness must be able to
+**force a strategy** rather than only exercising whatever the policy picks. Without that, a policy
+change and a mechanism change are indistinguishable in the numbers, and a regression in a
+rarely-selected path stays invisible until someone's data hits it. Add a `strategy=` override to
+the bench entry points as part of Q6.1.
+
+**Sequence it after fusion, not before.** Fusion changes the per-row cost that the policy's
+thresholds encode, so the current cutovers (`_PARALLEL_MIN_ROWS`, `_PARALLEL_ALWAYS_ROWS`, the
+cardinality split) will need re-measuring anyway. Introducing the seam first would mean tuning a
+policy against costs that are about to change.
+
 ##### Risks
 
 - **Binary size.** Fusion monomorphises per distinct aggregate-set. AOT programs contain few sets,
