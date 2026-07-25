@@ -315,6 +315,32 @@ So the `NumericType` bound is not load-bearing for the fold — it is a conseque
 work around by threading a dtype instance through `acc_instance` and eight construction sites,
 and which cascaded into the `Value` tower via `Reduction`'s `NumericValue` conformance.
 
+### ⚠️ The blocker for moving tags out of the kernel layer
+
+Surveyed 2026-07-25. The tag surface is 40 references in `groupby.mojo`, 32 in `aggregate.mojo`,
+9 elsewhere — but the count understates the problem. **`GroupBy.aggregate_runtime(values, tags)`
+is itself a runtime-dispatch API living in the kernel layer**, and it is what consumes the tags:
+it applies several differently-tagged aggregates over one grouping so the keys are hashed once.
+
+That creates a layering bind. Tags cannot simply move to `expr/dynamic.mojo`, because
+`kernels/groupby.mojo` needs to dispatch on them and the kernel layer must not depend on the
+expression layer. So moving them out requires one of:
+
+- **(a) Relocate the runtime driver.** `aggregate_runtime` moves out of `GroupBy` into the
+  expression layer (`expr/execution.mojo`), leaving `GroupBy` with only the typed
+  `aggregate[K](value)` surface. Cleanest against "kernels are pure comptime types", and it puts
+  the multi-aggregate planning next to the plan. Cost: the single-grouping optimisation (hash the
+  keys once, run N aggregates) has to be expressed across that boundary, and the Python binding
+  (`python/bindings/tabular.mojo`) calls it directly.
+- **(b) Keep the driver, change its currency.** `aggregate_runtime` takes `List[String]` names
+  and resolves them through a kernel-layer `dispatch_agg[job](name)`. The `AGG_*` constants,
+  `agg_tag_from_name` and `agg_out_dtype` all still disappear, and `K.name`/`K.acc_dtype` replace
+  them — but a name→kernel switch still lives in the kernel layer, which only *narrows* the
+  original objection rather than satisfying it.
+
+**(a) is what the directive asks for; (b) is the smaller change.** Decide before starting — this
+is the difference between a contained refactor and one that also moves a driver and a binding.
+
 ### Simplifications the new design should absorb
 
 **`_reduce_widened` / `_reduce_widened_typed` are the same function twice.** The typed one's own
