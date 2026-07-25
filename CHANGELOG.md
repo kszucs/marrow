@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **Broke the `dtypes` ⇄ `arrays`/`scalars` circular import.** `DataType` declared
+  `comptime ScalarType` / `comptime ArrayType` companion types on the trait and on
+  ~30 concrete types, which is what forced `dtypes.mojo` to import `arrays` and
+  `scalars` — while those modules import `dtypes` back. **Nothing consumed them**
+  (the only `.ScalarType`/`.ArrayType` uses in the tree are `Self`-qualified
+  members of the separate `Array` and `Builder` traits), so removing them costs
+  nothing and deletes 63 lines. `dtypes.mojo` now imports only `.utils`, making
+  the module graph a DAG.
+
+  The cycle had caused three distinct build failures, all with the same
+  signature — the same source compiling or failing depending on which file the
+  build entered through: a `Scalar` trait shadowing the builtin `Scalar[dtype]`,
+  `BoolArray` resolving along one import path but not another, and a rewrite that
+  moved errors 2 → 10 by shifting the ambiguity rather than removing it.
+
+
 ### Fixes
 
 - **Fused mixed-width numeric comparison no longer truncates.** `NumericCompare`

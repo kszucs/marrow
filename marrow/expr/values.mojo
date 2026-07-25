@@ -842,9 +842,7 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
     # Compare in the promoted domain of BOTH operands — the same rule as
     # `NumericBinary`, so `a > b` and `a + b` never disagree about widening.
     comptime ArgType = promote[Self.L.OutType, Self.R.OutType]
-    comptime NativeType = wider[
-        Self.L.OutType.native, Self.R.OutType.native
-    ]
+    comptime NativeType = wider[Self.L.OutType.native, Self.R.OutType.native]
     var l: Self.L
     var r: Self.R
 
