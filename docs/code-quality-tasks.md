@@ -570,8 +570,62 @@ It also means **`Grouping` must not become mandatory**: the fused path never wan
 - **Numerical parity.** Fusing must not change fold order in a way that alters float results
   versus the unfused path; parity tests should compare fused and per-column results.
 
+**Q6.1 — Cross-engine aggregate benchmark, with the AOT path measured** · *gates every Q2.5 round* ·
+Owns: `python/marrow/tests/bench_*.py`, `marrow/kernels/tests/bench_*.mojo`,
+`benchmarks/aggregates/` (new), `pixi.toml` (bench tasks) ·
+
+**Why this exists.** The fused-aggregate work (above) is justified entirely by a performance
+claim — that comptime monomorphisation beats engines which dispatch per aggregate at runtime.
+That claim has to be *measured against them*, before and after each round, or it is just an
+assertion. "Refactor, then check nothing regressed" is not enough here: the point is to improve.
+
+**What already exists.** `python/marrow/tests/bench_groupby.py` and `bench_clickbench.py` already
+compare marrow against **pyarrow, polars and duckdb**, `--competition` prints a side-by-side
+table, and the `bench` env carries `polars`/`duckdb`/`rich`. Reuse all of it.
+
+**What is missing — and it is the important half.** Those benchmarks drive marrow through the
+*Python bindings*, i.e. the **dynamic (F1)** path. The AOT (F2) fused path — the thing that is
+supposed to be faster than everyone — is not measured at all. Each Python benchmark needs a
+**paired AOT Mojo file expressing the same query through the fused comptime DSL**:
+
+```
+python/marrow/tests/bench_groupby.py        # pyarrow · polars · duckdb · marrow-dynamic
+marrow/kernels/tests/bench_groupby_aot.mojo # marrow-AOT (fused)   ← new, the differentiator
+```
+
+Both already emit machine-readable output (`pytest-benchmark` on one side, `BenchSuite`'s `--json`
+on the other), so a small merge script can print one table across both runners rather than asking
+anyone to eyeball two.
+
+**Done when:**
+- A **baseline is recorded in this document** — a committed table of marrow-AOT / marrow-dynamic /
+  pyarrow / polars / duckdb across the group-by shapes that matter (low- vs high-cardinality keys,
+  1 vs N aggregates, with and without nulls). N-aggregate cases are essential: they are precisely
+  what fusion targets, and a 1-aggregate benchmark would show none of the win.
+- Paired `*_aot.mojo` benchmarks exist for the group-by and ClickBench shapes, following the
+  `BenchSuite`/`Benchmark` pattern in CLAUDE.md — **including `keep(data)` after `b.iter[call]()`**,
+  or ASAP destruction frees the input mid-benchmark.
+- One command prints the merged comparison.
+- Consider adding **chdb** to the `bench` feature: ClickHouse is the engine whose aggregate design
+  we are explicitly trying to beat, so it is the most informative competitor to have in the table.
+
+**How it gates Q2.5.** Re-run after *each* step and append the numbers to the table:
+
+| step | expectation |
+|---|---|
+| tags out of the kernel layer | neutral — behaviour-preserving |
+| typed `aggregate[K]` + F1 loop | neutral to slightly better (one less indirection) |
+| `FusedAggregation` (AoS, scalar unrolled) | **the step that must show a win**, growing with aggregate count |
+| run-aware vectorisation | further win on clustered/partitioned inputs |
+
+A step that does not move its number is a signal to stop and understand why, not to continue. Pair
+each measurement with `pixi run binary_size` — fusion monomorphises per aggregate-set, and the AOT
+binary is the gate.
+
 ##### Sequencing
 
+0. **Q6.1 baseline first** — record the cross-engine table *before* any change, including the
+   paired AOT benchmark. Without it there is nothing to prove improvement against.
 1. Tags out of the kernel layer (prerequisite — without it the fused path cannot be expressed).
 2. Typed `aggregate[K]` surface; F1 loops over it. **Behaviour-preserving, fully testable.**
 3. Spike parameter-pack indexing; if it does not work, stop and redesign before writing more.
