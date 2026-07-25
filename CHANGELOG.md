@@ -4,6 +4,17 @@
 
 ### Refactors
 
+- **The four fold aggregates are two parameterised kernels.** `MinKernel`/`MaxKernel`
+  differed only in `identity`, `combine` and an `is_min` flag; `SumKernel`/`ProductKernel`
+  only in `identity` and `combine`. They are now `MinMax[Op]` and `Widening[Op]` with
+  small op structs, the same shape already used by `ConditionalBinary[K]`. The old names
+  survive as `comptime` aliases, so no call site changed.
+- **`_reduce_widened` delegates to `_reduce_widened_typed`** instead of re-implementing
+  its body — the erased entry point now only resolves the runtime dtype.
+
+
+### Refactors
+
 - **`AnyArray.view(dtype)`** — zero-copy reinterpretation of an array's buffers under
   a same-layout dtype, mirroring `pyarrow.Array.view`. `parquet`'s `_retag` and
   `kernels/aggregate`'s `reinterpret_array` were the same function written twice in

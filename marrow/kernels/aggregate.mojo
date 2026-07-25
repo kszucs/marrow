@@ -44,7 +44,9 @@ def _reduce_widened[
 ](
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
-    """Whole-array reduce that accumulates in the int64 / float64 accumulator
+    """Erased entry point: resolve the runtime dtype, then run the typed reduce.
+
+    Accumulates in the int64 / float64 accumulator
     (`K.AccType`), so narrow integer inputs don't overflow — matching the grouped
     path's widening. The widening is *fused* into the SIMD reduce (`reduce` casts
     each lane to `Acc` as it is loaded), so no widened copy of the input is
@@ -53,19 +55,9 @@ def _reduce_widened[
 
     @parameter
     def run[V: NumericType](d: V) raises -> AnyScalar:
-        comptime Acc = K.AccType[V].native
-        var identity = K.identity[Acc]()
-        ref prim = array.as_primitive[V]()
-        var value: Scalar[Acc]
-        if prim.bitmap:
-            value = reduce[V.native, K.combine, Acc](
-                prim.values(), prim.validity().value(), identity, ctx
-            )
-        else:
-            value = reduce[V.native, K.combine, Acc](
-                prim.values(), identity, ctx
-            )
-        return PrimitiveScalar[K.AccType[V]](value).to_any()
+        return _reduce_widened_typed[K, V](
+            array.as_primitive[V](), ctx
+        ).to_any()
 
     return array.dtype().dispatch_numeric[run]()
 
@@ -228,11 +220,25 @@ trait AggKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct SumKernel(AggKernel):
+trait WideningOp:
+    """The two things that distinguish `sum` from `product`: the fold's identity
+    element and its lane-wise operator. Both widen integers to int64 and floats
+    to float64, which is why they share one shell."""
+
+    comptime name: String
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        ...
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        ...
+
+
+struct SumOp(WideningOp):
     comptime name = "sum"
-    comptime AccType[
-        V: NumericType
-    ] = Int64Type if V.native.is_integral() else Float64Type
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -243,33 +249,9 @@ struct SumKernel(AggKernel):
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a + b
 
-    @always_inline
-    @staticmethod
-    def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
-        return acc
 
-    @staticmethod
-    def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        # Widen to the int64/float64 accumulator so narrow ints don't overflow.
-        return _reduce_widened[Self](array, ctx)
-
-    @staticmethod
-    def reduce[
-        V: NumericType
-    ](
-        array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveScalar[Self.AccType[V]]:
-        return _reduce_widened_typed[Self](array, ctx)
-
-
-struct ProductKernel(AggKernel):
+struct ProductOp(WideningOp):
     comptime name = "product"
-    comptime AccType[
-        V: NumericType
-    ] = Int64Type if V.native.is_integral() else Float64Type
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -280,6 +262,26 @@ struct ProductKernel(AggKernel):
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a * b
 
+
+struct Widening[Op: WideningOp](AggKernel):
+    """`sum`/`product` as one kernel: integers accumulate in int64 and floats in
+    float64 so narrow inputs cannot overflow, the fold is `Op.combine`, and
+    finalize is the identity."""
+
+    comptime name = Self.Op.name
+    comptime AccType[
+        V: NumericType
+    ] = Int64Type if V.native.is_integral() else Float64Type
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Self.Op.identity[T]()
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return Self.Op.combine[T, W](a, b)
+
     @always_inline
     @staticmethod
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
@@ -289,7 +291,6 @@ struct ProductKernel(AggKernel):
     def reduce(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
-        # Widen to the int64/float64 accumulator so narrow ints don't overflow.
         return _reduce_widened[Self](array, ctx)
 
     @staticmethod
@@ -302,9 +303,30 @@ struct ProductKernel(AggKernel):
         return _reduce_widened_typed[Self](array, ctx)
 
 
-struct MinKernel(AggKernel):
+comptime SumKernel = Widening[SumOp]
+comptime ProductKernel = Widening[ProductOp]
+
+
+trait MinMaxOp:
+    """The two things that distinguish `min` from `max`: which SIMD lane-wise
+    extremum to take, and which sentinel is the fold's identity."""
+
+    comptime name: String
+    comptime is_min: Bool
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        ...
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        ...
+
+
+struct MinOp(MinMaxOp):
     comptime name = "min"
-    comptime AccType[V: NumericType] = V
+    comptime is_min = True
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -315,35 +337,10 @@ struct MinKernel(AggKernel):
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.min(a, b)
 
-    @always_inline
-    @staticmethod
-    def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
-        return acc
 
-    @staticmethod
-    def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        var dt = array.dtype()
-        if dt.is_temporal():
-            return _minmax_temporal_scalar[Self](array, ctx)
-        elif dt.is_string() or dt.is_large_string():
-            return _minmax_string_scalar(array, is_min=True)
-        return Self.dispatch(array, ctx)  # SIMD whole-array fast path
-
-    @staticmethod
-    def reduce[
-        V: NumericType
-    ](
-        array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveScalar[Self.AccType[V]]:
-        return Self.apply(array, ctx)  # AccType == V → same-type SIMD reduce
-
-
-struct MaxKernel(AggKernel):
+struct MaxOp(MinMaxOp):
     comptime name = "max"
-    comptime AccType[V: NumericType] = V
+    comptime is_min = False
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -354,6 +351,25 @@ struct MaxKernel(AggKernel):
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.max(a, b)
 
+
+struct MinMax[Op: MinMaxOp](AggKernel):
+    """`min`/`max` as one kernel: the accumulator keeps the input type, the fold
+    is `Op.combine`, and finalize is the identity. Previously two structs that
+    differed only in `name`, `identity`, `combine`, and the `is_min` flag passed
+    to the string path."""
+
+    comptime name = Self.Op.name
+    comptime AccType[V: NumericType] = V
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Self.Op.identity[T]()
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return Self.Op.combine[T, W](a, b)
+
     @always_inline
     @staticmethod
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
@@ -367,7 +383,7 @@ struct MaxKernel(AggKernel):
         if dt.is_temporal():
             return _minmax_temporal_scalar[Self](array, ctx)
         elif dt.is_string() or dt.is_large_string():
-            return _minmax_string_scalar(array, is_min=False)
+            return _minmax_string_scalar(array, is_min=Self.Op.is_min)
         return Self.dispatch(array, ctx)  # SIMD whole-array fast path
 
     @staticmethod
@@ -378,6 +394,10 @@ struct MaxKernel(AggKernel):
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         return Self.apply(array, ctx)  # AccType == V → same-type SIMD reduce
+
+
+comptime MinKernel = MinMax[MinOp]
+comptime MaxKernel = MinMax[MaxOp]
 
 
 struct CountKernel(AggKernel):
