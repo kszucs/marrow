@@ -54,7 +54,7 @@ from .scalars import (
     ListScalar,
     StructScalar,
     DictionaryScalar,
-    Scalar as ScalarTrait,
+    ArrowScalar,
 )
 
 
@@ -73,7 +73,7 @@ trait Array(
     the type-erased handle that wraps any Array-conforming type.
     """
 
-    comptime ScalarType: ScalarTrait
+    comptime ScalarType: ArrowScalar
 
     def __init__(out self, data: ArrayData) raises:
         ...

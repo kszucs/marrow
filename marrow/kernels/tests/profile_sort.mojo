@@ -77,13 +77,13 @@ def _parse_str(name: String, default: String) -> String:
     return s
 
 
-def _ns_to_ms(ns: UInt) -> Float64:
-    return Float64(Int(ns)) / 1_000_000.0
+def _ns_to_ms(ns: Int) -> Float64:
+    return Float64(ns) / 1_000_000.0
 
 
-def _throughput(n: Int, avg_ns: UInt) -> Float64:
+def _throughput(n: Int, avg_ns: Int) -> Float64:
     """Rows per second in millions."""
-    return Float64(n) / (Float64(Int(avg_ns)) / 1_000_000_000.0) / 1_000_000.0
+    return Float64(n) / (Float64(avg_ns) / 1_000_000_000.0) / 1_000_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ def _bench_sort_indices[
         keep(idx)
     var elapsed = perf_counter_ns() - t0
 
-    var avg = elapsed // UInt(iters)
+    var avg = elapsed // iters
     print(
         "  sort_indices   ",
         _ns_to_ms(avg),
@@ -138,7 +138,7 @@ def _bench_sort[T: PrimitiveType](data: PrimitiveArray[T], iters: Int) raises:
         keep(sorted)
     var elapsed = perf_counter_ns() - t0
 
-    var avg = elapsed // UInt(iters)
+    var avg = elapsed // iters
     print(
         "  sort      ",
         _ns_to_ms(avg),
@@ -167,7 +167,7 @@ def _bench_sort_indices_desc[
         keep(idx)
     var elapsed = perf_counter_ns() - t0
 
-    var avg = elapsed // UInt(iters)
+    var avg = elapsed // iters
     print(
         "  sort_indices↓  ",
         _ns_to_ms(avg),

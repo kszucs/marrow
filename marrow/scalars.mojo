@@ -4,7 +4,7 @@ Following Arrow C++'s design: scalars hold native values directly, not
 length-1 arrays.
 
 Typed scalars:
-  PrimitiveScalar[T]  — holds _Scalar[T.native] (built-in Scalar) + Bool validity
+  PrimitiveScalar[T]  — holds Scalar[T.native] (built-in) + Bool validity
   StringScalar        — holds String value + Bool validity
   ListScalar          — holds AnyArray (child values) + Bool validity
   StructScalar        — holds List[AnyScalar] (one per field) + DataType + Bool validity
@@ -14,8 +14,11 @@ Type-erased container:
   AnyScalar          — wraps any typed scalar via @implicit conversion;
                        backed by an inline Variant, dispatched at runtime.
 
-Scalar trait:
+ArrowScalar trait:
   Common interface implemented by all four typed scalars.
+  (Named `ArrowScalar`, not `Scalar`, to avoid shadowing the builtin
+  `Scalar[dtype]` alias — the bare name is ambiguous along the
+  `arrays` <-> `dtypes` circular imports.)
 """
 
 from std.utils import Variant
@@ -37,15 +40,14 @@ from .builders import PrimitiveBuilder, StringBuilder
 from .dtypes import *
 
 # Alias the built-in Scalar[DType] to avoid shadowing by the local Scalar trait.
-from std.builtin.simd import Scalar as _Scalar
 
 
 # ---------------------------------------------------------------------------
-# Scalar trait
+# ArrowScalar trait
 # ---------------------------------------------------------------------------
 
 
-trait Scalar(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
+trait ArrowScalar(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
     def type(self) -> AnyDataType:
@@ -61,7 +63,7 @@ trait Scalar(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
         return AnyScalar(self^)
 
 
-struct NullScalar(Scalar):
+struct NullScalar(ArrowScalar):
     """A single null value — Arrow's `Null` type holds nothing but null."""
 
     def __init__(out self):
@@ -84,7 +86,7 @@ struct NullScalar(Scalar):
         writer.write("null")
 
 
-struct BoolScalar(Scalar):
+struct BoolScalar(ArrowScalar):
     """A single boolean value: holds a Bool + validity flag."""
 
     var _value: Bool
@@ -119,14 +121,14 @@ struct BoolScalar(Scalar):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveScalar[T: PrimitiveType](Scalar):
+struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
     """A single primitive value: holds a native Mojo scalar + type info + validity flag.
 
     `_dtype: T` carries runtime type information — zero-sized for NumericType,
     but holds unit/timezone for TemporalType and precision/scale for DecimalType.
     """
 
-    comptime NativeScalar = _Scalar[Self.T.native]
+    comptime NativeScalar = Scalar[Self.T.native]
 
     var _value: Self.NativeScalar
     var _dtype: Self.T
@@ -230,7 +232,7 @@ comptime Decimal256Scalar = PrimitiveScalar[Decimal256Type]
 # ---------------------------------------------------------------------------
 
 
-struct StringScalar(Scalar):
+struct StringScalar(ArrowScalar):
     """A single string value: holds a String + validity flag."""
 
     var _value: String
@@ -279,7 +281,7 @@ struct StringScalar(Scalar):
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryScalar(Scalar):
+struct FixedSizeBinaryScalar(ArrowScalar):
     """A single fixed-size-binary value: holds `byte_width` bytes + validity flag.
     """
 
@@ -329,7 +331,7 @@ struct FixedSizeBinaryScalar(Scalar):
 # ---------------------------------------------------------------------------
 
 
-struct ListScalar(Scalar):
+struct ListScalar(ArrowScalar):
     """A single list value: holds an AnyArray of child elements + validity flag.
     """
 
@@ -375,7 +377,7 @@ struct ListScalar(Scalar):
 # ---------------------------------------------------------------------------
 
 
-struct StructScalar(Scalar):
+struct StructScalar(ArrowScalar):
     """A single struct value: holds one AnyScalar per field + validity flag."""
 
     var _dtype: AnyDataType
@@ -433,7 +435,7 @@ struct StructScalar(Scalar):
 # ---------------------------------------------------------------------------
 
 
-struct DictionaryScalar(Scalar):
+struct DictionaryScalar(ArrowScalar):
     """A single dictionary-encoded value: holds the integer index + decoded value.
 
     Equivalent to PyArrow's ``pyarrow.DictionaryScalar``.
@@ -545,7 +547,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     # --- construction ---
 
     @implicit
-    def __init__[T: Scalar](out self, var typed: T):
+    def __init__[T: ArrowScalar](out self, var typed: T):
         self._v = Self.VariantType(typed^)
 
     def __init__(out self, *, copy: Self):
@@ -561,17 +563,17 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     def type(self) -> AnyDataType:
         @parameter
-        def f[T: Scalar](t: T) -> AnyDataType:
+        def f[T: ArrowScalar](t: T) -> AnyDataType:
             return t.type()
 
-        return variant_dispatch[Scalar, func=f](self._v)
+        return variant_dispatch[ArrowScalar, func=f](self._v)
 
     def is_valid(self) -> Bool:
         @parameter
-        def f[T: Scalar](t: T) -> Bool:
+        def f[T: ArrowScalar](t: T) -> Bool:
             return t.is_valid()
 
-        return variant_dispatch[Scalar, func=f](self._v)
+        return variant_dispatch[ArrowScalar, func=f](self._v)
 
     def repeat(self, times: Int) raises -> AnyArray:
         """Broadcast this scalar into an array of length `times`."""
@@ -604,7 +606,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     # --- typed downcasts ---
 
-    def _as[T: Scalar](ref self) -> ref[self._v[T]] T:
+    def _as[T: ArrowScalar](ref self) -> ref[self._v[T]] T:
         debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self.type())
         return self._v[T]
 
@@ -728,17 +730,17 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter
-        def f[T: Scalar](t: T):
+        def f[T: ArrowScalar](t: T):
             t.write_to(writer)
 
-        variant_dispatch[Scalar, func=f](self._v)
+        variant_dispatch[ArrowScalar, func=f](self._v)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         @parameter
-        def f[T: Scalar](t: T):
+        def f[T: ArrowScalar](t: T):
             t.write_repr_to(writer)
 
-        variant_dispatch[Scalar, func=f](self._v)
+        variant_dispatch[ArrowScalar, func=f](self._v)
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
@@ -750,7 +752,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-def scalar[T: NumericType](value: _Scalar[T.native]) -> PrimitiveScalar[T]:
+def scalar[T: NumericType](value: Scalar[T.native]) -> PrimitiveScalar[T]:
     """Create a typed primitive scalar from a native Mojo scalar."""
     return PrimitiveScalar[T](value)
 

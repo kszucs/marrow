@@ -48,8 +48,8 @@ from std.sys.compile import codegen_unreachable
 from .utils import variant_dispatch, variant_dispatch_raises
 from .scalars import *
 from .scalars import (
-    Scalar as ScalarTrait,
-)  # `Scalar` alone = builtin `Scalar[_]`
+    ArrowScalar,
+)
 from .arrays import *
 
 
@@ -64,7 +64,7 @@ trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     dtype to its typed scalar/array. Provided at the family traits
     (`NumericType`/`StringLikeType`/…) and on the standalone concrete types."""
 
-    comptime ScalarType: ScalarTrait
+    comptime ScalarType: ArrowScalar
     comptime ArrayType: Array
 
     def to_any(deinit self) -> AnyDataType:

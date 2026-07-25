@@ -14,6 +14,10 @@ parameter, a flag, or a second way to do something, it is the wrong fix — pref
 deletes code. Measure anything on a hot path; never trade a real speedup for tidiness without
 saying so.
 
+**Hard constraint: do not change the layout of arrays, scalars, or builders.** Their fields and
+memory layout are fixed. Adding accessors/methods is fine; adding, removing, reordering, or
+re-typing fields is not. Any task that would require it is out of scope, not deferred.
+
 ---
 
 ## 0. How to run these
@@ -51,7 +55,7 @@ None — `t2.3b-aggregate` and `fu4-like-scalar` are both merged. Re-check befor
 ## Tier 0 — correctness + trustworthy signal
 
 > Q0.0 is closed (upstream fix), so the suite is trustworthy again and these are no longer
-> gated — Q0.1/Q0.2/Q0.3 can run in parallel with everything else.
+> gated — Q0.2/Q0.3 can run in parallel with everything else.
 
 **Q0.0 — ~~Fix the one-byte heap overflow in `AnyValue`~~** · **CLOSED — fixed upstream
 2026-07-25** · No work required.
@@ -78,18 +82,6 @@ Lessons worth keeping (they cost real time):
   only grep for `heap-buffer-overflow`. Always assert the test actually ran.
 - **Minimal reproducers were useless here** — the fault depended on compilation context, so
   shrinking it produced contradictory results. Only the real suite was authoritative.
-
-**Q0.1 — Array validity correctness (D1 + D2)** · *Tier 0* · Depends: — ·
-Owns: `marrow/arrays.mojo`, `marrow/buffers.mojo`, `marrow/views.mojo`,
-`marrow/tests/test_arrays.mojo` · Done when:
-- `slice()` no longer copies the parent's `nulls`. Prefer the real fix: an unknown-null-count
-  sentinel recomputed on demand (Arrow C++ `kUnknownNullCount`), rather than an eager recount in
-  8 places. Check the 3 builder fast paths that branch on `arr.nulls == 0`
-  (`builders.mojo:606,735,1657`) still behave.
-- Indexing a sliced `BoolArray` is correct. Root cause is the API trap: `Bitmap.test(raw_index)`
-  vs `BitmapView.test(logical_index)` use **different index bases**. Unify the base (or rename the
-  raw one) so `is_valid` and `__getitem__` cannot disagree again.
-- Regression tests for both (a sliced array's `null_count()`, and `arr.slice(2,3)[i]` for all i).
 
 **Q0.2 — Fused expression correctness (D3 + D4)** · *Tier 0* · Depends: — ·
 Owns: `marrow/expr/values.mojo`, `marrow/kernels/boolean.mojo`, `marrow/expr/tests/test_values.mojo`,
@@ -119,9 +111,15 @@ Owns: `marrow/utils.mojo`, `marrow/dtypes.mojo`, `marrow/kernels/hashing.mojo`,
   dictionary**. This unblocks `GROUP BY date_trunc(...)` (Q19/35/36/40/43) and `ORDER BY` a
   timestamp (Q8/24–27) — both on the M1 ClickBench list, both currently raising.
 - Tests covering group-by and sort on a date/timestamp/large_string column.
-- Supersedes **FU-1** (which tracked only the `large_string` half). Fold Q3.1's
-  `hashing`→`RapidHash` / `sort`→`SortIndices` struct conversion in here if convenient — it is the
-  same files, and *the missing struct is why the ladders drifted*.
+- Supersedes **FU-1** (which tracked only the `large_string` half).
+
+> **Do the struct conversion in the same pass, not "if convenient".** `hashing.mojo` (17 free
+> functions) and `sort.mojo` (8) are the only two kernel modules with *no* `Kernel` struct, and
+> they are exactly the two with dtype-coverage gaps. That is not a coincidence: with no struct
+> there is no single `dispatch` to extend, so each new type had to be remembered in a hand-written
+> ladder — and wasn't. Converting them to `RapidHash` / `SortIndices` and routing through
+> `dispatch_over_*` makes the gap structurally impossible rather than currently-fixed. Adding a
+> dtype should then be a one-line change in one place; if it isn't, the abstraction is wrong.
 
 **Q1.2 — `ByteSource.read_at` → `Buffer[mut=False]` (RC5)** · *T2.4 prerequisite* ·
 Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`,
@@ -149,7 +147,7 @@ through. Then remove `_span()` and make `PageReader` chunk-relative.
 
 ## Tier 2 — root causes (removes classes of future bugs)
 
-**Q2.1 — Add the missing accessors (RC1)** · Depends: Q0.1 · Owns: `marrow/dtypes.mojo`,
+**Q2.1 — Add the missing accessors (RC1)** · Depends: — · Owns: `marrow/dtypes.mojo`,
 `marrow/buffers.mojo`, `marrow/builders.mojo`, `marrow/utils.mojo`, `marrow/expr/values.mojo` ·
 ⚠️ BINSIZE · Done when no type reaches into another's `_`-prefixed fields:
 `AnyDataType` exposes its variant (kills `dt._v` in `utils.mojo:287-316` and `arrays.mojo:447`);
@@ -168,14 +166,19 @@ reachable through the package namespace; `Bitmap` forwards its bit operations to
 instead of re-implementing them against `_buffer._ptr` (which is how `Bitmap.__eq__` drifted to
 ~64× slower than `BitmapView.__eq__`).
 
-**Q2.3 — A single validity/null-count representation (RC3)** · Depends: Q0.1, Q2.1 ·
-Owns: `marrow/arrays.mojo`, `marrow/buffers.mojo`, `marrow/views.mojo`,
-`marrow/kernels/helpers.mojo` · Done when: one `Validity` (bitmap + offset + length) value type
-owns `count()`; `bitmap_and` takes `Optional[BitmapView]` (i.e. `.validity()`, **not** the raw
-`.bitmap` — today's signature yields offset-misaligned validity for sliced inputs) and returns
-`(bitmap, nulls)`; the `nulls = length - count_set_bits()` incantation disappears from all 8
-inline sites; `BitmapView.to_owned()` replaces the three ad-hoc "copy a view into an owned bitmap"
-idioms.
+**Q2.3 — Validity plumbing hygiene (RC3, layout-preserving)** · Depends: Q2.1 ·
+Owns: `marrow/buffers.mojo`, `marrow/views.mojo`, `marrow/kernels/helpers.mojo` ·
+⚠️ **must not change array/scalar/builder layout** · Done when:
+- `bitmap_and` takes `Optional[BitmapView]` (i.e. `.validity()`, **not** the raw `.bitmap` —
+  today's signature yields offset-misaligned validity for sliced inputs) and returns
+  `(bitmap, nulls)` so the count is computed once.
+- The `nulls = length - count_set_bits()` incantation disappears from all 8 inline sites.
+- `BitmapView.to_owned()` replaces the three ad-hoc "copy a view into an owned bitmap" idioms
+  (`v.union(v)`, `~Bitmap.alloc_zeroed(n).view()`, and an identity SIMD functor).
+
+> Scope note: an earlier draft proposed a `Validity` value type owning bitmap+offset+length and
+> embedded it in every array. **Dropped** — array/scalar/builder layout is off-limits. Everything
+> above is call-site and helper-level only.
 
 **Q2.4 — `ExecutionContext` owns execution policy (RC6)** · Depends: **T2.3b merged** ·
 Owns: `marrow/kernels/execution.mojo`, `marrow/views.mojo`, `marrow/buffers.mojo`,
@@ -241,7 +244,17 @@ namespace next to `Crc32`; `_retag` → `AnyArray.view(dtype)` (that is `pyarrow
 delete the 6 redundant `read_ipc_*`/`write_ipc_*` wrappers (each is one constructor call).
 
 **Q3.4 — Python layer (65 delete, 19 relocate)** · Depends: — · Owns: `python/marrow/*.py`,
-`python/bindings/*.mojo` · **Independent of all Mojo-core tasks — can run any time.** Highest
+`python/bindings/*.mojo` · **Independent of all Mojo-core tasks — can run any time, and is the
+best effort-to-value ratio in the plan.**
+
+> **Target abstraction.** One home per function, PyArrow's home. The current state is not "some
+> duplication" — it is *three* definitions of `filter`/`take`/`sort_indices` (top level,
+> `compute.py`, and as `Array` methods) shipping **contradictory** `null_placement` defaults, so
+> the same call means different things depending on which you reach for. Deleting the top-level
+> copies is not cosmetic; it removes a live correctness hazard. While there: any kwarg that is
+> accepted and ignored (`skip_nulls`, `mode`, `boundscheck`, `sort_keys`) must raise
+> `NotImplementedError` — silently returning the wrong answer is worse than not offering the
+> option. Highest
 value in the whole plan for effort: delete the **24 duplicated compute functions** in
 `python/marrow/__init__.py` (they ship *contradictory* `null_placement` defaults vs `compute.py`;
 `filter`/`take`/`drop_null`/`sort`/`sort_indices` each exist **three** times — top-level,
@@ -327,20 +340,17 @@ size risk in the plan).
 
 ## Suggested first parallel batch
 
-Four disjoint lanes, none touching in-flight branches:
+Three disjoint lanes. Q5.3 (compiler migration) is done, so nothing is blocked.
 
-| lane | task | owns |
-|---|---|---|
-| A | **Q0.2 + Q0.3** (one lane — both own the expr files) | `expr/values.mojo`, `expr/dynamic.mojo`, `kernels/boolean.mojo` |
-| B | **Q0.1** | `arrays.mojo`, `buffers.mojo`, `views.mojo` |
-| C | **Q1.1** | `hashing.mojo`, `sort.mojo`, `dtypes.mojo`, `utils.mojo` |
-| D | **Q3.4** | `python/**` |
+| lane | task | owns | why first |
+|---|---|---|---|
+| **A** | **Q0.2 + Q0.3** — fused expr correctness | `expr/values.mojo`, `expr/dynamic.mojo`, `kernels/boolean.mojo`, `expr/tests/{test_values,test_parity}.mojo` | Two proven wrong-answer bugs (D3, D4) |
+| **B** | **Q1.1** — close the dtype ladders | `kernels/hashing.mojo`, `kernels/sort.mojo`, `dtypes.mojo`, `utils.mojo` + their tests | Only M1 blocker: `GROUP BY`/`ORDER BY` on temporal raises |
+| **C** | **Q3.4** — Python layer dedup | `python/**` | Best effort-to-value; fully independent |
 
 > Q0.2 and Q0.3 both touch `expr/values.mojo`/`dynamic.mojo` → **one lane**.
 > Q1.1 must land before Q3.2 (both own `utils.mojo`/`dtypes.mojo`).
-> **Q5.3 is the only genuine blocker left** — six files still fail to build after the compiler
-> upgrade, so those areas cannot be validated until it lands.
+> All three are disjoint in *Owns*, so they can run concurrently in worktrees.
 
 Q1.1 can join as lane E (owns `hashing.mojo`, `sort.mojo`, `dtypes.mojo`, `utils.mojo`) if
-Q0.1/Q3.2 are deferred — but note it contends with Q0.1 on nothing and with Q3.2 on
-`utils.mojo`/`dtypes.mojo`, so run Q1.1 **before** Q3.2.
+Q3.2 contends with Q1.1 on `utils.mojo`/`dtypes.mojo`, so run Q1.1 **before** Q3.2.

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **Renamed the `Scalar` trait to `ArrowScalar`** (`marrow/scalars.mojo`). The
+  old name shadowed the builtin `Scalar[dtype]` alias, and because `arrays.mojo`
+  and `dtypes.mojo` wildcard-import each other, the bare name resolved to the
+  trait along that cycle and `Scalar[T.native]` stopped parsing. Both existing
+  workarounds — `Scalar as ScalarTrait` in `arrays`/`dtypes` and
+  `Scalar as _Scalar` in `scalars` — are gone with it.
+
 ### Build
 
 - **Upgraded Mojo to `1.0.0b3.dev2026072406`** (pinned exactly in all three
