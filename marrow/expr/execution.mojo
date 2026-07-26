@@ -23,6 +23,7 @@ from std.memory import ArcPointer
 from ..arrays import AnyArray, StructArray
 from .. import dtypes as dt
 from ..schema import Schema
+from ..builders import Int32Builder
 from ..tabular import RecordBatch
 from ..kernels.concat import concat
 from ..kernels.filter import filter
@@ -651,18 +652,29 @@ struct AggregateProcessor(Processor):
 
         if keyless:
             # ``SELECT agg(x), ...`` with no GROUP BY — one implicit group, so
-            # there is nothing to hash and each aggregate takes its own
-            # whole-column path.
-            var whole_values = List[AnyArray]()
+            # there is nothing to hash: every row is group 0 and the aggregates
+            # run through the same per-column entry point as a GROUP BY.
+            #
+            # Not `Aggregates.whole`, which would be faster here (a vectorized
+            # SIMD reduce rather than a scatter): reaching it from a *plan*
+            # makes the whole name→aggregate catalog reachable from every plan,
+            # and that measured +13% on the fused binary-size gate for a path a
+            # keyed query never runs. The eager `RecordBatch.aggregate` binding
+            # still takes the fast route.
+            var values = List[AnyArray]()
             for i in range(len(self.inputs)):
-                whole_values.append(concat(value_chunks[i], self._ctx))
+                values.append(concat(value_chunks[i], self._ctx))
                 value_chunks[i].clear()
-            var one_row = self.aggs.whole(
-                whole_values, self._ctx.resolved_num_threads()
-            )
-            return RecordBatch(
-                schema=self._schema.copy(), columns=one_row.columns.copy()
-            )
+
+            var zeros = Int32Builder(values[0].length())
+            for _ in range(values[0].length()):
+                zeros.append(Int32(0))
+            var group_zero = zeros.finish()
+
+            var cols = List[AnyArray]()
+            for i in range(len(self.aggs)):
+                cols.append(self.aggs[i].grouped(group_zero, values[i], 1))
+            return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
         # Phase 2 — the unique key columns, then one shared per-column aggregate
         # each. An aggregate's buffered chunks are released as soon as they are

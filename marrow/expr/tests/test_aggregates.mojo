@@ -4,16 +4,21 @@ Everything here goes through the surface a query frontend uses, the way
 ibis/polars do:
 
     var plan = in_memory_table(orders).aggregate(
-        keys=[col("region")],                     # GROUP BY region
-        values=[col("amount"), col("amount")],    # the aggregate inputs
-        funcs=["sum", "max"],                     # applied pairwise
-        names=["total", "biggest"],               # output column names
+        keys=[col("region")],
+        aggs=[
+            col("amount").sum().alias("total"),
+            col("amount").max().alias("biggest"),
+        ],
     )
     var out = execute(plan)                       # region | total | biggest
 
 Keys and inputs are arbitrary expressions (``col("a") * lit(2)``,
 ``col("ts").year()``), ``HAVING`` is a ``.filter(...)`` on top, and leaving
 ``keys`` empty is ``SELECT agg(x)`` with no GROUP BY.
+
+An aggregate is written on the expression it aggregates, so there are no
+parallel ``values``/``funcs``/``names`` lists to keep in step — a whole class of
+caller mistake that used to need a test is now unrepresentable.
 
 Deliberately nothing here touches ``Aggregates`` / ``AggFunc`` / ``Aggregation``:
 the machinery underneath should stay refactorable without editing this file, so
@@ -101,7 +106,10 @@ def _row_for(out_batch: RecordBatch, region: String) raises -> Int:
 def test_group_by_one_aggregate() raises:
     """``SELECT region, sum(amount) FROM orders GROUP BY region``."""
     var plan = in_memory_table(_orders()).aggregate(
-        keys=[col("region")], values=[col("amount")], funcs=["sum"]
+        keys=[col("region")],
+        aggs=[
+            col("amount").sum(),
+        ],
     )
     var out = execute(plan)
 
@@ -119,9 +127,12 @@ def test_group_by_several_aggregates_in_one_pass() raises:
     are grouped once and every aggregate rides along."""
     var plan = in_memory_table(_orders()).aggregate(
         keys=[col("region")],
-        values=[col("amount"), col("amount"), col("quantity"), col("amount")],
-        funcs=["sum", "max", "count", "mean"],
-        names=["total", "biggest", "n", "avg"],
+        aggs=[
+            col("amount").sum().alias("total"),
+            col("amount").max().alias("biggest"),
+            col("quantity").count().alias("n"),
+            col("amount").mean().alias("avg"),
+        ],
     )
     var out = execute(plan)
     var east = _row_for(out, "east")
@@ -137,9 +148,9 @@ def test_group_by_computed_input() raises:
     """Keys and aggregate inputs are ordinary expressions."""
     var plan = in_memory_table(_orders()).aggregate(
         keys=[col("region")],
-        values=[col("amount") * lit[Int64Type](2)],
-        funcs=["sum"],
-        names=["doubled"],
+        aggs=[
+            (col("amount") * lit[Int64Type](2)).sum().alias("doubled"),
+        ],
     )
     var out = execute(plan)
     assert_equal(out.column(1).as_int64()[_row_for(out, "east")].value(), 180)
@@ -149,9 +160,10 @@ def test_group_by_names_disambiguate_aggregates() raises:
     """Two aggregates of the same function need explicit output names."""
     var plan = in_memory_table(_orders()).aggregate(
         keys=[col("region")],
-        values=[col("amount"), col("quantity")],
-        funcs=["sum", "sum"],
-        names=["amount_sum", "quantity_sum"],
+        aggs=[
+            col("amount").sum().alias("amount_sum"),
+            col("quantity").sum().alias("quantity_sum"),
+        ],
     )
     assert_true(plan.schema().fields[1].name == "amount_sum")
     assert_true(plan.schema().fields[2].name == "quantity_sum")
@@ -163,9 +175,9 @@ def test_having_is_a_filter_on_the_aggregate() raises:
         in_memory_table(_orders())
         .aggregate(
             keys=[col("region")],
-            values=[col("amount")],
-            funcs=["sum"],
-            names=["total"],
+            aggs=[
+                col("amount").sum().alias("total"),
+            ],
         )
         .filter(col("total") > lit[Int64Type](80))
     )
@@ -185,9 +197,11 @@ def test_whole_table_aggregate_without_keys() raises:
     keys means one implicit group and a single output row."""
     var plan = in_memory_table(_orders()).aggregate(
         keys=List[DynValue](),
-        values=[col("amount"), col("amount"), col("quantity")],
-        funcs=["sum", "min", "count"],
-        names=["total", "smallest", "n"],
+        aggs=[
+            col("amount").sum().alias("total"),
+            col("amount").min().alias("smallest"),
+            col("quantity").count().alias("n"),
+        ],
     )
     var out = execute(plan)
 
@@ -208,16 +222,14 @@ def test_output_dtypes_match_what_execution_produces() raises:
     output dtype, and execution must agree with it column for column."""
     var plan = in_memory_table(_orders()).aggregate(
         keys=[col("region")],
-        values=[
-            col("quantity"),  # sum widens int32 -> int64
-            col("quantity"),  # min keeps int32
-            col("amount"),  # mean is float64
-            col("region"),  # count is int64, over any dtype
-            col("region"),  # min of a string keeps string
-            col("day"),  # min of a date keeps date32
+        aggs=[
+            col("quantity").sum().alias("s"),  # sum widens int32 -> int64
+            col("quantity").min().alias("mn"),  # min keeps int32
+            col("amount").mean().alias("avg"),  # mean is float64
+            col("region").count().alias("n"),  # count is int64, any dtype
+            col("region").min().alias("first_name"),  # string min keeps string
+            col("day").min().alias("earliest"),  # date min keeps date32
         ],
-        funcs=["sum", "min", "mean", "count", "min", "min"],
-        names=["s", "mn", "avg", "n", "first_name", "earliest"],
     )
     var out = execute(plan)
     for i in range(len(plan.schema().fields)):
@@ -244,9 +256,9 @@ def test_min_max_keep_timestamp_unit_and_timezone() raises:
     )
     var plan = in_memory_table(batch).aggregate(
         keys=[col("k")],
-        values=[col("ts")],
-        funcs=["min"],
-        names=["first_seen"],
+        aggs=[
+            col("ts").min().alias("first_seen"),
+        ],
     )
     var out = execute(plan)
     assert_equal(plan.schema().fields[1].dtype, timestamp(second, "UTC"))
@@ -269,9 +281,10 @@ def test_min_max_over_strings_are_lexicographic() raises:
     )
     var plan = in_memory_table(batch).aggregate(
         keys=[col("k")],
-        values=[col("fruit"), col("fruit")],
-        funcs=["min", "max"],
-        names=["lo", "hi"],
+        aggs=[
+            col("fruit").min().alias("lo"),
+            col("fruit").max().alias("hi"),
+        ],
     )
     var out = execute(plan)
     assert_true(out.column(1).as_string()[0].to_string() == "apple")
@@ -281,9 +294,10 @@ def test_min_max_over_strings_are_lexicographic() raises:
 def test_count_distinct_over_any_column() raises:
     var plan = in_memory_table(_orders()).aggregate(
         keys=[col("region")],
-        values=[col("region"), col("amount")],
-        funcs=["count_distinct", "count_distinct"],
-        names=["regions", "amounts"],
+        aggs=[
+            col("region").count_distinct().alias("regions"),
+            col("amount").count_distinct().alias("amounts"),
+        ],
     )
     var out = execute(plan)
     var east = _row_for(out, "east")
@@ -306,9 +320,10 @@ def test_nulls_are_excluded_and_empty_groups_are_null() raises:
     )
     var plan = in_memory_table(batch).aggregate(
         keys=[col("k")],
-        values=[col("v"), col("v")],
-        funcs=["sum", "count"],
-        names=["total", "n"],
+        aggs=[
+            col("v").sum().alias("total"),
+            col("v").count().alias("n"),
+        ],
     )
     var out = execute(plan)
 
@@ -319,6 +334,9 @@ def test_nulls_are_excluded_and_empty_groups_are_null() raises:
             assert_equal(out.column(2).as_int64()[i].value(), 2)
         else:
             assert_false(out.column(1).is_valid(i))  # all-null group -> null
+            # ... but counting nothing is 0, and a *valid* 0, whatever the
+            # column's type.
+            assert_true(out.column(2).is_valid(i))
             assert_equal(out.column(2).as_int64()[i].value(), 0)
 
 
@@ -328,9 +346,13 @@ def test_nulls_are_excluded_and_empty_groups_are_null() raises:
 
 
 def test_unknown_aggregate_is_rejected() raises:
+    """The sugar (`.sum()`) cannot name an aggregate that does not exist; a
+    frontend passing a runtime name through `.aggregate(name)` can, and is
+    rejected when the plan is built."""
     with assert_raises(contains="unknown aggregate function"):
         _ = in_memory_table(_orders()).aggregate(
-            keys=[col("region")], values=[col("amount")], funcs=["median"]
+            keys=[col("region")],
+            aggs=[col("amount").aggregate("median")],
         )
 
 
@@ -339,20 +361,17 @@ def test_aggregate_undefined_for_the_column_type_is_rejected() raises:
     before anything executes."""
     with assert_raises(contains="not defined for"):
         _ = in_memory_table(_orders()).aggregate(
-            keys=[col("region")], values=[col("region")], funcs=["sum"]
+            keys=[col("region")],
+            aggs=[
+                col("region").sum(),
+            ],
         )
     with assert_raises(contains="not defined for"):
         _ = in_memory_table(_orders()).aggregate(
-            keys=[col("region")], values=[col("region")], funcs=["mean"]
-        )
-
-
-def test_mismatched_values_and_funcs_are_rejected() raises:
-    with assert_raises(contains="len(values) != len(funcs)"):
-        _ = in_memory_table(_orders()).aggregate(
             keys=[col("region")],
-            values=[col("amount")],
-            funcs=["sum", "min"],
+            aggs=[
+                col("region").mean(),
+            ],
         )
 
 
@@ -364,9 +383,9 @@ def test_mismatched_values_and_funcs_are_rejected() raises:
 def test_the_same_plan_can_be_executed_repeatedly() raises:
     var plan = in_memory_table(_orders()).aggregate(
         keys=[col("region")],
-        values=[col("amount")],
-        funcs=["sum"],
-        names=["total"],
+        aggs=[
+            col("amount").sum().alias("total"),
+        ],
     )
     var first = execute(plan)
     var second = execute(plan)
@@ -425,9 +444,10 @@ def test_fused_aggregate_matches_the_dynamic_one() raises:
     var dynamic = execute(
         in_memory_table(_orders()).aggregate(
             keys=[col("region")],
-            values=[col("amount"), col("amount")],
-            funcs=["sum", "max"],
-            names=["total", "biggest"],
+            aggs=[
+                col("amount").sum().alias("total"),
+                col("amount").max().alias("biggest"),
+            ],
         )
     )
 

@@ -37,8 +37,10 @@ def _make_vals(n: Int) raises -> AnyArray:
     return b.finish()
 
 
-def _bench_group_by[A: Aggregation](mut b: Benchmark, n: Int) raises:
-    var keys = _make_keys(n, 10)
+def _bench_group_by[
+    A: Aggregation
+](mut b: Benchmark, n: Int, num_groups: Int = 10) raises:
+    var keys = _make_keys(n, num_groups)
     var vals = A.from_any(_make_vals(n))
     b.throughput(BenchMetric.elements, n)
 
@@ -67,6 +69,29 @@ def bench_groupby_sum_100k(mut b: Benchmark) raises:
 
 def bench_groupby_sum_1m(mut b: Benchmark) raises:
     _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# group_by sum — 1M rows by cardinality.
+#
+# Cardinality, not row count, is what picks the execution strategy: g10 and g1k
+# fold thread-local partials, g100k partitions by key hash. Without the g100k
+# case the radix path is only reachable through the Python competition harness,
+# where Python overhead and machine noise hide exactly the regressions this is
+# meant to catch.
+# ---------------------------------------------------------------------------
+
+
+def bench_groupby_sum_1m_g1k(mut b: Benchmark) raises:
+    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 1_000_000, 1_000)
+
+
+def bench_groupby_sum_1m_g100k(mut b: Benchmark) raises:
+    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 1_000_000, 100_000)
+
+
+def bench_groupby_mean_1m_g100k(mut b: Benchmark) raises:
+    _bench_group_by[NumericAgg[MeanKernel, Float64Type]](b, 1_000_000, 100_000)
 
 
 # ---------------------------------------------------------------------------

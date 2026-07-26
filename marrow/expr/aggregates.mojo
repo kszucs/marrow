@@ -309,6 +309,11 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
     def __getitem__(ref self, index: Int) -> ref[self._funcs[index]] AggFunc:
         return self._funcs[index]
 
+    def add(mut self, var func: AggFunc):
+        """Add an already-resolved aggregate — what an ``AggExpr`` hands over
+        once the plan knows its input's dtype."""
+        self._funcs.append(func^)
+
     def append[A: Aggregation](mut self, value_dtype: AnyDataType) raises:
         """Add aggregation ``A`` over a ``value_dtype`` column (AOT)."""
         self._funcs.append(AggFunc.of[A](value_dtype))

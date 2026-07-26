@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### Features
+
+- **Aggregates are written on the expression they aggregate.** `rel.aggregate(...)`
+  took three positionally-correlated lists (`values`, `funcs`, `names`); it now takes one:
+
+  ```mojo
+  rel.aggregate(keys=[col("region")],
+                aggs=[col("amount").sum().alias("total"),
+                      col("amount").max().alias("biggest")])
+  ```
+
+  `col("x").sum()` on a `DynValue` yields a `DynAgg` — the function's *name* plus its input —
+  and on a fused node it is the existing `Reduction`, which converts to the same `AggExpr`
+  with its `Aggregation` already named. So the fused (AOT) spelling is the identical call, one
+  lane down: `col("amount", int64).sum()` resolves nothing at run time. Both lanes mix in one
+  list. The distinct counts, which have no fused reduction, are `.count_distinct()` /
+  `.approx_count_distinct()` on any value. A whole class of caller mistake (lists out of step)
+  is now unrepresentable, so the test that guarded it is gone.
+- **`SELECT agg(x)` with no `GROUP BY` executes as a plan.** Leaving `keys` empty used to
+  raise inside the grouper; it is now one implicit group. It routes through the same
+  per-column entry point as a keyed query rather than the vectorized whole-column reduce:
+  reaching the latter from a plan makes the whole name→aggregate catalog reachable from
+  *every* plan, which measured **+13%** on the fused binary-size gate. The eager
+  `RecordBatch.aggregate` binding still takes the fast route.
+
+### Fixes
+
+- **`count` of an all-null group is 0, not NULL** — over any dtype. It was 0 for non-numeric
+  columns (the validity scan) and NULL for numeric ones (the `AggState` fold), which SQL says
+  is wrong. Stated on the kernel as `AggKernel.empty_is_null` rather than special-cased at the
+  call site, so a group with nothing to fold is NULL unless the aggregate says otherwise.
+
+### Refactors
+
+- **`marrow/kernels` no longer knows what an aggregate is called.** The `Aggregation`
+  implementations (`NumericAgg`, `TemporalMinMax`, `StringMinMax`, `CountAgg`, `DistinctAgg`)
+  and the `AggFunction` catalog (`Sum`, `Min`, `Count`, …) live in `kernels/aggregate.mojo`
+  with the algebra they execute; the delegating `StringMinMaxKernel`/`CountValidKernel` layer
+  is gone. This also removed a cycle: `expr.aggregates ↔ expr.dynamic`.
+- **The group-by driver is one function.** `GroupPartitioner` / `WholeRows` / `ByKeyHash` are
+  deleted — inverting control flow through a `work` callback bought nothing for two cases, so
+  `_by_partition[col_agg](..., partition: Bool)` is the whole thing. `slice_struct` is gone
+  too: `RapidHash.apply(StructArray)` now honours a struct's own offset, so `keys.slice(...)`
+  works. `AggFold` lost its `whole` pointer (a box resolved and called once buys nothing) and
+  the thread-local path's three parallel `List[Optional[...]]` arrays indexed `[t * na + j]`
+  became one `ThreadPartials` value.
+
+### Tests
+
+- `marrow/expr/tests/test_aggregates.mojo` — aggregation through the expression API only
+  (plan-build + `execute`), so the machinery underneath stays refactorable, plus AOT/fused
+  cases that must agree with the dynamic ones column for column.
+- `bench_groupby.mojo` gains `g1k` / `g100k` cases: cardinality is what picks the execution
+  strategy, and the radix path had no Mojo-level benchmark at all.
+
 ### Refactors
 
 - **Aggregates are types all the way down — `Aggregation` replaces every name/tag

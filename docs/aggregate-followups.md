@@ -5,9 +5,11 @@ layering audit, L1–L9). That document owns the *layering* tasks; this one owns
 what is specific to aggregation and group-by, records what the `Aggregation`
 inversion already changed, and flags where the two disagree.
 
-**State:** 1866 passed / 314 skipped / 0 failed · binary size fused **7.6×**,
-runtime-named **7.9×** (baseline 7.6× / 7.8×) · group-by competition **11/15**
-wins, two runs on an idle machine.
+**State:** 1865 passed / 317 skipped / 0 failed · binary size fused **7.6×**,
+runtime-named **7.9×** (baseline 7.6× / 7.8×) · group-by competition **12/15**
+wins, `sum[1m_g100k]` 1.89 ms and `multi[1m_g100k]` 3.06 ms — parity with the
+pre-refactor baseline (1.87 / 3.02). §1, §3 and §4 are done — see the notes under
+each; §2, §5, §6 and §7 remain.
 
 ---
 
@@ -36,18 +38,7 @@ wins, two runs on an idle machine.
   surface through plan-build + `execute` only, so the machinery underneath stays
   refactorable, plus three AOT/fused cases.
 
-## 1. Ibis-style aggregate expressions — **owner-requested, not started**
-
-Today an aggregate is three positionally-correlated lists:
-
-```mojo
-rel.aggregate(keys=[col("region")],
-              values=[col("amount"), col("amount")],
-              funcs=["sum", "max"],
-              names=["total", "biggest"])
-```
-
-Target (ibis: `t.group_by("region").agg(total=t.amount.sum())`):
+## 1. Ibis-style aggregate expressions — **done**
 
 ```mojo
 rel.aggregate(keys=[col("region")],
@@ -55,19 +46,28 @@ rel.aggregate(keys=[col("region")],
                     col("amount").max().alias("biggest")])
 ```
 
-- `DynValue.sum()/min()/max()/count()/mean()/product()/count_distinct()/
-  approx_count_distinct()` + `.alias()` → an aggregate expression (input
-  expression + function + optional name). The dynamic form.
-- **The AOT form is the preference**, so it needs a typed spelling too —
-  `Sum(col("amount", int64))` — not `Aggregates.append[NumericAgg[...]]`. This
-  is where the owner's "aggregates are still values" note lands; `values.mojo`
-  already has `Reduction[K, A]` for the whole-array case and the grouped case is
-  its sibling.
-- `Aggregate` / `AggregateProcessor` then hold **one** list instead of `inputs`
-  + `aggs` in parallel; `python/bindings/tabular.mojo` builds the dynamic form
-  from the names Python passes.
-- Interacts with layering-audit **L3** (what `AggFunc` stores) and **L5** (who
-  owns the strategy) — settle the expression shape first, then those.
+`col("x").sum()` on a `DynValue` gives a `DynAgg` (the function's name plus its
+input); on a fused node it is the existing `Reduction`, which converts to the
+same `AggExpr` with its `Aggregation` already named — so the AOT spelling is the
+identical call one lane down and resolves nothing at run time. Both lanes mix in
+one list. `.count_distinct()` / `.approx_count_distinct()` have no fused
+reduction and go straight to an `AggExpr`.
+
+Left over:
+
+- The **node still holds two parallel lists** (`inputs: List[AnyValue]` +
+  `aggs: Aggregates`); `aggregate()` splits the `AggExpr`s at plan build. Fine
+  for now — the split is where the input expression and the resolved aggregate
+  genuinely part ways — but it is the obvious next simplification if the node
+  ever needs to carry the pair around together.
+- **A fused plan built through `rel.aggregate(...)` still links the catalog.**
+  `AggExpr.resolve` has a dynamic arm, so the name ladder is reachable from any
+  plan built with the fluent API. Only a plan that constructs the `Aggregate`
+  node directly (as `benchmarks/binary_size/query_streaming_agg_fused.mojo`
+  does) gets the 7.6× binary. Closing that needs the aggregate list to be
+  comptime-known, which is `FusedAggregation` (step 4) territory.
+- `python/bindings/tabular.mojo` is unaffected — it drives `Aggregates`
+  directly, not the plan API.
 
 ## 2. Consolidate the two hash groupers
 
@@ -85,25 +85,21 @@ incremental mode, `GroupBy` the deferred one. Do this with, or right after,
 audit **L4** (`GroupBy` stops speaking `RecordBatch`) — both touch the same
 return shape.
 
-## 3. `count` disagrees with itself on all-null groups
+## 3. `count` disagrees with itself on all-null groups — **done**
 
-`count` over a **numeric** column resolves to `NumericAgg[CountKernel, V]`,
-whose `AggState.finish` emits NULL for a group with no valid rows; over any
-**other** column it resolves to `CountAgg`, which emits 0. SQL says 0. This
-predates the inversion (the old code had the same split) and is currently pinned
-by `test_nulls_are_excluded_and_empty_groups_are_null`, so fixing it is a
-deliberate behaviour change: either `AggState` emits the kernel's identity
-rather than NULL when the kernel says so, or `count` gets one dtype-independent
-implementation.
+`AggKernel.empty_is_null` states it on the kernel (`count` is the one aggregate
+that answers 0 rather than NULL when a group has no valid rows), and
+`AggState.finish` finalizes the untouched identity instead of appending NULL
+when it is false. `count` is now 0 over every dtype, and
+`test_nulls_are_excluded_and_empty_groups_are_null` asserts the *validity* too,
+which it previously did not.
 
-## 4. Benchmark coverage for the radix path
+## 4. Benchmark coverage for the radix path — **done**
 
-`marrow/kernels/tests/bench_groupby.mojo` only covers `g10` — serial and
-thread-local. The high-cardinality radix path, which is what the fusion work
-targets, is reachable only through the Python competition harness (Python
-overhead, needs an idle machine). Add `g1k` / `g100k` cases at the Mojo level so
-a regression there shows up without the harness. Prerequisite for measuring
-audit **L5** honestly.
+`bench_groupby.mojo` gains `sum[1m_g1k]`, `sum[1m_g100k]` and `mean[1m_g100k]`;
+`_bench_group_by` takes the group count. Cardinality is what picks the strategy,
+so g100k is the radix path — previously reachable only through the Python
+competition harness. Not yet used as a gate: no baseline numbers recorded.
 
 ## 5. Strategy thresholds are unre-tuned
 

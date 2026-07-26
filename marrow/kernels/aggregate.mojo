@@ -92,6 +92,11 @@ trait AggKernel(Kernel):
     widens integers to int64; `min`/`max` keep `V`; `count` is int64; `mean` is
     float64."""
 
+    comptime empty_is_null: Bool = True
+    """Whether a group with no valid rows has no answer. It usually does not —
+    the minimum of nothing is NULL, not a sentinel — but `count` is the
+    exception SQL calls out: counting nothing is 0."""
+
     @staticmethod
     def identity[A: DType]() -> Scalar[A]:
         """Initial accumulator value."""
@@ -352,6 +357,7 @@ struct CountKernel(AggKernel):
 
     comptime name = "count"
     comptime AccType[V: NumericType] = Int64Type
+    comptime empty_is_null = False
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -610,8 +616,8 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
                 self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + 1)
 
     def finish(mut self, num_groups: Int) raises -> PrimitiveArray[Self.Acc]:
-        """Finalize into the typed output column (NULL for empty/all-null
-        groups)."""
+        """Finalize into the typed output column. A group with no valid rows is
+        NULL unless the kernel says otherwise (`AggKernel.empty_is_null`)."""
         comptime A = Self.Acc.native
         var b = PrimitiveBuilder[Self.Acc](num_groups)
         for g in range(num_groups):
@@ -619,7 +625,12 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
             if c > 0:
                 b.append(Self.K.finalize[A](self.acc.unsafe_get(g), c))
             else:
-                b.append_null()
+                comptime if Self.K.empty_is_null:
+                    b.append_null()
+                else:
+                    # `count` of nothing is 0, not unknown — finalizing the
+                    # untouched identity accumulator gives exactly that.
+                    b.append(Self.K.finalize[A](Self.K.identity[A](), 0))
         return b.finish()
 
     def into_partials(

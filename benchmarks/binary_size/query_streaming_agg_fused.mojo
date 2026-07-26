@@ -15,10 +15,10 @@ stripped sizes is precisely the cost of a runtime aggregate identity.
 
 from marrow.builders import array
 from marrow.dtypes import AnyDataType, Int64Type, int64, string, field
-from marrow.kernels.aggregate import SumKernel, MinKernel
+from marrow.kernels.aggregate import NumericAgg, SumKernel, MinKernel
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.aggregates import Aggregates, NumericAgg
+from marrow.expr.aggregates import Aggregates
 from marrow.expr.values import col, AnyValue
 from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation, execute
 

@@ -813,6 +813,78 @@ struct DynValue(
             name=unit^,
         )
 
+    # --- aggregates (marrow.expr.aggregates) --------------------------------
+    #
+    # An aggregate is not another `DynValue` tag: it does not produce a value
+    # per row, it collapses rows within a group. `col("x").sum()` therefore
+    # yields a `DynAgg` — this expression plus the aggregate applied to it —
+    # which `AnyRelation.aggregate` turns into an output column.
+
+    def aggregate(self, var func: String) -> DynAgg:
+        """Apply the aggregate named ``func`` to this expression. The named
+        entry point the sugar below is written in terms of, and what a frontend
+        holding a runtime function name calls."""
+        return DynAgg(func^, self.copy())
+
+    def sum(self) -> DynAgg:
+        return self.aggregate("sum")
+
+    def product(self) -> DynAgg:
+        return self.aggregate("product")
+
+    def mean(self) -> DynAgg:
+        return self.aggregate("mean")
+
+    def min(self) -> DynAgg:
+        return self.aggregate("min")
+
+    def max(self) -> DynAgg:
+        return self.aggregate("max")
+
+    def count(self) -> DynAgg:
+        return self.aggregate("count")
+
+    def count_distinct(self) -> DynAgg:
+        return self.aggregate("count_distinct")
+
+    def approx_count_distinct(self) -> DynAgg:
+        return self.aggregate("approx_count_distinct")
+
+
+struct DynAgg(Copyable, Movable, Writable):
+    """An aggregate applied to a runtime expression — ``col("x").sum()``.
+
+    The dynamic counterpart of the fused ``AggExpr`` (``marrow.expr.values``):
+    it names the aggregate rather than naming its ``Aggregation`` type, so the
+    function is resolved once — against the input's dtype — when the plan is
+    built. ``alias`` sets the output column name; without one the function's own
+    name is used."""
+
+    var func: String
+    var input: DynValue
+    var out_name: String
+
+    def __init__(
+        out self,
+        var func: String,
+        var input: DynValue,
+        var out_name: String = String(),
+    ):
+        self.func = func^
+        self.input = input^
+        self.out_name = out_name^
+
+    def alias(self, var name: String) -> DynAgg:
+        """Name this aggregate's output column."""
+        return DynAgg(self.func, self.input.copy(), name^)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.func, "(")
+        self.input.write_to(writer)
+        writer.write(")")
+        if self.out_name:
+            writer.write(" as ", self.out_name)
+
 
 # ---------------------------------------------------------------------------
 # Factory functions (return DynValue)

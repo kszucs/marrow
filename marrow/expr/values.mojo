@@ -34,6 +34,7 @@ from std.builtin.rebind import downcast
 from std.utils import Variant
 from std.memory import ArcPointer
 
+from ..schema import Schema
 from ..tabular import RecordBatch
 from ..arrays import (
     Array,
@@ -50,6 +51,7 @@ from ..buffers import Buffer, Bitmap
 from ..builders import Int64Builder, BinaryLikeBuilder
 from ..views import apply, BitmapView
 from ..dtypes import (
+    AnyDataType,
     DataType,
     NumericType,
     DType,
@@ -92,6 +94,14 @@ from ..kernels.arithmetic import (
     LogKernel,
 )
 from ..kernels.aggregate import (
+    Aggregation,
+    NumericAgg,
+    TemporalMinMax,
+    StringMinMax,
+    CountAgg,
+    DistinctAgg,
+    MinOp,
+    MaxOp,
     AggKernel,
     SumKernel,
     MeanKernel,
@@ -155,7 +165,8 @@ from ..kernels.boolean import (
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from ..kernels.helpers import bitmap_and
 from .pruning import PruneStats, PruneBound
-from .dynamic import DynValue
+from .dynamic import DynValue, DynAgg
+from .aggregates import AggFunc
 from ..kernels.cast import (
     NumericCast as NumericCastKernel,
     NumToBool as NumToBoolKernel,
@@ -518,6 +529,20 @@ trait NumericValue(Value):
                 buffer=buf.to_immutable(),
             )
             return arr^.to_any()
+
+    # --- aggregates without a fused reduction -------------------------------
+    #
+    # `sum`/`mean`/`min`/`max`/`product`/`count` are already above: they build a
+    # `Reduction`, which is both a scalar value inside an expression and — via
+    # `AggExpr`'s conversion — an aggregate in a `GROUP BY`. The distinct counts
+    # have no fused form (their state is a hash set / HLL sketch, not a scalar
+    # accumulator), so they go straight to an `AggExpr`.
+
+    def count_distinct(self) -> AggExpr:
+        return AggExpr.of[DistinctAgg[True]](self.copy())
+
+    def approx_count_distinct(self) -> AggExpr:
+        return AggExpr.of[DistinctAgg[False]](self.copy())
 
 
 struct NumericColumn[T: NumericType](NumericValue):
@@ -1314,6 +1339,23 @@ trait StringValue(Value):
                 builder.append(self.elementwise(batch, ctx, slot, i))
             return builder.finish().to_any()
 
+    # --- aggregates (marrow.expr.aggregates) --------------------------------
+
+    def min(self) -> AggExpr:
+        return AggExpr.of[StringMinMax[MinOp, Self.OutType]](self.copy())
+
+    def max(self) -> AggExpr:
+        return AggExpr.of[StringMinMax[MaxOp, Self.OutType]](self.copy())
+
+    def count(self) -> AggExpr:
+        return AggExpr.of[CountAgg](self.copy())
+
+    def count_distinct(self) -> AggExpr:
+        return AggExpr.of[DistinctAgg[True]](self.copy())
+
+    def approx_count_distinct(self) -> AggExpr:
+        return AggExpr.of[DistinctAgg[False]](self.copy())
+
 
 struct StringColumn[T: StringLikeType](StringValue):
     """A string column, resolved by name against `batch.schema` each pass."""
@@ -1995,6 +2037,20 @@ trait TemporalValue(Value):
     def date_trunc(self, var unit: String) -> DateTrunc[Self]:
         return DateTrunc(self.copy(), unit^)
 
+    # --- aggregates (marrow.expr.aggregates) --------------------------------
+
+    def min(self) -> AggExpr:
+        return AggExpr.of[TemporalMinMax[MinOp, Self.OutType]](self.copy())
+
+    def max(self) -> AggExpr:
+        return AggExpr.of[TemporalMinMax[MaxOp, Self.OutType]](self.copy())
+
+    def count(self) -> AggExpr:
+        return AggExpr.of[CountAgg](self.copy())
+
+    def count_distinct(self) -> AggExpr:
+        return AggExpr.of[DistinctAgg[True]](self.copy())
+
 
 struct TemporalColumn[T: TemporalType](TemporalValue):
     """A temporal column, resolved by name. No fused lane — `materialize` hands
@@ -2378,3 +2434,105 @@ def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
 def slit(value: String) -> StringLiteral[StringType]:
     """A string constant — `slit("suffix")`."""
     return StringLiteral[StringType](value)
+
+
+# ---------------------------------------------------------------------------
+# AggExpr — one aggregate in a query
+#
+# `col("x").sum()` on a fused node produces one of these with its `Aggregation`
+# already chosen; the same call on a `DynValue` produces a `DynAgg`, which
+# converts into one and resolves its function name when the plan is built. Both
+# arrive at the same `AggFunc`, which is why `aggregate(...)` takes a single
+# list and does not care which lane each member came from.
+# ---------------------------------------------------------------------------
+
+
+struct AggExpr(Copyable, Movable, Writable):
+    """An aggregate over an input expression, under an output column name.
+
+    Two ways in:
+
+    - **fused / AOT** — ``col("amount", int64).sum()``. The ``Aggregation`` is
+      computed from the node's own ``OutType``, so nothing is interpreted: the
+      plan points straight at ``AggState[SumKernel, Int64Type]``.
+    - **dynamic** — ``col("amount").sum()`` on a ``DynValue``, which carries the
+      function's *name* until the plan is built and the input's dtype is known.
+
+    ``input_for(schema)`` hands back the input expression ready to execute:
+    the dynamic lane resolves its column names against the schema first (a
+    fused node addresses columns by name at execute time and needs nothing)."""
+
+    var out_name: String
+    """The output column name — the aggregate's own name unless aliased."""
+
+    var input: AnyValue
+    var _unresolved: Optional[DynValue]
+    var _func: String
+    var _of: Optional[def(AnyDataType) thin raises -> AggFunc]
+
+    @implicit
+    def __init__[
+        K: AggKernel, In: NumericValue
+    ](out self, var reduction: Reduction[K, In]):
+        """From a fused reduction: ``col("amount", int64).sum()`` is a scalar
+        `Reduction` inside an expression and this aggregate in a `GROUP BY` —
+        the same node, read two ways. The kernel and the operand's `OutType`
+        name the `Aggregation` outright, so nothing is resolved later."""
+        self = AggExpr.of[NumericAgg[K, In.OutType]](reduction.a.copy())
+
+    @implicit
+    def __init__(out self, var agg: DynAgg):
+        """From the dynamic lane: keep the name, resolve it at plan build."""
+        var out_name = agg.out_name.copy()
+        if not out_name:
+            out_name = agg.func.copy()
+        self.out_name = out_name^
+        self.input = AnyValue(agg.input.copy())
+        self._unresolved = agg.input.copy()
+        self._func = agg.func.copy()
+        self._of = None
+
+    def __init__(
+        out self,
+        *,
+        var out_name: String,
+        var input: AnyValue,
+        of: def(AnyDataType) thin raises -> AggFunc,
+    ):
+        self.out_name = out_name^
+        self.input = input^
+        self._unresolved = None
+        self._func = String()
+        self._of = of
+
+    @staticmethod
+    def of[A: Aggregation, In: Value](var input: In) -> AggExpr:
+        """From the fused lane: the aggregation is named, not looked up."""
+        return AggExpr(
+            out_name=String(A.name),
+            input=AnyValue(input^),
+            of=AggFunc.of[A],
+        )
+
+    def alias(self, var name: String) -> AggExpr:
+        """Name this aggregate's output column."""
+        var out = self.copy()
+        out.out_name = name^
+        return out^
+
+    def input_for(self, schema: Schema) raises -> AnyValue:
+        """The input expression, ready to execute against ``schema``."""
+        if self._unresolved:
+            return AnyValue(self._unresolved.value().resolve_names(schema))
+        return self.input.copy()
+
+    def resolve(self, in_dtype: AnyDataType) raises -> AggFunc:
+        """The aggregate, bound to the dtype its input turned out to have."""
+        if self._of:
+            return self._of.value()(in_dtype)
+        return AggFunc(self._func, in_dtype)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._func if self._func else self.out_name, "(")
+        self.input.write_to(writer)
+        writer.write(")")
