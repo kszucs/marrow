@@ -17,11 +17,14 @@ Three layers, each one narrower than the last:
   carries the whole per-column implementation, so the routing that used to be a
   name comparison (the bytewise string scan, the temporal fold, the
   validity-only count, the distinct sketches) *is* which type was resolved.
-- **`AggFunc` / `Aggregates`** — the erasure a *plan* needs, because a query's
-  aggregate list is heterogeneous and only known at run time. ``AggFunc`` is one
-  aggregate behind a single function pointer into its ``Aggregation``;
-  ``Aggregates`` is the set, and it owns the drivers that make N aggregates
-  share one grouping pass.
+- **`AggFunc` / `Aggregates` / `FoldedAggregates`** — the erasure a *plan*
+  needs, because a query's aggregate list is heterogeneous and only known at run
+  time. ``AggFunc`` is one aggregate behind a single function pointer into its
+  ``Aggregation`` and ``Aggregates`` is the list of them, which is all a plan
+  holds; ``FoldedAggregates`` is what an eager ``GroupBy`` driver holds, adding
+  the partial/merge fold that lets a runtime aggregate set take the
+  thread-local path. Both boxes for a member come out of *one* ``resolve_agg``,
+  and nothing dispatches on a name afterwards.
 
 Two ways in, one destination:
 
@@ -253,8 +256,9 @@ struct AggFunc(Copyable, Movable, Writable):
     (+24 %)** on the aggregate binary-size gate."""
 
     var name: String
-    """The function's own name — the default output column name, never dispatch.
-    """
+    """The function's own name — the default output column name. Nothing
+    dispatches on it: the one place a name becomes a type is ``resolve_agg``,
+    and everything an aggregate can do comes out of that single resolution."""
 
     var out_dtype: AnyDataType
     """This aggregate's output dtype over the column it was resolved against."""
@@ -326,21 +330,29 @@ struct AggFold(Copyable, Movable):
     """The thread-local partial/merge fold, erased over the same comptime
     ``Aggregation`` as ``AggFunc``.
 
-    Two pointers rather than one box per capability: ``partials`` is called once
-    per *thread* and ``merge`` once per aggregate, so resolving them together
-    and calling them many times is what the box buys. Anything called exactly
-    once (the whole-table reduce) goes straight through ``resolve_agg`` instead.
+    Split out of ``AggFunc`` on purpose: a relational plan never merges partials
+    or reduces a whole table, and an erased box pays for every field it declares
+    (see ``AggFunc``'s note), so the fused/AOT path links none of this.
 
-    Split out of ``AggFunc`` on purpose: a relational plan never merges partials,
-    and an erased box pays for every field it declares (see ``AggFunc``'s note),
-    so the fused/AOT path links none of this."""
+    Constructible **only** from a comptime ``Aggregation`` (``of[A]``). There is
+    no name-keyed constructor, deliberately: a second dispatch on a string is
+    exactly what the aggregate layer exists not to do, and
+    ``FoldedAggregates.append`` gets this and its ``AggFunc`` out of the same
+    single resolution."""
 
+    var _whole_fn: def(AnyArray, Int) thin raises -> AnyArray
     var _partials_fn: def(Int32Array, AnyArray, Int) thin raises -> Tuple[
         AnyArray, Int64Array
     ]
     var _merge_fn: def(
         List[Int32Array], List[AnyArray], List[Int64Array], Int
     ) thin raises -> AnyArray
+
+    @staticmethod
+    def _whole[
+        A: Aggregation
+    ](value: AnyArray, num_threads: Int) raises -> AnyArray:
+        return A.whole(A.from_any(value), num_threads).to_any()
 
     @staticmethod
     def _partials[
@@ -368,6 +380,7 @@ struct AggFold(Copyable, Movable):
     def __init__(
         out self,
         *,
+        whole_fn: def(AnyArray, Int) thin raises -> AnyArray,
         partials_fn: def(Int32Array, AnyArray, Int) thin raises -> Tuple[
             AnyArray, Int64Array
         ],
@@ -375,25 +388,21 @@ struct AggFold(Copyable, Movable):
             List[Int32Array], List[AnyArray], List[Int64Array], Int
         ) thin raises -> AnyArray,
     ):
+        self._whole_fn = whole_fn
         self._partials_fn = partials_fn
         self._merge_fn = merge_fn
 
     @staticmethod
     def of[A: Aggregation]() -> AggFold:
         return AggFold(
+            whole_fn=Self._whole[A],
             partials_fn=Self._partials[A],
             merge_fn=Self._merge[A],
         )
 
-    def __init__(out self, name: String, value_dtype: AnyDataType) raises:
-        var box = List[AggFold]()
-
-        @parameter
-        def make[A: Aggregation]() raises:
-            box.append(Self.of[A]())
-
-        resolve_agg[make](name, value_dtype)
-        self = box[0].copy()
+    def whole(self, value: AnyArray, num_threads: Int = 0) raises -> AnyArray:
+        """The whole-table aggregate as a one-row column."""
+        return self._whole_fn(value, num_threads)
 
     def partials(
         self, gids: Int32Array, value: AnyArray, num_groups: Int
@@ -413,59 +422,53 @@ struct AggFold(Copyable, Movable):
         return self._merge_fn(remap, accs, cnts, num_groups)
 
 
-# ---------------------------------------------------------------------------
-# Aggregates — the aggregate *set* a query applies in one pass
-# ---------------------------------------------------------------------------
+struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
+    """N aggregates resolved *once* into everything the eager group-by drivers
+    need: the per-column `grouped` entry point and the partial/merge fold.
 
+    Both boxes come out of a single `resolve_agg` — one name comparison per
+    aggregate, at construction, and none afterwards. That is the whole point:
+    resolving the fold separately, later, by name would be a second dispatch on
+    a string, and doing it eagerly on the plan-side `Aggregates` instead would
+    link the fold code into every plan (measured **+1.2x** on the runtime-named
+    binary-size gate, for capabilities a plan never calls).
 
-struct Aggregates(ColumnAggregator, Copyable, Movable, Sized, Writable):
-    """The N aggregates a query computes, and how to compute them together.
-
-    A query aggregates several columns at once (``sum(a), min(b), count(c)``),
-    and what makes that fast is doing the *grouping* once and every aggregate in
-    that one pass. That is a property of the set, not of any single aggregate,
-    so the set is the type that owns the drivers:
-
-    - ``grouped(gb, values)`` — the whole GROUP BY, including the choice between
-      thread-local partial folds (only when every member is mergeable) and the
-      key-partitioned path;
-    - ``whole(values)`` — no GROUP BY: one implicit group, each aggregate's own
-      whole-column path.
-
-    Members are added either by naming the ``Aggregation`` (``append[A]``, the
-    AOT form) or by resolving a function name against the column's dtype
-    (``append(name, dtype)``, the dynamic form)."""
+    So the split is by *who needs what*, not by convenience: a plan holds
+    `Aggregates` and aggregates column by column; an eager `GroupBy` driver
+    holds this and can also fold thread-local partials."""
 
     var _funcs: List[AggFunc]
+    var _folds: List[AggFold]
 
     def __init__(out self):
         self._funcs = List[AggFunc]()
-
-    def __init__(out self, var funcs: List[AggFunc]):
-        self._funcs = funcs^
+        self._folds = List[AggFold]()
 
     def __len__(self) -> Int:
         return len(self._funcs)
 
-    def __getitem__(ref self, index: Int) -> ref[self._funcs[index]] AggFunc:
-        return self._funcs[index]
-
-    def add(mut self, var func: AggFunc):
-        """Add an already-resolved aggregate — what an ``AggExpr`` hands over
-        once the plan knows its input's dtype."""
-        self._funcs.append(func^)
-
     def append[A: Aggregation](mut self, value_dtype: AnyDataType) raises:
-        """Add aggregation ``A`` over a ``value_dtype`` column (AOT)."""
+        """Add aggregation ``A`` over a ``value_dtype`` column (AOT — the
+        aggregation is named, so there is nothing to resolve)."""
         self._funcs.append(AggFunc.of[A](value_dtype))
+        self._folds.append(AggFold.of[A]())
 
     def append(mut self, name: String, value_dtype: AnyDataType) raises:
-        """Add the aggregate ``name`` over a ``value_dtype`` column (dynamic).
-        """
-        self._funcs.append(AggFunc(name, value_dtype))
+        """Add the aggregate ``name`` over a ``value_dtype`` column — the one
+        name→type step, producing both boxes from the same ``Aggregation``."""
+        var funcs = List[AggFunc]()
+        var folds = List[AggFold]()
+
+        @parameter
+        def make[A: Aggregation]() raises:
+            funcs.append(AggFunc.of[A](value_dtype))
+            folds.append(AggFold.of[A]())
+
+        resolve_agg[make](name, value_dtype)
+        self._funcs.append(funcs[0].copy())
+        self._folds.append(folds[0].copy())
 
     def names(self) -> List[String]:
-        """Each aggregate's default output column name."""
         var out = List[String]()
         for ref f in self._funcs:
             out.append(f.name)
@@ -493,9 +496,7 @@ struct Aggregates(ColumnAggregator, Copyable, Movable, Sized, Writable):
     def partials(
         self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
     ) raises -> Tuple[AnyArray, Int64Array]:
-        return AggFold(self._funcs[column].name, values.dtype()).partials(
-            gids, values, num_groups
-        )
+        return self._folds[column].partials(gids, values, num_groups)
 
     def merge(
         self,
@@ -505,14 +506,9 @@ struct Aggregates(ColumnAggregator, Copyable, Movable, Sized, Writable):
         cnts: List[Int64Array],
         num_groups: Int,
     ) raises -> AnyArray:
-        return AggFold(self._funcs[column].name, self.out_dtype(column)).merge(
-            remap, accs, cnts, num_groups
-        )
+        return self._folds[column].merge(remap, accs, cnts, num_groups)
 
-    def out_dtype(self, column: Int) -> AnyDataType:
-        """The dtype the partial accumulators of ``column`` are stored in — for
-        a fold that is also the aggregate's output dtype."""
-        return self._funcs[column].out_dtype.copy()
+    # -- the drivers --------------------------------------------------------
 
     def grouped(
         self, gb: GroupBy, values: List[AnyArray]
@@ -520,13 +516,31 @@ struct Aggregates(ColumnAggregator, Copyable, Movable, Sized, Writable):
         """Apply every aggregate over one grouping of ``gb``'s keys.
 
         ``values[j]`` is aggregated with member ``j``. Returns the unique key
-        columns followed by one column per aggregate, so a multi-aggregate
-        query hashes and probes the keys once instead of once per aggregate.
-
-        Which execution strategy runs is the grouper's decision, not this
-        layer's: it is handed the set (as a ``ColumnAggregator``) and asks it
-        whether the columns are mergeable."""
+        columns followed by one column per aggregate, so a multi-aggregate query
+        hashes and probes the keys once instead of once per aggregate. Which
+        execution strategy runs is the grouper's decision: it is handed this set
+        and asks it whether the columns are mergeable."""
         return self._named(gb.aggregate_all(self, values), gb.keys())
+
+    def whole(
+        self, values: List[AnyArray], num_threads: Int = 0
+    ) raises -> RecordBatch:
+        """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
+
+        A single implicit group, computed with each aggregation's own
+        whole-column path (the vectorized SIMD reduce, ``O(1)`` count, direct
+        ``count_distinct``) rather than the grouped scatter. Returns a one-row
+        batch. Each aggregation decides what to do with the worker budget: the
+        fold reductions stay serial, the distinct sketches self-gate on size."""
+        if len(values) != len(self._funcs):
+            raise Error("aggregate: one value column per aggregate is required")
+        var out_fields = List[Field]()
+        var out_cols = List[AnyArray]()
+        for j in range(len(self._funcs)):
+            var col = self._folds[j].whole(values[j], num_threads)
+            out_fields.append(Field(self._funcs[j].name, col.dtype().copy()))
+            out_cols.append(col^)
+        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
 
     def _named(
         self, var grouped: GroupedColumns, keys: StructArray
@@ -547,31 +561,60 @@ struct Aggregates(ColumnAggregator, Copyable, Movable, Sized, Writable):
             cols.append(grouped.aggregates[j].copy())
         return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
 
-    def whole(
-        self, values: List[AnyArray], num_threads: Int = 0
-    ) raises -> RecordBatch:
-        """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
 
-        A single implicit group, computed with each aggregation's own
-        whole-column path (the vectorized SIMD reduce, ``O(1)`` count, direct
-        ``count_distinct``) rather than the grouped scatter. Returns a one-row
-        batch. Each aggregation decides what to do with the worker budget: the
-        fold reductions stay serial, the distinct sketches self-gate on size."""
-        if len(values) != len(self._funcs):
-            raise Error("aggregate: one value column per aggregate is required")
-        var out_fields = List[Field]()
-        var out_cols = List[AnyArray]()
-        for j in range(len(self._funcs)):
-            var col = List[AnyArray]()
+# ---------------------------------------------------------------------------
+# Aggregates — the aggregate *set* a query applies in one pass
+# ---------------------------------------------------------------------------
 
-            @parameter
-            def run[A: Aggregation]() raises:
-                col.append(A.whole(A.from_any(values[j]), num_threads).to_any())
 
-            resolve_agg[run](self._funcs[j].name, values[j].dtype())
-            out_fields.append(Field(self._funcs[j].name, col[0].dtype().copy()))
-            out_cols.append(col[0].copy())
-        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+struct Aggregates(Copyable, Movable, Sized, Writable):
+    """The N aggregates a query computes, and how to compute them together.
+
+    What a *plan* holds: one `AggFunc` per output column, each already bound to
+    the dtype its input turned out to have. A plan aggregates column by column
+    (`AggregateProcessor` groups incrementally as morsels arrive), so this list
+    deliberately carries nothing else — reaching the thread-local fold from here
+    would link that code into every plan.
+
+    An eager `GroupBy` driver wants more, and gets its own type:
+    `FoldedAggregates`. Members are added either by naming the `Aggregation`
+    (`append[A]`, the AOT form) or by resolving a function name against the
+    column's dtype (`append(name, dtype)`, the dynamic form)."""
+
+    var _funcs: List[AggFunc]
+
+    def __init__(out self):
+        self._funcs = List[AggFunc]()
+
+    def __init__(out self, var funcs: List[AggFunc]):
+        self._funcs = funcs^
+
+    def __len__(self) -> Int:
+        return len(self._funcs)
+
+    def __getitem__(ref self, index: Int) -> ref[self._funcs[index]] AggFunc:
+        return self._funcs[index]
+
+    def add(mut self, var func: AggFunc):
+        """Add an already-resolved aggregate — what an ``AggExpr`` hands over
+        once the plan knows its input's dtype."""
+        self._funcs.append(func^)
+
+    def append[A: Aggregation](mut self, value_dtype: AnyDataType) raises:
+        """Add aggregation ``A`` over a ``value_dtype`` column (AOT)."""
+        self._funcs.append(AggFunc.of[A](value_dtype))
+
+    def append(mut self, name: String, value_dtype: AnyDataType) raises:
+        """Add the aggregate ``name`` over a ``value_dtype`` column (dynamic).
+        """
+        self.add(AggFunc(name, value_dtype))
+
+    def names(self) -> List[String]:
+        """Each aggregate's default output column name."""
+        var out = List[String]()
+        for ref f in self._funcs:
+            out.append(f.name)
+        return out^
 
     def write_to[W: Writer](self, mut writer: W):
         for i in range(len(self._funcs)):

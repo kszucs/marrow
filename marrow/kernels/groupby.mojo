@@ -118,8 +118,9 @@ struct HashGrouper(Movable):
             self._register_new_groups(keys, grouped[1])
         return grouped[0].copy()
 
-    def key_fields(self, keys: StructArray) -> List[Field]:
-        """The key columns' fields, taken from a keys struct's dtype."""
+    @staticmethod
+    def key_fields(keys: StructArray) -> List[Field]:
+        """The key columns' fields, read off the keys struct's own dtype."""
         var fields = List[Field]()
         ref st = keys.dtype.as_struct()
         for k in range(len(st.fields)):
@@ -193,6 +194,51 @@ trait ColumnAggregator(Copyable, ImplicitlyDeletable, Movable):
     ) raises -> AnyArray:
         """Fold every thread's partials at remapped group ids and finalize."""
         ...
+
+
+struct OneAggregation[A: Aggregation](ColumnAggregator):
+    """A single statically-known aggregation, as a one-column aggregator.
+
+    The typed path (`GroupBy.aggregate[A]`) and the runtime path (a set of N
+    erased aggregates) want the same three strategies, so they run the same
+    driver; this is the adapter that lets a comptime `A` in. `A` stays comptime
+    inside every method, so nothing is interpreted — the column index is the
+    only thing that became a runtime value, and there is exactly one."""
+
+    def __init__(out self):
+        pass
+
+    def num_columns(self) -> Int:
+        return 1
+
+    def mergeable(self) -> Bool:
+        return Self.A.is_mergeable
+
+    def grouped(
+        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
+    ) raises -> AnyArray:
+        return Self.A.grouped(
+            gids, Self.A.from_any(values), num_groups
+        ).to_any()
+
+    def partials(
+        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
+    ) raises -> Tuple[AnyArray, Int64Array]:
+        var parts = Self.A.partials(gids, Self.A.from_any(values), num_groups)
+        return (parts[0].copy().to_any(), parts[1].copy())
+
+    def merge(
+        self,
+        column: Int,
+        remap: List[Int32Array],
+        accs: List[AnyArray],
+        cnts: List[Int64Array],
+        num_groups: Int,
+    ) raises -> AnyArray:
+        var typed = List[Self.A.OutArray]()
+        for t in range(len(accs)):
+            typed.append(Self.A.OutArray(accs[t].to_data()))
+        return Self.A.merge(remap, typed, cnts, num_groups).to_any()
 
 
 struct ThreadPartials(Copyable, Movable):
@@ -383,32 +429,13 @@ struct GroupBy(Movable):
     ](self, value: A.InArray) raises -> GroupedColumns:
         """Aggregate a typed ``value`` column per group with aggregation ``A``.
 
-        Returns the unique key columns and the aggregate column. ``A`` fixes the kernel *and* the input type, so the whole path is
-        monomorphized: no dtype is resolved, no aggregate identity is compared,
-        and erasure only reappears where the grouping machinery shuffles rows
-        (``take`` / ``slice`` / ``concat``), which is dtype-generic by nature.
-
-        A mergeable aggregation can take the thread-local path — row chunks
-        folded into per-thread partials, then merged. Everything else groups by
-        key partition, where each partition's groups are final on their own."""
+        Returns the unique key columns and the aggregate column. ``A`` fixes the
+        kernel *and* the input type, so the fold itself is monomorphized; the
+        strategy choice is the shared one (`aggregate_all`), because there is no
+        reason for a single aggregate to pick differently from a set of them."""
         var values = List[AnyArray]()
         values.append(A.to_any(value))
-
-        @parameter
-        def one_column(
-            _j: Int, gids: Int32Array, column: AnyArray, ng: Int
-        ) raises -> AnyArray:
-            return A.grouped(gids, A.from_any(column), ng).to_any()
-
-        comptime if A.is_mergeable:
-            if self._strategy == GROUP_THREAD_LOCAL:
-                return Self._thread_local[A](
-                    self._keys, value, self._num_threads
-                )
-            else:
-                return self.aggregate_columns[one_column](values)
-        else:
-            return self.aggregate_columns[one_column](values)
+        return self.aggregate_all(OneAggregation[A](), values)
 
     def apply[F: AggFunction](self, value: AnyArray) raises -> GroupedColumns:
         """Aggregate an erased ``value`` column with function ``F``: resolve the
@@ -443,89 +470,6 @@ struct GroupBy(Movable):
         var table = SwissHashTable[rapidhash]()
         _ = table.insert(sample, grow_adaptively=True)
         return table.num_keys() * 2 > s
-
-    @staticmethod
-    def _thread_local[
-        A: Aggregation
-    ](
-        keys: StructArray, value: A.InArray, num_threads: Int
-    ) raises -> GroupedColumns:
-        """Thread-local partial aggregation — the low-/mid-cardinality parallel path.
-
-        Every worker aggregates an equal contiguous chunk of rows into its *own*
-        grouper + `AggState`, producing per-thread partial `(unique keys, acc, cnt)`.
-        A serial merge then re-keys each thread's local groups into a global grouper
-        and folds the partials with `A.merge` (exact for every kernel — the
-        accumulator is the raw fold and the count is carried separately, so `mean`
-        merges as (Σsum, Σcount)).
-
-        Unlike the radix path, this scales with core count no matter how few distinct
-        keys there are: with 10 groups on 16 cores, all 16 cores still do 1/16 of the
-        scan, and the merge touches only ``num_threads × groups`` rows. Its weakness
-        is very high cardinality (the serial merge grows toward O(N)) — that case
-        goes to `_radix` instead.
-        """
-        var n = len(keys)
-        var chunk = (n + num_threads - 1) // num_threads
-        # Row slicing is dtype-generic, so it runs on the erased handle; every
-        # chunk is narrowed straight back to `A.InArray` for the fold.
-        var erased = A.to_any(value)
-
-        # Pre-sized per-thread partial slots — no races on list growth.
-        var part_keys = List[Optional[StructArray]](
-            length=num_threads, fill=None
-        )
-        var part_acc = List[Optional[A.OutArray]](length=num_threads, fill=None)
-        var part_cnt = List[Optional[Int64Array]](length=num_threads, fill=None)
-
-        @parameter
-        def worker(t: Int) raises:
-            var start = t * chunk
-            if start >= n:
-                return
-            var length = min(chunk, n - start)
-            var kchunk = keys.slice(start, length)
-
-            var grouper = HashGrouper()
-            var gids = grouper.consume_keys(kchunk)
-            var ng = grouper.num_groups()
-
-            var kfields = grouper.key_fields(kchunk)
-            var kcols = grouper.key_columns(kfields)
-            part_keys[t] = StructArray(
-                dtype=keys.dtype.copy(),
-                length=ng,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                children=kcols^,
-            )
-
-            var parts = A.partials(
-                gids, A.from_any(erased.slice(start, length)), ng
-            )
-            part_acc[t] = parts[0].copy()
-            part_cnt[t] = parts[1].copy()
-
-        sync_parallelize[worker](num_threads)
-
-        # Merge — serial, but touches only `num_threads × groups` rows.
-        var gg = HashGrouper()
-        var remap = List[Int32Array]()
-        var accs = List[A.OutArray]()
-        var cnts = List[Int64Array]()
-        for t in range(num_threads):
-            if not part_keys[t]:
-                continue
-            remap.append(gg.consume_keys(part_keys[t].value()))
-            accs.append(part_acc[t].value().copy())
-            cnts.append(part_cnt[t].value().copy())
-        var agg_col = A.merge(remap, accs, cnts, gg.num_groups()).to_any()
-
-        var key_cols = gg.key_columns(gg.key_fields(keys))
-        var agg_cols = List[AnyArray]()
-        agg_cols.append(agg_col^)
-        return GroupedColumns(key_cols^, agg_cols^)
 
     def aggregate_all[
         C: ColumnAggregator

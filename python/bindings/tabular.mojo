@@ -19,7 +19,7 @@ from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
 from marrow.kernels.groupby import GroupBy
-from marrow.expr.aggregates import Aggregates
+from marrow.expr.aggregates import FoldedAggregates
 from marrow.kernels.execution import ExecutionContext
 from marrow.kernels.sort import sort as _sort_kernel
 from marrow.arrays import Int32Array
@@ -516,7 +516,7 @@ def _record_batch_group_by(
 
     # Resolve the (value column, aggregate function) pairs and their output names.
     var value_cols = List[AnyArray]()
-    var aggs = Aggregates()
+    var aggs = FoldedAggregates()
     var agg_names = List[String]()
     for j in range(Int(funcs.__len__())):
         var vname = String(py=values[j])
@@ -566,7 +566,7 @@ def _record_batch_aggregate(
     """
     ref rb = ptr[]
     var value_cols = List[AnyArray]()
-    var aggs = Aggregates()
+    var aggs = FoldedAggregates()
     var names = List[String]()
     for j in range(Int(funcs.__len__())):
         var vname = String(py=values[j])

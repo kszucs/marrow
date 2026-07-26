@@ -89,6 +89,30 @@ The harness compiles runners to `.test_runners/test_runner_<hash>` (content-
 hashed, stable across runs).  Re-running the same test selection skips
 recompilation (~1 s vs ~5 s cold).
 
+### Only run the tests the change could have broken
+
+Do **not** run the full suite to validate a scoped change. Select the test
+directories that import the code you touched; a full run costs 8–38 minutes and
+tells you nothing extra about modules the diff cannot reach.
+
+For example, after editing `marrow/expr/*` and `marrow/kernels/*`:
+
+```bash
+pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests
+```
+
+Narrow further when the change is narrower — one file, or one case:
+
+```bash
+pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo
+pixi run -e dev pytest marrow/expr/tests/test_aggregates.mojo::test_sum_by_key
+```
+
+Widen only when the change actually reaches wider: touching `arrays`/`buffers`/
+`dtypes`, the Python bindings, or anything re-exported from a package
+`__init__.mojo`. A full `pixi run test_parallel` belongs before a commit that
+lands such a change, not after every edit.
+
 Tests run sequentially by default, but **prefer the `*_parallel` variants for
 any full-suite run** — measured on this repo, `pixi run test_parallel` completes
 the suite in **8m16s versus 38m30s** for `pixi run test`, a 4.7x speedup, with

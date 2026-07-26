@@ -799,11 +799,20 @@ trait Aggregation:
     ) raises -> Self.OutArray:
         """The whole-table aggregate (no GROUP BY) as a one-row column.
 
+        Defaults to the grouped path with every row in group 0 — which is what
+        "no GROUP BY" means, and is correct for any aggregation. Override it
+        only where there is a genuinely different route: a vectorized reduce, an
+        O(1) answer, a whole-array sketch.
+
         Takes a worker budget rather than an `ExecutionContext` so each
         aggregation decides its own parallelism: the SIMD fold reductions are
         serial (threads only pay off well above the sizes where the reduce is
         the bottleneck), while the distinct sketches self-gate on size."""
-        ...
+        var n = len(Self.to_any(values))
+        var zeros = Int32Builder(n)
+        for _ in range(n):
+            zeros.append(Int32(0))
+        return Self.grouped(zeros.finish(), values, 1)
 
     @staticmethod
     def partials(
@@ -961,18 +970,6 @@ struct TemporalMinMax[Op: MinMaxOp, T: TemporalType](Aggregation):
         state.update(gids, Self._as_backing(values), num_groups)
         return Self._as_temporal(state.finish(num_groups), values.dtype)
 
-    @staticmethod
-    def whole(
-        values: Self.InArray, num_threads: Int = 0
-    ) raises -> Self.OutArray:
-        if len(values) == values.null_count():
-            return PrimitiveScalar[Self.T](None, values.dtype.copy()).repeat(1)
-        # `AccType == Backing`, so this is the same-type SIMD reduce.
-        var folded = MinMax[Self.Op].apply(
-            Self._as_backing(values), ExecutionContext.serial()
-        )
-        return Self._as_temporal(folded.repeat(1), values.dtype)
-
 
 struct StringMinMax[Op: MinMaxOp, T: StringLikeType](Aggregation):
     """`min`/`max` over a string column — a bytewise (lexicographic) scan,
@@ -1026,24 +1023,6 @@ struct StringMinMax[Op: MinMaxOp, T: StringLikeType](Aggregation):
                 out.append_null()
             else:
                 out.append(values.unsafe_get(UInt(best[g])))
-        return out.finish()
-
-    @staticmethod
-    def whole(
-        values: Self.InArray, num_threads: Int = 0
-    ) raises -> Self.OutArray:
-        var has_null = values.null_count() > 0
-        var best = -1
-        for i in range(len(values)):
-            if has_null and not values.is_valid(i):
-                continue
-            if best == -1 or Self._better(values, i, best):
-                best = i
-        var out = BinaryLikeBuilder[Self.T](capacity=1)
-        if best == -1:
-            out.append_null()
-        else:
-            out.append(values.unsafe_get(UInt(best)))
         return out.finish()
 
 
