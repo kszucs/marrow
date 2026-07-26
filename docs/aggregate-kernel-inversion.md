@@ -247,45 +247,66 @@ the rule.
   erased box points at a fully monomorphized aggregation and no
   `dispatch_numeric` ladder runs per batch. `out_dtype` became a stored value
   rather than a second function pointer.
-- **Layering.** `marrow/kernels` executes (`AggKernel`, `AggState`, the two
-  scans that are not folds, the `Aggregation`/`AggFunction` contracts);
-  `marrow/expr/aggregates.mojo` holds the aggregations, the catalog, the erased
-  boxes and `Aggregates` (the set that owns the multi-aggregate drivers); the
-  name ladder is `marrow/expr/dynamic.mojo`, next to `DynValue`'s tag switch.
+- **Layering.** `marrow/kernels` executes — `AggKernel`, `AggState`, the
+  `Aggregation` implementations *and* the `AggFunction` catalog, because
+  "which implementation for which dtype" is kernel selection, the same shape
+  `cast.mojo` already has. `marrow/expr/aggregates.mojo` holds the erased boxes
+  (`AggFunc`, `AggFold`) and `Aggregates`, the set that owns the
+  multi-aggregate drivers; `marrow/expr/dynamic.mojo` holds `resolve_agg`, the
+  one string comparison. (`docs/expr-kernels-layering-tasks.md` L1 argues for
+  the catalog going the other way — see `docs/aggregate-followups.md` §6.)
 - `GroupBy`'s serial and radix strategies were the same algorithm written four
-  times; they are now one driver over a `GroupPartitioner` (`WholeRows` /
-  `ByKeyHash`). `GroupBy(keys, ctx, strategy)` can force a strategy — §7's
-  prerequisite for evaluating grouping policies.
-- `take`/`concat`/`rapidhash` handle temporal columns directly, so
-  `reinterpret_array` / `temporal_backing_dtype` and the reinterpret-and-relabel
-  dance in the drivers and in `AggregateProcessor`'s key path are deleted.
+  times; they are now one driver, `_by_partition[col_agg](..., partition: Bool)`.
+  `GroupBy(keys, ctx, strategy)` can force a strategy — §7's prerequisite for
+  evaluating grouping policies.
+- `take`/`concat`/`rapidhash` handle temporal columns directly (the struct
+  hasher now honours a struct's own offset), so `reinterpret_array`,
+  `temporal_backing_dtype` and `slice_struct` are deleted along with the
+  reinterpret-and-relabel dance in the drivers and in `AggregateProcessor`'s
+  key path.
+- Follow-on in the same line of work: aggregates are now written on the
+  expression they aggregate (`col("x").sum()`), a keyless `aggregate(...)`
+  executes, and `count` of an all-null group is 0 over every dtype. See
+  `docs/aggregate-followups.md`.
 
 ### Gates
 
 | gate | result |
 |---|---|
 | `check_lib`, per-file `check` | clean (only the documented `main()` / `bitmap_and` noise) |
-| `pytest test_groupby + test_aggregate + test_streaming` | 98 passed |
-| `test_parallel` | **1848 passed / 314 skipped / 0 failed** — the documented baseline |
+| `test_parallel` | **1865 passed / 317 skipped / 0 failed** (1848 baseline + the new aggregate tests) |
 | `binary_size` | fused **7.6×** (was 7.6×), runtime-named **7.9×** (was 7.8×), dynvalue/runtime 12.8× (unchanged) |
-| `--competition` group-by | **inconclusive — the machine was not quiet** |
+| `--competition` group-by | **12/15 wins** — see below |
 
-### The performance gate is unresolved
+### The performance gate — resolved
 
-Every engine in the table, marrow *and* polars *and* pyarrow, measured ~3–4×
-slower than the §5 baseline (polars `sum[1m_g100k]` 7.3 ms against an implied
-~2.2 ms), so the absolute numbers say nothing about this change. Normalising to
-polars in the same run, over two runs:
+The first reading was taken while the machine was loaded: every engine, marrow
+*and* polars *and* pyarrow, measured 3–4× slow, so it said nothing about this
+change. Re-measured idle, the driver rework had cost two things in the serial
+path, both now fixed — an identity row array built once per query, and
+stitching a single partition under a *parallel* context (thread dispatch for a
+`num_groups`-row `take`):
 
-| row | marrow / polars now | implied at baseline |
+| row | mid-refactor | after the fix |
 |---|---|---|
-| `groupby_multi[1m_g100k]` | 0.84, 0.88 | ~1.27 |
-| `groupby_sum[1m_g100k]` | 1.04, 1.08 | <1.0 |
+| `groupby_sum[10k_g10]` | 375 µs | **47.1 µs** |
+| `groupby_multi[10k_g10]` | 412 µs | **80.3 µs** |
+| `groupby_sum[100k_g10]` | 708 µs | **416 µs** |
+| `groupby_sum[1m_g10]` | 920 µs | **677 µs** |
 
-Read at face value that is the multi-aggregate row improving (the row §3 set out
-to fix) and the single-aggregate row losing ~20%, which would be consistent with
-`aggregate[A]` now routing through the shared multi-column driver
-(`_by_partition`) instead of a dedicated single-column path. **Do not act on
-that reading without re-measuring**: run `--competition` twice on an idle
-machine, and if the single-column row is genuinely down, A/B it against the
-previous commit in the same session rather than against these numbers.
+Against §5's baseline on the two rows it tracked, on an idle machine:
+
+| row | §5 baseline | after 3a | now |
+|---|---|---|---|
+| `groupby_sum[1m_g100k]` | 1.87 ms | 1.89 ms | **1.89 ms** |
+| `groupby_multi[1m_g100k]` | 3.02 ms | 3.28 ms | **3.06 ms** |
+| wins | 12/15 | 11/15 | **12/15** |
+
+So the +9% multi-aggregate regression §3 set out to fix is gone, and the rest is
+at parity. The three rows still lost are `sum`/`mean[100k_g10]` to pyarrow at
+1.1× and `multi[100k_g10]` to polars at 1.3×.
+
+> The lesson worth keeping: two full rounds of analysis were spent on numbers
+> taken from a loaded machine, including a plausible-but-wrong attribution to
+> the new shared driver. Check the load average before believing a benchmark,
+> and normalise against another engine in the same run.
