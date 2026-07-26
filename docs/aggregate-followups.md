@@ -69,21 +69,29 @@ Left over:
 - `python/bindings/tabular.mojo` is unaffected — it drives `Aggregates`
   directly, not the plan API.
 
-## 2. Consolidate the two hash groupers
+## 2. Consolidate the two hash groupers — **done**
 
-Hash is the only grouping mechanism (no sort-based grouping), but
-"resolve rows to dense group ids and remember each group's first row" is
-implemented twice, differing only in how keys are materialized:
+`HashGrouper.consume_hashes(hashes, grow_adaptively)` is the shared core:
+group ids per row, plus the rows at which *new* groups first appeared. The
+first-occurrence scan now exists once. What a caller does with those rows is
+the only difference that was ever real:
 
-| | `HashGrouper.consume_keys` | `GroupBy._by_partition` |
-|---|---|---|
-| across batches | incremental | one shot per partition |
-| unique keys | per-column builders, as it goes | first-occurrence row numbers, one `take` at the end |
+- `consume_keys` gathers the key values immediately, because it groups batch
+  after batch (`AggregateProcessor`, and each thread-local chunk);
+- `GroupBy._by_partition` keeps them, translating partition-local rows to
+  original ones with a `take`, and gathers every partition's keys in one pass
+  at the end.
 
-One grouper with two key-materialization modes. `AggregateProcessor` needs the
-incremental mode, `GroupBy` the deferred one. Do this with, or right after,
-audit **L4** (`GroupBy` stops speaking `RecordBatch`) — both touch the same
-return shape.
+## 2b. One owner for the grouping strategy — **done** (audit L5)
+
+`GROUP_THREAD_LOCAL` is no longer imported by `marrow/expr`; nothing outside the
+kernel layer compares a strategy enum. `GroupBy.aggregate_all[C:
+ColumnAggregator](agg, values)` reaches all three strategies, asking the
+aggregate set itself whether its columns are mergeable rather than being handed
+a strategy it may not be able to run. `Aggregates` implements that trait (five
+thin methods) and the multi-column thread-local driver moved to
+`GroupBy._thread_local_columns`, next to the other two, along with
+`ThreadPartials`.
 
 ## 3. `count` disagrees with itself on all-null groups — **done**
 

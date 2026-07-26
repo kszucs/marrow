@@ -62,47 +62,61 @@ struct HashGrouper(Movable):
     def num_groups(self) -> Int:
         return self._table.num_keys()
 
-    def consume_keys(
-        mut self, keys: StructArray, hashes: Optional[UInt64Array] = None
-    ) raises -> Int32Array:
-        """Hash keys and resolve group indices. Returns the per-row group ids.
+    def consume_hashes(
+        mut self, hashes: UInt64Array, grow_adaptively: Bool = True
+    ) raises -> Tuple[Int32Array, Int32Array]:
+        """Resolve a batch of key hashes to dense group ids, and report where
+        each *newly created* group first appeared.
 
-        New keys get new (dense, contiguous) group ids; existing keys return
-        their previous id. The group ids are exactly the table's bucket ids, so
-        they're returned as-is — no separate conversion pass. Safe to call
-        across multiple batches. Pass ``hashes`` when the caller already
-        computed them (e.g. the parallel path reuses the partitioner's hashes)
-        to skip the re-hash.
-        """
-        var n = len(keys)
-        if n == 0:
-            var empty = Int32Builder(0)
-            return empty.finish()
+        The core both grouping paths share. Returns ``(group ids per row, the
+        rows — indices into this batch — at which the new groups first showed
+        up)``. What a caller does with those rows is what distinguishes them:
+        ``consume_keys`` gathers the key values immediately, because it groups
+        batch after batch; a one-shot partitioned grouping keeps them and
+        gathers every partition's keys in a single pass at the end.
 
+        Bucket ids are dense and assigned in row order, so first occurrences
+        appear in increasing id order — one forward scan collects them all and
+        stops as soon as the last new group is found (near-instant when the
+        groups all appear early, which is the low-cardinality case)."""
         var prev = self._table.num_keys()
         var bids = self._table.insert_hashes(
-            hashes.value(), grow_adaptively=True
-        ) if hashes else self._table.insert(keys, grow_adaptively=True)
+            hashes, grow_adaptively=grow_adaptively
+        )
         var num_now = self._table.num_keys()
-        var new_groups = num_now - prev
 
-        # Materialize the key rows for the newly-created groups. Bucket ids are
-        # assigned densely in row order, so each new group's first occurrence
-        # appears in increasing bid order — one forward scan collects them all,
-        # stopping as soon as the last new group is found (near-instant for the
-        # low-cardinality case where all groups appear early).
-        if new_groups > 0:
-            var first_rows = Int32Builder(capacity=new_groups, zeroed=False)
-            var next_new = prev
-            for i in range(n):
+        var first_rows = Int32Builder(capacity=num_now - prev, zeroed=False)
+        var next_new = prev
+        if num_now > prev:
+            for i in range(len(bids)):
                 if Int(bids.unsafe_get(i)) == next_new:
                     first_rows.unsafe_append(Int32(i))
                     next_new += 1
                     if next_new == num_now:
                         break
-            self._register_new_groups(keys, first_rows.finish())
+        return (bids^, first_rows.finish())
 
-        return bids^
+    def consume_keys(
+        mut self, keys: StructArray, hashes: Optional[UInt64Array] = None
+    ) raises -> Int32Array:
+        """Hash keys and resolve group indices, materializing the unique key
+        rows as it goes. Returns the per-row group ids.
+
+        New keys get new (dense, contiguous) group ids; existing keys return
+        their previous id. Safe to call across multiple batches — this is the
+        incremental entry point, which is why it gathers each batch's new key
+        rows straight away rather than deferring. Pass ``hashes`` when the
+        caller already computed them to skip the re-hash."""
+        var n = len(keys)
+        if n == 0:
+            var empty = Int32Builder(0)
+            return empty.finish()
+
+        var batch_hashes = hashes.value().copy() if hashes else rapidhash(keys)
+        var grouped = self.consume_hashes(batch_hashes)
+        if len(grouped[1]) > 0:
+            self._register_new_groups(keys, grouped[1])
+        return grouped[0].copy()
 
     def key_fields(self, keys: StructArray) -> List[Field]:
         """The key columns' fields, taken from a keys struct's dtype."""
@@ -136,6 +150,69 @@ struct HashGrouper(Movable):
         var gathered = take(keys, rows)
         for k in range(len(keys.children)):
             self._key_builders[k].extend(gathered.children[k])
+
+
+trait ColumnAggregator(Copyable, ImplicitlyDeletable, Movable):
+    """What to compute per value column, for a grouping this layer drives.
+
+    The grouper knows how to split rows and resolve them to group ids; it does
+    not know what an aggregate is. A caller with a *runtime* set of aggregates
+    (N different ones, chosen when the query was built) implements this and
+    hands it over, so the choice of strategy — including the thread-local fold,
+    which needs the partial state below — stays where the strategy is chosen.
+
+    ``mergeable`` is the caller's answer to "can every column be folded per
+    thread and merged?"; the grouper will not pick a strategy it cannot run."""
+
+    def num_columns(self) -> Int:
+        ...
+
+    def mergeable(self) -> Bool:
+        """Whether every column implements ``partials``/``merge``."""
+        ...
+
+    def grouped(
+        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
+    ) raises -> AnyArray:
+        """Aggregate one value column over precomputed group ids."""
+        ...
+
+    def partials(
+        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
+    ) raises -> Tuple[AnyArray, Int64Array]:
+        """One thread's raw per-group accumulator + valid counts."""
+        ...
+
+    def merge(
+        self,
+        column: Int,
+        remap: List[Int32Array],
+        accs: List[AnyArray],
+        cnts: List[Int64Array],
+        num_groups: Int,
+    ) raises -> AnyArray:
+        """Fold every thread's partials at remapped group ids and finalize."""
+        ...
+
+
+struct ThreadPartials(Copyable, Movable):
+    """One worker's contribution to a thread-local aggregation: the unique keys
+    it saw, and the raw (non-finalized) accumulator + valid counts per column
+    over those keys."""
+
+    var keys: StructArray
+    var accs: List[AnyArray]
+    var cnts: List[Int64Array]
+
+    def __init__(
+        out self,
+        var keys: StructArray,
+        var accs: List[AnyArray],
+        var cnts: List[Int64Array],
+    ):
+        self.keys = keys^
+        self.accs = accs^
+        self.cnts = cnts^
 
 
 struct GroupedColumns(Copyable, Movable):
@@ -450,6 +527,116 @@ struct GroupBy(Movable):
         agg_cols.append(agg_col^)
         return GroupedColumns(key_cols^, agg_cols^)
 
+    def aggregate_all[
+        C: ColumnAggregator
+    ](self, agg: C, values: List[AnyArray]) raises -> GroupedColumns:
+        """Group the keys once and apply ``agg`` to every value column.
+
+        The multi-aggregate entry point, and the only one that reaches all three
+        strategies: thread-local partial folds when the caller says every column
+        is mergeable, otherwise the key-partitioned driver (serial being its
+        single-partition case). Which one ran is not the caller's business."""
+        if len(values) != agg.num_columns():
+            raise Error(
+                "aggregate_all: one value column per aggregate is required"
+            )
+        if self._strategy == GROUP_THREAD_LOCAL and agg.mergeable():
+            return Self._thread_local_columns[C](
+                self._keys, agg, values, self._num_threads
+            )
+
+        @parameter
+        def by_column(
+            j: Int, gids: Int32Array, value: AnyArray, ng: Int
+        ) raises -> AnyArray:
+            return agg.grouped(j, gids, value, ng)
+
+        return self.aggregate_columns[by_column](values)
+
+    @staticmethod
+    def _thread_local_columns[
+        C: ColumnAggregator
+    ](
+        keys: StructArray, agg: C, values: List[AnyArray], num_threads: Int
+    ) raises -> GroupedColumns:
+        """Thread-local partial aggregation for N columns at once.
+
+        Every worker groups an equal contiguous chunk *once* — the grouping is
+        what the columns share — and folds each column into its own partial
+        state; a serial merge then re-keys the chunks into a global grouper and
+        folds the partials at the global ids. The multi-column counterpart of
+        `_thread_local[A]`, and what lets a runtime aggregate set take this path
+        at all."""
+        var n = len(keys)
+        var na = agg.num_columns()
+        var chunk = (n + num_threads - 1) // num_threads
+
+        # Pre-sized per-thread slots — no races on list growth.
+        var partials = List[Optional[ThreadPartials]](
+            length=num_threads, fill=None
+        )
+
+        @parameter
+        def worker(t: Int) raises:
+            var start = t * chunk
+            if start >= n:
+                return
+            var length = min(chunk, n - start)
+            var kchunk = keys.slice(start, length)
+
+            var grouper = HashGrouper()
+            var gids = grouper.consume_keys(kchunk)  # group this chunk ONCE
+            var ng = grouper.num_groups()
+
+            var kcols = grouper.key_columns(grouper.key_fields(kchunk))
+            var accs = List[AnyArray]()
+            var cnts = List[Int64Array]()
+            for j in range(na):
+                var parts = agg.partials(
+                    j, gids, values[j].slice(start, length), ng
+                )
+                accs.append(parts[0].copy())
+                cnts.append(parts[1].copy())
+
+            partials[t] = ThreadPartials(
+                StructArray(
+                    dtype=keys.dtype.copy(),
+                    length=ng,
+                    nulls=0,
+                    offset=0,
+                    bitmap=None,
+                    children=kcols^,
+                ),
+                accs^,
+                cnts^,
+            )
+
+        sync_parallelize[worker](num_threads)
+
+        # Merge — re-key every chunk into the global grouper ONCE (shared across
+        # columns), then fold each column's partials at the global ids.
+        var gg = HashGrouper()
+        var live = List[Int]()
+        var remap = List[Int32Array]()
+        for t in range(num_threads):
+            if partials[t]:
+                live.append(t)
+                remap.append(gg.consume_keys(partials[t].value().keys))
+        var ngg = gg.num_groups()
+
+        var key_cols = gg.key_columns(gg.key_fields(keys))
+        var agg_cols = List[AnyArray]()
+        for j in range(na):
+            var accs = List[AnyArray]()
+            var cnts = List[Int64Array]()
+            for i in range(len(live)):
+                ref part = partials[live[i]].value()
+                accs.append(part.accs[j].copy())
+                cnts.append(part.cnts[j].copy())
+            agg_cols.append(agg.merge(j, remap, accs, cnts, ngg))
+
+        return GroupedColumns(key_cols^, agg_cols^)
+
     def aggregate_columns[
         col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
             _
@@ -513,25 +700,19 @@ struct GroupBy(Movable):
             rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[Int32Array, List[AnyArray]]:
             var n = len(part_hashes)
-            var table = SwissHashTable[rapidhash]()
-            var gids = table.insert_hashes(
+            var grouper = HashGrouper()
+            var grouped = grouper.consume_hashes(
                 part_hashes, grow_adaptively=not partition
             )
-            var ng = table.num_keys()
+            ref gids = grouped[0]
+            var ng = grouper.num_groups()
 
-            # First-occurrence original row per new group (bucket ids are dense
-            # and assigned in row order, so first occurrences appear in bid
-            # order). Unpartitioned rows are their own row numbers.
-            var first = Int32Builder(capacity=ng, zeroed=False)
-            var next_new = 0
-            for i in range(n):
-                if Int(gids.unsafe_get(i)) == next_new:
-                    first.unsafe_append(
-                        rows.unsafe_get(i) if partition else Int32(i)
-                    )
-                    next_new += 1
-                    if next_new == ng:
-                        break
+            # The scan reports rows within *this partition*; a partitioned one
+            # holds a subset in a different order, so translate to original row
+            # numbers. Unpartitioned rows already are their own row numbers.
+            var first = grouped[1].copy()
+            if partition:
+                first = take(rows.copy().to_any(), first).as_int32().copy()
 
             var agg_cols = List[AnyArray]()
             for j in range(na):
@@ -541,7 +722,7 @@ struct GroupBy(Movable):
                     agg_cols.append(col_agg(j, gids, take(values[j], rows), ng))
                 else:
                     agg_cols.append(col_agg(j, gids, values[j], ng))
-            return (first.finish(), agg_cols^)
+            return (first^, agg_cols^)
 
         var parts = List[Tuple[Int32Array, List[AnyArray]]]()
         if partition:

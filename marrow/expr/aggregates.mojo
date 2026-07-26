@@ -37,8 +37,6 @@ The fused path is the dynamic one with the resolution removed — never a second
 implementation.
 """
 
-from std.algorithm.functional import sync_parallelize
-
 from ..arrays import (
     AnyArray,
     StructArray,
@@ -67,12 +65,7 @@ from ..kernels.aggregate import (
     MeanKernel,
     CountKernel,
 )
-from ..kernels.groupby import (
-    GroupBy,
-    GroupedColumns,
-    HashGrouper,
-    GROUP_THREAD_LOCAL,
-)
+from ..kernels.groupby import ColumnAggregator, GroupBy, GroupedColumns
 
 
 # ---------------------------------------------------------------------------
@@ -420,36 +413,12 @@ struct AggFold(Copyable, Movable):
         return self._merge_fn(remap, accs, cnts, num_groups)
 
 
-struct ThreadPartials(Copyable, Movable):
-    """One worker's contribution to a thread-local aggregation: the unique keys
-    it saw, and the raw (non-finalized) accumulator + valid counts for each
-    aggregate over those keys.
-
-    The typed per-group state itself is ``AggState[K, V]``, inside the
-    aggregation; what a worker hands back is that state *frozen* and erased, one
-    entry per aggregate, which is what the merge re-keys and folds."""
-
-    var keys: StructArray
-    var accs: List[AnyArray]
-    var cnts: List[Int64Array]
-
-    def __init__(
-        out self,
-        var keys: StructArray,
-        var accs: List[AnyArray],
-        var cnts: List[Int64Array],
-    ):
-        self.keys = keys^
-        self.accs = accs^
-        self.cnts = cnts^
-
-
 # ---------------------------------------------------------------------------
 # Aggregates — the aggregate *set* a query applies in one pass
 # ---------------------------------------------------------------------------
 
 
-struct Aggregates(Copyable, Movable, Sized, Writable):
+struct Aggregates(ColumnAggregator, Copyable, Movable, Sized, Writable):
     """The N aggregates a query computes, and how to compute them together.
 
     A query aggregates several columns at once (``sum(a), min(b), count(c)``),
@@ -502,14 +471,48 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
             out.append(f.name)
         return out^
 
-    def is_mergeable(self) -> Bool:
-        """Whether *every* member can run as thread-local partials + a merge —
-        the gate for the thread-local path, since the whole set shares one
-        grouping."""
+    # -- ColumnAggregator: what the grouper asks of an aggregate set --------
+
+    def num_columns(self) -> Int:
+        return len(self._funcs)
+
+    def mergeable(self) -> Bool:
+        """Whether *every* member can run as thread-local partials + a merge.
+        One that cannot disqualifies the set, because the whole set shares a
+        single grouping."""
         for ref f in self._funcs:
             if not f.is_mergeable:
                 return False
         return True
+
+    def grouped(
+        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
+    ) raises -> AnyArray:
+        return self._funcs[column].grouped(gids, values, num_groups)
+
+    def partials(
+        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
+    ) raises -> Tuple[AnyArray, Int64Array]:
+        return AggFold(self._funcs[column].name, values.dtype()).partials(
+            gids, values, num_groups
+        )
+
+    def merge(
+        self,
+        column: Int,
+        remap: List[Int32Array],
+        accs: List[AnyArray],
+        cnts: List[Int64Array],
+        num_groups: Int,
+    ) raises -> AnyArray:
+        return AggFold(self._funcs[column].name, self.out_dtype(column)).merge(
+            remap, accs, cnts, num_groups
+        )
+
+    def out_dtype(self, column: Int) -> AnyDataType:
+        """The dtype the partial accumulators of ``column`` are stored in — for
+        a fold that is also the aggregate's output dtype."""
+        return self._funcs[column].out_dtype.copy()
 
     def grouped(
         self, gb: GroupBy, values: List[AnyArray]
@@ -517,25 +520,13 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
         """Apply every aggregate over one grouping of ``gb``'s keys.
 
         ``values[j]`` is aggregated with member ``j``. Returns the unique key
-        columns followed by one column per aggregate, so a multi-aggregate query
-        hashes and probes the keys once instead of once per aggregate."""
-        if len(values) != len(self._funcs):
-            raise Error("aggregate: one value column per aggregate is required")
-        if gb.strategy() == GROUP_THREAD_LOCAL and self.is_mergeable():
-            return self._named(
-                self._thread_local(gb.keys(), values, gb.num_threads()),
-                gb.keys(),
-            )
-        else:
-            # `aggregate_columns` groups once and picks its partitioner itself;
-            # the per-column aggregate is supplied as the comptime aggregator.
-            @parameter
-            def by_func(
-                j: Int, gids: Int32Array, value: AnyArray, ng: Int
-            ) raises -> AnyArray:
-                return self._funcs[j].grouped(gids, value, ng)
+        columns followed by one column per aggregate, so a multi-aggregate
+        query hashes and probes the keys once instead of once per aggregate.
 
-            return self._named(gb.aggregate_columns[by_func](values), gb.keys())
+        Which execution strategy runs is the grouper's decision, not this
+        layer's: it is handed the set (as a ``ColumnAggregator``) and asks it
+        whether the columns are mergeable."""
+        return self._named(gb.aggregate_all(self, values), gb.keys())
 
     def _named(
         self, var grouped: GroupedColumns, keys: StructArray
@@ -581,89 +572,6 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
             out_fields.append(Field(self._funcs[j].name, col[0].dtype().copy()))
             out_cols.append(col[0].copy())
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
-
-    def _thread_local(
-        self, keys: StructArray, values: List[AnyArray], num_threads: Int
-    ) raises -> GroupedColumns:
-        """Thread-local partial aggregation for N *fold* aggregates.
-
-        Every worker groups an equal contiguous chunk once and folds each
-        aggregate into its own `AggState`; a serial merge then re-keys the chunks
-        into a global grouper and folds the partials. Only valid when every
-        aggregate is mergeable — `grouped` gates on `is_mergeable`."""
-        var n = len(keys)
-        var na = len(self._funcs)
-        var chunk = (n + num_threads - 1) // num_threads
-        var folds = List[AggFold]()
-        for j in range(na):
-            folds.append(AggFold(self._funcs[j].name, values[j].dtype()))
-
-        # Pre-sized per-thread slots — no races on list growth.
-        var partials = List[Optional[ThreadPartials]](
-            length=num_threads, fill=None
-        )
-
-        @parameter
-        def worker(t: Int) raises:
-            var start = t * chunk
-            if start >= n:
-                return
-            var length = min(chunk, n - start)
-            var kchunk = keys.slice(start, length)
-
-            var grouper = HashGrouper()
-            var gids = grouper.consume_keys(kchunk)  # group this chunk ONCE
-            var ng = grouper.num_groups()
-
-            var kfields = grouper.key_fields(kchunk)
-            var kcols = grouper.key_columns(kfields)
-            var accs = List[AnyArray]()
-            var cnts = List[Int64Array]()
-            for j in range(na):
-                var parts = folds[j].partials(
-                    gids, values[j].slice(start, length), ng
-                )
-                accs.append(parts[0].copy())
-                cnts.append(parts[1].copy())
-
-            partials[t] = ThreadPartials(
-                StructArray(
-                    dtype=keys.dtype.copy(),
-                    length=ng,
-                    nulls=0,
-                    offset=0,
-                    bitmap=None,
-                    children=kcols^,
-                ),
-                accs^,
-                cnts^,
-            )
-
-        sync_parallelize[worker](num_threads)
-
-        # Merge — re-key every chunk into the global grouper ONCE (shared across
-        # aggregates), then fold each aggregate's partials at the global ids.
-        var gg = HashGrouper()
-        var live = List[Int]()
-        var remap = List[Int32Array]()
-        for t in range(num_threads):
-            if partials[t]:
-                live.append(t)
-                remap.append(gg.consume_keys(partials[t].value().keys))
-        var ngg = gg.num_groups()
-
-        var key_cols = gg.key_columns(gg.key_fields(keys))
-        var agg_cols = List[AnyArray]()
-        for j in range(na):
-            var accs = List[AnyArray]()
-            var cnts = List[Int64Array]()
-            for i in range(len(live)):
-                ref part = partials[live[i]].value()
-                accs.append(part.accs[j].copy())
-                cnts.append(part.cnts[j].copy())
-            agg_cols.append(folds[j].merge(remap, accs, cnts, ngg))
-
-        return GroupedColumns(key_cols^, agg_cols^)
 
     def write_to[W: Writer](self, mut writer: W):
         for i in range(len(self._funcs)):
