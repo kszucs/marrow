@@ -445,3 +445,8 @@ example. They mostly bite generic trait hierarchies (e.g. `marrow.expr.values`).
   trait's abstract requirement** for conforming structs (you'll see `does not
   implement all requirements for <BaseTrait>`) — declare the member on each
   concrete struct even if a parent trait "provides" it.
+
+
+# How to identify leaky abstractions
+
+Analyze the dependency relations and responsobilities of each type in the requested marrow packages, like marrow.expr and marrow.kernels which are tightly coupled. Then generate a couple word summary of what each type does and what its responsibility, if we cannot identify a single responsibility that highlights a leaky abstraction. Regarding the dependencies we need a clear one directional directed tree without any cycles aggregate this knowledge then get back to me with your findings.
