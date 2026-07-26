@@ -1,7 +1,5 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.kernels.aggregate import (
-    Sum,
-)
+
 from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, DictionaryArray, PrimitiveArray, StringArray
@@ -34,6 +32,7 @@ from marrow.dtypes import (
 )
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
+from marrow.expr.aggregates import Sum
 from marrow.kernels.groupby import GroupBy
 
 from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
@@ -336,11 +335,10 @@ def test_groupby_date32_key() raises:
     var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
-    assert_true(result.schema.fields[0].dtype == date32().to_any())
-    ref k = result.columns[0].as_date32()
+    ref k = result.keys[0].as_date32()
     assert_equal(k[0].value(), 19000)
     assert_equal(k[1].value(), 18500)
-    ref s = result.columns[1].as_int64()
+    ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 9)  # 1 + 3 + 5
     assert_equal(s[1].value(), 6)  # 2 + 4
 
@@ -351,10 +349,7 @@ def test_groupby_timestamp_key() raises:
     var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
-    assert_true(
-        result.schema.fields[0].dtype == timestamp(microsecond, "UTC").to_any()
-    )
-    ref s = result.columns[1].as_int64()
+    ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 40)
     assert_equal(s[1].value(), 20)
 
@@ -368,7 +363,7 @@ def test_groupby_large_string_key() raises:
     var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
-    ref s = result.columns[1].as_int64()
+    ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 4)
     assert_equal(s[1].value(), 6)
 

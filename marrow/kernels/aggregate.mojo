@@ -92,10 +92,22 @@ trait AggKernel(Kernel):
     widens integers to int64; `min`/`max` keep `V`; `count` is int64; `mean` is
     float64."""
 
+    comptime Grouped[V: NumericType]: Aggregation
+    """The `Aggregation` that implements this kernel over a numeric column of
+    type `V` — normally the typed `AggState` fold, `NumericAgg[Self, V]`. A
+    kernel whose grouped form is *not* that fold (`count`, whose per-group state
+    is a validity scan) names its own, so the choice is a type and never a
+    comparison."""
+
     comptime empty_is_null: Bool = True
     """Whether a group with no valid rows has no answer. It usually does not —
     the minimum of nothing is NULL, not a sentinel — but `count` is the
     exception SQL calls out: counting nothing is 0."""
+
+    comptime needs_count: Bool = False
+    """Whether `finalize` reads the group's valid count. Only `mean` does (it is
+    the divisor). Everything else needs to know *whether* a group was touched,
+    not how often — and that is a flag, not a counter. See `AggState`."""
 
     @staticmethod
     def identity[A: DType]() -> Scalar[A]:
@@ -223,6 +235,7 @@ struct Widening[Op: WideningOp](AggKernel):
     comptime AccType[
         V: NumericType
     ] = Int64Type if V.native.is_integral() else Float64Type
+    comptime Grouped[V: NumericType] = NumericAgg[Self, V]
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -321,6 +334,7 @@ struct MinMax[Op: MinMaxOp](AggKernel):
 
     comptime name = Self.Op.name
     comptime AccType[V: NumericType] = V
+    comptime Grouped[V: NumericType] = NumericAgg[Self, V]
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -358,6 +372,10 @@ struct CountKernel(AggKernel):
     comptime name = "count"
     comptime AccType[V: NumericType] = Int64Type
     comptime empty_is_null = False
+    comptime needs_count = True  # the answer *is* the count
+    # Grouped `count` is the validity scan, whatever the column's type: there is
+    # no accumulator to fold, and the scan is mergeable (counts add).
+    comptime Grouped[V: NumericType] = CountAgg
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -389,6 +407,8 @@ struct MeanKernel(AggKernel):
 
     comptime name = "mean"
     comptime AccType[V: NumericType] = Float64Type
+    comptime Grouped[V: NumericType] = NumericAgg[Self, V]
+    comptime needs_count = True  # the divisor
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -562,12 +582,19 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
 
     comptime Acc = Self.K.AccType[Self.V]
 
+    comptime Seen = Int64Type if Self.K.needs_count else UInt8Type
+    """How the second column is stored. A kernel that reads the count needs a
+    real counter; the rest only ask *was this group touched*, so one byte per
+    group is enough — and at 100k groups that is 100 KB against 800 KB, which
+    is the difference between staying in cache and not, on the loop that does a
+    random write per row."""
+
     var acc: PrimitiveBuilder[Self.Acc]
-    var cnt: Int64Builder
+    var cnt: PrimitiveBuilder[Self.Seen]
 
     def __init__(out self):
         self.acc = PrimitiveBuilder[Self.Acc]()
-        self.cnt = Int64Builder()
+        self.cnt = PrimitiveBuilder[Self.Seen]()
 
     def num_groups(self) -> Int:
         return self.acc.length()
@@ -581,9 +608,10 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
         """Grow to `num_groups` (new slots filled with `K.identity`), then
         scatter-fold this batch. No dtype dispatch — `Acc`/`V` are comptime."""
         comptime A = Self.Acc.native
+        comptime S = Self.Seen.native
         while self.acc.length() < num_groups:
             self.acc.append(Self.K.identity[A]())
-            self.cnt.append(Scalar[int64.native](0))
+            self.cnt.append(Scalar[S](0))
 
         # Reads go through `BufferView`s; accumulator/count writes use the builder
         # element accessor (a builder has no mutable value view — this is
@@ -603,7 +631,7 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
                         self.acc.unsafe_get(g), vals[i].cast[A]()
                     ),
                 )
-                self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + 1)
+                self._mark(g)
         else:
             for i in range(n):
                 var g = Int(gids[i])
@@ -613,7 +641,17 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
                         self.acc.unsafe_get(g), vals[i].cast[A]()
                     ),
                 )
-                self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + 1)
+                self._mark(g)
+
+    @always_inline
+    def _mark(mut self, g: Int):
+        """Record that group `g` saw a valid value: a counter bump when the
+        kernel reads the count, otherwise a plain store — no read, no add."""
+        comptime S = Self.Seen.native
+        comptime if Self.K.needs_count:
+            self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + 1)
+        else:
+            self.cnt.unsafe_set(g, Scalar[S](1))
 
     def finish(mut self, num_groups: Int) raises -> PrimitiveArray[Self.Acc]:
         """Finalize into the typed output column. A group with no valid rows is
@@ -638,8 +676,16 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
     ) raises -> Tuple[PrimitiveArray[Self.Acc], Int64Array]:
         """Freeze the raw (non-finalized) per-group accumulator and valid-count
         columns — the partial state a parallel merge folds together. Consumes
-        the builders."""
-        return (self.acc.finish(), self.cnt.finish())
+        the builders.
+
+        The exchanged count is always int64, whatever this state stores: it
+        crosses a thread boundary as data, and widening a flag to a count here
+        is O(groups), not O(rows)."""
+        var seen = self.cnt.finish()
+        var counts = Int64Builder(len(seen))
+        for g in range(len(seen)):
+            counts.append(Int64(seen.unsafe_get(g)))
+        return (self.acc.finish(), counts.finish())
 
     def merge(
         mut self,
@@ -659,9 +705,10 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
         all-null local group contributes `identity` (a no-op under `combine`)
         and count 0, so it correctly leaves the target unchanged."""
         comptime A = Self.Acc.native
+        comptime S = Self.Seen.native
         while self.acc.length() < num_groups:
             self.acc.append(Self.K.identity[A]())
-            self.cnt.append(Scalar[int64.native](0))
+            self.cnt.append(Scalar[S](0))
 
         var gids = group_ids.values()
         var acc = part_acc.values()
@@ -671,7 +718,13 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
             self.acc.unsafe_set(
                 g, Self.K.combine[A, 1](self.acc.unsafe_get(g), acc[j])
             )
-            self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + cnt[j])
+            comptime if Self.K.needs_count:
+                self.cnt.unsafe_set(
+                    g, self.cnt.unsafe_get(g) + Scalar[S](cnt[j])
+                )
+            else:
+                if cnt[j] > 0:
+                    self.cnt.unsafe_set(g, Scalar[S](1))
 
 
 # ---------------------------------------------------------------------------
@@ -998,14 +1051,20 @@ struct CountAgg(Aggregation):
     """`count` over a non-numeric column — a validity-only scan.
 
     `count` reads validity and nothing else, so it is defined for *every* dtype
-    and there is nothing to monomorphize on: the input stays erased. Numeric
-    columns resolve to `NumericAgg[CountKernel, V]` instead, which is mergeable.
-    An empty group counts 0 (never null), matching SQL."""
+    and there is nothing to monomorphize on: the input stays erased. That makes
+    it the grouped form of `count` for numeric columns too (`CountKernel.Grouped`
+    names it), so there is one implementation rather than a fold for numbers and
+    a scan for everything else. An empty group counts 0 (never null), matching
+    SQL.
+
+    Mergeable, because per-group counts merge by addition — which is exactly
+    what the shared `(accumulator, valid count)` partial format already carries,
+    with the count as the accumulator."""
 
     comptime name = CountKernel.name
     comptime InArray = AnyArray
     comptime OutArray = Int64Array
-    comptime is_mergeable = False
+    comptime is_mergeable = True
 
     @staticmethod
     def from_any(value: AnyArray) raises -> Self.InArray:
@@ -1041,6 +1100,34 @@ struct CountAgg(Aggregation):
     ) raises -> Self.OutArray:
         # Valid count is metadata — no scan.
         return Int64Scalar(Int64(len(values) - values.null_count())).repeat(1)
+
+    @staticmethod
+    def partials(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Tuple[Self.OutArray, Int64Array]:
+        """A thread's per-group counts, in both slots of the partial format: as
+        the accumulator to merge, and as the valid count that says the group was
+        seen at all."""
+        var counts = Self.grouped(gids, values, num_groups)
+        return (counts.copy(), counts.copy())
+
+    @staticmethod
+    def merge(
+        remap: List[Int32Array],
+        accs: List[Self.OutArray],
+        cnts: List[Int64Array],
+        num_groups: Int,
+    ) raises -> Self.OutArray:
+        var totals = List[Int64](length=num_groups, fill=0)
+        for t in range(len(remap)):
+            var gids = remap[t].values()
+            var part = accs[t].values()
+            for j in range(len(remap[t])):
+                totals[Int(gids[j])] += part[j]
+        var out = Int64Builder(num_groups)
+        for g in range(num_groups):
+            out.append(Scalar[int64.native](totals[g]))
+        return out.finish()
 
 
 struct DistinctAgg[exact: Bool](Aggregation):
@@ -1098,117 +1185,8 @@ struct DistinctAgg[exact: Bool](Aggregation):
 # `resolve` — a new aggregate cannot forget the rule, and no central ladder has
 # to know every aggregate that will ever exist.
 #
-# Mapping a runtime function *name* onto one of these is `marrow.expr.dynamic`'s
-# job — the single string comparison in the system, and the only part of an
-# aggregate that is not a type.
+# The functions themselves (`Sum`, `Min`, `Count`, …) are the frontend's
+# vocabulary and live in `marrow.expr.aggregates`, together with the one string
+# comparison that maps a runtime name onto them. Nothing in this package turns a
+# name into behaviour.
 # ---------------------------------------------------------------------------
-
-
-struct NumericFold[K: AggKernel](AggFunction):
-    """`sum` / `product` / `mean` — folds defined over numeric columns only."""
-
-    comptime name = Self.K.name
-
-    @staticmethod
-    def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
-        if not value_dtype.is_numeric():
-            raise Error(
-                "aggregate '",
-                Self.name,
-                "' is not defined for ",
-                value_dtype,
-                " columns",
-            )
-
-        @parameter
-        def numeric[V: NumericType](d: V) raises:
-            job[NumericAgg[Self.K, V]]()
-
-        value_dtype.dispatch_numeric[numeric]()
-
-
-struct OrderPreserving[Op: MinMaxOp](AggFunction):
-    """`min` / `max` — defined wherever a total order is: numeric columns fold
-    through `AggState`, temporal columns through their integer backing, and
-    string columns through the bytewise scan. All three keep the input dtype."""
-
-    comptime name = Self.Op.name
-
-    @staticmethod
-    def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
-        if value_dtype.is_numeric():
-
-            @parameter
-            def numeric[V: NumericType](d: V) raises:
-                job[NumericAgg[MinMax[Self.Op], V]]()
-
-            value_dtype.dispatch_numeric[numeric]()
-        elif value_dtype.is_temporal():
-
-            @parameter
-            def temporal[T: TemporalType](d: T) raises:
-                job[TemporalMinMax[Self.Op, T]]()
-
-            value_dtype.dispatch_temporal[temporal]()
-        elif value_dtype.is_string() or value_dtype.is_large_string():
-
-            @parameter
-            def stringly[T: StringLikeType](d: T) raises:
-                job[StringMinMax[Self.Op, T]]()
-
-            value_dtype.dispatch_stringlike[stringly]()
-        else:
-            raise Error(
-                "aggregate '",
-                Self.name,
-                "' is not defined for ",
-                value_dtype,
-                " columns",
-            )
-
-
-struct CountValid(AggFunction):
-    """`count` — defined for every dtype. Numeric columns take the mergeable
-    `AggState` fold; everything else the validity-only scan."""
-
-    comptime name = CountKernel.name
-
-    @staticmethod
-    def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
-        if value_dtype.is_numeric():
-
-            @parameter
-            def numeric[V: NumericType](d: V) raises:
-                job[NumericAgg[CountKernel, V]]()
-
-            value_dtype.dispatch_numeric[numeric]()
-        else:
-            job[CountAgg]()
-
-
-struct DistinctCount[exact: Bool](AggFunction):
-    """`count_distinct` / `approx_count_distinct` — defined for every dtype."""
-
-    comptime name = DistinctAgg[Self.exact].name
-
-    @staticmethod
-    def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
-        job[DistinctAgg[Self.exact]]()
-
-
-comptime Sum = NumericFold[SumKernel]
-comptime Product = NumericFold[ProductKernel]
-comptime Mean = NumericFold[MeanKernel]
-comptime Min = OrderPreserving[MinOp]
-comptime Max = OrderPreserving[MaxOp]
-comptime Count = CountValid
-comptime CountDistinct = DistinctCount[True]
-comptime ApproxCountDistinct = DistinctCount[False]

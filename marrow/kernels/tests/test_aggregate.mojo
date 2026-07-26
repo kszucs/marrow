@@ -23,6 +23,12 @@ from marrow.dtypes import (
     Int32Type,
     Int64Type,
 )
+from marrow.expr.aggregates import (
+    Sum,
+    Mean,
+    Min,
+    Max,
+)
 from marrow.kernels.aggregate import (
     Aggregation,
     AggFunction,
@@ -31,10 +37,6 @@ from marrow.kernels.aggregate import (
     MinKernel,
     MaxKernel,
     CountKernel,
-    Sum,
-    Mean,
-    Min,
-    Max,
 )
 
 

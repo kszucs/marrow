@@ -7,8 +7,8 @@ inversion already changed, and flags where the two disagree.
 
 **State:** 1865 passed / 317 skipped / 0 failed · binary size fused **7.6×**,
 runtime-named **7.9×** (baseline 7.6× / 7.8×) · group-by competition **12/15**
-wins, `sum[1m_g100k]` 1.89 ms and `multi[1m_g100k]` 3.06 ms — parity with the
-pre-refactor baseline (1.87 / 3.02). §1, §3 and §4 are done — see the notes under
+wins, `sum[1m_g100k]` **1.74 ms** and `multi[1m_g100k]` **2.94 ms** — both now
+under the pre-refactor baseline (1.87 / 3.02). §1, §3 and §4 are done — see the notes under
 each; §2, §5, §6 and §7 remain.
 
 ---
@@ -109,7 +109,21 @@ prerequisite in `docs/aggregate-kernel-inversion.md` §7 for evaluating a
 `_PARALLEL_ALWAYS_ROWS` and the cardinality sample have not been re-measured
 since the driver changed.
 
-## 6. Conflict to resolve: where does the `AggFunction` catalog live?
+## 6. Where the `AggFunction` catalog lives — **decided: `expr`** (audit L1)
+
+The catalog (`Sum`, `Product`, `Mean`, `Min`, `Max`, `Count`, `CountDistinct`,
+`ApproxCountDistinct`) and `resolve_agg` are in `expr/aggregates.mojo`. The
+criterion that settled it: **nothing in `marrow/kernels` maps a name to
+behaviour.** `Aggregation.name` and `AggKernel.name` stay — every kernel in the
+package carries a name as identity, and removing them would only push a name
+argument through `AggFunc.of[A]` / `Aggregates.append[A]` / `AggExpr.of[A]` for
+no gain. The invariant is "no name→behaviour mapping", not "no strings".
+
+Consequences that landed with it: `expr.aggregates → expr.dynamic` is gone (the
+ladder moved out of `dynamic.mojo`), and `GroupBy` no longer names output
+columns — see below.
+
+### Old text (for the record)
 
 The catalog (`Sum`, `Product`, `Mean`, `Min`, `Max`, `Count`, `CountDistinct`,
 `ApproxCountDistinct`) is currently in **`kernels/aggregate.mojo`**, moved there
@@ -127,6 +141,25 @@ Pick one and make the three headers say it. Note the remaining edge under the
 current arrangement (`expr.aggregates → expr.dynamic`, for `resolve_agg`) is
 structural only — the fused binary links **zero** `marrow::expr::dynamic`
 symbols, so DCE already removes the interpreter.
+
+## 6b. Done alongside — audit L4, K1, K2
+
+- **L4:** `GroupBy` returns `GroupedColumns` (unique key columns + one per
+  aggregate) instead of a named `RecordBatch`. `marrow/kernels` imports neither
+  `..tabular` nor `..schema` anywhere now. Naming moved to `Aggregates._named`.
+- **K1 — one `count`:** `AggKernel.Grouped[V]: Aggregation` lets a kernel name
+  its own grouped implementation, so `CountKernel.Grouped[V] = CountAgg` and the
+  validity scan serves every dtype. `CountValid.resolve` no longer branches on
+  numeric-vs-not, and `CountAgg` is now mergeable (counts add), which it was
+  not. The fused lane resolves through the same member.
+- **K2 — the scatter loop:** `AggKernel.needs_count` (true only for `mean` and
+  `count`) picks `AggState`'s second column — `Int64Type` when the count is
+  read, `UInt8Type` when only "was this group touched" matters. For
+  `sum`/`min`/`max`/`product` the per-row work drops from a read-add-write on 8
+  bytes to a plain 1-byte store, and the column is 100 KB rather than 800 KB at
+  100k groups. Partial exchange stays int64; the widening is O(groups), once.
+  Measured on a *loaded* machine: `sum[1m_g100k]` 1.89 → **1.74 ms**,
+  `multi[1m_g100k]` 3.06 → **2.94 ms**, `sum[1m_g1k]` 812 → 775 µs.
 
 ## 7. Smaller items
 

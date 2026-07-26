@@ -48,9 +48,181 @@ from ..arrays import (
 from ..dtypes import AnyDataType, Field
 from ..schema import Schema
 from ..tabular import RecordBatch
-from ..kernels.aggregate import Aggregation
-from ..kernels.groupby import GroupBy, HashGrouper, GROUP_THREAD_LOCAL
-from .dynamic import resolve_agg
+from ..dtypes import NumericType, StringLikeType, TemporalType
+from ..kernels.aggregate import (
+    Aggregation,
+    AggFunction,
+    AggKernel,
+    NumericAgg,
+    TemporalMinMax,
+    StringMinMax,
+    CountAgg,
+    DistinctAgg,
+    MinMax,
+    MinMaxOp,
+    MinOp,
+    MaxOp,
+    SumKernel,
+    ProductKernel,
+    MeanKernel,
+    CountKernel,
+)
+from ..kernels.groupby import (
+    GroupBy,
+    GroupedColumns,
+    HashGrouper,
+    GROUP_THREAD_LOCAL,
+)
+
+
+# ---------------------------------------------------------------------------
+# The aggregate functions — the frontend's vocabulary.
+#
+# An `AggFunction` is an aggregate before its input type is known: it states
+# which dtypes it is defined for and, for each, which `Aggregation` implements
+# it. That is the only dispatch left, and `resolve_agg` below is the only place
+# a runtime *name* is compared — once per aggregate, when the plan is built.
+# ---------------------------------------------------------------------------
+
+
+struct NumericFold[K: AggKernel](AggFunction):
+    """`sum` / `product` / `mean` — folds defined over numeric columns only."""
+
+    comptime name = Self.K.name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        if not value_dtype.is_numeric():
+            raise Error(
+                "aggregate '",
+                Self.name,
+                "' is not defined for ",
+                value_dtype,
+                " columns",
+            )
+
+        @parameter
+        def numeric[V: NumericType](d: V) raises:
+            job[Self.K.Grouped[V]]()
+
+        value_dtype.dispatch_numeric[numeric]()
+
+
+struct OrderPreserving[Op: MinMaxOp](AggFunction):
+    """`min` / `max` — defined wherever a total order is: numeric columns fold
+    through `AggState`, temporal columns through their integer backing, and
+    string columns through the bytewise scan. All three keep the input dtype."""
+
+    comptime name = Self.Op.name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        if value_dtype.is_numeric():
+
+            @parameter
+            def numeric[V: NumericType](d: V) raises:
+                job[MinMax[Self.Op].Grouped[V]]()
+
+            value_dtype.dispatch_numeric[numeric]()
+        elif value_dtype.is_temporal():
+
+            @parameter
+            def temporal[T: TemporalType](d: T) raises:
+                job[TemporalMinMax[Self.Op, T]]()
+
+            value_dtype.dispatch_temporal[temporal]()
+        elif value_dtype.is_string() or value_dtype.is_large_string():
+
+            @parameter
+            def stringly[T: StringLikeType](d: T) raises:
+                job[StringMinMax[Self.Op, T]]()
+
+            value_dtype.dispatch_stringlike[stringly]()
+        else:
+            raise Error(
+                "aggregate '",
+                Self.name,
+                "' is not defined for ",
+                value_dtype,
+                " columns",
+            )
+
+
+struct CountValid(AggFunction):
+    """`count` — defined for every dtype. Numeric columns take the mergeable
+    `AggState` fold; everything else the validity-only scan."""
+
+    comptime name = CountKernel.name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        if value_dtype.is_numeric():
+
+            @parameter
+            def numeric[V: NumericType](d: V) raises:
+                job[NumericAgg[CountKernel, V]]()
+
+            value_dtype.dispatch_numeric[numeric]()
+        else:
+            job[CountAgg]()
+
+
+struct DistinctCount[exact: Bool](AggFunction):
+    """`count_distinct` / `approx_count_distinct` — defined for every dtype."""
+
+    comptime name = DistinctAgg[Self.exact].name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        job[DistinctAgg[Self.exact]]()
+
+
+comptime Sum = NumericFold[SumKernel]
+comptime Product = NumericFold[ProductKernel]
+comptime Mean = NumericFold[MeanKernel]
+comptime Min = OrderPreserving[MinOp]
+comptime Max = OrderPreserving[MaxOp]
+comptime Count = CountValid
+comptime CountDistinct = DistinctCount[True]
+comptime ApproxCountDistinct = DistinctCount[False]
+
+
+def resolve_agg[
+    job: def[A: Aggregation]() raises capturing[_] -> None
+](name: String, value_dtype: AnyDataType) raises:
+    """Resolve an aggregate function *name* over a ``value_dtype`` column to the
+    ``Aggregation`` that implements it, and run ``job[A]``.
+
+    Keyed on the functions' own ``name``, with no tag in between. Each branch
+    hands the dtype straight to that function's own ``resolve``, so which input
+    types an aggregate supports — and what it does for each — is stated by the
+    aggregate itself, never re-listed here."""
+    if name == Sum.name:
+        Sum.resolve[job](value_dtype)
+    elif name == Product.name:
+        Product.resolve[job](value_dtype)
+    elif name == Mean.name:
+        Mean.resolve[job](value_dtype)
+    elif name == Min.name:
+        Min.resolve[job](value_dtype)
+    elif name == Max.name:
+        Max.resolve[job](value_dtype)
+    elif name == Count.name:
+        Count.resolve[job](value_dtype)
+    elif name == CountDistinct.name:
+        CountDistinct.resolve[job](value_dtype)
+    elif name == ApproxCountDistinct.name:
+        ApproxCountDistinct.resolve[job](value_dtype)
+    else:
+        raise Error("unknown aggregate function: ", name)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +522,10 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
         if len(values) != len(self._funcs):
             raise Error("aggregate: one value column per aggregate is required")
         if gb.strategy() == GROUP_THREAD_LOCAL and self.is_mergeable():
-            return self._thread_local(gb.keys(), values, gb.num_threads())
+            return self._named(
+                self._thread_local(gb.keys(), values, gb.num_threads()),
+                gb.keys(),
+            )
         else:
             # `aggregate_columns` groups once and picks its partitioner itself;
             # the per-column aggregate is supplied as the comptime aggregator.
@@ -360,7 +535,26 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
             ) raises -> AnyArray:
                 return self._funcs[j].grouped(gids, value, ng)
 
-            return gb.aggregate_columns[by_func](values, self.names())
+            return self._named(gb.aggregate_columns[by_func](values), gb.keys())
+
+    def _named(
+        self, var grouped: GroupedColumns, keys: StructArray
+    ) raises -> RecordBatch:
+        """Label a grouping's columns. The kernel layer returns key and
+        aggregate *columns* and knows none of their names; the key names come
+        from the keys struct and the aggregate names from this set."""
+        ref kstruct = keys.dtype.as_struct()
+        var fields = List[Field]()
+        var cols = List[AnyArray]()
+        for k in range(len(grouped.keys)):
+            fields.append(kstruct.fields[k].copy())
+            cols.append(grouped.keys[k].copy())
+        for j in range(len(grouped.aggregates)):
+            fields.append(
+                Field(self._funcs[j].name, grouped.aggregates[j].dtype().copy())
+            )
+            cols.append(grouped.aggregates[j].copy())
+        return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
 
     def whole(
         self, values: List[AnyArray], num_threads: Int = 0
@@ -390,7 +584,7 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
 
     def _thread_local(
         self, keys: StructArray, values: List[AnyArray], num_threads: Int
-    ) raises -> RecordBatch:
+    ) raises -> GroupedColumns:
         """Thread-local partial aggregation for N *fold* aggregates.
 
         Every worker groups an equal contiguous chunk once and folds each
@@ -458,12 +652,8 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
                 remap.append(gg.consume_keys(partials[t].value().keys))
         var ngg = gg.num_groups()
 
-        var kfields = gg.key_fields(keys)
-        var out_fields = List[Field]()
-        for k in range(len(kfields)):
-            out_fields.append(kfields[k].copy())
-        var out_cols = gg.key_columns(kfields)
-
+        var key_cols = gg.key_columns(gg.key_fields(keys))
+        var agg_cols = List[AnyArray]()
         for j in range(na):
             var accs = List[AnyArray]()
             var cnts = List[Int64Array]()
@@ -471,11 +661,9 @@ struct Aggregates(Copyable, Movable, Sized, Writable):
                 ref part = partials[live[i]].value()
                 accs.append(part.accs[j].copy())
                 cnts.append(part.cnts[j].copy())
-            var col = folds[j].merge(remap, accs, cnts, ngg)
-            out_fields.append(Field(self._funcs[j].name, col.dtype().copy()))
-            out_cols.append(col^)
+            agg_cols.append(folds[j].merge(remap, accs, cnts, ngg))
 
-        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+        return GroupedColumns(key_cols^, agg_cols^)
 
     def write_to[W: Writer](self, mut writer: W):
         for i in range(len(self._funcs)):

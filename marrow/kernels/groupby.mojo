@@ -26,8 +26,6 @@ from ..arrays import (
 )
 from ..builders import AnyBuilder, Int32Builder
 from ..dtypes import Field, struct_
-from ..schema import Schema
-from ..tabular import RecordBatch
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
@@ -138,6 +136,33 @@ struct HashGrouper(Movable):
         var gathered = take(keys, rows)
         for k in range(len(keys.children)):
             self._key_builders[k].extend(gathered.children[k])
+
+
+struct GroupedColumns(Copyable, Movable):
+    """The result of a grouped aggregation: the unique key columns, and one
+    column per aggregate over them.
+
+    Columns, not a table — naming the outputs and assembling a schema is the
+    caller's business, and the caller is the only one who knows what the
+    aggregates were called."""
+
+    var keys: List[AnyArray]
+    var aggregates: List[AnyArray]
+
+    def __init__(
+        out self, var keys: List[AnyArray], var aggregates: List[AnyArray]
+    ):
+        self.keys = keys^
+        self.aggregates = aggregates^
+
+    def num_rows(self) -> Int:
+        """The group count — every column has one row per group."""
+        if len(self.keys) > 0:
+            return self.keys[0].length()
+        elif len(self.aggregates) > 0:
+            return self.aggregates[0].length()
+        else:
+            return 0
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +301,12 @@ struct GroupBy(Movable):
         ``GROUP_THREAD_LOCAL`` / ``GROUP_RADIX``)."""
         return self._strategy
 
-    def aggregate[A: Aggregation](self, value: A.InArray) raises -> RecordBatch:
+    def aggregate[
+        A: Aggregation
+    ](self, value: A.InArray) raises -> GroupedColumns:
         """Aggregate a typed ``value`` column per group with aggregation ``A``.
 
-        Returns a batch of the unique key columns followed by the aggregate
-        column. ``A`` fixes the kernel *and* the input type, so the whole path is
+        Returns the unique key columns and the aggregate column. ``A`` fixes the kernel *and* the input type, so the whole path is
         monomorphized: no dtype is resolved, no aggregate identity is compared,
         and erasure only reappears where the grouping machinery shuffles rows
         (``take`` / ``slice`` / ``concat``), which is dtype-generic by nature.
@@ -288,8 +314,6 @@ struct GroupBy(Movable):
         A mergeable aggregation can take the thread-local path — row chunks
         folded into per-thread partials, then merged. Everything else groups by
         key partition, where each partition's groups are final on their own."""
-        var names = List[String]()
-        names.append(String(A.name))
         var values = List[AnyArray]()
         values.append(A.to_any(value))
 
@@ -305,16 +329,16 @@ struct GroupBy(Movable):
                     self._keys, value, self._num_threads
                 )
             else:
-                return self.aggregate_columns[one_column](values, names)
+                return self.aggregate_columns[one_column](values)
         else:
-            return self.aggregate_columns[one_column](values, names)
+            return self.aggregate_columns[one_column](values)
 
-    def apply[F: AggFunction](self, value: AnyArray) raises -> RecordBatch:
+    def apply[F: AggFunction](self, value: AnyArray) raises -> GroupedColumns:
         """Aggregate an erased ``value`` column with function ``F``: resolve the
         column's dtype to the ``Aggregation`` implementing ``F`` over it, then
         run the typed path above. The runtime-dtype entry point; the AOT path
         names its ``Aggregation`` directly and calls ``aggregate``."""
-        var box = List[RecordBatch]()
+        var box = List[GroupedColumns]()
 
         @parameter
         def run[A: Aggregation]() raises:
@@ -348,7 +372,7 @@ struct GroupBy(Movable):
         A: Aggregation
     ](
         keys: StructArray, value: A.InArray, num_threads: Int
-    ) raises -> RecordBatch:
+    ) raises -> GroupedColumns:
         """Thread-local partial aggregation — the low-/mid-cardinality parallel path.
 
         Every worker aggregates an equal contiguous chunk of rows into its *own*
@@ -421,35 +445,26 @@ struct GroupBy(Movable):
             cnts.append(part_cnt[t].value().copy())
         var agg_col = A.merge(remap, accs, cnts, gg.num_groups()).to_any()
 
-        var kfields = gg.key_fields(keys)
-        var out_fields = List[Field]()
-        for k in range(len(kfields)):
-            out_fields.append(kfields[k].copy())
-        out_fields.append(Field(A.name, agg_col.dtype().copy()))
-
-        var out_cols = gg.key_columns(kfields)
-        out_cols.append(agg_col^)
-        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+        var key_cols = gg.key_columns(gg.key_fields(keys))
+        var agg_cols = List[AnyArray]()
+        agg_cols.append(agg_col^)
+        return GroupedColumns(key_cols^, agg_cols^)
 
     def aggregate_columns[
         col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
             _
         ] -> AnyArray
-    ](self, values: List[AnyArray], names: List[String]) raises -> RecordBatch:
+    ](self, values: List[AnyArray]) raises -> GroupedColumns:
         """Group the keys once, then emit ``col_agg(j, gids, values[j], ng)`` as
-        output column ``j``, named ``names[j]`` — the multi-aggregate driver.
+        output column ``j`` — the multi-aggregate driver.
 
-        Returns the unique key columns followed by one aggregate column each.
         Never thread-local: the aggregator is opaque here, so its per-thread
         partial state can't be merged. (The thread-local *fold* path is
         ``aggregate[A]``, where the aggregation — and therefore its ``merge`` —
         is statically known.)"""
-        if len(values) != len(names):
-            raise Error("aggregate_columns: len(values) != len(names)")
         return Self._by_partition[col_agg](
             self._keys,
             values,
-            names,
             self._num_threads,
             partition=self._strategy != GROUP_SERIAL,
         )
@@ -462,10 +477,9 @@ struct GroupBy(Movable):
     ](
         keys: StructArray,
         values: List[AnyArray],
-        names: List[String],
         num_threads: Int,
         partition: Bool,
-    ) raises -> RecordBatch:
+    ) raises -> GroupedColumns:
         """The grouped-aggregation driver: group and aggregate one partition at
         a time, then stitch the partitions back together.
 
@@ -559,12 +573,9 @@ struct GroupBy(Movable):
         var first_any = concat(first_chunks, ctx)
         ref first_rows = first_any.as_int32()
 
-        ref kstruct = keys.dtype.as_struct()
-        var out_fields = List[Field]()
-        var out_cols = List[AnyArray]()
-        for k in range(len(kstruct.fields)):
-            out_fields.append(kstruct.fields[k].copy())
-            out_cols.append(
+        var key_cols = List[AnyArray]()
+        for k in range(len(keys.children)):
+            key_cols.append(
                 take(
                     keys.children[k].slice(keys.offset, len(keys)),
                     first_rows,
@@ -572,12 +583,11 @@ struct GroupBy(Movable):
                 )
             )
 
+        var agg_cols = List[AnyArray]()
         for j in range(na):
             var chunks = List[AnyArray]()
             for i in range(len(parts)):
                 chunks.append(parts[i][1][j].copy())
-            var col = concat(chunks, ctx)
-            out_fields.append(Field(names[j], col.dtype().copy()))
-            out_cols.append(col^)
+            agg_cols.append(concat(chunks, ctx))
 
-        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+        return GroupedColumns(key_cols^, agg_cols^)

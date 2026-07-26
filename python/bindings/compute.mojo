@@ -14,9 +14,7 @@ import marrow.kernels as mk
 # resolves to the submodule rather than the function. Import it directly.
 from marrow.kernels.filter import filter as _filter_kernel
 from marrow.kernels.execution import ExecutionContext
-from marrow.kernels.aggregate import (
-    Aggregation,
-    AggFunction,
+from marrow.expr.aggregates import (
     Sum,
     Product,
     Mean,
@@ -25,6 +23,11 @@ from marrow.kernels.aggregate import (
     CountDistinct,
     ApproxCountDistinct,
 )
+from marrow.kernels.aggregate import (
+    Aggregation,
+    AggFunction,
+)
+
 from helpers import pyfunction
 
 

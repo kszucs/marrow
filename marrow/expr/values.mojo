@@ -2478,7 +2478,7 @@ struct AggExpr(Copyable, Movable, Writable):
         `Reduction` inside an expression and this aggregate in a `GROUP BY` —
         the same node, read two ways. The kernel and the operand's `OutType`
         name the `Aggregation` outright, so nothing is resolved later."""
-        self = AggExpr.of[NumericAgg[K, In.OutType]](reduction.a.copy())
+        self = AggExpr.of[K.Grouped[In.OutType]](reduction.a.copy())
 
     @implicit
     def __init__(out self, var agg: DynAgg):
