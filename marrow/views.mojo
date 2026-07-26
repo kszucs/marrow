@@ -173,7 +173,7 @@ struct BufferView[
         length-carrying window over contiguous elements), for APIs typed on
         `Span`. Preserves mutability via the origin."""
         return Span[Scalar[Self.T], Self.origin](
-            ptr=self._data, length=self._length
+            unsafe_ptr=self._data, length=self._length
         )
 
     @always_inline
@@ -395,7 +395,7 @@ struct BufferView[
         """Convert this byte view to a StringSlice with origin `self_o`."""
         return StringSlice(
             unsafe_from_utf8=Span[Byte](
-                ptr=self._data.bitcast[Byte](), length=self._length
+                unsafe_ptr=self._data.bitcast[Byte](), length=self._length
             )
         )
 
@@ -1736,7 +1736,7 @@ def _reduce_dispatch[
             @always_inline
             @parameter
             def combine_capturing[
-                W: SIMDSize
+                W: SIMDLength
             ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
                 return combine[Int(W)](a, b)
 
@@ -1747,7 +1747,7 @@ def _reduce_dispatch[
             @__copy_capture(dev_view)
             @parameter
             def output_fn_gpu[
-                W: SIMDSize, rank: Int
+                W: SIMDLength, rank: Int
             ](idx: IndexList[rank], val: SIMD[T, W]):
                 dev_view.store[1](0, val[0])
 

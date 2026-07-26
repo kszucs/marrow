@@ -70,7 +70,7 @@ def _info(benchmark, lib, n):
 @pytest.mark.benchmark(group=f"sort1col_{_MODE}")
 def test_marrow_1col(benchmark, data, n):
     _info(benchmark, "marrow", n)
-    benchmark(lambda: ma.sort_indices(data["ma_val"], ctx=_CTX))
+    benchmark(lambda: ma.compute.sort_indices(data["ma_val"], ctx=_CTX))
 
 
 @pytest.mark.benchmark(group=f"sort1col_{_MODE}")

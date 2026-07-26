@@ -21,15 +21,6 @@ from std.utils import Variant
 from std.builtin.rebind import downcast
 from std.os import abort
 from std.sys import has_accelerator, CompilationTarget, size_of
-from std.sys.info import _accelerator_arch
-
-from .dtypes import (
-    AnyDataType,
-    BinaryLikeType,
-    FloatingType,
-    NumericType,
-    StringLikeType,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -179,27 +170,23 @@ def has_accelerator_support[*dtypes: DType]() -> Bool:
 
     For example Metal doesn't support float64 as of April 2026.
 
-    Also guards against Mojo toolchain regressions where the GPU architecture
-    string is malformed (e.g. 'metal:2-metal4' on an M2 with Metal 4 API).
-    The valid Metal targets are 'metal:1'–'metal:4'; anything else indicates
-    the toolchain cannot compile GPU kernels for this device and we fall back
-    to CPU.
+    Must use `comptime if`, not runtime `if`: these guards have to eliminate
+    the accelerator branches at elaboration time, not at runtime.
+
+    Note `has_accelerator()` is itself `is_gpu() or _accelerator_arch() != ""`,
+    so on a machine reporting an accelerator this enables GPU codegen — which
+    since 1.0.0b3.dev2026072406 requires a MAX runtime (`lib/libmax.dylib`),
+    hence the `max` dependency pinned alongside `mojo` in `pixi.toml`.
+
+    A previous `_accelerator_arch()` check here validated the GPU architecture
+    string, working around a toolchain regression that reported a malformed
+    target (e.g. 'metal:2-metal4' on an M2 with the Metal 4 API). It has been
+    removed; reinstate it if that regression reappears.
     """
-    if not has_accelerator():
+    comptime if not has_accelerator():
         return False
-    if not CompilationTarget.is_apple_silicon():
+    comptime if not CompilationTarget.is_apple_silicon():
         return True
-    # Validate the GPU architecture string before attempting to compile any
-    # GPU kernel.  A malformed target (e.g. 'metal:2-metal4') causes a hard
-    # constraint failure deep inside simd_width_of, so we gate it out here.
-    comptime arch = _accelerator_arch()
-    comptime if (
-        arch != "metal:1"
-        and arch != "metal:2"
-        and arch != "metal:3"
-        and arch != "metal:4"
-    ):
-        return False
     comptime for dtype in dtypes:
         if dtype == DType.float64:
             return False
@@ -269,48 +256,17 @@ def variant_dispatch_raises[
 #
 # Thin wrappers over `variant_dispatch_raises` that fix the trait to a dtype
 # family, so a kernel's runtime dispatch reads as
-# `dispatch_over_numeric[leaf](array.dtype())` instead of an 11-way
+# `array.dtype().dispatch_numeric[leaf]()` instead of an 11-way
 # `if dtype == int8 ... elif ...` cascade. `func` receives the runtime dtype
 # resolved to its concrete comptime type `T`; the return type `R` is inferred
 # from `func`. A dtype outside the family raises (the family trait bound filters
 # it out, so no arm matches) — the aggregate boundary relies on this to reject
 # non-numeric columns catchably.
+#
+# One member per dtype family trait in `dtypes.mojo`, so a kernel never has to
+# spell out its own ladder: adding a dtype to `AnyDataType.VariantType` extends
+# every family it conforms to at once. Pick the *narrowest* family that covers
+# the leaf — each member instantiates `func` once per conforming variant arm, so
+# `AnyDataType.dispatch_primitive` costs roughly twice `AnyDataType.dispatch_numeric` in code
+# size.
 # ---------------------------------------------------------------------------
-
-
-def dispatch_over_numeric[
-    R: AnyType,
-    //,
-    func: def[T: NumericType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime numeric dtype to its comptime type and run `func`."""
-    return variant_dispatch_raises[NumericType, func=func](dt._v)
-
-
-def dispatch_over_floating[
-    R: AnyType,
-    //,
-    func: def[T: FloatingType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime floating dtype to its comptime type and run `func`."""
-    return variant_dispatch_raises[FloatingType, func=func](dt._v)
-
-
-def dispatch_over_stringlike[
-    R: AnyType,
-    //,
-    func: def[T: StringLikeType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime string-like dtype to its comptime type and run `func`.
-    """
-    return variant_dispatch_raises[StringLikeType, func=func](dt._v)
-
-
-def dispatch_over_binarylike[
-    R: AnyType,
-    //,
-    func: def[T: BinaryLikeType](T) raises capturing[_] -> R,
-](dt: AnyDataType) raises -> R:
-    """Resolve a runtime binary-like dtype to its comptime type and run `func`.
-    """
-    return variant_dispatch_raises[BinaryLikeType, func=func](dt._v)

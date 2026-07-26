@@ -23,16 +23,13 @@ from std.memory import ArcPointer
 from ..arrays import AnyArray, StructArray
 from .. import dtypes as dt
 from ..schema import Schema
+from ..builders import Int32Builder
 from ..tabular import RecordBatch
 from ..kernels.concat import concat
 from ..kernels.filter import filter
 from ..kernels.sort import sort as sort_by_keys
-from ..kernels.groupby import HashGrouper, GroupBy
-from ..kernels.aggregate import (
-    agg_tag_from_name,
-    reinterpret_array,
-    temporal_backing_dtype,
-)
+from ..kernels.groupby import HashGrouper
+from .aggregates import Aggregates
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet import (
@@ -47,6 +44,7 @@ from ..parquet import (
 from ..scalars import AnyScalar
 from .values import AnyValue
 from .pruning import PruneStats
+from ..kernels.execution import ExecutionContext
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536
@@ -563,11 +561,12 @@ struct AggregateProcessor(Processor):
     Keys are grouped by a keys-only ``HashGrouper`` *as morsels arrive*, so the
     grouping is incremental; only the per-batch group ids and the evaluated value
     columns are buffered. On emit, each aggregate's chunks are ``concat``-ed once
-    and handed to ``GroupBy.aggregate_column`` — the same per-column entry point
-    the kernel-level multi-aggregate driver uses — so the whole routing (distinct
-    kernels, string/temporal min/max, non-numeric ``count``, typed ``AggState``
-    folds) is shared rather than duplicated here. Keys and aggregate inputs are
-    arbitrary ``AnyValue`` expressions, evaluated per morsel.
+    and handed to its ``Aggregation``, which already knows what it is: the
+    routing that used to be a name comparison (bytewise string min/max, the
+    temporal fold, the validity-only count, the distinct sketches) was decided
+    when the plan was built. A fused plan therefore reaches ``AggState[K, V]``
+    with nothing interpreted in between. Keys (``keys``) and aggregate inputs
+    (``inputs``) are arbitrary ``AnyValue`` expressions, evaluated per morsel.
 
     ``HAVING`` needs no node of its own: a ``Filter`` on top of the ``Aggregate``
     relation evaluates its predicate against the aggregate's *output* batch, so
@@ -576,10 +575,10 @@ struct AggregateProcessor(Processor):
 
     var input: AnyProcessor
     var keys: List[AnyValue]
-    var aggs: List[AnyValue]
+    var inputs: List[AnyValue]
+    var aggs: Aggregates
     var _schema: Schema
     var _grouper: HashGrouper
-    var _tags: List[UInt8]
     var _ctx: ExecutionContext
     var _emitted: Bool
 
@@ -588,19 +587,17 @@ struct AggregateProcessor(Processor):
         *,
         var input: AnyProcessor,
         var keys: List[AnyValue],
-        var aggs: List[AnyValue],
-        var funcs: List[String],
+        var inputs: List[AnyValue],
+        var aggs: Aggregates,
         var schema: Schema,
         var ctx: ExecutionContext,
     ) raises:
         self.input = input^
         self.keys = keys^
+        self.inputs = inputs^
         self.aggs = aggs^
         self._schema = schema^
         self._grouper = HashGrouper()
-        self._tags = List[UInt8]()
-        for i in range(len(funcs)):
-            self._tags.append(agg_tag_from_name(funcs[i]))
         self._ctx = ctx^
         self._emitted = False
 
@@ -608,40 +605,12 @@ struct AggregateProcessor(Processor):
         return Schema(copy=self._schema)
 
     def _key_fields(self) raises -> List[dt.Field]:
-        """The group-key fields *as grouped*.
-
-        Output schema is key fields then aggregate fields, so the first
-        ``len(keys)`` fields are the group keys. A temporal key is grouped
-        through its signed-integer backing (the same reinterpret idiom the
-        aggregate kernels use for temporal min/max): key values are only ever
-        compared for equality, the reinterpretation is exact and free, and the
-        hash/scatter path is then fully numeric. ``_as_declared`` relabels the
-        unique key column back to the schema's temporal dtype on emit."""
+        """The group-key fields. The output schema is key fields then aggregate
+        fields, so the first ``len(keys)`` fields are the group keys."""
         var fields = List[dt.Field]()
         for i in range(len(self.keys)):
-            ref f = self._schema.fields[i]
-            if f.dtype.is_temporal():
-                fields.append(dt.Field(f.name, temporal_backing_dtype(f.dtype)))
-            else:
-                fields.append(f.copy())
+            fields.append(self._schema.fields[i].copy())
         return fields^
-
-    @staticmethod
-    def _as_grouped(var value: AnyArray) raises -> AnyArray:
-        """An evaluated key column in the dtype it is grouped under — temporal
-        reinterpreted to its integer backing, everything else unchanged."""
-        var vdt = value.dtype()
-        if vdt.is_temporal():
-            return reinterpret_array(value, temporal_backing_dtype(vdt))
-        return value^
-
-    def _as_declared(self, i: Int, var value: AnyArray) raises -> AnyArray:
-        """Inverse of ``_as_grouped`` — the unique key column ``i`` relabelled
-        back to the output schema's dtype."""
-        ref target = self._schema.fields[i].dtype
-        if target.is_temporal():
-            return reinterpret_array(value, target)
-        return value^
 
     def pull(mut self) raises -> RecordBatch:
         if self._emitted:
@@ -650,34 +619,62 @@ struct AggregateProcessor(Processor):
 
         # Phase 1 — drain the input, grouping the keys morsel by morsel and
         # buffering the group ids + the evaluated value columns.
+        var keyless = len(self.keys) == 0
         var gid_chunks = List[AnyArray]()
         var value_chunks = List[List[AnyArray]]()
-        for _ in range(len(self.aggs)):
+        for _ in range(len(self.inputs)):
             value_chunks.append(List[AnyArray]())
+        var morsels = 0
         while True:
             try:
                 var batch = self.input.pull()
-                var key_children = List[AnyArray]()
-                for i in range(len(self.keys)):
-                    key_children.append(
-                        Self._as_grouped(self.keys[i].execute(batch))
+                morsels += 1
+                if not keyless:
+                    var key_children = List[AnyArray]()
+                    for i in range(len(self.keys)):
+                        key_children.append(self.keys[i].execute(batch))
+                    var key_struct = StructArray(
+                        dtype=dt.struct_(self._key_fields()),
+                        length=batch.num_rows(),
+                        nulls=0,
+                        offset=0,
+                        bitmap=None,
+                        children=key_children^,
                     )
-                var key_struct = StructArray(
-                    dtype=dt.struct_(self._key_fields()),
-                    length=batch.num_rows(),
-                    nulls=0,
-                    offset=0,
-                    bitmap=None,
-                    children=key_children^,
-                )
-                gid_chunks.append(self._grouper.consume_keys(key_struct))
-                for i in range(len(self.aggs)):
-                    value_chunks[i].append(self.aggs[i].execute(batch))
+                    gid_chunks.append(self._grouper.consume_keys(key_struct))
+                for i in range(len(self.inputs)):
+                    value_chunks[i].append(self.inputs[i].execute(batch))
             except Exhausted:
                 break
 
-        if len(gid_chunks) == 0:
+        if morsels == 0:
             return RecordBatch.empty(self._schema)
+
+        if keyless:
+            # ``SELECT agg(x), ...`` with no GROUP BY — one implicit group, so
+            # there is nothing to hash: every row is group 0 and the aggregates
+            # run through the same per-column entry point as a GROUP BY.
+            #
+            # Not `Aggregates.whole`, which would be faster here (a vectorized
+            # SIMD reduce rather than a scatter): reaching it from a *plan*
+            # makes the whole name→aggregate catalog reachable from every plan,
+            # and that measured +13% on the fused binary-size gate for a path a
+            # keyed query never runs. The eager `RecordBatch.aggregate` binding
+            # still takes the fast route.
+            var values = List[AnyArray]()
+            for i in range(len(self.inputs)):
+                values.append(concat(value_chunks[i], self._ctx))
+                value_chunks[i].clear()
+
+            var zeros = Int32Builder(values[0].length())
+            for _ in range(values[0].length()):
+                zeros.append(Int32(0))
+            var group_zero = zeros.finish()
+
+            var cols = List[AnyArray]()
+            for i in range(len(self.aggs)):
+                cols.append(self.aggs[i].grouped(group_zero, values[i], 1))
+            return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
         # Phase 2 — the unique key columns, then one shared per-column aggregate
         # each. An aggregate's buffered chunks are released as soon as they are
@@ -688,13 +685,11 @@ struct AggregateProcessor(Processor):
         var grouped_keys = self._grouper.key_columns(self._key_fields())
         var cols = List[AnyArray]()
         for i in range(len(grouped_keys)):
-            cols.append(self._as_declared(i, grouped_keys[i].copy()))
-        for i in range(len(self._tags)):
+            cols.append(grouped_keys[i].copy())
+        for i in range(len(self.aggs)):
             var value = concat(value_chunks[i], self._ctx)
             value_chunks[i].clear()
-            cols.append(
-                GroupBy.aggregate_column(gids, value, num_groups, self._tags[i])
-            )
+            cols.append(self.aggs[i].grouped(gids, value, num_groups))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 

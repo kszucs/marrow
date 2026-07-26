@@ -42,11 +42,6 @@ from ..builders import (
     FixedSizeBinaryBuilder,
     PrimitiveBuilder,
 )
-from ..utils import (
-    dispatch_over_binarylike,
-    dispatch_over_numeric,
-    dispatch_over_stringlike,
-)
 from ..views import apply, apply_checked
 from ..dtypes import (
     AnyDataType,
@@ -175,9 +170,9 @@ struct NumericCast(Kernel):
                     return Self.apply[From, To, True](typed, ctx).to_any()
                 return Self.apply[From, To, False](typed, ctx).to_any()
 
-            return dispatch_over_numeric[on_target](to)
+            return to.dispatch_numeric[on_target]()
 
-        return dispatch_over_numeric[on_source](array.dtype())
+        return array.dtype().dispatch_numeric[on_source]()
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +198,7 @@ struct NumToBool(Kernel):
         def from_num[From: NumericType](s: From) raises -> AnyArray:
             return Self.apply(array.as_primitive[From](), ctx).to_any()
 
-        return dispatch_over_numeric[from_num](array.dtype())
+        return array.dtype().dispatch_numeric[from_num]()
 
     @staticmethod
     def apply[
@@ -246,7 +241,7 @@ struct BoolToNum(Kernel):
         def to_num[To: NumericType](d: To) raises -> AnyArray:
             return Self.apply[To](b, ctx).to_any()
 
-        return dispatch_over_numeric[to_num](to)
+        return to.dispatch_numeric[to_num]()
 
     @staticmethod
     def apply[
@@ -431,9 +426,9 @@ struct StringToNum(Kernel):
                     return Self.apply[From, To, True](a).to_any()
                 return Self.apply[From, To, False](a).to_any()
 
-            return dispatch_over_numeric[to_num](to)
+            return to.dispatch_numeric[to_num]()
 
-        return dispatch_over_stringlike[on_str](array.dtype())
+        return array.dtype().dispatch_stringlike[on_str]()
 
     @staticmethod
     def _parse[native: DType](s: StringSlice) raises -> Scalar[native]:
@@ -483,7 +478,7 @@ struct StringToBool(Kernel):
                 return Self.apply[From, True](a).to_any()
             return Self.apply[From, False](a).to_any()
 
-        return dispatch_over_stringlike[on_str](array.dtype())
+        return array.dtype().dispatch_stringlike[on_str]()
 
     @staticmethod
     def apply[
@@ -523,9 +518,9 @@ struct NumToString(Kernel):
             def from_num[From: NumericType](s: From) raises -> AnyArray:
                 return Self.apply[From, To](array.as_primitive[From]()).to_any()
 
-            return dispatch_over_numeric[from_num](array.dtype())
+            return array.dtype().dispatch_numeric[from_num]()
 
-        return dispatch_over_stringlike[on_target](to)
+        return to.dispatch_stringlike[on_target]()
 
     @staticmethod
     def apply[
@@ -554,7 +549,7 @@ struct BoolToString(Kernel):
         def on_target[To: StringLikeType](d: To) raises -> AnyArray:
             return Self.apply[To](b).to_any()
 
-        return dispatch_over_stringlike[on_target](to)
+        return to.dispatch_stringlike[on_target]()
 
     @staticmethod
     def apply[
@@ -600,9 +595,9 @@ struct BinaryLikeCast(Kernel):
                     return Self.apply[From, To, True](a).to_any()
                 return Self.apply[From, To, False](a).to_any()
 
-            return dispatch_over_binarylike[on_to](to)
+            return to.dispatch_binarylike[on_to]()
 
-        return dispatch_over_binarylike[on_src](array.dtype())
+        return array.dtype().dispatch_binarylike[on_src]()
 
     @staticmethod
     def apply[
@@ -664,7 +659,7 @@ struct FixedSizeBinaryCast(Kernel):
             def to_bin[To: BinaryLikeType](d: To) raises -> AnyArray:
                 return Self.to_binary[To](fsb).to_any()
 
-            return dispatch_over_binarylike[to_bin](to)
+            return to.dispatch_binarylike[to_bin]()
         else:  # binary → fsb
             var width = to.as_fixed_size_binary().byte_width
 
@@ -673,7 +668,7 @@ struct FixedSizeBinaryCast(Kernel):
                 var a = BinaryLikeArray[From](array.to_data())
                 return Self.from_binary[From](a, width).to_any()
 
-            return dispatch_over_binarylike[from_bin](array.dtype())
+            return array.dtype().dispatch_binarylike[from_bin]()
 
     @staticmethod
     def to_binary[
@@ -802,7 +797,7 @@ struct DecimalCast(Kernel):
             def by_num[T: NumericType](x: T) raises -> AnyArray:
                 return func[T.native]()
 
-            return dispatch_over_numeric[by_num](dt)
+            return dt.dispatch_numeric[by_num]()
 
     @staticmethod
     def _convert[

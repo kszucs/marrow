@@ -10,7 +10,7 @@ per-read/write handle pool plus the primitive block calls; `Compression` (in
 
 from std.ffi import OwnedDLHandle, _try_find_dylib
 from std.pathlib import Path
-from std.memory import alloc, memset_zero
+from std.memory import alloc, unsafe_memset_zero
 
 comptime _ZSTD_PATHS: List[Path] = [
     "libzstd.dylib",
@@ -155,7 +155,7 @@ struct CompressionLibs(Movable):
         # next_in @0, avail_in @8, next_out @24, avail_out @32; total_out @40.
         var strm = alloc[UInt64](16)
         var sp = strm.bitcast[UInt8]()
-        memset_zero(sp, 128)
+        unsafe_memset_zero(sp, 128)
         strm[0] = UInt64(Int(src.unsafe_ptr()))
         (sp + 8).bitcast[UInt32]()[0] = UInt32(len(src))
         strm[3] = UInt64(Int(dst))
@@ -209,7 +209,7 @@ struct CompressionLibs(Movable):
         """Copy `n` bytes out of a freshly-`alloc`'d compression scratch buffer,
         free the buffer, and return an owned List — the shared tail of every
         `*_compress` method."""
-        var out = List[UInt8](Span(ptr=dst, length=n))
+        var out = List[UInt8](Span(unsafe_ptr=dst, length=n))
         dst.free()
         return out^
 
@@ -261,7 +261,7 @@ struct CompressionLibs(Movable):
         # z_stream is 112 bytes on LP64; same field layout as gzip_decompress.
         var strm = alloc[UInt64](16)
         var sp = strm.bitcast[UInt8]()
-        memset_zero(sp, 128)
+        unsafe_memset_zero(sp, 128)
         strm[0] = UInt64(Int(src.unsafe_ptr()))  # next_in @0
         (sp + 8).bitcast[UInt32]()[0] = UInt32(len(src))  # avail_in @8
         strm[3] = UInt64(Int(dst))  # next_out @24

@@ -93,9 +93,9 @@ and SIMD bulk operations.
 
 from std.builtin.builtin_slice import ContiguousSlice
 from std.memory import (
-    memset_zero,
+    unsafe_memset_zero,
     unsafe_memcpy,
-    memset,
+    unsafe_memset,
     ArcPointer,
 )
 from std.sys.info import simd_byte_width
@@ -380,7 +380,7 @@ struct Buffer[*, mut: Bool = False](
         """Allocate a 64-byte-aligned, zero-filled buffer for `length` elements of type T.
         """
         var result = Buffer.alloc_uninit[T](length)
-        memset_zero(result._ptr, result._size)
+        unsafe_memset_zero(result._ptr, result._size)
         return result^
 
     @staticmethod
@@ -389,7 +389,7 @@ struct Buffer[*, mut: Bool = False](
     ](length: I, fill: Scalar[T]) -> Buffer[mut=True]:
         """Allocate a 64-byte-aligned buffer filled with ``fill``."""
         var result = Buffer.alloc_uninit[T](length)
-        memset(result._ptr, UInt8(fill), result._size)
+        unsafe_memset(result._ptr, UInt8(fill), result._size)
         return result^
 
     @staticmethod
@@ -433,7 +433,7 @@ struct Buffer[*, mut: Bool = False](
         var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
             host.unsafe_ptr()
         )
-        memset_zero(ptr, byte_size)
+        unsafe_memset_zero(ptr, byte_size)
         return Buffer[mut=True](
             size=byte_size,
             ptr=rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr),
@@ -896,6 +896,23 @@ struct Bitmap[*, mut: Bool = False](
         self.write_to(writer)
 
     # TODO: ensure that properly covered by tests
+    @staticmethod
+    def intersect(
+        a: Optional[Bitmap[mut=False]], b: Optional[Bitmap[mut=False]]
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Bitwise AND of two optional validity bitmaps.
+
+        `None` means all-valid, so it is the identity: the result is `None` only
+        when both inputs are. Output bit i is set iff both inputs have it set.
+        """
+        if not a and not b:
+            return None
+        if not a:
+            return b
+        if not b:
+            return a
+        return (a.value().view() & b.value().view()).to_immutable()
+
     def view(
         ref self, offset: Int = 0, length: Int = -1
     ) -> BitmapView[origin_of(self)]:
@@ -1046,7 +1063,7 @@ struct Bitmap[*, mut: Bool = False](
                 ptr[end_byte] = ptr[end_byte] & ~mask
 
         if end_byte > start_byte:
-            memset(ptr + start_byte, fill, end_byte - start_byte)
+            unsafe_memset(ptr + start_byte, fill, end_byte - start_byte)
 
     def extend(
         mut self: Bitmap[mut=True],

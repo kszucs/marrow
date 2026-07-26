@@ -9,7 +9,7 @@ Three tiers per operation:
   output buffer, propagates null bitmaps, dispatches CPU/GPU via ``apply()``.
 - **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: runtime-typed entry
   point; resolves the runtime dtype to the typed ``apply`` overload via
-  ``dispatch_over_numeric`` / ``dispatch_over_floating`` (``marrow.utils``).
+  `AnyDataType.dispatch_numeric` / `.dispatch_floating`.
 
 Structural kernels (filter, sort, concat, …) operate on array layout rather than
 element values and are **not** part of this tier scheme.
@@ -25,7 +25,6 @@ from ..dtypes import (
     NumericType,
     FloatingType,
 )
-from ..utils import dispatch_over_floating, dispatch_over_numeric
 from .helpers import Kernel, bitmap_and
 from .execution import ExecutionContext
 
@@ -61,7 +60,7 @@ trait BinaryKernel(Kernel):
             )
         comptime native = T.native
         var length = len(left)
-        var bm = bitmap_and(left.bitmap, right.bitmap)
+        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
         var buf: Buffer[mut=True]
         if ctx.is_gpu():
             buf = Buffer.alloc_device[native](ctx.device.value(), length)
@@ -101,7 +100,7 @@ trait BinaryNumericKernel(BinaryKernel):
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
 
-        return dispatch_over_numeric[leaf](left.dtype())
+        return left.dtype().dispatch_numeric[leaf]()
 
 
 trait BinaryFloatKernel(BinaryKernel):
@@ -125,7 +124,7 @@ trait BinaryFloatKernel(BinaryKernel):
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
 
-        return dispatch_over_floating[leaf](left.dtype())
+        return left.dtype().dispatch_floating[leaf]()
 
 
 trait UnaryKernel(Kernel):
@@ -181,7 +180,7 @@ trait UnaryNumericKernel(UnaryKernel):
         def leaf[T: NumericType](d: T) raises -> AnyArray:
             return Self.apply(array.as_primitive[T](), ctx).to_any()
 
-        return dispatch_over_numeric[leaf](array.dtype())
+        return array.dtype().dispatch_numeric[leaf]()
 
 
 trait UnaryFloatKernel(UnaryKernel):
@@ -196,7 +195,7 @@ trait UnaryFloatKernel(UnaryKernel):
         def leaf[T: FloatingType](d: T) raises -> AnyArray:
             return Self.apply(array.as_primitive[T](), ctx).to_any()
 
-        return dispatch_over_floating[leaf](array.dtype())
+        return array.dtype().dispatch_floating[leaf]()
 
 
 # ---------------------------------------------------------------------------

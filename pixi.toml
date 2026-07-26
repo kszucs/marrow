@@ -17,8 +17,8 @@ version = "0.1.0"
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
 [package.build-dependencies]
-mojo-compiler = "==1.0.0b2.dev2026051306"
-mojo = "==1.0.0b2.dev2026051306"
+mojo-compiler = "==1.0.0b3.dev2026072406"
+mojo = "==1.0.0b3.dev2026072406"
 
 [package.run-dependencies]
 # Mojo nightly builds are compiled against a specific CPython minor version;
@@ -55,12 +55,29 @@ cffi = "*"
 # Tests build from source by default.  --pkg (precompiled-marrow fast build)
 # is opt-in: it currently crashes the Mojo compiler on some generic-heavy
 # files (filter/join/plan/...), so it is not enabled by default.
+# Build-only checks — compile without running anything.  Much faster than
+# pytest (which builds one runner per selected test), so prefer these while
+# migrating to a new Mojo release until the tree builds again.
+#
+#   check_lib                                  — whole library, ~10s
+#   check marrow/tests/test_views.mojo         — one file + its imports, ~4s
+#
+# `check_lib` first: it compiles every module under `marrow/`, so it catches
+# errors in code no selected test happens to import.  `check <file>` then
+# narrows down to a specific test and its transitive imports.
+check_lib = { cmd = "mkdir -p .test_runners && mojo package marrow -I . -o .test_runners/_marrow.mojopkg" }
+check = { cmd = "mkdir -p .test_runners && mojo build -I . -o .test_runners/_check" }
 test_mojo = { cmd = "pytest --mojo -v" }
 test_mojo_parallel = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
 test_python = { cmd = "pytest --python -v" }
 test_gpu = { cmd = "pytest --gpu -v" }
 test = { cmd = "pytest -v" }
-test_parallel = { cmd = "pytest -v -n auto --dist=loadfile" }
+# No `-v` by default: with `-n auto` the per-test lines from several workers
+# interleave and are hard to read, and the run is usually about the summary.
+# Pass it explicitly when you want it: `pixi run test_parallel -v`.
+# `--dist=loadfile` keeps every test from one `.mojo` file on the same worker so
+# the compiled runner is built once and reused.
+test_parallel = { cmd = "pytest -n auto --dist=loadfile" }
 
 # Integration — Arrow protocol conformance tests via archery.
 # All reference Arrow implementations are cloned into ./integration/arrow/ and
@@ -197,7 +214,19 @@ docker = { features = ["docker"], no-default-feature = true }
 wheel = { features = ["wheel"], solve-group = "default" }
 
 [dependencies]
-mojo = ">=1.0.0b3.dev2026072217,<2"
+mojo = "==1.0.0b3.dev2026072406"
+# NOTE: this should NOT be required, and was not before
+# mojo 1.0.0b3.dev2026072406 — GPU kernels compiled fine without MAX.  That
+# release made GPU codegen resolve `max.package_root` and hard-error
+# ("please install MAX for accelerator support") when `lib/libmax.dylib` is
+# absent, which trips any build on a machine reporting an accelerator, since
+# `has_accelerator()` is `is_gpu() or _accelerator_arch() != ""`.
+# Minimal repro: a `DeviceContext.enqueue_function[k]` call in a single file.
+# Treat as a toolchain regression: retry dropping this on the next upgrade.
+# MAX uses its own version line; upstream pins the pair together (see the
+# modular release commit "Pin lockfiles to Mojo 1.0.0b3.dev2026072406,
+# MAX 26.5.0.dev2026072406").
+max = "==26.5.0.dev2026072406"
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"

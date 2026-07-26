@@ -284,7 +284,7 @@ trait StringPredicateKernel(Kernel):
                 t"{Self.name}: arrays must have the same length, got {n} and"
                 t" {len(right)}"
             )
-        var bm = bitmap_and(left.bitmap, right.bitmap)
+        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):

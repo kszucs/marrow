@@ -24,7 +24,6 @@ from ..arrays import (
 )
 from ..buffers import Buffer, Bitmap
 from ..dtypes import ListLikeType, NumericType, DType
-from ..utils import dispatch_over_numeric
 from .helpers import Kernel
 from .execution import ExecutionContext
 
@@ -159,4 +158,4 @@ struct ArrayContainsKernel(Kernel):
                     t"array_contains: expected a list array, got {list.dtype()}"
                 )
 
-        return dispatch_over_numeric[leaf](elem.dtype())
+        return elem.dtype().dispatch_numeric[leaf]()

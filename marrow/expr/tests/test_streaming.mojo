@@ -165,7 +165,10 @@ def test_aggregate_plan_is_reusable() raises:
     var v = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a^, v^], names=["k", "v"])
     var plan = in_memory_table(batch).aggregate(
-        keys=[dyn_col("k")], values=[dyn_col("v")], funcs=["sum"]
+        keys=[dyn_col("k")],
+        aggs=[
+            dyn_col("v").sum(),
+        ],
     )
     var r1 = execute(plan)
     var r2 = execute(plan)
@@ -186,8 +189,9 @@ def test_aggregate_multi_key_schema() raises:
     )
     var plan = in_memory_table(batch).aggregate(
         keys=[dyn_col("region"), dyn_col("dept")],
-        values=[dyn_col("v")],
-        funcs=["sum"],
+        aggs=[
+            dyn_col("v").sum(),
+        ],
     )
     var result = execute(plan)
     assert_equal(result.num_columns(), 3)
@@ -493,7 +497,10 @@ def _sorted_by_key(batch: RecordBatch) raises -> RecordBatch:
 def test_aggregate_count_distinct_grouped() raises:
     """COUNT(DISTINCT v) per group — group 1 has {10}, group 2 has {30, 40}."""
     var plan = in_memory_table(_agg_batch()).aggregate(
-        keys=[dyn_col("k")], values=[dyn_col("v")], funcs=["count_distinct"]
+        keys=[dyn_col("k")],
+        aggs=[
+            dyn_col("v").count_distinct(),
+        ],
     )
     assert_equal(plan.schema().fields[1].name, "count_distinct")
     assert_equal(plan.schema().fields[1].dtype, int64)
@@ -507,9 +514,9 @@ def test_aggregate_count_distinct_whole_table() raises:
     COUNT(DISTINCT v) over the whole table (3 distinct values)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[lit[Int64Type](0)],
-        values=[dyn_col("v")],
-        funcs=["count_distinct"],
-        names=["distinct_v"],
+        aggs=[
+            dyn_col("v").count_distinct().alias("distinct_v"),
+        ],
     )
     assert_equal(plan.schema().fields[0].name, "key0")
     var result = execute(plan)
@@ -522,8 +529,9 @@ def test_aggregate_approx_count_distinct() raises:
     """approx_count_distinct is exact at these cardinalities."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("v")],
-        funcs=["approx_count_distinct"],
+        aggs=[
+            dyn_col("v").approx_count_distinct(),
+        ],
     )
     assert_equal(plan.schema().fields[1].dtype, int64)
     var result = _sorted_by_key(execute(plan))
@@ -534,9 +542,10 @@ def test_aggregate_min_max_string() raises:
     """min/max over a string value column keep the string dtype (Q22/Q23)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("s"), dyn_col("s")],
-        funcs=["min", "max"],
-        names=["lo", "hi"],
+        aggs=[
+            dyn_col("s").min().alias("lo"),
+            dyn_col("s").max().alias("hi"),
+        ],
     )
     assert_equal(plan.schema().fields[1].dtype, string)
     assert_equal(plan.schema().fields[2].dtype, string)
@@ -553,9 +562,10 @@ def test_aggregate_min_max_date() raises:
     """min/max over a date32 value column keep the temporal dtype (Q7)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("d"), dyn_col("d")],
-        funcs=["min", "max"],
-        names=["first_day", "last_day"],
+        aggs=[
+            dyn_col("d").min().alias("first_day"),
+            dyn_col("d").max().alias("last_day"),
+        ],
     )
     assert_true(plan.schema().fields[1].dtype == date32())
     var result = _sorted_by_key(execute(plan))
@@ -571,7 +581,10 @@ def test_aggregate_min_max_date() raises:
 def test_aggregate_count_over_string_column() raises:
     """COUNT(*)-style count over a non-numeric column — validity only."""
     var plan = in_memory_table(_agg_batch()).aggregate(
-        keys=[dyn_col("k")], values=[dyn_col("s")], funcs=["count"]
+        keys=[dyn_col("k")],
+        aggs=[
+            dyn_col("s").count(),
+        ],
     )
     assert_equal(plan.schema().fields[1].dtype, int64)
     var result = _sorted_by_key(execute(plan))
@@ -583,9 +596,12 @@ def test_aggregate_out_dtypes() raises:
     every aggregate kind."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("v"), dyn_col("v"), dyn_col("v"), dyn_col("v")],
-        funcs=["count", "mean", "min", "sum"],
-        names=["c", "m", "mn", "s"],
+        aggs=[
+            dyn_col("v").count().alias("c"),
+            dyn_col("v").mean().alias("m"),
+            dyn_col("v").min().alias("mn"),
+            dyn_col("v").sum().alias("s"),
+        ],
     )
     var out = execute(plan)
     for i in range(len(plan.schema().fields)):
@@ -603,9 +619,9 @@ def test_aggregate_computed_key_arithmetic() raises:
     """An arithmetic group key (k * 10) groups on the computed value."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k") * lit[Int64Type](10)],
-        values=[dyn_col("v")],
-        funcs=["sum"],
-        names=["total"],
+        aggs=[
+            dyn_col("v").sum().alias("total"),
+        ],
     )
     assert_equal(plan.schema().fields[0].name, "key0")
     assert_equal(plan.schema().fields[0].dtype, int64)
@@ -628,9 +644,9 @@ def test_aggregate_computed_key_case_when() raises:
                 lit[Int64Type](1),
             )
         ],
-        values=[dyn_col("v")],
-        funcs=["count"],
-        names=["n"],
+        aggs=[
+            dyn_col("v").count().alias("n"),
+        ],
     )
     var result = _sorted_by_key(execute(plan))
     assert_true(result.columns[0].as_int64().copy() == array([0, 1], int64))
@@ -647,8 +663,9 @@ def test_aggregate_computed_key_if_else() raises:
                 lit[Int64Type](200),
             )
         ],
-        values=[dyn_col("v")],
-        funcs=["sum"],
+        aggs=[
+            dyn_col("v").sum(),
+        ],
     )
     var result = _sorted_by_key(execute(plan))
     assert_true(result.columns[0].as_int64().copy() == array([100, 200], int64))
@@ -659,9 +676,9 @@ def test_aggregate_computed_key_year() raises:
     """year(date) as a group key — an int32 extraction key (Q19/Q40)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("d").year()],
-        values=[dyn_col("v")],
-        funcs=["count"],
-        names=["n"],
+        aggs=[
+            dyn_col("v").count().alias("n"),
+        ],
     )
     assert_equal(plan.schema().fields[0].dtype, int32)
     var result = _sorted_by_key(execute(plan))
@@ -678,9 +695,9 @@ def test_aggregate_computed_key_date_trunc() raises:
     out (Q19/Q35/Q36/Q43)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("t").date_trunc("hour")],
-        values=[dyn_col("v")],
-        funcs=["count"],
-        names=["n"],
+        aggs=[
+            dyn_col("v").count().alias("n"),
+        ],
     )
     assert_true(plan.schema().fields[0].dtype == timestamp(second))
     var result = execute(plan)
@@ -700,9 +717,9 @@ def test_aggregate_computed_value_arithmetic() raises:
     """SUM(v + 1) — a computed aggregate input (Q30)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("v") + lit[Int64Type](1)],
-        funcs=["sum"],
-        names=["total"],
+        aggs=[
+            (dyn_col("v") + lit[Int64Type](1)).sum().alias("total"),
+        ],
     )
     assert_equal(plan.schema().fields[1].dtype, int64)
     var result = _sorted_by_key(execute(plan))
@@ -715,9 +732,9 @@ def test_aggregate_computed_value_length() raises:
     """AVG(length(s)) — a computed, dtype-changing aggregate input (Q28)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("s").length()],
-        funcs=["mean"],
-        names=["avg_len"],
+        aggs=[
+            dyn_col("s").length().mean().alias("avg_len"),
+        ],
     )
     assert_equal(plan.schema().fields[1].dtype, float64)
     var result = _sorted_by_key(execute(plan))
@@ -734,9 +751,10 @@ def test_aggregate_names_disambiguate_outputs() raises:
     """Two means of different columns need distinct output names."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("v"), dyn_col("d").year()],
-        funcs=["mean", "mean"],
-        names=["avg_v", "avg_year"],
+        aggs=[
+            dyn_col("v").mean().alias("avg_v"),
+            dyn_col("d").year().mean().alias("avg_year"),
+        ],
     )
     assert_equal(plan.schema().fields[1].name, "avg_v")
     assert_equal(plan.schema().fields[2].name, "avg_year")
@@ -748,7 +766,10 @@ def test_aggregate_names_disambiguate_outputs() raises:
 def test_aggregate_default_names_are_the_functions() raises:
     """Without `names`, outputs keep their function name (unchanged default)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
-        keys=[dyn_col("k")], values=[dyn_col("v")], funcs=["sum"]
+        keys=[dyn_col("k")],
+        aggs=[
+            dyn_col("v").sum(),
+        ],
     )
     assert_equal(plan.schema().fields[1].name, "sum")
 
@@ -760,9 +781,9 @@ def test_aggregate_having() raises:
         in_memory_table(_agg_batch())
         .aggregate(
             keys=[dyn_col("k")],
-            values=[dyn_col("v")],
-            funcs=["count"],
-            names=["n"],
+            aggs=[
+                dyn_col("v").count().alias("n"),
+            ],
         )
         .filter(AnyValue(dyn_col("n") > lit[Int64Type](1)))
     )
@@ -779,9 +800,9 @@ def test_aggregate_having_on_aliased_aggregate() raises:
         in_memory_table(_agg_batch())
         .aggregate(
             keys=[dyn_col("k")],
-            values=[dyn_col("v")],
-            funcs=["sum"],
-            names=["total"],
+            aggs=[
+                dyn_col("v").sum().alias("total"),
+            ],
         )
         .filter(AnyValue(dyn_col("total") >= lit[Int64Type](50)))
         .sort(keys=[dyn_col("total")], ascending=[False])
@@ -803,9 +824,11 @@ def test_aggregate_streams_across_morsels() raises:
         InMemoryTable(batch=_agg_batch(), morsel_size=1)
     ).aggregate(
         keys=[dyn_col("k")],
-        values=[dyn_col("v"), dyn_col("s"), dyn_col("v")],
-        funcs=["sum", "min", "count_distinct"],
-        names=["total", "lo", "nd"],
+        aggs=[
+            dyn_col("v").sum().alias("total"),
+            dyn_col("s").min().alias("lo"),
+            dyn_col("v").count_distinct().alias("nd"),
+        ],
     )
     var result = _sorted_by_key(execute(plan))
     assert_equal(result.num_rows(), 3)

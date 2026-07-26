@@ -39,10 +39,10 @@ from std.memory import ArcPointer
 from ..dtypes import Field
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .values import AnyValue
+from .values import AnyValue, AggExpr
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
-from ..kernels.aggregate import agg_tag_from_name, agg_out_dtype
+from .aggregates import Aggregates
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -243,38 +243,40 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         return AnyRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
-        self,
-        keys: List[DynValue],
-        values: List[DynValue],
-        funcs: List[String],
-        names: List[String] = List[String](),
+        self, keys: List[DynValue], aggs: List[AggExpr]
     ) raises -> AnyRelation:
-        """Grouped aggregation: key columns + aggregated value columns.
+        """Grouped aggregation — ``GROUP BY keys`` with one output column per
+        aggregate.
 
-        Keys and aggregate inputs are arbitrary expressions — a bare column, or a
-        computed one (``col("x") + lit(1)``, ``col("ts").year()``,
-        ``col("ts").date_trunc("month")``, ``case_when(...)``, a literal).
-        ``funcs[i]`` is the aggregate applied to ``values[i]``: ``sum``, ``min``,
-        ``max``, ``count``, ``mean``, ``product``, ``count_distinct`` or
-        ``approx_count_distinct``.
+            rel.aggregate(
+                keys=[col("region")],
+                aggs=[col("amount").sum().alias("total"),
+                      col("amount").max().alias("biggest")],
+            )
+
+        An aggregate is written on the expression it aggregates
+        (``col("amount").sum()``), so nothing has to be kept in positional
+        correspondence. Keys and aggregate inputs are arbitrary expressions — a
+        bare column or a computed one (``col("x") + lit(1)``,
+        ``col("ts").date_trunc("month")``, ``case_when(...)``).
+
+        Both expression lanes are accepted, and they mix: ``col("x").sum()`` on
+        a ``DynValue`` carries the function's *name* until this call resolves it
+        against the input's dtype, while the same call on a fused node
+        (``col("x", int64).sum()``) already names its ``Aggregation`` and
+        resolves nothing.
 
         Output schema: one field per key — named after its source column, or
-        ``key<i>`` for a computed key — then one field per aggregate, named
-        ``names[i]`` when given and after the function otherwise. Pass ``names``
-        to alias aggregates that would otherwise collide (``mean(a), mean(b)``).
+        ``key<i>`` for a computed key — then one per aggregate, named by
+        ``.alias(...)`` or after the function. Leaving ``keys`` empty is
+        ``SELECT agg(x), ...`` with no GROUP BY: one implicit group, one row out.
 
         ``HAVING`` needs no dedicated node: ``rel.aggregate(...).filter(pred)``
-        evaluates ``pred`` against the aggregate's output batch, so it resolves
-        column references against the *aggregate output* schema —
+        evaluates ``pred`` against the aggregate's output batch, so
         ``...filter(col("n") > lit(100))`` is exactly ``HAVING n > 100``.
         """
-        if len(values) != len(funcs):
-            raise Error("aggregate: len(values) != len(funcs)")
-        if len(names) != 0 and len(names) != len(funcs):
-            raise Error("aggregate: len(names) != len(funcs)")
-
         var input_schema = self.schema()
-        # Bind key/value expressions to positional form once (names -> indices),
+        # Bind key/input expressions to positional form once (names -> indices),
         # so per-morsel eval uses positions directly, and probe each one's output
         # dtype by evaluating it against a 0-row batch of the input schema (the
         # same trick ``project`` uses) — general for computed expressions, where
@@ -291,26 +293,27 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             fields.append(Field(name, k.execute(probe).dtype()))
             key_exprs.append(AnyValue(k^))
 
-        # Aggregate output dtype comes from the kernel's accumulator algebra —
-        # `agg_out_dtype` is the single home of that rule (sum widens integers to
-        # int64; min/max preserve the input dtype, including string/temporal;
-        # count and the distinct counts are int64; mean is float64).
-        var val_exprs = List[AnyValue]()
-        for i in range(len(values)):
-            var v = values[i].resolve_names(input_schema)
-            var tag = agg_tag_from_name(funcs[i])
-            var out_name = names[i] if len(names) != 0 else funcs[i]
-            fields.append(
-                Field(out_name, agg_out_dtype(tag, v.execute(probe).dtype()))
-            )
-            val_exprs.append(AnyValue(v^))
+        # Resolve each aggregate against the dtype its input turns out to have —
+        # the only interpretation step on this path, and the last one: the output
+        # dtype is then the aggregation's own (`sum` widens integers to int64;
+        # `min`/`max` preserve the input dtype, including a timestamp's unit and
+        # timezone; `count` and the distinct counts are int64; `mean` is
+        # float64), and an aggregate not defined for the column's type is
+        # rejected here rather than at execution.
+        var input_exprs = List[AnyValue]()
+        var resolved = Aggregates()
+        for i in range(len(aggs)):
+            var v = aggs[i].input_for(input_schema)
+            resolved.add(aggs[i].resolve(v.execute(probe).dtype()))
+            fields.append(Field(aggs[i].out_name, resolved[i].out_dtype.copy()))
+            input_exprs.append(v^)
 
         return AnyRelation(
             Aggregate(
                 input=self,
                 keys=key_exprs^,
-                aggs=val_exprs^,
-                funcs=funcs.copy(),
+                inputs=input_exprs^,
+                aggs=resolved^,
                 schema=Schema(fields=fields^),
             )
         )
@@ -717,12 +720,17 @@ struct Sort(Relation):
 
 
 struct Aggregate(Relation):
-    """Grouped aggregation — the descriptive node (keys, aggregates, schema)."""
+    """Grouped aggregation — the descriptive node (keys, aggregates, schema).
+
+    ``aggs[i]`` is the aggregate applied to the value expression ``inputs[i]``.
+    Each carries a *comptime* ``Aggregation``, so a plan built from fused values
+    and ``Aggregates.append[A]`` carries no function-name interpretation at all;
+    ``AnyRelation.aggregate`` produces the same node from runtime names."""
 
     var input: AnyRelation
     var keys: List[AnyValue]
-    var aggs: List[AnyValue]
-    var funcs: List[String]
+    var inputs: List[AnyValue]
+    var aggs: Aggregates
     var _schema: Schema
 
     def __init__(
@@ -730,14 +738,14 @@ struct Aggregate(Relation):
         *,
         var input: AnyRelation,
         var keys: List[AnyValue],
-        var aggs: List[AnyValue],
-        var funcs: List[String],
+        var inputs: List[AnyValue],
+        var aggs: Aggregates,
         var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
+        self.inputs = inputs^
         self.aggs = aggs^
-        self.funcs = funcs^
         self._schema = schema^
 
     def schema(self) -> Schema:
@@ -747,8 +755,8 @@ struct Aggregate(Relation):
         return AggregateProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
+            inputs=self.inputs.copy(),
             aggs=self.aggs.copy(),
-            funcs=self.funcs.copy(),
             schema=Schema(copy=self._schema),
             ctx=ctx.copy(),
         )

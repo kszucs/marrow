@@ -223,7 +223,7 @@ _filter_params = pytest.mark.parametrize(
 @_arith_params
 def test_marrow_add(benchmark, ma_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.add, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial())
+    benchmark(ma.compute.add, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="arithmetic")
@@ -291,7 +291,7 @@ def test_pyarrow_div(benchmark, pa_arrays, n):
 @_sum_params
 def test_marrow_sum(benchmark, ma_arrays, n, dtype, key):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.sum, ma_arrays[key], ma.ExecutionContext.serial())
+    benchmark(ma.compute.sum, ma_arrays[key], ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -304,7 +304,7 @@ def test_pyarrow_sum(benchmark, pa_arrays, n, dtype, key):
 @pytest.mark.benchmark(group="aggregate")
 def test_marrow_product(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.product, ma_arrays["int64_a"], ma.ExecutionContext.serial())
+    benchmark(ma.compute.product, ma_arrays["int64_a"], ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -317,7 +317,7 @@ def test_pyarrow_product(benchmark, pa_arrays, n):
 @_unary_num_params
 def test_marrow_min(benchmark, ma_arrays, n, dtype, key):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.min, ma_arrays[key], ma.ExecutionContext.serial())
+    benchmark(ma.compute.min, ma_arrays[key], ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -330,7 +330,7 @@ def test_pyarrow_min(benchmark, pa_arrays, n, dtype, key):
 @pytest.mark.benchmark(group="aggregate")
 def test_marrow_max(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.max, ma_arrays["int64_a"], ma.ExecutionContext.serial())
+    benchmark(ma.compute.max, ma_arrays["int64_a"], ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -342,7 +342,7 @@ def test_pyarrow_max(benchmark, pa_arrays, n):
 @pytest.mark.benchmark(group="aggregate")
 def test_marrow_any(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
-    benchmark(ma.any, ma_arrays["bool"])
+    benchmark(ma.compute.any, ma_arrays["bool"])
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -354,7 +354,7 @@ def test_pyarrow_any(benchmark, pa_arrays, n):
 @pytest.mark.benchmark(group="aggregate")
 def test_marrow_all(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
-    benchmark(ma.all, ma_arrays["bool"])
+    benchmark(ma.compute.all, ma_arrays["bool"])
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -379,7 +379,7 @@ def test_marrow_filter(
         selectivity=selectivity,
         distribution=distribution,
     )
-    benchmark(ma.filter, ma_arrays[dtype_key], ma_arrays[mask_key])
+    benchmark(ma.compute.filter, ma_arrays[dtype_key], ma_arrays[mask_key])
 
 
 @pytest.mark.benchmark(group="filter")
@@ -421,7 +421,7 @@ def test_polars_filter(
 @_null_params
 def test_marrow_drop_null(benchmark, ma_arrays, n, dtype, key):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.drop_null, ma_arrays[key])
+    benchmark(ma.compute.drop_null, ma_arrays[key])
 
 
 @pytest.mark.benchmark(group="drop_nulls")
@@ -445,7 +445,9 @@ def test_polars_drop_nulls(benchmark, pl_arrays, n, dtype, key):
 @_binary_num_params
 def test_marrow_equal(benchmark, ma_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.equal, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial())
+    benchmark(
+        ma.compute.equal, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial()
+    )
 
 
 @pytest.mark.benchmark(group="comparison")
@@ -459,7 +461,7 @@ def test_pyarrow_equal(benchmark, pa_arrays, n, dtype, a, b):
 @_binary_num_params
 def test_marrow_less(benchmark, ma_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.less, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial())
+    benchmark(ma.compute.less, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial())
 
 
 @pytest.mark.benchmark(group="comparison")
@@ -539,7 +541,7 @@ _nested_keys = pytest.mark.parametrize("key", ["list", "struct", "dict"])
 @pytest.mark.benchmark(group="filter_nested")
 @_nested_keys
 def test_marrow_filter_nested(benchmark, nested_ma, sel_ma, key):
-    benchmark(ma.filter, nested_ma[key], sel_ma["mask"])
+    benchmark(ma.compute.filter, nested_ma[key], sel_ma["mask"])
 
 
 @pytest.mark.benchmark(group="filter_nested")
@@ -557,7 +559,7 @@ def test_polars_filter_nested(benchmark, nested_pl, sel_pl, key):
 @pytest.mark.benchmark(group="take_nested")
 @_nested_keys
 def test_marrow_take_nested(benchmark, nested_ma, sel_ma, key):
-    benchmark(ma.take, nested_ma[key], sel_ma["idx"])
+    benchmark(ma.compute.take, nested_ma[key], sel_ma["idx"])
 
 
 @pytest.mark.benchmark(group="take_nested")

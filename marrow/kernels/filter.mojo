@@ -39,6 +39,7 @@ from ..dtypes import (
     AnyDataType,
     PrimitiveType,
     NumericType,
+    TemporalType,
     BinaryLikeType,
     ListLikeType,
     Int8Type,
@@ -68,11 +69,9 @@ from ..dtypes import (
 )
 from std.algorithm.functional import sync_parallelize
 
-from ..utils import dispatch_over_numeric, dispatch_over_binarylike
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
 from .helpers import Kernel
-from .aggregate import reinterpret_array, temporal_backing_dtype
 
 
 # ---------------------------------------------------------------------------
@@ -116,13 +115,19 @@ struct Filter(Kernel):
         var dt = array.dtype()
         if dt == bool_:
             return Filter.apply(array.as_bool(), mask, ctx).to_any()
-        elif dt.is_numeric():
+        elif dt.is_primitive():
+            # One arm for every fixed-width type: `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and decimal
+            # columns all reach the same leaf and keep their dtype. The
+            # numeric and temporal arms this replaces were identical apart
+            # from the trait bound, and between them left interval and
+            # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def numeric[T: NumericType](d: T) raises -> AnyArray:
+            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
                 return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
 
-            return dispatch_over_numeric[numeric](dt)
+            return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
@@ -131,7 +136,7 @@ struct Filter(Kernel):
                     array.as_binary_like[T](), mask, ctx
                 ).to_any()
 
-            return dispatch_over_binarylike[binarylike](dt)
+            return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
             return Filter.apply(array.as_null(), mask, ctx).to_any()
         elif dt.is_fixed_size_binary():
@@ -150,14 +155,6 @@ struct Filter(Kernel):
             return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_any()
         elif dt.is_dictionary():
             return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
-        elif dt.is_temporal():
-            # Reinterpret to the integer backing, filter via the numeric path,
-            # then relabel the output back to the temporal dtype.
-            var backing = temporal_backing_dtype(dt)
-            var filtered = Filter.dispatch(
-                reinterpret_array(array, backing), mask, ctx
-            )
-            return reinterpret_array(filtered, dt)
         else:
             raise Error("filter: unsupported dtype ", dt)
 
@@ -627,15 +624,21 @@ struct Take(Kernel):
         var dt = array.dtype()
         if dt == bool_:
             return Take.apply(array.as_bool(), indices, ctx).to_any()
-        elif dt.is_numeric():
+        elif dt.is_primitive():
+            # One arm for every fixed-width type: `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and decimal
+            # columns all reach the same leaf and keep their dtype. The
+            # numeric and temporal arms this replaces were identical apart
+            # from the trait bound, and between them left interval and
+            # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def numeric[T: NumericType](d: T) raises -> AnyArray:
+            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
                 return Take.apply(
                     array.as_primitive[T](), indices, ctx
                 ).to_any()
 
-            return dispatch_over_numeric[numeric](dt)
+            return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
@@ -644,7 +647,7 @@ struct Take(Kernel):
                     array.as_binary_like[T](), indices, ctx
                 ).to_any()
 
-            return dispatch_over_binarylike[binarylike](dt)
+            return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
             return Take.apply(array.as_null(), indices, ctx).to_any()
         elif dt.is_fixed_size_binary():
@@ -663,14 +666,6 @@ struct Take(Kernel):
             return Take.apply(array.as_fixed_size_list(), indices, ctx).to_any()
         elif dt.is_dictionary():
             return Take.apply(array.as_dictionary(), indices, ctx).to_any()
-        elif dt.is_temporal():
-            # Reinterpret to the integer backing, gather via the numeric path,
-            # then relabel the output back to the temporal dtype.
-            var backing = temporal_backing_dtype(dt)
-            var gathered = Take.dispatch(
-                reinterpret_array(array, backing), indices, ctx
-            )
-            return reinterpret_array(gathered, dt)
         else:
             raise Error("take: unsupported dtype ", dt)
 
@@ -714,7 +709,11 @@ struct Take(Kernel):
 
         # SIMD gather loop: load W indices, gather W values in parallel.
         # Null indices are masked out (get default value 0).
-        comptime W = simd_byte_width() // size_of[Scalar[native]]()
+        # Floored at 1: types wider than a SIMD register (decimal256 at 32
+        # bytes) would otherwise yield W == 0, which is not a legal store
+        # width. At W == 1 the "vector" gather degenerates to a scalar one,
+        # which is what those types want anyway.
+        comptime W = max(1, simd_byte_width() // size_of[Scalar[native]]())
         var i = 0
         var bitmap = Optional[Bitmap[]](None)
         var null_count = 0

@@ -14,8 +14,8 @@ from marrow.buffers import Bitmap
 
 
 def bitmap_and(
-    a: Optional[Bitmap[]], b: Optional[Bitmap[]]
-) raises -> Optional[Bitmap[]]:
+    a: Optional[Bitmap[mut=False]], b: Optional[Bitmap[mut=False]]
+) raises -> Optional[Bitmap[mut=False]]:
     """Compute the output validity bitmap as the bitwise AND of two input bitmaps.
 
     Output bit i is True iff both a[i] and b[i] are True (valid).
@@ -28,13 +28,7 @@ def bitmap_and(
     Returns:
         None if both are all-valid; otherwise the AND of the two bitmaps.
     """
-    if not a and not b:
-        return None
-    if not a:
-        return b
-    if not b:
-        return a
-    return (a.value().view() & b.value().view()).to_immutable()
+    return Bitmap.intersect(a, b)
 
 
 # ---------------------------------------------------------------------------

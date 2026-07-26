@@ -32,6 +32,32 @@ pixi run -e dev fmt
 pixi run package
 ```
 
+### Fast build-error checking (use this while a build is broken)
+
+When the tree does not compile — e.g. after a Mojo upgrade — do **not** iterate
+with `pytest`. It builds one runner per selected test, so a single file costs
+minutes and reports each build error once per test. Use the build-only tasks:
+
+```bash
+pixi run -e dev check_lib                              # whole library, ~10 s
+pixi run -e dev check marrow/tests/test_views.mojo     # one file + imports, ~4 s
+```
+
+`check_lib` compiles every module under `marrow/`, so it catches errors in code
+that no selected test happens to import; `check <file>` then narrows to one
+test and its transitive imports. Both surface **all** errors and warnings in a
+single pass. A `pytest` run of the same file takes ~2.5 min.
+
+Caveats for `check_lib`: it compiles `*/tests/*` too, so `'main()' is not
+supported within packages` lines are expected noise. It also compiles modules in
+a *package* context rather than the normal build context, which produces some
+**false positives** that do not affect real builds (currently a set of
+`invalid call to 'bitmap_and'` errors). Treat `check_lib` as a fast way to find
+*candidate* breakage, then confirm each with `check <file>` — that one matches
+how tests actually build.
+
+Switch back to `pytest` once it compiles: building is not passing.
+
 ### Running Individual Tests
 
 Always use `pytest` to run tests — never `mojo test` or `mojo run` directly.
@@ -63,11 +89,42 @@ The harness compiles runners to `.test_runners/test_runner_<hash>` (content-
 hashed, stable across runs).  Re-running the same test selection skips
 recompilation (~1 s vs ~5 s cold).
 
-Tests run sequentially by default. Use `*_parallel` task variants (e.g.
-`test_mojo_parallel`) to enable `--dist=loadfile` parallelism, which groups
-all tests from the same `.mojo` file on the same worker so the compiled binary
-is reused.  Benchmark tasks always pass `-n0` to disable parallelism for
-accurate timing.
+### Only run the tests the change could have broken
+
+Do **not** run the full suite to validate a scoped change. Select the test
+directories that import the code you touched; a full run costs 8–38 minutes and
+tells you nothing extra about modules the diff cannot reach.
+
+For example, after editing `marrow/expr/*` and `marrow/kernels/*`:
+
+```bash
+pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests
+```
+
+Narrow further when the change is narrower — one file, or one case:
+
+```bash
+pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo
+pixi run -e dev pytest marrow/expr/tests/test_aggregates.mojo::test_sum_by_key
+```
+
+Widen only when the change actually reaches wider: touching `arrays`/`buffers`/
+`dtypes`, the Python bindings, or anything re-exported from a package
+`__init__.mojo`. A full `pixi run test_parallel` belongs before a commit that
+lands such a change, not after every edit.
+
+Tests run sequentially by default, but **prefer the `*_parallel` variants for
+any full-suite run** — measured on this repo, `pixi run test_parallel` completes
+the suite in **8m16s versus 38m30s** for `pixi run test`, a 4.7x speedup, with
+identical results. `--dist=loadfile` groups all tests from one `.mojo` file onto
+the same worker so its compiled runner is built once and reused; without that,
+parallelism would recompile the same binary per worker and could be slower.
+
+`test_parallel` omits `-v` by default (with `-n auto` the per-test lines from
+several workers interleave); pass it explicitly when you want per-test output:
+`pixi run test_parallel -v`.
+
+Benchmark tasks always pass `-n0` to disable parallelism for accurate timing.
 
 The Python shared library (`python/libmarrow.so`) is rebuilt automatically by
 `conftest.py` before each test session — no manual `build_python` step needed.
@@ -327,6 +384,14 @@ Kernels in `marrow/kernels/` are implemented as typed overloads first, with a ty
 
 See `marrow/kernels/concat.mojo` and `marrow/kernels/filter.mojo` for examples.
 
+**Dispatch on the widest family the typed leaf accepts.** A leaf bound on `PrimitiveType` takes
+temporal, interval and decimal columns as-is, so it needs one `dt.dispatch_primitive[...]` arm —
+not one per family, and never a reinterpret to an integer backing. Two arms differing only by
+trait bound usually means the narrower bound is masking a defect rather than encoding a
+constraint: `filter`/`take` had separate numeric and temporal arms that silently left decimal and
+interval unsupported, hiding a SIMD gather width that computed to 0 for types wider than a
+register.
+
 ## Releasing to prefix.dev
 
 Marrow is published to [prefix.dev](https://prefix.dev/channels/marrow) as a conda package via rattler-build. The release is triggered automatically by pushing a git tag.
@@ -372,6 +437,12 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
 - **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly
+- **Open bug:** `ArcPointer[DynValue]` (`expr/values.mojo:2299`) writes its
+  trailing `Variant` discriminant one byte past the allocation (`size_of` 416
+  vs ≥417 needed), silently corrupting the heap and causing every full-suite
+  failure — note that ASAN *hides* it (`test_reader` passes 35/35 under ASAN,
+  fails without) and that a Mojo build failure emits no ASAN output at all, so
+  verify fixes without ASAN and confirm tests actually ran.
 
 ### Associated-type & trait gotchas (learned the hard way)
 
@@ -403,3 +474,7 @@ example. They mostly bite generic trait hierarchies (e.g. `marrow.expr.values`).
   trait's abstract requirement** for conforming structs (you'll see `does not
   implement all requirements for <BaseTrait>`) — declare the member on each
   concrete struct even if a parent trait "provides" it.
+
+# How to identify leaky abstractions
+
+Analyze the dependency relations and responsobilities of each type in the requested marrow packages, like marrow.expr and marrow.kernels which are tightly coupled. Then generate a couple word summary of what each type does and what its responsibility, if we cannot identify a single responsibility that highlights a leaky abstraction. Regarding the dependencies we need a clear one directional directed tree without any cycles aggregate this knowledge then get back to me with your findings.

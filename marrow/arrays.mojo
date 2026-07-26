@@ -54,7 +54,7 @@ from .scalars import (
     ListScalar,
     StructScalar,
     DictionaryScalar,
-    Scalar as ScalarTrait,
+    ArrowScalar,
 )
 
 
@@ -73,7 +73,7 @@ trait Array(
     the type-erased handle that wraps any Array-conforming type.
     """
 
-    comptime ScalarType: ScalarTrait
+    comptime ScalarType: ArrowScalar
 
     def __init__(out self, data: ArrayData) raises:
         ...
@@ -2166,6 +2166,22 @@ struct AnyArray(
             return a.slice(offset, actual_length)
 
         return variant_dispatch[Array, func=f](self._v)
+
+    def view(self, var dtype: AnyDataType) raises -> AnyArray:
+        """Reinterpret this array's buffers under a same-layout `dtype`.
+
+        Zero-copy: only the logical type is replaced, the buffers are shared.
+        Mirrors `pyarrow.Array.view(target_type)` / arrow-rs
+        `ArrayData::with_data_type`. Used to relabel a column produced in its
+        physical storage type (an integer-backed temporal build, say) to the
+        Arrow type it logically is.
+
+        The caller is responsible for the layouts actually matching — this does
+        not validate, exactly as PyArrow's does not.
+        """
+        var d = self.to_data()
+        d.dtype = dtype^
+        return AnyArray.from_data(d^)
 
     def to_data(self) raises -> ArrayData:
         """Extract a generic ArrayData layout for interop (C Data Interface, etc.).

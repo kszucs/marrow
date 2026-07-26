@@ -46,11 +46,6 @@ from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.compile import codegen_unreachable
 
 from .utils import variant_dispatch, variant_dispatch_raises
-from .scalars import *
-from .scalars import (
-    Scalar as ScalarTrait,
-)  # `Scalar` alone = builtin `Scalar[_]`
-from .arrays import *
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +58,6 @@ trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     `ArrayType` (the inverse of `Array.ScalarType`), so generic code can map a
     dtype to its typed scalar/array. Provided at the family traits
     (`NumericType`/`StringLikeType`/…) and on the standalone concrete types."""
-
-    comptime ScalarType: ScalarTrait
-    comptime ArrayType: Array
 
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self^)
@@ -91,11 +83,7 @@ trait NumericType(Defaultable, PrimitiveType):
     """Integers, unsigned integers, and floats — zero-sized register-passable markers.
     """
 
-    # Provided here (not just on the concrete types) so that a helper bound on
-    # `NumericType` sees `T.ScalarType`/`T.ArrayType` reduce to the concrete
-    # companion — enabling generic construction of `T.ScalarType` values.
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
+    pass
 
 
 trait IntegerType(NumericType):
@@ -122,9 +110,7 @@ trait StringLikeType(BinaryLikeType):
     accept all four variants.
     """
 
-    # Provided here so a helper bound on `StringLikeType` reduces `T.ScalarType`.
-    comptime ScalarType = StringScalar
-    comptime ArrayType = BinaryLikeArray[Self]
+    pass
 
 
 trait ListLikeType(DataType):
@@ -177,9 +163,6 @@ trait DecimalType(PrimitiveType):
 
 
 struct NullType(DataType, ImplicitlyCopyable):
-    comptime ScalarType = NullScalar
-    comptime ArrayType = NullArray
-
     def __init__(out self):
         pass
 
@@ -188,8 +171,6 @@ struct NullType(DataType, ImplicitlyCopyable):
 
 
 struct BoolType(DataType, ImplicitlyCopyable):
-    comptime ScalarType = BoolScalar
-    comptime ArrayType = BoolArray
     comptime native: DType = DType.bool
 
     def __init__(out self):
@@ -200,8 +181,6 @@ struct BoolType(DataType, ImplicitlyCopyable):
 
 
 struct _IntegerType[T: DType](IntegerType):
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
     comptime native = Self.T
 
     def __init__(out self):
@@ -212,8 +191,6 @@ struct _IntegerType[T: DType](IntegerType):
 
 
 struct _FloatingType[T: DType](FloatingType):
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
     comptime native = Self.T
 
     def __init__(out self):
@@ -224,8 +201,6 @@ struct _FloatingType[T: DType](FloatingType):
 
 
 struct _DecimalType[T: DType](DecimalType):
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
     comptime native = Self.T
 
     var precision: Int
@@ -267,8 +242,6 @@ comptime Decimal256Type = _DecimalType[DType.int256]
 
 
 struct BinaryType(BinaryLikeType):
-    comptime ScalarType = StringScalar
-    comptime ArrayType = BinaryLikeArray[Self]
     comptime offset: DType = DType.int32
 
     def __init__(out self):
@@ -279,8 +252,6 @@ struct BinaryType(BinaryLikeType):
 
 
 struct LargeBinaryType(BinaryLikeType):
-    comptime ScalarType = StringScalar
-    comptime ArrayType = BinaryLikeArray[Self]
     comptime offset: DType = DType.int64
 
     def __init__(out self):
@@ -291,8 +262,6 @@ struct LargeBinaryType(BinaryLikeType):
 
 
 struct StringType(StringLikeType):
-    comptime ScalarType = StringScalar
-    comptime ArrayType = BinaryLikeArray[Self]
     comptime offset: DType = DType.int32
 
     def __init__(out self):
@@ -303,8 +272,6 @@ struct StringType(StringLikeType):
 
 
 struct LargeStringType(StringLikeType):
-    comptime ScalarType = StringScalar
-    comptime ArrayType = BinaryLikeArray[Self]
     comptime offset: DType = DType.int64
 
     def __init__(out self):
@@ -316,9 +283,6 @@ struct LargeStringType(StringLikeType):
 
 struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
     """Fixed-size binary type — every element is exactly `byte_width` bytes."""
-
-    comptime ScalarType = FixedSizeBinaryScalar
-    comptime ArrayType = FixedSizeBinaryArray
 
     var byte_width: Int
 
@@ -366,9 +330,6 @@ comptime nanosecond = TimeUnit(3)
 struct Date32Type(TemporalType):
     """Date32 — days since Unix epoch (int32)."""
 
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
-
     comptime native: DType = DType.int32
 
     def __init__(out self):
@@ -381,9 +342,6 @@ struct Date32Type(TemporalType):
 struct Date64Type(TemporalType):
     """Date64 — milliseconds since Unix epoch (int64)."""
 
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
-
     comptime native: DType = DType.int64
 
     def __init__(out self):
@@ -395,9 +353,6 @@ struct Date64Type(TemporalType):
 
 struct Time32Type(TemporalType):
     """Time32 — seconds or milliseconds since midnight (int32)."""
-
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
 
     comptime native: DType = DType.int32
 
@@ -413,9 +368,6 @@ struct Time32Type(TemporalType):
 struct Time64Type(TemporalType):
     """Time64 — microseconds or nanoseconds since midnight (int64)."""
 
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
-
     comptime native: DType = DType.int64
 
     var unit: TimeUnit
@@ -430,9 +382,6 @@ struct Time64Type(TemporalType):
 struct TimestampType(TemporalType):
     """Timestamp — int64 elapsed units since Unix epoch, with optional timezone.
     """
-
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
 
     comptime native: DType = DType.int64
 
@@ -456,9 +405,6 @@ struct TimestampType(TemporalType):
 struct DurationType(TemporalType):
     """Duration — elapsed int64 units, no epoch reference."""
 
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
-
     comptime native: DType = DType.int64
 
     var unit: TimeUnit
@@ -473,9 +419,6 @@ struct DurationType(TemporalType):
 struct YearMonthIntervalType(IntervalType):
     """Year/month interval — number of months as int32."""
 
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
-
     comptime native: DType = DType.int32
 
     def __init__(out self):
@@ -489,9 +432,6 @@ struct DayTimeIntervalType(IntervalType):
     """Day/time interval — {days: int32, milliseconds: int32} packed into int64.
     """
 
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
-
     comptime native: DType = DType.int64
 
     def __init__(out self):
@@ -504,9 +444,6 @@ struct DayTimeIntervalType(IntervalType):
 struct MonthDayNanoIntervalType(IntervalType):
     """Month/day/nanosecond interval — {months: int32, days: int32, nanos: int64} in 16 bytes.
     """
-
-    comptime ScalarType = PrimitiveScalar[Self]
-    comptime ArrayType = PrimitiveArray[Self]
 
     comptime native: DType = DType.int128
 
@@ -577,8 +514,6 @@ struct Field(
 
 
 struct ListType(DataType, ListLikeType):
-    comptime ScalarType = ListScalar
-    comptime ArrayType = ListLikeArray[Self]
     comptime offset: DType = DType.int32
 
     var item: OwnedPointer[Field]
@@ -603,8 +538,6 @@ struct ListType(DataType, ListLikeType):
 
 
 struct LargeListType(DataType, ListLikeType):
-    comptime ScalarType = ListScalar
-    comptime ArrayType = ListLikeArray[Self]
     comptime offset: DType = DType.int64
 
     var item: OwnedPointer[Field]
@@ -629,8 +562,6 @@ struct LargeListType(DataType, ListLikeType):
 
 
 struct FixedSizeListType(DataType):
-    comptime ScalarType = ListScalar
-    comptime ArrayType = FixedSizeListArray
     var item: OwnedPointer[Field]
     var size: Int
 
@@ -656,8 +587,6 @@ struct FixedSizeListType(DataType):
 
 
 struct StructType(DataType):
-    comptime ScalarType = StructScalar
-    comptime ArrayType = StructArray
     var fields: List[Field]
 
     def __init__(out self, var fields: List[Field]):
@@ -691,9 +620,6 @@ struct MapType(DataType, ListLikeType):
     keys_sorted)``. Accessors return by value so a map-dtype temporary can be
     read safely.
     """
-
-    comptime ScalarType = ListScalar
-    comptime ArrayType = ListLikeArray[Self]
 
     comptime offset: DType = DType.int32
 
@@ -766,9 +692,6 @@ struct DictionaryType(DataType):
     The value type (the dictionary) can be any Arrow type.
     """
 
-    comptime ScalarType = DictionaryScalar
-    comptime ArrayType = DictionaryArray
-
     var _index_type: OwnedPointer[AnyDataType]
     var _value_type: OwnedPointer[AnyDataType]
     var ordered: Bool
@@ -792,6 +715,12 @@ struct DictionaryType(DataType):
         self._index_type = OwnedPointer(copy._index_type[].copy())
         self._value_type = OwnedPointer(copy._value_type[].copy())
         self.ordered = copy.ordered
+
+    # Explicit (empty) destructor: `OwnedPointer[AnyDataType]` is not implicitly
+    # deletable, so the compiler cannot synthesize one. Fields are still
+    # destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
 
     def index_type(ref self) -> ref[self._index_type[]] AnyDataType:
         return self._index_type[]
@@ -834,8 +763,6 @@ struct AnyDataType(
 ):
     # Type-erased: no single companion. Placeholders satisfy the `DataType`
     # requirement (a typed scalar/array of an `AnyDataType` is never built).
-    comptime ScalarType = NullScalar
-    comptime ArrayType = NullArray
 
     comptime VariantType = Variant[
         NullType,
@@ -882,6 +809,88 @@ struct AnyDataType(
     @implicit
     def __init__[T: DataType](out self, var value: T):
         self._v = Self.VariantType(value^)
+
+    def dispatch_primitive[
+        R: AnyType,
+        //,
+        func: def[T: PrimitiveType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve any runtime fixed-width dtype to its comptime type and run `func`.
+
+        The widest family — numeric, temporal, interval, and decimal. Prefer a
+        narrower member where one fits: this one instantiates `func` for every
+        fixed-width type in the variant.
+        """
+        return variant_dispatch_raises[PrimitiveType, func=func](self._v)
+
+    def dispatch_numeric[
+        R: AnyType,
+        //,
+        func: def[T: NumericType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime numeric dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[NumericType, func=func](self._v)
+
+    def dispatch_integer[
+        R: AnyType,
+        //,
+        func: def[T: IntegerType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime integer dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[IntegerType, func=func](self._v)
+
+    def dispatch_floating[
+        R: AnyType,
+        //,
+        func: def[T: FloatingType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime floating dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[FloatingType, func=func](self._v)
+
+    def dispatch_temporal[
+        R: AnyType,
+        //,
+        func: def[T: TemporalType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime date/time/timestamp/duration dtype to its comptime type
+            and run `func`.
+
+            Only needed when the *logical* type matters (unit, timezone). Kernels that
+            are value- or order-preserving should instead reinterpret the column through
+            the typed leaf directly — every kernel leaf is bound on
+        `PrimitiveType`, which the temporal types satisfy.
+        """
+        return variant_dispatch_raises[TemporalType, func=func](self._v)
+
+    def dispatch_stringlike[
+        R: AnyType,
+        //,
+        func: def[T: StringLikeType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime string-like dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[StringLikeType, func=func](self._v)
+
+    def dispatch_binarylike[
+        R: AnyType,
+        //,
+        func: def[T: BinaryLikeType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime binary-like dtype to its comptime type and run `func`.
+        """
+        return variant_dispatch_raises[BinaryLikeType, func=func](self._v)
+
+    def dispatch_listlike[
+        R: AnyType,
+        //,
+        func: def[T: ListLikeType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime list/large_list/map dtype to its comptime type and run
+        `func`."""
+        return variant_dispatch_raises[ListLikeType, func=func](self._v)
 
     def to_any(deinit self) -> AnyDataType:
         return self^

@@ -83,9 +83,9 @@ struct MappedFile(ByteSource):
     ) -> Span[UInt8, ImmUntrackedOrigin]:
         # A sub-span of the whole-file map — zero copy, same untracked origin as
         # the backing mmap (kept alive by this MappedFile).
-        return Span[UInt8, ImmUntrackedOrigin](ptr=self.ptr, length=self._size)[
-            offset : offset + length
-        ]
+        return Span[UInt8, ImmUntrackedOrigin](
+            unsafe_ptr=self.ptr, length=self._size
+        )[offset : offset + length]
 
     def __del__(deinit self):
         _ = external_call["munmap", Int32](self.ptr, self._size)

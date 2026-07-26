@@ -29,7 +29,10 @@ def _double_i32[W: Int](v: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
 
 
 @always_inline
-def _add_i32[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+# `BinaryFn[In, Out]` fixes the dtype, so this must not be generic over `T`.
+def _add_i32[
+    W: Int
+](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
     return a + b
 
 
