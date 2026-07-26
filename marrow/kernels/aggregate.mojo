@@ -1,24 +1,39 @@
 """Aggregate kernels — scalar reductions and grouped aggregation.
 
-Every aggregate is one ``AggKernel`` type: it defines the accumulator-dtype
-algebra (``AccType``), an ``identity``, a SIMD ``combine``, and a ``finalize``.
-Grouped aggregation runs through ``AggState[K, V]`` — a *fully typed* per-group
-state (``update``/``finish`` carry no dtype dispatch). Whole-array reduction is
-``AggKernel.reduce`` — the single-(full-)group case, so ``SELECT avg(col)`` /
-``count(col)`` work like ``sum(col)``; it defaults to the general single-group
-path (used by ``mean``/``count``), and same-type reductions
-(``sum``/``min``/``max``/``product``) override it with a SIMD ``views.reduce``
-fast path.
+Two layers, both made of types:
 
-Runtime ``name -> kernel`` selection lives in the expression layer
-(``marrow/expr``), mirroring ``DynValue``'s tag switch. The runtime *data* dtype
-is resolved to the comptime ``V`` at the boundary via `AnyDataType.dispatch_numeric`
-(``marrow.utils``), so ``AggState[K, V]`` itself is fully typed with no dispatch.
+- **``AggKernel``** — the pure *algebra* of a fold: the accumulator-dtype
+  rule (``AccType``), an ``identity``, a SIMD ``combine`` and a ``finalize``.
+  It knows nothing about arrays beyond the fully typed whole-array ``reduce`` /
+  ``apply``. Grouped folding is ``AggState[K, V]`` — a fully typed per-group
+  state with no dtype dispatch anywhere inside it.
+- **``Aggregation``** — a fold *bound to a concrete input type*: the pair
+  (kernel, input dtype) resolved down to one type that names its own
+  ``InArray`` / ``OutArray`` and carries the whole per-column implementation
+  (``grouped`` / ``whole`` / ``partials`` / ``merge``). Every aggregate
+  behaviour that used to be selected by comparing an aggregate's *name* — the
+  bytewise string ``min``/``max``, the temporal reinterpret, the validity-only
+  ``count``, the distinct sketches — is a distinct ``Aggregation`` type
+  instead, chosen once when the input dtype becomes known.
+
+The named aggregate functions themselves (``Sum``, ``Min``, ``Count``, …) are
+the expression layer's vocabulary, not this one's: they live in
+``marrow.expr.aggregates`` as ``AggFunction``s and resolve a runtime input dtype
+onto one of the ``Aggregation`` types here. No aggregate *name* is ever compared
+in this module.
 """
 
 import std.math as math
 
-from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
+from ..arrays import (
+    Array,
+    BoolArray,
+    BinaryLikeArray,
+    PrimitiveArray,
+    AnyArray,
+    Int32Array,
+    Int64Array,
+)
 from ..builders import (
     PrimitiveBuilder,
     AnyBuilder,
@@ -37,50 +52,12 @@ from ..scalars import (
 from ..views import reduce
 from .helpers import Kernel
 from .execution import ExecutionContext
-
-
-def _reduce_widened[
-    K: AggKernel
-](
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyScalar:
-    """Erased entry point: resolve the runtime dtype, then run the typed reduce.
-
-    Accumulates in the int64 / float64 accumulator
-    (`K.AccType`), so narrow integer inputs don't overflow — matching the grouped
-    path's widening. The widening is *fused* into the SIMD reduce (`reduce` casts
-    each lane to `Acc` as it is loaded), so no widened copy of the input is
-    materialized; when the input is already the accumulator width the per-lane
-    cast is a compile-time no-op."""
-
-    @parameter
-    def run[V: NumericType](d: V) raises -> AnyScalar:
-        return _reduce_widened_typed[K, V](
-            array.as_primitive[V](), ctx
-        ).to_any()
-
-    return array.dtype().dispatch_numeric[run]()
-
-
-def _reduce_widened_typed[
-    K: AggKernel, V: NumericType
-](
-    array: PrimitiveArray[V], ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> PrimitiveScalar[K.AccType[V]]:
-    """Fully-typed counterpart of `_reduce_widened` — the input dtype `V` is known
-    at comptime, so there is no `AnyDataType.dispatch_numeric` and no erased scalar. The
-    lane cast to the `K.AccType[V]` accumulator is fused into the SIMD `reduce`.
-    """
-    comptime Acc = K.AccType[V].native
-    var identity = K.identity[Acc]()
-    var value: Scalar[Acc]
-    if array.bitmap:
-        value = reduce[V.native, K.combine, Acc](
-            array.values(), array.validity().value(), identity, ctx
-        )
-    else:
-        value = reduce[V.native, K.combine, Acc](array.values(), identity, ctx)
-    return PrimitiveScalar[K.AccType[V]](value)
+from .distinct import (
+    count_distinct,
+    approx_count_distinct,
+    count_distinct_grouped,
+    approx_count_distinct_grouped,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -89,9 +66,9 @@ def _reduce_widened_typed[
 # A kernel is the pure algebra of a fold. Grouped aggregation is driven by
 # `AggState[K, V]` (fully typed); whole-array reduction is `reduce` — the
 # single-full-group case — which defaults to that same path but is overridden by
-# `sum`/`min`/`max`/`product` with the SIMD `apply`/`dispatch` fast path. One
-# SIMD `combine[T, W]` per kernel serves both: the horizontal reduce (same-type)
-# and the grouped scatter (fold `combine[A, 1]` over each value cast to `A`).
+# `sum`/`min`/`max`/`product` with the SIMD `apply` fast path. One SIMD
+# `combine[T, W]` per kernel serves both: the horizontal reduce (same-type) and
+# the grouped scatter (fold `combine[A, 1]` over each value cast to `A`).
 # ---------------------------------------------------------------------------
 
 
@@ -100,12 +77,15 @@ trait AggKernel(Kernel):
     (`AccType`), `identity`, SIMD `combine`, and `finalize` — plus a default
     whole-array `reduce`.
 
-    Grouped state + driver live in the fully typed `AggState[K, V]` (below); a
-    kernel is a pure type, so any runtime `name -> kernel` selection lives in the
-    expression layer, never here. The default per-group state is an accumulator
-    column plus a valid-count column (the count drives NULL output for
-    empty/all-null groups and the `mean` divisor); a richer aggregate can pair
-    itself with a different state struct."""
+    Everything here is typed: `reduce` / `apply` take a `PrimitiveArray[V]` and
+    return a `PrimitiveScalar`, so a kernel never sees an `AnyArray` or an
+    `AnyDataType`. Binding a kernel to a *runtime* dtype (and routing the
+    non-numeric input types it can also serve) is `Aggregation`'s job, below.
+
+    Grouped state + driver live in the fully typed `AggState[K, V]`. The default
+    per-group state is an accumulator column plus a valid-count column (the count
+    drives NULL output for empty/all-null groups and the `mean` divisor); a
+    richer aggregate can pair itself with a different state struct."""
 
     comptime AccType[V: NumericType]: NumericType
     """Per-group accumulator type for input `V` (also the output type). `sum`
@@ -134,41 +114,20 @@ trait AggKernel(Kernel):
     # -- whole-array scalar reduction ----------------------------------------
 
     @staticmethod
-    def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        """Reduce a whole array to one scalar — the single-(full-)group case.
-
-        This default works for *any* kernel (it drives one `AggState[Self, V]`
-        with every row in group 0), so `mean`/`count` reduce here too
-        (`SELECT avg(col)`). Same-type reductions (`sum`/`min`/`max`/`product`)
-        override it with the SIMD `dispatch` fast path."""
-        var n = len(array)
-        var gb = Int32Builder(n)
-        for _ in range(n):
-            gb.append(Scalar[int32.native](0))
-        var gids = gb.finish()
-
-        @parameter
-        def job[V: NumericType](d: V) raises -> AnyScalar:
-            var state = AggState[Self, V]()
-            state.update(gids, array.as_primitive[V](), 1)
-            return state.finish(1)[0]
-
-        return array.dtype().dispatch_numeric[job]()
-
-    @staticmethod
     def reduce[
         V: NumericType
     ](
         array: PrimitiveArray[V],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
-        """Fully-typed whole-array reduce — the input dtype is known at comptime,
-        so the result is `PrimitiveScalar[Self.AccType[V]]` directly (no erased
-        `AnyScalar`, no downcast). This general default drives one `AggState` over
-        a single group (as the erased overload does); `sum`/`min`/`max`/`product`
-        override it with the SIMD widened fast path."""
+        """Whole-array reduce — the single-(full-)group case. The input dtype is
+        known at comptime, so the result is `PrimitiveScalar[Self.AccType[V]]`
+        directly (no erased `AnyScalar`, no downcast).
+
+        This general default works for *any* kernel — it drives one
+        `AggState[Self, V]` with every row in group 0 — so `mean`/`count` reduce
+        here too (`SELECT avg(col)`); `sum`/`min`/`max`/`product` override it
+        with the SIMD widened fast path."""
         var n = len(array)
         var gb = Int32Builder(n)
         for _ in range(n):
@@ -198,19 +157,6 @@ trait AggKernel(Kernel):
         else:
             value = reduce[native, Self.combine](array.values(), identity, ctx)
         return PrimitiveScalar[T](value, array.dtype.copy())
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyScalar:
-        """Runtime-dtype entry to the SIMD `apply` (same-type reductions)."""
-
-        @parameter
-        def leaf[T: NumericType](d: T) raises -> AnyScalar:
-            return Self.apply(array.as_primitive[T](), ctx)
-
-        return array.dtype().dispatch_numeric[leaf]()
 
 
 # ---------------------------------------------------------------------------
@@ -288,19 +234,29 @@ struct Widening[Op: WideningOp](AggKernel):
         return acc
 
     @staticmethod
-    def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        return _reduce_widened[Self](array, ctx)
-
-    @staticmethod
     def reduce[
         V: NumericType
     ](
         array: PrimitiveArray[V],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
-        return _reduce_widened_typed[Self](array, ctx)
+        """Widened SIMD whole-array reduce: accumulate in `AccType[V]` so narrow
+        integer inputs cannot overflow, matching the grouped path. The widening
+        is *fused* into the reduce (each lane is cast to `Acc` as it is loaded),
+        so no widened copy of the input is materialized; when the input is
+        already the accumulator width the per-lane cast is a no-op."""
+        comptime Acc = Self.AccType[V].native
+        var identity = Self.identity[Acc]()
+        var value: Scalar[Acc]
+        if array.bitmap:
+            value = reduce[V.native, Self.combine, Acc](
+                array.values(), array.validity().value(), identity, ctx
+            )
+        else:
+            value = reduce[V.native, Self.combine, Acc](
+                array.values(), identity, ctx
+            )
+        return PrimitiveScalar[Self.AccType[V]](value)
 
 
 comptime SumKernel = Widening[SumOp]
@@ -376,17 +332,6 @@ struct MinMax[Op: MinMaxOp](AggKernel):
         return acc
 
     @staticmethod
-    def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        var dt = array.dtype()
-        if dt.is_temporal():
-            return _minmax_temporal_scalar[Self](array, ctx)
-        elif dt.is_string() or dt.is_large_string():
-            return _minmax_string_scalar(array, is_min=Self.Op.is_min)
-        return Self.dispatch(array, ctx)  # SIMD whole-array fast path
-
-    @staticmethod
     def reduce[
         V: NumericType
     ](
@@ -423,13 +368,6 @@ struct CountKernel(AggKernel):
         return Scalar[A](count)
 
     @staticmethod
-    def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        # Valid count is metadata — no scan.
-        return Int64Scalar(Int64(len(array) - array.null_count())).to_any()
-
-    @staticmethod
     def reduce[
         V: NumericType
     ](
@@ -461,21 +399,6 @@ struct MeanKernel(AggKernel):
         return acc / Scalar[A](count)
 
     @staticmethod
-    def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        # Vectorized sum (widened, SIMD) divided by the valid count.
-        var cnt = len(array) - array.null_count()
-        if cnt == 0:
-            return Float64Scalar(None, float64).to_any()  # null
-        var total = SumKernel.reduce(array, ctx)
-        var s = (
-            total.as_float64().value() if total.type()
-            == float64 else Float64(total.as_int64().value())
-        )
-        return Float64Scalar(s / Float64(cnt)).to_any()
-
-    @staticmethod
     def reduce[
         V: NumericType
     ](
@@ -486,155 +409,8 @@ struct MeanKernel(AggKernel):
         var cnt = len(array) - array.null_count()
         if cnt == 0:
             return Float64Scalar(None, float64)
-        var total = _reduce_widened_typed[SumKernel](array, ctx)
+        var total = SumKernel.reduce(array, ctx)
         return Float64Scalar(total.value().cast[DType.float64]() / Float64(cnt))
-
-
-# ---------------------------------------------------------------------------
-# min / max over string and temporal columns.
-#
-# `min`/`max` are order-preserving, so temporal types (date/time/timestamp/
-# duration) reduce over their signed-integer backing and the result is
-# reinterpreted back to the temporal dtype — reusing the whole numeric path
-# (SIMD whole-array reduce + typed `AggState` scatter). Strings compare
-# bytewise (lexicographic), matching Arrow's `hash_min`/`hash_max`; nulls are
-# excluded (SQL semantics) and an empty / all-null group yields null.
-# ---------------------------------------------------------------------------
-
-
-def reinterpret_array(array: AnyArray, dt: AnyDataType) raises -> AnyArray:
-    """View `array`'s buffers under a new (same-width) `dt` — used to read a
-    temporal column as its integer backing and to relabel the integer result
-    back to the temporal dtype, so min/max reuse the numeric aggregation path.
-    """
-    return array.view(dt.copy())
-
-
-def temporal_backing_dtype(dt: AnyDataType) -> AnyDataType:
-    """The integer dtype backing a temporal value — 32-bit for date32/time32,
-    64-bit otherwise (date64/time64/timestamp/duration). Paired with
-    `reinterpret_array` to route temporal columns through the numeric path."""
-    return AnyDataType(int32) if (
-        dt.is_date32() or dt.is_time32()
-    ) else AnyDataType(int64)
-
-
-def _mm_temporal_typed[
-    K: AggKernel, T: TemporalType
-](arr: PrimitiveArray[T], ctx: ExecutionContext) raises -> AnyScalar:
-    """Whole-array min/max over one temporal array — the SIMD same-type reduce
-    over the integer backing, preserving the runtime dtype (unit/tz). All-null /
-    empty → null."""
-    if len(arr) == arr.null_count():
-        return PrimitiveScalar[T](None, arr.dtype.copy()).to_any()
-    return K.apply(arr, ctx).to_any()
-
-
-def _minmax_temporal_scalar[
-    K: AggKernel
-](array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
-    """Whole-array min/max over a temporal `AnyArray` → temporal `AnyScalar`."""
-    var dt = array.dtype()
-    if dt.is_date32():
-        return _mm_temporal_typed[K](array.as_date32(), ctx)
-    elif dt.is_date64():
-        return _mm_temporal_typed[K](array.as_date64(), ctx)
-    elif dt.is_time32():
-        return _mm_temporal_typed[K](array.as_time32(), ctx)
-    elif dt.is_time64():
-        return _mm_temporal_typed[K](array.as_time64(), ctx)
-    elif dt.is_timestamp():
-        return _mm_temporal_typed[K](array.as_timestamp(), ctx)
-    else:
-        return _mm_temporal_typed[K](array.as_duration(), ctx)
-
-
-def _minmax_string_scalar(array: AnyArray, is_min: Bool) raises -> AnyScalar:
-    """Whole-array lexicographic (bytewise) min/max over a string/large_string
-    array. Nulls excluded; empty / all-null → null `StringScalar`."""
-
-    @parameter
-    def leaf[T: StringLikeType](d: T) raises -> AnyScalar:
-        ref sa = array.as_binary_like[T]()
-        var n = len(sa)
-        var has_null = sa.null_count() > 0
-        var best = -1
-        for i in range(n):
-            if has_null and not sa.is_valid(i):
-                continue
-            if best == -1:
-                best = i
-            else:
-                var a = sa.unsafe_get(UInt(i))
-                var b = sa.unsafe_get(UInt(best))
-                var take = (a < b) if is_min else (b < a)
-                if take:
-                    best = i
-        if best == -1:
-            return StringScalar.null().to_any()
-        return StringScalar(String(sa.unsafe_get(UInt(best)))).to_any()
-
-    return array.dtype().dispatch_stringlike[leaf]()
-
-
-def min_max_string_grouped(
-    gids: Int32Array, value: AnyArray, num_groups: Int, is_min: Bool
-) raises -> AnyArray:
-    """Per-group lexicographic (bytewise) min/max over a string/large_string
-    column, over precomputed `gids`. Nulls excluded; an empty / all-null group
-    yields null. Matches Arrow's bytewise ordering for `hash_min`/`hash_max`."""
-
-    @parameter
-    def leaf[T: StringLikeType](d: T) raises -> AnyArray:
-        ref sa = value.as_binary_like[T]()
-        var best = List[Int](length=num_groups, fill=-1)
-        var gv = gids.values()
-        var n = len(gids)
-        var has_null = sa.null_count() > 0
-        for i in range(n):
-            if has_null and not sa.is_valid(i):
-                continue
-            var g = Int(gv[i])
-            if best[g] == -1:
-                best[g] = i
-            else:
-                var a = sa.unsafe_get(UInt(i))
-                var b = sa.unsafe_get(UInt(best[g]))
-                var take = (a < b) if is_min else (b < a)
-                if take:
-                    best[g] = i
-        var out = BinaryLikeBuilder[T](capacity=num_groups)
-        for g in range(num_groups):
-            if best[g] == -1:
-                out.append_null()
-            else:
-                out.append(sa.unsafe_get(UInt(best[g])))
-        return out.finish().to_any()
-
-    return value.dtype().dispatch_stringlike[leaf]()
-
-
-def count_valid_grouped(
-    gids: Int32Array, value: AnyArray, num_groups: Int
-) raises -> Int64Array:
-    """Per-group count of valid (non-null) rows over precomputed `gids`.
-
-    `count` reads only validity, so — unlike the other folds — it is defined for
-    *every* dtype. This is the non-numeric counterpart of
-    `AggState[CountKernel, V]`, keeping `COUNT(col)` / `COUNT(*)` available over
-    string, binary and nested columns that the typed numeric scatter can't
-    resolve. An empty group counts 0 (never null), matching SQL."""
-    var counts = List[Int64](length=num_groups, fill=0)
-    var gv = gids.values()
-    var has_null = value.null_count() > 0
-    for i in range(len(gids)):
-        if has_null and not value.is_valid(i):
-            continue
-        counts[Int(gv[i])] += 1
-    var out = Int64Builder(num_groups)
-    for g in range(num_groups):
-        out.append(Scalar[int64.native](counts[g]))
-    return out.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -885,3 +661,543 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
                 g, Self.K.combine[A, 1](self.acc.unsafe_get(g), acc[j])
             )
             self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + cnt[j])
+
+
+# ---------------------------------------------------------------------------
+# Aggregation — a fold bound to a concrete input type.
+#
+# `AggKernel` is the algebra; an `Aggregation` is that algebra *applied to one
+# input type*, and it is the unit the rest of the system passes around. It names
+# its own `InArray` / `OutArray` and implements the whole per-column surface
+# (`grouped` / `whole` / `partials` / `merge`) over those types, so nothing
+# downstream has to ask what kind of aggregate it is holding: the routing that
+# used to be a name comparison (bytewise string min/max, the temporal
+# reinterpret, the validity-only count, the distinct sketches) is *which
+# `Aggregation` type was chosen*.
+#
+# `from_any` / `to_any` are the only erasure points, both O(1) handle copies —
+# a typed column enters, a typed column leaves.
+# ---------------------------------------------------------------------------
+
+
+trait Aggregation:
+    """One aggregate over one input type — the fully resolved, monomorphized
+    unit of aggregation.
+
+    Implementations are `NumericAgg[K, V]` (the typed `AggState` fold),
+    `TemporalMinMax[Op, T]`, `StringMinMax[Op, T]`, `CountAgg` and
+    `DistinctAgg[exact]`. Which one a runtime dtype maps to is decided once, by
+    `AggFunction.resolve`."""
+
+    comptime name: String
+    """The aggregate's name — output-column naming only, never dispatch."""
+
+    comptime InArray: Copyable & ImplicitlyDeletable
+    """The typed input column this aggregation consumes. `AnyArray` for the two
+    aggregations whose work *is* dtype-generic (validity scan, row hashing) —
+    there is nothing to monomorphize on."""
+
+    comptime OutArray: Array
+    """The typed output column, always one value per group."""
+
+    comptime is_mergeable: Bool
+    """Whether `partials`/`merge` are implemented — i.e. whether this aggregate
+    can run as thread-local partial folds plus a merge."""
+
+    @staticmethod
+    def from_any(value: AnyArray) raises -> Self.InArray:
+        """Narrow an erased column to this aggregation's input type (O(1))."""
+        ...
+
+    @staticmethod
+    def to_any(values: Self.InArray) raises -> AnyArray:
+        """Widen back to an erased column — for the row-shuffling machinery
+        (`take` / `slice` / `concat`), which is dtype-generic by nature."""
+        ...
+
+    @staticmethod
+    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+        """This aggregation's output dtype. Takes the *runtime* input dtype
+        because an order-preserving aggregate carries its parameters through
+        (a timestamp's unit and timezone, a decimal's precision and scale)."""
+        ...
+
+    @staticmethod
+    def grouped(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Self.OutArray:
+        """One aggregate column over precomputed group ids."""
+        ...
+
+    @staticmethod
+    def whole(
+        values: Self.InArray, num_threads: Int = 0
+    ) raises -> Self.OutArray:
+        """The whole-table aggregate (no GROUP BY) as a one-row column.
+
+        Takes a worker budget rather than an `ExecutionContext` so each
+        aggregation decides its own parallelism: the SIMD fold reductions are
+        serial (threads only pay off well above the sizes where the reduce is
+        the bottleneck), while the distinct sketches self-gate on size."""
+        ...
+
+    @staticmethod
+    def partials(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Tuple[Self.OutArray, Int64Array]:
+        """A thread-local partial fold: the raw (non-finalized) per-group
+        accumulator plus valid counts, for a later `merge`."""
+        raise Error(
+            "aggregate '", Self.name, "' has no mergeable partial state"
+        )
+
+    @staticmethod
+    def merge(
+        remap: List[Int32Array],
+        accs: List[Self.OutArray],
+        cnts: List[Int64Array],
+        num_groups: Int,
+    ) raises -> Self.OutArray:
+        """Fold every thread's partials at remapped group ids and finalize."""
+        raise Error(
+            "aggregate '", Self.name, "' has no mergeable partial state"
+        )
+
+
+trait AggFunction:
+    """An aggregate *function*: a name plus the input dtypes it supports.
+
+    The contract for resolving an aggregate against a runtime dtype — `resolve`
+    picks the `Aggregation` that implements this function over a column of that
+    type and hands the type to a comptime `job`. The catalog of functions
+    (`Sum`, `Min`, `Count`, …) and their implementations live in
+    `marrow.expr.aggregates`; this layer only executes what it is given."""
+
+    comptime name: String
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        """Run `job[A]` with the `Aggregation` implementing this function over a
+        `value_dtype` column. Raises if the aggregate is not defined for it."""
+        ...
+
+
+struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
+    """Kernel `K` over a numeric column of type `V` — the typed `AggState` fold.
+
+    The fused leaf: `InArray`, `OutArray` and the accumulator are all fixed at
+    compile time, so nothing is resolved at run time and the scatter loop is
+    fully monomorphized."""
+
+    comptime name = Self.K.name
+    comptime InArray = PrimitiveArray[Self.V]
+    comptime OutArray = PrimitiveArray[Self.K.AccType[Self.V]]
+    comptime is_mergeable = True
+
+    @staticmethod
+    def from_any(value: AnyArray) raises -> Self.InArray:
+        return value.as_primitive[Self.V]().copy()
+
+    @staticmethod
+    def to_any(values: Self.InArray) raises -> AnyArray:
+        return values.copy().to_any()
+
+    @staticmethod
+    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+        return AnyDataType(Self.K.AccType[Self.V]())
+
+    @staticmethod
+    def grouped(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Self.OutArray:
+        var state = AggState[Self.K, Self.V]()
+        state.update(gids, values, num_groups)
+        return state.finish(num_groups)
+
+    @staticmethod
+    def whole(
+        values: Self.InArray, num_threads: Int = 0
+    ) raises -> Self.OutArray:
+        # The vectorized whole-array reduce, broadcast to length 1. Serial: the
+        # SIMD reduce only benefits from threads well above the sizes reached
+        # here, and that gating belongs in the reduce primitive itself.
+        return Self.K.reduce(values, ExecutionContext.serial()).repeat(1)
+
+    @staticmethod
+    def partials(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Tuple[Self.OutArray, Int64Array]:
+        var state = AggState[Self.K, Self.V]()
+        state.update(gids, values, num_groups)
+        return state.into_partials()
+
+    @staticmethod
+    def merge(
+        remap: List[Int32Array],
+        accs: List[Self.OutArray],
+        cnts: List[Int64Array],
+        num_groups: Int,
+    ) raises -> Self.OutArray:
+        # Exact for every kernel: the accumulator is the raw fold and the count
+        # is carried separately, so `mean` merges as (Σsum, Σcount) and
+        # finalizes once at the end.
+        var state = AggState[Self.K, Self.V]()
+        for t in range(len(remap)):
+            state.merge(remap[t], accs[t], cnts[t], num_groups)
+        return state.finish(num_groups)
+
+
+struct TemporalMinMax[Op: MinMaxOp, T: TemporalType](Aggregation):
+    """`min`/`max` over a temporal column (date/time/timestamp/duration).
+
+    Order-preserving, so the fold runs over the column's signed-integer backing
+    — reusing the whole numeric path, SIMD reduce and typed `AggState` scatter
+    alike — and the result is relabelled to the input's own dtype, carrying its
+    unit and timezone."""
+
+    comptime name = Self.Op.name
+    comptime Backing = Int32Type if Self.T.native == DType.int32 else Int64Type
+    comptime InArray = PrimitiveArray[Self.T]
+    comptime OutArray = PrimitiveArray[Self.T]
+    comptime is_mergeable = False
+
+    @staticmethod
+    def from_any(value: AnyArray) raises -> Self.InArray:
+        return value.as_primitive[Self.T]().copy()
+
+    @staticmethod
+    def to_any(values: Self.InArray) raises -> AnyArray:
+        return values.copy().to_any()
+
+    @staticmethod
+    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+        return in_dtype.copy()
+
+    @staticmethod
+    def _as_backing(
+        values: Self.InArray,
+    ) raises -> PrimitiveArray[Self.Backing]:
+        var backing = values.copy().to_any().view(AnyDataType(Self.Backing()))
+        return backing.as_primitive[Self.Backing]().copy()
+
+    @staticmethod
+    def _as_temporal(
+        var folded: PrimitiveArray[Self.Backing], dtype: AnyDataType
+    ) raises -> Self.OutArray:
+        var relabelled = folded^.to_any().view(dtype.copy())
+        return relabelled.as_primitive[Self.T]().copy()
+
+    @staticmethod
+    def grouped(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Self.OutArray:
+        var state = AggState[MinMax[Self.Op], Self.Backing]()
+        state.update(gids, Self._as_backing(values), num_groups)
+        return Self._as_temporal(state.finish(num_groups), values.dtype)
+
+    @staticmethod
+    def whole(
+        values: Self.InArray, num_threads: Int = 0
+    ) raises -> Self.OutArray:
+        if len(values) == values.null_count():
+            return PrimitiveScalar[Self.T](None, values.dtype.copy()).repeat(1)
+        # `AccType == Backing`, so this is the same-type SIMD reduce.
+        var folded = MinMax[Self.Op].apply(
+            Self._as_backing(values), ExecutionContext.serial()
+        )
+        return Self._as_temporal(folded.repeat(1), values.dtype)
+
+
+struct StringMinMax[Op: MinMaxOp, T: StringLikeType](Aggregation):
+    """`min`/`max` over a string column — a bytewise (lexicographic) scan,
+    matching Arrow's `hash_min`/`hash_max`.
+
+    Not an `AggState` fold: there is no scalar accumulator, so the scan keeps the
+    index of the best row per group and materializes at the end. Nulls are
+    excluded (SQL semantics) and an empty / all-null group yields null."""
+
+    comptime name = Self.Op.name
+    comptime InArray = BinaryLikeArray[Self.T]
+    comptime OutArray = BinaryLikeArray[Self.T]
+    comptime is_mergeable = False
+
+    @staticmethod
+    def from_any(value: AnyArray) raises -> Self.InArray:
+        return value.as_binary_like[Self.T]().copy()
+
+    @staticmethod
+    def to_any(values: Self.InArray) raises -> AnyArray:
+        return values.copy().to_any()
+
+    @staticmethod
+    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+        return in_dtype.copy()
+
+    @staticmethod
+    @always_inline
+    def _better(values: Self.InArray, i: Int, best: Int) raises -> Bool:
+        """Whether row `i` beats the current best row."""
+        var a = values.unsafe_get(UInt(i))
+        var b = values.unsafe_get(UInt(best))
+        return (a < b) if Self.Op.is_min else (b < a)
+
+    @staticmethod
+    def grouped(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Self.OutArray:
+        var best = List[Int](length=num_groups, fill=-1)
+        var gv = gids.values()
+        var has_null = values.null_count() > 0
+        for i in range(len(gids)):
+            if has_null and not values.is_valid(i):
+                continue
+            var g = Int(gv[i])
+            if best[g] == -1 or Self._better(values, i, best[g]):
+                best[g] = i
+        var out = BinaryLikeBuilder[Self.T](capacity=num_groups)
+        for g in range(num_groups):
+            if best[g] == -1:
+                out.append_null()
+            else:
+                out.append(values.unsafe_get(UInt(best[g])))
+        return out.finish()
+
+    @staticmethod
+    def whole(
+        values: Self.InArray, num_threads: Int = 0
+    ) raises -> Self.OutArray:
+        var has_null = values.null_count() > 0
+        var best = -1
+        for i in range(len(values)):
+            if has_null and not values.is_valid(i):
+                continue
+            if best == -1 or Self._better(values, i, best):
+                best = i
+        var out = BinaryLikeBuilder[Self.T](capacity=1)
+        if best == -1:
+            out.append_null()
+        else:
+            out.append(values.unsafe_get(UInt(best)))
+        return out.finish()
+
+
+struct CountAgg(Aggregation):
+    """`count` over a non-numeric column — a validity-only scan.
+
+    `count` reads validity and nothing else, so it is defined for *every* dtype
+    and there is nothing to monomorphize on: the input stays erased. Numeric
+    columns resolve to `NumericAgg[CountKernel, V]` instead, which is mergeable.
+    An empty group counts 0 (never null), matching SQL."""
+
+    comptime name = CountKernel.name
+    comptime InArray = AnyArray
+    comptime OutArray = Int64Array
+    comptime is_mergeable = False
+
+    @staticmethod
+    def from_any(value: AnyArray) raises -> Self.InArray:
+        return value.copy()
+
+    @staticmethod
+    def to_any(values: Self.InArray) raises -> AnyArray:
+        return values.copy()
+
+    @staticmethod
+    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+        return AnyDataType(int64)
+
+    @staticmethod
+    def grouped(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Self.OutArray:
+        var counts = List[Int64](length=num_groups, fill=0)
+        var gv = gids.values()
+        var has_null = values.null_count() > 0
+        for i in range(len(gids)):
+            if has_null and not values.is_valid(i):
+                continue
+            counts[Int(gv[i])] += 1
+        var out = Int64Builder(num_groups)
+        for g in range(num_groups):
+            out.append(Scalar[int64.native](counts[g]))
+        return out.finish()
+
+    @staticmethod
+    def whole(
+        values: Self.InArray, num_threads: Int = 0
+    ) raises -> Self.OutArray:
+        # Valid count is metadata — no scan.
+        return Int64Scalar(Int64(len(values) - values.null_count())).repeat(1)
+
+
+struct DistinctAgg[exact: Bool](Aggregation):
+    """`count_distinct` (exact) / `approx_count_distinct` (HyperLogLog).
+
+    Not a fold at all — the per-group state is a hash set / HLL sketch rather
+    than a scalar accumulator, which is why it is never mergeable. The work is
+    row hashing, which is dtype-generic, so the input stays erased."""
+
+    comptime name = "count_distinct" if Self.exact else "approx_count_distinct"
+    comptime InArray = AnyArray
+    comptime OutArray = Int64Array
+    comptime is_mergeable = False
+
+    @staticmethod
+    def from_any(value: AnyArray) raises -> Self.InArray:
+        return value.copy()
+
+    @staticmethod
+    def to_any(values: Self.InArray) raises -> AnyArray:
+        return values.copy()
+
+    @staticmethod
+    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+        return AnyDataType(int64)
+
+    @staticmethod
+    def grouped(
+        gids: Int32Array, values: Self.InArray, num_groups: Int
+    ) raises -> Self.OutArray:
+        comptime if Self.exact:
+            return count_distinct_grouped(gids, values, num_groups)
+        else:
+            return approx_count_distinct_grouped(gids, values, num_groups)
+
+    @staticmethod
+    def whole(
+        values: Self.InArray, num_threads: Int = 0
+    ) raises -> Self.OutArray:
+        # `count_distinct` self-gates on size, going radix-partition-parallel at
+        # scale, so it gets the worker budget.
+        var ctx = ExecutionContext.parallel(num_threads)
+        comptime if Self.exact:
+            return count_distinct(values, ctx).repeat(1)
+        else:
+            return approx_count_distinct(values, ctx).repeat(1)
+
+
+# ---------------------------------------------------------------------------
+# AggFunction — an aggregate before its input type is known.
+#
+# The one dispatch left in the aggregate layer: map a *runtime input dtype* onto
+# the `Aggregation` that implements this aggregate for it, and hand that type to
+# a comptime `job`. Which dtypes an aggregate supports is stated by its own
+# `resolve` — a new aggregate cannot forget the rule, and no central ladder has
+# to know every aggregate that will ever exist.
+#
+# Mapping a runtime function *name* onto one of these is `marrow.expr.dynamic`'s
+# job — the single string comparison in the system, and the only part of an
+# aggregate that is not a type.
+# ---------------------------------------------------------------------------
+
+
+struct NumericFold[K: AggKernel](AggFunction):
+    """`sum` / `product` / `mean` — folds defined over numeric columns only."""
+
+    comptime name = Self.K.name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        if not value_dtype.is_numeric():
+            raise Error(
+                "aggregate '",
+                Self.name,
+                "' is not defined for ",
+                value_dtype,
+                " columns",
+            )
+
+        @parameter
+        def numeric[V: NumericType](d: V) raises:
+            job[NumericAgg[Self.K, V]]()
+
+        value_dtype.dispatch_numeric[numeric]()
+
+
+struct OrderPreserving[Op: MinMaxOp](AggFunction):
+    """`min` / `max` — defined wherever a total order is: numeric columns fold
+    through `AggState`, temporal columns through their integer backing, and
+    string columns through the bytewise scan. All three keep the input dtype."""
+
+    comptime name = Self.Op.name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        if value_dtype.is_numeric():
+
+            @parameter
+            def numeric[V: NumericType](d: V) raises:
+                job[NumericAgg[MinMax[Self.Op], V]]()
+
+            value_dtype.dispatch_numeric[numeric]()
+        elif value_dtype.is_temporal():
+
+            @parameter
+            def temporal[T: TemporalType](d: T) raises:
+                job[TemporalMinMax[Self.Op, T]]()
+
+            value_dtype.dispatch_temporal[temporal]()
+        elif value_dtype.is_string() or value_dtype.is_large_string():
+
+            @parameter
+            def stringly[T: StringLikeType](d: T) raises:
+                job[StringMinMax[Self.Op, T]]()
+
+            value_dtype.dispatch_stringlike[stringly]()
+        else:
+            raise Error(
+                "aggregate '",
+                Self.name,
+                "' is not defined for ",
+                value_dtype,
+                " columns",
+            )
+
+
+struct CountValid(AggFunction):
+    """`count` — defined for every dtype. Numeric columns take the mergeable
+    `AggState` fold; everything else the validity-only scan."""
+
+    comptime name = CountKernel.name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        if value_dtype.is_numeric():
+
+            @parameter
+            def numeric[V: NumericType](d: V) raises:
+                job[NumericAgg[CountKernel, V]]()
+
+            value_dtype.dispatch_numeric[numeric]()
+        else:
+            job[CountAgg]()
+
+
+struct DistinctCount[exact: Bool](AggFunction):
+    """`count_distinct` / `approx_count_distinct` — defined for every dtype."""
+
+    comptime name = DistinctAgg[Self.exact].name
+
+    @staticmethod
+    def resolve[
+        job: def[A: Aggregation]() raises capturing[_] -> None
+    ](value_dtype: AnyDataType) raises:
+        job[DistinctAgg[Self.exact]]()
+
+
+comptime Sum = NumericFold[SumKernel]
+comptime Product = NumericFold[ProductKernel]
+comptime Mean = NumericFold[MeanKernel]
+comptime Min = OrderPreserving[MinOp]
+comptime Max = OrderPreserving[MaxOp]
+comptime Count = CountValid
+comptime CountDistinct = DistinctCount[True]
+comptime ApproxCountDistinct = DistinctCount[False]

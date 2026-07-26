@@ -19,11 +19,7 @@ from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
 from marrow.kernels.groupby import GroupBy
-from marrow.expr.aggregates import (
-    AggFunc,
-    aggregate_grouped,
-    aggregate_whole,
-)
+from marrow.expr.aggregates import Aggregates
 from marrow.kernels.execution import ExecutionContext
 from marrow.kernels.sort import sort as _sort_kernel
 from marrow.arrays import Int32Array
@@ -520,7 +516,7 @@ def _record_batch_group_by(
 
     # Resolve the (value column, aggregate function) pairs and their output names.
     var value_cols = List[AnyArray]()
-    var agg_funcs = List[AggFunc]()
+    var aggs = Aggregates()
     var agg_names = List[String]()
     for j in range(Int(funcs.__len__())):
         var vname = String(py=values[j])
@@ -529,20 +525,20 @@ def _record_batch_group_by(
             raise Error("group_by: value column '", vname, "' not found")
         var func = String(py=funcs[j])
         value_cols.append(rb.column(vidx).copy())
-        agg_funcs.append(AggFunc(func))
+        aggs.append(func, rb.column(vidx).dtype())
         agg_names.append(vname + "_" + func)
 
     var gb = GroupBy(key_struct, ExecutionContext.parallel(Int(py=num_threads)))
-    var res = aggregate_grouped(gb, value_cols, agg_funcs)
+    var res = aggs.grouped(gb, value_cols)
 
     # `res` is [key columns..., aggregate columns...]; rename the aggregates.
-    var n_keys = len(res.columns) - len(agg_funcs)
+    var n_keys = len(res.columns) - len(aggs)
     var out_fields = List[Field]()
     var out_columns = List[AnyArray]()
     for c in range(n_keys):
         out_fields.append(res.schema.fields[c].copy())
         out_columns.append(res.columns[c].copy())
-    for j in range(len(agg_funcs)):
+    for j in range(len(aggs)):
         out_fields.append(
             Field(agg_names[j], res.schema.fields[n_keys + j].dtype.copy())
         )
@@ -570,7 +566,7 @@ def _record_batch_aggregate(
     """
     ref rb = ptr[]
     var value_cols = List[AnyArray]()
-    var agg_funcs = List[AggFunc]()
+    var aggs = Aggregates()
     var names = List[String]()
     for j in range(Int(funcs.__len__())):
         var vname = String(py=values[j])
@@ -579,13 +575,13 @@ def _record_batch_aggregate(
             raise Error("aggregate: column '", vname, "' not found")
         value_cols.append(rb.column(vidx).copy())
         var func = String(py=funcs[j])
-        agg_funcs.append(AggFunc(func))
+        aggs.append(func, rb.column(vidx).dtype())
         names.append(vname + "_" + func)
 
-    var res = aggregate_whole(value_cols, agg_funcs)
+    var res = aggs.whole(value_cols)
     var out_fields = List[Field]()
     var out_cols = List[AnyArray]()
-    for j in range(len(agg_funcs)):
+    for j in range(len(aggs)):
         out_fields.append(Field(names[j], res.schema.fields[j].dtype.copy()))
         out_cols.append(res.columns[j].copy())
     return RecordBatch(

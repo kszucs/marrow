@@ -42,7 +42,7 @@ from ..tabular import RecordBatch
 from .values import AnyValue
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
-from .aggregates import AggFunc
+from .aggregates import Aggregates
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -291,30 +291,28 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             fields.append(Field(name, k.execute(probe).dtype()))
             key_exprs.append(AnyValue(k^))
 
-        # Resolve each function *name* to its comptime kernel once, here — the
-        # only interpretation step on this path. The output dtype then comes from
-        # the kernel's own accumulator algebra (`AggFunc.out_dtype`: sum widens
-        # integers to int64; min/max preserve the input dtype, including
-        # string/temporal; count and the distinct counts are int64; mean is
-        # float64).
+        # Resolve each (function *name*, input dtype) pair to its comptime
+        # `Aggregation` once, here — the only interpretation step on this path.
+        # The output dtype is then the aggregation's own (`sum` widens integers
+        # to int64; `min`/`max` preserve the input dtype — including a
+        # timestamp's unit and timezone; `count` and the distinct counts are
+        # int64; `mean` is float64), and an aggregate that is not defined for
+        # the column's type is rejected here rather than at execution.
         var val_exprs = List[AnyValue]()
-        var agg_funcs = List[AggFunc]()
+        var aggs = Aggregates()
         for i in range(len(values)):
             var v = values[i].resolve_names(input_schema)
-            var f = AggFunc(funcs[i])
+            aggs.append(funcs[i], v.execute(probe).dtype())
             var out_name = names[i] if len(names) != 0 else funcs[i]
-            fields.append(
-                Field(out_name, f.out_dtype(v.execute(probe).dtype()))
-            )
+            fields.append(Field(out_name, aggs[i].out_dtype.copy()))
             val_exprs.append(AnyValue(v^))
-            agg_funcs.append(f^)
 
         return AnyRelation(
             Aggregate(
                 input=self,
                 keys=key_exprs^,
-                aggs=val_exprs^,
-                funcs=agg_funcs^,
+                inputs=val_exprs^,
+                aggs=aggs^,
                 schema=Schema(fields=fields^),
             )
         )
@@ -723,15 +721,15 @@ struct Sort(Relation):
 struct Aggregate(Relation):
     """Grouped aggregation — the descriptive node (keys, aggregates, schema).
 
-    ``funcs[i]`` is the ``AggFunc`` applied to ``aggs[i]``. It holds a *comptime*
-    kernel, so a plan built from fused values and ``AggFunc.typed[...]`` carries
-    no function-name interpretation at all; ``AnyRelation.aggregate`` produces the
-    same node from runtime names."""
+    ``aggs[i]`` is the aggregate applied to the value expression ``inputs[i]``.
+    Each carries a *comptime* ``Aggregation``, so a plan built from fused values
+    and ``Aggregates.append[A]`` carries no function-name interpretation at all;
+    ``AnyRelation.aggregate`` produces the same node from runtime names."""
 
     var input: AnyRelation
     var keys: List[AnyValue]
-    var aggs: List[AnyValue]
-    var funcs: List[AggFunc]
+    var inputs: List[AnyValue]
+    var aggs: Aggregates
     var _schema: Schema
 
     def __init__(
@@ -739,14 +737,14 @@ struct Aggregate(Relation):
         *,
         var input: AnyRelation,
         var keys: List[AnyValue],
-        var aggs: List[AnyValue],
-        var funcs: List[AggFunc],
+        var inputs: List[AnyValue],
+        var aggs: Aggregates,
         var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
+        self.inputs = inputs^
         self.aggs = aggs^
-        self.funcs = funcs^
         self._schema = schema^
 
     def schema(self) -> Schema:
@@ -756,8 +754,8 @@ struct Aggregate(Relation):
         return AggregateProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
+            inputs=self.inputs.copy(),
             aggs=self.aggs.copy(),
-            funcs=self.funcs.copy(),
             schema=Schema(copy=self._schema),
             ctx=ctx.copy(),
         )

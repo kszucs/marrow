@@ -42,6 +42,17 @@ from ..scalars import AnyScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
+from ..kernels.aggregate import (
+    Aggregation,
+    Sum,
+    Product,
+    Mean,
+    Min,
+    Max,
+    Count,
+    CountDistinct,
+    ApproxCountDistinct,
+)
 from ..kernels.arithmetic import (
     AddKernel,
     SubKernel,
@@ -888,3 +899,43 @@ def case_when(
         value=None,
         name=String(),
     )
+
+
+# ---------------------------------------------------------------------------
+# resolve_agg — the one runtime -> comptime boundary
+#
+# The aggregate counterpart of `DynValue.eval`'s tag switch: a runtime aggregate
+# identity (a name, as the Python / ibis frontend has it) becomes a comptime
+# type. Everything downstream is typed, so this is the only string comparison
+# an aggregate ever goes through — and it happens once, when the plan is built.
+# ---------------------------------------------------------------------------
+
+
+def resolve_agg[
+    job: def[A: Aggregation]() raises capturing[_] -> None
+](name: String, value_dtype: AnyDataType) raises:
+    """Resolve an aggregate function *name* over a ``value_dtype`` column to the
+    ``Aggregation`` that implements it, and run ``job[A]``.
+
+    Keyed on the functions' own ``name``, with no tag in between. Each branch
+    hands the dtype straight to that function's own ``resolve``, so which input
+    types an aggregate supports — and what it does for each — is stated by the
+    aggregate itself, never re-listed here."""
+    if name == Sum.name:
+        Sum.resolve[job](value_dtype)
+    elif name == Product.name:
+        Product.resolve[job](value_dtype)
+    elif name == Mean.name:
+        Mean.resolve[job](value_dtype)
+    elif name == Min.name:
+        Min.resolve[job](value_dtype)
+    elif name == Max.name:
+        Max.resolve[job](value_dtype)
+    elif name == Count.name:
+        Count.resolve[job](value_dtype)
+    elif name == CountDistinct.name:
+        CountDistinct.resolve[job](value_dtype)
+    elif name == ApproxCountDistinct.name:
+        ApproxCountDistinct.resolve[job](value_dtype)
+    else:
+        raise Error("unknown aggregate function: ", name)

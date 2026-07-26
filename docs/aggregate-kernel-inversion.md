@@ -1,6 +1,6 @@
 # Q2.5 step 3b — invert the aggregate layer onto the kernels
 
-**Status:** specified, not started. Blocks `FusedAggregation` (step 4).
+**Status:** done (2026-07-26) — see "Outcome" at the end. Blocks `FusedAggregation` (step 4).
 **Base:** `complete` @ `15af282`. Suite green (1848 passed / 314 skipped / 0 failed).
 
 This file is the working spec for the next round. It exists because step 3a
@@ -223,3 +223,69 @@ Run all; report real numbers; a negative result is valuable.
 5. Pluggable grouping strategies (`GroupStats` / `suitable` / `rank`) — after fusion, since fusion
    changes the per-row costs the policy thresholds encode. Requires the bench harness to be able to
    **force** a strategy, or "improve X without hurting Y" is unverifiable.
+
+
+---
+
+## 8. Outcome (2026-07-26)
+
+Implemented, plus two structural changes the owner asked for mid-flight.
+
+**The inversion.** An aggregate resolved against an input dtype is now one
+`Aggregation` type (`NumericAgg[K, V]`, `TemporalMinMax[Op, T]`,
+`StringMinMax[Op, T]`, `CountAgg`, `DistinctAgg[exact]`) that names its own
+`InArray`/`OutArray` and carries `grouped`/`whole`/`partials`/`merge`. Defect A
+is gone by construction: there is no `K.name ==` comparison anywhere, because
+the thing a name used to select *is the type*. Defect B: the 18 module-level
+functions are members of those types; `AggFunction` (`Sum`, `Min`, `Count`, …)
+states which dtypes each aggregate supports, so a new aggregate cannot forget
+the rule.
+
+**Two changes beyond the spec.**
+
+- **The dtype is resolved with the name**, once, at plan-build time — so the
+  erased box points at a fully monomorphized aggregation and no
+  `dispatch_numeric` ladder runs per batch. `out_dtype` became a stored value
+  rather than a second function pointer.
+- **Layering.** `marrow/kernels` executes (`AggKernel`, `AggState`, the two
+  scans that are not folds, the `Aggregation`/`AggFunction` contracts);
+  `marrow/expr/aggregates.mojo` holds the aggregations, the catalog, the erased
+  boxes and `Aggregates` (the set that owns the multi-aggregate drivers); the
+  name ladder is `marrow/expr/dynamic.mojo`, next to `DynValue`'s tag switch.
+- `GroupBy`'s serial and radix strategies were the same algorithm written four
+  times; they are now one driver over a `GroupPartitioner` (`WholeRows` /
+  `ByKeyHash`). `GroupBy(keys, ctx, strategy)` can force a strategy — §7's
+  prerequisite for evaluating grouping policies.
+- `take`/`concat`/`rapidhash` handle temporal columns directly, so
+  `reinterpret_array` / `temporal_backing_dtype` and the reinterpret-and-relabel
+  dance in the drivers and in `AggregateProcessor`'s key path are deleted.
+
+### Gates
+
+| gate | result |
+|---|---|
+| `check_lib`, per-file `check` | clean (only the documented `main()` / `bitmap_and` noise) |
+| `pytest test_groupby + test_aggregate + test_streaming` | 98 passed |
+| `test_parallel` | **1848 passed / 314 skipped / 0 failed** — the documented baseline |
+| `binary_size` | fused **7.6×** (was 7.6×), runtime-named **7.9×** (was 7.8×), dynvalue/runtime 12.8× (unchanged) |
+| `--competition` group-by | **inconclusive — the machine was not quiet** |
+
+### The performance gate is unresolved
+
+Every engine in the table, marrow *and* polars *and* pyarrow, measured ~3–4×
+slower than the §5 baseline (polars `sum[1m_g100k]` 7.3 ms against an implied
+~2.2 ms), so the absolute numbers say nothing about this change. Normalising to
+polars in the same run, over two runs:
+
+| row | marrow / polars now | implied at baseline |
+|---|---|---|
+| `groupby_multi[1m_g100k]` | 0.84, 0.88 | ~1.27 |
+| `groupby_sum[1m_g100k]` | 1.04, 1.08 | <1.0 |
+
+Read at face value that is the multi-aggregate row improving (the row §3 set out
+to fix) and the single-aggregate row losing ~20%, which would be consistent with
+`aggregate[A]` now routing through the shared multi-column driver
+(`_by_partition`) instead of a dedicated single-column path. **Do not act on
+that reading without re-measuring**: run `--competition` twice on an idle
+machine, and if the single-column row is genuinely down, A/B it against the
+previous commit in the same session rather than against these numbers.

@@ -14,6 +14,17 @@ import marrow.kernels as mk
 # resolves to the submodule rather than the function. Import it directly.
 from marrow.kernels.filter import filter as _filter_kernel
 from marrow.kernels.execution import ExecutionContext
+from marrow.kernels.aggregate import (
+    Aggregation,
+    AggFunction,
+    Sum,
+    Product,
+    Mean,
+    Min,
+    Max,
+    CountDistinct,
+    ApproxCountDistinct,
+)
 from helpers import pyfunction
 
 
@@ -52,23 +63,24 @@ def cast(
     return mk.cast(array, target, safe, ctx)
 
 
-# Thin ``-> AnyScalar`` wrappers so the concrete ``Int64Scalar``-returning
-# distinct kernels match the ``pyfunction`` scalar shape.
-def count_distinct(array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
-    return mk.count_distinct(array, ctx)
+# Whole-column aggregates. The column's dtype is a runtime value here, so each
+# one resolves its `AggFunction` to the `Aggregation` implementing it (the same
+# path a `GROUP BY` plan takes, with one implicit group) and reads the single
+# row back out — the thin `(AnyArray, ExecutionContext) -> AnyScalar` shape
+# `pykernel` expects.
+def aggregate[
+    F: AggFunction
+](array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
+    var box = List[AnyScalar]()
 
+    @parameter
+    def run[A: Aggregation]() raises:
+        box.append(
+            A.whole(A.from_any(array), ctx.resolved_num_threads()).to_any()[0]
+        )
 
-# ``MeanKernel.reduce`` is a trait method with a defaulted ``ctx``; referencing
-# it directly in ``pykernel[...]`` crashes overload inference. Pin the exact
-# ``(AnyArray, ExecutionContext) -> AnyScalar`` shape with a thin wrapper.
-def mean(array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
-    return mk.MeanKernel.reduce(array, ctx)
-
-
-def approx_count_distinct(
-    array: AnyArray, ctx: ExecutionContext
-) raises -> AnyScalar:
-    return mk.approx_count_distinct(array, ctx)
+    F.resolve[run](array.dtype())
+    return box[0].copy()
 
 
 # ``pykernel`` — wrap a marrow kernel of uniform shape
@@ -114,11 +126,11 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.SubKernel.dispatch]()]("subtract")
     mb.def_function[pykernel[mk.MulKernel.dispatch]()]("multiply")
     mb.def_function[pykernel[mk.DivKernel.dispatch]()]("divide")
-    mb.def_function[pykernel[mk.SumKernel.dispatch]()]("sum")
-    mb.def_function[pykernel[mk.ProductKernel.dispatch]()]("product")
-    mb.def_function[pykernel[mk.MinKernel.dispatch]()]("min")
-    mb.def_function[pykernel[mk.MaxKernel.dispatch]()]("max")
-    mb.def_function[pykernel[mean]()]("mean")
+    mb.def_function[pykernel[aggregate[Sum]]()]("sum")
+    mb.def_function[pykernel[aggregate[Product]]()]("product")
+    mb.def_function[pykernel[aggregate[Min]]()]("min")
+    mb.def_function[pykernel[aggregate[Max]]()]("max")
+    mb.def_function[pykernel[aggregate[Mean]]()]("mean")
     mb.def_function[pykernel[mk.AnyKernel.dispatch]()]("any")
     mb.def_function[pykernel[mk.AllKernel.dispatch]()]("all")
     mb.def_function[pykernel[mk.drop_null]()]("drop_null")
@@ -129,8 +141,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.LeKernel.dispatch]()]("less_equal")
     mb.def_function[pykernel[mk.GtKernel.dispatch]()]("greater")
     mb.def_function[pykernel[mk.GeKernel.dispatch]()]("greater_equal")
-    mb.def_function[pyfunction[count_distinct]()]("count_distinct")
-    mb.def_function[pyfunction[approx_count_distinct]()](
+    mb.def_function[pykernel[aggregate[CountDistinct]]()]("count_distinct")
+    mb.def_function[pykernel[aggregate[ApproxCountDistinct]]()](
         "approx_count_distinct"
     )
     mb.def_function[pyfunction[sort_indices]()]("sort_indices")

@@ -1,4 +1,7 @@
 from std.testing import assert_equal, assert_true, assert_false
+from marrow.kernels.aggregate import (
+    Sum,
+)
 from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, DictionaryArray, PrimitiveArray, StringArray
@@ -32,6 +35,7 @@ from marrow.dtypes import (
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import GroupBy
+
 from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 
 
@@ -329,7 +333,7 @@ def test_hash_dictionary_matches_decoded() raises:
 def test_groupby_date32_key() raises:
     var keys = _date32([19000, 18500, 19000, 18500, 19000])
     var vals: AnyArray = array([1, 2, 3, 4, 5], int32)
-    var result = GroupBy(keys).sum(vals)
+    var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
     assert_true(result.schema.fields[0].dtype == date32().to_any())
@@ -344,7 +348,7 @@ def test_groupby_date32_key() raises:
 def test_groupby_timestamp_key() raises:
     var keys = _timestamp([1_000, 2_000, 1_000])
     var vals: AnyArray = array([10, 20, 30], int32)
-    var result = GroupBy(keys).sum(vals)
+    var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
     assert_true(
@@ -361,7 +365,7 @@ def test_groupby_large_string_key() raises:
         lb.append(s)
     var keys: AnyArray = lb.finish()
     var vals: AnyArray = array([1, 2, 3, 4], int32)
-    var result = GroupBy(keys).sum(vals)
+    var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
     ref s = result.columns[1].as_int64()

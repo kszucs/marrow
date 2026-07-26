@@ -11,7 +11,7 @@ aggregate-set — exactly the change that can blow code size up — and without 
 aggregate query in the gate that regression would go unnoticed.
 
 Its pair, `query_streaming_agg_fused.mojo`, expresses the **same** query with
-comptime kernels (`AggFunc.typed[SumKernel, Int64Type]()`). The delta between
+comptime aggregations (`AggFunc.of[NumericAgg[SumKernel, Int64Type]]()`). The delta between
 the two is the measurement: it is exactly the cost of the aggregate identity
 (and the input dtype) being runtime rather than comptime.
 
@@ -19,10 +19,10 @@ the two is the measurement: it is exactly the cost of the aggregate identity
 """
 
 from marrow.builders import array
-from marrow.dtypes import int64, string, field
+from marrow.dtypes import AnyDataType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.aggregates import AggFunc
+from marrow.expr.aggregates import Aggregates
 from marrow.expr.values import col, AnyValue
 from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation, execute
 
@@ -42,15 +42,15 @@ def main() raises:
     aggs.append(AnyValue(col("a", int64)))
     aggs.append(AnyValue(col("b", int64)))
 
-    var funcs = List[AggFunc]()
-    funcs.append(AggFunc("sum"))
-    funcs.append(AggFunc("min"))
+    var funcs = Aggregates()
+    funcs.append("sum", AnyDataType(int64))
+    funcs.append("min", AnyDataType(int64))
 
     var agg = Aggregate(
         input=AnyRelation(InMemoryTable(batch=batch)),
         keys=keys^,
-        aggs=aggs^,
-        funcs=funcs^,
+        inputs=aggs^,
+        aggs=funcs^,
         schema=schema(
             [field("name", string), field("a", int64), field("b", int64)]
         ),

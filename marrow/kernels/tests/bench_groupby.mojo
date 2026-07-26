@@ -11,12 +11,15 @@ from marrow.builders import PrimitiveBuilder, Int32Builder, Float64Builder
 from marrow.dtypes import int32, float64, Int32Type, Float64Type
 from marrow.kernels.groupby import GroupBy
 from marrow.kernels.aggregate import (
-    AggKernel,
+    Aggregation,
     SumKernel,
     MinKernel,
     MaxKernel,
     MeanKernel,
+    NumericAgg,
 )
+
+
 from marrow.testing import BenchSuite, Benchmark
 
 
@@ -34,15 +37,15 @@ def _make_vals(n: Int) raises -> AnyArray:
     return b.finish()
 
 
-def _bench_group_by[K: AggKernel](mut b: Benchmark, n: Int) raises:
+def _bench_group_by[A: Aggregation](mut b: Benchmark, n: Int) raises:
     var keys = _make_keys(n, 10)
-    var vals = _make_vals(n)
+    var vals = A.from_any(_make_vals(n))
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(GroupBy(keys).aggregate[K](vals))
+        keep(GroupBy(keys).aggregate[A](vals))
 
     b.iter[call]()
     keep(keys)
@@ -55,15 +58,15 @@ def _bench_group_by[K: AggKernel](mut b: Benchmark, n: Int) raises:
 
 
 def bench_groupby_sum_10k(mut b: Benchmark) raises:
-    _bench_group_by[SumKernel](b, 10_000)
+    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 10_000)
 
 
 def bench_groupby_sum_100k(mut b: Benchmark) raises:
-    _bench_group_by[SumKernel](b, 100_000)
+    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 100_000)
 
 
 def bench_groupby_sum_1m(mut b: Benchmark) raises:
-    _bench_group_by[SumKernel](b, 1_000_000)
+    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 1_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -72,15 +75,15 @@ def bench_groupby_sum_1m(mut b: Benchmark) raises:
 
 
 def bench_groupby_min_100k(mut b: Benchmark) raises:
-    _bench_group_by[MinKernel](b, 100_000)
+    _bench_group_by[NumericAgg[MinKernel, Float64Type]](b, 100_000)
 
 
 def bench_groupby_max_100k(mut b: Benchmark) raises:
-    _bench_group_by[MaxKernel](b, 100_000)
+    _bench_group_by[NumericAgg[MaxKernel, Float64Type]](b, 100_000)
 
 
 def bench_groupby_mean_100k(mut b: Benchmark) raises:
-    _bench_group_by[MeanKernel](b, 100_000)
+    _bench_group_by[NumericAgg[MeanKernel, Float64Type]](b, 100_000)
 
 
 # ---------------------------------------------------------------------------

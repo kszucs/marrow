@@ -488,16 +488,24 @@ struct RapidHash(Kernel):
         combined element-wise using ``_combine_hashes``. The
         ``ExecutionContext`` is forwarded to per-field hashing and to the
         combine pass — all stripe-parallelism is handled inside ``apply``.
+
+        A struct's own offset/length are *not* propagated to its children by the
+        layout, so each field is sliced to the struct's row range first: hashing
+        ``keys.slice(start, length)`` then covers exactly those rows.
         """
         var n = len(keys)
         var num_fields = len(keys.children)
         if num_fields == 0:
             raise Error("rapidhash: empty struct array")
 
-        var result = RapidHash.dispatch(keys.children[0], ctx)
+        var result = RapidHash.dispatch(
+            keys.children[0].slice(keys.offset, n), ctx
+        )
 
         for k in range(1, num_fields):
-            var field_hashes = RapidHash.dispatch(keys.children[k], ctx)
+            var field_hashes = RapidHash.dispatch(
+                keys.children[k].slice(keys.offset, n), ctx
+            )
 
             var buf: Buffer[mut=True]
             if ctx.is_gpu():

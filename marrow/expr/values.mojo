@@ -1716,8 +1716,10 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
         return self.a.referenced_columns()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+        # The operand's dtype is `A.OutType`, so the reduce is the fully typed
+        # one — no dtype dispatch, and the erasure is only the `Context` slot.
         var arg = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Self.K.reduce(arg))
+        ctx.append(Self.K.reduce(arg.as_primitive[Self.A.OutType]()).to_any())
 
     @always_inline
     def vectorwise[

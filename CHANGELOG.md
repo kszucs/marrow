@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **Aggregates are types all the way down — `Aggregation` replaces every name/tag
+  dispatch.** An aggregate used to be a comptime `AggKernel` whose *behaviour* lived in
+  free functions that re-identified it by name (`comptime if K.name == "min"`). Now
+  resolving an aggregate against an input dtype yields one **`Aggregation`** type —
+  `NumericAgg[K, V]`, `TemporalMinMax[Op, T]`, `StringMinMax[Op, T]`, `CountAgg`,
+  `DistinctAgg[exact]` — that names its own `InArray`/`OutArray` and carries the whole
+  per-column implementation (`grouped` / `whole` / `partials` / `merge`). The routing that
+  was a name comparison (bytewise string min/max, the temporal fold, the validity-only
+  count, the distinct sketches) *is* which type was chosen. `AggFunction` (`Sum`, `Min`,
+  `Count`, …) states which input dtypes each aggregate supports, so a new aggregate cannot
+  forget the rule and no central ladder has to know every aggregate that will ever exist.
+  18 module-level functions and every `K.name ==` comparison are gone.
+- **The type erasure moved to the edges.** The aggregate path is typed end to end:
+  `Aggregation.grouped` takes a `PrimitiveArray[V]` / `BinaryLikeArray[T]` and returns a
+  typed column; `AnyArray` appears only where a caller genuinely holds a heterogeneous
+  list, via one `from_any`/`to_any` pair of O(1) handle conversions. `AggKernel`'s erased
+  `reduce(AnyArray)` / `dispatch` overloads, `agg_out_dtype`, `_acc_dtype`,
+  `_fold_grouped`, `_partials`, `_merge_partials` and their `_typed` halves, and the
+  `_reduce_widened` pair are all deleted; `Reduction` in the fused value tower now calls
+  the typed `K.reduce[V]`.
+- **The runtime→comptime boundary is one switch, in the dynamic layer.**
+  `marrow.expr.dynamic.resolve_agg(name, value_dtype)` is the only place a string is
+  compared, and it happens once per aggregate at plan-build time — the aggregate
+  counterpart of `DynValue`'s tag switch. It resolves the *dtype* at the same moment, so
+  the plan holds a pointer to a fully monomorphized aggregation and no `dispatch_numeric`
+  ladder runs per batch. An aggregate that is not defined for a column's type (`mean` of a
+  string) is now rejected when the plan is built rather than when it executes.
+- **Layering: `marrow/kernels` executes, `marrow/expr` orchestrates.**
+  `kernels/aggregate.mojo` keeps the fold algebra (`AggKernel`, `AggState`), the two scans
+  that are not folds (`StringMinMaxKernel`, `CountValidKernel`), and the `Aggregation` /
+  `AggFunction` contracts. The aggregations, the function catalog, the erased boxes and
+  the drivers live in `expr/aggregates.mojo`, next to the fused value expressions.
+- **`Aggregates` — the aggregate *set* owns the multi-aggregate drivers.** The standalone
+  `aggregate_grouped` / `aggregate_whole` / `_thread_local_multi` functions are replaced by
+  `Aggregates.grouped(gb, values)` / `.whole(values)`, so "group once, apply N aggregates"
+  is a property of the set rather than three free functions over parallel lists. The
+  `Aggregate` relation node and `AggregateProcessor` hold one `Aggregates` (plus the value
+  expressions) instead of two parallel lists.
+- **`GroupBy` is factored on a `GroupPartitioner`.** The serial and radix strategies were
+  the same algorithm over a different number of partitions, written out four times (single-
+  vs multi-column × serial vs radix). They are now one driver, `GroupBy._by_partition[P,
+  col_agg]`, parameterized on `WholeRows` (one partition, no gather) or `ByKeyHash` (radix
+  partitioning, parallel). Only the thread-local path stays separate, because it splits by
+  row range rather than by key and therefore has to merge. `GroupBy(keys, ctx, strategy)`
+  can now force a strategy — what tests and benchmarks need to compare the paths on the
+  same input.
+- **Temporal columns no longer need reinterpreting by their callers.** `take`, `concat` and
+  `rapidhash` handle temporal dtypes directly, so `reinterpret_array` /
+  `temporal_backing_dtype` and the reinterpret-and-relabel dance in the group-by drivers and
+  in `AggregateProcessor`'s key path are deleted; `TemporalMinMax` folds over the integer
+  backing internally and relabels on the way out, carrying unit and timezone.
+- **`GroupBy`'s `sum`/`min`/`max`/`count`/`mean`/`count_distinct` shorthands are removed**
+  in favour of `aggregate[A]` (typed) and `apply[F]` (runtime dtype).
+
 ### Features
 
 - **The relational layer can express a *comptime* aggregate — `AggFunc`.** An aggregate is
