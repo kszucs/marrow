@@ -516,7 +516,7 @@ def test_string_less_pred() raises:
     var b = array(["apricot", "banana", "blueberry", "durian"])
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec_pred(col(0) < col(1), batch)
-    assert_true(result == LtKernel.apply_string(a, b))
+    assert_true(result == LtKernel.StringKernel.apply(a, b))
     assert_true(result == array([True, False, False, True]))
 
 
@@ -526,13 +526,13 @@ def test_string_all_compares() raises:
     var b = array(["a", "b", "cc"])
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     assert_true(
-        _exec_pred(col(0) <= col(1), batch) == LeKernel.apply_string(a, b)
+        _exec_pred(col(0) <= col(1), batch) == LeKernel.StringKernel.apply(a, b)
     )
     assert_true(
-        _exec_pred(col(0) > col(1), batch) == GtKernel.apply_string(a, b)
+        _exec_pred(col(0) > col(1), batch) == GtKernel.StringKernel.apply(a, b)
     )
     assert_true(
-        _exec_pred(col(0) >= col(1), batch) == GeKernel.apply_string(a, b)
+        _exec_pred(col(0) >= col(1), batch) == GeKernel.StringKernel.apply(a, b)
     )
 
 

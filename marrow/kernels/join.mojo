@@ -49,7 +49,7 @@ expected payoff for the next round of optimization:
 
 1. **Fused equality verification**
    Current ``SwissHashTable.probe`` does
-   ``take(build_keys, bi) + take(probe_keys, pi) + equal(...)`` which
+   ``take(build_keys, bi) + take(probe_keys, pi) + EqKernel.apply(...)`` which
    allocates three intermediate Arrays (two gathered keys + one mask)
    then ``filter`` rebuilds two Int32 arrays from the candidates.
    A fused kernel could walk ``(bi[i], pi[i])`` once, load
@@ -128,7 +128,6 @@ from ..dtypes import (
     struct_,
     null,
 )
-from .compare import equal
 from .execution import ExecutionContext
 from .filter import take, filter
 from .hashtable import SwissHashTable

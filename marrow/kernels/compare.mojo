@@ -22,31 +22,34 @@ Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 - **Tier 1 (apply)** — ``KernelStruct.apply[T]``: typed array API.
 - **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: type-erased entry.
 
-All six kernels also implement ``str_predicate`` / ``apply_string``: ``dispatch``
-routes ``string`` / ``large_string`` inputs to a lexicographic byte comparison
-(UTF-8 byte order equals codepoint order), so ``<`` ``<=`` ``>`` ``>=`` ``==``
-``!=`` all work on strings. ``equal`` additionally keeps free-function overloads
-for ``StringArray`` / ``StructArray`` / ``AnyArray`` (nested struct equality is
-not folded into ``EqKernel``).
+Each kernel names its string counterpart from ``string.mojo`` as
+``StringKernel``, so ``<`` ``<=`` ``>`` ``>=`` ``==`` ``!=`` work on
+``string`` / ``large_string`` through the *one* implementation of a string
+predicate rather than a second copy here. ``EqKernel`` additionally overloads
+``apply`` for ``StructArray``: row equality is every child column agreeing,
+which is how the hash table verifies key rows.
 """
 
 from ..arrays import (
     BoolArray,
     PrimitiveArray,
-    StringArray,
-    BinaryLikeArray,
     AnyArray,
     StructArray,
 )
 from ..buffers import Bitmap
 from ..views import apply
-from ..dtypes import (
-    NumericType,
-    PrimitiveType,
-    StringLikeType,
-    bool_ as bool_dt,
-)
+from ..dtypes import NumericType, PrimitiveType
 from .core import Kernel
+from .boolean import AndKernel
+from .string import (
+    StringPredicateKernel,
+    StringEqKernel,
+    StringNeKernel,
+    StringLtKernel,
+    StringLeKernel,
+    StringGtKernel,
+    StringGeKernel,
+)
 from .execution import ExecutionContext
 from ..utils import GPU_ENABLED
 
@@ -61,19 +64,12 @@ def _binary_cmp[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
         DType.bool, W
     ],
-    name: String = "",
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Binary comparison kernel — compare + bit-pack via apply."""
-    if len(left) != len(right):
-        raise Error(
-            t"{name} arrays must have the same length, got {len(left)} and"
-            t" {len(right)}"
-        )
-
     comptime native = T.native
     var length = len(left)
     var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy()) if (
@@ -105,22 +101,21 @@ def _binary_cmp[
 trait BinaryCompareKernel(Kernel):
     """Element-wise binary comparison kernel producing a BoolArray.
 
-    Concrete structs define ``comptime name`` and ``core``; ``apply`` and
-    ``dispatch`` have default implementations.
+    Concrete structs define ``comptime name``, ``core`` (the SIMD predicate over
+    fixed-width lanes) and ``StringKernel`` (the `string.mojo` predicate that
+    implements the same comparison over variable-width data); ``apply`` and
+    ``dispatch`` are defaulted.
     """
+
+    comptime StringKernel: StringPredicateKernel
+    """This comparison over strings — the one implementation, lexicographic over
+    UTF-8 bytes. `dispatch` routes string / large_string inputs to it, and the
+    fused expression layer instantiates it directly."""
 
     @staticmethod
     def core[
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-        ...
-
-    @staticmethod
-    def str_predicate[
-        o1: Origin, o2: Origin
-    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
-        """Scalar per-element string comparison (lexicographic byte ordering).
-        """
         ...
 
     @staticmethod
@@ -131,40 +126,8 @@ trait BinaryCompareKernel(Kernel):
         right: PrimitiveArray[T],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
-        return _binary_cmp[T, func=Self.core[T.native, _], name=Self.name](
-            left, right, ctx
-        )
-
-    @staticmethod
-    def apply_string[
-        L: StringLikeType, R: StringLikeType
-    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
-        """Element-wise string comparison producing a bit-packed BoolArray.
-
-        Lexicographic byte ordering (UTF-8 byte order equals codepoint order).
-        Validity is the AND of the operand bitmaps, matching the numeric path.
-        """
-        var n = len(left)
-        if len(right) != n:
-            raise Error(
-                t"{Self.name}: arrays must have the same length, got {n} and"
-                t" {len(right)}"
-            )
-        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
-        var data = Bitmap.alloc_zeroed(n)
-        for i in range(n):
-            if left.is_valid(i) and right.is_valid(i):
-                if Self.str_predicate(
-                    left.unsafe_get(UInt(i)), right.unsafe_get(UInt(i))
-                ):
-                    data.set(i)
-        return BoolArray(
-            length=n,
-            nulls=n - bm.value().view().count_set_bits() if bm else 0,
-            offset=0,
-            bitmap=bm,
-            buffer=data.to_immutable(),
-        )
+        Self.expect_same_length(len(left), len(right))
+        return _binary_cmp[T, func=Self.core[T.native, _]](left, right, ctx)
 
     @staticmethod
     def dispatch(
@@ -172,11 +135,7 @@ trait BinaryCompareKernel(Kernel):
         right: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        if left.dtype() != right.dtype():
-            raise Error(
-                t"{Self.name}: dtype mismatch: {left.dtype()} vs"
-                t" {right.dtype()}"
-            )
+        Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
         def leaf[T: NumericType](d: T) raises -> AnyArray:
@@ -184,14 +143,8 @@ trait BinaryCompareKernel(Kernel):
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
 
-        if left.dtype().is_string():
-            return Self.apply_string(
-                left.as_string(), right.as_string()
-            ).to_any()
-        elif left.dtype().is_large_string():
-            return Self.apply_string(
-                left.as_large_string(), right.as_large_string()
-            ).to_any()
+        if left.dtype().is_string() or left.dtype().is_large_string():
+            return Self.StringKernel.dispatch(left, right)
         else:
             return left.dtype().dispatch_numeric[leaf]()
 
@@ -202,6 +155,7 @@ trait BinaryCompareKernel(Kernel):
 
 
 struct EqKernel(BinaryCompareKernel):
+    comptime StringKernel = StringEqKernel
     comptime name = "equal"
 
     @always_inline
@@ -211,15 +165,39 @@ struct EqKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.eq(b)
 
-    @always_inline
     @staticmethod
-    def str_predicate[
-        o1: Origin, o2: Origin
-    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
-        return a == b
+    def apply(
+        left: StructArray,
+        right: StructArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        """Row equality: element ``i`` is True iff every child column agrees.
+
+        This is the comparison the hash table verifies key rows with, so it
+        recurses through `dispatch` and picks up each child's own dtype arm."""
+        Self.expect_same_dtype(left.dtype, right.dtype)
+        var mask = (
+            Self.dispatch(
+                left.children[0].copy(), right.children[0].copy(), ctx
+            )
+            .as_bool()
+            .copy()
+        )
+        for k in range(1, len(left.children)):
+            mask = AndKernel.apply(
+                mask,
+                Self.dispatch(
+                    left.children[k].copy(), right.children[k].copy(), ctx
+                )
+                .as_bool()
+                .copy(),
+                ctx,
+            )
+        return mask^
 
 
 struct NeKernel(BinaryCompareKernel):
+    comptime StringKernel = StringNeKernel
     comptime name = "not_equal"
 
     @always_inline
@@ -229,15 +207,9 @@ struct NeKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.ne(b)
 
-    @always_inline
-    @staticmethod
-    def str_predicate[
-        o1: Origin, o2: Origin
-    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
-        return a != b
-
 
 struct LtKernel(BinaryCompareKernel):
+    comptime StringKernel = StringLtKernel
     comptime name = "less"
 
     @always_inline
@@ -247,15 +219,9 @@ struct LtKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.lt(b)
 
-    @always_inline
-    @staticmethod
-    def str_predicate[
-        o1: Origin, o2: Origin
-    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
-        return a < b
-
 
 struct LeKernel(BinaryCompareKernel):
+    comptime StringKernel = StringLeKernel
     comptime name = "less_equal"
 
     @always_inline
@@ -265,15 +231,9 @@ struct LeKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.le(b)
 
-    @always_inline
-    @staticmethod
-    def str_predicate[
-        o1: Origin, o2: Origin
-    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
-        return a <= b
-
 
 struct GtKernel(BinaryCompareKernel):
+    comptime StringKernel = StringGtKernel
     comptime name = "greater"
 
     @always_inline
@@ -283,15 +243,9 @@ struct GtKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.gt(b)
 
-    @always_inline
-    @staticmethod
-    def str_predicate[
-        o1: Origin, o2: Origin
-    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
-        return a > b
-
 
 struct GeKernel(BinaryCompareKernel):
+    comptime StringKernel = StringGeKernel
     comptime name = "greater_equal"
 
     @always_inline
@@ -300,85 +254,3 @@ struct GeKernel(BinaryCompareKernel):
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.ge(b)
-
-    @always_inline
-    @staticmethod
-    def str_predicate[
-        o1: Origin, o2: Origin
-    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
-        return not (a < b)  # StringSlice has no __ge__(StringSlice) overload
-
-
-# ---------------------------------------------------------------------------
-# String overloads
-# ---------------------------------------------------------------------------
-
-
-def equal(
-    left: StringArray,
-    right: StringArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise string equality."""
-    var n = len(left)
-    if len(right) != n:
-        raise Error("equal: string arrays must have the same length")
-    var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
-    var bm_builder = Bitmap.alloc_zeroed(n)
-    for i in range(n):
-        var eq = String(left.unsafe_get(UInt(i))) == String(
-            right.unsafe_get(UInt(i))
-        )
-        if eq:
-            bm_builder.set(i)
-    return BoolArray(
-        length=n,
-        nulls=n - bm.value().view().count_set_bits() if bm else 0,
-        offset=0,
-        bitmap=bm,
-        buffer=bm_builder.to_immutable(),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Runtime-typed overloads
-# ---------------------------------------------------------------------------
-
-
-def equal(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    if left.dtype().is_string():
-        return equal(left.as_string(), right.as_string(), ctx).to_any()
-    return EqKernel.dispatch(left, right, ctx)
-
-
-def equal(
-    left: StructArray,
-    right: StructArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise struct equality: all corresponding columns must match.
-
-    Returns a boolean array where element ``i`` is True iff
-    ``left[i] == right[i]`` across every child column.
-    """
-    from .boolean import AndKernel
-
-    var n_keys = len(left.children)
-    var mask = (
-        equal(left.children[0].copy(), right.children[0].copy(), ctx)
-        .as_bool()
-        .copy()
-    )
-    for k in range(1, n_keys):
-        mask = AndKernel.apply(
-            mask,
-            equal(left.children[k].copy(), right.children[k].copy(), ctx)
-            .as_bool()
-            .copy(),
-            ctx,
-        )
-    return mask^

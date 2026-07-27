@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **String comparison has one implementation.** `LtKernel`/`LeKernel`/`GtKernel`/`GeKernel`/
+  `EqKernel`/`NeKernel` each name their string counterpart as `comptime StringKernel`
+  (`StringLtKernel`, … — new in `string.mojo` alongside the existing `StringEqKernel`), so
+  `dispatch` routes `string`/`large_string` to the *same* `StringPredicateKernel` the fused
+  expression layer uses. The parallel `str_predicate`/`apply_string` pair in `compare.mojo`
+  is gone, and with it the second copy of the element-wise compare loop. `StringCompare` in
+  `expr/values.mojo` collapsed into `StringPredicate` for the same reason: the two nodes
+  differed only by which kernel they held.
+- **`Kernel` owns the argument checks every kernel family was repeating.** `error`,
+  `expect_same_length` and `expect_same_dtype` are defaults on the base trait, so the message
+  a caller sees is one sentence written once instead of ten copies drifting apart — and the
+  trait now constrains behaviour rather than being a name-only marker.
+- **The legacy free functions in `compare.mojo`/`boolean.mojo` are gone.** `equal` existed
+  three times (a `StringArray` overload that allocated a `String` per element, a
+  `StructArray` one, and an erased one) beside `EqKernel`; struct row equality is now
+  `EqKernel.apply(StructArray, StructArray)` — the shape the hash table verifies key rows
+  with — and everything else goes through `EqKernel.dispatch`. The numeric-only `is_null`
+  and the validity-dropping `select` are deleted; the interpreter reaches `IsNullKernel` and
+  `case_when` instead, which is also what fixes the two defects below.
+
+### Fixes
+
+- **`is_null` works on every dtype from the interpreter.** `DynValue`'s `IS_NULL` called the
+  numeric-only free function, so `is_null` over a string or temporal column raised.
+- **`if_else` no longer drops validity.** The interpreter's `IF_ELSE` used the legacy
+  `select`, which was numeric-only and ignored the condition's nulls; it now routes through
+  `case_when`, where a null condition counts as false (Arrow semantics).
+- **A fused string predicate reports its nulls.** `StringPredicate` (`startswith`, `like`,
+  `contains`, string `==`/`!=`) inherited the default all-valid `validity()`, so a null
+  operand produced a *valid* `false` in the fused lane while the dynamic lane returned null.
+  It now ANDs its operands' validity, as `StringCompare` already did for `<`/`<=`/`>`/`>=`.
+- **`Bitmap.__eq__` compares words, not bits.** It re-implemented the comparison bit-by-bit
+  against the backing pointer instead of forwarding to `BitmapView.__eq__` (~64x slower for
+  the same answer).
+
 ### Features
 
 - **One compilation unit per test selection.** The harness used to build one runner per

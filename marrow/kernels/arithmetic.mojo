@@ -54,11 +54,7 @@ trait BinaryKernel(Kernel):
         right: PrimitiveArray[T],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveArray[T]:
-        if len(left) != len(right):
-            raise Error(
-                t"{Self.name} arrays must have the same length, got"
-                t" {len(left)} and {len(right)}"
-            )
+        Self.expect_same_length(len(left), len(right))
         comptime native = T.native
         var length = len(left)
         var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
@@ -92,11 +88,7 @@ trait BinaryNumericKernel(BinaryKernel):
         right: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        if left.dtype() != right.dtype():
-            raise Error(
-                t"{Self.name}: dtype mismatch: {left.dtype()} vs"
-                t" {right.dtype()}"
-            )
+        Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
         def leaf[T: NumericType](d: T) raises -> AnyArray:
@@ -116,11 +108,7 @@ trait BinaryFloatKernel(BinaryKernel):
         right: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        if left.dtype() != right.dtype():
-            raise Error(
-                t"{Self.name}: dtype mismatch: {left.dtype()} vs"
-                t" {right.dtype()}"
-            )
+        Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
         def leaf[T: FloatingType](d: T) raises -> AnyArray:

@@ -20,7 +20,7 @@ from ..builders import PrimitiveBuilder, Int32Builder
 from ..buffers import Buffer
 from ..dtypes import int32, uint64, Int32Type, UInt64Type
 from ..views import BufferView
-from .compare import equal
+from .compare import EqKernel
 from .execution import ExecutionContext
 from .filter import take, filter
 from .hashing import rapidhash
@@ -618,7 +618,7 @@ struct SwissHashTable[
         ref probe_indices = indices[1]
 
         # Filter hash-collision false positives by key equality.
-        var mask = equal(
+        var mask = EqKernel.apply(
             take(build_keys, build_indices), take(probe_keys, probe_indices)
         )
         return (

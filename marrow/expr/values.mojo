@@ -130,6 +130,10 @@ from ..kernels.string import (
     ContainsKernel,
     StringEqKernel,
     StringNeKernel,
+    StringLtKernel,
+    StringLeKernel,
+    StringGtKernel,
+    StringGeKernel,
     LikeKernel,
     ILikeKernel,
 )
@@ -1580,6 +1584,14 @@ struct StringPredicate[
             self.l.referenced_columns(), self.r.referenced_columns()
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # A string predicate is null exactly where an operand is: the kernel
+        # already ANDs the operand bitmaps, and `vectorwise` reads only the
+        # data bits, so the node has to carry the validity itself.
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n).as_string().copy()
@@ -1608,55 +1620,13 @@ comptime Like = StringPredicate[LikeKernel, _, _]
 comptime ILike = StringPredicate[ILikeKernel, _, _]
 
 
-# ---------------------------------------------------------------------------
-# String ordering comparisons — `string < <= > >=` -> bool. Same materialize-once
-# breaker shape as `StringPredicate`, but backed by the `compare.mojo` string
-# kernels (`apply_string`, lexicographic UTF-8 byte order). Validity is the AND of
-# the operand validities (both must be valid), exactly like `NumericCompare` — no
-# kernel re-run needed since string-compare nulls are purely operand-driven.
-# ---------------------------------------------------------------------------
-@fieldwise_init
-struct StringCompare[K: BinaryCompareKernel, L: StringValue, R: StringValue](
-    BoolValue
-):
-    comptime OutType = BoolType
-    comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime IsBreaker = True
-    comptime NativeType = DType.int32  # lane width for the bit-pack driver
-    var l: Self.L
-    var r: Self.R
-
-    def referenced_columns(self) -> List[String]:
-        return _union_columns(
-            self.l.referenced_columns(), self.r.referenced_columns()
-        )
-
-    def validity(
-        self, batch: RecordBatch
-    ) raises -> Optional[Bitmap[mut=False]]:
-        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
-
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        var n = batch.num_rows()
-        var la = into_array(self.l.execute(batch), n).as_string().copy()
-        var ra = into_array(self.r.execute(batch), n).as_string().copy()
-        ctx.append(Self.K.apply_string(la, ra).to_any())
-
-    @always_inline
-    def vectorwise[
-        W: Int
-    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
-        DType.bool, W
-    ]:
-        var s = slot
-        slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
-
-
-comptime StrLt = StringCompare[LtKernel, _, _]
-comptime StrLe = StringCompare[LeKernel, _, _]
-comptime StrGt = StringCompare[GtKernel, _, _]
-comptime StrGe = StringCompare[GeKernel, _, _]
+# String ordering comparisons — `string < <= > >=` -> bool. The compare kernels
+# name their string counterpart, so ordering is the same node as every other
+# string predicate; only the kernel differs.
+comptime StrLt = StringPredicate[StringLtKernel, _, _]
+comptime StrLe = StringPredicate[StringLeKernel, _, _]
+comptime StrGt = StringPredicate[StringGtKernel, _, _]
+comptime StrGe = StringPredicate[StringGeKernel, _, _]
 
 
 # ---------------------------------------------------------------------------

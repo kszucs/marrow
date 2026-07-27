@@ -12,7 +12,6 @@ from ...dtypes import int64, float64, Int64Type, Float64Type, large_string
 from ...kernels.cast import cast
 
 from ...kernels.compare import (
-    equal,
     EqKernel,
     NeKernel,
     LtKernel,
@@ -189,10 +188,10 @@ def test_output_length() raises:
 
 
 def test_equal_array_overload() raises:
-    """Type-erased equal(AnyArray, AnyArray) dispatches correctly."""
+    """Type-erased EqKernel.dispatch(AnyArray, AnyArray) resolves the dtype."""
     var a: AnyArray = array([1, 2, 3], int64)
     var b: AnyArray = array([1, 0, 3], int64)
-    var result = equal(a, b)
+    var result = EqKernel.dispatch(a, b)
     assert_equal(result.length(), 3)
 
 
@@ -206,7 +205,7 @@ def test_dtype_mismatch_raises() raises:
     var b: AnyArray = fb.finish()
     var raised = False
     try:
-        _ = equal(a, b)
+        _ = EqKernel.dispatch(a, b)
     except:
         raised = True
     assert_true(raised)
@@ -238,7 +237,8 @@ def test_string_less() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        LtKernel.apply_string(a, b) == array([True, False, False, False, True])
+        LtKernel.StringKernel.apply(a, b)
+        == array([True, False, False, False, True])
     )
 
 
@@ -246,7 +246,8 @@ def test_string_less_equal() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        LeKernel.apply_string(a, b) == array([True, True, True, False, True])
+        LeKernel.StringKernel.apply(a, b)
+        == array([True, True, True, False, True])
     )
 
 
@@ -254,7 +255,8 @@ def test_string_greater() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        GtKernel.apply_string(a, b) == array([False, False, False, True, False])
+        GtKernel.StringKernel.apply(a, b)
+        == array([False, False, False, True, False])
     )
 
 
@@ -262,23 +264,30 @@ def test_string_greater_equal() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        GeKernel.apply_string(a, b) == array([False, True, True, True, False])
+        GeKernel.StringKernel.apply(a, b)
+        == array([False, True, True, True, False])
     )
 
 
 def test_string_equal_via_kernel() raises:
     var a = array(["x", "yy", "z"])
     var b = array(["x", "yz", "z"])
-    assert_true(EqKernel.apply_string(a, b) == array([True, False, True]))
-    assert_true(NeKernel.apply_string(a, b) == array([False, True, False]))
+    assert_true(EqKernel.StringKernel.apply(a, b) == array([True, False, True]))
+    assert_true(
+        NeKernel.StringKernel.apply(a, b) == array([False, True, False])
+    )
 
 
 def test_string_prefix_ordering() raises:
     # a shorter string that is a prefix compares less than the longer one
     var a = array(["ab", "abc", "abc"])
     var b = array(["abc", "ab", "abc"])
-    assert_true(LtKernel.apply_string(a, b) == array([True, False, False]))
-    assert_true(GtKernel.apply_string(a, b) == array([False, True, False]))
+    assert_true(
+        LtKernel.StringKernel.apply(a, b) == array([True, False, False])
+    )
+    assert_true(
+        GtKernel.StringKernel.apply(a, b) == array([False, True, False])
+    )
 
 
 def test_string_compare_nulls() raises:
@@ -293,7 +302,7 @@ def test_string_compare_nulls() raises:
     rb.append_null()
     var left = lb.finish()
     var right = rb.finish()
-    var r = LtKernel.apply_string(left, right)
+    var r = LtKernel.StringKernel.apply(left, right)
     assert_equal(r.null_count(), 2)
     assert_true(r.is_valid(0))
     assert_false(r.is_valid(1))

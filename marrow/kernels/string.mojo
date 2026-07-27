@@ -44,7 +44,7 @@ from .core import Kernel
 # ---------------------------------------------------------------------------
 
 
-struct LengthKernel:
+struct LengthKernel(Kernel):
     """Per-element byte length of a string array → `Int32Array` (matches
     pyarrow's `utf8_length`).
 
@@ -109,7 +109,7 @@ struct LengthKernel:
         elif array.dtype().is_large_string():
             return Self.apply(array.as_large_string()).to_any()
         else:
-            raise Error(t"length: expected a string array, got {array.dtype()}")
+            raise Self.error(t"expected a string array, got {array.dtype()}")
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +146,7 @@ trait StringMapKernel(Kernel):
         elif array.dtype().is_large_string():
             return Self.apply(array.as_large_string()).to_any()
         else:
-            raise Error(
-                t"{Self.name}: expected a string array, got {array.dtype()}"
-            )
+            raise Self.error(t"expected a string array, got {array.dtype()}")
 
 
 struct UpperKernel(StringMapKernel):
@@ -278,12 +276,8 @@ trait StringPredicateKernel(Kernel):
     def apply[
         L: StringLikeType, R: StringLikeType
     ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        Self.expect_same_length(len(left), len(right))
         var n = len(left)
-        if len(right) != n:
-            raise Error(
-                t"{Self.name}: arrays must have the same length, got {n} and"
-                t" {len(right)}"
-            )
         var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
@@ -309,8 +303,8 @@ trait StringPredicateKernel(Kernel):
                 left.as_large_string(), right.as_large_string()
             ).to_any()
         else:
-            raise Error(
-                t"{Self.name}: expected string arrays, got {left.dtype()} and"
+            raise Self.error(
+                t"expected string arrays, got {left.dtype()} and"
                 t" {right.dtype()}"
             )
 
@@ -363,6 +357,51 @@ struct StringNeKernel(StringPredicateKernel):
         o1: Origin, o2: Origin
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s != pat
+
+
+# Ordering comparisons — lexicographic over UTF-8 bytes, which equals codepoint
+# order. `BinaryCompareKernel.StringKernel` names these, so `a < b` on a string
+# column and `LtKernel.dispatch` reach the same implementation.
+
+
+struct StringLtKernel(StringPredicateKernel):
+    comptime name = "less"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s < pat
+
+
+struct StringLeKernel(StringPredicateKernel):
+    comptime name = "less_equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s <= pat
+
+
+struct StringGtKernel(StringPredicateKernel):
+    comptime name = "greater"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s > pat
+
+
+struct StringGeKernel(StringPredicateKernel):
+    comptime name = "greater_equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return not (s < pat)  # StringSlice has no __ge__(StringSlice) overload
 
 
 # ---------------------------------------------------------------------------

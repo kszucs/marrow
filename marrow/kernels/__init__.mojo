@@ -52,7 +52,6 @@ from .aggregate import (
 )
 from .arithmetic import AddKernel, SubKernel, MulKernel, DivKernel
 from .compare import (
-    equal,
     EqKernel,
     NeKernel,
     LtKernel,

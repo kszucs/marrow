@@ -58,11 +58,10 @@ from ..kernels.boolean import (
     NotKernel,
     XorKernel,
     NotNullKernel,
-    is_null,
-    select,
+    IsNullKernel,
 )
 from ..kernels.compare import (
-    equal,
+    EqKernel,
     NeKernel,
     LtKernel,
     LeKernel,
@@ -346,7 +345,9 @@ struct DynValue(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == EQ:
-            return equal(self._args[0].eval(batch), self._args[1].eval(batch))
+            return EqKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == NE:
             return NeKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
@@ -386,7 +387,7 @@ struct DynValue(
         elif self._tag == NOT:
             return NotKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == IS_NULL:
-            return is_null(self._args[0].eval(batch))
+            return IsNullKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == NOT_NULL:
             return NotNullKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == LENGTH:
@@ -394,9 +395,11 @@ struct DynValue(
         elif self._tag == CAST:
             return cast_array(self._args[0].eval(batch), self._cast_to.value())
         elif self._tag == IF_ELSE:
-            return select(
-                self._args[0].eval(batch),
-                self._args[1].eval(batch),
+            # One-branch CASE WHEN: the same null semantics (a null condition
+            # counts as false) and the same dtype coverage as `case_when`.
+            return case_when_kernel(
+                [self._args[0].eval(batch).as_bool().copy()],
+                [self._args[1].eval(batch)],
                 self._args[2].eval(batch),
             )
         elif self._tag == LIKE:

@@ -34,7 +34,7 @@ from ..dtypes import PrimitiveType
 from .execution import ExecutionContext
 from .concat import concat
 from .filter import take
-from .compare import equal
+from .compare import EqKernel
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ def nullif(
     if b.length() != length:
         raise Error(t"nullif: length mismatch: {a.length()} != {b.length()}")
 
-    var eq = equal(a.copy(), b.copy(), ctx).as_bool().copy()
+    var eq = EqKernel.dispatch(a.copy(), b.copy(), ctx).as_bool().copy()
     var candidates = List[AnyArray]()
     candidates.append(a.copy())
 
