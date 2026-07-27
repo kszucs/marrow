@@ -55,7 +55,15 @@ for run in $(seq 1 "$REPEATS"); do
 
         # pytest-benchmark's table columns are: Name Min Max Mean StdDev Median ...
         # Units vary per row (ns/us/ms), so carry the unit from the group header.
-        pixi run -e dev pytest --benchmark "$FILES" -k "$SELECT" 2>/dev/null \
+        # $FILES is intentionally unquoted: it may name several bench files, and
+        # each must reach pytest as its own argument. Quoting it passes one
+        # argument containing spaces, which matches no path — pytest then
+        # collects nothing, prints no benchmark table, and this loop silently
+        # emits zero rows. Point it at `bench_*.mojo` files rather than a
+        # directory, too: a directory drags in test files, and one that fails to
+        # build takes the whole run down with the same empty-output symptom.
+        # shellcheck disable=SC2086
+        pixi run -e dev pytest --benchmark $FILES -k "$SELECT" 2>/dev/null \
         | awk -v c="$sha" -v d="$date" -v s="$subject" -v r="$run" '
             /^Name \(time in/ { unit = $4; sub(/\)$/, "", unit); next }
             /^bench_/ {
