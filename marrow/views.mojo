@@ -1175,14 +1175,12 @@ def _apply_dispatch[
     as a comptime ``Bool`` so the GPU branch is dead-code-eliminated when
     unsupported.
 
-    Three execution paths, picked from ``ctx``:
+    Two execution paths, picked from ``ctx``:
 
     - **GPU** (``ctx.is_gpu()``) — single grid launch via ``elementwise``.
-    - **CPU multi-thread** (``ctx.wants_parallel(length)``) — explicit stripe
-      over ``ctx.resolved_num_threads()`` workers via ``sync_parallelize``;
-      each worker runs ``vectorize`` over its slice. Thread count is owned by
-      ``ctx`` — no Mojo-internal heuristic involved.
-    - **CPU serial** (default) — pure ``vectorize`` on the calling thread.
+    - **CPU** — one ``vectorize`` body handed to ``ctx.stripe``, which runs it
+      on the calling thread or across ``ctx.resolved_num_threads()`` workers.
+      Thread count is owned by ``ctx`` — no Mojo-internal heuristic involved.
     """
     if ctx.is_gpu():
         comptime if gpu_ok:
@@ -1196,35 +1194,20 @@ def _apply_dispatch[
 
     comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
 
-    if ctx.wants_parallel(length):
-        var workers = ctx.resolved_num_threads()
-        var chunk = ceildiv(length, workers)
-
+    # One `vectorize` over a half-open range; `ctx.stripe` decides whether it
+    # runs on the calling thread or across workers. No `align`: `vectorize`
+    # handles its own tail within each stripe, which is exactly what the
+    # hand-written pair did.
+    @always_inline
+    @parameter
+    def span(start: Int, end: Int):
         @always_inline
-        def task(
-            wid: Int,
-        ) {imm chunk, imm length,}:
-            var start = wid * chunk
-            var end = min(start + chunk, length)
-            if end <= start:
-                return
+        def lane[W: Int](i: Int) {imm start,}:
+            process[W](Coord(start + i))
 
-            @always_inline
-            def lane[
-                W: Int
-            ](i: Int) {imm start,}:
-                process[W](Coord(start + i))
+        vectorize[cpu_width](end - start, lane)
 
-            vectorize[cpu_width](end - start, lane)
-
-        sync_parallelize(task, workers)
-    else:
-
-        @always_inline
-        def lane[W: Int](i: Int):
-            process[W](Coord(i))
-
-        vectorize[cpu_width](length, lane)
+    ctx.stripe[span](length)
 
 
 def apply[
