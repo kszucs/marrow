@@ -7,9 +7,9 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import PrimitiveArray
-from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import (
+from ...arrays import PrimitiveArray
+from ...builders import arange, PrimitiveBuilder
+from ...dtypes import (
     int64,
     float64,
     Int64Type,
@@ -17,13 +17,13 @@ from marrow.dtypes import (
     PrimitiveType,
     NumericType,
 )
-from marrow.kernels.aggregate import (
+from ...kernels.aggregate import (
     SumKernel,
     ProductKernel,
     MinKernel,
     MaxKernel,
 )
-from marrow.testing import BenchSuite, Benchmark
+from ...testing import Benchmark
 
 
 def _make_array_with_nulls[
@@ -50,7 +50,7 @@ def bench_sumint64_1k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Int64Type](arr))
+        keep(SumKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -62,7 +62,7 @@ def bench_sumint64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Int64Type](arr))
+        keep(SumKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -74,7 +74,7 @@ def bench_sumint64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Int64Type](arr))
+        keep(SumKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -91,7 +91,7 @@ def bench_sumfloat64_1k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Float64Type](arr))
+        keep(SumKernel.reduce[Float64Type](arr))
 
     b.iter[call]()
 
@@ -103,7 +103,7 @@ def bench_sumfloat64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Float64Type](arr))
+        keep(SumKernel.reduce[Float64Type](arr))
 
     b.iter[call]()
 
@@ -115,7 +115,7 @@ def bench_sumfloat64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Float64Type](arr))
+        keep(SumKernel.reduce[Float64Type](arr))
 
     b.iter[call]()
 
@@ -132,7 +132,7 @@ def bench_sumnulls_int64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Int64Type](arr))
+        keep(SumKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -144,7 +144,7 @@ def bench_sumnulls_int64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(SumKernel.apply[Int64Type](arr))
+        keep(SumKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -161,7 +161,7 @@ def bench_product_int64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(ProductKernel.apply[Int64Type](arr))
+        keep(ProductKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -173,7 +173,7 @@ def bench_product_int64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(ProductKernel.apply[Int64Type](arr))
+        keep(ProductKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -190,7 +190,7 @@ def bench_minint64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(MinKernel.apply[Int64Type](arr))
+        keep(MinKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -202,7 +202,7 @@ def bench_minint64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(MinKernel.apply[Int64Type](arr))
+        keep(MinKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -214,7 +214,7 @@ def bench_maxint64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(MaxKernel.apply[Int64Type](arr))
+        keep(MaxKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -226,7 +226,7 @@ def bench_maxint64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(MaxKernel.apply[Int64Type](arr))
+        keep(MaxKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -238,7 +238,7 @@ def bench_minnulls_int64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(MinKernel.apply[Int64Type](arr))
+        keep(MinKernel.reduce[Int64Type](arr))
 
     b.iter[call]()
 
@@ -246,7 +246,3 @@ def bench_minnulls_int64_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

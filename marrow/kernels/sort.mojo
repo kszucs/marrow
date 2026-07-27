@@ -53,7 +53,6 @@ from ..dtypes import (
 from .cast import cast
 from .execution import ExecutionContext
 from .filter import take as _take
-from .helpers import Kernel
 from .partition import radix_histogram
 
 
@@ -345,7 +344,7 @@ def _radix_sort_indices[
     return idx_buf^.to_immutable()
 
 
-struct SortIndices(Kernel):
+struct SortIndices:
     """Sort-permutation kernel — the indices that would sort a column.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a

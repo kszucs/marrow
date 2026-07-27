@@ -23,11 +23,10 @@ runtime ``select``.
 """
 
 from std.testing import assert_true
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, Int64Array
-from marrow.builders import array, PrimitiveBuilder
-from marrow.dtypes import (
+from ...arrays import AnyArray, Int64Array
+from ...builders import array, PrimitiveBuilder
+from ...dtypes import (
     int64,
     int32,
     float64,
@@ -38,10 +37,10 @@ from marrow.dtypes import (
     timestamp,
     second,
 )
-from marrow.tabular import RecordBatch, record_batch
+from ...tabular import RecordBatch, record_batch
 
 # Fused comptime algebra (values.mojo)
-from marrow.expr.values import (
+from ...expr.values import (
     AnyValue,
     col as fcol,
     lit as flit,
@@ -68,7 +67,7 @@ from marrow.expr.values import (
 )
 
 # Runtime tag interpreter (dynamic.mojo)
-from marrow.expr.dynamic import (
+from ...expr.dynamic import (
     DynValue,
     col as dcol,
     lit as dlit,
@@ -474,7 +473,3 @@ def test_parity_date_trunc() raises:
         array([0, 0], int32).to_any(),
         _ts_batch(),
     )
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

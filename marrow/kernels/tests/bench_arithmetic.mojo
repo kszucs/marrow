@@ -8,12 +8,12 @@ Run with: pixi run pytest marrow/kernels/tests/bench_arithmetic.mojo --benchmark
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import PrimitiveArray
-from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import Int32Type, Float64Type, NumericType
-from marrow.kernels.arithmetic import AddKernel
-from marrow.kernels.execution import ExecutionContext
-from marrow.testing import BenchSuite, Benchmark
+from ...arrays import PrimitiveArray
+from ...builders import arange, PrimitiveBuilder
+from ...dtypes import Int32Type, Float64Type, NumericType
+from ...kernels.arithmetic import AddKernel
+from ...kernels.execution import ExecutionContext
+from ...testing import Benchmark
 
 
 def _make_array_with_nulls[
@@ -299,7 +299,3 @@ def bench_add_int32_1m_parallel_8(mut b: Benchmark) raises:
 
 def bench_add_int32_1m_auto(mut b: Benchmark) raises:
     _bench_add_1m_ctx(b, ExecutionContext.auto())
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

@@ -7,8 +7,8 @@ Run with:
 from std.benchmark import BenchMetric, keep
 from std.python import Python
 
-from marrow.testing import BenchSuite, Benchmark
-from marrow.parquet import read_table, write_table
+from ...testing import Benchmark
+from ...parquet import read_table, write_table
 
 
 def _prepare(path: String, n: Int, compression: String) raises:
@@ -80,7 +80,3 @@ def bench_read_dict_1m(mut b: Benchmark) raises:
 
     b.iter[call]()
     keep(path)  # keep the captured path alive through the whole benchmark
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

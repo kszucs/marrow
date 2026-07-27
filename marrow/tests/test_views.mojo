@@ -1,10 +1,9 @@
 import std.math as math
 
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.buffers import Buffer, Bitmap
-from marrow.views import BufferView, BitmapView, reduce
+from ..buffers import Buffer, Bitmap
+from ..views import BufferView, BitmapView, reduce
 
 
 @always_inline
@@ -499,7 +498,7 @@ def test_bitmapview_pext() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_bitmapview_eq_equal() raises:
+def test_views_bitmapview_eq_equal() raises:
     var bm1 = Bitmap.alloc_zeroed(16)
     var bm2 = Bitmap.alloc_zeroed(16)
     bm1.set(3)
@@ -580,7 +579,7 @@ def test_bitmapview_difference() raises:
     assert_false(v[3])
 
 
-def test_bitmapview_invert() raises:
+def test_views_bitmapview_invert() raises:
     var bm = Bitmap.alloc_zeroed(8)
     bm.set(0)
     bm.set(2)
@@ -796,7 +795,3 @@ def test_reduce_all_null_returns_identity() raises:
         buf.view[DType.int32](), bm.view(), Int32(0)
     )
     assert_equal(result, Int32(0))
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

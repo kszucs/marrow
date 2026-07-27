@@ -39,7 +39,7 @@ struct ExecutionContext(
     """
 
     var num_threads: Int
-    """CPU dispatch strategy, encoded as an Int sentinel:
+    """CPU dispatch strategy, encoded as an Int sentinel.
 
     - ``1``           — **Serial (forced)**: always run on the calling thread,
       irrespective of problem size.

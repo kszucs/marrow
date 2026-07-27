@@ -14,8 +14,8 @@ Run with: pixi run pytest marrow/tests/bench_bitmap.mojo --benchmark
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.buffers import Bitmap, Buffer
-from marrow.testing import BenchSuite, Benchmark
+from ..buffers import Bitmap, Buffer
+from ..testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -891,7 +891,3 @@ def bench_filter_values_1m(mut b: Benchmark) raises:
 
 def bench_filter_values_10m(mut b: Benchmark) raises:
     _bench_filter_values(b, 10_000_000)
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

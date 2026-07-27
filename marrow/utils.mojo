@@ -20,7 +20,42 @@ compiler currently crashes when `ref[_]` is used here (tracked as a TODO).
 from std.utils import Variant
 from std.builtin.rebind import downcast
 from std.os import abort
-from std.sys import has_accelerator, CompilationTarget, size_of
+from std.sys import (
+    has_accelerator,
+    CompilationTarget,
+    get_defined_bool,
+    size_of,
+)
+
+
+# The single switch for GPU code generation across marrow.  **Off by default**:
+# GPU work is opt-in, so build with `-D MARROW_GPU=true` to get it.  With it
+# off, every device path is eliminated at elaboration time — device allocations
+# in the kernels, the accelerator arms of `_apply_dispatch`, and
+# `has_accelerator_support`, which answers False and so makes a GPU
+# `ExecutionContext` raise at the dispatch site rather than misbehave.  Applies
+# to `mojo build` / `mojo run`; `mojo precompile` rejects `-D` outright.
+#
+# This is marrow's largest single compile-time lever.  Cold builds (fresh
+# `MODULAR_CACHE_DIR` — the transform cache makes a repeated identical compile
+# useless as a measurement):
+#
+#                        GPU off (default)   GPU on
+#   cast, numeric x numeric      14.6s        40.1s
+#   cast + sort_indices          43.7s        85.0s
+#
+# **Both halves have to be gated to get any of it.** Device paths only vanish
+# when the allocations are wrapped in `comptime if GPU_ENABLED` *and*
+# `has_accelerator_support` answers False.  Gating either one alone measures as
+# no change at all (45.2s and 84.4s respectively against 42.5s / 84.1s
+# baselines), which is why this looked like a dead end for a long time.  So:
+# anything that touches device code needs a `comptime if GPU_ENABLED` around
+# it; a runtime `if ctx.is_gpu()` cannot be eliminated at elaboration time and
+# silently keeps the whole device path alive.
+#
+# It does not shed the MAX runtime, though — a binary built with the flag off
+# still links `libmax` / AsyncRT exactly as one built with it on.
+comptime GPU_ENABLED = get_defined_bool["MARROW_GPU", False]()
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +217,21 @@ def has_accelerator_support[*dtypes: DType]() -> Bool:
     string, working around a toolchain regression that reported a malformed
     target (e.g. 'metal:2-metal4' on an M2 with the Metal 4 API). It has been
     removed; reinstate it if that regression reappears.
+
+    GPU codegen is **opt-in**: this answers False unless the build passes
+    `-D MARROW_GPU=true` (see `GPU_ENABLED`). Without it a GPU
+    `ExecutionContext` raises at the dispatch site rather than misbehaving.
+    Applies to `mojo build`/`mojo run` only — `mojo precompile` rejects `-D`.
+
+    Answering False here is one half of eliminating GPU codegen; the other half
+    is the `comptime if GPU_ENABLED` guards around the kernels' device
+    allocations. Either half alone measures as no improvement whatsoever — this
+    call returning False while the allocations stay behind a runtime
+    `if ctx.is_gpu()` was 45.2s against a 42.5s baseline. Together they take the
+    same build to 14.6s. Do not "simplify" one side away.
     """
+    comptime if not GPU_ENABLED:
+        return False
     comptime if not has_accelerator():
         return False
     comptime if not CompilationTarget.is_apple_silicon():

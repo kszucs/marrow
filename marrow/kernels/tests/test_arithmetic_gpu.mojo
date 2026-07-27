@@ -1,11 +1,10 @@
 from std.testing import assert_equal, assert_false, assert_true
-from marrow.testing import TestSuite
 from std.gpu.host import DeviceContext
 from std.sys.info import CompilationTarget
 
-from marrow.builders import array, arange
-from marrow.dtypes import int32, float32, Int32Type, Float32Type
-from marrow.kernels.arithmetic import AddKernel
+from ...builders import array, arange
+from ...dtypes import int32, float32, Int32Type, Float32Type
+from ...kernels.arithmetic import AddKernel
 
 
 def test_add_gpu() raises:
@@ -75,7 +74,3 @@ def test_chained_gpu_add() raises:
     assert_equal(abc.unsafe_get(0), 0)
     assert_equal(abc.unsafe_get(1), 3)
     assert_equal(abc.unsafe_get(999), 2997)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -6,12 +6,11 @@ with default seed=0 and default secrets. See:
 """
 
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray, UInt64Array
-from marrow.builders import PrimitiveBuilder, Int32Builder, Int64Builder
-from marrow.dtypes import int32, int64, uint64, Int32Type, Int64Type, UInt64Type
-from marrow.kernels.hashing import (
+from ...arrays import PrimitiveArray, UInt64Array
+from ...builders import PrimitiveBuilder, Int32Builder, Int64Builder
+from ...dtypes import int32, int64, uint64, Int32Type, Int64Type, UInt64Type
+from ...kernels.hashing import (
     rapidhash,
     _rapidhash_fixed,
     NULL_HASH_SENTINEL,
@@ -130,7 +129,3 @@ def test_null_produces_sentinel() raises:
     assert_true(UInt64(h.unsafe_get(0)) != NULL_HASH_SENTINEL)
     assert_equal(UInt64(h.unsafe_get(1)), NULL_HASH_SENTINEL)
     assert_true(UInt64(h.unsafe_get(2)) != NULL_HASH_SENTINEL)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

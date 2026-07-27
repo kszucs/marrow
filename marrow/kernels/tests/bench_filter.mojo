@@ -7,11 +7,11 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import BoolArray, PrimitiveArray, Int64Array
-from marrow.builders import arange, BoolBuilder, PrimitiveBuilder, Int64Builder
-from marrow.dtypes import int64, Int64Type
-from marrow.kernels.filter import filter
-from marrow.testing import BenchSuite, Benchmark
+from ...arrays import BoolArray, PrimitiveArray, Int64Array
+from ...builders import arange, BoolBuilder, PrimitiveBuilder, Int64Builder
+from ...dtypes import int64, Int64Type
+from ...kernels.filter import filter
+from ...testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +167,3 @@ def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

@@ -1,20 +1,19 @@
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
-from marrow.expr.values import AnyValue
+from ...expr.values import AnyValue
 
-from marrow.arrays import AnyArray
-from marrow.builders import array
-from marrow.dtypes import field, int64, float64, Int64Type
-from marrow.schema import schema
-from marrow.tabular import record_batch
-from marrow.expr import (
+from ...arrays import AnyArray
+from ...builders import array
+from ...dtypes import field, int64, float64, Int64Type
+from ...schema import schema
+from ...tabular import record_batch
+from ...expr import (
     col,
     lit,
     ADD,
     LT,
     in_memory_table,
 )
-from marrow.expr.relations import (
+from ...expr.relations import (
     AnyRelation,
     Filter,
     Project,
@@ -23,7 +22,7 @@ from marrow.expr.relations import (
     InMemoryTable,
     ParquetScan,
 )
-from marrow.expr.dynamic import col as dyn_col
+from ...expr.dynamic import col as dyn_col
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +327,3 @@ def test_computed_project_schema() raises:
     assert_equal(len(s), 1)
     assert_equal(s.fields[0].name, "x2")
     assert_equal(s.fields[0].dtype, int64)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

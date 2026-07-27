@@ -1,14 +1,13 @@
 """Tests for SwissHashTable: insert, build, probe, num_keys."""
 
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray, AnyArray, StructArray
-from marrow.buffers import Bitmap
-from marrow.builders import PrimitiveBuilder, UInt64Builder
-from marrow.dtypes import int32, uint64, struct_, Field, Int32Type, UInt64Type
-from marrow.kernels.hashtable import SwissHashTable
-from marrow.kernels.hashing import rapidhash
+from ...arrays import PrimitiveArray, AnyArray, StructArray
+from ...buffers import Bitmap
+from ...builders import PrimitiveBuilder, UInt64Builder
+from ...dtypes import int32, uint64, struct_, Field, Int32Type, UInt64Type
+from ...kernels.hashtable import SwissHashTable
+from ...kernels.hashing import rapidhash
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +264,3 @@ def test_num_keys_after_insert() raises:
     var t = SwissHashTable[rapidhash]()
     _ = t.insert(_keys(1, 2, 3, 2, 1))
     assert_equal(t.num_keys(), 3)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

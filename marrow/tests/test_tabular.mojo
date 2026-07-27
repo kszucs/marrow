@@ -1,10 +1,9 @@
 """Tests for RecordBatch and Table abstractions."""
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
-from marrow.tabular import RecordBatch, Table
-from marrow.arrays import AnyArray
-from marrow.schema import Schema
-from marrow.dtypes import (
+from ..tabular import RecordBatch, Table
+from ..arrays import AnyArray
+from ..schema import Schema
+from ..dtypes import (
     int32,
     int64,
     float64,
@@ -13,7 +12,7 @@ from marrow.dtypes import (
     Int64Type,
     Float64Type,
 )
-from marrow.builders import array, PrimitiveBuilder, Float64Builder
+from ..builders import array, PrimitiveBuilder, Float64Builder
 
 
 def test_record_batch_construction() raises:
@@ -159,7 +158,3 @@ def test_record_batch_eq_sliced() raises:
     var batch_a = RecordBatch(schema, [full_a.slice(1, 3)])
     var batch_b = RecordBatch(schema, [full_b.slice(1, 3)])
     assert_true(batch_a == batch_b)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

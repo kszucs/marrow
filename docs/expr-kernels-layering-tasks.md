@@ -189,7 +189,7 @@ this width.
 `kind()` RTTI. `kernels/distinct.mojo` hosts `count_distinct_grouped` /
 `approx_count_distinct_grouped`, so "grouped aggregation" is split across `aggregate.mojo` and
 `distinct.mojo`. `bitmap_and` exists twice (`kernels/helpers` alias over `Bitmap.intersect`) and is
-the source of the documented `check_lib` false positives.
+the source of the (now removed) `check_lib` false positives.
 
 ---
 

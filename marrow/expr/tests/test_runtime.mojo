@@ -1,7 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     PrimitiveArray,
     BoolArray,
     AnyArray,
@@ -9,8 +8,8 @@ from marrow.arrays import (
     Int32Array,
     TimestampArray,
 )
-from marrow.builders import array, PrimitiveBuilder
-from marrow.dtypes import (
+from ...builders import array, PrimitiveBuilder
+from ...dtypes import (
     int64,
     float64,
     bool_ as bool_dt,
@@ -21,7 +20,7 @@ from marrow.dtypes import (
     second,
     TimestampType,
 )
-from marrow.kernels.arithmetic import (
+from ...kernels.arithmetic import (
     AddKernel,
     SubKernel,
     AbsKernel,
@@ -29,11 +28,11 @@ from marrow.kernels.arithmetic import (
     ModKernel,
     FloordivKernel,
 )
-from marrow.kernels.boolean import XorKernel
-from marrow.kernels.string import LengthKernel, LikeKernel, ILikeKernel
-from marrow.kernels.compare import LtKernel, LeKernel, GtKernel, GeKernel
-from marrow.kernels.membership import is_in
-from marrow.kernels.temporal import (
+from ...kernels.boolean import XorKernel
+from ...kernels.string import LengthKernel, LikeKernel, ILikeKernel
+from ...kernels.compare import LtKernel, LeKernel, GtKernel, GeKernel
+from ...kernels.membership import is_in
+from ...kernels.temporal import (
     YearKernel,
     MonthKernel,
     DayKernel,
@@ -45,8 +44,8 @@ from marrow.kernels.temporal import (
     DayOfYearKernel,
     date_trunc,
 )
-from marrow.tabular import RecordBatch, record_batch
-from marrow.expr import (
+from ...tabular import RecordBatch, record_batch
+from ...expr import (
     DynValue,
     col,
     lit,
@@ -76,7 +75,7 @@ from marrow.expr import (
 
 # The op tags added in this task are not re-exported from ``marrow.expr`` yet
 # (that's a sibling packaging task), so import them from the module directly.
-from marrow.expr.dynamic import (
+from ...expr.dynamic import (
     MOD,
     FLOORDIV,
     XOR,
@@ -786,7 +785,3 @@ def test_temporal_referenced_columns() raises:
     var cols = col("ts").year().referenced_columns()
     assert_equal(len(cols), 1)
     assert_equal(cols[0], "ts")
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

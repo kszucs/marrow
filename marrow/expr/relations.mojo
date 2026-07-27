@@ -42,7 +42,7 @@ from ..tabular import RecordBatch
 from .values import AnyValue, AggExpr
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
-from .aggregates import Aggregates
+from .aggregates import AggFunc
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -301,10 +301,10 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         # float64), and an aggregate not defined for the column's type is
         # rejected here rather than at execution.
         var input_exprs = List[AnyValue]()
-        var resolved = Aggregates()
+        var resolved = List[AggFunc]()
         for i in range(len(aggs)):
             var v = aggs[i].input_for(input_schema)
-            resolved.add(aggs[i].resolve(v.execute(probe).dtype()))
+            resolved.append(aggs[i].resolve(v.execute(probe).dtype()))
             fields.append(Field(aggs[i].out_name, resolved[i].out_dtype.copy()))
             input_exprs.append(v^)
 
@@ -724,13 +724,13 @@ struct Aggregate(Relation):
 
     ``aggs[i]`` is the aggregate applied to the value expression ``inputs[i]``.
     Each carries a *comptime* ``Aggregation``, so a plan built from fused values
-    and ``Aggregates.append[A]`` carries no function-name interpretation at all;
+    and ``AggFunc.of[A]`` carries no function-name interpretation at all;
     ``AnyRelation.aggregate`` produces the same node from runtime names."""
 
     var input: AnyRelation
     var keys: List[AnyValue]
     var inputs: List[AnyValue]
-    var aggs: Aggregates
+    var aggs: List[AggFunc]
     var _schema: Schema
 
     def __init__(
@@ -739,7 +739,7 @@ struct Aggregate(Relation):
         var input: AnyRelation,
         var keys: List[AnyValue],
         var inputs: List[AnyValue],
-        var aggs: Aggregates,
+        var aggs: List[AggFunc],
         var schema: Schema,
     ):
         self.input = input^

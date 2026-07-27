@@ -1027,7 +1027,7 @@ What did work, and is worth keeping in a retry:
 
 **Process note:** the widening compiled cleanly against `test_aggregate` and `test_groupby` (23 and
 32 passing) while the expr layer was broken — a per-file `check` is not proof the library builds.
-Run `check_lib`, or at minimum `check marrow/expr/tests/test_streaming.mojo`, before believing a
+Run `precompile`, or at minimum `check marrow/expr/tests/test_streaming.mojo`, before believing a
 kernel-layer change is done.
 
 **Q2.6 — Delete `reinterpret_array`** · Depends: Q2.5 for the `groupby` half ·

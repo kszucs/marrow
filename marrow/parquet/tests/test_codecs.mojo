@@ -7,10 +7,9 @@ PyArrow-written files across the compression codecs marrow supports on read."""
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import read_table
-from marrow.parquet.codecs import Rle, Compression
-from marrow.parquet.utils import CompressionLibs
+from ...parquet import read_table
+from ...parquet.codecs import Rle, Compression
+from ...parquet.utils import CompressionLibs
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +363,3 @@ def test_read_gzip() raises:
 
 def test_read_lz4() raises:
     _roundtrip_read("lz4")
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

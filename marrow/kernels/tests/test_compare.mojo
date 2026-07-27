@@ -1,18 +1,17 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray, AnyArray
-from marrow.builders import (
+from ...arrays import PrimitiveArray, AnyArray
+from ...builders import (
     array,
     PrimitiveBuilder,
     Int64Builder,
     Float64Builder,
     StringBuilder,
 )
-from marrow.dtypes import int64, float64, Int64Type, Float64Type, large_string
-from marrow.kernels.cast import cast
+from ...dtypes import int64, float64, Int64Type, Float64Type, large_string
+from ...kernels.cast import cast
 
-from marrow.kernels.compare import (
+from ...kernels.compare import (
     equal,
     EqKernel,
     NeKernel,
@@ -129,7 +128,7 @@ def test_less_float64() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_length_mismatch_raises() raises:
+def test_compare_length_mismatch_raises() raises:
     """Comparison of arrays with different lengths raises an error."""
     var a = array([1, 2, 3], int64)
     var b = array([1, 2], int64)
@@ -146,7 +145,7 @@ def test_length_mismatch_raises() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_single_element() raises:
+def test_compare_single_element() raises:
     """Comparisons work on length-1 arrays."""
     var a = array([7], int64)
     var b = array([7], int64)
@@ -159,7 +158,7 @@ def test_single_element() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_non_aligned_length() raises:
+def test_compare_non_aligned_length() raises:
     """Comparisons work on lengths that are not multiples of SIMD width."""
     var n = 7
     var a = array([1, 2, 3, 4, 5, 6, 7], int64)
@@ -321,7 +320,3 @@ def test_large_string_ordering() raises:
     assert_true(rb[0].value())  # apple < apricot
     assert_false(rb[1].value())  # banana == banana
     assert_false(rb[2].value())  # cherry > berry
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

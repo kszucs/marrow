@@ -10,9 +10,8 @@ Covers the four value families and the universal `AnyValue` box:
 
 from std.testing import assert_true, assert_equal
 
-from marrow.testing import TestSuite
-from marrow.builders import array, ListBuilder, Int64Builder, PrimitiveBuilder
-from marrow.dtypes import (
+from ...builders import array, ListBuilder, Int64Builder, PrimitiveBuilder
+from ...dtypes import (
     int64,
     int32,
     float64,
@@ -25,9 +24,9 @@ from marrow.dtypes import (
     timestamp,
     second,
 )
-from marrow.tabular import record_batch, RecordBatch
-from marrow.scalars import AnyScalar
-from marrow.expr.values import (
+from ...tabular import record_batch, RecordBatch
+from ...scalars import AnyScalar
+from ...expr.values import (
     col,
     lit,
     slit,
@@ -92,7 +91,7 @@ from marrow.expr.values import (
     DayOfWeek,
     DayOfYear,
 )
-from marrow.expr.dynamic import col as dyn_col
+from ...expr.dynamic import col as dyn_col
 
 
 # instantiation is a COMPILE-TIME proof the operand is a fused `NumericValue` node
@@ -1006,7 +1005,3 @@ def test_date_trunc_fluent() raises:
     )
     # truncating to the hour zeroes minutes/seconds
     assert_true(into_array(h, 2) == array([0, 0], int32).to_any())
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

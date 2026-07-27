@@ -643,7 +643,6 @@ struct GroupBy(Movable):
         def group_partition(
             rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[Int32Array, List[AnyArray]]:
-            var n = len(part_hashes)
             var grouper = HashGrouper()
             var grouped = grouper.consume_hashes(
                 part_hashes, grow_adaptively=not partition

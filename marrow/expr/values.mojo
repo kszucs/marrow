@@ -163,7 +163,6 @@ from ..kernels.boolean import (
     IsInfKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
-from ..kernels.helpers import bitmap_and
 from .pruning import PruneStats, PruneBound
 from .dynamic import DynValue, DynAgg
 from .aggregates import AggFunc
@@ -641,7 +640,7 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -743,7 +742,7 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -893,7 +892,7 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -1635,7 +1634,7 @@ struct StringCompare[K: BinaryCompareKernel, L: StringValue, R: StringValue](
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
@@ -2263,7 +2262,9 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 # ---------------------------------------------------------------------------
 struct AnyValue(Copyable, Movable, Writable):
     """Type-erased expression handle — the boundary the relational engine
-    (`marrow.expr.execution`) holds. Boxes either:
+    (`marrow.expr.execution`) holds.
+
+    Boxes either:
 
       * a comptime fused `Value` node — `execute` runs the fused engine against a
         fresh context and returns a column (`AnyArray`); `prune` is the conservative

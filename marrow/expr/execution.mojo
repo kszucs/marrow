@@ -29,7 +29,7 @@ from ..kernels.concat import concat
 from ..kernels.filter import filter
 from ..kernels.sort import sort as sort_by_keys
 from ..kernels.groupby import HashGrouper
-from .aggregates import Aggregates
+from .aggregates import AggFunc
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet import (
@@ -576,7 +576,7 @@ struct AggregateProcessor(Processor):
     var input: AnyProcessor
     var keys: List[AnyValue]
     var inputs: List[AnyValue]
-    var aggs: Aggregates
+    var aggs: List[AggFunc]
     var _schema: Schema
     var _grouper: HashGrouper
     var _ctx: ExecutionContext
@@ -588,7 +588,7 @@ struct AggregateProcessor(Processor):
         var input: AnyProcessor,
         var keys: List[AnyValue],
         var inputs: List[AnyValue],
-        var aggs: Aggregates,
+        var aggs: List[AggFunc],
         var schema: Schema,
         var ctx: ExecutionContext,
     ) raises:
@@ -655,7 +655,7 @@ struct AggregateProcessor(Processor):
             # there is nothing to hash: every row is group 0 and the aggregates
             # run through the same per-column entry point as a GROUP BY.
             #
-            # Not `Aggregates.whole`, which would be faster here (a vectorized
+            # Not `FoldedAggregates.whole`, which would be faster here (a vectorized
             # SIMD reduce rather than a scatter): reaching it from a *plan*
             # makes the whole name→aggregate catalog reachable from every plan,
             # and that measured +13% on the fused binary-size gate for a path a

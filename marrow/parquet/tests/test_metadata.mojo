@@ -9,16 +9,15 @@ chunks read back absent."""
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import (
+from ...parquet import (
     read_metadata,
     read_statistics,
     read_page_index,
     read_page_bounds,
     write_table,
 )
-from marrow.tabular import Table
-from marrow.c_data import CArrowArrayStream
+from ...tabular import Table
+from ...c_data import CArrowArrayStream
 
 
 def _col(arr: PythonObject) raises -> PythonObject:
@@ -350,7 +349,3 @@ def test_read_float16_minmax() raises:
     assert_true(cs.min.value().as_float16().value() == Float16(1.5))
     assert_true(cs.max.value().as_float16().value() == Float16(4.5))
     remove(path)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -4,9 +4,8 @@ from std.testing import (
     assert_false,
     assert_raises,
 )
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     AnyArray,
     PrimitiveArray,
     BoolArray,
@@ -16,7 +15,7 @@ from marrow.arrays import (
     StructArray,
     ChunkedArray,
 )
-from marrow.builders import (
+from ...builders import (
     array,
     arange,
     PrimitiveBuilder,
@@ -27,8 +26,8 @@ from marrow.builders import (
     Int32Builder,
     Float32Builder,
 )
-from marrow.dtypes import *
-from marrow.kernels.concat import concat
+from ...dtypes import *
+from ...kernels.concat import concat
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +424,3 @@ def test_combine_chunks_delegates() raises:
     assert_equal(result[2].value(), 30)
     assert_equal(result[3].value(), 40)
     assert_equal(result[4].value(), 50)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -1,7 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
-from marrow.arrays import *
-from marrow.builders import (
+from ..arrays import *
+from ..builders import (
     array,
     arange,
     nulls,
@@ -17,10 +16,10 @@ from marrow.builders import (
     Int64Builder,
     Float64Builder,
 )
-from marrow.dtypes import *
-from marrow.buffers import Buffer
-from marrow.buffers import Bitmap
-from marrow.kernels.filter import drop_null
+from ..dtypes import *
+from ..buffers import Buffer
+from ..buffers import Bitmap
+from ..kernels.filter import drop_null
 
 from std.reflection import call_location
 
@@ -368,7 +367,7 @@ def test_list_str() raises:
     assert_equal(first_value[1], "world")
 
 
-def test_list_of_list() raises:
+def test_arrays_list_of_list() raises:
     var top_b = ListBuilder(
         ListBuilder(Int64Builder(capacity=10), capacity=6),
         capacity=3,
@@ -2239,7 +2238,3 @@ def test_empty_nested_list() raises:
     assert_true(arr.dtype().is_list())
     assert_equal(len(arr.as_list().values()), 0)
     assert_true(arr.as_list().values().dtype().is_list())
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

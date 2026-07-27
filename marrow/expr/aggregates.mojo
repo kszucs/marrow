@@ -17,14 +17,14 @@ Three layers, each one narrower than the last:
   carries the whole per-column implementation, so the routing that used to be a
   name comparison (the bytewise string scan, the temporal fold, the
   validity-only count, the distinct sketches) *is* which type was resolved.
-- **`AggFunc` / `Aggregates` / `FoldedAggregates`** — the erasure a *plan*
-  needs, because a query's aggregate list is heterogeneous and only known at run
-  time. ``AggFunc`` is one aggregate behind a single function pointer into its
-  ``Aggregation`` and ``Aggregates`` is the list of them, which is all a plan
-  holds; ``FoldedAggregates`` is what an eager ``GroupBy`` driver holds, adding
-  the partial/merge fold that lets a runtime aggregate set take the
-  thread-local path. Both boxes for a member come out of *one* ``resolve_agg``,
-  and nothing dispatches on a name afterwards.
+- **`AggFunc` / `FoldedAggregates`** — the erasure a *plan* needs, because a
+  query's aggregate list is heterogeneous and only known at run time.
+  ``AggFunc`` is one aggregate behind a single function pointer into its
+  ``Aggregation``, and a plan holds a plain ``List`` of them — there is nothing
+  a wrapper would add. ``FoldedAggregates`` is what an eager ``GroupBy`` driver
+  holds instead, adding the partial/merge fold that lets a runtime aggregate set
+  take the thread-local path. Both boxes for a member come out of *one*
+  ``resolve_agg``, and nothing dispatches on a name afterwards.
 
 Two ways in, one destination:
 
@@ -560,64 +560,3 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
             )
             cols.append(grouped.aggregates[j].copy())
         return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
-
-
-# ---------------------------------------------------------------------------
-# Aggregates — the aggregate *set* a query applies in one pass
-# ---------------------------------------------------------------------------
-
-
-struct Aggregates(Copyable, Movable, Sized, Writable):
-    """The N aggregates a query computes, and how to compute them together.
-
-    What a *plan* holds: one `AggFunc` per output column, each already bound to
-    the dtype its input turned out to have. A plan aggregates column by column
-    (`AggregateProcessor` groups incrementally as morsels arrive), so this list
-    deliberately carries nothing else — reaching the thread-local fold from here
-    would link that code into every plan.
-
-    An eager `GroupBy` driver wants more, and gets its own type:
-    `FoldedAggregates`. Members are added either by naming the `Aggregation`
-    (`append[A]`, the AOT form) or by resolving a function name against the
-    column's dtype (`append(name, dtype)`, the dynamic form)."""
-
-    var _funcs: List[AggFunc]
-
-    def __init__(out self):
-        self._funcs = List[AggFunc]()
-
-    def __init__(out self, var funcs: List[AggFunc]):
-        self._funcs = funcs^
-
-    def __len__(self) -> Int:
-        return len(self._funcs)
-
-    def __getitem__(ref self, index: Int) -> ref[self._funcs[index]] AggFunc:
-        return self._funcs[index]
-
-    def add(mut self, var func: AggFunc):
-        """Add an already-resolved aggregate — what an ``AggExpr`` hands over
-        once the plan knows its input's dtype."""
-        self._funcs.append(func^)
-
-    def append[A: Aggregation](mut self, value_dtype: AnyDataType) raises:
-        """Add aggregation ``A`` over a ``value_dtype`` column (AOT)."""
-        self._funcs.append(AggFunc.of[A](value_dtype))
-
-    def append(mut self, name: String, value_dtype: AnyDataType) raises:
-        """Add the aggregate ``name`` over a ``value_dtype`` column (dynamic).
-        """
-        self.add(AggFunc(name, value_dtype))
-
-    def names(self) -> List[String]:
-        """Each aggregate's default output column name."""
-        var out = List[String]()
-        for ref f in self._funcs:
-            out.append(f.name)
-        return out^
-
-    def write_to[W: Writer](self, mut writer: W):
-        for i in range(len(self._funcs)):
-            if i > 0:
-                writer.write(", ")
-            self._funcs[i].write_to(writer)

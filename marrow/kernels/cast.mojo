@@ -53,9 +53,9 @@ from ..dtypes import (
     TimeUnit,
     int32,
 )
-from .helpers import Kernel
 from .execution import ExecutionContext
 from .filter import take
+from ..utils import GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ from .filter import take
 # ---------------------------------------------------------------------------
 
 
-struct NumericCast(Kernel):
+struct NumericCast:
     """Numeric ↔ numeric cast: one ``pop.cast`` per SIMD lane."""
 
     comptime name = "numeric_cast"
@@ -122,8 +122,11 @@ struct NumericCast(Kernel):
         var length = len(array)
 
         var buf: Buffer[mut=True]
-        if ctx.is_gpu():
-            buf = Buffer.alloc_device[Out](ctx.device.value(), length)
+        comptime if GPU_ENABLED:
+            if ctx.is_gpu():
+                buf = Buffer.alloc_device[Out](ctx.device.value(), length)
+            else:
+                buf = Buffer.alloc_uninit[Out](length)
         else:
             buf = Buffer.alloc_uninit[Out](length)
         var dst = buf.view[Out](0, length)
@@ -180,8 +183,8 @@ struct NumericCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct NumToBool(Kernel):
-    """numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
+struct NumToBool:
+    """Numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
 
     comptime name = "num_to_bool"
 
@@ -205,9 +208,13 @@ struct NumToBool(Kernel):
         From: NumericType
     ](array: PrimitiveArray[From], ctx: ExecutionContext) raises -> BoolArray:
         var length = len(array)
-        var result = Bitmap.alloc_device(
-            ctx.device.value(), length
-        ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
+        var result: Bitmap[mut=True]
+        comptime if GPU_ENABLED:
+            result = Bitmap.alloc_device(
+                ctx.device.value(), length
+            ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
+        else:
+            result = Bitmap.alloc_uninit(length)
         apply[From.native, Self.core[From.native, _]](
             array.values(), result.view(), ctx
         )
@@ -220,8 +227,8 @@ struct NumToBool(Kernel):
         )
 
 
-struct BoolToNum(Kernel):
-    """bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
+struct BoolToNum:
+    """Bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
 
     comptime name = "bool_to_num"
 
@@ -250,8 +257,11 @@ struct BoolToNum(Kernel):
         comptime Out = To.native
         var length = len(array)
         var buf: Buffer[mut=True]
-        if ctx.is_gpu():
-            buf = Buffer.alloc_device[Out](ctx.device.value(), length)
+        comptime if GPU_ENABLED:
+            if ctx.is_gpu():
+                buf = Buffer.alloc_device[Out](ctx.device.value(), length)
+            else:
+                buf = Buffer.alloc_uninit[Out](length)
         else:
             buf = Buffer.alloc_uninit[Out](length)
         apply[Out, Self.core[Out, _]](
@@ -271,7 +281,7 @@ struct BoolToNum(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct TemporalCast(Kernel):
+struct TemporalCast:
     """Cast temporal ↔ integer / temporal ↔ temporal. Same physical width and
     resolution → a zero-copy relabel (``_reinterpret``); a differing unit → scale
     the underlying integers by the unit ratio (``_scale``)."""
@@ -346,6 +356,7 @@ struct TemporalCast(Kernel):
             return Self._unit_ns(dt.as_time64().unit)
         raise Error(t"cast: {dt} is not a temporal type")
 
+    # TODO: remove this
     @staticmethod
     def _reinterpret(data: ArrayData, to: AnyDataType) raises -> AnyArray:
         """Relabel an integer/temporal buffer as ``to`` without moving data."""
@@ -403,7 +414,7 @@ struct TemporalCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct StringToNum(Kernel):
+struct StringToNum:
     """Parse strings to a numeric type. ``safe`` is comptime: safe=True raises on
     an unparseable value, safe=False nulls it — the dead branch is elided."""
 
@@ -459,7 +470,7 @@ struct StringToNum(Kernel):
         return b.finish()
 
 
-struct StringToBool(Kernel):
+struct StringToBool:
     """Parse ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive) to bool.
     ``safe`` comptime: raise vs null on an unrecognized value."""
 
@@ -502,7 +513,7 @@ struct StringToBool(Kernel):
         return b.finish()
 
 
-struct NumToString(Kernel):
+struct NumToString:
     """Format a numeric array to strings (per-element ``String(value)``)."""
 
     comptime name = "num_to_string"
@@ -535,7 +546,7 @@ struct NumToString(Kernel):
         return b.finish()
 
 
-struct BoolToString(Kernel):
+struct BoolToString:
     """Format a bool array to ``"true"``/``"false"`` strings."""
 
     comptime name = "bool_to_string"
@@ -569,7 +580,7 @@ struct BoolToString(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct BinaryLikeCast(Kernel):
+struct BinaryLikeCast:
     """Cast between the binary-like containers (binary, large_binary, utf8,
     large_utf8). Equal physical offset width → a zero-copy relabel that shares
     the offset and value buffers; differing width (32↔64-bit offsets) → a rebuild
@@ -641,7 +652,7 @@ struct BinaryLikeCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryCast(Kernel):
+struct FixedSizeBinaryCast:
     """Cast fixed-size-binary ↔ variable-length binary. ``to_binary`` derives the
     offset buffer from the fixed width and shares the data bytes; ``from_binary``
     packs each element into a fixed cell, raising when a length ≠ the width."""
@@ -715,7 +726,7 @@ struct FixedSizeBinaryCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct NullCast(Kernel):
+struct NullCast:
     """Cast a null array to any target type: an all-null array of that type."""
 
     comptime name = "null_cast"
@@ -734,7 +745,7 @@ struct NullCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct DecimalCast(Kernel):
+struct DecimalCast:
     """Cast decimal ↔ decimal (rescale) and decimal ↔ numeric.
 
     Both sides resolve uniformly to a scalar native and a scale — a decimal to its
@@ -880,7 +891,7 @@ struct DecimalCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct ListCast(Kernel):
+struct ListCast:
     """Cast a list-like array (list / large_list) to another of the same kind by
     recursively casting its child values to the target's value type; the offset
     buffer and validity are shared unchanged."""
@@ -914,7 +925,7 @@ struct ListCast(Kernel):
         )
 
 
-struct StructCast(Kernel):
+struct StructCast:
     """Cast struct → struct by recursively casting each field to the target
     field's type (matched by position); the field counts must match."""
 
@@ -948,7 +959,7 @@ struct StructCast(Kernel):
         )
 
 
-struct DictionaryCast(Kernel):
+struct DictionaryCast:
     """Decode a dictionary array — gather its values by index (``take``) — then
     cast the decoded values to the target type when it differs."""
 

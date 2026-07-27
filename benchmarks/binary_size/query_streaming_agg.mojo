@@ -22,7 +22,7 @@ from marrow.builders import array
 from marrow.dtypes import AnyDataType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.aggregates import Aggregates
+from marrow.expr.aggregates import AggFunc
 from marrow.expr.values import col, AnyValue
 from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation, execute
 
@@ -42,9 +42,9 @@ def main() raises:
     aggs.append(AnyValue(col("a", int64)))
     aggs.append(AnyValue(col("b", int64)))
 
-    var funcs = Aggregates()
-    funcs.append("sum", AnyDataType(int64))
-    funcs.append("min", AnyDataType(int64))
+    var funcs = List[AggFunc]()
+    funcs.append(AggFunc("sum", AnyDataType(int64)))
+    funcs.append(AggFunc("min", AnyDataType(int64)))
 
     var agg = Aggregate(
         input=AnyRelation(InMemoryTable(batch=batch)),

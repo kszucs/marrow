@@ -5,7 +5,7 @@ and opens it in Instruments.
 
 Usage (via pixi task):
     pixi run profile marrow/kernels/tests/profile_filter.mojo
-    pixi run profile --open python/tests/profile_filter.py
+    pixi run profile --open python/marrow/tests/profile_filter.py
 """
 
 import argparse

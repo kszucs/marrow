@@ -50,7 +50,7 @@ from ..scalars import (
     StringScalar,
 )
 from ..views import reduce
-from .helpers import Kernel
+from .core import Kernel
 from .execution import ExecutionContext
 from .distinct import (
     count_distinct,

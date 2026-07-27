@@ -1,14 +1,13 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ..arrays import (
     AnyArray,
     BoolArray,
     StringArray,
     FixedSizeListArray,
     StructArray,
 )
-from marrow.builders import (
+from ..builders import (
     array,
     BoolBuilder,
     StringBuilder,
@@ -16,7 +15,7 @@ from marrow.builders import (
     StructBuilder,
     Int32Builder,
 )
-from marrow.dtypes import (
+from ..dtypes import (
     int32,
     int64,
     float64,
@@ -37,7 +36,7 @@ from marrow.dtypes import (
     microsecond,
     nanosecond,
 )
-from marrow.scalars import (
+from ..scalars import (
     AnyScalar,
     BoolScalar,
     Int32Scalar,
@@ -433,7 +432,3 @@ def test_interval_scalar_month_day_nano() raises:
 #     var s = TemporalScalar(Int64(7), duration(nanosecond).to_any())
 #     var any_s = s^.to_any()
 #     assert_true(any_s.as_temporal() == TemporalScalar(Int64(7), duration(nanosecond).to_any()))
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

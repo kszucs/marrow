@@ -199,3 +199,9 @@ package/
 
 # integration test deps (cloned + built by pixi tasks)
 integration/arrow/
+
+# Mojo build artifacts.  A `marrow.mojoc` in the repo root is especially bad:
+# runners compile with `-I .`, so it shadows the whole `marrow/` source tree.
+*.mojoc
+*.mojopkg
+*.dSYM/

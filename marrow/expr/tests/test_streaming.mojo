@@ -9,11 +9,10 @@ never mutates them).
 
 from std.testing import assert_equal, assert_true
 
-from marrow.testing import TestSuite
 
-from marrow.arrays import Date32Array, TimestampArray
-from marrow.builders import array, Date32Builder, PrimitiveBuilder
-from marrow.dtypes import (
+from ...arrays import Date32Array, TimestampArray
+from ...builders import array, Date32Builder, PrimitiveBuilder
+from ...dtypes import (
     Int32Type,
     Int64Type,
     StringType,
@@ -27,10 +26,10 @@ from marrow.dtypes import (
     timestamp,
     field,
 )
-from marrow.schema import Schema, schema
-from marrow.tabular import RecordBatch, record_batch
-from marrow.expr.values import Gt, AnyValue, col
-from marrow.expr.relations import (
+from ...schema import Schema, schema
+from ...tabular import RecordBatch, record_batch
+from ...expr.values import Gt, AnyValue, col
+from ...expr.relations import (
     InMemoryTable,
     Project,
     Sort,
@@ -39,7 +38,7 @@ from marrow.expr.relations import (
     execute,
     in_memory_table,
 )
-from marrow.expr.dynamic import col as dyn_col, lit, case_when, if_else
+from ...expr.dynamic import col as dyn_col, lit, case_when, if_else
 
 
 def _batch() raises -> RecordBatch:
@@ -839,7 +838,3 @@ def test_aggregate_streams_across_morsels() raises:
         result.columns[2].as_string().copy() == array(["pear", "apple", "kiwi"])
     )
     assert_true(result.columns[3].as_int64().copy() == array([1, 2, 1], int64))
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

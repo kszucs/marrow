@@ -37,8 +37,9 @@ from ..dtypes import (
     bool_ as bool_dt,
 )
 from ..views import BitmapView, apply
-from .helpers import Kernel
+from .core import Kernel
 from .execution import ExecutionContext
+from ..utils import GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -371,9 +372,13 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
         def leaf[T: FloatingType](d: T) raises -> BoolArray:
             ref prim = arr.as_primitive[T]()
             var n = len(prim)
-            var result = Bitmap.alloc_device(
-                ctx.device.value(), n
-            ) if ctx.is_gpu() else Bitmap.alloc_uninit(n)
+            var result: Bitmap[mut=True]
+            comptime if GPU_ENABLED:
+                result = Bitmap.alloc_device(
+                    ctx.device.value(), n
+                ) if ctx.is_gpu() else Bitmap.alloc_uninit(n)
+            else:
+                result = Bitmap.alloc_uninit(n)
             apply[T.native, Self.core[T.native, _]](
                 prim.values(), result.view(), ctx
             )

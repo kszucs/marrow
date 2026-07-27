@@ -33,10 +33,9 @@ from std.testing import (
     assert_raises,
 )
 
-from marrow.testing import TestSuite
 
-from marrow.builders import array, Date32Builder, PrimitiveBuilder
-from marrow.dtypes import (
+from ...builders import array, Date32Builder, PrimitiveBuilder
+from ...dtypes import (
     Int64Type,
     TimestampType,
     date32,
@@ -47,10 +46,10 @@ from marrow.dtypes import (
     string,
     timestamp,
 )
-from marrow.schema import schema
-from marrow.tabular import RecordBatch, record_batch
-from marrow.dtypes import AnyDataType, Int32Type, field
-from marrow.kernels.aggregate import (
+from ...schema import schema
+from ...tabular import RecordBatch, record_batch
+from ...dtypes import AnyDataType, Int32Type, field
+from ...kernels.aggregate import (
     NumericAgg,
     StringMinMax,
     MinOp,
@@ -58,16 +57,16 @@ from marrow.kernels.aggregate import (
     SumKernel,
     MaxKernel,
 )
-from marrow.expr.aggregates import Aggregates
-from marrow.expr.dynamic import DynValue, col, lit
-from marrow.expr.relations import (
+from ...expr.aggregates import AggFunc
+from ...expr.dynamic import DynValue, col, lit
+from ...expr.relations import (
     Aggregate,
     AnyRelation,
     InMemoryTable,
     execute,
     in_memory_table,
 )
-from marrow.expr.values import AnyValue, col as fused_col
+from ...expr.values import AnyValue, col as fused_col
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +415,13 @@ def _fused_sum_max_by_region() raises -> AnyRelation:
     inputs.append(AnyValue(fused_col("amount", int64)))
     inputs.append(AnyValue(fused_col("amount", int64)))
 
-    var aggs = Aggregates()
-    aggs.append[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
-    aggs.append[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64))
+    var aggs = List[AggFunc]()
+    aggs.append(
+        AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
+    )
+    aggs.append(
+        AggFunc.of[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64))
+    )
 
     return AnyRelation(
         Aggregate(
@@ -481,8 +484,10 @@ def test_fused_non_numeric_aggregation() raises:
     var inputs = List[AnyValue]()
     inputs.append(AnyValue(fused_col("region", string)))
 
-    var aggs = Aggregates()
-    aggs.append[StringMinMax[MinOp, StringType]](AnyDataType(string))
+    var aggs = List[AggFunc]()
+    aggs.append(
+        AggFunc.of[StringMinMax[MinOp, StringType]](AnyDataType(string))
+    )
 
     var plan = AnyRelation(
         Aggregate(
@@ -496,7 +501,3 @@ def test_fused_non_numeric_aggregation() raises:
     var out = execute(plan)
     var east = _row_for(out, "east")
     assert_true(out.column(1).as_string()[east].to_string() == "east")
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

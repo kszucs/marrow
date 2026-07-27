@@ -1,7 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
-import marrow.dtypes as dt
-from marrow.dtypes import *
+from .. import dtypes as dt
+from ..dtypes import *
 
 
 def test_bool_type() raises:
@@ -76,7 +75,7 @@ def test_is_floating_point() raises:
     assert_true(AnyDataType(dt.float64).is_floating_point())
 
 
-def test_bit_width() raises:
+def test_dtypes_bit_width() raises:
     assert_equal(dt.int8.bit_width(), 8)
     assert_equal(dt.int16.bit_width(), 16)
     assert_equal(dt.int32.bit_width(), 32)
@@ -495,7 +494,3 @@ def test_time_unit_string() raises:
     assert_equal(String(millisecond), "ms")
     assert_equal(String(microsecond), "us")
     assert_equal(String(nanosecond), "ns")
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

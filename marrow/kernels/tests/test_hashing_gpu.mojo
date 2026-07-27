@@ -4,19 +4,18 @@ Verifies that GPU-dispatched rapidhash produces identical results to CPU SIMD.
 """
 
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import BoolArray, PrimitiveArray
-from marrow.kernels.execution import ExecutionContext
-from marrow.builders import (
+from ...arrays import BoolArray, PrimitiveArray
+from ...kernels.execution import ExecutionContext
+from ...builders import (
     array,
     arange,
     BoolBuilder,
     PrimitiveBuilder,
     Int32Builder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     bool_,
     int32,
     int64,
@@ -27,7 +26,7 @@ from marrow.dtypes import (
     Float32Type,
     UInt64Type,
 )
-from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
+from ...kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 
 
 def test_rapidhash_gpu_int32() raises:
@@ -132,7 +131,3 @@ def test_rapidhash_gpu_device_resident() raises:
     assert_true(result.buffer.is_device())
     var on_cpu = result.to_cpu(ctx)
     assert_equal(len(on_cpu), 3)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

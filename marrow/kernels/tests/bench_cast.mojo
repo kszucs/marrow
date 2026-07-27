@@ -9,9 +9,9 @@ against PyArrow/Polars in ``python/marrow/tests/bench_cast.py``.
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import AnyArray
-from marrow.builders import arange
-from marrow.dtypes import (
+from ...arrays import AnyArray
+from ...builders import arange
+from ...dtypes import (
     Int32Type,
     Int64Type,
     Float64Type,
@@ -22,8 +22,8 @@ from marrow.dtypes import (
     second,
     millisecond,
 )
-from marrow.kernels.cast import cast, NumericCast
-from marrow.testing import BenchSuite, Benchmark
+from ...kernels.cast import cast, NumericCast
+from ...testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,3 @@ def bench_timestamp_upscale_100k(mut b: Benchmark) raises:
 
 def bench_timestamp_upscale_1m(mut b: Benchmark) raises:
     _bench_timestamp_upscale(b, 1_000_000)
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

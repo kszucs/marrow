@@ -4,9 +4,6 @@ Re-exports kernel structs from the submodules so callers can
 ``import marrow.kernels as mk`` and use e.g. ``mk.AddKernel.dispatch``,
 ``mk.SumKernel.dispatch``, ``mk.filter``, ``mk.sort`` directly.
 
-Shared dispatch helpers (``bitmap_and``, ``binary_array_dispatch`` etc.) live
-in ``marrow.kernels.helpers`` to keep this file as a thin re-export layer.
-
 Submodules:
   - `arithmetic.mojo` — binary arithmetic, unary math, GPU dispatch via ``elementwise``
   - `compare.mojo` — comparison kernels producing bit-packed bool output

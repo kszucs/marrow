@@ -1,12 +1,11 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 from std.python import Python, PythonObject
 from std.memory import alloc
-from marrow.c_data import *
-from marrow.tabular import Table
-from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
-from marrow.builders import PrimitiveBuilder, StringBuilder, BoolBuilder
-from marrow.dtypes import *
+from ..c_data import *
+from ..tabular import Table
+from ..arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
+from ..builders import PrimitiveBuilder, StringBuilder, BoolBuilder
+from ..dtypes import *
 
 
 def c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
@@ -389,7 +388,7 @@ def test_primitive_array_no_nulls() raises:
     assert_equal(arr[2].value(), 30)
 
 
-def test_primitive_array_with_offset() raises:
+def test_c_data_primitive_array_with_offset() raises:
     """Sliced primitive array: offset field is non-zero."""
     var pa = Python.import_module("pyarrow")
 
@@ -519,7 +518,7 @@ def test_struct_array_values_from_pyarrow() raises:
     assert_equal(String(ys[2]), "c")
 
 
-def test_fixed_size_list_with_nulls() raises:
+def test_c_data_fixed_size_list_with_nulls() raises:
     """FixedSizeList array with a null row: bitmap must reflect validity."""
     var pa = Python.import_module("pyarrow")
 
@@ -977,8 +976,8 @@ def test_dictionary_from_pyarrow() raises:
 
 def test_dictionary_to_pyarrow() raises:
     """Export a Mojo dictionary array to PyArrow via C Data Interface."""
-    from marrow.arrays import DictionaryArray
-    from marrow.builders import Int32Builder, StringBuilder
+    from ..arrays import DictionaryArray
+    from ..builders import Int32Builder, StringBuilder
 
     var pa = Python.import_module("pyarrow")
 
@@ -1086,8 +1085,8 @@ def test_map_array_from_pyarrow() raises:
 
 def test_map_array_roundtrip() raises:
     """Build a Mojo MapArray, export it, and re-import through CArrowArray."""
-    from marrow.arrays import MapArray, Int32Array
-    from marrow.builders import Int32Builder, StringBuilder
+    from ..arrays import MapArray, Int32Array
+    from ..builders import Int32Builder, StringBuilder
 
     # map: [ {"x":10}, {"y":20,"z":30} ]  ->  offsets [0,1,3]
     var ob = Int32Builder()
@@ -1123,7 +1122,3 @@ def test_map_array_roundtrip() raises:
     assert_equal(keys[2].to_string(), "z")
     assert_equal(vals[0].value(), 10)
     assert_equal(vals[2].value(), 30)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

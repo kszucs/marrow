@@ -1,21 +1,20 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     AnyArray,
     PrimitiveArray,
     StringArray,
     StructArray,
 )
-from marrow.builders import (
+from ...builders import (
     array,
     PrimitiveBuilder,
     StringBuilder,
     Int32Builder,
     Date32Builder,
 )
-from marrow.tabular import RecordBatch
-from marrow.dtypes import (
+from ...tabular import RecordBatch
+from ...dtypes import (
     int8,
     int32,
     int64,
@@ -35,16 +34,16 @@ from marrow.dtypes import (
     Float64Type,
     AnyDataType,
 )
-from marrow.arrays import Int32Array
-from marrow.kernels.execution import ExecutionContext
-from marrow.kernels.groupby import (
+from ...arrays import Int32Array
+from ...kernels.execution import ExecutionContext
+from ...kernels.groupby import (
     GroupBy,
     GroupedColumns,
     GROUP_SERIAL,
     GROUP_RADIX,
     GROUP_THREAD_LOCAL,
 )
-from marrow.expr.aggregates import (
+from ...expr.aggregates import (
     Sum,
     Min,
     Max,
@@ -53,14 +52,14 @@ from marrow.expr.aggregates import (
     CountDistinct,
     ApproxCountDistinct,
 )
-from marrow.kernels.aggregate import (
+from ...kernels.aggregate import (
     SumKernel,
     MeanKernel,
     NumericAgg,
 )
 
 
-from marrow.kernels.distinct import count_distinct_grouped
+from ...kernels.distinct import count_distinct_grouped
 
 
 # An aggregate is an `Aggregation` — a kernel already bound to its input type.
@@ -668,7 +667,3 @@ def test_groupby_count_distinct_string() raises:
     ref c = result.aggregates[0].as_int64()
     assert_equal(c[0].value(), 1)
     assert_equal(c[1].value(), 2)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

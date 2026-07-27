@@ -52,32 +52,28 @@ numpy = ">=2.4.4, <3"
 cffi = "*"
 
 [feature.dev.tasks]
-# Tests build from source by default.  --pkg (precompiled-marrow fast build)
-# is opt-in: it currently crashes the Mojo compiler on some generic-heavy
-# files (filter/join/plan/...), so it is not enabled by default.
-# Build-only checks — compile without running anything.  Much faster than
-# pytest (which builds one runner per selected test), so prefer these while
-# migrating to a new Mojo release until the tree builds again.
+# Build-only check — compiles every module under `marrow/`, tests and benches
+# included (they live in `marrow/**/tests/` and are ordinary importable modules
+# now, with no `main()`).  It reports all errors and warnings in one pass, so
+# prefer it over pytest while migrating to a new Mojo release: pytest has to
+# elaborate the whole library before it can report anything.
 #
-#   check_lib                                  — whole library, ~10s
-#   check marrow/tests/test_views.mojo         — one file + its imports, ~4s
+#   precompile                          — everything under marrow/, ~18s
 #
-# `check_lib` first: it compiles every module under `marrow/`, so it catches
-# errors in code no selected test happens to import.  `check <file>` then
-# narrows down to a specific test and its transitive imports.
-check_lib = { cmd = "mkdir -p .test_runners && mojo package marrow -I . -o .test_runners/_marrow.mojopkg" }
-check = { cmd = "mkdir -p .test_runners && mojo build -I . -o .test_runners/_check" }
+# A single test file cannot be compiled on its own any more — without a
+# `main()` there is nothing to build.  Run it through pytest instead; the
+# harness generates a driver for the selection and compiles that.
+precompile = { cmd = "mkdir -p .test_runners && mojo precompile marrow -o .test_runners/marrow.mojoc" }
+# Harness selftests — the pure-Python parts of conftest (flag handling, driver
+# generation, result mapping).  No Mojo compilation, runs in well under a second.
+selftest = { cmd = "python conftest.py selftest" }
 test_mojo = { cmd = "pytest --mojo -v" }
-test_mojo_parallel = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
 test_python = { cmd = "pytest --python -v" }
 test_gpu = { cmd = "pytest --gpu -v" }
 test = { cmd = "pytest -v" }
-# No `-v` by default: with `-n auto` the per-test lines from several workers
-# interleave and are hard to read, and the run is usually about the summary.
-# Pass it explicitly when you want it: `pixi run test_parallel -v`.
-# `--dist=loadfile` keeps every test from one `.mojo` file on the same worker so
-# the compiled runner is built once and reused.
-test_parallel = { cmd = "pytest -n auto --dist=loadfile" }
+# One selection = one compilation unit, so there is nothing for xdist to
+# parallelise across: splitting by file would rebuild the same unit per worker.
+# Narrow the selection instead (a directory, a file) — that shrinks the unit.
 
 # Integration — Arrow protocol conformance tests via archery.
 # All reference Arrow implementations are cloned into ./integration/arrow/ and
@@ -148,8 +144,8 @@ bench = { cmd = "pytest --benchmark -v" }
 ruff = ">=0.14.14,<0.15"
 
 [feature.format.tasks]
-fmt_mojo = { cmd = "mojo format marrow python" }
-fmt_python = { cmd = "ruff format python" }
+fmt_mojo = { cmd = "mojo format marrow python benchmarks" }
+fmt_python = { cmd = "ruff format python conftest.py benchmarks" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
 fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 
@@ -214,7 +210,7 @@ docker = { features = ["docker"], no-default-feature = true }
 wheel = { features = ["wheel"], solve-group = "default" }
 
 [dependencies]
-mojo = "==1.0.0b3.dev2026072406"
+mojo = ">=1.0.0b3.dev2026072406,<2"
 # NOTE: this should NOT be required, and was not before
 # mojo 1.0.0b3.dev2026072406 — GPU kernels compiled fine without MAX.  That
 # release made GPU codegen resolve `max.package_root` and hard-error

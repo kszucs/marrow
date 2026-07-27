@@ -275,7 +275,7 @@ struct RadixPartitioner(Partitioner):
         # `Optional[R]` (used for the per-worker result slots below) only
         # conditionally conforms to it, so an unconstrained `R` makes the
         # slot list linear and unable to be dropped.
-        R: Copyable & ImplicitlyDeletable & Movable,
+        R: Copyable & ImplicitlyDeletable,
         op: def(Int, Int32Array, UInt64Array) raises capturing[_] -> R,
     ](self, var hashes: UInt64Array) raises -> List[R]:
         """Run ``op`` on every partition in parallel and collect the results.

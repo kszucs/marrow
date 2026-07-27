@@ -36,7 +36,7 @@ from ..arrays import (
 from ..buffers import Buffer, Bitmap
 from ..builders import BinaryLikeBuilder
 from ..dtypes import StringLikeType, DType
-from .helpers import Kernel, bitmap_and
+from .core import Kernel
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ from .helpers import Kernel, bitmap_and
 # ---------------------------------------------------------------------------
 
 
-struct LengthKernel(Kernel):
+struct LengthKernel:
     """Per-element byte length of a string array → `Int32Array` (matches
     pyarrow's `utf8_length`).
 
@@ -225,7 +225,7 @@ struct CapitalizeKernel(StringMapKernel):
 # ---------------------------------------------------------------------------
 
 
-struct ConcatKernel(Kernel):
+struct ConcatKernel:
     """Element-wise binary string concatenation (`a || b`). `combine` is the fusable
     per-element primitive (the expression layer's `Concat` builds on it); `apply`
     materializes the whole array, null-propagating."""
@@ -284,7 +284,7 @@ trait StringPredicateKernel(Kernel):
                 t"{Self.name}: arrays must have the same length, got {n} and"
                 t" {len(right)}"
             )
-        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
+        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):
@@ -510,8 +510,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         self.literal = String()
         self.tokens = List[Int]()
 
-        @parameter
-        if Self.ignore_case:
+        comptime if Self.ignore_case:
             var folded = pattern.lower()
             self._compile(StringSlice(folded))
         else:
@@ -573,8 +572,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
     def matches(self, s: StringSlice) -> Bool:
         """Return True if `s` matches this pattern."""
 
-        @parameter
-        if Self.ignore_case:
+        comptime if Self.ignore_case:
             var fold = _fold_kind(s)
             if fold == _FOLD_NONE:
                 return self._matches_folded(s)

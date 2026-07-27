@@ -4,14 +4,13 @@ from std.testing import (
     assert_false,
     assert_raises,
 )
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     AnyArray,
     PrimitiveArray,
     BoolArray,
 )
-from marrow.builders import (
+from ...builders import (
     array,
     arange,
     nulls,
@@ -22,7 +21,7 @@ from marrow.builders import (
     TimestampBuilder,
     DurationBuilder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     int32,
     int64,
     uint8,
@@ -37,7 +36,7 @@ from marrow.dtypes import (
     UInt8Type,
     Float32Type,
 )
-from marrow.kernels.filter import filter, drop_null, take
+from ...kernels.filter import filter, drop_null, take
 
 
 # ---------------------------------------------------------------------------
@@ -654,7 +653,3 @@ def test_cross_check_temporal_pyarrow() raises:
     ref rt = got_t.as_timestamp()
     for i in range(len(got_t)):
         assert_equal(Int(rt[i].value()), Int(py=pa_t[i].as_py()))
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

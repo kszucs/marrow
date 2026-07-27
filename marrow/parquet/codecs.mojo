@@ -1043,7 +1043,9 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
 struct Compression(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `CompressionCodec` value: the codec identity plus the
     `compress` / `decompress` operations, dispatched onto a `CompressionLibs`
-    handle pool (the `dlopen` bindings in `utils.mojo`). Enum values:
+    handle pool (the `dlopen` bindings in `utils.mojo`).
+
+    Enum values:
         0 UNCOMPRESSED  1 SNAPPY  2 GZIP  4 BROTLI  5 LZ4  6 ZSTD  7 LZ4_RAW
     """
 

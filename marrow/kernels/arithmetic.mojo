@@ -18,15 +18,16 @@ element values and are **not** part of this tier scheme.
 import std.math as math
 
 from ..arrays import PrimitiveArray, AnyArray
-from ..buffers import Buffer
+from ..buffers import Buffer, Bitmap
 from ..views import apply
 from ..dtypes import (
     PrimitiveType,
     NumericType,
     FloatingType,
 )
-from .helpers import Kernel, bitmap_and
+from .core import Kernel
 from .execution import ExecutionContext
+from ..utils import GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -60,10 +61,13 @@ trait BinaryKernel(Kernel):
             )
         comptime native = T.native
         var length = len(left)
-        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
+        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
         var buf: Buffer[mut=True]
-        if ctx.is_gpu():
-            buf = Buffer.alloc_device[native](ctx.device.value(), length)
+        comptime if GPU_ENABLED:
+            if ctx.is_gpu():
+                buf = Buffer.alloc_device[native](ctx.device.value(), length)
+            else:
+                buf = Buffer.alloc_zeroed[native](length)
         else:
             buf = Buffer.alloc_zeroed[native](length)
         apply[native, native, Self.core[native, _]](
@@ -148,8 +152,11 @@ trait UnaryKernel(Kernel):
         comptime native = T.native
         var length = len(array)
         var buf: Buffer[mut=True]
-        if ctx.is_gpu():
-            buf = Buffer.alloc_device[native](ctx.device.value(), length)
+        comptime if GPU_ENABLED:
+            if ctx.is_gpu():
+                buf = Buffer.alloc_device[native](ctx.device.value(), length)
+            else:
+                buf = Buffer.alloc_zeroed[native](length)
         else:
             buf = Buffer.alloc_zeroed[native](length)
         apply[native, native, Self.core[native, _]](

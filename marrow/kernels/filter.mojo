@@ -71,7 +71,6 @@ from std.algorithm.functional import sync_parallelize
 
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
-from .helpers import Kernel
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +84,7 @@ from .helpers import Kernel
 # ---------------------------------------------------------------------------
 
 
-struct Filter(Kernel):
+struct Filter:
     """Selection kernel — keep elements where a boolean ``mask`` is True.
 
     The typed leaves are the ``apply`` overloads below; each operates directly on
@@ -605,7 +604,7 @@ struct Filter(Kernel):
         )
 
 
-struct Take(Kernel):
+struct Take:
     """Gather kernel — collect elements at arbitrary indices (null index → null).
 
     The typed leaves are the ``apply`` overloads below; ``dispatch`` resolves a
@@ -793,6 +792,8 @@ struct Take(Kernel):
         Args:
             array: Source bool array.
             indices: Row indices to gather. Null index → null output.
+            ctx: Execution context (currently unused — accepted for
+                signature parity with the other `take` overloads).
 
         Returns:
             A new BoolArray with one element per index.
@@ -827,6 +828,8 @@ struct Take(Kernel):
         Args:
             array: Source binary-like array (string/binary, 32- or 64-bit offsets).
             indices: Row indices to gather. Null index → null output.
+            ctx: Execution context (currently unused — accepted for
+                signature parity with the other `take` overloads).
 
         Returns:
             A new BinaryLikeArray[T] with one element per index.

@@ -1,13 +1,12 @@
 """Executor-level tests for join plan nodes."""
 
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray
-from marrow.builders import array, PrimitiveBuilder, Int64Builder
-from marrow.dtypes import int64, float64, Int64Type
-from marrow.tabular import record_batch, RecordBatch
-from marrow.expr import (
+from ...arrays import AnyArray
+from ...builders import array, PrimitiveBuilder, Int64Builder
+from ...dtypes import int64, float64, Int64Type
+from ...tabular import record_batch, RecordBatch
+from ...expr import (
     DynValue,
     col,
     lit,
@@ -282,7 +281,3 @@ def test_join_plan_is_reusable() raises:
     var r2 = execute(plan)
     assert_equal(r1.num_rows(), 2)
     assert_equal(r2.num_rows(), 2)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -14,11 +14,10 @@ chunk-boundary and field-metadata differences that `pa.Table.equals` rejects.
 from std.testing import assert_true, assert_equal
 from std.python import Python, PythonObject
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import read_table, write_table
-from marrow.parquet.codecs import Compression
-from marrow.tabular import Table
-from marrow.c_data import CArrowArrayStream
+from ...parquet import read_table, write_table
+from ...parquet.codecs import Compression
+from ...tabular import Table
+from ...c_data import CArrowArrayStream
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +357,3 @@ def test_interop_map() raises:
         )
     )
     _all_shapes(t)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

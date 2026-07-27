@@ -4,7 +4,7 @@ Each kernel compares two ``PrimitiveArray[T]`` values element-wise and returns
 a ``BoolArray`` following the Arrow boolean layout.
 
 Null propagation: if either input has a null at position ``i``, the output is
-null at ``i`` (validity = ``bitmap_and(left.bitmap, right.bitmap)``).  Data
+null at ``i`` (validity = ``Bitmap.intersect(left.bitmap, right.bitmap)``).  Data
 bits for null positions are set to the comparison result of the underlying
 values (undefined per Arrow spec, but branch-free for performance).
 
@@ -46,8 +46,9 @@ from ..dtypes import (
     StringLikeType,
     bool_ as bool_dt,
 )
-from .helpers import Kernel, bitmap_and
+from .core import Kernel
 from .execution import ExecutionContext
+from ..utils import GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -75,13 +76,17 @@ def _binary_cmp[
 
     comptime native = T.native
     var length = len(left)
-    var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy()) if (
+    var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy()) if (
         left.bitmap or right.bitmap
     ) else Optional[Bitmap[]]()
 
-    var result = Bitmap.alloc_device(
-        ctx.device.value(), length
-    ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
+    var result: Bitmap[mut=True]
+    comptime if GPU_ENABLED:
+        result = Bitmap.alloc_device(
+            ctx.device.value(), length
+        ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
+    else:
+        result = Bitmap.alloc_uninit(length)
     apply[native, func](left.values(), right.values(), result.view(), ctx)
     return BoolArray(
         length=length,
@@ -145,7 +150,7 @@ trait BinaryCompareKernel(Kernel):
                 t"{Self.name}: arrays must have the same length, got {n} and"
                 t" {len(right)}"
             )
-        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
+        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):
@@ -318,7 +323,7 @@ def equal(
     var n = len(left)
     if len(right) != n:
         raise Error("equal: string arrays must have the same length")
-    var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
+    var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
     var bm_builder = Bitmap.alloc_zeroed(n)
     for i in range(n):
         var eq = String(left.unsafe_get(UInt(i))) == String(

@@ -11,11 +11,10 @@ from std.testing import (
     assert_raises,
 )
 
-from marrow.testing import TestSuite
-from marrow.arrays import BoolArray
-from marrow.builders import array
+from ...arrays import BoolArray
+from ...builders import array
 
-from marrow.kernels.boolean import (
+from ...kernels.boolean import (
     AndKernel,
     OrKernel,
     NotKernel,
@@ -133,7 +132,3 @@ def test_length_mismatch_raises() raises:
     var b = array([True])
     with assert_raises():
         _ = AndKernel.apply(a, b)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

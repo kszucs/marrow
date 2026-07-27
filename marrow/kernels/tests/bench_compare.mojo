@@ -5,10 +5,10 @@ Run with: pixi run pytest marrow/kernels/tests/bench_compare.mojo --benchmark
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.builders import arange
-from marrow.dtypes import Int32Type, Int64Type
-from marrow.kernels.compare import EqKernel
-from marrow.testing import BenchSuite, Benchmark
+from ...builders import arange
+from ...dtypes import Int32Type, Int64Type
+from ...kernels.compare import EqKernel
+from ...testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,3 @@ def bench_equal_int64_1m(mut b: Benchmark) raises:
         keep(len(EqKernel.apply[Int64Type](lhs, rhs)))
 
     b.iter[call]()
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

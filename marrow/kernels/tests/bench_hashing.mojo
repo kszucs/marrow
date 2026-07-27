@@ -7,16 +7,16 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import PrimitiveArray, BoolArray, Int32Array, Int64Array
-from marrow.builders import (
+from ...arrays import PrimitiveArray, BoolArray, Int32Array, Int64Array
+from ...builders import (
     PrimitiveBuilder,
     BoolBuilder,
     Int32Builder,
     Int64Builder,
 )
-from marrow.dtypes import PrimitiveType, int32, int64, Int32Type, Int64Type
-from marrow.kernels.hashing import rapidhash
-from marrow.testing import BenchSuite, Benchmark
+from ...dtypes import PrimitiveType, int32, int64, Int32Type, Int64Type
+from ...kernels.hashing import rapidhash
+from ...testing import Benchmark
 
 
 def _make_int64(n: Int) raises -> Int64Array:
@@ -166,7 +166,3 @@ def bench_rapidhash_bool_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

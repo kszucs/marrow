@@ -7,10 +7,9 @@ correctness in both directions.
 
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
-from marrow.testing import TestSuite
-from marrow.dtypes import *
-from marrow.arrays import AnyArray, DictionaryArray
-from marrow.builders import (
+from ..dtypes import *
+from ..arrays import AnyArray, DictionaryArray
+from ..builders import (
     array,
     BoolBuilder,
     Int8Builder,
@@ -28,9 +27,9 @@ from marrow.builders import (
     FixedSizeListBuilder,
     StructBuilder,
 )
-from marrow.schema import Schema
-from marrow.tabular import RecordBatch
-from marrow.ipc import (
+from ..schema import Schema
+from ..tabular import RecordBatch
+from ..ipc import (
     read_ipc_file,
     read_ipc_stream,
     read_ipc_file_schema,
@@ -719,7 +718,3 @@ def test_marrow_reads_pyarrow_dictionary() raises:
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 4)
     assert_true(batches[0].schema.fields[0].dtype.is_dictionary())
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -24,11 +24,10 @@ from ..arrays import (
 )
 from ..buffers import Buffer, Bitmap
 from ..dtypes import ListLikeType, NumericType, DType
-from .helpers import Kernel
 from .execution import ExecutionContext
 
 
-struct ArrayLengthKernel(Kernel):
+struct ArrayLengthKernel:
     """Per-element element count of a list array → `Int32Array` (matches
     pyarrow's `list_value_length`).
 
@@ -87,7 +86,7 @@ struct ArrayLengthKernel(Kernel):
             )
 
 
-struct ArrayContainsKernel(Kernel):
+struct ArrayContainsKernel:
     """Element-wise list membership: `result[i]` is True iff the search value
     `elem[i]` appears among the (valid) elements of the sublist `list[i]`. Result
     is null exactly where the list row is null; a null / absent search value gives

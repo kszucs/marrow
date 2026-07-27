@@ -1,10 +1,9 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 from std.gpu.host import DeviceContext
 
-from marrow.builders import array, arange
-from marrow.dtypes import int32, float32, Int32Type, Float32Type
-from marrow.kernels.compare import (
+from ...builders import array, arange
+from ...dtypes import int32, float32, Int32Type, Float32Type
+from ...kernels.compare import (
     EqKernel,
     NeKernel,
     LtKernel,
@@ -101,7 +100,3 @@ def test_less_gpu_float32() raises:
     assert_true(result[1].value())
     assert_false(result[2].value())
     assert_false(result[3].value())
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

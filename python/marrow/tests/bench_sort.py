@@ -3,8 +3,8 @@
 Single-threaded throughout for a fair comparison with marrow's serial Phase 1.
 
 Run with:
-    pixi run -e bench pytest python/tests/bench_sort.py --benchmark
-    pixi run -e bench pytest python/tests/bench_sort.py --benchmark --competition
+    pixi run -e bench pytest python/marrow/tests/bench_sort.py --benchmark
+    pixi run -e bench pytest python/marrow/tests/bench_sort.py --benchmark --competition
 """
 
 import os

@@ -1,24 +1,23 @@
 """Tests for the hash join kernel."""
 
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     AnyArray,
     PrimitiveArray,
     StringArray,
     StructArray,
     UInt64Array,
 )
-from marrow.kernels.execution import ExecutionContext
-from marrow.builders import (
+from ...kernels.execution import ExecutionContext
+from ...builders import (
     array,
     PrimitiveBuilder,
     StringBuilder,
     Int32Builder,
     UInt64Builder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     int32,
     int64,
     uint64,
@@ -30,9 +29,9 @@ from marrow.dtypes import (
     UInt64Type,
     Float64Type,
 )
-from marrow.tabular import record_batch
-from marrow.kernels.filter import take
-from marrow.kernels.join import (
+from ...tabular import record_batch
+from ...kernels.filter import take
+from ...kernels.join import (
     hash_join,
     JOIN_INNER,
     JOIN_LEFT,
@@ -574,7 +573,7 @@ def _constant_hash(
 
 def test_collision_inner_join() raises:
     """With all hashes colliding, key equality filters to correct matches."""
-    from marrow.kernels.join import HashJoin
+    from ...kernels.join import HashJoin
 
     # left: k=[1,2,3], v=[10,20,30]
     # right: k=[2,3,4], v=[100,200,300]
@@ -610,7 +609,7 @@ def test_collision_inner_join() raises:
 
 def test_collision_left_join() raises:
     """With all hashes colliding, left join produces correct unmatched rows."""
-    from marrow.kernels.join import HashJoin
+    from ...kernels.join import HashJoin
 
     var lk = List[Int]()
     lk.append(1)
@@ -724,7 +723,3 @@ def test_parallel_partial_match() raises:
     var parallel = _run_inner(left, right, 4)
     assert_equal(len(serial), len(parallel))
     assert_equal(len(serial), n // 2)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

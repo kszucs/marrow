@@ -5,12 +5,11 @@ Expected patterns match PyArrow's `pc.list_value_length`.
 
 from std.testing import assert_equal, assert_true, assert_false
 
-from marrow.testing import TestSuite
-from marrow.arrays import ListArray, Int32Array
-from marrow.builders import ListBuilder, Int64Builder, array
-from marrow.dtypes import int32
+from ...arrays import ListArray, Int32Array
+from ...builders import ListBuilder, Int64Builder, array
+from ...dtypes import int32
 
-from marrow.kernels.nested import ArrayLengthKernel
+from ...kernels.nested import ArrayLengthKernel
 
 
 def _lists_with_null() raises -> ListArray:
@@ -74,7 +73,3 @@ def test_array_length_sliced_with_nulls() raises:
     assert_false(r.is_valid(0))
     assert_true(r.is_valid(1))
     assert_equal(r[1].value(), 3)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

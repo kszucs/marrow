@@ -5,8 +5,7 @@ from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python
 from std.pathlib import Path
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet.format import (
+from ...parquet.format import (
     FileMetaData,
     PhysicalType,
     Repetition,
@@ -177,7 +176,3 @@ def test_read_footer_metadata() raises:
     assert_true(rg.columns[0].meta_data.data_page_offset >= 4)
 
     remove(path)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -1,10 +1,9 @@
 from std.testing import assert_true, assert_raises
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray
-from marrow.builders import array
-from marrow.dtypes import int32, int64, uint32, float64
-from marrow.kernels.membership import is_in
+from ...arrays import AnyArray
+from ...builders import array
+from ...dtypes import int32, int64, uint32, float64
+from ...kernels.membership import is_in
 
 
 def test_is_in_clickbench_int() raises:
@@ -41,7 +40,7 @@ def test_is_in_bool() raises:
     assert_true(is_in(values, value_set) == array([True, False, True, False]))
 
 
-def test_is_in_string() raises:
+def test_membership_is_in_string() raises:
     var values = array([String("apple"), "banana", "cherry", "apple", "date"])
     var value_set = array([String("apple"), "cherry"])
     assert_true(
@@ -101,7 +100,3 @@ def test_is_in_type_mismatch_raises() raises:
     var value_set: AnyArray = array([1, 2], int64)
     with assert_raises():
         _ = is_in(values, value_set)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

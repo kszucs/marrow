@@ -4,6 +4,32 @@
 
 ### Features
 
+- **One compilation unit per test selection.** The harness used to build one runner per
+  `.mojo` file, paying marrow's elaboration once per file. `conftest.py` now generates a
+  single driver (`.test_runners/_test_driver_<hash>.mojo`) that imports every selected case
+  and hands it to `TestSuite.run`, then compiles that once. Measured on `marrow/expr/tests`
+  (9 files, 280 cases): **4m43s for all nine together against ~200s *each* separately**, and
+  the aggregate peaks *below* a single file's memory — the cost is elaborating marrow, not
+  the test bodies. Consequences: narrowing the selection by *file* saves time, narrowing to a
+  single `::case` does not; one compile error fails the whole selection; case names must be
+  unique suite-wide (12 collisions were renamed). Driver names are content-addressed so
+  parallel `pytest` invocations cannot clobber each other. `--pkg`/`--no-pkg` and the
+  precompiled-`marrow.mojoc` build path are gone with it; `--asan` is unchanged.
+- **Tests and benchmarks live next to the code they cover again** (`marrow/tests/`,
+  `marrow/kernels/tests/`, …, `python/marrow/tests/`). They carry no `main()` — the generated
+  driver owns the only one — which is what lets them sit inside the package. Their
+  `marrow.*` imports had to become relative: absolute self-imports break `mojo precompile
+  marrow` and `mojo package marrow`. The two standalone `profile_*.mojo` programs moved to
+  `benchmarks/profiles/` since `main()` is illegal inside a package.
+- **`-D MARROW_GPU=true` opts into GPU code generation; it is off by default.**
+  `marrow.utils.GPU_ENABLED` is the single switch, gating the kernels' device allocations and
+  `has_accelerator_support`. This is the largest compile-time lever in the tree: `cast`'s
+  numeric x numeric dispatch goes **40.1s -> 14.6s**, `cast` + `sort_indices` **85.0s ->
+  43.7s** (cold builds). Both halves must be gated to get any of it — gating the allocations
+  or the capability check alone measures as no change. A GPU `ExecutionContext` raises at the
+  dispatch site in a GPU-off build rather than silently taking a CPU path; `pytest --gpu`
+  passes the flag automatically.
+
 - **Aggregates are written on the expression they aggregate.** `rel.aggregate(...)`
   took three positionally-correlated lists (`values`, `funcs`, `names`); it now takes one:
 

@@ -1977,7 +1977,9 @@ def read_table(
 
 struct RowSelection(Copyable, Movable):
     """Which rows of a row group to decode when a pushed-down predicate lets the
-    reader skip pages. Row-group-relative, one flag per row: a data page whose
+    reader skip pages.
+
+    Row-group-relative, one flag per row: a data page whose
     rows are all deselected is skipped without decoding; a partially selected
     page keeps only its chosen rows, so every column yields the same rows and
     stays aligned. Built from per-page keep flags, combined with `intersect`, and

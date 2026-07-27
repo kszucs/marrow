@@ -8,12 +8,11 @@ result matches an exact filter."""
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.dtypes import Int64Type, int64, field
-from marrow.schema import Schema, schema
-from marrow.scalars import AnyScalar
-from marrow.parquet import read_table, read_statistics
-from marrow.expr.relations import (
+from ...dtypes import Int64Type, int64, field
+from ...schema import Schema, schema
+from ...scalars import AnyScalar
+from ...parquet import read_table, read_statistics
+from ...expr.relations import (
     ParquetScan,
     parquet_scan,
     AnyRelation,
@@ -21,9 +20,9 @@ from marrow.expr.relations import (
     execute,
     RELATION_PARQUET_SCAN,
 )
-from marrow.expr.dynamic import col, lit
-from marrow.expr.values import AnyValue
-from marrow.expr.pruning import PruneStats
+from ...expr.dynamic import col, lit
+from ...expr.values import AnyValue
+from ...expr.pruning import PruneStats
 
 
 def _write_sorted(path: String, n: Int, rgsize: Int) raises:
@@ -140,7 +139,3 @@ def test_pushdown_prunes_all_groups() raises:
     var result = execute(plan)
     assert_equal(result.num_rows(), 0)
     remove(path)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()
