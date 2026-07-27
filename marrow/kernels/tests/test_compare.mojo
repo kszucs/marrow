@@ -11,6 +11,14 @@ from ...builders import (
 from ...dtypes import int64, float64, Int64Type, Float64Type, large_string
 from ...kernels.cast import cast
 
+from ...kernels.string import (
+    StringEqKernel,
+    StringNeKernel,
+    StringLtKernel,
+    StringLeKernel,
+    StringGtKernel,
+    StringGeKernel,
+)
 from ...kernels.compare import (
     EqKernel,
     NeKernel,
@@ -237,8 +245,7 @@ def test_string_less() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        LtKernel.StringKernel.apply(a, b)
-        == array([True, False, False, False, True])
+        StringLtKernel.apply(a, b) == array([True, False, False, False, True])
     )
 
 
@@ -246,8 +253,7 @@ def test_string_less_equal() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        LeKernel.StringKernel.apply(a, b)
-        == array([True, True, True, False, True])
+        StringLeKernel.apply(a, b) == array([True, True, True, False, True])
     )
 
 
@@ -255,8 +261,7 @@ def test_string_greater() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        GtKernel.StringKernel.apply(a, b)
-        == array([False, False, False, True, False])
+        StringGtKernel.apply(a, b) == array([False, False, False, True, False])
     )
 
 
@@ -264,30 +269,23 @@ def test_string_greater_equal() raises:
     var a = array(["apple", "banana", "cherry", "apple", ""])
     var b = array(["apricot", "banana", "cherry", "ab", "a"])
     assert_true(
-        GeKernel.StringKernel.apply(a, b)
-        == array([False, True, True, True, False])
+        StringGeKernel.apply(a, b) == array([False, True, True, True, False])
     )
 
 
 def test_string_equal_via_kernel() raises:
     var a = array(["x", "yy", "z"])
     var b = array(["x", "yz", "z"])
-    assert_true(EqKernel.StringKernel.apply(a, b) == array([True, False, True]))
-    assert_true(
-        NeKernel.StringKernel.apply(a, b) == array([False, True, False])
-    )
+    assert_true(StringEqKernel.apply(a, b) == array([True, False, True]))
+    assert_true(StringNeKernel.apply(a, b) == array([False, True, False]))
 
 
 def test_string_prefix_ordering() raises:
     # a shorter string that is a prefix compares less than the longer one
     var a = array(["ab", "abc", "abc"])
     var b = array(["abc", "ab", "abc"])
-    assert_true(
-        LtKernel.StringKernel.apply(a, b) == array([True, False, False])
-    )
-    assert_true(
-        GtKernel.StringKernel.apply(a, b) == array([False, True, False])
-    )
+    assert_true(StringLtKernel.apply(a, b) == array([True, False, False]))
+    assert_true(StringGtKernel.apply(a, b) == array([False, True, False]))
 
 
 def test_string_compare_nulls() raises:
@@ -302,7 +300,7 @@ def test_string_compare_nulls() raises:
     rb.append_null()
     var left = lb.finish()
     var right = rb.finish()
-    var r = LtKernel.StringKernel.apply(left, right)
+    var r = StringLtKernel.apply(left, right)
     assert_equal(r.null_count(), 2)
     assert_true(r.is_valid(0))
     assert_false(r.is_valid(1))
@@ -311,9 +309,11 @@ def test_string_compare_nulls() raises:
 
 
 def test_string_dispatch_anyarray() raises:
+    """String ordering goes through the string kernel family: `LtKernel` is
+    numeric-only and would not resolve a string dtype."""
     var a: AnyArray = array(["a", "bb", "c"])
     var b: AnyArray = array(["b", "bb", "a"])
-    var r = LtKernel.dispatch(a, b)
+    var r = StringLtKernel.dispatch(a, b)
     assert_equal(r.length(), 3)
     ref rb = r.as_bool()
     assert_true(rb[0].value())  # 'a' < 'b'
@@ -324,7 +324,7 @@ def test_string_dispatch_anyarray() raises:
 def test_large_string_ordering() raises:
     var a = cast(array(["apple", "banana", "cherry"]), large_string)
     var b = cast(array(["apricot", "banana", "berry"]), large_string)
-    var r = LtKernel.dispatch(a, b)
+    var r = StringLtKernel.dispatch(a, b)
     ref rb = r.as_bool()
     assert_true(rb[0].value())  # apple < apricot
     assert_false(rb[1].value())  # banana == banana

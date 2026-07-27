@@ -360,8 +360,11 @@ struct StringNeKernel(StringPredicateKernel):
 
 
 # Ordering comparisons — lexicographic over UTF-8 bytes, which equals codepoint
-# order. `BinaryCompareKernel.StringKernel` names these, so `a < b` on a string
-# column and `LtKernel.dispatch` reach the same implementation.
+# order. These are the string half of `<` `<=` `>` `>=` `==` `!=`; the numeric
+# half lives in `compare.mojo` as `NumericCompareKernel` conformers. The two are
+# separate families because a variable-width predicate is elementwise and cannot
+# vectorize, so whoever interprets the operator pairs them (see `_compare` in
+# `marrow/expr/dynamic.mojo`).
 
 
 struct StringLtKernel(StringPredicateKernel):

@@ -61,6 +61,7 @@ from ..kernels.boolean import (
     IsNullKernel,
 )
 from ..kernels.compare import (
+    NumericCompareKernel,
     EqKernel,
     NeKernel,
     LtKernel,
@@ -68,7 +69,18 @@ from ..kernels.compare import (
     GtKernel,
     GeKernel,
 )
-from ..kernels.string import LengthKernel, LikeKernel, ILikeKernel
+from ..kernels.string import (
+    StringPredicateKernel,
+    StringEqKernel,
+    StringNeKernel,
+    StringLtKernel,
+    StringLeKernel,
+    StringGtKernel,
+    StringGeKernel,
+    LengthKernel,
+    LikeKernel,
+    ILikeKernel,
+)
 from ..kernels.membership import is_in as is_in_kernel
 from ..kernels.conditional import (
     coalesce as coalesce_kernel,
@@ -306,6 +318,25 @@ struct DynValue(
         """
         return True
 
+    def _compare[
+        N: NumericCompareKernel, S: StringPredicateKernel
+    ](self, left: AnyArray, right: AnyArray) raises -> AnyArray:
+        """Apply one comparison operator, choosing the kernel family the
+        operands belong to.
+
+        Numeric and string comparison are unrelated implementations — SIMD over
+        fixed-width lanes versus an elementwise walk over variable-width data —
+        so the operator names a *pair* of kernels and the dtype picks one. This
+        used to live inside the numeric kernel as a `comptime StringKernel` plus
+        a dtype branch in its `dispatch`, which made every numeric comparison
+        carry a string counterpart it never used. Interpreting an operator is
+        this layer's job; the kernels stay one family each.
+        """
+        if left.dtype().is_string() or left.dtype().is_large_string():
+            return S.dispatch(left, right)
+        else:
+            return N.dispatch(left, right)
+
     def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate this expression tree against *batch*, dispatching on tag."""
         if self._tag == LOAD:
@@ -345,27 +376,27 @@ struct DynValue(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == EQ:
-            return EqKernel.dispatch(
+            return self._compare[EqKernel, StringEqKernel](
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == NE:
-            return NeKernel.dispatch(
+            return self._compare[NeKernel, StringNeKernel](
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == LT:
-            return LtKernel.dispatch(
+            return self._compare[LtKernel, StringLtKernel](
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == LE:
-            return LeKernel.dispatch(
+            return self._compare[LeKernel, StringLeKernel](
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == GT:
-            return GtKernel.dispatch(
+            return self._compare[GtKernel, StringGtKernel](
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == GE:
-            return GeKernel.dispatch(
+            return self._compare[GeKernel, StringGeKernel](
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == AND:

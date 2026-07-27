@@ -35,6 +35,7 @@ from .execution import ExecutionContext
 from .concat import concat
 from .filter import take
 from .compare import EqKernel
+from .string import StringEqKernel
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +240,15 @@ def nullif(
     if b.length() != length:
         raise Error(t"nullif: length mismatch: {a.length()} != {b.length()}")
 
-    var eq = EqKernel.dispatch(a.copy(), b.copy(), ctx).as_bool().copy()
+    # `nullif` is defined for any dtype with an equality, so it picks the
+    # comparison family the operands belong to — numeric comparison is SIMD over
+    # fixed-width lanes, string comparison an elementwise walk, and they are
+    # separate kernels. Both operands are already known to share a dtype here.
+    var eq: BoolArray
+    if a.dtype().is_string() or a.dtype().is_large_string():
+        eq = StringEqKernel.dispatch(a.copy(), b.copy()).as_bool().copy()
+    else:
+        eq = EqKernel.dispatch(a.copy(), b.copy(), ctx).as_bool().copy()
     var candidates = List[AnyArray]()
     candidates.append(a.copy())
 

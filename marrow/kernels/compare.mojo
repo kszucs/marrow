@@ -22,12 +22,15 @@ Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 - **Tier 1 (apply)** — ``KernelStruct.apply[T]``: typed array API.
 - **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: type-erased entry.
 
-Each kernel names its string counterpart from ``string.mojo`` as
-``StringKernel``, so ``<`` ``<=`` ``>`` ``>=`` ``==`` ``!=`` work on
-``string`` / ``large_string`` through the *one* implementation of a string
-predicate rather than a second copy here. ``EqKernel`` additionally overloads
-``apply`` for ``StructArray``: row equality is every child column agreeing,
-which is how the hash table verifies key rows.
+These are **numeric** comparisons. The same operators over ``string`` /
+``large_string`` are a separate family — ``StringPredicateKernel`` and its
+``StringLtKernel``/``StringEqKernel``/… conformers in ``string.mojo`` — because
+a variable-width predicate is elementwise and cannot vectorize. Whoever
+interprets ``a < b`` picks the family from the operand dtype; see
+``_compare`` in ``marrow/expr/dynamic.mojo``.
+
+``EqKernel`` additionally overloads ``apply`` for ``StructArray``: row equality
+is every child column agreeing, which is how the hash table verifies key rows.
 """
 
 from ..arrays import (
@@ -41,15 +44,6 @@ from ..views import apply
 from ..dtypes import NumericType, PrimitiveType
 from .core import Kernel
 from .boolean import AndKernel
-from .string import (
-    StringPredicateKernel,
-    StringEqKernel,
-    StringNeKernel,
-    StringLtKernel,
-    StringLeKernel,
-    StringGtKernel,
-    StringGeKernel,
-)
 from .execution import ExecutionContext
 from ..utils import GPU_ENABLED
 
@@ -98,19 +92,21 @@ def _binary_cmp[
 # ---------------------------------------------------------------------------
 
 
-trait BinaryCompareKernel(Kernel):
-    """Element-wise binary comparison kernel producing a BoolArray.
+trait NumericCompareKernel(Kernel):
+    """Element-wise comparison over fixed-width lanes, producing a BoolArray.
 
-    Concrete structs define ``comptime name``, ``core`` (the SIMD predicate over
-    fixed-width lanes) and ``StringKernel`` (the `string.mojo` predicate that
-    implements the same comparison over variable-width data); ``apply`` and
-    ``dispatch`` are defaulted.
+    Concrete structs define ``comptime name`` and ``core`` (the SIMD predicate);
+    ``apply`` and ``dispatch`` are defaulted.
+
+    **Numeric only.** Comparing strings is a different kernel family —
+    `StringPredicateKernel` in `string.mojo`, whose core is elementwise over
+    variable-width data and cannot vectorize. This trait used to carry a
+    `comptime StringKernel` naming its string counterpart, so every numeric
+    comparison had to know about strings and `dispatch` branched on dtype at run
+    time to pick between two unrelated implementations. Which family `a < b`
+    means is a question about the operands, and it belongs to whoever is
+    interpreting the operator, not to the SIMD kernel.
     """
-
-    comptime StringKernel: StringPredicateKernel
-    """This comparison over strings — the one implementation, lexicographic over
-    UTF-8 bytes. `dispatch` routes string / large_string inputs to it, and the
-    fused expression layer instantiates it directly."""
 
     @staticmethod
     def core[
@@ -143,10 +139,7 @@ trait BinaryCompareKernel(Kernel):
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
 
-        if left.dtype().is_string() or left.dtype().is_large_string():
-            return Self.StringKernel.dispatch(left, right)
-        else:
-            return left.dtype().dispatch_numeric[leaf]()
+        return left.dtype().dispatch_numeric[leaf]()
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +147,7 @@ trait BinaryCompareKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct EqKernel(BinaryCompareKernel):
-    comptime StringKernel = StringEqKernel
+struct EqKernel(NumericCompareKernel):
     comptime name = "equal"
 
     @always_inline
@@ -196,8 +188,7 @@ struct EqKernel(BinaryCompareKernel):
         return mask^
 
 
-struct NeKernel(BinaryCompareKernel):
-    comptime StringKernel = StringNeKernel
+struct NeKernel(NumericCompareKernel):
     comptime name = "not_equal"
 
     @always_inline
@@ -208,8 +199,7 @@ struct NeKernel(BinaryCompareKernel):
         return a.ne(b)
 
 
-struct LtKernel(BinaryCompareKernel):
-    comptime StringKernel = StringLtKernel
+struct LtKernel(NumericCompareKernel):
     comptime name = "less"
 
     @always_inline
@@ -220,8 +210,7 @@ struct LtKernel(BinaryCompareKernel):
         return a.lt(b)
 
 
-struct LeKernel(BinaryCompareKernel):
-    comptime StringKernel = StringLeKernel
+struct LeKernel(NumericCompareKernel):
     comptime name = "less_equal"
 
     @always_inline
@@ -232,8 +221,7 @@ struct LeKernel(BinaryCompareKernel):
         return a.le(b)
 
 
-struct GtKernel(BinaryCompareKernel):
-    comptime StringKernel = StringGtKernel
+struct GtKernel(NumericCompareKernel):
     comptime name = "greater"
 
     @always_inline
@@ -244,8 +232,7 @@ struct GtKernel(BinaryCompareKernel):
         return a.gt(b)
 
 
-struct GeKernel(BinaryCompareKernel):
-    comptime StringKernel = StringGeKernel
+struct GeKernel(NumericCompareKernel):
     comptime name = "greater_equal"
 
     @always_inline

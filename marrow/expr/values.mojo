@@ -66,7 +66,7 @@ from ..dtypes import (
     TemporalType,
 )
 from ..kernels.compare import (
-    BinaryCompareKernel,
+    NumericCompareKernel,
     LtKernel,
     LeKernel,
     GtKernel,
@@ -831,9 +831,9 @@ trait BoolValue(Value):
 
 
 @fieldwise_init
-struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
-    BoolValue
-):
+struct NumericCompare[
+    K: NumericCompareKernel, L: NumericValue, R: NumericValue
+](BoolValue):
     """Fused numeric comparison → a bit-packed `BoolArray`."""
 
     comptime OutType = BoolType
