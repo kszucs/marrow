@@ -606,7 +606,14 @@ struct DynValue(
 
     def write_to[W: Writer](self, mut writer: W):
         if self._tag == LOAD:
-            writer.write(t"input({self._kind_data})")
+            # A named reference renders as its name until `resolve_names` binds
+            # it to a position; rendering it as `input(0)` beforehand would
+            # report an index it does not yet have (every unresolved name
+            # carries `_kind_data == 0`, so they would all print alike).
+            if self._name:
+                writer.write(self._name)
+            else:
+                writer.write(t"input({self._kind_data})")
         elif self._tag == LITERAL:
             writer.write("literal(...)")
         else:

@@ -52,11 +52,20 @@ A single test file **cannot** be compiled on its own: without a `main()` there
 is nothing to build (`mojo build` errors with `module does not contain a 'main'
 function`). Run it through `pytest` instead.
 
-**Never leave a stale `marrow.mojoc` in the repo root.** Runners compile with
-`-I .`, and a root-level `marrow.mojoc` *shadows the entire `marrow/` source
-tree*, so every import resolves against the stale artifact and fails with
-`unable to locate module 'tests'`. The `precompile` task writes to
-`.test_runners/` precisely to avoid this.
+**Never leave a `marrow.mojoc` where a runner can see it.** Such an artifact
+*shadows the entire `marrow/` source tree*, so every import resolves against the
+stale package instead of the files you just edited. Mojo puts a source file's own
+directory on the import search path, which makes **two** locations dangerous: the
+repo root (runners compile with `-I .`) and **`.test_runners/`**, where the
+generated driver lives.
+
+`precompile` therefore writes to `.precompile/`, which is on neither path. It used
+to write to `.test_runners/`, and that silently broke every following `pytest`
+run — symptom (observed 2026-07-27): a case you just added reports
+`module 'test_<x>' does not contain 'test_<your_new_case>'` and the run fails in
+well under a second, because nothing is compiled at all. Stale artifacts fail
+differently again, with `unable to locate module 'tests'`. If you ever hit either,
+`rm -f .test_runners/marrow.mojoc marrow.mojoc` first.
 
 **The library must stay warning-clean.** Keep `mojo precompile marrow` at 0
 errors rather than letting warnings accumulate until the output is unreadable.
@@ -264,9 +273,9 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 
 #### Builders (`marrow/builders.mojo`)
 
-- **`BuilderData`** - Internal mutable builder state, always accessed through `ArcPointer[BuilderData]` for shared ownership.
-- **`Builder`** - Type-erased builder wrapping `ArcPointer[BuilderData]`. Can be constructed from a `DataType` at runtime. `finish()` returns `AnyArray`.
-- **Typed builders** convert implicitly to `Builder` by cloning the `ArcPointer`, so the original typed builder remains usable after passing to a composite builder:
+- **`Builder`** - Trait every typed builder implements.
+- **`AnyBuilder`** - Type-erased builder. Can be constructed from a `DataType` at runtime. `finish()` returns `AnyArray`.
+- **Typed builders** convert implicitly to `AnyBuilder` by cloning the `ArcPointer`, so the original typed builder remains usable after passing to a composite builder:
   - `PrimitiveBuilder[T]` → `PrimitiveArray[T]`
   - `StringBuilder` → `StringArray`
   - `ListBuilder` → `ListArray`
@@ -283,10 +292,14 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 - **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`, and `c_data.mojo` only.** All other files (kernels, arrays, tests, etc.) must not call `unsafe_ptr()` directly. Kernels and array code should operate through `BufferView`/`BitmapView` abstractions instead.
 - **Avoid `AnyOrigin` types (`MutAnyOrigin`, `ImmutAnyOrigin`) and `unsafe_origin_cast`.** Use parametric origins instead (e.g. `out_o: Origin[mut=True]` / `src_o: Origin[mut=False]`) and pass views directly without origin casts.
 
-**Bitmap** (`marrow/bitmap.mojo`):
-- Immutable, bit-packed validity buffer wrapping a `Buffer`
+**Bitmap** (`marrow/buffers.mojo` — *not* a `bitmap.mojo`; it lives beside `Buffer`):
+- `Bitmap[mut=False]` — immutable, bit-packed validity buffer wrapping a `Buffer`
 - Copying is O(1) (ref-count bump)
-- `BitmapBuilder` is the mutable counterpart; `finish()` transfers to immutable `Bitmap`
+- `Bitmap[mut=True]` is the mutable counterpart; `finish()` freezes to `Bitmap[mut=False]`
+
+**Views** (`marrow/views.mojo`):
+- `BufferView` / `BitmapView` — borrowed, offset-applied spans over a `Buffer`/`Bitmap`. These are what
+  kernels compute over; see the `unsafe_ptr()` restriction above.
 
 **DataType** (`marrow/dtypes.mojo`):
 - Struct-based type system matching Arrow specification
@@ -294,9 +307,14 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 - Nested types via `list_(DataType)`, `fixed_size_list_(DataType, size)`, and `struct_(Field, ...)`
 - Uses `code` field for type identification and optional `native` field for DType mapping
 
-**Visitor** (`marrow/visitor.mojo`):
-- `DataTypeVisitor` - runtime dispatch based on `DataType` value
-- `ArrayVisitor` - runtime dispatch from `Array` to typed array overloads
+**Runtime → comptime dispatch** (`marrow/dtypes.mojo`, `marrow/utils.mojo`):
+- There is no visitor module. Runtime dtype dispatch is the `AnyDataType.dispatch_*` family —
+  `dispatch_primitive` / `dispatch_numeric` / `dispatch_integer` / `dispatch_floating` /
+  `dispatch_temporal` / `dispatch_stringlike` / `dispatch_binarylike` / `dispatch_listlike` —
+  each resolving a runtime `DataType` to a comptime type parameter for a `capturing` job.
+- **Dispatch on the widest family the typed leaf accepts** (see the Kernel Implementation Pattern
+  below): a leaf bound on `PrimitiveType` needs one `dispatch_primitive` arm, not one per family.
+- `variant_dispatch*` (`marrow/utils.mojo`) is the comptime adapter over stdlib `Variant`.
 
 **C Data Interface** (`marrow/c_data.mojo`):
 - `CArrowSchema` and `CArrowArray` for zero-copy data exchange
@@ -311,13 +329,15 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 
 ```
 marrow/
-├── dtypes.mojo           # Type system (DataType, Field)
-├── buffers.mojo          # Memory management (Buffer[mut], Allocation)
-├── bitmap.mojo           # Bitmap, BitmapBuilder
+├── dtypes.mojo           # Type system (DataType, Field, AnyDataType.dispatch_*)
+├── buffers.mojo          # Memory management (Buffer[mut], Bitmap[mut], Allocation)
+├── views.mojo            # BufferView, BitmapView — what kernels compute over
 ├── arrays.mojo           # Array, PrimitiveArray, StringArray, ListArray,
 │                         # FixedSizeListArray, StructArray, ChunkedArray
-├── builders.mojo         # Builder, BuilderData, PrimitiveBuilder, StringBuilder,
+├── builders.mojo         # Builder, AnyBuilder, PrimitiveBuilder, StringBuilder,
 │                         # ListBuilder, FixedSizeListBuilder, StructBuilder
+├── scalars.mojo          # Scalar trait, AnyScalar, PrimitiveScalar
+├── utils.mojo            # variant_dispatch*, GPU_ENABLED
 ├── kernels/
 │   ├── arithmetic.mojo   # Element-wise add, subtract, multiply, divide, math
 │   ├── aggregate.mojo    # Sum, mean, min, max, count, product
@@ -335,9 +355,9 @@ marrow/
 ├── parquet/
 │   └── tests/            # test_*.mojo + bench_*.mojo for parquet
 ├── c_data.mojo           # Arrow C Data Interface
+├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── schema.mojo           # Schema with Fields and metadata
 ├── tabular.mojo          # RecordBatch, Table
-├── visitor.mojo          # DataTypeVisitor, ArrayVisitor traits
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # The Python module top level
 └── marrow/tests/         # Python test_*.py and bench_*.py
@@ -355,7 +375,7 @@ That works because they carry no `main()` — see "Writing Mojo Tests".
 Mojo lacks dynamic dispatch, so the codebase uses:
 - Type-erased containers (`AnyArray`, `AnyBuilder`) with implicit conversions to/from typed wrappers
 - Compile-time parameterization (`PrimitiveArray[int64]`)
-- Visitor pattern (`ArrayVisitor`, `DataTypeVisitor`) for runtime type dispatch
+- The `AnyDataType.dispatch_*` family for runtime dtype → comptime type dispatch
 - Runtime type checking via `DataType.code` comparison
 
 ## GPU Compute

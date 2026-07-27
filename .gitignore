@@ -185,6 +185,7 @@ docs/_freeze/
 kgen.trace.*
 package/
 .test_runners/
+.precompile/
 .benchmarks/
 
 # Benchmark scratch output (transformed into results/ by run_benchmarks.sh)

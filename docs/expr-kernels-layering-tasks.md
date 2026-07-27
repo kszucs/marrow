@@ -3,8 +3,27 @@
 Findings and an executable task plan from a full read of both packages' type inventory and
 module import graph (2026-07-26).
 
-**Base:** `complete` @ `6e43acc` · **Status:** not started · **Scope:** `marrow/expr/*`,
-`marrow/kernels/*` (core `arrays`/`buffers`/`scalars`/`builders` are out of scope).
+**Base:** `complete` @ `6e43acc` · **Scope:** `marrow/expr/*`, `marrow/kernels/*` (core
+`arrays`/`buffers`/`scalars`/`builders` are out of scope).
+
+**Status — re-verified against the code, 2026-07-27.** The header said "not started"; three
+Tier-A/B tasks were in fact complete. Checked by grep, not by trusting a header:
+
+| task | status | evidence |
+|---|---|---|
+| **L1** — move the aggregate catalog up | **done** | `NumericFold` (`expr/aggregates.mojo:84`), the `Sum`/… aliases (`:184`) and `resolve_agg` (`:194`) all live in `expr`; the `expr.aggregates → expr.dynamic` edge is gone |
+| **L4** — `GroupBy` stops speaking `RecordBatch` | **done** | `kernels/groupby.mojo` imports only `..arrays`/`..builders`/`..dtypes` — no `..schema`, no `..tabular`. `marrow/kernels` is free of the tabular layer |
+| **L5** — one owner for the grouping strategy | **done** | `GROUP_THREAD_LOCAL` no longer crosses into `marrow/expr`; the mergeability check is internal to `GroupBy` (`groupby.mojo:487`) |
+| **L9** — `bitmap_and` duplicate | **done** | no occurrences outside a comment |
+| **L2** — extract `AnyValue` | **open** | still at `values.mojo:2194`; `values.mojo` still imports `.dynamic`. Blocks L6 |
+| **L3** — `AggFunc`'s late binding | **open** | unchanged |
+| **L6** — a `Scan` abstraction | **open** | `RELATION_PARQUET_SCAN` still an IR discriminant (`relations.mojo:78`) |
+| **L7** — split or delete `Kernel` | **re-scope** | **the premise no longer holds.** `Kernel` now carries `error[M](message)` (`kernels/core.mojo:22-25`) plus `expect_same_length` / `expect_same_dtype` — a genuinely shared member across all 73 conformers, which is exactly what the task asked for. "Prefer the delete" is now the wrong advice; close it, or re-scope to the remaining question of whether one trait should serve both element-wise SIMD ops and whole-array algorithm namespaces |
+| **L8** — decompose `DynValue` | **open** | unchanged, and still the root cause of the Q0.0 class of bug |
+
+> **L6/Q1.3's blocker was imaginary.** Both were held up by a "compiler crashes on
+> `rel.filter(col > lit)` under `TestSuite`" cap. That cap was caused by tests building plan
+> nodes by hand, not by the toolchain — see `docs/code-quality-tasks.md`. Both are unblocked.
 
 Same conventions as `docs/code-quality-tasks.md`: one owner per file, worktree-ready, conventional
 commits, `CHANGELOG.md` entry per meaningful change. Tasks marked **⚠️ BINSIZE** must run

@@ -63,7 +63,14 @@ cffi = "*"
 # A single test file cannot be compiled on its own any more — without a
 # `main()` there is nothing to build.  Run it through pytest instead; the
 # harness generates a driver for the selection and compiles that.
-precompile = { cmd = "mkdir -p .test_runners && mojo precompile marrow -o .test_runners/marrow.mojoc" }
+#
+# The artifact goes to `.precompile/`, NOT `.test_runners/`.  Mojo adds a source
+# file's own directory to the import search path, and the generated test driver
+# lives in `.test_runners/` — so an artifact left there shadows the whole
+# `marrow/` source tree for every subsequent pytest run, which then resolves
+# imports against the stale package instead of the files you just edited.  Only
+# the diagnostics matter here; the artifact itself is never consumed.
+precompile = { cmd = "mkdir -p .precompile && mojo precompile marrow -o .precompile/marrow.mojoc" }
 # Harness selftests — the pure-Python parts of conftest (flag handling, driver
 # generation, result mapping).  No Mojo compilation, runs in well under a second.
 selftest = { cmd = "python conftest.py selftest" }

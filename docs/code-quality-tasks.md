@@ -14,19 +14,54 @@ the expr half of Q3.5 (`AnyRelation.execute`, one `lit`, the validity helpers), 
 filter/take delegators. Fused `query_streaming` stripped size held at 1,307,624 across all
 of them.
 
-**Still open:** Q1.2, Q1.3, the rest of Q3.2 (`_apply_dispatch`/`_reduce_dispatch` onto
-`ExecutionContext`, `PrimitiveArray.arange`, the `c_data` double-free guard), the rest of
-Q3.1 (membership/conditional/temporal kernel structs, the 9 temporal delegators), Q2.4,
-Q3.3, Q4.1–Q4.5, Q5.1, Q5.2, Q6.1 and Q2.5 step 4.
+> **Status re-verified against the code, 2026-07-27.** The list above understated what had
+> landed; each of these was checked by grep, not by trusting a header. Newly confirmed
+> **done**, and closed here:
+>
+> | task | evidence |
+> |---|---|
+> | **Q1.1** (both halves) | the eight `AnyDataType.dispatch_*` methods (`dtypes.mojo:813-886`); `RapidHash` (`hashing.mojo:266`) and `SortIndices` (`sort.mojo:347`) structs route through them |
+> | **Q3.2**, `dispatch_over_*` half | the ladders became `AnyDataType` methods, not free functions — the 64-call-site item |
+> | **Q3.4** headline | the 24 duplicated top-level compute fns are gone; `python/marrow/__init__.py` keeps only `array`/`field`/`schema`/`record_batch`/`table` + ipc, which is PyArrow's shape |
+> | **Q2.5** step 2 | `reinterpret_array` has **no occurrences tree-wide**; so do `hash_identity` and the duplicate `bitmap_and` |
+> | **L1**, **L4**, **L5** (layering doc) | see `expr-kernels-layering-tasks.md` — all three verified done |
+>
+> Still open, re-confirmed: **Q1.2**, **Q1.3**, **Q2.4** (9 hand-rolled `sync_parallelize`
+> loops, no `ctx.stripe`), the rest of **Q3.2** (`_apply_dispatch`/`_reduce_dispatch` still
+> free in `views.mojo:1167`/`:1711`; `arange` still free in `builders.mojo:1898`), the rest
+> of **Q3.1** (`membership.mojo` 5 free fns / no struct, `conditional.mojo` 11 / no struct,
+> `date_trunc` still `String`-keyed, the 9 temporal delegators at `temporal.mojo:314-346`),
+> **Q3.3** (`ipc.mojo` 12 free fns, `parquet/reader.mojo` 9), **Q4.1–Q4.5**, **Q5.2**,
+> **Q6.1**, **Q2.5** step 4. **Q5.1** is partly done (CLAUDE.md + the `precompile` trap).
+> **L7**'s premise no longer holds — `Kernel` carries `error[M]()`, a real shared member.
 
 > **Two gates were broken and are fixed.** `pixi run binary_size` errored out entirely
 > (`query_streaming_agg_fused.mojo` used the removed `List.append[A](dtype)` spelling), and
 > the test harness reported a *compiler crash* as a failure of every case in the selection.
-> The harness now halves the unit on a crash and retries — `test_aggregates` 0/17 -> 16/17,
-> `test_plan` 0/22 -> 17/22, `test_filter` 0/48 -> 15. The cases that still fail crash on
-> their own: **a test body that filters with a comparison predicate under `TestSuite`**
-> (`rel.filter(col("a") > lit(...))`), which compiles fine in a plain `main()`. That is a
-> pre-existing upstream bug, not one of these tasks.
+> The harness now halves the unit on a crash and retries.
+
+> ### The compiler-crash cap is lifted — it was our code, not the compiler (2026-07-27)
+>
+> The five long-standing `test_plan.mojo` crashes were attributed to an upstream bug ("a
+> test body that filters with a comparison predicate under `TestSuite`"). That was wrong.
+> **All five were tests that built plans by hand** — `AnyRelation(ParquetScan(...))` then
+> `Filter(input=..., predicate=col(0) > lit(...))` with a hand-written output schema.
+> Rewriting the file through the plan-building API (`parquet_scan(...).filter(...)`,
+> `.project(...)`) made every crash disappear: the whole 21-case file now compiles as **one**
+> unit and runs, where before the harness had to bisect to single cases and five still died.
+>
+> | | crashes | wall |
+> |---|---|---|
+> | hand-built nodes, bisected to single cases | 5 | 390 s |
+> | plan-building API, one unit | **0** | **97 s** |
+>
+> This matters well beyond the test file: the cap was believed to block **Q1.2/Q1.3, L6 and
+> Q4.5**, all of which touch the scan/filter path. It does not. Prefer the plan-building API
+> in every new test for this reason, not only for style — and treat "the compiler crashes on
+> this" as a hypothesis about our own elaboration, not a fact about the toolchain.
+>
+> The same pass found the real bug the hand-written schema was hiding: see
+> *Lane divergence on mixed-dtype arithmetic* under Tier 0.
 
 **Guiding standard.** These tasks are not chores; the bar is *elegant, performant, encapsulated
 abstractions*. A task is done when the concept has **one owner**, its invariants are enforced by
@@ -145,6 +180,38 @@ Owns: `marrow/expr/values.mojo`, `marrow/kernels/boolean.mojo`, `marrow/expr/tes
 Owns: `marrow/expr/dynamic.mojo` · Done when: `name()` returns `String()` unless `_tag == LOAD`,
 so a `LIKE` node stops reporting its pattern (`"%foo%"`) and a `DATE_TRUNC` node its unit as an
 output column name. Add a test.
+
+**Q0.4 — Lane divergence on mixed-dtype arithmetic** · *Tier 0, found 2026-07-27* ·
+Depends: — · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.mojo`,
+`marrow/kernels/core.mojo`, `marrow/expr/tests/test_parity.mojo`,
+`marrow/expr/tests/test_plan.mojo` ·
+
+**The two expression lanes disagree about `int64 + float64`.** Q0.2 made the *fused* lane
+promote — `NumericBinary` and `NumericCompare` both compute in `promote[L, R]`, and that is
+what its mixed-width parity case covers. The *interpreted* lane never learned: the erased
+binary path goes through `Kernel.expect_same_dtype` (`kernels/core.mojo:36-39`) and raises
+`add: dtype mismatch: int64 vs float64`. So the same expression executes in one lane and
+raises in the other, and `.project()` surfaces it at **plan-build** time because it probes
+each expression's dtype against a 0-row batch.
+
+Found by rewriting `test_plan.mojo` through the plan-building API. The old test hid it
+perfectly: it built `Project(values=[col(0) + col(1)], schema=[field("z", int64)])` by hand
+and asserted the schema it had just written down — so the expression was never evaluated,
+*and* the declared dtype (`int64` for `int64 + float64`) was wrong in a way nothing could
+catch. This is the general argument for the API revamp: a test that supplies the output
+schema asserts against its own arithmetic.
+
+Done when: the erased binary dispatch casts both operands to `promote(left, right)` before
+selecting a leaf, so both lanes agree; `expect_same_dtype` remains for the kernels that
+genuinely require identical types (`nullif`, `conditional`'s candidates); `test_parity.mojo`
+covers `int64 + float64` and `int32 > int64` **through both lanes**; and
+`test_project_mixed_dtype_arithmetic_raises` in `test_plan.mojo` — which currently asserts
+the *divergence* so it stays visible — is turned into a promotion assertion.
+
+> Note what the parity suite did not catch. `test_parity.mojo` compares fused against
+> dynamic for expressions it can build in both, so an operand pairing only the fused lane
+> accepts is invisible to it. Parity coverage should be keyed on the *fused* lane's accepted
+> domain, not on the intersection.
 
 ---
 

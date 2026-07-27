@@ -129,7 +129,7 @@ from ..dtypes import (
     null,
 )
 from .execution import ExecutionContext
-from .filter import Take, filter
+from .filter import Take, filter, take
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash

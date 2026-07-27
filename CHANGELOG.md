@@ -4,6 +4,39 @@
 
 ### Fixes
 
+- **`precompile` no longer breaks every following `pytest` run.** It wrote its package
+  artifact to `.test_runners/`, and Mojo puts a source file's own directory on the import
+  search path — so a `marrow.mojoc` sitting next to the generated test driver *shadowed the
+  whole `marrow/` source tree*. Every subsequent run resolved imports against the stale
+  package: a case you had just added reported `module 'test_x' does not contain
+  'test_your_new_case'` and the run failed in well under a second without compiling
+  anything. The artifact now goes to `.precompile/`, which is on no include path. CLAUDE.md
+  claimed `.test_runners/` was chosen "precisely to avoid this".
+- **A named column no longer renders as `input(0)`.** `DynValue.write_to` printed
+  `input(_kind_data)` for every `LOAD` node, but an *unresolved* named reference carries
+  `_kind_data == 0` — so `col("x") < col("y")` displayed as `less(input(0), input(0))`,
+  reporting positions neither column had yet. It now prints the name until `resolve_names`
+  binds it, which also makes a rendered plan distinguish bound from unbound references.
+- **Restored warning-clean.** `groupby.mojo` and `join.mojo` reached `take` implicitly
+  through the package `__init__` in 5 places (deprecated); both now import it explicitly.
+
+### Tests
+
+- **`expr/tests/test_plan.mojo` builds its plans through the plan-building API** —
+  `parquet_scan(...).filter(...).select(...)`/`.project(...)` — instead of constructing
+  `AnyRelation(ParquetScan(...))` / `Filter(input=…)` / `Project(input=…, schema=…)` by hand.
+  Two consequences beyond style:
+  - **The five long-standing compiler crashes in this file are gone.** They were attributed
+    to an upstream bug ("filtering with a comparison predicate under `TestSuite`"); they were
+    caused by the hand-built plan nodes. The whole file now compiles as **one** unit and
+    passes 21/21 in 105 s, where before the harness had to bisect to single cases and five
+    still died (390 s). The same cap was believed to block Q1.2/Q1.3, L6 and Q4.5.
+  - **It exposed a real lane divergence** (now tracked as Q0.4, and asserted by
+    `test_project_mixed_dtype_arithmetic_raises`): the fused algebra promotes mixed operand
+    widths, the interpreted lane raises `dtype mismatch`. The old test could not catch it —
+    it declared `schema=[field("z", int64)]` for an `int64 + float64` expression it never
+    evaluated, so it asserted the arithmetic it had itself written down, wrongly.
+
 - **`Buffer.resize` no longer corrupts DEVICE memory.** It probed `Allocation._host` to
   decide between a pinned and a heap reallocation, so a DEVICE buffer took the heap arm
   and then `memcpy`'d through a pointer it does not have. `Allocation` now answers

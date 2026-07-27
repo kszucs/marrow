@@ -30,7 +30,7 @@ from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
 from .execution import ExecutionContext
-from .filter import Take
+from .filter import Take, take
 from .concat import concat
 from .aggregate import Aggregation, AggFunction
 
