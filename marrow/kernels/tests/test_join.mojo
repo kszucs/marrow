@@ -663,7 +663,7 @@ def _run_inner(
         _right_on(),
         JOIN_INNER,
         JOIN_ALL,
-        num_threads=num_threads,
+        ctx=ExecutionContext.parallel(num_threads),
     )
 
 

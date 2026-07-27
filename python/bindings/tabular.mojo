@@ -469,7 +469,7 @@ def _record_batch_join(
         left_on,
         right_on,
         kind,
-        num_threads=nt,
+        ctx=ExecutionContext.parallel(nt),
     )
 
     # Build output schema and RecordBatch from StructArray result.
