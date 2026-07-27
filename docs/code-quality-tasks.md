@@ -1344,6 +1344,45 @@ incompatible parallel-gating idioms become one.
 > Consider splitting into Q2.4a (context API: `execution.mojo` + `buffers.mojo` + `views.mojo`)
 > and Q2.4b (migrate kernel call sites), so the API lands first and migration is mechanical.
 
+### The stripe loops are **three** shapes, not one — surveyed 2026-07-27
+
+`ctx.stripe[body](length, align)` landed and two call sites use it, but the card's premise
+("replace the 7 hand-rolled loops") is wrong: only two of them are the shape `stripe`
+expresses. Read every remaining one before planning the rest.
+
+| loop | shape | fits `stripe(start, end)`? |
+|---|---|---|
+| `filter.mojo` `Take.apply` gather | parallel-for over a range | **yes — converted** |
+| `views.mojo` `_apply_dispatch` | parallel-for over a range | **yes — converted** |
+| `views.mojo` `_reduce_dispatch` :1711 | per-worker partial, then merge | no — needs `wid` |
+| `partition.mojo` `hist_worker` :59 | per-worker histogram, `base = t * num_buckets` | no — needs `wid` |
+| `partition.mojo` `scatter_worker` :245 | per-worker write offsets, `base = t * p` | no — needs `wid` |
+| `groupby.mojo` `worker` :558 | per-worker partials, `partials[t] = …` | no — needs `wid` |
+| `sort.mojo` `scatter_worker` :333 | per-worker write offsets, `base = t * bucket_count` | no — needs `wid` |
+| `partition.mojo` `worker` :310 | parallel-for over `p` **partitions**, not a range | no — different loop |
+| `parquet/reader.mojo` :1847 | **strided** items (`t`, `t+nt`, …) writing `grid[t]` | no — different loop |
+
+So the real remaining work is **one new shape, covering five loops**: a parallel-for whose
+body owns per-worker scratch. They share more than the first family did — every one of them
+spells `start = t*chunk; if start >= n: return; end = min(start+chunk, n); base = t*K`.
+
+Design decision to make first, and it is the whole task:
+
+- **Prefer one primitive, not two.** Give `stripe`'s body `(wid, start, end)` and let the two
+  converted callers ignore `wid`. A second `stripe_indexed` would be a second way to do the
+  same thing, which this document's bar rejects.
+- **Callers must size their scratch before the call**, so `ExecutionContext` also needs
+  something like `stripe_workers(length) -> Int` (the worker count if it will parallelise,
+  else 1). Without it every caller re-derives `wants_parallel` + `resolved_num_threads`,
+  which is the reach-in this task exists to remove.
+- The last two rows are **not** stripe loops at all and should be left alone; converting them
+  would mean inventing a shape for one caller each.
+
+Verification burden, learned the hard way: every one of these five is on a hot path
+(`sort`, `groupby`, `partition` back the group-by and join benchmarks). Measure with
+**interleaved repeats, five or more, comparing ranges** — two repeats produced two separate
+false regressions today (see `benchmarks/history.sh`). Mark every body `@always_inline`.
+
 ---
 
 ## Tier 3 — free-function elimination (RC10)
