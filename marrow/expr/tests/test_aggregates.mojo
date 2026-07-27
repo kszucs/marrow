@@ -48,12 +48,11 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...dtypes import AnyDataType, Int32Type, field
+from ...dtypes import AnyDataType, Int32Type, StringType, field
 from ...kernels.aggregate import (
     NumericAgg,
     StringMinMax,
     MinOp,
-    StringType,
     SumKernel,
     MaxKernel,
 )

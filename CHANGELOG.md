@@ -4,6 +4,13 @@
 
 ### Refactors
 
+- **No wildcard imports left in the core modules.** `arrays`, `scalars`, `builders`,
+  `c_data` and `kernels/aggregate` pulled `from .dtypes import *`, which also re-exported
+  whatever `dtypes` had imported — `variant_dispatch`, `DeviceContext` and the dtype
+  vocabulary all arrived in three namespaces by accident, and a test was importing
+  `StringType` from `kernels.aggregate`. Each is now an explicit list, so a module's
+  dependencies are readable at its head and adding a name to `dtypes` cannot silently land
+  somewhere else. CLAUDE.md's standing advice is updated to match.
 - **String comparison has one implementation.** `LtKernel`/`LeKernel`/`GtKernel`/`GeKernel`/
   `EqKernel`/`NeKernel` each name their string counterpart as `comptime StringKernel`
   (`StringLtKernel`, … — new in `string.mojo` alongside the existing `StringEqKernel`), so

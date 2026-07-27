@@ -41,7 +41,20 @@ from ..builders import (
     Int32Builder,
     BinaryLikeBuilder,
 )
-from ..dtypes import *
+from ..dtypes import (
+    AnyDataType,
+    Float64Type,
+    Int32Type,
+    Int64Type,
+    NumericType,
+    PrimitiveType,
+    StringLikeType,
+    TemporalType,
+    UInt8Type,
+    float64,
+    int32,
+    int64,
+)
 from ..scalars import (
     PrimitiveScalar,
     AnyScalar,

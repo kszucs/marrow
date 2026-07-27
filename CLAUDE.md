@@ -534,7 +534,7 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - Use `deinit` for consuming parameters
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
-- **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly
+- **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly. **But import explicitly, never `from .x import *`.** A wildcard re-exports whatever `x` itself imported, so a name resolves or not depending on which file you entered through — the signature of three separate incidents (a trait shadowing the builtin `Scalar`; `BoolArray` resolving along one path and not another; a "fix" that took errors 2 → 10). The remaining wildcards were replaced with explicit lists; keep it that way.
 - **Open bug (`docs/code-quality-tasks.md` Q0.0):** `ArcPointer[DynValue]` (`expr/values.mojo:2299`) writes its trailing `Variant` discriminant one byte past the allocation (`size_of` 416 vs ≥417 needed), silently corrupting the heap and causing every full-suite failure — note that ASAN *hides* it (`test_reader` passes 35/35 under ASAN, fails without) and that a Mojo build failure emits no ASAN output at all, so verify fixes without ASAN and confirm tests actually ran.
 
 ### Associated-type & trait gotchas (learned the hard way)
