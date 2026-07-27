@@ -20,8 +20,29 @@
 - **Restored warning-clean.** `groupby.mojo` and `join.mojo` reached `take` implicitly
   through the package `__init__` in 5 places (deprecated); both now import it explicitly.
 
+### Features
+
+- **`in_memory_table(batch, morsel_size=…)`** — the morsel size was reachable only by
+  constructing `InMemoryTable` directly, which is the sole reason several streaming tests
+  built nodes by hand.
+- **`AnyRelation.project` and `.aggregate` accept already-bound `AnyValue`s**, so a fused
+  comptime plan uses the same plan-building API as an interpreted one instead of assembling
+  `Project`/`Aggregate` nodes with a caller-written schema. `project` now takes
+  `List[AnyValue]` only: `AnyValue` converts implicitly from `DynValue`, so a second
+  `List[DynValue]` overload was shadowed at every list-literal call site — reachable only by
+  spelling the conversion out, which is not an API. Column references bind when the value
+  executes, exactly as `filter` already did; an unknown column still fails at plan-build
+  time because the dtype probe executes the expression.
+
 ### Tests
 
+- **`expr/tests/{test_plan,test_streaming,test_aggregates}.mojo` build their plans through
+  the plan-building API.** The `benchmarks/binary_size/*.mojo` gates are now the only place
+  that constructs plan nodes directly, and deliberately so: schema derivation probes each
+  expression against a 0-row batch, and converting the gates measured **+16,528 bytes
+  (+1.26 %)** on `query_streaming` stripped (1,307,624 -> 1,324,152). They were reverted and
+  their docstring records why; tracked as Q0.5, whose fix is to answer a *fused* value's
+  dtype statically instead of by execution.
 - **`expr/tests/test_plan.mojo` builds its plans through the plan-building API** —
   `parquet_scan(...).filter(...).select(...)`/`.project(...)` — instead of constructing
   `AnyRelation(ParquetScan(...))` / `Filter(input=…)` / `Project(input=…, schema=…)` by hand.

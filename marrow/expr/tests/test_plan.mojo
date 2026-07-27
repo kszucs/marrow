@@ -154,12 +154,20 @@ def test_project_exprs() raises:
 
 
 def test_project_write_to() raises:
-    """`.project()` binds names to positions, so it renders positionally.
+    """A projection renders each output column as `name=expression`.
 
-    Uses `y` (index 1) rather than `x`: an *unresolved* name also carries
-    `_kind_data == 0`, so only a non-zero index proves the binding ran."""
+    Column references print by name: `project` binds them when the boxed value
+    executes, exactly as `filter` does, rather than rewriting them to positions
+    at plan-build time. `select` is the one that renders positionally, because
+    it builds positional references directly."""
     var plan = _scan().project(names=["z"], values=[col("y") + col("y")])
-    assert_equal(String(plan), "Project([z=add(input(1), input(1))])")
+    assert_equal(String(plan), "Project([z=add(y, y)])")
+
+
+def test_select_write_to() raises:
+    """`select` resolves names to positions itself, so it renders positionally —
+    `y` is index 1, which an unresolved reference could not report."""
+    assert_equal(String(_scan().select("y")), "Project([y=input(1)])")
 
 
 # ---------------------------------------------------------------------------

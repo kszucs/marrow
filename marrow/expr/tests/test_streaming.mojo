@@ -26,17 +26,10 @@ from ...dtypes import (
     timestamp,
     field,
 )
-from ...schema import Schema, schema
+from ...schema import schema
 from ...tabular import RecordBatch, record_batch
 from ...expr.values import Gt, AnyValue, col
-from ...expr.relations import (
-    InMemoryTable,
-    Project,
-    Sort,
-    Limit,
-    AnyRelation,
-    in_memory_table,
-)
+from ...expr.relations import AnyRelation, Sort, in_memory_table
 from ...expr.dynamic import col as dyn_col, lit, case_when, if_else
 
 
@@ -49,33 +42,21 @@ def _batch() raises -> RecordBatch:
     )
 
 
-def _out_schema() raises -> Schema:
-    return schema([field("a", int64), field("name", string)])
-
-
 def _fused_plan(morsel: Int) raises -> AnyRelation:
     """SELECT a, name WHERE a > b, fused values, given a morsel size."""
-    var filtered = AnyRelation(
-        InMemoryTable(batch=_batch(), morsel_size=morsel)
-    ).filter(AnyValue(Gt(col("a", int64), col("b", int64))))
-    var values = List[AnyValue]()
-    values.append(AnyValue(col("a", int64)))
-    values.append(AnyValue(col("name", string)))
-    return AnyRelation(
-        Project(
-            input=filtered,
+    return (
+        in_memory_table(_batch(), morsel_size=morsel)
+        .filter(AnyValue(Gt(col("a", int64), col("b", int64))))
+        .project(
             names=["a", "name"],
-            values=values^,
-            schema=_out_schema(),
+            values=[AnyValue(col("a", int64)), AnyValue(col("name", string))],
         )
     )
 
 
 def test_scan_streams_in_morsels() raises:
     """Opening an InMemoryTable yields morsel-sized slices, then Exhausted."""
-    var scan = AnyRelation(
-        InMemoryTable(batch=_batch(), morsel_size=2)
-    ).to_processor()
+    var scan = in_memory_table(_batch(), morsel_size=2).to_processor()
     assert_equal(scan.pull().num_rows(), 2)
     assert_equal(scan.pull().num_rows(), 2)
     assert_equal(scan.pull().num_rows(), 1)
@@ -109,19 +90,10 @@ def test_result_independent_of_morsel_size() raises:
 def test_streaming_interpreter_values() raises:
     """The same pipeline with DynValue interpreter values (small morsels)
     produces the same result — fused and interpreted interchange."""
-    var filtered = AnyRelation(
-        InMemoryTable(batch=_batch(), morsel_size=2)
-    ).filter(AnyValue(dyn_col("a") > dyn_col("b")))
-    var values = List[AnyValue]()
-    values.append(AnyValue(dyn_col("a")))
-    values.append(AnyValue(dyn_col("name")))
-    var plan = AnyRelation(
-        Project(
-            input=filtered,
-            names=["a", "name"],
-            values=values^,
-            schema=_out_schema(),
-        )
+    var plan = (
+        in_memory_table(_batch(), morsel_size=2)
+        .filter(AnyValue(dyn_col("a") > dyn_col("b")))
+        .project(names=["a", "name"], values=[dyn_col("a"), dyn_col("name")])
     )
     var result = plan.execute()
     assert_equal(result.num_rows(), 2)
@@ -334,9 +306,7 @@ def test_limit_offset_across_morsels() raises:
     for morsel in [1, 2, 3, 4, 7]:
         var a = array([1, 2, 3, 4, 5, 6], int64)
         var batch = record_batch([a^], names=["a"])
-        var plan = AnyRelation(
-            InMemoryTable(batch=batch, morsel_size=morsel)
-        ).limit(3, offset=1)
+        var plan = in_memory_table(batch, morsel_size=morsel).limit(3, offset=1)
         var result = plan.execute()
         assert_equal(result.num_rows(), 3)
         assert_true(
@@ -819,9 +789,7 @@ def test_aggregate_streams_across_morsels() raises:
     the concatenation of every morsel's group ids and values. A one-row morsel
     gives the same answer as a single batch, for a heterogeneous aggregate set.
     """
-    var plan = AnyRelation(
-        InMemoryTable(batch=_agg_batch(), morsel_size=1)
-    ).aggregate(
+    var plan = in_memory_table(_agg_batch(), morsel_size=1).aggregate(
         keys=[dyn_col("k")],
         aggs=[
             dyn_col("v").sum().alias("total"),

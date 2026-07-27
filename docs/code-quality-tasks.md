@@ -181,6 +181,33 @@ Owns: `marrow/expr/dynamic.mojo` · Done when: `name()` returns `String()` unles
 so a `LIKE` node stops reporting its pattern (`"%foo%"`) and a `DATE_TRUNC` node its unit as an
 output column name. Add a test.
 
+**Q0.5 — Schema derivation probes by execution, and it costs 16 KB** ·
+*measured 2026-07-27* · Depends: — · Owns: `marrow/expr/relations.mojo`,
+`marrow/expr/values.mojo` · ⚠️ BINSIZE ·
+
+`project` and `aggregate` derive their output schema by evaluating each expression against a
+0-row batch (`RecordBatch.empty(input_schema)`). That is what makes a plan's schema honest —
+a caller-supplied one asserts the caller's type algebra, which is how Q0.4 stayed hidden —
+but it is *executed* code, so it links.
+
+Measured by converting the four `benchmarks/binary_size/*.mojo` gates from hand-built nodes
+to the plan-building API and back:
+
+| | `query_streaming` stripped | Δ |
+|---|---|---|
+| hand-built `Project(…, schema=…)` | **1,307,624** | — |
+| `.project(names, values)` | 1,324,152 | **+16,528 (+1.26 %)** |
+
+(`marrow::tabular` 8 -> 9 symbols, `marrow::schema` 2 -> 3, `marrow::expr::relations`
+20 -> 24.) The gates were therefore **reverted** and are the one sanctioned place that builds
+nodes directly; their docstring says so. Everything else, tests included, uses the API.
+
+Done when the probe is unnecessary for the fused lane: a fused value's `OutType` is
+**statically known**, so `AnyValue` should be able to answer its output dtype without
+executing anything, and only the interpreted arm needs the probe. That reclaims the 16 KB
+*and* lets the gates use the same API as every other caller — at which point this task and
+the gate exception close together.
+
 **Q0.4 — Lane divergence on mixed-dtype arithmetic** · *Tier 0, found 2026-07-27* ·
 Depends: — · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.mojo`,
 `marrow/kernels/core.mojo`, `marrow/expr/tests/test_parity.mojo`,

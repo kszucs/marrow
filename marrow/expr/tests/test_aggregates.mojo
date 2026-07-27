@@ -48,7 +48,7 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...dtypes import AnyDataType, Int32Type, StringType, field
+from ...dtypes import AnyDataType, Int32Type, StringType
 from ...kernels.aggregate import (
     NumericAgg,
     StringMinMax,
@@ -58,12 +58,7 @@ from ...kernels.aggregate import (
 )
 from ...expr.aggregates import AggFunc
 from ...expr.dynamic import DynValue, col, lit
-from ...expr.relations import (
-    Aggregate,
-    AnyRelation,
-    InMemoryTable,
-    in_memory_table,
-)
+from ...expr.relations import AnyRelation, in_memory_table
 from ...expr.values import AnyValue, col as fused_col
 
 
@@ -406,35 +401,17 @@ def test_the_same_plan_can_be_executed_repeatedly() raises:
 
 def _fused_sum_max_by_region() raises -> AnyRelation:
     """``SELECT region, sum(amount), max(amount) GROUP BY region``, fused."""
-    var keys = List[AnyValue]()
-    keys.append(AnyValue(fused_col("region", string)))
-
-    var inputs = List[AnyValue]()
-    inputs.append(AnyValue(fused_col("amount", int64)))
-    inputs.append(AnyValue(fused_col("amount", int64)))
-
-    var aggs = List[AggFunc]()
-    aggs.append(
-        AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
-    )
-    aggs.append(
-        AggFunc.of[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64))
-    )
-
-    return AnyRelation(
-        Aggregate(
-            input=AnyRelation(InMemoryTable(batch=_orders())),
-            keys=keys^,
-            inputs=inputs^,
-            aggs=aggs^,
-            schema=schema(
-                [
-                    field("region", string),
-                    field("total", int64),
-                    field("biggest", int64),
-                ]
-            ),
-        )
+    return in_memory_table(_orders()).aggregate(
+        keys=[AnyValue(fused_col("region", string))],
+        inputs=[
+            AnyValue(fused_col("amount", int64)),
+            AnyValue(fused_col("amount", int64)),
+        ],
+        aggs=[
+            AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64)),
+            AggFunc.of[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64)),
+        ],
+        names=["region", "total", "biggest"],
     )
 
 
@@ -479,24 +456,11 @@ def test_fused_aggregate_results() raises:
 def test_fused_non_numeric_aggregation() raises:
     """A fused plan is not limited to the numeric folds: a bytewise string
     min is just a different `Aggregation` named at compile time."""
-    var keys = List[AnyValue]()
-    keys.append(AnyValue(fused_col("region", string)))
-    var inputs = List[AnyValue]()
-    inputs.append(AnyValue(fused_col("region", string)))
-
-    var aggs = List[AggFunc]()
-    aggs.append(
-        AggFunc.of[StringMinMax[MinOp, StringType]](AnyDataType(string))
-    )
-
-    var plan = AnyRelation(
-        Aggregate(
-            input=AnyRelation(InMemoryTable(batch=_orders())),
-            keys=keys^,
-            inputs=inputs^,
-            aggs=aggs^,
-            schema=schema([field("region", string), field("lo", string)]),
-        )
+    var plan = in_memory_table(_orders()).aggregate(
+        keys=[AnyValue(fused_col("region", string))],
+        inputs=[AnyValue(fused_col("region", string))],
+        aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](AnyDataType(string))],
+        names=["region", "lo"],
     )
     var out = plan.execute()
     var east = _row_for(out, "east")

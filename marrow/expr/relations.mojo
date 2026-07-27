@@ -20,18 +20,31 @@ Concrete nodes / operators: ``InMemoryTable``/``InMemoryTableProcessor``,
 
 Plan-building API
 -----------------
+Build plans through these, not by constructing nodes: every verb *derives* its
+output schema (probing expression dtypes where needed), whereas the node
+constructors take one, so a hand-built plan can declare a schema its own
+expressions do not produce.
+
+``in_memory_table(batch[, morsel_size])`` / ``parquet_scan(path, schema)`` — leaf sources.
 ``AnyRelation.select(*names)``                   — project columns by name.
+``AnyRelation.project(names, values)``           — project computed expressions.
 ``AnyRelation.filter(pred)``                     — filter rows by predicate.
-``AnyRelation.aggregate(keys, values, funcs, names)`` — grouped aggregation
-(computed keys/inputs; ``HAVING`` is a ``.filter(...)`` on top of it).
+``AnyRelation.aggregate(keys, aggs)``            — grouped aggregation
+(``HAVING`` is a ``.filter(...)`` on top of it).
+``AnyRelation.sort(keys, ascending)`` / ``.limit(n[, offset])`` — order and slice
+(``.sort(...).limit(k)`` folds into the sort kernel's top-K path).
 ``AnyRelation.join(right, left_on, right_on)``   — hash join.
-``in_memory_table(batch)`` / ``parquet_scan(path)`` — leaf sources.
-``execute(plan)``                                — drain to a single RecordBatch.
+``AnyRelation.execute()``                        — drain to a single RecordBatch.
+
+``project`` and ``aggregate`` each have two overloads, one per expression lane:
+one taking interpreted ``DynValue``s (names resolved against the input schema
+here) and one taking already-bound ``AnyValue``s, so a fused comptime plan uses
+the same API rather than assembling nodes by hand.
 
 Example
 -------
     var plan = in_memory_table(batch).filter(col("x") > lit[Int64Type](0)).select("x")
-    var result = execute(plan)
+    var result = plan.execute()
 """
 
 from std.memory import ArcPointer
@@ -329,6 +342,54 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             )
         )
 
+    def aggregate(
+        self,
+        var keys: List[AnyValue],
+        var inputs: List[AnyValue],
+        var aggs: List[AggFunc],
+        names: List[String],
+    ) raises -> AnyRelation:
+        """Grouped aggregation from an already-resolved aggregate spec — the
+        fused counterpart of the ``keys``/``aggs`` overload above.
+
+        ``aggs[j]`` carries a *comptime* ``Aggregation`` (built with
+        ``AggFunc.of[A]``) and applies to ``inputs[j]``, so there is no function
+        name to interpret and nothing is resolved here. ``names`` covers the
+        output columns in schema order — one per key, then one per aggregate.
+
+        The output schema is derived, never supplied: key dtypes are probed the
+        same way ``project`` probes, and each aggregate's dtype is read off the
+        aggregation itself. A caller-written schema would assert the caller's
+        own type algebra rather than the plan's."""
+        if len(names) != len(keys) + len(aggs):
+            raise Error(
+                "aggregate: len(names) != len(keys) + len(aggs), got "
+                + String(len(names))
+                + " for "
+                + String(len(keys))
+                + " keys and "
+                + String(len(aggs))
+                + " aggregates"
+            )
+        if len(inputs) != len(aggs):
+            raise Error("aggregate: len(inputs) != len(aggs)")
+
+        var probe = RecordBatch.empty(self.schema())
+        var fields = List[Field]()
+        for i in range(len(keys)):
+            fields.append(Field(names[i], keys[i].execute(probe).dtype()))
+        for j in range(len(aggs)):
+            fields.append(Field(names[len(keys) + j], aggs[j].out_dtype.copy()))
+        return AnyRelation(
+            Aggregate(
+                input=self,
+                keys=keys^,
+                inputs=inputs^,
+                aggs=aggs^,
+                schema=Schema(fields=fields^),
+            )
+        )
+
     def join(
         self,
         right: AnyRelation,
@@ -385,15 +446,25 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         )
 
     def project(
-        self, names: List[String], values: List[DynValue]
+        self, names: List[String], var values: List[AnyValue]
     ) raises -> AnyRelation:
         """Project arbitrary named expressions (computed columns).
 
         Unlike ``select`` (column pass-through), each value is an expression
         evaluated per morsel — e.g. ``col("x") + lit(1)``, a literal, or a
-        renamed column. Column references resolve by name against the input
-        schema; the output dtype of each column is the expression's static dtype
-        (or the referenced column's dtype for a bare column reference)."""
+        renamed column. The output dtype of each column is the expression's own,
+        probed rather than declared (see below).
+
+        Both expression lanes are accepted, exactly as ``filter`` accepts both,
+        and — also as in ``filter`` — column references bind by name when the
+        boxed value executes rather than being rewritten to positions here. An
+        unknown column still fails at plan-build time, because the dtype probe
+        below executes the expression.
+
+        There is deliberately no ``List[DynValue]`` overload: ``AnyValue``
+        converts implicitly from ``DynValue``, so a second overload would be
+        shadowed by this one at every call site that passes a list literal —
+        reachable only by spelling out the conversion, which is not an API."""
         if len(names) != len(values):
             raise Error("project: len(names) != len(values)")
 
@@ -401,19 +472,17 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         # Probe each expression's output dtype by evaluating it against a 0-row
         # batch of the input schema — general for computed columns (``x + 1``,
         # literals, CASE) where a purely static dtype rule would be incomplete.
+        # It is also the only thing that keeps the declared schema honest: a
+        # caller-supplied one asserts the caller's arithmetic, not the plan's.
         var probe = RecordBatch.empty(input_schema)
         var fields = List[Field]()
-        var exprs = List[AnyValue]()
         for i in range(len(values)):
-            var resolved = values[i].resolve_names(input_schema)
-            var out = resolved.execute(probe)
-            fields.append(Field(names[i], out.dtype()))
-            exprs.append(AnyValue(resolved^))
+            fields.append(Field(names[i], values[i].execute(probe).dtype()))
         return AnyRelation(
             Project(
                 input=self,
                 names=names.copy(),
-                values=exprs^,
+                values=values^,
                 schema=Schema(fields=fields^),
             )
         )
@@ -508,9 +577,15 @@ struct InMemoryTable(Relation):
         )
 
 
-def in_memory_table(batch: RecordBatch) -> AnyRelation:
-    """Create a relation backed by an in-memory RecordBatch."""
-    return InMemoryTable(batch=batch)
+def in_memory_table(
+    batch: RecordBatch, morsel_size: Int = DEFAULT_MORSEL_SIZE
+) -> AnyRelation:
+    """Create a relation backed by an in-memory RecordBatch.
+
+    ``morsel_size`` is the number of rows each ``pull()`` yields. It never
+    changes the result — only how many slices the pipeline is driven in — so it
+    exists mainly to exercise the streaming boundary from tests."""
+    return InMemoryTable(batch=batch, morsel_size=morsel_size)
 
 
 struct ParquetScan(Relation):
