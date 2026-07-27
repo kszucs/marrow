@@ -730,40 +730,25 @@ struct Take:
         var null_count = 0
 
         if not has_null_indices and not has_src_nulls:
-            # Fast path: no nulls — pure SIMD gather, no bitmap.
-            if ctx.wants_parallel(n):
-                var nt = ctx.resolved_num_threads()
-                # Round chunk up to a SIMD width so each worker owns a
-                # self-contained gather boundary and the tail scalar loop
-                # only runs at the very end of the last worker's stripe.
-                var chunk = ((n + nt - 1) // nt + W - 1) // W * W
-
-                @parameter
-                def worker(t: Int):
-                    var start = t * chunk
-                    if start >= n:
-                        return
-                    var end = min(start + chunk, n)
-                    var k = start
-                    while k + W <= end:
-                        var offsets = idx.load[W](k).cast[DType.int64]()
-                        var vals = src.gather[W](offsets)
-                        out.store[W](k, vals)
-                        k += W
-                    while k < end:
-                        out.unsafe_set(k, src[Int(idx.unsafe_get(k))])
-                        k += 1
-
-                sync_parallelize[worker](nt)
-            else:
-                while i + W <= n:
-                    var offsets = idx.load[W](i).cast[DType.int64]()
+            # Fast path: no nulls — pure SIMD gather, no bitmap. Written once;
+            # `stripe` decides whether it runs on this thread or across workers.
+            # `align=W` keeps every stripe boundary on a vector boundary, so the
+            # scalar tail runs at the end of the last stripe rather than once
+            # per stripe.
+            @always_inline
+            @parameter
+            def gather(start: Int, end: Int):
+                var k = start
+                while k + W <= end:
+                    var offsets = idx.load[W](k).cast[DType.int64]()
                     var vals = src.gather[W](offsets)
-                    out.store[W](i, vals)
-                    i += W
-                while i < n:
-                    out.unsafe_set(i, src[Int(idx.unsafe_get(i))])
-                    i += 1
+                    out.store[W](k, vals)
+                    k += W
+                while k < end:
+                    out.unsafe_set(k, src[Int(idx.unsafe_get(k))])
+                    k += 1
+
+            ctx.stripe[gather](n, align=W)
         else:
             # TODO: optimize this, the implementation below could be vectorized
             # Slow path: null indices or source nulls — scalar + bitmap.

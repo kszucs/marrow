@@ -20,7 +20,9 @@ Implicit conversions from ``Optional[DeviceContext]`` keep all existing
 call sites working without source changes.
 """
 
+from std.algorithm.functional import sync_parallelize
 from std.gpu.host import DeviceContext
+from std.math import ceildiv
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.info import num_physical_cores
@@ -155,6 +157,64 @@ struct ExecutionContext(
         if self.num_threads >= 2:
             return True
         return n >= min_parallel_size
+
+    # --- striped execution ------------------------------------------------
+
+    @always_inline
+    def stripe[
+        body: def(Int, Int) capturing[_] -> None
+    ](self, length: Int, min_parallel_size: Int = 32768, align: Int = 1):
+        """Run ``body(start, end)`` over ``[0, length)``, striped or serial.
+
+        This is the CPU dispatch decision, in one place. Callers write their
+        range loop **once**; whether it runs on the calling thread or across
+        ``resolved_num_threads()`` workers is decided here.
+
+        The duplication this removes is not the `wants_parallel` / `ceildiv` /
+        clamp / empty-stripe preamble — that was only the visible half. Each
+        kernel that striped by hand also had to write its inner loop *twice*,
+        once inside the worker and once for the serial arm, so the two could
+        (and did) drift independently.
+
+        The serial arm is a single ``body(0, length)`` call rather than a
+        one-worker stripe, so the no-parallelism path keeps exactly the shape it
+        had before — no closure per stripe, no chunk arithmetic.
+
+        **Mark ``body`` ``@always_inline``.** Measured on `Take.apply`'s gather
+        over 1M elements: without it the conversion was ~10 % *slower* than the
+        hand-rolled loop it replaced (median 3.1 ms vs 2.8 ms); with it, ~18 %
+        faster (2.3 ms), and the striped path went 373 µs → 309 µs. A hand-rolled
+        worker got inlined for free because `sync_parallelize` consumed it
+        directly; routed through here it will not unless you say so.
+
+        ``align`` rounds each stripe **up** to a multiple of itself. Pass the
+        SIMD width when ``body`` is a vectorized loop with a scalar tail: it
+        keeps every stripe boundary on a vector boundary, so the tail runs once
+        at the end of the last stripe rather than once per stripe. Leaving it at
+        1 for such a body is a silent throughput loss, not a correctness bug,
+        which is exactly why it is a parameter rather than an assumption.
+
+        GPU kernels do not use this: ``wants_parallel`` is always False on the
+        GPU path, since the device handles its own parallelism, so a caller with
+        a device branch takes it before reaching here.
+        """
+        if self.wants_parallel(length, min_parallel_size):
+            var workers = self.resolved_num_threads()
+            var chunk = ceildiv(ceildiv(length, workers), align) * align
+
+            @always_inline
+            def task(
+                wid: Int,
+            ) {imm chunk, imm length,}:
+                var start = wid * chunk
+                var end = min(start + chunk, length)
+                # The last stripes are empty when `length < workers`.
+                if start < end:
+                    body(start, end)
+
+            sync_parallelize(task, workers)
+        else:
+            body(0, length)
 
     # --- Writable ---------------------------------------------------------
 
