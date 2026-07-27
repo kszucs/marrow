@@ -269,6 +269,41 @@ node's body into the constructors. The interpreted lane should do the same where
 dtypes are statically known (literals, casts); where they are not (`col("a")` before schema
 resolution) it stays strict, and that gap should be stated rather than papered over.
 
+**Blocked as designed — probed 2026-07-27, compiler limitation.** The clean version needs
+`__add__`'s *return type* to depend on whether a cast is needed, i.e. a comptime
+conditional type:
+
+```mojo
+comptime coerce[To: NumericType, V: NumericValue] = V if (
+    V.OutType.native == To.native
+) else NumericCast[To, V]
+```
+
+That alias **resolves**, but a function returning it cannot return either branch — not
+even inside a `comptime if` that has already selected one (`cannot implicitly convert 'V'
+value to 'V if (…) else NumericCast[To, V]'`). `rebind` does not rescue it either: an
+unreduced conditional type **conforms to nothing**, so `rebind[coerce[To, V]](x)` fails
+with `does not conform to 'ImplicitlyCopyable'`. (`promote[L, R]` is the same shape and
+works only because it is used as an annotation, never returned.) Recorded in CLAUDE.md's
+"Associated-type & trait gotchas".
+
+So the choice is:
+
+- **(a) Always wrap** — `__add__` returns `Add[NumericCast[P, Self], NumericCast[P, Rhs]]`
+  unconditionally. Correct (a same-type `NumericCast` is the identity) and needs no
+  conditional type, but puts a no-op node on *every* same-typed operand in every fused
+  tree, doubles node depth, and is a real ⚠️ BINSIZE risk for no correctness gain — **the
+  fused lane has no bug today**; its internal `ArgType = promote[…]` widening is already
+  exact.
+- **(b) Leave the fused nodes as they are** and treat this as an interpreted-lane task
+  only, which is where the actual divergence lives.
+
+Recommend (b) unless the always-wrap version measures flat on the fused gate. Note also
+that promotion-at-construction covers only the operator path: `Gt(a, b)` is constructed
+directly by tests and by the `binary_size` gates, so the nodes would still need their
+internal widening — or would have to *require* same-typed operands, making those direct
+constructions compile errors.
+
 Original finding, unchanged: ·
 Owns: `marrow/expr/values.mojo`, `marrow/expr/dynamic.mojo`,
 `marrow/expr/tests/test_parity.mojo`, `marrow/expr/tests/test_plan.mojo` ·

@@ -599,6 +599,21 @@ example. They mostly bite generic trait hierarchies (e.g. `marrow.expr.values`).
   trait's abstract requirement** for conforming structs (you'll see `does not
   implement all requirements for <BaseTrait>`) — declare the member on each
   concrete struct even if a parent trait "provides" it.
+- **A comptime *conditional type* is usable as a type, but carries no trait
+  conformance and does not reduce at a return site** — not even inside a
+  `comptime if` that has already selected the branch. `comptime C[To, V] = V if
+  (V.OutType.native == To.native) else Wrapper[To, V]` resolves fine as an
+  annotation, but a function returning `C[To, V]` cannot return either branch:
+  `cannot implicitly convert 'V' value to 'V if (…) else Wrapper[To, V]'`. The
+  usual `rebind` escape hatch does **not** help — `rebind[C[To, V]](x)` fails
+  with `value of type '<the conditional>' cannot be implicitly copied, it does
+  not conform to 'ImplicitlyCopyable'`, because an unreduced conditional
+  conforms to nothing at all. Note `promote[L, R]` (`expr/values.mojo`) is the
+  same shape and works — the difference is that it is only ever *used* as a type
+  annotation, never returned from a function. Consequence: "wrap this operand
+  only when it needs converting" is not expressible; either always wrap or do
+  the selection somewhere the concrete type is known. This blocked Q0.4's
+  promote-at-construction design (`docs/code-quality-tasks.md`).
 
 
 # How to identify leaky abstractions
