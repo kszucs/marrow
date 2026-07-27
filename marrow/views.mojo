@@ -1200,9 +1200,11 @@ def _apply_dispatch[
     # hand-written pair did.
     @always_inline
     @parameter
-    def span(start: Int, end: Int):
+    def span(wid: Int, start: Int, end: Int):
         @always_inline
-        def lane[W: Int](i: Int) {imm start,}:
+        def lane[
+            W: Int
+        ](i: Int) {imm start,}:
             process[W](Coord(start + i))
 
         vectorize[cpu_width](end - start, lane)
@@ -1763,6 +1765,15 @@ def _reduce_dispatch[
 
     comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
 
+    # This stripes by hand, unlike `_apply_dispatch` above, and deliberately so.
+    # Routing it through `ctx.stripe` works and removes the duplicated fold body,
+    # but it forces the serial arm to allocate a one-slot partials buffer it does
+    # not otherwise need. Measured, five interleaved repeats: `sumint64_1k`
+    # 0.19-0.20 -> 0.30-0.32 us and `sumfloat64_1k` 0.23-0.24 -> 0.34-0.37 us —
+    # ranges fully disjoint, ~55% on small reductions, for one heap allocation.
+    # A reduce is a fold *plus* a merge, and the merge's scratch is exactly what
+    # a serial fold should not pay for. The parallel arm below allocates it
+    # because it genuinely needs it.
     if ctx.wants_parallel(length):
         var workers = ctx.resolved_num_threads()
         var chunk = ceildiv(length, workers)

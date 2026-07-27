@@ -737,7 +737,7 @@ struct Take:
             # per stripe.
             @always_inline
             @parameter
-            def gather(start: Int, end: Int):
+            def gather(wid: Int, start: Int, end: Int):
                 var k = start
                 while k + W <= end:
                     var offsets = idx.load[W](k).cast[DType.int64]()

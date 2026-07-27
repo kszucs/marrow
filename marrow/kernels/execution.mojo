@@ -160,11 +160,34 @@ struct ExecutionContext(
 
     # --- striped execution ------------------------------------------------
 
+    def stripe_workers(
+        self, length: Int, min_parallel_size: Int = 32768
+    ) -> Int:
+        """How many stripes ``stripe`` will run for this length — 1 when serial.
+
+        Callers whose body owns per-worker scratch (a histogram, a partials
+        slot, a write-offset block) must allocate it *before* the call, sized by
+        this. Without it every such caller re-derives `wants_parallel` and
+        `resolved_num_threads` for itself, which is the reach-in this type
+        exists to remove — and the two must agree with what `stripe` then does,
+        or the body indexes past its scratch.
+        """
+        if self.wants_parallel(length, min_parallel_size):
+            return self.resolved_num_threads()
+        else:
+            return 1
+
     @always_inline
     def stripe[
-        body: def(Int, Int) capturing[_] -> None
+        body: def(Int, Int, Int) capturing[_] -> None
     ](self, length: Int, min_parallel_size: Int = 32768, align: Int = 1):
-        """Run ``body(start, end)`` over ``[0, length)``, striped or serial.
+        """Run ``body(wid, start, end)`` over ``[0, length)``, striped or serial.
+
+        ``wid`` is the stripe index, always in ``[0, stripe_workers(length))``.
+        A body with no per-worker state simply ignores it; one that owns scratch
+        indexes into it with ``wid``. That is why there is a single primitive
+        rather than a plain and an indexed variant — the second would be a second
+        way to do the same thing, and the unused parameter costs nothing.
 
         This is the CPU dispatch decision, in one place. Callers write their
         range loop **once**; whether it runs on the calling thread or across
@@ -210,11 +233,14 @@ struct ExecutionContext(
                 var end = min(start + chunk, length)
                 # The last stripes are empty when `length < workers`.
                 if start < end:
-                    body(start, end)
+                    body(wid, start, end)
 
             sync_parallelize(task, workers)
         else:
-            body(0, length)
+            # Stripe 0 of 1 — matches `stripe_workers` returning 1 here, so a
+            # body with per-worker scratch reads slot 0 and the caller only
+            # allocated one.
+            body(0, 0, length)
 
     # --- Writable ---------------------------------------------------------
 
