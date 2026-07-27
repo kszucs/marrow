@@ -223,9 +223,35 @@ for arithmetic, `BoolArray` for comparison. That return type depends on the *met
 parameter, not on `Self`, so it cannot be an associated type on a shared trait — which is
 why the duplication exists at all.
 
-Done when one defaulted `dispatch` serves all three. Note the trait hazards in CLAUDE.md's
-"Associated-type & trait gotchas" apply directly here: re-defaulting a base trait's method
-in a sub-trait is one of the documented recursion triggers, so budget for iteration.
+**Closed as not worth doing — counted 2026-07-27, after Q0.7 put the bodies side by side.**
+
+The only mechanism available is a shared trait providing `dispatch` in terms of an abstract
+`_apply_any[T](left, right, ctx) -> AnyArray`, which each family implements as a one-line
+`return Self.apply(l, r, c).to_any()` shim. (That erasure is required because `apply`'s
+return type — `PrimitiveArray[T]` vs `BoolArray` — depends on the *method's* type parameter
+and so cannot be an associated type.) Counting it:
+
+| | lines |
+|---|---|
+| today: three `dispatch` bodies | ~45 |
+| shared trait + `dispatch` | ~18 |
+| three `_apply_any` shims | ~15 |
+| `BinaryFloatKernel` keeps its own body (it needs `dispatch_floating`, not `dispatch_numeric`) | ~15 |
+| **after** | **~48** |
+
+It is a **net increase**, plus a new trait in the hierarchy and an extra indirection on
+every erased dispatch — for removing one duplicated body. Even assuming the float family
+could be folded in (it cannot without parameterising the dispatch family, which costs more
+than it saves), the best case is ~33 lines: twelve saved, one trait added.
+
+That fails this document's own bar — *"if a fix adds a parameter, a flag, or a second way to
+do something, it is the wrong fix; prefer the change that deletes code"*. The duplication is
+real but bounded and structural: there are exactly three binary dispatch bodies, one per
+family trait, and a new kernel conforms to an existing family rather than adding a fourth.
+
+**Reopen only if** a fourth binary family appears, or if `dispatch_numeric`/`dispatch_floating`
+become selectable as a comptime parameter — at which point all three collapse into one body
+and the arithmetic changes sign.
 
 **Q0.7 — Merge `arithmetic.mojo` + `compare.mojo` into `numeric.mojo`** ·
 *owner directive, 2026-07-27* · Depends: — (do **before** Q0.6, so that task's diff is the
