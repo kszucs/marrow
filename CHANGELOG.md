@@ -20,6 +20,19 @@
 - **Restored warning-clean.** `groupby.mojo` and `join.mojo` reached `take` implicitly
   through the package `__init__` in 5 places (deprecated); both now import it explicitly.
 
+### Refactors
+
+- **Comparison is two kernel families, not one with a dtype branch.**
+  `BinaryCompareKernel` is now `NumericCompareKernel` and is numeric-only. It used to
+  carry `comptime StringKernel: StringPredicateKernel`, so every numeric comparison named
+  a string counterpart it never used and its `dispatch` chose between two unrelated
+  implementations at run time — SIMD over fixed-width lanes versus an elementwise walk
+  over variable-width data. Which family `a < b` means is now decided by whoever
+  interprets the operator (`DynValue._compare[N, S]`, plus an explicit route in `nullif`,
+  the one kernel legitimately spanning both). The string kernels were already first-class
+  `StringPredicateKernel` conformers; they were just unreachable except through the
+  numeric kernel's associated type.
+
 ### Features
 
 - **`in_memory_table(batch, morsel_size=…)`** — the morsel size was reachable only by

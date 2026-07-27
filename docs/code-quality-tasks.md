@@ -208,10 +208,53 @@ executing anything, and only the interpreted arm needs the probe. That reclaims 
 *and* lets the gates use the same API as every other caller — at which point this task and
 the gate exception close together.
 
+**Q0.6 — One `dispatch` for every binary numeric kernel** · *found 2026-07-27* ·
+Depends: — · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.mojo` ·
+
+`BinaryNumericKernel.dispatch` and `NumericCompareKernel.dispatch` are **byte-identical**
+— `expect_same_dtype`, a `leaf[T: NumericType]` closure calling
+`Self.apply(l.as_primitive[T](), r.as_primitive[T](), ctx).to_any()`, then
+`dispatch_numeric[leaf]()`. `BinaryFloatKernel.dispatch` is the same again with
+`dispatch_floating`.
+
+**Merging `arithmetic.mojo` and `compare.mojo` into a `numeric.mojo` co-locates this but
+does not remove it** — worth knowing before doing the move for that reason. The bodies are
+identical yet cannot share a default today because they live in traits with no common
+ancestor below `Kernel`, and the thing that separates them is `apply`'s return type:
+`PrimitiveArray[T]` for arithmetic, `BoolArray` for comparison. That return type depends
+on the *method's* type parameter, not on `Self`, so it cannot be an associated type on a
+shared trait — which is why the duplication exists at all.
+
+Done when one defaulted `dispatch` serves all three. Note the trait hazards in CLAUDE.md's
+"Associated-type & trait gotchas" apply directly here: re-defaulting a base trait's method
+in a sub-trait is one of the documented recursion triggers, so budget for iteration.
+
+The file merge is still worth doing on its own merits (both modules are now numeric-only,
+three-tier, and differ mainly in `core`) — just do it knowing it is organisation, not
+deduplication.
+
 **Q0.4 — Lane divergence on mixed-dtype arithmetic** · *Tier 0, found 2026-07-27* ·
-Depends: — · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.mojo`,
-`marrow/kernels/core.mojo`, `marrow/expr/tests/test_parity.mojo`,
-`marrow/expr/tests/test_plan.mojo` ·
+**Reverted 2026-07-27 — first attempt fixed it at the wrong layer.** Promotion was put in
+the erased kernel dispatches (`AnyDataType.promote` + cast both operands). That works and
+all 415 tests passed, but it puts type-algebra decisions in the kernel layer, which is
+exactly the leak the layering rules forbid — kernels are array-in/array-out and must not
+decide what an operator means. It also cost `query_dynvalue` +82,576 bytes by making the
+cast fanout reachable from every erased binary dispatch.
+
+**The agreed design (owner directive): promote at construction.** `a + b` — i.e.
+`__add__`/`__gt__` and the other operator overloads — inserts the cast on whichever operand
+needs widening, so operands are already the same type by the time any kernel sees them and
+the kernels stay strict. In the fused lane this is comptime and exact:
+`promote[L.OutType, R.OutType]` is known, and `NumericCast` already exists as a fused node,
+so `Add[L, R]` becomes `Add[cast-wrapped L, cast-wrapped R]` and `NumericBinary`'s internal
+`ArgType = promote[...]` widening can go away — the promotion logic moves from every binary
+node's body into the constructors. The interpreted lane should do the same where operand
+dtypes are statically known (literals, casts); where they are not (`col("a")` before schema
+resolution) it stays strict, and that gap should be stated rather than papered over.
+
+Original finding, unchanged: ·
+Owns: `marrow/expr/values.mojo`, `marrow/expr/dynamic.mojo`,
+`marrow/expr/tests/test_parity.mojo`, `marrow/expr/tests/test_plan.mojo` ·
 
 **The two expression lanes disagree about `int64 + float64`.** Q0.2 made the *fused* lane
 promote — `NumericBinary` and `NumericCompare` both compute in `promote[L, R]`, and that is
