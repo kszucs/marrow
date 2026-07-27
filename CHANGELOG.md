@@ -22,6 +22,11 @@
 
 ### Refactors
 
+- **The C-ABI double-free guard has a name.** `UnsafePointer(to=x.release).bitcast[UInt64]()[0]`
+  — read as "has this been released?" and written as "mark it released" — was open-coded at
+  eleven sites across `c_data.mojo`. `CArrowSchema`, `CArrowArray` and `CArrowArrayStream`
+  now answer `is_released()` and `mark_released()`, so the one handshake the C Data
+  Interface has for ownership transfer is stated once instead of re-derived per call site.
 - **`filter` / `take` / `drop_null` have three free functions, not twenty-three.** Each
   typed array shape had its own one-line delegator forwarding to `Filter.apply` /
   `Take.apply`, so adding an array type meant editing six places. The kernels are the
