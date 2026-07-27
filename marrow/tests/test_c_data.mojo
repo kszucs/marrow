@@ -995,7 +995,13 @@ def test_dictionary_to_pyarrow() raises:
 
     # Verify CArrowSchema structure: format = "i" (int32 index), dictionary != null
     var c_schema = CArrowSchema.from_dtype(arr.dtype())
-    var fmt = String(StringSlice(unsafe_from_utf8_ptr=c_schema.format))
+    var fmt = String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(
+                unsafe_from_ptr=Pointer(to=c_schema.format[])
+            )
+        )
+    )
     assert_equal(fmt, "i")  # int32 index type format
     # dictionary schema pointer must be non-null
     assert_true(UnsafePointer(to=c_schema.dictionary).bitcast[UInt64]()[0] != 0)
@@ -1029,7 +1035,13 @@ def test_map_dtype_schema_roundtrip() raises:
         AnyDataType(string), AnyDataType(int64), keys_sorted=True
     ).to_any()
     var c_schema = CArrowSchema.from_dtype(dt)
-    var fmt = String(StringSlice(unsafe_from_utf8_ptr=c_schema.format))
+    var fmt = String(
+        StringSlice(
+            unsafe_from_utf8=CStringSlice(
+                unsafe_from_ptr=Pointer(to=c_schema.format[])
+            )
+        )
+    )
     assert_equal(fmt, "+m")
     var rt = c_schema.to_dtype()
     assert_true(rt.is_map())

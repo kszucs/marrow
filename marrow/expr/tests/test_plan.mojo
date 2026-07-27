@@ -172,7 +172,7 @@ def test_in_memory_table_downcast() raises:
 
 
 def test_scan_filter_schema_passthrough() raises:
-    """source.filter() preserves the scan's output schema."""
+    """`source.filter()` preserves the scan's output schema."""
     var src = AnyRelation(
         ParquetScan(
             path="t", schema=schema([field("x", int64), field("y", float64)])
@@ -186,7 +186,7 @@ def test_scan_filter_schema_passthrough() raises:
 
 
 def test_scan_select_schema() raises:
-    """source.select('x') yields a single-field schema."""
+    """`source.select('x')` yields a single-field schema."""
     var src = AnyRelation(
         ParquetScan(
             path="t", schema=schema([field("x", int64), field("y", float64)])
@@ -199,7 +199,7 @@ def test_scan_select_schema() raises:
 
 
 def test_scan_filter_select_schema() raises:
-    """source.filter().select('y') final schema has only 'y'."""
+    """`source.filter().select('y')` final schema has only 'y'."""
     var src = AnyRelation(
         ParquetScan(
             path="t", schema=schema([field("x", int64), field("y", float64)])
