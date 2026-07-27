@@ -269,7 +269,7 @@ def test_hash_timestamp_nulls() raises:
 
 
 def test_hash_large_string() raises:
-    """large_string hashes identically to string for the same bytes."""
+    """`large_string` hashes identically to string for the same bytes."""
     var lb = LargeStringBuilder(3)
     lb.append("foo")
     lb.append("bar")
@@ -288,7 +288,7 @@ def test_hash_large_string() raises:
 
 
 def test_hash_decimal128_high_bits() raises:
-    """decimal128 folds both 64-bit limbs — values that differ only above bit 63
+    """`decimal128` folds both 64-bit limbs — values that differ only above bit 63
     must not collide (group-by buckets on the hash alone)."""
     var b = Decimal128Builder(decimal128(38, 0), 3)
     b.append(Scalar[DType.int128](1))

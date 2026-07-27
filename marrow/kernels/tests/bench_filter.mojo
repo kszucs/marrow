@@ -10,7 +10,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import BoolArray, PrimitiveArray, Int64Array
 from ...builders import arange, BoolBuilder, PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, Int64Type
-from ...kernels.filter import filter
+from ...kernels.filter import Filter
 from ...testing import Benchmark
 
 
@@ -48,7 +48,7 @@ def bench_filter50pct_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -60,7 +60,7 @@ def bench_filter50pct_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -72,7 +72,7 @@ def bench_filter50pct_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -89,7 +89,7 @@ def bench_filter10pct_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -101,7 +101,7 @@ def bench_filter10pct_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -118,7 +118,7 @@ def bench_filter90pct_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -130,7 +130,7 @@ def bench_filter90pct_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -147,7 +147,7 @@ def bench_filter50pct_nulls_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 
@@ -159,7 +159,7 @@ def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter[Int64Type](arr, mask)))
+        keep(len(Filter.apply(arr, mask.values())))
 
     b.iter[call]()
 

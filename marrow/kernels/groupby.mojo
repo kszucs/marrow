@@ -30,7 +30,7 @@ from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
 from .execution import ExecutionContext
-from .filter import take
+from .filter import Take
 from .concat import concat
 from .aggregate import Aggregation, AggFunction
 
@@ -148,7 +148,7 @@ struct HashGrouper(Movable):
         if len(self._key_builders) == 0:
             for k in range(len(keys.children)):
                 self._key_builders.append(AnyBuilder(keys.children[k].dtype()))
-        var gathered = take(keys, rows)
+        var gathered = Take.apply(keys, rows)
         for k in range(len(keys.children)):
             self._key_builders[k].extend(gathered.children[k])
 
@@ -466,7 +466,7 @@ struct GroupBy(Movable):
         var idx = Int32Builder(capacity=s, zeroed=False)
         for i in range(s):
             idx.unsafe_append(Int32(i * stride))
-        var sample = take(keys, idx.finish())
+        var sample = Take.apply(keys, idx.finish())
         var table = SwissHashTable[rapidhash]()
         _ = table.insert(sample, grow_adaptively=True)
         return table.num_keys() * 2 > s

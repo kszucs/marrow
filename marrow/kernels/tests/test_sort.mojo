@@ -1002,7 +1002,7 @@ def test_sort_indices_large_string() raises:
 
 
 def test_sort_indices_decimal128() raises:
-    """decimal128 has no UInt64 radix key, so it takes the comparison path —
+    """`decimal128` has no UInt64 radix key, so it takes the comparison path —
     including values that differ only above bit 63."""
     var b = Decimal128Builder(decimal128(38, 0), 3)
     b.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))

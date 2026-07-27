@@ -22,6 +22,12 @@
 
 ### Refactors
 
+- **`filter` / `take` / `drop_null` have three free functions, not twenty-three.** Each
+  typed array shape had its own one-line delegator forwarding to `Filter.apply` /
+  `Take.apply`, so adding an array type meant editing six places. The kernels are the
+  typed surface now (`Filter.apply`, `Filter.drop_null[T]`, `Take.apply`) and only the
+  three erased `pc.*` entry points remain free. The verified-dead `_drop_null_bool` is
+  deleted with them.
 - **`execute` is a method on the plan, and `lit` is one verb.** Draining a plan was the
   only plan verb that was a free function — and it collided with `Value.execute`, the
   fused lane's per-node verb, so `execute` meant two different things depending on the

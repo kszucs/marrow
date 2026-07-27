@@ -129,7 +129,7 @@ from ..dtypes import (
     null,
 )
 from .execution import ExecutionContext
-from .filter import take, filter
+from .filter import Take, filter
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
@@ -478,7 +478,7 @@ struct HashJoin[
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[StructArray, Int32Array]:
-            var k = take(left_keys, rows)
+            var k = Take.apply(left_keys, rows)
             tables[i].build_hashes(part_hashes)
             return (k^, rows.copy())
 
@@ -527,7 +527,7 @@ struct HashJoin[
         def probe_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises -> IndexPairs:
-            var probe_keys_i = take(right_keys, rows)
+            var probe_keys_i = Take.apply(right_keys, rows)
             var pairs = self._tables[i].probe(
                 self._left_partition_keys[i],
                 probe_keys_i,
@@ -536,8 +536,8 @@ struct HashJoin[
                 hashes=part_hashes.copy(),
             )
             return (
-                take(self._left_partition_rows[i], pairs[0]),
-                take(rows, pairs[1]),
+                Take.apply(self._left_partition_rows[i], pairs[0]),
+                Take.apply(rows, pairs[1]),
             )
 
         # 1. Hash probe side in parallel; 2-3. partition + parallel probe.

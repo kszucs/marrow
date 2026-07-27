@@ -52,7 +52,7 @@ from ..dtypes import (
 )
 from .cast import cast
 from .execution import ExecutionContext
-from .filter import take as _take
+from .filter import Take
 from .partition import radix_histogram
 
 
@@ -519,7 +519,7 @@ struct SortIndices:
             ctx=ctx,
         )
         for i in reversed(range(last)):
-            var reordered = _take(array.field(key_indices[i]), perm)
+            var reordered = Take.dispatch(array.field(key_indices[i]), perm)
             var local = SortIndices.dispatch(
                 reordered,
                 ascending=ascending[i],
@@ -527,7 +527,7 @@ struct SortIndices:
                 stable=True,
                 ctx=ctx,
             )
-            perm = _take(perm, local, ctx)
+            perm = Take.apply(perm, local, ctx)
 
         if limit:
             var lim = limit.value()
@@ -825,7 +825,7 @@ def sort(
 ) raises -> StructArray:
     """Sort a StructArray by the specified key columns — ``take`` under the
     permutation from ``SortIndices.multi``."""
-    return _take(
+    return Take.apply(
         array,
         SortIndices.multi(
             array, key_indices, ascending, nulls_first, stable, limit, ctx

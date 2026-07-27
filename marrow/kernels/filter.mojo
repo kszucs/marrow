@@ -158,6 +158,18 @@ struct Filter:
             raise Error("filter: unsupported dtype ", dt)
 
     @staticmethod
+    def drop_null[
+        T: PrimitiveType
+    ](
+        array: PrimitiveArray[T],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveArray[T]:
+        """The valid elements only, keeping the array's type."""
+        if not array.bitmap:
+            return array.copy()
+        return Self.apply(array, array.validity().value(), ctx)
+
+    @staticmethod
     def drop_null(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyArray:
@@ -1128,7 +1140,9 @@ struct Take:
 
 
 # ---------------------------------------------------------------------------
-# Public API — thin free delegators to the Filter / Take kernels
+# Public API — the three `pc.*` entry points. Everything typed is a method on
+# the `Filter` / `Take` kernels; adding an array type means teaching those, not
+# writing another delegator here.
 # ---------------------------------------------------------------------------
 
 
@@ -1142,91 +1156,6 @@ def filter(
     return Filter.dispatch(array, m.values(), ctx)
 
 
-def filter[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: BoolArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter[
-    T: BinaryLikeType
-](
-    array: BinaryLikeArray[T],
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BinaryLikeArray[T]:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: NullArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> NullArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: FixedSizeBinaryArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeBinaryArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter[
-    T: ListLikeType
-](
-    array: ListLikeArray[T],
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> ListLikeArray[T]:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: FixedSizeListArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeListArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: DictionaryArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> DictionaryArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: StructArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> StructArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def drop_null(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyArray:
-    """Remove null elements using the validity bitmap as the selection."""
-    return Filter.drop_null(array, ctx)
-
-
 def take(
     array: AnyArray,
     indices: Int32Array,
@@ -1236,111 +1165,8 @@ def take(
     return Take.dispatch(array, indices, ctx)
 
 
-def take[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: BoolArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take[
-    T: BinaryLikeType
-](
-    array: BinaryLikeArray[T],
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BinaryLikeArray[T]:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: NullArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> NullArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: FixedSizeBinaryArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeBinaryArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take[
-    T: ListLikeType
-](
-    array: ListLikeArray[T],
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> ListLikeArray[T]:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: FixedSizeListArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeListArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: DictionaryArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> DictionaryArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: StructArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> StructArray:
-    return Take.apply(array, indices, ctx)
-
-
-def drop_null[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Create a new array containing only the valid (non-null) elements.
-
-    Uses the array's validity bitmap directly as the filter selection.
-
-    Args:
-        array: The input array.
-        ctx: Execution context (currently unused — accepted for signature
-            uniformity across kernels).
-
-    Returns:
-        A new PrimitiveArray containing only valid elements.
-    """
-    if not array.bitmap:
-        return array.copy()
-    return Filter.apply(array, array.validity().value(), ctx)
-
-
-def _drop_null_bool(
-    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> BoolArray:
-    """Drop null elements from a bool array."""
-    if not array.bitmap:
-        return array.copy()
-    return Filter.apply(array, array.validity().value(), ctx)
+def drop_null(
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyArray:
+    """Remove null elements using the validity bitmap as the selection."""
+    return Filter.drop_null(array, ctx)
