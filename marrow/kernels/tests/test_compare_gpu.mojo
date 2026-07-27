@@ -3,7 +3,7 @@ from std.gpu.host import DeviceContext
 
 from ...builders import array, arange
 from ...dtypes import int32, float32, Int32Type, Float32Type
-from ...kernels.compare import (
+from ...kernels.numeric import (
     EqKernel,
     NeKernel,
     LtKernel,

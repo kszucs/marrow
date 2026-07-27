@@ -647,9 +647,11 @@ def test_cross_check_temporal_pyarrow() raises:
     for m in mask:
         pa_mask.append(m.value())
     var got_f = filter(a, (array(mask^)))
-    var pa_f = pc.Filter.apply(
-        pa_arr, (pa.array(pa_mask)).cast(pa.int64()).values()
-    )
+    # `pc.filter` / `pc.take` are PyArrow's own API — this is the reference side
+    # of the cross-check, so it must NOT be renamed to marrow's `Filter.apply`.
+    # The result is cast to int64 so `as_py()` yields the epoch value that
+    # `rf[i].value()` holds, rather than a datetime.
+    var pa_f = pc.filter(pa_arr, pa.array(pa_mask)).cast(pa.int64())
     ref rf = got_f.as_timestamp()
     assert_equal(len(got_f), Int(py=pa_f.__len__()))
     for i in range(len(got_f)):
@@ -661,7 +663,7 @@ def test_cross_check_temporal_pyarrow() raises:
     for k in idx:
         pa_idx.append(k.value())
     var got_t = take(a, array(idx^, int32))
-    var pa_t = pc.Take.apply(pa_arr, pa.array(pa_idx)).cast(pa.int64())
+    var pa_t = pc.take(pa_arr, pa.array(pa_idx)).cast(pa.int64())
     ref rt = got_t.as_timestamp()
     for i in range(len(got_t)):
         assert_equal(Int(rt[i].value()), Int(py=pa_t[i].as_py()))

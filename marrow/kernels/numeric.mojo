@@ -1,23 +1,42 @@
-"""Element-wise arithmetic kernels — CPU SIMD and GPU via ``elementwise``.
+"""Element-wise kernels over numeric arrays — arithmetic and comparison.
+
+One module because they are one kind of thing: both are numeric-only, both are
+three-tier, both resolve a runtime dtype through `AnyDataType.dispatch_numeric`.
+What separates an `AddKernel` from an `LtKernel` is the `core` functor and the
+output layout — values for arithmetic, a bit-packed `BoolArray` for comparison.
+
+Comparison stopped being "the string-aware one" when `NumericCompareKernel`
+dropped its `comptime StringKernel`: comparing strings is a separate family
+(`StringPredicateKernel` in `string.mojo`) whose core is elementwise over
+variable-width data and cannot vectorize. Whoever interprets `a < b` picks the
+family from the operand dtype — see `_compare` in `marrow/expr/dynamic.mojo`.
 
 Three tiers per operation:
 
-- **Tier 0 (core)** — ``KernelStruct.core[T: DType, W: Int]``: raw SIMD functor,
-  no allocation; called directly by expression-node ``exec_core[W](idx)`` for
+- **Tier 0 (core)** — `KernelStruct.core[T: DType, W: Int]`: raw SIMD functor,
+  no allocation; called directly by expression-node `exec_core[W](idx)` for
   kernel fusion.
-- **Tier 1 (apply)** — ``KernelStruct.apply[T: PrimitiveType]``: allocates an
-  output buffer, propagates null bitmaps, dispatches CPU/GPU via ``apply()``.
-- **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: runtime-typed entry
-  point; resolves the runtime dtype to the typed ``apply`` overload via
-  `AnyDataType.dispatch_numeric` / `.dispatch_floating`.
+- **Tier 1 (apply)** — `KernelStruct.apply[T: PrimitiveType]`: allocates an
+  output buffer, propagates null bitmaps, dispatches CPU/GPU via `apply()`.
+- **Tier 2 (dispatch)** — `KernelStruct.dispatch(AnyArray)`: runtime-typed entry
+  point; resolves the dtype to the typed `apply` via `AnyDataType.dispatch_numeric`
+  / `.dispatch_floating`.
 
 Structural kernels (filter, sort, concat, …) operate on array layout rather than
 element values and are **not** part of this tier scheme.
+
+Null propagation (comparison): if either input is null at `i` the output is null
+at `i` (validity = `Bitmap.intersect(left.bitmap, right.bitmap)`). Data bits for
+null positions hold the comparison of the underlying values — undefined per the
+Arrow spec, but branch-free.
+
+`EqKernel` additionally overloads `apply` for `StructArray`: row equality is
+every child column agreeing, which is how the hash table verifies key rows.
 """
 
 import std.math as math
 
-from ..arrays import PrimitiveArray, AnyArray
+from ..arrays import PrimitiveArray, AnyArray, BoolArray, StructArray
 from ..buffers import Buffer, Bitmap
 from ..views import apply
 from ..dtypes import (
@@ -26,6 +45,8 @@ from ..dtypes import (
     FloatingType,
 )
 from .core import Kernel
+from .boolean import AndKernel
+from .string import StringEqKernel
 from .execution import ExecutionContext
 from ..utils import GPU_ENABLED
 
@@ -444,3 +465,219 @@ struct CosKernel(UnaryFloatKernel):
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         comptime assert T.is_floating_point()
         return math.cos(a)
+
+
+# ---------------------------------------------------------------------------
+# Generic comparison kernel helper — compare + bit-pack via apply
+# ---------------------------------------------------------------------------
+
+
+def _binary_cmp[
+    T: PrimitiveType,
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
+        DType.bool, W
+    ],
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> BoolArray:
+    """Binary comparison kernel — compare + bit-pack via apply."""
+    comptime native = T.native
+    var length = len(left)
+    var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy()) if (
+        left.bitmap or right.bitmap
+    ) else Optional[Bitmap[]]()
+
+    var result: Bitmap[mut=True]
+    comptime if GPU_ENABLED:
+        result = Bitmap.alloc_device(
+            ctx.device.value(), length
+        ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
+    else:
+        result = Bitmap.alloc_uninit(length)
+    apply[native, func](left.values(), right.values(), result.view(), ctx)
+    return BoolArray(
+        length=length,
+        nulls=bm.value().unset_count() if bm else 0,
+        offset=0,
+        bitmap=bm,
+        buffer=result.to_immutable(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kernel trait
+# ---------------------------------------------------------------------------
+
+
+trait NumericCompareKernel(Kernel):
+    """Element-wise comparison over fixed-width lanes, producing a BoolArray.
+
+    Concrete structs define ``comptime name`` and ``core`` (the SIMD predicate);
+    ``apply`` and ``dispatch`` are defaulted.
+
+    **Numeric only.** Comparing strings is a different kernel family —
+    `StringPredicateKernel` in `string.mojo`, whose core is elementwise over
+    variable-width data and cannot vectorize. This trait used to carry a
+    `comptime StringKernel` naming its string counterpart, so every numeric
+    comparison had to know about strings and `dispatch` branched on dtype at run
+    time to pick between two unrelated implementations. Which family `a < b`
+    means is a question about the operands, and it belongs to whoever is
+    interpreting the operator, not to the SIMD kernel.
+    """
+
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        ...
+
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](
+        left: PrimitiveArray[T],
+        right: PrimitiveArray[T],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        Self.expect_same_length(len(left), len(right))
+        return _binary_cmp[T, func=Self.core[T.native, _]](left, right, ctx)
+
+    @staticmethod
+    def dispatch(
+        left: AnyArray,
+        right: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        Self.expect_same_dtype(left.dtype(), right.dtype())
+
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyArray:
+            return Self.apply(
+                left.as_primitive[T](), right.as_primitive[T](), ctx
+            ).to_any()
+
+        return left.dtype().dispatch_numeric[leaf]()
+
+
+# ---------------------------------------------------------------------------
+# Kernel structs
+# ---------------------------------------------------------------------------
+
+
+def equal_any(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> BoolArray:
+    """Equality over any comparable dtype, picking the kernel family.
+
+    Numeric and string equality are separate kernels — SIMD over fixed-width
+    lanes versus an elementwise walk — and `NumericCompareKernel` deliberately
+    knows nothing about strings. Two callers nonetheless need equality as a
+    *primitive over an arbitrary dtype* rather than as an operator they are
+    interpreting: hash-join row verification, where a key row is an arbitrary
+    schema, and `nullif`, which is defined for any dtype with an equality. This
+    names that once instead of open-coding the same two-line branch at each.
+
+    Not to be confused with `DynValue._compare`, which answers a different
+    question — which kernel the *user's* `==` meant — and lives in the
+    expression layer for that reason.
+    """
+    if left.dtype().is_string() or left.dtype().is_large_string():
+        return StringEqKernel.dispatch(left, right).as_bool().copy()
+    else:
+        return EqKernel.dispatch(left, right, ctx).as_bool().copy()
+
+
+struct EqKernel(NumericCompareKernel):
+    comptime name = "equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.eq(b)
+
+    @staticmethod
+    def apply(
+        left: StructArray,
+        right: StructArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        """Row equality: element ``i`` is True iff every child column agrees.
+
+        This is the comparison the hash table verifies key rows with. A key row
+        is an arbitrary schema, so the children span dtype families and each one
+        goes through `equal_any` rather than this kernel's own numeric
+        `dispatch`."""
+        Self.expect_same_dtype(left.dtype, right.dtype)
+        var mask = equal_any(
+            left.children[0].copy(), right.children[0].copy(), ctx
+        )
+        for k in range(1, len(left.children)):
+            mask = AndKernel.apply(
+                mask,
+                equal_any(
+                    left.children[k].copy(), right.children[k].copy(), ctx
+                ),
+                ctx,
+            )
+        return mask^
+
+
+struct NeKernel(NumericCompareKernel):
+    comptime name = "not_equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.ne(b)
+
+
+struct LtKernel(NumericCompareKernel):
+    comptime name = "less"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.lt(b)
+
+
+struct LeKernel(NumericCompareKernel):
+    comptime name = "less_equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.le(b)
+
+
+struct GtKernel(NumericCompareKernel):
+    comptime name = "greater"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.gt(b)
+
+
+struct GeKernel(NumericCompareKernel):
+    comptime name = "greater_equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.ge(b)

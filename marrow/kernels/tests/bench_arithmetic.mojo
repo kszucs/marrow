@@ -11,7 +11,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import PrimitiveArray
 from ...builders import arange, PrimitiveBuilder
 from ...dtypes import Int32Type, Float64Type, NumericType
-from ...kernels.arithmetic import AddKernel
+from ...kernels.numeric import AddKernel
 from ...kernels.execution import ExecutionContext
 from ...testing import Benchmark
 

@@ -20,7 +20,7 @@ from ..builders import PrimitiveBuilder, Int32Builder
 from ..buffers import Buffer
 from ..dtypes import int32, uint64, Int32Type, UInt64Type
 from ..views import BufferView
-from .compare import EqKernel
+from .numeric import EqKernel
 from .execution import ExecutionContext
 from .filter import Take, Filter
 from .hashing import rapidhash

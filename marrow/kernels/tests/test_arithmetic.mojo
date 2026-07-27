@@ -24,7 +24,7 @@ from ...dtypes import (
     Float32Type,
     Float64Type,
 )
-from ...kernels.arithmetic import (
+from ...kernels.numeric import (
     AddKernel,
     SubKernel,
     MulKernel,

@@ -20,8 +20,32 @@
 - **Restored warning-clean.** `groupby.mojo` and `join.mojo` reached `take` implicitly
   through the package `__init__` in 5 places (deprecated); both now import it explicitly.
 
+### Fixes
+
+- **`test_cross_check_temporal_pyarrow` was silently broken by an over-applied rename.**
+  The Q3.1 pass that turned `filter`/`take` into `Filter.apply`/`Take.apply` also rewrote
+  the **PyArrow** reference calls in the cross-check — `pc.filter` became
+  `pc.Filter.apply`, `pc.take` became `pc.Take.apply` — and moved a
+  `.cast(pa.int64())` off the *result* onto the *filter mask*, where a boolean mask was
+  required. The test compared marrow against an API PyArrow does not have, so it could
+  only ever fail. Swept the tree for other casualties; this was the only one.
+
 ### Refactors
 
+- **`arithmetic.mojo` + `compare.mojo` → `numeric.mojo`.** They were the same kind of
+  thing: numeric-only, three-tier (`core`/`apply`/`dispatch`), both resolving runtime
+  dtypes through `AnyDataType.dispatch_numeric`. What separates an `AddKernel` from an
+  `LtKernel` is the `core` functor and the output layout. Public names are unchanged —
+  `kernels/__init__.mojo` re-exports the same set. Tests stay split as `test_arithmetic`
+  / `test_compare` on purpose: they cover different operations and smaller files keep
+  failures legible. This is organisation, not deduplication — the identical `dispatch`
+  bodies it puts side by side are tracked separately as Q0.6. Fused gate unchanged at
+  1,307,624.
+- **`equal_any` names the cross-family equality primitive once.** Hash-join row
+  verification (a key row is an arbitrary schema) and `nullif` (defined for any dtype with
+  an equality) both need equality *over an arbitrary dtype*, as opposed to interpreting a
+  user's `==`. Both used to reach it through the numeric kernel's string branch; after
+  that branch was removed they each grew their own copy. Now there is one.
 - **Comparison is two kernel families, not one with a dtype branch.**
   `BinaryCompareKernel` is now `NumericCompareKernel` and is numeric-only. It used to
   carry `comptime StringKernel: StringPredicateKernel`, so every numeric comparison named

@@ -20,7 +20,7 @@ from ...dtypes import (
     second,
     TimestampType,
 )
-from ...kernels.arithmetic import (
+from ...kernels.numeric import (
     AddKernel,
     SubKernel,
     AbsKernel,
@@ -38,7 +38,7 @@ from ...kernels.string import (
     StringGtKernel,
     StringGeKernel,
 )
-from ...kernels.compare import LtKernel, LeKernel, GtKernel, GeKernel
+from ...kernels.numeric import LtKernel, LeKernel, GtKernel, GeKernel
 from ...kernels.membership import is_in
 from ...kernels.temporal import (
     YearKernel,

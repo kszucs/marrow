@@ -65,7 +65,7 @@ from ..dtypes import (
     ListLikeType,
     TemporalType,
 )
-from ..kernels.compare import (
+from ..kernels.numeric import (
     NumericCompareKernel,
     LtKernel,
     LeKernel,
@@ -74,7 +74,7 @@ from ..kernels.compare import (
     EqKernel,
     NeKernel,
 )
-from ..kernels.arithmetic import (
+from ..kernels.numeric import (
     BinaryKernel,
     UnaryKernel,
     AddKernel,

@@ -19,7 +19,7 @@ from ...kernels.string import (
     StringGtKernel,
     StringGeKernel,
 )
-from ...kernels.compare import (
+from ...kernels.numeric import (
     EqKernel,
     NeKernel,
     LtKernel,

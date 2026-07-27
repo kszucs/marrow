@@ -4,7 +4,7 @@ from std.sys.info import CompilationTarget
 
 from ...builders import array, arange
 from ...dtypes import int32, float32, Int32Type, Float32Type
-from ...kernels.arithmetic import AddKernel
+from ...kernels.numeric import AddKernel
 
 
 def test_add_gpu() raises:

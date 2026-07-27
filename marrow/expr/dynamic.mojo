@@ -42,7 +42,7 @@ from ..scalars import AnyScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
-from ..kernels.arithmetic import (
+from ..kernels.numeric import (
     AddKernel,
     SubKernel,
     MulKernel,
@@ -60,7 +60,7 @@ from ..kernels.boolean import (
     NotNullKernel,
     IsNullKernel,
 )
-from ..kernels.compare import (
+from ..kernels.numeric import (
     NumericCompareKernel,
     EqKernel,
     NeKernel,

@@ -50,8 +50,11 @@ from .aggregate import (
     AnyKernel,
     AllKernel,
 )
-from .arithmetic import AddKernel, SubKernel, MulKernel, DivKernel
-from .compare import (
+from .numeric import (
+    AddKernel,
+    SubKernel,
+    MulKernel,
+    DivKernel,
     EqKernel,
     NeKernel,
     LtKernel,
