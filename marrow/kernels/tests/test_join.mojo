@@ -33,6 +33,7 @@ from ...tabular import record_batch
 from ...kernels.filter import take
 from ...kernels.join import (
     hash_join,
+    HashJoin,
     JOIN_INNER,
     JOIN_LEFT,
     JOIN_RIGHT,
@@ -723,3 +724,72 @@ def test_parallel_partial_match() raises:
     var parallel = _run_inner(left, right, 4)
     assert_equal(len(serial), len(parallel))
     assert_equal(len(serial), n // 2)
+
+
+# ---------------------------------------------------------------------------
+# Execution context plumbing
+#
+# `HashJoin` used to store a bare worker count and rebuild
+# `ExecutionContext.parallel(n)` at five internal sites, each of which dropped
+# the caller's device. It now holds the context whole. These pin the observable
+# half of that: which path a given context selects, and that the default did not
+# silently change when `num_threads` was replaced by `ctx`.
+# ---------------------------------------------------------------------------
+
+
+def test_join_default_context_matches_explicit_auto() raises:
+    """`hash_join`'s default is *auto*, not serial.
+
+    The parameter it replaced defaulted to `num_threads=0`, which meant
+    all-cores. Defaulting the context to `.serial()` instead would have quietly
+    made every default join single-threaded — a change no correctness test would
+    have caught, since all three paths return the same rows.
+    """
+    var left = _dense_struct(20_000)
+    var right = _dense_struct(20_000)
+    var default_result = hash_join(left, right, _left_on(), _right_on())
+    var auto_result = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        ctx=ExecutionContext.auto(),
+    )
+    assert_equal(default_result.length, auto_result.length)
+
+
+def test_join_serial_and_parallel_contexts_agree() raises:
+    """The serial single-table path and the radix-partitioned parallel path
+    return the same number of matched rows for the same input."""
+    var left = _dense_struct(20_000)
+    var right = _dense_struct(20_000)
+    var serial = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        ctx=ExecutionContext.serial(),
+    )
+    var parallel = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        ctx=ExecutionContext.parallel(4),
+    )
+    assert_equal(serial.length, parallel.length)
+
+
+def test_hash_join_struct_default_is_serial() raises:
+    """`HashJoin()` built with no argument stays on the serial path.
+
+    `expr/execution.mojo` and `bench_join` both construct it that way, and its
+    old `num_threads=1` default meant serial — unlike the free function's.
+    """
+    var join = HashJoin(ExecutionContext())
+    var left = _dense_struct(20_000)
+    join.build(left, _left_on())
+    var out = join.probe(
+        _dense_struct(20_000), _right_on(), JOIN_INNER, JOIN_ALL
+    )
+    assert_true(out.length > 0)
