@@ -219,7 +219,7 @@ struct Context(Copyable, Movable):
         """Typed slot read — `ctx.get[BoolArray](i)`. Pulls the typed array straight
         out of the slot's `Datum` (a ref-count bump), skipping the `as_xxx().copy()`
         dance at every breaker read."""
-        return self._slots[i][AnyArray]._v[A].copy()
+        return self._slots[i][AnyArray].as_type[A]().copy()
 
     def size(self) -> Int:
         return len(self._slots)

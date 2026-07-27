@@ -4,6 +4,13 @@
 
 ### Fixes
 
+- **`Buffer.resize` no longer corrupts DEVICE memory.** It probed `Allocation._host` to
+  decide between a pinned and a heap reallocation, so a DEVICE buffer took the heap arm
+  and then `memcpy`'d through a pointer it does not have. `Allocation` now answers
+  `is_host()` / `is_device()` itself and resize raises for device memory, which has to go
+  through the device API.
+- **The `binary_size` gate builds again.** `query_streaming_agg_fused.mojo` still used the
+  removed `List.append[A](dtype)` spelling, so the whole gate errored out.
 - **A compiler crash no longer takes down the whole test selection.** The compiler dies
   with a bug-report dump — no diagnostic — on units that elaborate too much, which is a
   function of unit size, not of the code being wrong: 17 cases in one driver crashed where
@@ -15,6 +22,14 @@
 
 ### Refactors
 
+- **The erased boxes expose their downcast instead of having it reached into.**
+  `AnyDataType`, `AnyArray`, `AnyBuilder` and `AnyScalar` each had a private `_as[T]`
+  with public one-liners over it, so generic callers went through the *variant field* —
+  `data.dtype._v[Self.T]`, `slot[AnyArray]._v[A]`, `variant_dispatch_raises[...](t._v)`.
+  It is now `as_type[T]()` on all four, and the last three private reach-ins are gone
+  (`PrimitiveArray` reading its own dtype, `Context.get[A]`, and statistics comparison,
+  which now uses `AnyDataType.dispatch_numeric`). `PrimitiveBuilder.append_nulls(n)`
+  likewise replaces `nulls()` writing the builder's `_null_count` by hand.
 - **No wildcard imports left in the core modules.** `arrays`, `scalars`, `builders`,
   `c_data` and `kernels/aggregate` pulled `from .dtypes import *`, which also re-exported
   whatever `dtypes` had imported — `variant_dispatch`, `DeviceContext` and the dtype

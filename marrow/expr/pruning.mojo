@@ -120,7 +120,7 @@ struct PruneBound(Copyable, Movable):
                     a.as_primitive[T]().value(), b.as_primitive[T]().value()
                 )
 
-            return variant_dispatch_raises[dt.NumericType, func=cmp_typed](t._v)
+            return t.dispatch_numeric[cmp_typed]()
         elif t.is_string():
             var x = a.as_string().to_string()
             var y = b.as_string().to_string()

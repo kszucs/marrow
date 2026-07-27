@@ -39,8 +39,12 @@ def main() raises:
     aggs.append(AnyValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
-    funcs.append[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
-    funcs.append[NumericAgg[MinKernel, Int64Type]](AnyDataType(int64))
+    funcs.append(
+        AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
+    )
+    funcs.append(
+        AggFunc.of[NumericAgg[MinKernel, Int64Type]](AnyDataType(int64))
+    )
 
     var agg = Aggregate(
         input=AnyRelation(InMemoryTable(batch=batch)),

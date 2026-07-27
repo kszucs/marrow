@@ -29,7 +29,8 @@ A `Buffer` has one of four memory kinds, encoded in the `Allocation` it owns:
 CPU accessibility
 -----------------
 For `Buffer[mut=False]`: `_ptr` is non-null for CPU/FOREIGN/HOST; null for DEVICE.
-`is_cpu()` and `is_device()` use this O(1) check.  `is_host()` checks `_owner._host`.
+`is_cpu()`, `is_device()` and `is_host()` forward to `Allocation`, which is the
+only thing that knows which kind it holds.
 
 For `Buffer[mut=True]`: `_ptr` holds the mutable allocation pointer (CPU heap, pinned
 host, or GPU device pointer).  Use `is_cpu()` / `is_device()` only on `Buffer[mut=False]`.
@@ -211,6 +212,22 @@ struct Allocation(Movable):
         self.release = release
         self._host = host
         self._device = device
+
+    @always_inline
+    def is_host(self) -> Bool:
+        """Pinned host memory (HOST kind) — CPU-addressable, page-locked."""
+        return Bool(self._host)
+
+    @always_inline
+    def is_device(self) -> Bool:
+        """GPU device memory (DEVICE kind) — *not* CPU-addressable."""
+        return Bool(self._device)
+
+    def host_context(self) raises -> DeviceContext:
+        """The context this allocation was pinned with (HOST kind only)."""
+        if not self._host:
+            raise Error("Allocation.host_context: not a pinned host allocation")
+        return self._host.value().context()
 
     @staticmethod
     def cpu(ptr: UnsafePointer[UInt8, MutUntrackedOrigin]) -> Allocation:
@@ -560,17 +577,17 @@ struct Buffer[*, mut: Bool = False](
 
         True for CPU, FOREIGN, and HOST kinds; False for DEVICE.
         """
-        return not self._owner[]._device.__bool__()
+        return not self._owner[].is_device()
 
     @always_inline
     def is_device(self) -> Bool:
         """Return True if the buffer lives on a GPU device."""
-        return self._owner[]._device.__bool__()
+        return self._owner[].is_device()
 
     @always_inline
     def is_host(self) -> Bool:
         """Return True if the buffer is pinned host memory (HOST kind)."""
-        return self._owner[]._host.__bool__()
+        return self._owner[].is_host()
 
     # --- Length helper (both modes) ---
 
@@ -596,11 +613,16 @@ struct Buffer[*, mut: Bool = False](
         var byte_size = Buffer._aligned_size[T](Int(length))
         if byte_size == self._size:
             return
-        var new: Buffer[mut=True]
-        if self._owner[]._host:
-            new = Buffer.alloc_host[T](
-                self._owner[]._host.value().context(), length
+        if self._owner[].is_device():
+            # The copy below reads through `_ptr`, which a DEVICE allocation
+            # does not have — growing one has to go through the device API.
+            raise Error(
+                "Buffer.resize: device memory cannot be resized; download with"
+                " to_host(ctx), resize, and upload again"
             )
+        var new: Buffer[mut=True]
+        if self._owner[].is_host():
+            new = Buffer.alloc_host[T](self._owner[].host_context(), length)
         else:
             new = Buffer.alloc_zeroed[T](length)
         unsafe_memcpy(
