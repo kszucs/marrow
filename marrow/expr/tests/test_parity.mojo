@@ -162,11 +162,12 @@ def test_parity_eq() raises:
 
 
 # ---------------------------------------------------------------------------
-# Mixed-width comparison. The runtime `LT/GT` tags route through `compare.mojo`'s
-# `dispatch`, which *rejects* a dtype mismatch outright, so there is no
-# `DynValue` counterpart here — pin the fused result instead. `NumericCompare`
-# widens both operands to `promote[L, R]` exactly like `NumericBinary`; casting
-# only the right one into the left's type truncated (D4).
+# Mixed operand types. Both drivers compute in the promoted domain of the two
+# operands — `promote[L, R]` fused, `AnyDataType.promote` interpreted — so
+# widening never depends on which lane ran. Casting only the right operand into
+# the left's type truncated (D4); rejecting the pair outright made the fused and
+# interpreted lanes disagree (Q0.4). These are real parity cases *because* the
+# interpreted lane no longer rejects them; they used to pin the fused result.
 # ---------------------------------------------------------------------------
 
 
@@ -178,10 +179,38 @@ def _mixed_width_batch() raises -> RecordBatch:
 
 
 def test_parity_mixed_width_gt() raises:
-    assert_fused(
+    """int32 vs int64 -> both widen to int64; truncating to int32 would make
+    rows 0 and 1 compare against 0."""
+    assert_parity(
         Gt(fcol("a", int32), fcol("b", int64)),
-        array([False, True, False]).to_any(),
+        dcol(0) > dcol(1),
         _mixed_width_batch(),
+    )
+
+
+def _int_float_batch() raises -> RecordBatch:
+    var a = array([1, 5, 3], int64)
+    var b = array([1.5, 2.5, 3.0], float64)
+    return record_batch([a^, b^], names=["a", "b"])
+
+
+def test_parity_mixed_int_float_add() raises:
+    """int64 + float64 -> float64. Any float outranks any integer, so the sum
+    keeps the fractional part instead of truncating it away."""
+    assert_parity(
+        fcol("a", int64) + fcol("b", float64),
+        dcol(0) + dcol(1),
+        _int_float_batch(),
+    )
+
+
+def test_parity_mixed_int_float_gt() raises:
+    """The comparison widens the same way the arithmetic does, so `a > b` and
+    `a + b` cannot disagree about the domain they computed in."""
+    assert_parity(
+        Gt(fcol("a", int64), fcol("b", float64)),
+        dcol(0) > dcol(1),
+        _int_float_batch(),
     )
 
 

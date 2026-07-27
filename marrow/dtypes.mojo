@@ -930,6 +930,33 @@ struct AnyDataType(
 
         return variant_dispatch[PrimitiveType, func=f](self._v)
 
+    def _promotion_rank(self) raises -> Int:
+        """Ordering key for `promote`. The runtime twin of `_rank[T]()` in
+        `marrow.expr.values` — **the two must agree**, or the same expression
+        means different things in the fused and interpreted lanes."""
+        return self.byte_width() * 8 + (1000 if self.is_floating_point() else 0)
+
+    def promote(self, other: AnyDataType) raises -> AnyDataType:
+        """The domain two numeric operands compute in — the wider of the two,
+        with any float outranking any integer (`int64 + float32` -> `float32`).
+
+        This is the runtime form of the comptime `promote[L, R]` the fused
+        algebra uses, deliberately down to the quirks: float-beats-int ignores
+        bit width, and same-rank operands (`uint64` vs `int64`) resolve to the
+        left. Both lanes being *equally* surprising is the property that
+        matters; changing the rule means changing both.
+        """
+        if self == other:
+            return self.copy()
+        elif not (self.is_numeric() and other.is_numeric()):
+            raise Error(
+                t"cannot promote {self} and {other}: both must be numeric"
+            )
+        elif self._promotion_rank() >= other._promotion_rank():
+            return self.copy()
+        else:
+            return other.copy()
+
     # --- convenience predicates ---
 
     def is_bool(self) -> Bool:
