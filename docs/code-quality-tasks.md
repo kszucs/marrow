@@ -5,7 +5,28 @@ executable half: discrete, worktree-ready tasks with explicit file ownership so 
 run in parallel without merge conflicts, following the same conventions as
 `docs/execution-engine-tasks.md`.
 
-**Base:** `complete` @ `867d9d6`+ · **Status:** not started (Q0.0 closed — fixed upstream).
+**Base:** `complete` @ `867d9d6`+ · **Status:** in progress on `agg`.
+
+**Landed (2026-07-27, branch `agg`).** Q0.0 (closed upstream), Q0.2, Q0.3, Q1.1, Q1.4,
+Q2.1, Q2.2, Q2.3, Q2.6, Q3.4, Q5.3, the core half of Q3.2 (`BitmapView.to_owned`,
+`Bitmap.unset_count`, `ArrayData.owned_validity`, the `BitmapView`-private SIMD functors),
+the expr half of Q3.5 (`AnyRelation.execute`, one `lit`, the validity helpers), and Q3.1's
+filter/take delegators. Fused `query_streaming` stripped size held at 1,307,624 across all
+of them.
+
+**Still open:** Q1.2, Q1.3, the rest of Q3.2 (`_apply_dispatch`/`_reduce_dispatch` onto
+`ExecutionContext`, `PrimitiveArray.arange`, the `c_data` double-free guard), the rest of
+Q3.1 (membership/conditional/temporal kernel structs, the 9 temporal delegators), Q2.4,
+Q3.3, Q4.1–Q4.5, Q5.1, Q5.2, Q6.1 and Q2.5 step 4.
+
+> **Two gates were broken and are fixed.** `pixi run binary_size` errored out entirely
+> (`query_streaming_agg_fused.mojo` used the removed `List.append[A](dtype)` spelling), and
+> the test harness reported a *compiler crash* as a failure of every case in the selection.
+> The harness now halves the unit on a crash and retries — `test_aggregates` 0/17 -> 16/17,
+> `test_plan` 0/22 -> 17/22, `test_filter` 0/48 -> 15. The cases that still fail crash on
+> their own: **a test body that filters with a comparison predicate under `TestSuite`**
+> (`rel.filter(col("a") > lit(...))`), which compiles fine in a plain `main()`. That is a
+> pre-existing upstream bug, not one of these tasks.
 
 **Guiding standard.** These tasks are not chores; the bar is *elegant, performant, encapsulated
 abstractions*. A task is done when the concept has **one owner**, its invariants are enforced by
