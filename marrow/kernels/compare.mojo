@@ -40,7 +40,6 @@ from ..buffers import Bitmap
 from ..views import apply
 from ..dtypes import NumericType, PrimitiveType
 from .core import Kernel
-from .cast import cast
 from .boolean import AndKernel
 from .string import (
     StringPredicateKernel,
@@ -136,24 +135,18 @@ trait BinaryCompareKernel(Kernel):
         right: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
+        Self.expect_same_dtype(left.dtype(), right.dtype())
+
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyArray:
+            return Self.apply(
+                left.as_primitive[T](), right.as_primitive[T](), ctx
+            ).to_any()
+
         if left.dtype().is_string() or left.dtype().is_large_string():
-            Self.expect_same_dtype(left.dtype(), right.dtype())
             return Self.StringKernel.dispatch(left, right)
         else:
-            # Compare in the promoted domain of BOTH operands — the same rule
-            # the fused `NumericCompare` applies, so `a > b` and `a + b` never
-            # disagree about widening. `cast` is identity for equal dtypes.
-            var dt = left.dtype().promote(right.dtype())
-            var l = cast(left, dt, ctx=ctx)
-            var r = cast(right, dt, ctx=ctx)
-
-            @parameter
-            def leaf[T: NumericType](d: T) raises -> AnyArray:
-                return Self.apply(
-                    l.as_primitive[T](), r.as_primitive[T](), ctx
-                ).to_any()
-
-            return dt.dispatch_numeric[leaf]()
+            return left.dtype().dispatch_numeric[leaf]()
 
 
 # ---------------------------------------------------------------------------

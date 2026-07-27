@@ -26,7 +26,6 @@ from ..dtypes import (
     FloatingType,
 )
 from .core import Kernel
-from .cast import cast
 from .execution import ExecutionContext
 from ..utils import GPU_ENABLED
 
@@ -89,21 +88,15 @@ trait BinaryNumericKernel(BinaryKernel):
         right: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        # Compute in the promoted domain of BOTH operands, exactly as the fused
-        # `NumericBinary` does — otherwise `int64 + float64` means one thing
-        # fused and raises interpreted. `cast` is identity when the dtype
-        # already matches, so the same-dtype case is untouched.
-        var dt = left.dtype().promote(right.dtype())
-        var l = cast(left, dt, ctx=ctx)
-        var r = cast(right, dt, ctx=ctx)
+        Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
         def leaf[T: NumericType](d: T) raises -> AnyArray:
             return Self.apply(
-                l.as_primitive[T](), r.as_primitive[T](), ctx
+                left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
 
-        return dt.dispatch_numeric[leaf]()
+        return left.dtype().dispatch_numeric[leaf]()
 
 
 trait BinaryFloatKernel(BinaryKernel):
@@ -115,17 +108,15 @@ trait BinaryFloatKernel(BinaryKernel):
         right: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        var dt = left.dtype().promote(right.dtype())
-        var l = cast(left, dt, ctx=ctx)
-        var r = cast(right, dt, ctx=ctx)
+        Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
         def leaf[T: FloatingType](d: T) raises -> AnyArray:
             return Self.apply(
-                l.as_primitive[T](), r.as_primitive[T](), ctx
+                left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
 
-        return dt.dispatch_floating[leaf]()
+        return left.dtype().dispatch_floating[leaf]()
 
 
 trait UnaryKernel(Kernel):

@@ -195,29 +195,14 @@ def test_equal_array_overload() raises:
     assert_equal(result.length(), 3)
 
 
-def test_mixed_numeric_dtypes_promote() raises:
-    """Type-erased kernels compare in the promoted domain of both operands
-    rather than rejecting the pair.
-
-    `int64` vs `float64` widens to float64, so `1 == 1.0` is True and
-    `2 == 2.5` is False. Rejecting the mismatch (what this used to assert) made
-    the interpreted lane disagree with the fused algebra, which always promoted
-    — see Q0.4."""
+def test_dtype_mismatch_raises() raises:
+    """Type-erased kernels raise on dtype mismatch."""
     var a: AnyArray = array([1, 2, 3], int64)
     var fb = Float64Builder(3)
     fb.unsafe_append(1.0)
-    fb.unsafe_append(2.5)
+    fb.unsafe_append(2.0)
     fb.unsafe_append(3.0)
     var b: AnyArray = fb.finish()
-    var out = EqKernel.dispatch(a, b).as_bool().copy()
-    assert_true(out == array([True, False, True]))
-
-
-def test_non_numeric_dtype_mismatch_raises() raises:
-    """Promotion is defined for numeric pairs only: comparing a number against a
-    string has no common domain and still raises."""
-    var a: AnyArray = array([1, 2, 3], int64)
-    var b: AnyArray = array(["1", "2", "3"])
     var raised = False
     try:
         _ = EqKernel.dispatch(a, b)
