@@ -288,7 +288,7 @@ trait StringPredicateKernel(Kernel):
                     data.set(i)
         return BoolArray(
             length=n,
-            nulls=n - bm.value().view().count_set_bits() if bm else 0,
+            nulls=bm.value().unset_count() if bm else 0,
             offset=0,
             bitmap=bm,
             buffer=data.to_immutable(),

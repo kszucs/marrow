@@ -22,6 +22,16 @@
 
 ### Refactors
 
+- **Validity has one owner.** `BitmapView.to_owned()` replaces the three ad-hoc "copy a
+  view into an owned bitmap" idioms (a `difference` against a zero scratch, `v.union(v)`,
+  and an identity SIMD functor) — and it goes through `Bitmap.extend`, so a byte-aligned
+  view costs a `memcpy` instead of a pass over every bit. `Bitmap.unset_count()` replaces
+  the `length - …count_set_bits()` incantation at eight sites, and
+  `ArrayData.owned_validity()` replaces `_column_validity` / `_result_validity` /
+  `_view_to_owned` / `_nulls_of` in the fused expression layer.
+- **The five byte-level SIMD functors are private to `BitmapView`.** They were module-level
+  free functions in `views.mojo` (`_and`, `_or`, `_xor`, `_and_not`, `_invert`) usable by
+  anything; only the bitmap set operations ever wanted them.
 - **The erased boxes expose their downcast instead of having it reached into.**
   `AnyDataType`, `AnyArray`, `AnyBuilder` and `AnyScalar` each had a private `_as[T]`
   with public one-liners over it, so generic callers went through the *variant field* —

@@ -86,7 +86,7 @@ def _binary_cmp[
     apply[native, func](left.values(), right.values(), result.view(), ctx)
     return BoolArray(
         length=length,
-        nulls=length - bm.value().view().count_set_bits() if bm else 0,
+        nulls=bm.value().unset_count() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=result.to_immutable(),

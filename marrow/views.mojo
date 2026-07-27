@@ -971,18 +971,66 @@ struct BitmapView[
         var bit_mask = UInt8(1 << (abs_index & 7))
         self._data[byte_index] = self._data[byte_index] ^ bit_mask
 
+    # --- Byte-level functors for the set operations above.  `apply` takes a
+    # SIMD functor, and these are the five `BitmapView` needs; they live here
+    # rather than at module scope because nothing else can use them.
+
+    @always_inline
+    @staticmethod
+    def _not[W: Int](x: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return ~x
+
+    @always_inline
+    @staticmethod
+    def _and[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a & b
+
+    @always_inline
+    @staticmethod
+    def _or[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a | b
+
+    @always_inline
+    @staticmethod
+    def _xor[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a ^ b
+
+    @always_inline
+    @staticmethod
+    def _and_not[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a & ~b
+
     # --- Set operations (return Buffer with offset=0) ---
+
+    def to_owned(self) raises -> Bitmap[mut=False]:
+        """These bits as an owned, offset-0 `Bitmap`.
+
+        `Bitmap.extend` copies whole bytes when the source is byte-aligned and
+        shift-merges otherwise, so a view that already starts at a byte costs a
+        `memcpy` rather than a pass over every bit.
+        """
+        var out = Bitmap.alloc_zeroed(self._length)
+        out.extend(self, 0, self._length)
+        return out.to_immutable()
 
     def intersection(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise AND of self and other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_and](self, other, builder.view())
+        apply[Self._and](self, other, builder.view())
         return builder^
 
     def union(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise OR of self and other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_or](self, other, builder.view())
+        apply[Self._or](self, other, builder.view())
         return builder^
 
     def symmetric_difference(
@@ -990,13 +1038,13 @@ struct BitmapView[
     ) raises -> Bitmap[mut=True]:
         """Return the bitwise XOR of self and other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_xor](self, other, builder.view())
+        apply[Self._xor](self, other, builder.view())
         return builder^
 
     def difference(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return self AND NOT other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_and_not](self, other, builder.view())
+        apply[Self._and_not](self, other, builder.view())
         return builder^
 
     def filter(
@@ -1080,7 +1128,7 @@ struct BitmapView[
     def __invert__(self) raises -> Bitmap[mut=True]:
         """Return the bitwise NOT of this view as a new Bitmap (offset=0)."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_invert](self, builder.view())
+        apply[Self._not](self, builder.view())
         return builder^
 
     # --- Writable ---
@@ -1092,44 +1140,6 @@ struct BitmapView[
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
-
-
-# ---------------------------------------------------------------------------
-# SIMD byte-level binary op helpers
-# ---------------------------------------------------------------------------
-
-
-@always_inline
-def _invert[W: Int](x: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return ~x
-
-
-@always_inline
-def _and[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a & b
-
-
-@always_inline
-def _or[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a | b
-
-
-@always_inline
-def _xor[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a ^ b
-
-
-@always_inline
-def _and_not[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a & ~b
 
 
 # ---------------------------------------------------------------------------

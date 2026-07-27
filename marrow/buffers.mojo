@@ -965,6 +965,11 @@ struct Bitmap[*, mut: Bool = False](
         """
         return self.view() == other.view()
 
+    def unset_count(self) -> Int:
+        """How many of these bits are 0 — the null count of a validity bitmap.
+        """
+        return self._length - self.view().count_set_bits()
+
     def byte_count(self) -> Int:
         """Return the size of the backing buffer in bytes."""
         return len(self._buffer)

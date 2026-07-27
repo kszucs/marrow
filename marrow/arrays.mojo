@@ -202,6 +202,19 @@ struct ArrayData(Copyable, Movable):
             return None
         return self.bitmap.value().view(self.offset, self.length)
 
+    def owned_validity(self) raises -> Optional[Bitmap[mut=False]]:
+        """Validity as an *offset-0 owned* bitmap (None = all valid).
+
+        `validity()` hands out a view into this array's own buffer at its own
+        offset; a consumer that bakes the validity into a differently-offset
+        result needs its own copy, and this is that copy.
+        """
+        var v = self.validity()
+        if v:
+            return v.value().to_owned()
+        else:
+            return None
+
     def __del__(deinit self):
         pass
 

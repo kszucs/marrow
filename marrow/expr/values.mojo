@@ -287,36 +287,6 @@ def _union_columns(var acc: List[String], names: List[String]) -> List[String]:
 # use; Kleene `And`/`Or` reuse the null-correct `and_`/`or_` kernels; column leaves
 # read their own validity; literals / `is_null` results are always valid.
 # ---------------------------------------------------------------------------
-def _view_to_owned(v: BitmapView) raises -> Bitmap[mut=False]:
-    """An offset-0 owned copy of a bitmap view. Uses `difference` against an
-    all-zero scratch (`v AND NOT 0 == v`) rather than `union(v, v)`, which would
-    alias the same origin mutably through both call arguments."""
-    var zeroed = Bitmap.alloc_zeroed(len(v))
-    return v.difference(zeroed.view()).to_immutable()
-
-
-def _column_validity(
-    batch: RecordBatch, name: String
-) raises -> Optional[Bitmap[mut=False]]:
-    """The named column's validity as an offset-0 owned bitmap (None = all valid).
-    Materialises a fresh offset-0 copy so the fused driver can bake it into the
-    result independent of the source array's own offset."""
-    var data = batch.columns[batch.schema.get_field_index(name)].to_data()
-    var v = data.validity()
-    if v:
-        return _view_to_owned(v.value())
-    else:
-        return None
-
-
-def _nulls_of(length: Int, v: Optional[Bitmap[mut=False]]) -> Int:
-    """Unset-bit count of a validity bitmap (0 when all-valid)."""
-    if v:
-        return length - v.value().view().count_set_bits()
-    else:
-        return 0
-
-
 # ---------------------------------------------------------------------------
 # Value — every node. `execute` is abstract; `prepare` defaults to a no-op (only
 # composites recurse and breakers prepare).
@@ -526,7 +496,7 @@ trait NumericValue(Value):
             var arr = PrimitiveArray[Self.OutType](
                 dtype=Self.OutType(),
                 length=length,
-                nulls=_nulls_of(length, v),
+                nulls=v.value().unset_count() if v else 0,
                 offset=0,
                 bitmap=v^,
                 buffer=buf.to_immutable(),
@@ -582,7 +552,7 @@ struct NumericColumn[T: NumericType](NumericValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()
@@ -852,7 +822,7 @@ trait BoolValue(Value):
         var v = self.validity(batch)
         return BoolArray(
             length=length,
-            nulls=_nulls_of(length, v),
+            nulls=v.value().unset_count() if v else 0,
             offset=0,
             bitmap=v^,
             buffer=bm.to_immutable(),
@@ -1389,7 +1359,7 @@ struct StringColumn[T: StringLikeType](StringValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()
@@ -1831,16 +1801,6 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 # on the branch), so `validity` re-runs the kernel and reads the materialized
 # bitmap — the one case where operand validities alone can't reconstruct the result.
 # ---------------------------------------------------------------------------
-def _result_validity(r: AnyArray) raises -> Optional[Bitmap[mut=False]]:
-    """The materialized result's validity as an offset-0 owned bitmap (None =
-    all valid) — shared by the conditional breakers' `validity`."""
-    var v = r.to_data().validity()
-    if v:
-        return _view_to_owned(v.value())
-    else:
-        return None
-
-
 # Conditional binary breakers — `coalesce(l, r)` and `nullif(l, r)` differ only
 # in the kernel they call, so one generic node parameterized by a tiny op struct
 # covers both (mirrors `Reduction[K]` / `TemporalExtract[K]`). Both are
@@ -1893,7 +1853,7 @@ struct ConditionalBinary[
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _result_validity(self._result(batch))
+        return self._result(batch).to_data().owned_validity()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         ctx.append(self._result(batch))
@@ -1950,7 +1910,7 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _result_validity(self._result(batch))
+        return self._result(batch).to_data().owned_validity()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         ctx.append(self._result(batch))
@@ -2041,7 +2001,7 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()
@@ -2153,7 +2113,7 @@ struct ListColumn[T: ListLikeType](ListValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()

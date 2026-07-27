@@ -72,7 +72,7 @@ trait BinaryKernel(Kernel):
         return PrimitiveArray[T](
             dtype=left.dtype.copy(),
             length=length,
-            nulls=length - bm.value().view().count_set_bits() if bm else 0,
+            nulls=bm.value().unset_count() if bm else 0,
             offset=0,
             bitmap=bm,
             buffer=buf.to_immutable(),
@@ -153,10 +153,7 @@ trait UnaryKernel(Kernel):
         return PrimitiveArray[T](
             dtype=array.dtype.copy(),
             length=length,
-            nulls=length
-            - array.bitmap.value()
-            .view()
-            .count_set_bits() if array.bitmap else 0,
+            nulls=array.null_count(),
             offset=0,
             bitmap=array.bitmap,
             buffer=buf.to_immutable(),
