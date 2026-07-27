@@ -217,21 +217,38 @@ Depends: — · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.
 `dispatch_numeric[leaf]()`. `BinaryFloatKernel.dispatch` is the same again with
 `dispatch_floating`.
 
-**Merging `arithmetic.mojo` and `compare.mojo` into a `numeric.mojo` co-locates this but
-does not remove it** — worth knowing before doing the move for that reason. The bodies are
-identical yet cannot share a default today because they live in traits with no common
-ancestor below `Kernel`, and the thing that separates them is `apply`'s return type:
-`PrimitiveArray[T]` for arithmetic, `BoolArray` for comparison. That return type depends
-on the *method's* type parameter, not on `Self`, so it cannot be an associated type on a
-shared trait — which is why the duplication exists at all.
+They cannot share a default today because they live in traits with no common ancestor below
+`Kernel`, and the thing that separates them is `apply`'s return type: `PrimitiveArray[T]`
+for arithmetic, `BoolArray` for comparison. That return type depends on the *method's* type
+parameter, not on `Self`, so it cannot be an associated type on a shared trait — which is
+why the duplication exists at all.
 
 Done when one defaulted `dispatch` serves all three. Note the trait hazards in CLAUDE.md's
 "Associated-type & trait gotchas" apply directly here: re-defaulting a base trait's method
 in a sub-trait is one of the documented recursion triggers, so budget for iteration.
 
-The file merge is still worth doing on its own merits (both modules are now numeric-only,
-three-tier, and differ mainly in `core`) — just do it knowing it is organisation, not
-deduplication.
+**Q0.7 — Merge `arithmetic.mojo` + `compare.mojo` into `numeric.mojo`** ·
+*owner directive, 2026-07-27* · Depends: — (do **before** Q0.6, so that task's diff is the
+trait change alone) · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.mojo`,
+new `marrow/kernels/numeric.mojo`, `marrow/kernels/__init__.mojo`, every importer of the two
+(+ `marrow/kernels/tests/test_arithmetic.mojo`, `test_compare.mojo`) · ⚠️ BINSIZE ·
+
+The two modules are now the same kind of thing: both numeric-only, both three-tier
+(`core` / `apply` / `dispatch`), both dispatching through `AnyDataType.dispatch_numeric`.
+What differs between an `AddKernel` and an `LtKernel` is the `core` functor and the output
+layout — not enough to justify two modules. Comparison stopped being "the string-aware one"
+when `NumericCompareKernel` dropped `comptime StringKernel` (`f5374e9`).
+
+**Do it knowing it is organisation, not deduplication.** The identical `dispatch` bodies in
+Q0.6 survive the move untouched; merging the files just puts them next to each other where
+the duplication is visible. Sequence it first anyway: doing Q0.6 across two modules means
+touching both, and doing the merge afterwards would re-touch everything Q0.6 changed.
+
+Done when: one `marrow/kernels/numeric.mojo` holds the binary/unary numeric traits, the
+comparison trait, and all their kernel structs; `kernels/__init__.mojo` re-exports the same
+public names so no caller outside `marrow/kernels` changes; the test files merge or stay
+split on purpose (say which); fused stripped size reported before/after — expected
+unchanged, since this moves no code across a DCE boundary.
 
 **Q0.4 — Lane divergence on mixed-dtype arithmetic** · *Tier 0, found 2026-07-27* ·
 **Reverted 2026-07-27 — first attempt fixed it at the wrong layer.** Promotion was put in
