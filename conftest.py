@@ -334,24 +334,76 @@ class MojoRunner:
             return None, detail or f"exit code {result.returncode}"
 
     @staticmethod
+    def compiler_crashed(detail):
+        """True when the compiler *died* rather than rejecting the source.
+
+        A crash prints a bug-report dump and no diagnostic, and it depends on
+        how much the unit elaborates — the same cases build in smaller units.
+        A real `error:` does not: it would be reported identically in every
+        subset, so splitting on it would only multiply the compile time.
+        """
+        return any(
+            marker in (detail or "")
+            for marker in ("Please submit a bug report", "Stack dump:")
+        )
+
+    @staticmethod
+    def halve(groups):
+        """Split a selection into two, keeping each file's cases in order."""
+        flat = [(f, case) for f in sorted(groups) for case in groups[f]]
+        mid = len(flat) // 2
+        halves = []
+        for part in (flat[:mid], flat[mid:]):
+            group = {}
+            for fspath, case in part:
+                group.setdefault(fspath, []).append(case)
+            halves.append(group)
+        return halves
+
+    @staticmethod
+    def collect(config, groups, kind):
+        """Run the selection and return ``{case name: JSON entry}``.
+
+        One unit is the fast path — marrow's elaboration dominates, so it is
+        paid once for the whole selection.  When the *compiler crashes* on that
+        unit the selection is halved and each half compiled on its own, down to
+        a single case; a case that still cannot be built reports the crash as
+        its own failure instead of failing every case in the selection with it.
+        """
+        entries, detail = MojoRunner.run_suite(config, groups, kind)
+        if entries is not None:
+            return {e["name"]: e for e in entries}
+        names = [name for cases in groups.values() for name in cases]
+        if len(names) > 1 and MojoRunner.compiler_crashed(detail):
+            print(
+                f"compiler crashed on {len(names)} cases — splitting the unit",
+                flush=True,
+            )
+            collected = {}
+            for half in MojoRunner.halve(groups):
+                collected.update(MojoRunner.collect(config, half, kind))
+            return collected
+        return {
+            name: {"name": name, "status": "FAIL", "error": detail}
+            for name in names
+        }
+
+    @staticmethod
     def run_tests(config, groups):
         """Run every selected test case and return ``{name: (status, error)}``."""
-        entries, detail = MojoRunner.run_suite(config, groups, "test")
-        names = [name for cases in groups.values() for name in cases]
-        if entries is None:
-            return {name: ("FAIL", detail) for name in names}
-        parsed = {e["name"]: (e["status"], e.get("error", "")) for e in entries}
-        for name in names:
-            parsed.setdefault(name, ("FAIL", detail))
+        entries = MojoRunner.collect(config, groups, "test")
+        parsed = {
+            name: (e["status"], e.get("error", "")) for name, e in entries.items()
+        }
+        for cases in groups.values():
+            for name in cases:
+                parsed.setdefault(name, ("FAIL", "no result reported"))
         return parsed
 
     @staticmethod
     def run_benches(config, groups):
         """Run every selected benchmark and return ``{name: entry}``."""
-        entries, detail = MojoRunner.run_suite(config, groups, "bench")
-        if entries is None:
-            return {"_error": detail}
-        return {e["name"]: e for e in entries}
+        return MojoRunner.collect(config, groups, "bench")
 
 
 def _to_seconds(value, unit):
@@ -841,13 +893,14 @@ class MojoBenchItem(pytest.Item):
             config._mojo_bench_results = MojoRunner.run_benches(
                 config, config._mojo_bench_groups
             )
-        entries = config._mojo_bench_results
+        entry = config._mojo_bench_results.get(self.name)
 
-        if "_error" in entries:
-            raise MojoTestFailure(entries["_error"])
-        if self.name not in entries:
+        if entry is None:
             raise MojoTestFailure(f"{self.name} did not appear in bench runner output")
-        self._inject_one(self.name, entries[self.name])
+        if entry.get("status") == "FAIL":
+            # The unit this benchmark was in could not be built or run.
+            raise MojoTestFailure(entry.get("error", ""))
+        self._inject_one(self.name, entry)
 
     def _inject_one(self, bench_name, entry):
         """Inject pre-measured timings into pytest-benchmark.
@@ -1461,6 +1514,50 @@ def test_run_tests_marks_missing_cases_failed(tmp):
     assert results["test_vanished"][0] == "FAIL"
 
 
+def test_run_tests_splits_the_unit_when_the_compiler_crashes(tmp):
+    """A compiler crash is a size problem — the halves must still be run."""
+    groups = _driver_groups(tmp)
+    original = MojoRunner.run_suite
+    calls = []
+
+    def fake(config, groups, kind):
+        names = [name for cases in groups.values() for name in cases]
+        calls.append(tuple(names))
+        if len(names) > 1:
+            return None, "Please submit a bug report to https://..."
+        return [{"name": names[0], "status": "PASS"}], ""
+
+    MojoRunner.run_suite = staticmethod(fake)
+    try:
+        results = MojoRunner.run_tests(_FakeConfig(tmp), groups)
+    finally:
+        MojoRunner.run_suite = original
+
+    assert set(results) == {"test_sort_one", "test_arrays_one", "test_arrays_two"}
+    assert all(status == "PASS" for status, _ in results.values())
+    assert len(calls) > 1  # the whole selection, then its halves
+
+
+def test_run_tests_does_not_split_on_a_compile_error(tmp):
+    """A diagnostic fails identically in every subset — splitting is waste."""
+    groups = _driver_groups(tmp)
+    original = MojoRunner.run_suite
+    calls = []
+
+    def fake(config, groups, kind):
+        calls.append(1)
+        return None, "marrow/kernels/filter.mojo:12:5: error: use of unknown 'x'"
+
+    MojoRunner.run_suite = staticmethod(fake)
+    try:
+        results = MojoRunner.run_tests(_FakeConfig(tmp), groups)
+    finally:
+        MojoRunner.run_suite = original
+
+    assert len(calls) == 1
+    assert all(status == "FAIL" for status, _ in results.values())
+
+
 def _run_history_selftests():
     tests = [
         test_make_envelope,
@@ -1481,6 +1578,8 @@ def _run_history_selftests():
         test_write_driver_skips_files_without_cases,
         test_run_tests_reports_build_failure_against_every_case,
         test_run_tests_marks_missing_cases_failed,
+        test_run_tests_splits_the_unit_when_the_compiler_crashes,
+        test_run_tests_does_not_split_on_a_compile_error,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory() as tmp:

@@ -115,8 +115,20 @@ Consequences worth knowing:
 
 - **Selecting fewer *files* is what saves time; selecting fewer *cases* is not.**
   A single `::test_name` builds the same unit as its whole file.
-- **Blast radius is the selection.** One compile error or one crashing case takes
-  down every case in the run, not just its file.
+- **Blast radius is the selection — for compile *errors*.** A diagnostic fails every
+  case in the run, not just its file, because there is one unit.
+- **A compiler *crash* is different: the harness splits the unit and retries.**
+  The Mojo compiler dies (bug-report dump, no diagnostic) on some units simply
+  because of how much they elaborate — the same cases build in smaller units. On
+  a crash `MojoRunner.collect` halves the selection and compiles each half, down
+  to a single case; a case that still cannot be built reports the crash as *its
+  own* failure instead of failing everything selected alongside it. Ordinary
+  `error:` output never splits, since it would be identical in every half.
+  **Known-crashing cases (pre-existing, unrelated to the harness): a test body
+  that filters with a comparison predicate** (`rel.filter(col("a") > …)`) under
+  `TestSuite` — the same code compiles fine in a plain `main()`. That is why five
+  cases in `test_plan.mojo` and one in `test_aggregates.mojo` fail; the rest of
+  each file runs.
 - **Peak memory scales with the unit**, so a full-suite run is a single very
   large compile. Narrow the selection if memory is tight.
 - **Optimization level follows the kind, not the session.** `bench_*.mojo` builds

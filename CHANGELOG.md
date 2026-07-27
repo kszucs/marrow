@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **A compiler crash no longer takes down the whole test selection.** The compiler dies
+  with a bug-report dump — no diagnostic — on units that elaborate too much, which is a
+  function of unit size, not of the code being wrong: 17 cases in one driver crashed where
+  2 of the same cases built fine. The harness now halves the selection on a crash and
+  compiles each half, down to a single case, so a case that genuinely cannot be built
+  reports the crash as *its own* failure instead of failing every case selected with it.
+  Ordinary `error:` diagnostics never split — they would be identical in each half.
+  `test_aggregates.mojo` went from 0/17 to 16/17, `test_plan.mojo` from 0/22 to 17/22.
+
 ### Refactors
 
 - **No wildcard imports left in the core modules.** `arrays`, `scalars`, `builders`,
