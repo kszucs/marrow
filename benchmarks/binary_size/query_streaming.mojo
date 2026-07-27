@@ -15,7 +15,7 @@ from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import InMemoryTable, Project, AnyRelation, execute
+from marrow.expr.relations import InMemoryTable, Project, AnyRelation
 
 
 def main() raises:
@@ -38,4 +38,4 @@ def main() raises:
         values=values^,
         schema=schema([field("a", int64), field("name", string)]),
     )
-    print(execute(AnyRelation(proj^)))
+    print(AnyRelation(proj^).execute())

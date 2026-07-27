@@ -384,8 +384,7 @@ class MojoRunner:
                 collected.update(MojoRunner.collect(config, half, kind))
             return collected
         return {
-            name: {"name": name, "status": "FAIL", "error": detail}
-            for name in names
+            name: {"name": name, "status": "FAIL", "error": detail} for name in names
         }
 
     @staticmethod

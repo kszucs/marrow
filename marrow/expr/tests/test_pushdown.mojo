@@ -17,7 +17,6 @@ from ...expr.relations import (
     parquet_scan,
     AnyRelation,
     Filter,
-    execute,
     RELATION_PARQUET_SCAN,
 )
 from ...expr.dynamic import col, lit
@@ -92,7 +91,7 @@ def test_pushdown_end_to_end() raises:
     var plan = parquet_scan(path, sch).filter(
         col("x") > lit[Int64Type](Int64(1500))
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 1499)  # 1501..2999
     assert_equal(result.columns[0].copy().as_int64()[0].value(), 1501)
     remove(path)
@@ -121,7 +120,7 @@ def test_pushdown_page_skip() raises:
     var plan = parquet_scan(path, sch).filter(
         col("x") > lit[Int64Type](Int64(7500))
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 2499)  # 7501..9999
     assert_equal(result.columns[0].copy().as_int64()[0].value(), 7501)
     assert_equal(result.columns[0].copy().as_int64()[2498].value(), 9999)
@@ -136,6 +135,6 @@ def test_pushdown_prunes_all_groups() raises:
     var plan = parquet_scan(path, sch).filter(
         col("x") > lit[Int64Type](Int64(100000))
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 0)
     remove(path)

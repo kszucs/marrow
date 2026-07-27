@@ -24,7 +24,7 @@ from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.aggregates import AggFunc
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation, execute
+from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation
 
 
 def main() raises:
@@ -55,4 +55,4 @@ def main() raises:
             [field("name", string), field("a", int64), field("b", int64)]
         ),
     )
-    print(execute(AnyRelation(agg^)))
+    print(AnyRelation(agg^).execute())

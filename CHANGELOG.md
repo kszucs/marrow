@@ -22,6 +22,12 @@
 
 ### Refactors
 
+- **`execute` is a method on the plan, and `lit` is one verb.** Draining a plan was the
+  only plan verb that was a free function — and it collided with `Value.execute`, the
+  fused lane's per-node verb, so `execute` meant two different things depending on the
+  argument. It is now `plan.execute(ctx)`. Likewise `slit("x")` is gone: `lit` overloads
+  on the argument type, and a new `lit(3.5, float64)` overload makes fractional constants
+  representable — the only spelling took an `Int` and silently truncated.
 - **Validity has one owner.** `BitmapView.to_owned()` replaces the three ad-hoc "copy a
   view into an owned bitmap" idioms (a `difference` against a zero scratch, `v.union(v)`,
   and an identity SIMD functor) — and it goes through `Bitmap.extend`, so a byte-aligned

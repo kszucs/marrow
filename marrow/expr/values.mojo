@@ -51,6 +51,7 @@ from ..buffers import Buffer, Bitmap
 from ..builders import Int64Builder, BinaryLikeBuilder
 from ..views import apply, BitmapView
 from ..dtypes import (
+    FloatingType,
     AnyDataType,
     DataType,
     NumericType,
@@ -2358,12 +2359,21 @@ def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:
 
 
 def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
-    """A numeric constant — `lit(10, int64)`."""
+    """An integral constant — `lit(10, int64)`."""
     return NumericLiteral[T](Scalar[T.native](value))
 
 
-def slit(value: String) -> StringLiteral[StringType]:
-    """A string constant — `slit("suffix")`."""
+def lit[T: FloatingType](value: Float64, dtype: T) -> NumericLiteral[T]:
+    """A fractional constant — `lit(3.5, float64)`.
+
+    Without this overload the only spelling took an `Int`, so `lit(3.5,
+    float64)` was unrepresentable: it truncated to 3."""
+    return NumericLiteral[T](Scalar[T.native](value))
+
+
+def lit(value: String) -> StringLiteral[StringType]:
+    """A string constant — `lit("suffix")`. Same verb as the numeric ones; the
+    argument type picks the literal."""
     return StringLiteral[StringType](value)
 
 

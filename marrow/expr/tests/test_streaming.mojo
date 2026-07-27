@@ -35,7 +35,6 @@ from ...expr.relations import (
     Sort,
     Limit,
     AnyRelation,
-    execute,
     in_memory_table,
 )
 from ...expr.dynamic import col as dyn_col, lit, case_when, if_else
@@ -91,7 +90,7 @@ def test_scan_streams_in_morsels() raises:
 def test_streaming_filter_project() raises:
     """Full pipeline collected: a > b keeps rows 5 and 8."""
     var plan = _fused_plan(1024)
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 2)
     assert_equal(result.schema.fields[0].name, "a")
     assert_equal(result.schema.fields[1].name, "name")
@@ -102,7 +101,7 @@ def test_result_independent_of_morsel_size() raises:
     """Morsel size must not change the result."""
     for morsel in [1, 2, 3, 5, 1024]:
         var plan = _fused_plan(morsel)
-        var result = execute(plan)
+        var result = plan.execute()
         assert_equal(result.num_rows(), 2)
         assert_true(result.columns[0].as_int64().copy() == array([5, 8], int64))
 
@@ -124,7 +123,7 @@ def test_streaming_interpreter_values() raises:
             schema=_out_schema(),
         )
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].as_int64().copy() == array([5, 8], int64))
 
@@ -135,11 +134,11 @@ def test_streaming_interpreter_values() raises:
 
 
 def test_plan_is_reusable() raises:
-    """execute() opens a fresh operator tree each run, so the same plan runs
+    """`execute()` opens a fresh operator tree each run, so the same plan runs
     repeatedly and yields the same result — no single-use leakage."""
     var plan = _fused_plan(2)
-    var r1 = execute(plan)
-    var r2 = execute(plan)
+    var r1 = plan.execute()
+    var r2 = plan.execute()
     assert_equal(r1.num_rows(), 2)
     assert_equal(r2.num_rows(), 2)
     assert_true(r1.columns[0].as_int64().copy() == array([5, 8], int64))
@@ -151,8 +150,8 @@ def test_plan_copy_is_independent() raises:
     and the original each open their own operator tree — no shared cursor."""
     var plan = _fused_plan(2)
     var clone = plan.copy()
-    var r_clone = execute(clone)
-    var r_orig = execute(plan)
+    var r_clone = clone.execute()
+    var r_orig = plan.execute()
     assert_true(r_clone.columns[0].as_int64().copy() == array([5, 8], int64))
     assert_true(r_orig.columns[0].as_int64().copy() == array([5, 8], int64))
 
@@ -169,8 +168,8 @@ def test_aggregate_plan_is_reusable() raises:
             dyn_col("v").sum(),
         ],
     )
-    var r1 = execute(plan)
-    var r2 = execute(plan)
+    var r1 = plan.execute()
+    var r2 = plan.execute()
     assert_equal(r1.num_rows(), 2)
     assert_equal(r2.num_rows(), 2)
     # Same group count and same summed values across both runs.
@@ -192,7 +191,7 @@ def test_aggregate_multi_key_schema() raises:
             dyn_col("v").sum(),
         ],
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_columns(), 3)
     assert_equal(result.schema.fields[0].name, "region")
     assert_equal(result.schema.fields[1].name, "dept")
@@ -212,7 +211,7 @@ def test_sort_by_column_ascending() raises:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col("a")], ascending=[True]
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 5)
     assert_true(
         result.columns[0].as_int64().copy() == array([1, 2, 3, 5, 8], int64)
@@ -231,7 +230,7 @@ def test_sort_by_column_descending() raises:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col("a")], ascending=[False]
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_true(
         result.columns[0].as_int64().copy() == array([8, 5, 3, 2, 1], int64)
     )
@@ -244,7 +243,7 @@ def test_sort_nulls_first() raises:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col("a")], ascending=[True], nulls_first=True
     )
-    var col = execute(plan).columns[0].as_int64().copy()
+    var col = plan.execute().columns[0].as_int64().copy()
     assert_true(col == array([None, None, 1, 2, 3], int64))
 
 
@@ -255,7 +254,7 @@ def test_sort_nulls_last() raises:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col("a")], ascending=[True], nulls_first=False
     )
-    var col = execute(plan).columns[0].as_int64().copy()
+    var col = plan.execute().columns[0].as_int64().copy()
     assert_true(col == array([1, 2, 3, None, None], int64))
 
 
@@ -267,7 +266,7 @@ def test_sort_multi_key() raises:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col("a"), dyn_col("b")], ascending=[True, True]
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_true(
         result.columns[0].as_int64().copy() == array([1, 1, 2, 2], int64)
     )
@@ -284,7 +283,7 @@ def test_sort_multi_key_mixed_direction() raises:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col("a"), dyn_col("b")], ascending=[True, False]
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_true(
         result.columns[0].as_int64().copy() == array([1, 1, 2, 2], int64)
     )
@@ -300,7 +299,7 @@ def test_sort_by_string_column() raises:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col("s")], ascending=[True]
     )
-    var col = execute(plan).columns[0].as_string().copy()
+    var col = plan.execute().columns[0].as_string().copy()
     assert_true(col == array(["apple", "banana", "cherry", "pear"]))
 
 
@@ -314,7 +313,7 @@ def test_limit() raises:
     var a = array([1, 2, 3, 4, 5, 6], int64)
     var batch = record_batch([a^], names=["a"])
     var plan = in_memory_table(batch).limit(3)
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 3)
     assert_true(result.columns[0].as_int64().copy() == array([1, 2, 3], int64))
 
@@ -324,7 +323,7 @@ def test_limit_offset() raises:
     var a = array([1, 2, 3, 4, 5, 6], int64)
     var batch = record_batch([a^], names=["a"])
     var plan = in_memory_table(batch).limit(2, offset=2)
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].as_int64().copy() == array([3, 4], int64))
 
@@ -338,7 +337,7 @@ def test_limit_offset_across_morsels() raises:
         var plan = AnyRelation(
             InMemoryTable(batch=batch, morsel_size=morsel)
         ).limit(3, offset=1)
-        var result = execute(plan)
+        var result = plan.execute()
         assert_equal(result.num_rows(), 3)
         assert_true(
             result.columns[0].as_int64().copy() == array([2, 3, 4], int64)
@@ -350,7 +349,7 @@ def test_limit_beyond_end() raises:
     var a = array([1, 2, 3], int64)
     var batch = record_batch([a^], names=["a"])
     var plan = in_memory_table(batch).limit(10, offset=1)
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].as_int64().copy() == array([2, 3], int64))
 
@@ -383,7 +382,7 @@ def test_topk_values() raises:
         .sort(keys=[dyn_col("a")], ascending=[False])
         .limit(2)
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].as_int64().copy() == array([8, 5], int64))
     assert_true(result.columns[1].as_int64().copy() == array([80, 50], int64))
@@ -398,7 +397,7 @@ def test_limit_over_sort_with_offset_not_folded() raises:
         .sort(keys=[dyn_col("a")], ascending=[True])
         .limit(2, offset=1)
     )
-    var result = execute(plan)
+    var result = plan.execute()
     # Ascending [1,2,3,5,8], skip 1, take 2 -> [2,3].
     assert_true(result.columns[0].as_int64().copy() == array([2, 3], int64))
 
@@ -420,7 +419,7 @@ def test_computed_project() raises:
             dyn_col("a"),
         ],
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_columns(), 3)
     assert_equal(result.schema.fields[0].name, "a_plus")
     assert_equal(result.schema.fields[1].name, "one")
@@ -490,7 +489,7 @@ def _sorted_by_key(batch: RecordBatch) raises -> RecordBatch:
     var plan = in_memory_table(batch).sort(
         keys=[dyn_col(batch.schema.fields[0].name)], ascending=[True]
     )
-    return execute(plan)
+    return plan.execute()
 
 
 def test_aggregate_count_distinct_grouped() raises:
@@ -503,7 +502,7 @@ def test_aggregate_count_distinct_grouped() raises:
     )
     assert_equal(plan.schema().fields[1].name, "count_distinct")
     assert_equal(plan.schema().fields[1].dtype, int64)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(result.columns[0].as_int64().copy() == array([1, 2, 3], int64))
     assert_true(result.columns[1].as_int64().copy() == array([1, 2, 1], int64))
 
@@ -518,14 +517,14 @@ def test_aggregate_count_distinct_whole_table() raises:
         ],
     )
     assert_equal(plan.schema().fields[0].name, "key0")
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 1)
     assert_equal(result.schema.fields[1].name, "distinct_v")
     assert_equal(result.columns[1].as_int64()[0].value(), 4)
 
 
 def test_aggregate_approx_count_distinct() raises:
-    """approx_count_distinct is exact at these cardinalities."""
+    """`approx_count_distinct` is exact at these cardinalities."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
@@ -533,12 +532,13 @@ def test_aggregate_approx_count_distinct() raises:
         ],
     )
     assert_equal(plan.schema().fields[1].dtype, int64)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(result.columns[1].as_int64().copy() == array([1, 2, 1], int64))
 
 
 def test_aggregate_min_max_string() raises:
-    """min/max over a string value column keep the string dtype (Q22/Q23)."""
+    """`min`/`max` over a string value column keep the string dtype (Q22/Q23).
+    """
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
@@ -548,7 +548,7 @@ def test_aggregate_min_max_string() raises:
     )
     assert_equal(plan.schema().fields[1].dtype, string)
     assert_equal(plan.schema().fields[2].dtype, string)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(
         result.columns[1].as_string().copy() == array(["pear", "apple", "kiwi"])
     )
@@ -558,7 +558,7 @@ def test_aggregate_min_max_string() raises:
 
 
 def test_aggregate_min_max_date() raises:
-    """min/max over a date32 value column keep the temporal dtype (Q7)."""
+    """`min`/`max` over a date32 value column keep the temporal dtype (Q7)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
@@ -567,7 +567,7 @@ def test_aggregate_min_max_date() raises:
         ],
     )
     assert_true(plan.schema().fields[1].dtype == date32())
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(result.columns[1].dtype() == date32())
     assert_true(
         result.columns[1].as_date32().copy() == _dates([18500, 18800, 19200])
@@ -586,7 +586,7 @@ def test_aggregate_count_over_string_column() raises:
         ],
     )
     assert_equal(plan.schema().fields[1].dtype, int64)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(result.columns[1].as_int64().copy() == array([2, 2, 1], int64))
 
 
@@ -602,7 +602,7 @@ def test_aggregate_out_dtypes() raises:
             dyn_col("v").sum().alias("s"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     for i in range(len(plan.schema().fields)):
         assert_equal(plan.schema().fields[i].dtype, out.schema.fields[i].dtype)
     assert_equal(out.schema.fields[1].dtype, int64)  # count
@@ -624,7 +624,7 @@ def test_aggregate_computed_key_arithmetic() raises:
     )
     assert_equal(plan.schema().fields[0].name, "key0")
     assert_equal(plan.schema().fields[0].dtype, int64)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(
         result.columns[0].as_int64().copy() == array([10, 20, 30], int64)
     )
@@ -647,13 +647,13 @@ def test_aggregate_computed_key_case_when() raises:
             dyn_col("v").count().alias("n"),
         ],
     )
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(result.columns[0].as_int64().copy() == array([0, 1], int64))
     assert_true(result.columns[1].as_int64().copy() == array([2, 3], int64))
 
 
 def test_aggregate_computed_key_if_else() raises:
-    """if_else as a group key (the two-branch CASE)."""
+    """`if_else` as a group key (the two-branch CASE)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[
             if_else(
@@ -666,13 +666,13 @@ def test_aggregate_computed_key_if_else() raises:
             dyn_col("v").sum(),
         ],
     )
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(result.columns[0].as_int64().copy() == array([100, 200], int64))
     assert_true(result.columns[1].as_int64().copy() == array([20, 120], int64))
 
 
 def test_aggregate_computed_key_year() raises:
-    """year(date) as a group key — an int32 extraction key (Q19/Q40)."""
+    """`year(date)` as a group key — an int32 extraction key (Q19/Q40)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("d").year()],
         aggs=[
@@ -680,7 +680,7 @@ def test_aggregate_computed_key_year() raises:
         ],
     )
     assert_equal(plan.schema().fields[0].dtype, int32)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     # 18500 -> 2020, 18800 -> 2021, 19000/19100/19200 -> 2022.
     assert_true(
         result.columns[0].as_int32().copy() == array([2020, 2021, 2022], int32)
@@ -689,7 +689,7 @@ def test_aggregate_computed_key_year() raises:
 
 
 def test_aggregate_computed_key_date_trunc() raises:
-    """date_trunc yields a *temporal* group key — it is grouped through its
+    """`date_trunc` yields a *temporal* group key — it is grouped through its
     signed-integer backing and relabelled back to the timestamp dtype on the way
     out (Q19/Q35/Q36/Q43)."""
     var plan = in_memory_table(_agg_batch()).aggregate(
@@ -699,7 +699,7 @@ def test_aggregate_computed_key_date_trunc() raises:
         ],
     )
     assert_true(plan.schema().fields[0].dtype == timestamp(second))
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].dtype() == timestamp(second))
     assert_true(
@@ -721,7 +721,7 @@ def test_aggregate_computed_value_arithmetic() raises:
         ],
     )
     assert_equal(plan.schema().fields[1].dtype, int64)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_true(
         result.columns[1].as_int64().copy() == array([22, 72, 51], int64)
     )
@@ -736,7 +736,7 @@ def test_aggregate_computed_value_length() raises:
         ],
     )
     assert_equal(plan.schema().fields[1].dtype, float64)
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     var avg = result.columns[1].as_float64().copy()
     assert_true(avg[0].value() == 4.0)  # "pear", "pear"
     assert_true(avg[1].value() == 4.0)  # "apple" (5), "fig" (3)
@@ -757,7 +757,7 @@ def test_aggregate_names_disambiguate_outputs() raises:
     )
     assert_equal(plan.schema().fields[1].name, "avg_v")
     assert_equal(plan.schema().fields[2].name, "avg_year")
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.schema.fields[1].name, "avg_v")
     assert_equal(result.schema.fields[2].name, "avg_year")
 
@@ -786,7 +786,7 @@ def test_aggregate_having() raises:
         )
         .filter(AnyValue(dyn_col("n") > lit[Int64Type](1)))
     )
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].as_int64().copy() == array([1, 2], int64))
     assert_true(result.columns[1].as_int64().copy() == array([2, 2], int64))
@@ -807,7 +807,7 @@ def test_aggregate_having_on_aliased_aggregate() raises:
         .sort(keys=[dyn_col("total")], ascending=[False])
         .limit(1)
     )
-    var result = execute(plan)
+    var result = plan.execute()
     assert_equal(result.num_rows(), 1)
     assert_true(result.columns[0].as_int64().copy() == array([2], int64))
     assert_true(result.columns[1].as_int64().copy() == array([70], int64))
@@ -829,7 +829,7 @@ def test_aggregate_streams_across_morsels() raises:
             dyn_col("v").count_distinct().alias("nd"),
         ],
     )
-    var result = _sorted_by_key(execute(plan))
+    var result = _sorted_by_key(plan.execute())
     assert_equal(result.num_rows(), 3)
     assert_true(
         result.columns[1].as_int64().copy() == array([20, 70, 50], int64)

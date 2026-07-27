@@ -9,7 +9,7 @@ links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 named column leaves (``NumericColumn``/``StringColumn``) with the ``Table[Tbl]()``
 and ``col(name, dtype)`` builders, and ``AnyValue`` — the universal value box the
 relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
-``execute``).
+``AnyRelation.execute``).
 
 ``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
@@ -18,19 +18,19 @@ and operator overloads.
 ``relations.mojo`` — the **descriptive IR**: ``Relation`` nodes
 (``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``)
 that are pure, immutable, and cheaply copied, plus the plan-building API and
-``execute(plan)``.
+``plan.execute()``.
 
 ``execution.mojo`` — the **execution layer**: the ``Processor`` each
 ``Relation.to_processor(ctx)`` builds (pull-based, owning all mutable state — offset,
 hash index, grouper, child processors), erased behind ``AnyProcessor`` which
-drives ``collect()``. ``execute`` opens a plan into a fresh processor tree and
+drives ``collect()``. ``plan.execute()`` opens a plan into a fresh processor tree and
 drains it, so a plan is a reusable template. Depends only on the value box and
 kernels (one-way: ``relations`` → ``execution``).
 
 Usage::
 
     var plan = in_memory_table(batch).filter(col("x") > lit[Int64Type](0)).select("x")
-    var result = execute(plan)
+    var result = plan.execute()
 """
 
 from .dynamic import (
@@ -87,7 +87,6 @@ from .relations import (
     Join,
     in_memory_table,
     parquet_scan,
-    execute,
     # Join kind constants (hash join: inner/left/right/full/semi/anti)
     JOIN_INNER,
     JOIN_LEFT,

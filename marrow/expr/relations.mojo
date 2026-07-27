@@ -196,6 +196,17 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         """Build the operator tree for this plan; the plan is left untouched."""
         return self._virt_to_processor(self._data, ctx)
 
+    def execute(
+        self, ctx: ExecutionContext = ExecutionContext()
+    ) raises -> RecordBatch:
+        """Open this plan into a fresh operator tree and drain it into one
+        `RecordBatch`.
+
+        The plan is a pure description and is never mutated, so it can be
+        executed repeatedly and concurrently."""
+        var op = self.to_processor(ctx)
+        return op.collect()
+
     # --- plan-building API ---
 
     def select(self, *names: String) raises -> AnyRelation:
@@ -816,18 +827,3 @@ struct Join(Relation):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Join(kind={self.join_kind})")
-
-
-# ---------------------------------------------------------------------------
-# execute — drain a plan into a single RecordBatch
-# ---------------------------------------------------------------------------
-
-
-def execute(
-    plan: AnyRelation, ctx: ExecutionContext = ExecutionContext()
-) raises -> RecordBatch:
-    """Execute a plan: open it into a fresh operator tree and drain it. The plan
-    (a pure description) is never mutated, so it can be executed repeatedly and
-    concurrently."""
-    var op = plan.to_processor(ctx)
-    return op.collect()
