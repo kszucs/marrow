@@ -19,6 +19,7 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 """
 
 from std.memory import ArcPointer
+from std.sys.info import num_physical_cores
 
 from ..arrays import AnyArray, StructArray
 from .. import dtypes as dt
@@ -46,6 +47,11 @@ from ..kernels.execution import ExecutionContext
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536
+
+# How much decoded row-group data a Parquet scan may hold at once. This is the
+# constant that makes the scan's memory independent of file size — see
+# `ParquetScanProcessor._window_end` for why it is not one row group.
+comptime _WINDOW_BYTES: Int = 64 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +187,26 @@ struct InMemoryTableProcessor(Processor):
 
 
 struct ParquetScanProcessor(Processor):
-    """Reads the Parquet file on first pull, then yields morsels.
+    """Streams a Parquet file a **bounded window of row groups** at a time.
+
+    The file is opened once, on the first pull, and stays open for the life of
+    the scan; a window of row groups is decoded only when its rows are asked
+    for, and is dropped as soon as the next window is needed. So the decoded
+    data resident at any moment is bounded by `window x row_group_size` — a
+    function of the machine and the writer's group size, **not of the file
+    size**, which is the point.
+
+    The window exists purely for throughput: `ParquetFile.read` parallelizes
+    over the (row group x leaf) grid, and reading a single group offers only as
+    many slots as the scan has columns (see `_window_size`). The groups are
+    still handed out one at a time, so a morsel never straddles a row-group
+    boundary. None of this changes the rows produced — `morsel_size` and the
+    window are only how the pipeline is driven.
+
+    The scan reads **only the columns in its own schema**: those names are pushed
+    into the read as a projection, so unselected column chunks are never even
+    touched. A scan's schema is therefore the projection, and that is what an
+    optimizer rewrites to push one down.
 
     When a `predicate` is pushed down, row groups whose column statistics prove
     the predicate can never match are skipped (never decoded). The predicate is
@@ -192,7 +217,18 @@ struct ParquetScanProcessor(Processor):
     var _schema: Schema
     var morsel_size: Int
     var _predicate: Optional[AnyValue]
-    var _batch: Optional[RecordBatch]
+    var _file: Optional[ParquetFile[MappedFile]]
+    # The read plan, computed once when the file is opened: the row groups to
+    # decode in order, and (only when page-level skipping applies) one row
+    # selection per entry.
+    var _groups: List[Int]
+    var _group_bytes: List[Int]  # uncompressed size of each, for the window
+    var _selections: Optional[List[RowSelection]]
+    var _next_group: Int
+    # The decoded row groups of the current window, which one is being handed
+    # out, and how far into it we are.
+    var _batches: List[RecordBatch]
+    var _batch_idx: Int
     var _offset: Int
 
     def __init__(
@@ -207,11 +243,24 @@ struct ParquetScanProcessor(Processor):
         self._schema = schema^
         self.morsel_size = morsel_size
         self._predicate = predicate^
-        self._batch = None
+        self._file = None
+        self._groups = List[Int]()
+        self._group_bytes = List[Int]()
+        self._selections = None
+        self._next_group = 0
+        self._batches = List[RecordBatch]()
+        self._batch_idx = 0
         self._offset = 0
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
+
+    def _columns(self) -> List[String]:
+        """The projection pushed into the read: this scan's own column names."""
+        var out = List[String](capacity=len(self._schema.fields))
+        for ref f in self._schema.fields:
+            out.append(f.name)
+        return out^
 
     def _bounds_of(
         self, mins: List[Optional[AnyScalar]], maxs: List[Optional[AnyScalar]]
@@ -220,16 +269,30 @@ struct ParquetScanProcessor(Processor):
         """
         return PruneStats(Schema(copy=self._schema), mins.copy(), maxs.copy())
 
+    def _leaf_map(self, file_schema: Schema) -> List[Int]:
+        """This scan's columns as *file leaf* indices — which is what
+        `statistics()` and `page_bounds()` are indexed by, while the predicate
+        resolves against the scan's own schema. Empty when a column has no leaf
+        of its own name, which is how a nested file turns pruning off rather
+        than misaligning it against a projected schema."""
+        var out = List[Int](capacity=len(self._schema.fields))
+        for ref f in self._schema.fields:
+            var i = file_schema.get_field_index(f.name)
+            if i < 0:
+                return List[Int]()
+            out.append(i)
+        return out^
+
     def _row_group_survives(
-        self, rg_stats: List[ColumnStatistics]
+        self, rg_stats: List[ColumnStatistics], leaf_of: List[Int]
     ) raises -> Bool:
         """Whether the predicate might match some row of a group, from its
         per-column chunk statistics."""
         var mins = List[Optional[AnyScalar]]()
         var maxs = List[Optional[AnyScalar]]()
-        for c in range(len(rg_stats)):
-            mins.append(rg_stats[c].min.copy())
-            maxs.append(rg_stats[c].max.copy())
+        for c in range(len(leaf_of)):
+            mins.append(rg_stats[leaf_of[c]].min.copy())
+            maxs.append(rg_stats[leaf_of[c]].max.copy())
         return (
             self._predicate.value()
             .prune(self._bounds_of(mins, maxs))
@@ -237,16 +300,19 @@ struct ParquetScanProcessor(Processor):
         )
 
     def _page_selection(
-        self, rg_pages: List[List[PageBounds]], num_rows: Int
+        self,
+        rg_pages: List[List[PageBounds]],
+        num_rows: Int,
+        leaf_of: List[Int],
     ) raises -> RowSelection:
         """Rows of one group that survive page-level pruning: for each column
         with a page index, keep a page iff the predicate might match given that
         page's bounds (other columns unknown), then intersect the per-column
         selections. Pages of an unindexed column impose no restriction."""
-        var ncols = len(self._schema.fields)
+        var ncols = len(leaf_of)
         var sel = RowSelection.all(num_rows)
         for c in range(ncols):
-            ref pages = rg_pages[c]
+            ref pages = rg_pages[leaf_of[c]]
             if len(pages) == 0:
                 continue  # no page index for this column
             var keep = List[Bool]()
@@ -272,71 +338,141 @@ struct ParquetScanProcessor(Processor):
 
     def _read_plan(
         self, pf: ParquetFile[MappedFile]
-    ) raises -> Tuple[Optional[List[Int]], Optional[List[RowSelection]]]:
-        """The pushdown plan: which row groups to read and, when the page index
-        lets the reader skip pages, a per-group row selection. Returns
-        `(None, None)` with no predicate, and `(groups, None)` when only
-        row-group skipping applies. Pruning is skipped for a nested file (leaf
-        count != top-level column count) — those groups are kept whole."""
-        if not self._predicate:
-            return (None, None)
+    ) raises -> Tuple[List[Int], Optional[List[RowSelection]]]:
+        """The pushdown plan: which row groups to read, in order, and — when the
+        page index lets the reader skip pages — a per-group row selection.
+        Without a predicate every group is read whole. Pruning is skipped for a
+        nested file (leaf count != top-level column count) and for a column the
+        file has no leaf for; those groups are kept whole."""
         var meta = pf.metadata()
+        var groups = List[Int]()
+        if not self._predicate:
+            for rg in range(len(meta.row_groups)):
+                groups.append(rg)
+            return (groups^, None)
+        var file_schema = pf.schema()
+        var leaf_of = self._leaf_map(file_schema)
         var stats = pf.statistics()
         var pages = pf.page_bounds()
-        var ncols = len(self._schema.fields)
-        var groups = List[Int]()
+        var nleaves = len(file_schema.fields)
         var selections = List[RowSelection]()
         var any_page_skip = False
         for rg in range(len(meta.row_groups)):
             var num_rows = meta.row_groups[rg].num_rows
-            if len(stats[rg]) != ncols:
+            if len(leaf_of) == 0 or len(stats[rg]) != nleaves:
                 groups.append(rg)
                 selections.append(RowSelection.all(num_rows))
                 continue
-            if not self._row_group_survives(stats[rg]):
+            if not self._row_group_survives(stats[rg], leaf_of):
                 continue
             groups.append(rg)
-            var sel = self._page_selection(pages[rg], num_rows)
+            var sel = self._page_selection(pages[rg], num_rows, leaf_of)
             if not sel.selects_all():
                 any_page_skip = True
             selections.append(sel^)
         if any_page_skip:
-            return (Optional(groups^), Optional(selections^))
-        return (Optional(groups^), None)
+            return (groups^, Optional(selections^))
+        return (groups^, None)
+
+    def _open(mut self) raises:
+        """Open the file and fix the read plan — once per scan, on first pull.
+
+        Each of these used to construct its own `ParquetFile`: four memory maps
+        and four footer parses for a single logical read. Now the file stays
+        open for the life of the processor, which is also what lets row groups
+        be decoded one at a time."""
+        var pf = ParquetFile(self.path)
+        var plan = self._read_plan(pf)
+        self._groups = plan[0].copy()
+        self._selections = plan[1].copy()
+        var meta = pf.metadata()
+        self._group_bytes = List[Int](capacity=len(self._groups))
+        for g in self._groups:
+            self._group_bytes.append(meta.row_groups[g].total_byte_size)
+        self._next_group = 0
+        self._file = pf^
+
+    def _window_end(self, start: Int) -> Int:
+        """One past the last row group of the window beginning at `start`.
+
+        As many groups as fit in `_WINDOW_BYTES` of decoded data, and always at
+        least one — so a single group larger than the budget is still read,
+        rather than the scan deadlocking on its own limit.
+
+        Reading exactly one group per call was the obvious reading of "stream
+        it", and it is 1.6x-4.7x slower than reading the file whole: every call
+        re-pays the fixed cost of a `read` (plan, dispatch, join), and each one
+        ends on a barrier whose stragglers cannot be filled by the next group's
+        work. `ParquetFile.read` also parallelizes over the (row group x leaf)
+        grid, so a one-group read of a 2-column projection has two slots to
+        spread over every core.
+
+        A byte budget is the honest form of the bound this scan exists for:
+        resident decoded data is capped by a constant, independent of the file
+        size. `total_byte_size` is the group's *uncompressed* size across all
+        columns, so for a projection it over-estimates — the window is then
+        smaller than it needed to be, which is the safe direction."""
+        var used = 0
+        var end = start
+        while end < len(self._groups):
+            var next = used + self._group_bytes[end]
+            if end > start and next > _WINDOW_BYTES:
+                break
+            used = next
+            end += 1
+        return end
+
+    def _load_next_window(mut self) raises:
+        """Decode the next window of selected row groups, dropping the previous
+        one. Raises `Exhausted` once every group has been handed out.
+
+        The decoded groups are kept as *separate* batches and handed out one at
+        a time, so a morsel still never straddles a row-group boundary — the
+        window is purely how much is decoded per `read`, not how much is
+        concatenated. Groups that decode to no rows (every page pruned) are
+        dropped here so `pull` never yields an empty morsel."""
+        while self._next_group < len(self._groups):
+            var start = self._next_group
+            var stop = self._window_end(start)
+            self._next_group = stop
+            var window = List[Int](capacity=stop - start)
+            var selections = List[RowSelection]()
+            for g in range(start, stop):
+                window.append(self._groups[g])
+                if self._selections:
+                    selections.append(self._selections.value()[g].copy())
+            var selection: Optional[List[RowSelection]] = None
+            if self._selections:
+                selection = Optional(selections^)
+            var table = self._file.value().read(
+                self._columns(), Optional(window^), selection^
+            )
+            var batches = List[RecordBatch]()
+            for ref b in table.to_batches():
+                if b.num_rows() > 0:
+                    batches.append(RecordBatch(copy=b))
+            if len(batches) == 0:
+                continue
+            self._batches = batches^
+            self._batch_idx = 0
+            self._offset = 0
+            return
+        raise Exhausted()
 
     def pull(mut self) raises -> RecordBatch:
-        if not self._batch:
-            # One open per scan. Each of these used to construct its own
-            # `ParquetFile` — four memory maps and four footer parses for a
-            # single logical read.
-            var pf = ParquetFile(self.path)
-            var plan = self._read_plan(pf)
-            var table = pf.read(
-                None,
-                plan[0].copy(),
-                plan[1].copy(),
-            )
-            var batches = table.to_batches()
-            if len(batches) == 0:
-                self._batch = RecordBatch(
-                    schema=table.schema, columns=List[AnyArray]()
-                )
-            elif len(batches) == 1:
-                self._batch = RecordBatch(copy=batches[0])
+        if not self._file:
+            self._open()
+        # Advance to the next decoded row group, then the next window, until
+        # something has rows left or the file is drained (Exhausted propagates).
+        while True:
+            if self._batch_idx >= len(self._batches):
+                self._load_next_window()
+            elif self._offset >= self._batches[self._batch_idx].num_rows():
+                self._batch_idx += 1
+                self._offset = 0
             else:
-                var num_cols = batches[0].num_columns()
-                var cols = List[AnyArray](capacity=num_cols)
-                for c in range(num_cols):
-                    var col_arrays = List[AnyArray](capacity=len(batches))
-                    for b in range(len(batches)):
-                        col_arrays.append(batches[b].columns[c].copy())
-                    cols.append(concat(col_arrays))
-                self._batch = RecordBatch(
-                    schema=Schema(copy=batches[0].schema), columns=cols^
-                )
-        ref batch = self._batch.value()
-        if self._offset >= batch.num_rows():
-            raise Exhausted()
+                break
+        ref batch = self._batches[self._batch_idx]
         var remaining = batch.num_rows() - self._offset
         var length = (
             self.morsel_size if self.morsel_size < remaining else remaining

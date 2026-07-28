@@ -591,6 +591,10 @@ def in_memory_table(
 struct ParquetScan(Relation):
     """Leaf describing a Parquet file scan with a known schema.
 
+    The schema doubles as the **projection**: the scan reads only its own
+    columns out of the file, so narrowing a scan's schema is how a projection is
+    pushed into it. The file is read one row group at a time.
+
     An optional `predicate` is pushed-down pruning metadata: the scan uses it to
     skip row groups (and, later, pages) whose statistics prove no row can match.
     It never changes the rows returned — a `Filter` above the scan applies the
@@ -633,9 +637,15 @@ struct ParquetScan(Relation):
         writer.write(t"ParquetScan({self.path})")
 
 
-def parquet_scan(path: String, schema: Schema) -> AnyRelation:
-    """Create a Parquet file scan with a known schema."""
-    return ParquetScan(path=path, schema=schema)
+def parquet_scan(
+    path: String, schema: Schema, morsel_size: Int = DEFAULT_MORSEL_SIZE
+) -> AnyRelation:
+    """Create a Parquet file scan with a known schema.
+
+    The schema *is* the projection: only its columns are read out of the file.
+    ``morsel_size`` bounds how many rows each ``pull()`` yields (morsels never
+    straddle a row-group boundary), and never changes the result."""
+    return ParquetScan(path=path, schema=schema, morsel_size=morsel_size)
 
 
 # ---------------------------------------------------------------------------
