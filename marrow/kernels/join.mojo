@@ -477,7 +477,7 @@ struct HashJoin[
         # result), so the op only returns the cheap (keys, rows) per partition.
         var partitioner = RadixPartitioner(
             num_bits=self._radix_bits,
-            num_threads=self._ctx.resolved_num_threads(),
+            ctx=self._ctx.copy(),
         )
         var p = partitioner.num_partitions()
         var tables = List[SwissHashTable[Self.hasher]](capacity=p)
@@ -552,7 +552,7 @@ struct HashJoin[
         var probe_hashes = Self.hasher(right_keys, self._ctx.copy())
         var pairs_per_partition = RadixPartitioner(
             num_bits=self._radix_bits,
-            num_threads=self._ctx.resolved_num_threads(),
+            ctx=self._ctx.copy(),
         ).map_partitions[IndexPairs, probe_partition](probe_hashes^)
 
         # 4. Concat per-partition pairs into a single IndexPairs.

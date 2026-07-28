@@ -677,7 +677,7 @@ struct GroupBy(Movable):
                 return group_partition(rows, part_hashes)
 
             parts = RadixPartitioner(
-                num_bits=RADIX_BITS, num_threads=num_threads
+                num_bits=RADIX_BITS, ctx=ExecutionContext.parallel(num_threads)
             ).map_partitions[
                 Tuple[Int32Array, List[AnyArray]], radix_partition
             ](
