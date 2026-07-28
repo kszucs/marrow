@@ -258,6 +258,16 @@ struct Allocation(Movable):
             raise Error("Allocation.host_context: not a pinned host allocation")
         return self._host.value().context()
 
+    def mapped_size(self) raises -> Int:
+        """The mapping's true extent in bytes (MAPPED kind only).
+
+        Distinct from the owning `Buffer`'s logical size, which is padded up to
+        Arrow's 64 bytes. A caller addressing *file* offsets — the Parquet
+        footer does — wants this one."""
+        if not self._mapped_size:
+            raise Error("Allocation.mapped_size: not a mapped allocation")
+        return self._mapped_size.value()
+
     @staticmethod
     def cpu(ptr: UnsafePointer[UInt8, MutUntrackedOrigin]) -> Allocation:
         """Create an owned CPU allocation.  `__del__` calls `ptr.free()`."""
@@ -684,6 +694,13 @@ struct Buffer[*, mut: Bool = False](
     def is_host(self) -> Bool:
         """Return True if the buffer is pinned host memory (HOST kind)."""
         return self._owner[].is_host()
+
+    def mapped_size(self) raises -> Int:
+        """The backing mapping's true extent in bytes (MAPPED kind only).
+
+        `len(self)` is the *padded* logical size; this is the file length the
+        mapping was made with. Delegates to `Allocation.mapped_size()`."""
+        return self._owner[].mapped_size()
 
     # --- Length helper (both modes) ---
 

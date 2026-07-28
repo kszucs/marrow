@@ -436,6 +436,35 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > compiler's ability to catch the dangle. Doing `_span()` removal first would just move the
 > dangling problem into every page decode.
 
+> ### ⚠️ `read_at` cannot return a sub-`Buffer` — Arrow alignment (2026-07-28)
+>
+> The card says `read_at` returns a `Buffer[mut=False]`. For the **whole file** that works.
+> For an arbitrary `(offset, length)` it does not: `Buffer.__init__` asserts
+> `Int(ptr) % 64 == 0` — Arrow requires 64-byte-aligned buffers — and Parquet page offsets
+> are arbitrary file offsets. A `subrange` helper was written, and the first test of it
+> failed on exactly that assert.
+>
+> So the shape has to be: the **source owns one whole-file `Buffer`** (its base is
+> page-aligned, so the assert holds), and regions are handed out as `BufferView`s into it,
+> *not* as sub-`Buffer`s. `Buffer.mapped_size()` gives the true file length for the
+> footer's absolute offsets, since `len(buf)` is padded to 64.
+>
+> That still removes the untracked origin — a `BufferView` carries a real origin — but it
+> means `PageReader` must hold the owning `Buffer` for its lifetime rather than each region
+> owning itself. Worth settling before the pass starts, because it decides whether
+> `Page.body` is a view or a buffer.
+>
+> Related, and the reason the pass is not mechanical: `_body`'s two arms return either an
+> mmap region *or* `PageReader.scratch` (a `List[UInt8]` written by
+> `Compression.decompress_into`). Both must end up the same type with a real origin, so
+> either scratch becomes a `Buffer` — which means `decompress_into` changes too — or both
+> arms return views into storage `PageReader` owns.
+>
+> Also note: of `reader.mojo`'s 19 `Span[UInt8` sites, **13 are `Span[UInt8, _]`** — a
+> generic origin that already accepts a tracked view and needs no change. Only the **6**
+> `ImmUntrackedOrigin` occurrences are the actual work. The earlier "19 sites" estimate
+> overstated it.
+
 > ### `Buffer.mmap_file` exists now — and IPC wants it too (2026-07-28)
 >
 > Memory mapping is a fifth `Allocation` kind (**MAPPED**), created by

@@ -815,3 +815,31 @@ def test_buffer_mmap_file_missing_path_raises() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_buffer_mapped_size_is_the_file_length() raises:
+    """`mapped_size()` is the true file length; `len()` is the padded logical
+    size. Callers addressing *file* offsets — the Parquet footer does — need the
+    former, and conflating them reads past the end."""
+    from std.os import remove
+
+    var path = "/tmp/marrow_test_mapped_size.bin"
+    with open(path, "w") as f:
+        f.write(String("hello mmap"))
+    var mapped = Buffer.mmap_file(path)
+
+    assert_equal(mapped.mapped_size(), 10)
+    assert_equal(len(mapped), 64)
+    _ = mapped^
+    remove(path)
+
+
+def test_buffer_mapped_size_raises_for_other_kinds() raises:
+    """A heap buffer has no mapping extent to report."""
+    var buf = Buffer.alloc_zeroed[DType.uint8](64).to_immutable()
+    var raised = False
+    try:
+        _ = buf.mapped_size()
+    except:
+        raised = True
+    assert_true(raised)
