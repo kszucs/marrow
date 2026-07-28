@@ -506,7 +506,9 @@ struct _FlatbufReader(Movable):
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
-        return LittleEndian.checked[DType.uint16](self._buf, Int(tp) + Int(voff))
+        return LittleEndian.checked[DType.uint16](
+            self._buf, Int(tp) + Int(voff)
+        )
 
     def read_i32(
         self, tp: UInt32, slot: Int, default: Int32 = 0
@@ -530,7 +532,9 @@ struct _FlatbufReader(Movable):
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
-        return LittleEndian.checked[DType.uint8](self._buf, Int(tp) + Int(voff)) != UInt8(0)
+        return LittleEndian.checked[DType.uint8](
+            self._buf, Int(tp) + Int(voff)
+        ) != UInt8(0)
 
     def read_string(
         self, tp: UInt32, slot: Int, default: String = ""
@@ -539,7 +543,9 @@ struct _FlatbufReader(Movable):
         if voff == 0:
             return default
         var ref_pos = Int(tp) + Int(voff)
-        var str_pos = ref_pos + Int(LittleEndian.checked[DType.uint32](self._buf, ref_pos))
+        var str_pos = ref_pos + Int(
+            LittleEndian.checked[DType.uint32](self._buf, ref_pos)
+        )
         var length = Int(LittleEndian.checked[DType.uint32](self._buf, str_pos))
         if str_pos + 4 + length > len(self._buf):
             raise Error("flatbuffers: string extends beyond buffer")
@@ -555,7 +561,9 @@ struct _FlatbufReader(Movable):
                 "flatbuffers: absent offset field at slot " + String(slot)
             )
         var ref_pos = Int(tp) + Int(voff)
-        return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](self._buf, ref_pos)
+        return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](
+            self._buf, ref_pos
+        )
 
     def read_table(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
@@ -564,7 +572,9 @@ struct _FlatbufReader(Movable):
                 "flatbuffers: absent offset field at slot " + String(slot)
             )
         var ref_pos = Int(tp) + Int(voff)
-        return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](self._buf, ref_pos)
+        return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](
+            self._buf, ref_pos
+        )
 
     def vector_len(self, vec_pos: UInt32) raises -> UInt32:
         return LittleEndian.checked[DType.uint32](self._buf, Int(vec_pos))
@@ -579,7 +589,9 @@ struct _FlatbufReader(Movable):
                 + String(vlen)
             )
         var elem_pos = Int(vec_pos) + 4 + Int(i) * 4
-        return UInt32(elem_pos) + LittleEndian.checked[DType.uint32](self._buf, elem_pos)
+        return UInt32(elem_pos) + LittleEndian.checked[DType.uint32](
+            self._buf, elem_pos
+        )
 
     def vec_struct_bytes(
         self, vec_pos: UInt32, i: UInt32, struct_size: Int
@@ -1353,7 +1365,8 @@ struct _IpcDecoder(Movable):
             var sb = self._r.vec_struct_bytes(nodes_vec, UInt32(i), 16)
             nodes.append(
                 _FieldNode(
-                    LittleEndian.checked[DType.int64](sb, 0), LittleEndian.checked[DType.int64](sb, 8)
+                    LittleEndian.checked[DType.int64](sb, 0),
+                    LittleEndian.checked[DType.int64](sb, 8),
                 )
             )
 
@@ -1363,7 +1376,8 @@ struct _IpcDecoder(Movable):
             var sb = self._r.vec_struct_bytes(bufs_vec, UInt32(i), 16)
             bufs.append(
                 _BodyBuffer(
-                    LittleEndian.checked[DType.int64](sb, 0), LittleEndian.checked[DType.int64](sb, 8)
+                    LittleEndian.checked[DType.int64](sb, 0),
+                    LittleEndian.checked[DType.int64](sb, 8),
                 )
             )
 
@@ -1558,12 +1572,24 @@ struct _IpcDecoder(Movable):
 struct _MessageReader(Movable):
     """Reads framed IPC messages (continuation + length + metadata + body)."""
 
-    var _bytes: List[UInt8]
+    var _buf: Buffer[mut=False]
+    """The file's bytes, owned. A `Buffer` rather than a `List` so a
+    memory-mapped file can be read without first copying it in — `len(_buf)` is
+    padded to 64, hence the separate `_size`."""
+    var _size: Int
     var _pos: Int
 
-    def __init__(out self, var bytes: List[UInt8], start_pos: Int = 0):
-        self._bytes = bytes^
+    def __init__(
+        out self, var buf: Buffer[mut=False], size: Int, start_pos: Int = 0
+    ):
+        self._buf = buf^
+        self._size = size
         self._pos = start_pos
+
+    def _span(self) -> Span[UInt8, origin_of(self)]:
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._buf.view[DType.uint8](0, self._size).as_span()
+        )
 
     def pos(self) -> Int:
         return self._pos
@@ -1572,7 +1598,7 @@ struct _MessageReader(Movable):
         self._pos = pos
 
     def __len__(self) -> Int:
-        return len(self._bytes)
+        return self._size
 
     def read_next(
         mut self,
@@ -1581,18 +1607,19 @@ struct _MessageReader(Movable):
     ) raises -> Bool:
         """Parse one message at the current position. Returns False at end-of-stream.
         """
-        var n = len(self._bytes)
+        var n = self._size
+        var data = self._span()
         if self._pos + 4 > n:
             return False
 
-        var marker = LittleEndian.checked[DType.int32](self._bytes, self._pos)
+        var marker = LittleEndian.checked[DType.int32](data, self._pos)
         var metadata_len: Int
         var meta_start: Int
         if UInt32(marker) == UInt32(0xFFFFFFFF):
             if self._pos + 8 > n:
                 return False
             metadata_len = Int(
-                LittleEndian.checked[DType.int32](self._bytes, self._pos + 4)
+                LittleEndian.checked[DType.int32](data, self._pos + 4)
             )
             meta_start = self._pos + 8
         else:
@@ -1604,7 +1631,7 @@ struct _MessageReader(Movable):
             return False
 
         for i in range(metadata_len):
-            meta.append(self._bytes[meta_start + i])
+            meta.append(data[meta_start + i])
 
         var raw_end = meta_start + metadata_len
         var meta_end = raw_end + (8 - raw_end % 8) % 8
@@ -1613,7 +1640,7 @@ struct _MessageReader(Movable):
         var body_len = Int(dec.body_length())
 
         for i in range(body_len):
-            body.append(self._bytes[meta_end + i])
+            body.append(data[meta_end + i])
 
         self._pos = meta_end + body_len
         return True
@@ -2107,8 +2134,11 @@ struct RecordBatchFileReader(Movable):
     var _dict_values: List[AnyArray]
 
     def __init__(out self, path: String) raises:
-        var file_bytes = Path(path).read_bytes()
-        var n = len(file_bytes)
+        # Memory-mapped, not read in: an IPC file used to be copied whole into a
+        # `List[UInt8]` before a single byte was parsed.
+        var buf = Buffer.mmap_file(path)
+        var n = buf.mapped_size()
+        var file_bytes = buf.view[DType.uint8](0, n).as_span()
         if n < 14:
             raise Error("IPC file too short")
         var magic = _magic()
@@ -2119,7 +2149,9 @@ struct RecordBatchFileReader(Movable):
             if file_bytes[n - 6 + i] != magic[i]:
                 raise Error("IPC file: bad trailing magic")
 
-        var footer_size = Int(LittleEndian.checked[DType.int32](file_bytes, n - 10))
+        var footer_size = Int(
+            LittleEndian.checked[DType.int32](file_bytes, n - 10)
+        )
         var footer_start = n - 10 - footer_size
         var footer_bytes = List[UInt8](capacity=footer_size)
         for i in range(footer_size):
@@ -2132,7 +2164,7 @@ struct RecordBatchFileReader(Movable):
         self.schema = dec.read_footer(dict_blocks, blocks, ipc_infos)
         self._ipc_infos = ipc_infos^
         self._blocks = blocks^
-        self._msg_reader = _MessageReader(file_bytes^)
+        self._msg_reader = _MessageReader(buf, n)
         self._dict_values = List[AnyArray]()
 
         # Load dictionary values from their footer-registered blocks.
@@ -2191,8 +2223,9 @@ struct RecordBatchStreamReader(Movable):
     var _msg_reader: _MessageReader
 
     def __init__(out self, path: String) raises:
-        var file_bytes = Path(path).read_bytes()
-        var msg_reader = _MessageReader(file_bytes^)
+        # Memory-mapped rather than read in, same as the file reader.
+        var buf = Buffer.mmap_file(path)
+        var msg_reader = _MessageReader(buf, buf.mapped_size())
         var meta = List[UInt8]()
         var body = List[UInt8]()
         if not msg_reader.read_next(meta, body):
