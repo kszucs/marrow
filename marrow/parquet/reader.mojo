@@ -52,14 +52,14 @@ from .format import (
 # ---------------------------------------------------------------------------
 
 
-struct Page(Movable):
+struct Page[o: Origin[mut=False]](Movable):
     """A decoded page. `body` is a *view* — into the mmap for uncompressed pages
     (zero copy) or into the `PageReader`'s reused scratch for compressed pages —
     not an owned buffer, so no per-page allocation. `dictionary` marks the
     column chunk's dictionary page (vs a data page)."""
 
     var dictionary: Bool
-    var body: Span[UInt8, ImmUntrackedOrigin]
+    var body: Span[UInt8, Self.o]
     var def_levels: List[Int32]
     var rep_levels: List[Int32]  # only populated for repeated (list) leaves
     var value_offset: Int
@@ -70,7 +70,7 @@ struct Page(Movable):
     def __init__(
         out self,
         *,
-        body: Span[UInt8, ImmUntrackedOrigin],
+        body: Span[UInt8, Self.o],
         num_values: Int,
         num_present: Int,
         value_offset: Int = 0,
@@ -89,9 +89,9 @@ struct Page(Movable):
         self.num_values = num_values
 
     @staticmethod
-    def dictionary_page(
-        body: Span[UInt8, ImmUntrackedOrigin], num_values: Int
-    ) -> Page:
+    def dictionary_page[
+        po: Origin[mut=False]
+    ](body: Span[UInt8, po], num_values: Int) -> Page[po]:
         """The column chunk's dictionary page — carries only its distinct values;
         no levels, no present/null distinction."""
         return Page(
@@ -117,7 +117,7 @@ struct Page(Movable):
     def is_dictionary(self) -> Bool:
         return self.encoding.is_dictionary()
 
-    def values(self) -> Span[UInt8, ImmUntrackedOrigin]:
+    def values(self) -> Span[UInt8, Self.o]:
         """The value bytes (after any level prefix)."""
         return self.body[self.value_offset :]
 
@@ -153,36 +153,43 @@ struct PageReader[o: Origin[mut=False]](Movable):
         self.produced = 0
         self.scratch = List[UInt8]()
 
-    @staticmethod
-    def _untracked(s: Span[UInt8, _]) -> Span[UInt8, ImmUntrackedOrigin]:
-        """Drop origin tracking on a byte span. The backing storage (the mmap,
-        or this reader's decompression scratch) is kept alive for as long as each
-        page is consumed, so the untracked view is always valid in use."""
-        return rebind[Span[UInt8, ImmUntrackedOrigin]](s)
-
     def _body(
         mut self,
-        comp: Span[UInt8, _],
+        comp: Span[UInt8, Self.o],
         uncompressed_size: Int,
         mut codecs: CompressionLibs,
-    ) raises -> Span[UInt8, ImmUntrackedOrigin]:
-        """A view of the page body: the mmap bytes directly for uncompressed
-        pages, or the reused scratch after decompressing."""
+    ) raises -> Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]:
+        """A view of the page body: the source bytes directly for uncompressed
+        pages, or the reused scratch after decompressing.
+
+        The two arms have genuinely different origins — the byte source's, and
+        this reader's own scratch — so the result is their *union*. That union
+        is why this used to launder both through an `ImmUntrackedOrigin`: the
+        return needed one type, and dropping the tracking was the only way to
+        get one. It is not: `origin_of(a, b)` expresses exactly this, and now
+        the compiler knows a page body borrows from whichever of the two it
+        actually came from."""
         var codec = Compression(self.meta.codec)
         if codec == Compression.UNCOMPRESSED:
-            return Self._untracked(comp)
+            return rebind[
+                Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+            ](comp)
         codec.decompress_into(codecs, comp, uncompressed_size, self.scratch)
-        return Self._untracked(Span(self.scratch))
+        return rebind[Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]](
+            Span(self.scratch)
+        )
 
     def has_next(self) -> Bool:
         return self.produced < self.meta.num_values
 
-    def _data_page_v1(
+    def _data_page_v1[
+        bo: Origin[mut=False]
+    ](
         self,
-        var body: Span[UInt8, ImmUntrackedOrigin],
+        var body: Span[UInt8, bo],
         num_values: Int,
         encoding: Encoding,
-    ) raises -> Page:
+    ) raises -> Page[bo]:
         """Decode a v1 data page's leading rep/def level streams and build the
         `Page` — the single construction site for v1 pages (no field-by-field
         mutation)."""
@@ -232,7 +239,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
             def_levels=defs^,
         )
 
-    def next(mut self, mut codecs: CompressionLibs) raises -> Page:
+    def next(
+        mut self, mut codecs: CompressionLibs
+    ) raises -> Page[origin_of(Self.o, origin_of(self.scratch))]:
         var body_start = self.pos
         # advances body_start to the page body
         var ph = PageHeader.read_at(self.data, body_start)
@@ -246,7 +255,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
             raise Error("parquet: page CRC-32 mismatch (corrupt data)")
 
         if ph.type == PageType.DICTIONARY:
-            return Page.dictionary_page(
+            return Page[
+                origin_of(Self.o, origin_of(self.scratch))
+            ].dictionary_page(
                 self._body(comp, ph.uncompressed_page_size, codecs),
                 ph.dictionary_page_header.value().num_values,
             )
@@ -288,7 +299,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
             # otherwise ends flush against the last value byte).
             self.scratch.resize(unsafe_uninit_length=len(self.scratch) + 8)
 
-            var body = Self._untracked(Span(self.scratch))
+            var body = rebind[
+                Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+            ](Span(self.scratch))
             var reps = List[Int32]()
             var defs = List[Int32]()
             if (
@@ -1727,11 +1740,15 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         )
         self._mapping = SchemaMapping.from_parquet(self._meta)
 
-    def _span(self) -> Span[UInt8, ImmUntrackedOrigin]:
+    def _span(ref self) -> Span[UInt8, origin_of(self)]:
         """The whole file as one contiguous span. The absolute offsets in the
         footer/page metadata index into this. (A future non-whole-file
         `ByteSource` would drive per-region `read_at` calls instead.)"""
-        return self._source.read_at(0, self._source.size())
+        # `_source` is a field of `self`; widening its origin to the file's is
+        # sound and is what every caller of `_span()` relies on.
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._source.read_at(0, self._source.size())
+        )
 
     def metadata(self) -> FileMetaData:
         """The file's footer metadata (row groups, column chunks, statistics).
