@@ -2,7 +2,7 @@
 
 Buffer Kinds
 ------------
-A `Buffer` has one of four memory kinds, encoded in the `Allocation` it owns:
+A `Buffer` has one of five memory kinds, encoded in the `Allocation` it owns:
 
   CPU
       Owned Mojo heap allocation.  Created by `Buffer.alloc_zeroed()` and
@@ -14,6 +14,14 @@ A `Buffer` has one of four memory kinds, encoded in the `Allocation` it owns:
       in the `Allocation` is invoked when the last `Buffer` view is dropped.
       Multiple `Buffer` views share the *same* `ArcPointer[Allocation]` (the "keeper")
       so the release fires exactly once when the last view is destroyed.
+
+  MAPPED
+      A memory-mapped file region.  Created by `Buffer.mmap_file(path)`;
+      `Allocation.__del__` unmaps it when the last `Buffer` view is dropped.
+      This is what lets a mapped file be *owned* by a `Buffer` rather than
+      borrowed from something that must be kept alive alongside it — the
+      distinction that makes a zero-copy file read safe rather than merely
+      fast.
 
   HOST
       Pinned CPU memory managed by Mojo's `HostBuffer` (AsyncRT reference-counted).
@@ -50,11 +58,15 @@ is created eagerly at allocation time so `to_immutable()` is a zero-cost type co
 
 Allocation Invariant
 --------------------
-Each `Allocation` has exactly one active release mechanism (checked in `__del__`):
-  - `release is Some` → FOREIGN: invoke the producer's C release callback.
-  - `ptr is non-null` → CPU: call `ptr.free()` directly (no callback).
-  - `_host is Some`   → HOST: `HostBuffer.__del__` cascades to AsyncRT release.
-  - `_device is Some` → DEVICE: `DeviceBuffer.__del__` cascades to AsyncRT release.
+Each `Allocation` has exactly one active release mechanism (checked in `__del__`,
+in this order):
+  - `release is Some`      → FOREIGN: invoke the producer's C release callback.
+  - `_mapped_size is Some` → MAPPED: `munmap(ptr, size)`.
+  - `ptr is non-null`      → CPU: call `ptr.free()` directly (no callback).
+  - `_host is Some`        → HOST: `HostBuffer.__del__` cascades to AsyncRT release.
+  - `_device is Some`      → DEVICE: `DeviceBuffer.__del__` cascades to AsyncRT release.
+
+MAPPED is checked before CPU because both have a non-null `ptr`.
 
 device_type / device_id
 ------------------------
@@ -93,6 +105,8 @@ and SIMD bulk operations.
 """
 
 from std.builtin.builtin_slice import ContiguousSlice
+from std.ffi import external_call
+from std.io.file import FileHandle
 from std.memory import (
     unsafe_memset_zero,
     unsafe_memcpy,
@@ -170,18 +184,22 @@ comptime simd_widths = (simd_width, simd_width // 2, 1)
 struct Allocation(Movable):
     """Owns a buffer's backing memory with exactly one active release mechanism.
 
-    Release rules (in `__del__`):
-      - `release is Some`  → FOREIGN: invoke the producer's C callback.
-      - `ptr is non-null`  → CPU: call `ptr.free()`.
-      - `_host is Some`    → HOST: HostBuffer.__del__ cascades to AsyncRT release.
-      - `_device is Some`  → DEVICE: DeviceBuffer.__del__ cascades to AsyncRT release.
+    Release rules (in `__del__`, checked in this order):
+      - `release is Some`      → FOREIGN: invoke the producer's C callback.
+      - `_mapped_size is Some` → MAPPED: `munmap(ptr, size)`.
+      - `ptr is non-null`      → CPU: call `ptr.free()`.
+      - `_host is Some`        → HOST: HostBuffer.__del__ cascades to AsyncRT release.
+      - `_device is Some`      → DEVICE: DeviceBuffer.__del__ cascades to AsyncRT release.
+
+    Order matters between MAPPED and CPU: both carry a non-null `ptr`, and
+    `free()`-ing mapped memory is undefined.
 
     Always accessed through `ArcPointer[Allocation]` so that multiple `Buffer`
     views can share ownership.  Lifetime: the last ArcPointer to drop triggers
     `__del__`, which fires the appropriate release.
 
-    Use the static factory methods (`cpu`, `foreign`, `host`, `device`) rather
-    than the raw `__init__`.
+    Use the static factory methods (`cpu`, `foreign`, `mapped`, `host`,
+    `device`) rather than the raw `__init__`.
     """
 
     var ptr: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
@@ -199,6 +217,15 @@ struct Allocation(Movable):
     var _device: Optional[DeviceBuffer[DType.uint8]]
     """GPU device buffer.  Set only for DEVICE kind; None otherwise."""
 
+    var _mapped_size: Optional[Int]
+    """Mapped byte length.  Set only for MAPPED kind; None otherwise.
+
+    `munmap` needs the extent and cannot recover it from the pointer, so a
+    mapping's length is part of what identifies the kind — the same way `_host`
+    and `_device` identify theirs.  It is not a general "size of this
+    allocation": CPU and FOREIGN do not track one because neither release needs
+    one."""
+
     def __init__(
         out self,
         ptr: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]],
@@ -207,11 +234,13 @@ struct Allocation(Movable):
         ],
         host: Optional[HostBuffer[DType.uint8]],
         device: Optional[DeviceBuffer[DType.uint8]],
+        mapped_size: Optional[Int] = None,
     ):
         self.ptr = ptr
         self.release = release
         self._host = host
         self._device = device
+        self._mapped_size = mapped_size
 
     @always_inline
     def is_host(self) -> Bool:
@@ -241,6 +270,22 @@ struct Allocation(Movable):
     ) -> Allocation:
         """Create a foreign CPU allocation with a custom release callback."""
         return Allocation(Optional(ptr), release, None, None)
+
+    @staticmethod
+    def mapped(
+        ptr: UnsafePointer[UInt8, MutUntrackedOrigin], size: Int
+    ) -> Allocation:
+        """Create a MAPPED allocation over an existing memory mapping.
+
+        `__del__` unmaps it. The caller does the `mmap` — which file, which
+        flags, which offset is the mapper's business — and hands the result
+        here; this owns the release, exactly as HOST/DEVICE allocations are
+        created through a `DeviceContext` elsewhere and released here.
+
+        `size` must be the length the mapping was created with, not the extent
+        any one `Buffer` view addresses: a mapping is unmapped whole.
+        """
+        return Allocation(Optional(ptr), None, None, None, Optional(size))
 
     @staticmethod
     def host(host_buf: HostBuffer[DType.uint8]) -> Allocation:
@@ -306,6 +351,13 @@ struct Allocation(Movable):
         if self.release:
             # FOREIGN: invoke the producer's C release callback.
             self.release.value()(self.ptr.value())
+        elif self._mapped_size:
+            # MAPPED: unmap the region. Must be checked *before* the CPU branch
+            # — a mapping has a non-null `ptr` too, and `ptr.free()` on mapped
+            # memory is undefined.
+            _ = external_call["munmap", Int32](
+                self.ptr.value(), self._mapped_size.value()
+            )
         elif self.ptr:
             # CPU: free the Mojo heap allocation directly.
             # HOST and DEVICE have ptr=None, so this branch is CPU-only.
@@ -479,6 +531,50 @@ struct Buffer[*, mut: Bool = False](
         )
 
     # --- Immutable factory methods (return Buffer[mut=False]) ---
+
+    @staticmethod
+    def mmap_file(path: String) raises -> Buffer[mut=False]:
+        """Memory-map a whole file read-only, owned by the returned Buffer.
+
+        The mapping lives exactly as long as the `Buffer`s that reference it:
+        the last one dropped unmaps. Nothing has to be kept alive alongside it,
+        which is the difference between this and handing out borrowed spans over
+        a mapping some other object owns.
+
+        This sits next to `alloc_host` / `alloc_device` on purpose — creating
+        the memory and naming its `Allocation` kind belong together, and every
+        other kind is already built here. It is also what makes the mapping's
+        extent unforgeable: `Allocation.mapped` needs a size that matches the
+        real mapping, and only the code that called `mmap` knows it.
+
+        Zero-copy: no file bytes are read here; the kernel faults pages in on
+        access.
+
+        Two sizes are in play and they are deliberately different. The
+        `Allocation` records the **true** file length, because that is what
+        `munmap` must be given. The `Buffer`'s logical size is that rounded up
+        to Arrow's 64-byte padding, as `from_foreign` does — safe because `mmap`
+        rounds the mapping up to a whole page and bytes past EOF within it read
+        as zero, so the padding is always addressable.
+        """
+        var f = FileHandle(path, "r")
+        var size = Int(
+            external_call["lseek", Int64](f.handle, Int64(0), Int(2))
+        )  # SEEK_END
+        if size <= 0:
+            raise Error("Buffer.mmap_file: empty or unreadable file ", path)
+        # PROT_READ=1, MAP_PRIVATE=2; the mapping outlives the fd.
+        var ptr = external_call[
+            "mmap", UnsafePointer[UInt8, MutUntrackedOrigin]
+        ](UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0))
+        _ = f^  # close the fd; the mapping stays valid
+        if Int(ptr) == 0 or Int(ptr) == -1:
+            raise Error("Buffer.mmap_file: mmap failed for ", path)
+        return Buffer[mut=False](
+            size=math.align_up(size, 64),
+            ptr=ptr,
+            owner=ArcPointer(Allocation.mapped(ptr, size)),
+        )
 
     @staticmethod
     def from_foreign[

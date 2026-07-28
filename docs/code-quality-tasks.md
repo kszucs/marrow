@@ -436,7 +436,31 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > compiler's ability to catch the dangle. Doing `_span()` removal first would just move the
 > dangling problem into every page decode.
 
+> ### `Buffer.mmap_file` exists now — and IPC wants it too (2026-07-28)
+>
+> Memory mapping is a fifth `Allocation` kind (**MAPPED**), created by
+> `Buffer.mmap_file(path)` and unmapped when the last `Buffer` referencing it drops.
+> That is the prerequisite below, resolved: a mapped file can now be *owned* by a `Buffer`
+> rather than borrowed from something kept alive alongside it.
+>
+> **`ipc.mojo` should use it, and the win is bigger than it looks.** It copies each file
+> **twice**: `Path(path).read_bytes()` pulls the whole file into a `List[UInt8]`
+> (`ipc.mojo:2119` and `:2203`), and then `_slice_body` copies again **byte by byte in a
+> scalar loop** into a fresh `Buffer` for *every column buffer* in *every batch*.
+>
+> But it is not a small change, and it should not be done on its own: byte access runs
+> through `_read_le(buf: List[UInt8], pos)` at **28 call sites**, plus `_MessageReader._bytes`,
+> `_IpcDecoder`, and `body: List[UInt8]`. Every one has to accept a buffer-backed view
+> instead of a `List`.
+>
+> **Those are the same 28 sites as Q3.3's `_read_le` → `LittleEndian.checked`.** Do them as
+> one change or they get touched twice. Sequencing: Q3.3 converts the reader to
+> `LittleEndian.checked` over a `BufferView`, and mmap-ing the file then falls out — at which
+> point `_slice_body` becomes a zero-copy sub-buffer sharing the mapping rather than a
+> scalar copy loop.
+
 > ### ⚠️ `Buffer.from_foreign` cannot wrap an mmap today — surveyed 2026-07-28
+> **Resolved** by the MAPPED kind above; kept for the reasoning.
 >
 > The step above ("`MappedFile` wraps the mmap via `Buffer.from_foreign`") does not work as
 > written, and it is the first thing the task hits. `Allocation.foreign` takes a release

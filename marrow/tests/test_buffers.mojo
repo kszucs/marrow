@@ -772,3 +772,46 @@ def test_bitmapview_difference_length_mismatch_raises() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_buffer_mmap_file_reads_and_unmaps() raises:
+    """`Buffer.mmap_file` owns its mapping: readable, and unmapped on last drop.
+
+    This is what lets a memory-mapped file be *owned* by a `Buffer` instead of
+    borrowed from something that must be kept alive alongside it — the property
+    the parquet reader's untracked-origin spans currently work around.
+    """
+    from std.os import remove
+
+    var path = "/tmp/marrow_test_mmap_file.bin"
+    with open(path, "w") as f:
+        f.write(String("hello mmap"))
+
+    var buf = Buffer.mmap_file(path)
+    assert_true(buf.is_cpu())
+    assert_false(buf.is_device())
+
+    # Padded to Arrow's 64 bytes even though the file is 10 — the mapping covers
+    # a whole page, so the padding is addressable. `munmap` still gets 10.
+    assert_equal(len(buf), 64)
+
+    var view = buf.view[DType.uint8](0, 10)
+    assert_equal(view.unsafe_get(0), UInt8(ord("h")))
+    assert_equal(view.unsafe_get(9), UInt8(ord("p")))
+
+    # A copy shares the mapping; the unmap fires only when the last one drops.
+    var second = buf
+    _ = buf^
+    assert_equal(second.view[DType.uint8](0, 10).unsafe_get(0), UInt8(ord("h")))
+    _ = second^
+
+    remove(path)
+
+
+def test_buffer_mmap_file_missing_path_raises() raises:
+    var raised = False
+    try:
+        _ = Buffer.mmap_file("/tmp/marrow_no_such_file_xyz.bin")
+    except:
+        raised = True
+    assert_true(raised)
