@@ -32,6 +32,7 @@ complete — T2.1–T2.3b (fused and dynamic wiring, Sort/Limit/TopK, Aggregate 
 
 | task | what is left |
 |---|---|
+| **Q0.8** | **The AOT binary-size gate exercises the fused lane in two shapes** — `col`/`>` and `Sum`/`Min`. Scan, sort, join, and every other fused value family are unmeasured, so the gate answers "no change" to changes it cannot see (Q0.4 and T2.4 both). CLAUDE.md makes gating on it a hard constraint. |
 | **Q0.5** | A fused value's `OutType` is statically known, so `project`/`aggregate` need not probe it by executing against a 0-row batch. Worth 16,528 bytes on the fused gate and retires the hand-built `benchmarks/binary_size` exception. Also the residual half of Q0.4: the interpreted lane promotes at *execution*, so a `DynValue` tree's output dtype is still only knowable by running it. |
 | **Q3.1 tail** | `conditional.mojo` (11 free fns, no struct), `temporal.mojo` (18, incl. `String`-keyed `date_trunc` and 9 delegators only tests call), `membership.mojo` (5). |
 | **Q3.3 tail** | `ipc.mojo` still has 12 free fns. `_slice_body` still copies each column buffer byte-by-byte; a memcpy needs a new `Buffer` factory, since `unsafe_ptr()` is restricted to `buffers`/`views`/`c_data`. |

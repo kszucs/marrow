@@ -412,6 +412,47 @@ the *divergence* so it stays visible — is turned into a promotion assertion.
 
 ---
 
+**Q0.8 — The AOT binary-size gate covers two shapes, and its silence reads as evidence** ·
+*Tier 0, found 2026-07-28* · Depends: — · Owns: `benchmarks/binary_size/*` ·
+
+CLAUDE.md makes it a hard constraint that the `marrow.aot`/`marrow.expr` layers stay
+small-binary and that changes are **gated on `benchmarks/binary_size/`**. The gate cannot
+carry that weight today. Five programs are built, but between them the *fused* lane is
+exercised in exactly **two shapes**:
+
+- `query_streaming` — `InMemoryTable -> Filter -> Project`, whose only fused nodes are
+  `col` and `>`.
+- `query_streaming_agg_fused` — `Aggregate` with `NumericAgg[SumKernel, Int64Type]` and
+  `[MinKernel, Int64Type]`.
+
+Everything else an AOT expression can be made of is **unmeasured**: `ParquetScan` (and with
+it the whole reader), `Sort`/`Limit`/`TopK`, `Join`, and every fused value node except
+`col`/`Gt` — arithmetic, `NumericCast`, boolean, string, conditional, membership, temporal —
+plus `Count`/`Mean`/`Max`/`CountDistinct`.
+
+**Two measurements from 2026-07-28 show this is not hypothetical, because in both cases the
+gate reported "no change" and the change was simply invisible to it:**
+
+- Q0.4 rewrote all twelve of `DynValue.eval`'s binary arms. The fused gates came back
+  byte-identical — true, and worthless: **neither fused gate contains a single arithmetic
+  expression.**
+- T2.4 rewrote the Parquet read path and the scan processor. It contributed **0 bytes to
+  every gate**, because no gate constructs a `ParquetScan`. The DCE property is real (that
+  is *why* it is zero), but it means the entire AOT Parquet surface has never been measured.
+
+Done when there is one minimal gate program per operator family — scan, sort/limit, join,
+and one per fused value family — `compare.py`'s `NAMES` covers them, each has its expected
+stripped size recorded, and the three orphan binaries (`query_comptime`,
+`query_erased_aot`, `query_hybrid` — untracked, no `.mojo` source, so `compare.py` never
+rebuilds them and their sizes are stale artifacts) are deleted.
+
+> **Watch the cost of the gate itself.** Each program is a full `-O3` build: five currently
+> take ~10 min on an M-series laptop. Fifteen would take ~35 and nobody would run it. Keep
+> each gate to the minimum that links its family, and add a `--only` filter so a change can
+> re-measure the one gate it plausibly moved before the full sweep.
+
+---
+
 ### Accepted known defects (not scheduled)
 
 **D1** — `slice()` copies the parent's `nulls`, so a slice of an array with nulls reports the
