@@ -461,9 +461,21 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > arms return views into storage `PageReader` owns.
 >
 > Also note: of `reader.mojo`'s 19 `Span[UInt8` sites, **13 are `Span[UInt8, _]`** — a
-> generic origin that already accepts a tracked view and needs no change. Only the **6**
-> `ImmUntrackedOrigin` occurrences are the actual work. The earlier "19 sites" estimate
-> overstated it.
+> generic origin that already accepts a tracked view and needs no change
+> (`BufferView.as_span()` preserves the origin, so a view satisfies them directly). Only
+> the **6** `ImmUntrackedOrigin` occurrences are the actual work.
+>
+> **But "6 sites" understates it too, and this is the real scope.** `Page` *stores* its
+> body — `var body: Span[UInt8, ImmUntrackedOrigin]` — so giving it a real origin means
+> parameterising the struct, `Page[o: Origin]`. `Page` appears **48 times**: passed by value
+> into ~10 decode functions (`_decode_plain`, `_decode_dictionary`, the level readers …) and
+> returned from `PageReader`. Every one has to thread the origin.
+>
+> That is the honest size of Q1.2's body: not a span-type swap but an origin
+> parameterisation across the decode path, in a system whose rules have repeatedly turned
+> out narrower than they look (see the conditional-type and capturing-closure notes in
+> CLAUDE.md). Budget accordingly, and do it in one sitting — a half-parameterised `Page`
+> does not compile, so there is no safe stopping point in the middle.
 
 > ### `Buffer.mmap_file` exists now — and IPC wants it too (2026-07-28)
 >
