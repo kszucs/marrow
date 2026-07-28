@@ -30,6 +30,15 @@
 
 ### Refactors
 
+- **`membership.mojo` and `conditional.mojo` are kernels, not free functions (Q3.1).**
+  Neither had a struct, so `is_in` was five free functions (three of them byte-identical
+  typed delegators) and the four conditional kernels each re-implemented the same
+  validate / fill-a-selector / multiplex sequence with its own error vocabulary. Now
+  `IsInKernel`, and `CaseWhenKernel`/`CoalesceKernel`/`NullifKernel`/`FillNullKernel` over a
+  shared `Selection` engine that owns the candidates, the per-row branch selector, and the
+  `concat`+`take` gather. Diagnostics come from `Kernel.error`/`expect_same_dtype`/
+  `expect_same_length` instead of four hand-rolled phrasings. Collapsing the four inlined
+  copies takes **16,528 bytes off `query_dynvalue`**, paying back Q0.4's cost exactly.
 - **`PageReader` reads one column chunk, not the file.** It took a whole-file span and
   seeked to absolute footer offsets; it now takes exactly the chunk's bytes and starts at
   0. `ColumnMetaData.byte_range()` (new) is the single place the "start at the dictionary

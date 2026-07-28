@@ -1627,9 +1627,28 @@ Everything else becomes a method, static factory, private method of its one owni
    in its own file. *(Fold into Q1.1 if done together.)*
 3. Delete legacy `is_null`/`select`/`equal` free functions — `expr/dynamic.mojo` calls the **old,
    narrower** ones (numeric-only `is_null`; `select` silently drops validity).
-4. `membership.mojo` → `IsInKernel`; `conditional.mojo` → `Multiplex` + kernel structs;
-   `temporal.mojo` `date_trunc` → `DateTruncKernel` with a `TimeUnit` enum instead of a `String`.
-5. Delete the **9 temporal delegators** (`year`, `month`, …) called only by tests.
+4. ✅ **DONE 2026-07-28** — `membership.mojo` → `IsInKernel` (`3fa602f`, 5 free fns → 2);
+   `conditional.mojo` → kernel structs over a shared engine (`762b6ba`, 11 → 10 free fns but
+   5 structs where there were none). The engine is named **`Selection`**, not `Multiplex`:
+   it owns the candidates *and* the growing selector, and `gather` is the multiplex step —
+   naming the type after one of its methods was what kept it looking like a free function.
+   Two findings worth carrying into the rest of this task:
+   - **Do not parameterise a shared engine on the kernel.** `Selection[K: Kernel]` reads
+     better and attributes errors statically, but it holds `concat`/`take` and would be
+     instantiated per kernel — Q0.4 measured that shape at +115,600 bytes. A runtime
+     `StaticString` name costs nothing.
+   - **Deduplicating into a type is a size *win*, not a cost.** Collapsing four inlined
+     copies of the selector loop and the uniformity check took `query_dynvalue` down
+     **16,528 bytes** (5,455,440 → 5,438,912).
+   - **Typed delegators are not automatically waste.** The three in `membership.mojo` were
+     (byte-identical bodies), and collapsed to one bound on `Array`. But typed arrays are
+     deliberately not `ImplicitlyCopyable`, so deleting a typed overload outright just moves
+     `.copy()` noise onto every call site. Check the call sites before counting a delegator.
+
+   Still open here: `temporal.mojo` `date_trunc` → `DateTruncKernel` with a `TimeUnit` enum
+   instead of a `String`.
+5. Delete the **9 temporal delegators** (`year`, `month`, …) called only by tests — but see
+   the typed-delegator finding above before counting them as dead.
 6. Move `reinterpret_array` / `temporal_backing_dtype` out of `aggregate.mojo` onto
    `AnyArray` / `AnyDataType` (today `filter.mojo` imports from *aggregate* to filter a timestamp).
 7. Delete verified-dead: `hash_identity` ×3, `_drop_null_bool`.
