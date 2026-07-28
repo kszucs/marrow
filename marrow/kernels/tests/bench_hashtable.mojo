@@ -7,13 +7,13 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import PrimitiveArray, AnyArray, StructArray
-from marrow.buffers import Bitmap
-from marrow.builders import PrimitiveBuilder, UInt64Builder
-from marrow.dtypes import uint64, UInt64Type, struct_, Field
-from marrow.kernels.hashtable import SwissHashTable
-from marrow.kernels.hashing import rapidhash
-from marrow.testing import BenchSuite, Benchmark
+from ...arrays import PrimitiveArray, AnyArray, StructArray
+from ...buffers import Bitmap
+from ...builders import PrimitiveBuilder, UInt64Builder
+from ...dtypes import uint64, UInt64Type, struct_, Field
+from ...kernels.hashtable import SwissHashTable
+from ...kernels.hashing import rapidhash
+from ...testing import Benchmark
 
 
 def _make_keys(n: Int) raises -> StructArray:
@@ -176,7 +176,3 @@ def bench_hash_table_probe_semi_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

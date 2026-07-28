@@ -971,18 +971,66 @@ struct BitmapView[
         var bit_mask = UInt8(1 << (abs_index & 7))
         self._data[byte_index] = self._data[byte_index] ^ bit_mask
 
+    # --- Byte-level functors for the set operations above.  `apply` takes a
+    # SIMD functor, and these are the five `BitmapView` needs; they live here
+    # rather than at module scope because nothing else can use them.
+
+    @always_inline
+    @staticmethod
+    def _not[W: Int](x: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return ~x
+
+    @always_inline
+    @staticmethod
+    def _and[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a & b
+
+    @always_inline
+    @staticmethod
+    def _or[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a | b
+
+    @always_inline
+    @staticmethod
+    def _xor[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a ^ b
+
+    @always_inline
+    @staticmethod
+    def _and_not[
+        W: Int
+    ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+        return a & ~b
+
     # --- Set operations (return Buffer with offset=0) ---
+
+    def to_owned(self) raises -> Bitmap[mut=False]:
+        """These bits as an owned, offset-0 `Bitmap`.
+
+        `Bitmap.extend` copies whole bytes when the source is byte-aligned and
+        shift-merges otherwise, so a view that already starts at a byte costs a
+        `memcpy` rather than a pass over every bit.
+        """
+        var out = Bitmap.alloc_zeroed(self._length)
+        out.extend(self, 0, self._length)
+        return out.to_immutable()
 
     def intersection(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise AND of self and other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_and](self, other, builder.view())
+        apply[Self._and](self, other, builder.view())
         return builder^
 
     def union(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise OR of self and other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_or](self, other, builder.view())
+        apply[Self._or](self, other, builder.view())
         return builder^
 
     def symmetric_difference(
@@ -990,13 +1038,13 @@ struct BitmapView[
     ) raises -> Bitmap[mut=True]:
         """Return the bitwise XOR of self and other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_xor](self, other, builder.view())
+        apply[Self._xor](self, other, builder.view())
         return builder^
 
     def difference(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return self AND NOT other."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_and_not](self, other, builder.view())
+        apply[Self._and_not](self, other, builder.view())
         return builder^
 
     def filter(
@@ -1080,7 +1128,7 @@ struct BitmapView[
     def __invert__(self) raises -> Bitmap[mut=True]:
         """Return the bitwise NOT of this view as a new Bitmap (offset=0)."""
         var builder = Bitmap.alloc_uninit(self._length)
-        apply[_invert](self, builder.view())
+        apply[Self._not](self, builder.view())
         return builder^
 
     # --- Writable ---
@@ -1092,44 +1140,6 @@ struct BitmapView[
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
-
-
-# ---------------------------------------------------------------------------
-# SIMD byte-level binary op helpers
-# ---------------------------------------------------------------------------
-
-
-@always_inline
-def _invert[W: Int](x: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return ~x
-
-
-@always_inline
-def _and[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a & b
-
-
-@always_inline
-def _or[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a | b
-
-
-@always_inline
-def _xor[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a ^ b
-
-
-@always_inline
-def _and_not[
-    W: Int
-](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
-    return a & ~b
 
 
 # ---------------------------------------------------------------------------
@@ -1165,14 +1175,12 @@ def _apply_dispatch[
     as a comptime ``Bool`` so the GPU branch is dead-code-eliminated when
     unsupported.
 
-    Three execution paths, picked from ``ctx``:
+    Two execution paths, picked from ``ctx``:
 
     - **GPU** (``ctx.is_gpu()``) — single grid launch via ``elementwise``.
-    - **CPU multi-thread** (``ctx.wants_parallel(length)``) — explicit stripe
-      over ``ctx.resolved_num_threads()`` workers via ``sync_parallelize``;
-      each worker runs ``vectorize`` over its slice. Thread count is owned by
-      ``ctx`` — no Mojo-internal heuristic involved.
-    - **CPU serial** (default) — pure ``vectorize`` on the calling thread.
+    - **CPU** — one ``vectorize`` body handed to ``ctx.stripe``, which runs it
+      on the calling thread or across ``ctx.resolved_num_threads()`` workers.
+      Thread count is owned by ``ctx`` — no Mojo-internal heuristic involved.
     """
     if ctx.is_gpu():
         comptime if gpu_ok:
@@ -1186,35 +1194,22 @@ def _apply_dispatch[
 
     comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
 
-    if ctx.wants_parallel(length):
-        var workers = ctx.resolved_num_threads()
-        var chunk = ceildiv(length, workers)
-
+    # One `vectorize` over a half-open range; `ctx.stripe` decides whether it
+    # runs on the calling thread or across workers. No `align`: `vectorize`
+    # handles its own tail within each stripe, which is exactly what the
+    # hand-written pair did.
+    @always_inline
+    @parameter
+    def span(wid: Int, start: Int, end: Int):
         @always_inline
-        def task(
-            wid: Int,
-        ) {imm chunk, imm length,}:
-            var start = wid * chunk
-            var end = min(start + chunk, length)
-            if end <= start:
-                return
+        def lane[
+            W: Int
+        ](i: Int) {imm start,}:
+            process[W](Coord(start + i))
 
-            @always_inline
-            def lane[
-                W: Int
-            ](i: Int) {imm start,}:
-                process[W](Coord(start + i))
+        vectorize[cpu_width](end - start, lane)
 
-            vectorize[cpu_width](end - start, lane)
-
-        sync_parallelize(task, workers)
-    else:
-
-        @always_inline
-        def lane[W: Int](i: Int):
-            process[W](Coord(i))
-
-        vectorize[cpu_width](length, lane)
+    ctx.stripe[span](length)
 
 
 def apply[
@@ -1770,6 +1765,15 @@ def _reduce_dispatch[
 
     comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
 
+    # This stripes by hand, unlike `_apply_dispatch` above, and deliberately so.
+    # Routing it through `ctx.stripe` works and removes the duplicated fold body,
+    # but it forces the serial arm to allocate a one-slot partials buffer it does
+    # not otherwise need. Measured, five interleaved repeats: `sumint64_1k`
+    # 0.19-0.20 -> 0.30-0.32 us and `sumfloat64_1k` 0.23-0.24 -> 0.34-0.37 us —
+    # ranges fully disjoint, ~55% on small reductions, for one heap allocation.
+    # A reduce is a fold *plus* a merge, and the merge's scratch is exactly what
+    # a serial fold should not pay for. The parallel arm below allocates it
+    # because it genuinely needs it.
     if ctx.wants_parallel(length):
         var workers = ctx.resolved_num_threads()
         var chunk = ceildiv(length, workers)

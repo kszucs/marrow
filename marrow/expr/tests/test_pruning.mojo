@@ -4,14 +4,13 @@ only when it provably cannot match. Covers both the runtime DynValue interpreter
 and the fused static nodes, plus the AnyValue box the scan uses."""
 
 from std.testing import assert_true, assert_false
-from marrow.testing import TestSuite
-from marrow import dtypes as dt
-from marrow.dtypes import int64, Int64Type, Field
-from marrow.schema import Schema
-from marrow.scalars import AnyScalar, Int64Scalar
-from marrow.expr.pruning import PruneStats
-from marrow.expr.values import AnyValue
-from marrow.expr.dynamic import col, lit
+from ... import dtypes as dt
+from ...dtypes import int64, Int64Type, Field
+from ...schema import Schema
+from ...scalars import AnyScalar, Int64Scalar
+from ...expr.pruning import PruneStats
+from ...expr.values import AnyValue
+from ...expr.dynamic import col, lit
 
 # NOTE: comptime-node pruning is PARKED in the new `marrow.expr.values` (the
 # per-node `prune` overrides were not ported from the old fused algebra; the
@@ -106,7 +105,3 @@ def test_unknown_stats_keeps() raises:
     var stats = PruneStats(Schema(fields=fields^), mins^, maxs^)
     var pred = col("x") > lit[Int64Type](Int64(100))
     assert_true(pred.prune(stats).maybe_true)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

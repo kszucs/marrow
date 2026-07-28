@@ -20,9 +20,9 @@ from ..builders import PrimitiveBuilder, Int32Builder
 from ..buffers import Buffer
 from ..dtypes import int32, uint64, Int32Type, UInt64Type
 from ..views import BufferView
-from .compare import equal
+from .numeric import EqKernel
 from .execution import ExecutionContext
-from .filter import take, filter
+from .filter import Take, Filter
 from .hashing import rapidhash
 
 
@@ -618,12 +618,13 @@ struct SwissHashTable[
         ref probe_indices = indices[1]
 
         # Filter hash-collision false positives by key equality.
-        var mask = equal(
-            take(build_keys, build_indices), take(probe_keys, probe_indices)
+        var mask = EqKernel.apply(
+            Take.apply(build_keys, build_indices),
+            Take.apply(probe_keys, probe_indices),
         )
         return (
-            filter[Int32Type](build_indices, mask),
-            filter[Int32Type](probe_indices, mask),
+            Filter.apply(build_indices, mask.values()),
+            Filter.apply(probe_indices, mask.values()),
         )
 
     def num_keys(self) -> Int:

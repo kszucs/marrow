@@ -51,6 +51,7 @@ from ..buffers import Buffer, Bitmap
 from ..builders import Int64Builder, BinaryLikeBuilder
 from ..views import apply, BitmapView
 from ..dtypes import (
+    FloatingType,
     AnyDataType,
     DataType,
     NumericType,
@@ -64,8 +65,8 @@ from ..dtypes import (
     ListLikeType,
     TemporalType,
 )
-from ..kernels.compare import (
-    BinaryCompareKernel,
+from ..kernels.numeric import (
+    NumericCompareKernel,
     LtKernel,
     LeKernel,
     GtKernel,
@@ -73,7 +74,7 @@ from ..kernels.compare import (
     EqKernel,
     NeKernel,
 )
-from ..kernels.arithmetic import (
+from ..kernels.numeric import (
     BinaryKernel,
     UnaryKernel,
     AddKernel,
@@ -130,10 +131,14 @@ from ..kernels.string import (
     ContainsKernel,
     StringEqKernel,
     StringNeKernel,
+    StringLtKernel,
+    StringLeKernel,
+    StringGtKernel,
+    StringGeKernel,
     LikeKernel,
     ILikeKernel,
 )
-from ..kernels.membership import is_in
+from ..kernels.membership import IsInKernel
 from ..kernels.conditional import coalesce, nullif, case_when
 from ..kernels.temporal import (
     TemporalExtractKernel,
@@ -163,7 +168,6 @@ from ..kernels.boolean import (
     IsInfKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
-from ..kernels.helpers import bitmap_and
 from .pruning import PruneStats, PruneBound
 from .dynamic import DynValue, DynAgg
 from .aggregates import AggFunc
@@ -216,7 +220,7 @@ struct Context(Copyable, Movable):
         """Typed slot read — `ctx.get[BoolArray](i)`. Pulls the typed array straight
         out of the slot's `Datum` (a ref-count bump), skipping the `as_xxx().copy()`
         dance at every breaker read."""
-        return self._slots[i][AnyArray]._v[A].copy()
+        return self._slots[i][AnyArray].as_type[A]().copy()
 
     def size(self) -> Int:
         return len(self._slots)
@@ -284,36 +288,6 @@ def _union_columns(var acc: List[String], names: List[String]) -> List[String]:
 # use; Kleene `And`/`Or` reuse the null-correct `and_`/`or_` kernels; column leaves
 # read their own validity; literals / `is_null` results are always valid.
 # ---------------------------------------------------------------------------
-def _view_to_owned(v: BitmapView) raises -> Bitmap[mut=False]:
-    """An offset-0 owned copy of a bitmap view. Uses `difference` against an
-    all-zero scratch (`v AND NOT 0 == v`) rather than `union(v, v)`, which would
-    alias the same origin mutably through both call arguments."""
-    var zeroed = Bitmap.alloc_zeroed(len(v))
-    return v.difference(zeroed.view()).to_immutable()
-
-
-def _column_validity(
-    batch: RecordBatch, name: String
-) raises -> Optional[Bitmap[mut=False]]:
-    """The named column's validity as an offset-0 owned bitmap (None = all valid).
-    Materialises a fresh offset-0 copy so the fused driver can bake it into the
-    result independent of the source array's own offset."""
-    var data = batch.columns[batch.schema.get_field_index(name)].to_data()
-    var v = data.validity()
-    if v:
-        return _view_to_owned(v.value())
-    else:
-        return None
-
-
-def _nulls_of(length: Int, v: Optional[Bitmap[mut=False]]) -> Int:
-    """Unset-bit count of a validity bitmap (0 when all-valid)."""
-    if v:
-        return length - v.value().view().count_set_bits()
-    else:
-        return 0
-
-
 # ---------------------------------------------------------------------------
 # Value — every node. `execute` is abstract; `prepare` defaults to a no-op (only
 # composites recurse and breakers prepare).
@@ -523,7 +497,7 @@ trait NumericValue(Value):
             var arr = PrimitiveArray[Self.OutType](
                 dtype=Self.OutType(),
                 length=length,
-                nulls=_nulls_of(length, v),
+                nulls=v.value().unset_count() if v else 0,
                 offset=0,
                 bitmap=v^,
                 buffer=buf.to_immutable(),
@@ -579,7 +553,7 @@ struct NumericColumn[T: NumericType](NumericValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()
@@ -641,7 +615,7 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -743,7 +717,7 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -849,7 +823,7 @@ trait BoolValue(Value):
         var v = self.validity(batch)
         return BoolArray(
             length=length,
-            nulls=_nulls_of(length, v),
+            nulls=v.value().unset_count() if v else 0,
             offset=0,
             bitmap=v^,
             buffer=bm.to_immutable(),
@@ -857,9 +831,9 @@ trait BoolValue(Value):
 
 
 @fieldwise_init
-struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
-    BoolValue
-):
+struct NumericCompare[
+    K: NumericCompareKernel, L: NumericValue, R: NumericValue
+](BoolValue):
     """Fused numeric comparison → a bit-packed `BoolArray`."""
 
     comptime OutType = BoolType
@@ -893,7 +867,7 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -1386,7 +1360,7 @@ struct StringColumn[T: StringLikeType](StringValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()
@@ -1581,6 +1555,14 @@ struct StringPredicate[
             self.l.referenced_columns(), self.r.referenced_columns()
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # A string predicate is null exactly where an operand is: the kernel
+        # already ANDs the operand bitmaps, and `vectorwise` reads only the
+        # data bits, so the node has to carry the validity itself.
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n).as_string().copy()
@@ -1609,61 +1591,19 @@ comptime Like = StringPredicate[LikeKernel, _, _]
 comptime ILike = StringPredicate[ILikeKernel, _, _]
 
 
-# ---------------------------------------------------------------------------
-# String ordering comparisons — `string < <= > >=` -> bool. Same materialize-once
-# breaker shape as `StringPredicate`, but backed by the `compare.mojo` string
-# kernels (`apply_string`, lexicographic UTF-8 byte order). Validity is the AND of
-# the operand validities (both must be valid), exactly like `NumericCompare` — no
-# kernel re-run needed since string-compare nulls are purely operand-driven.
-# ---------------------------------------------------------------------------
-@fieldwise_init
-struct StringCompare[K: BinaryCompareKernel, L: StringValue, R: StringValue](
-    BoolValue
-):
-    comptime OutType = BoolType
-    comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime IsBreaker = True
-    comptime NativeType = DType.int32  # lane width for the bit-pack driver
-    var l: Self.L
-    var r: Self.R
-
-    def referenced_columns(self) -> List[String]:
-        return _union_columns(
-            self.l.referenced_columns(), self.r.referenced_columns()
-        )
-
-    def validity(
-        self, batch: RecordBatch
-    ) raises -> Optional[Bitmap[mut=False]]:
-        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
-
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        var n = batch.num_rows()
-        var la = into_array(self.l.execute(batch), n).as_string().copy()
-        var ra = into_array(self.r.execute(batch), n).as_string().copy()
-        ctx.append(Self.K.apply_string(la, ra).to_any())
-
-    @always_inline
-    def vectorwise[
-        W: Int
-    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
-        DType.bool, W
-    ]:
-        var s = slot
-        slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
-
-
-comptime StrLt = StringCompare[LtKernel, _, _]
-comptime StrLe = StringCompare[LeKernel, _, _]
-comptime StrGt = StringCompare[GtKernel, _, _]
-comptime StrGe = StringCompare[GeKernel, _, _]
+# String ordering comparisons — `string < <= > >=` -> bool. The compare kernels
+# name their string counterpart, so ordering is the same node as every other
+# string predicate; only the kernel differs.
+comptime StrLt = StringPredicate[StringLtKernel, _, _]
+comptime StrLe = StringPredicate[StringLeKernel, _, _]
+comptime StrGt = StringPredicate[StringGtKernel, _, _]
+comptime StrGe = StringPredicate[StringGeKernel, _, _]
 
 
 # ---------------------------------------------------------------------------
 # is_in — SQL `x IN (...)`. A bool breaker over any value family: `prepare`
 # hashes the captured value-set once and probes the operand column (reusing
-# `kernels.membership.is_in`), then `vectorwise` loads the mask. The output is
+# `kernels.membership.IsInKernel`), then `vectorwise` loads the mask. The output is
 # always valid (PyArrow `is_in` never nulls), so validity defaults to `None`.
 # ---------------------------------------------------------------------------
 @fieldwise_init
@@ -1680,7 +1620,7 @@ struct IsIn[A: Value](BoolValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(is_in(arr, self._value_set.copy()).to_any())
+        ctx.append(IsInKernel.dispatch(arr, self._value_set.copy()).to_any())
 
     @always_inline
     def vectorwise[
@@ -1862,16 +1802,6 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 # on the branch), so `validity` re-runs the kernel and reads the materialized
 # bitmap — the one case where operand validities alone can't reconstruct the result.
 # ---------------------------------------------------------------------------
-def _result_validity(r: AnyArray) raises -> Optional[Bitmap[mut=False]]:
-    """The materialized result's validity as an offset-0 owned bitmap (None =
-    all valid) — shared by the conditional breakers' `validity`."""
-    var v = r.to_data().validity()
-    if v:
-        return _view_to_owned(v.value())
-    else:
-        return None
-
-
 # Conditional binary breakers — `coalesce(l, r)` and `nullif(l, r)` differ only
 # in the kernel they call, so one generic node parameterized by a tiny op struct
 # covers both (mirrors `Reduction[K]` / `TemporalExtract[K]`). Both are
@@ -1924,7 +1854,7 @@ struct ConditionalBinary[
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _result_validity(self._result(batch))
+        return self._result(batch).to_data().owned_validity()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         ctx.append(self._result(batch))
@@ -1981,7 +1911,7 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _result_validity(self._result(batch))
+        return self._result(batch).to_data().owned_validity()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         ctx.append(self._result(batch))
@@ -2072,7 +2002,7 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()
@@ -2184,7 +2114,7 @@ struct ListColumn[T: ListLikeType](ListValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
-        return _column_validity(batch, self._name)
+        return batch.column(self._name).to_data().owned_validity()
 
     def name(self) -> String:
         return self._name.copy()
@@ -2263,7 +2193,9 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 # ---------------------------------------------------------------------------
 struct AnyValue(Copyable, Movable, Writable):
     """Type-erased expression handle — the boundary the relational engine
-    (`marrow.expr.execution`) holds. Boxes either:
+    (`marrow.expr.execution`) holds.
+
+    Boxes either:
 
       * a comptime fused `Value` node — `execute` runs the fused engine against a
         fresh context and returns a column (`AnyArray`); `prune` is the conservative
@@ -2427,12 +2359,21 @@ def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:
 
 
 def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
-    """A numeric constant — `lit(10, int64)`."""
+    """An integral constant — `lit(10, int64)`."""
     return NumericLiteral[T](Scalar[T.native](value))
 
 
-def slit(value: String) -> StringLiteral[StringType]:
-    """A string constant — `slit("suffix")`."""
+def lit[T: FloatingType](value: Float64, dtype: T) -> NumericLiteral[T]:
+    """A fractional constant — `lit(3.5, float64)`.
+
+    Without this overload the only spelling took an `Int`, so `lit(3.5,
+    float64)` was unrepresentable: it truncated to 3."""
+    return NumericLiteral[T](Scalar[T.native](value))
+
+
+def lit(value: String) -> StringLiteral[StringType]:
+    """A string constant — `lit("suffix")`. Same verb as the numeric ones; the
+    argument type picks the literal."""
     return StringLiteral[StringType](value)
 
 

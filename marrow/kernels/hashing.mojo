@@ -43,7 +43,6 @@ from ..buffers import Buffer
 from ..views import apply
 from .cast import cast
 from .execution import ExecutionContext
-from .helpers import Kernel
 from ..dtypes import (
     BinaryLikeType,
     NumericType,
@@ -52,6 +51,7 @@ from ..dtypes import (
     bool_,
     uint64,
 )
+from ..utils import GPU_ENABLED
 
 comptime _h = Scalar[uint64.native]
 
@@ -263,7 +263,7 @@ def _combine_hashes[
     return lo_hi[0] ^ lo_hi[1]
 
 
-struct RapidHash(Kernel):
+struct RapidHash:
     """Column hashing kernel — one ``UInt64`` per row.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
@@ -354,8 +354,11 @@ struct RapidHash(Kernel):
         """
         var n = len(keys)
         var buf: Buffer[mut=True]
-        if ctx.is_gpu():
-            buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
+        comptime if GPU_ENABLED:
+            if ctx.is_gpu():
+                buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
+            else:
+                buf = Buffer.alloc_uninit[uint64.native](n)
         else:
             buf = Buffer.alloc_uninit[uint64.native](n)
 
@@ -414,8 +417,13 @@ struct RapidHash(Kernel):
             return builder.finish()
         else:
             var buf: Buffer[mut=True]
-            if ctx.is_gpu():
-                buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
+            comptime if GPU_ENABLED:
+                if ctx.is_gpu():
+                    buf = Buffer.alloc_device[uint64.native](
+                        ctx.device.value(), n
+                    )
+                else:
+                    buf = Buffer.alloc_uninit[uint64.native](n)
             else:
                 buf = Buffer.alloc_uninit[uint64.native](n)
 
@@ -508,8 +516,13 @@ struct RapidHash(Kernel):
             )
 
             var buf: Buffer[mut=True]
-            if ctx.is_gpu():
-                buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
+            comptime if GPU_ENABLED:
+                if ctx.is_gpu():
+                    buf = Buffer.alloc_device[uint64.native](
+                        ctx.device.value(), n
+                    )
+                else:
+                    buf = Buffer.alloc_uninit[uint64.native](n)
             else:
                 buf = Buffer.alloc_uninit[uint64.native](n)
             apply[uint64.native, uint64.native, _combine_hashes](

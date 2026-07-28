@@ -52,8 +52,7 @@ from ..dtypes import (
 )
 from .cast import cast
 from .execution import ExecutionContext
-from .filter import take as _take
-from .helpers import Kernel
+from .filter import Take
 from .partition import radix_histogram
 
 
@@ -272,10 +271,8 @@ def _radix_sort_indices[
             ),
         )
 
-    var nt = 1
-    if ctx.wants_parallel(n, _PARALLEL_THRESHOLD):
-        nt = ctx.resolved_num_threads()
-    var chunk = (n + nt - 1) // nt
+    # The histogram and the scatter below index `write_offsets` by stripe, so
+    # both must stripe identically — same `ctx`, same `_PARALLEL_THRESHOLD`.
 
     # [~35 ms parallel total, 6 passes × (hist + scatter) at N=10M int64]
     for pass_ in range(num_passes):
@@ -294,7 +291,9 @@ def _radix_sort_indices[
         def bucket_of(i: Int) -> Int:
             return Int((ka_h.unsafe_get(i) >> shift) & mask)
 
-        var offsets = radix_histogram[bucket_of](n, bucket_count, nt)
+        var offsets = radix_histogram[bucket_of](
+            n, bucket_count, ctx, _PARALLEL_THRESHOLD
+        )
         var write_offsets = offsets[0].copy()
         ref bucket_start = offsets[1]
 
@@ -317,12 +316,9 @@ def _radix_sort_indices[
         var kb_s = key_b.view[DType.uint64](0, n)
         var ib_s = idx_b.view[DType.int32](0, n)
 
+        @always_inline
         @parameter
-        def scatter_worker(t: Int):
-            var start = t * chunk
-            if start >= n:
-                return
-            var end = min(start + chunk, n)
+        def scatter_worker(t: Int, start: Int, end: Int):
             var base = t * bucket_count
             for i in range(start, end):
                 var b = Int((ka_s.unsafe_get(i) >> shift) & mask)
@@ -331,7 +327,7 @@ def _radix_sort_indices[
                 ib_s.unsafe_set(pos, ia_s.unsafe_get(i))
                 write_offsets[base + b] = pos + 1
 
-        sync_parallelize[scatter_worker](nt)
+        ctx.stripe[scatter_worker](n, _PARALLEL_THRESHOLD)
 
         # Swap A ↔ B so the next pass always reads from "current A".
         var tmp_key = key_a^
@@ -345,7 +341,7 @@ def _radix_sort_indices[
     return idx_buf^.to_immutable()
 
 
-struct SortIndices(Kernel):
+struct SortIndices:
     """Sort-permutation kernel — the indices that would sort a column.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
@@ -520,7 +516,7 @@ struct SortIndices(Kernel):
             ctx=ctx,
         )
         for i in reversed(range(last)):
-            var reordered = _take(array.field(key_indices[i]), perm)
+            var reordered = Take.dispatch(array.field(key_indices[i]), perm)
             var local = SortIndices.dispatch(
                 reordered,
                 ascending=ascending[i],
@@ -528,7 +524,7 @@ struct SortIndices(Kernel):
                 stable=True,
                 ctx=ctx,
             )
-            perm = _take(perm, local, ctx)
+            perm = Take.apply(perm, local, ctx)
 
         if limit:
             var lim = limit.value()
@@ -826,7 +822,7 @@ def sort(
 ) raises -> StructArray:
     """Sort a StructArray by the specified key columns — ``take`` under the
     permutation from ``SortIndices.multi``."""
-    return _take(
+    return Take.apply(
         array,
         SortIndices.multi(
             array, key_indices, ascending, nulls_first, stable, limit, ctx

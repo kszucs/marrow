@@ -9,7 +9,7 @@ Sizes:
     100M rows gated behind ``MARROW_BENCH_LARGE=1`` (10 GiB+ RSS, minutes).
 
 Run with:
-    pixi run -e bench pytest python/tests/bench_join_parallel.py \\
+    pixi run -e bench pytest python/marrow/tests/bench_join_parallel.py \\
         --benchmark --competition
 
 Set ``MARROW_BENCH_LARGE=1`` to include the 100M tier.

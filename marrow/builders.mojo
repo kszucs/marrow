@@ -29,7 +29,65 @@ from std.utils import Variant
 from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BitmapView, BufferView
-from .dtypes import *
+from .utils import variant_dispatch, variant_dispatch_raises
+from .dtypes import (
+    AnyDataType,
+    BinaryLikeType,
+    BinaryType,
+    Date32Type,
+    Date64Type,
+    DayTimeIntervalType,
+    Decimal128Type,
+    Decimal256Type,
+    Decimal32Type,
+    Decimal64Type,
+    DurationType,
+    Field,
+    FixedSizeBinaryType,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    Int8Type,
+    LargeBinaryType,
+    LargeListType,
+    LargeStringType,
+    ListLikeType,
+    ListType,
+    MapType,
+    MonthDayNanoIntervalType,
+    NumericType,
+    PrimitiveType,
+    StringType,
+    Time32Type,
+    Time64Type,
+    TimestampType,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    UInt8Type,
+    YearMonthIntervalType,
+    bool_,
+    dictionary,
+    fixed_size_list_,
+    float16,
+    float32,
+    float64,
+    int16,
+    int32,
+    int64,
+    int8,
+    large_list_,
+    list_,
+    null,
+    struct_,
+    uint16,
+    uint32,
+    uint64,
+    uint8,
+)
 from .arrays import (
     Array,
     AnyArray,
@@ -319,7 +377,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
-    def _as[T: Builder](ref self) -> ref[self._ptr[][T]] T:
+    def as_type[T: Builder](ref self) -> ref[self._ptr[][T]] T:
+        """This builder as the concrete `T` it holds — a borrow, no copy."""
         debug_assert(
             self._ptr[].isa[T](), "_as: wrong type, holds ", self.dtype()
         )
@@ -328,147 +387,147 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_primitive[
         T: PrimitiveType
     ](ref self) -> ref[self._ptr[][PrimitiveBuilder[T]]] PrimitiveBuilder[T]:
-        return self._as[PrimitiveBuilder[T]]()
+        return self.as_type[PrimitiveBuilder[T]]()
 
     def as_null(ref self) -> ref[self._ptr[][NullBuilder]] NullBuilder:
-        return self._as[NullBuilder]()
+        return self.as_type[NullBuilder]()
 
     def as_bool(ref self) -> ref[self._ptr[][BoolBuilder]] BoolBuilder:
-        return self._as[BoolBuilder]()
+        return self.as_type[BoolBuilder]()
 
     def as_int8(ref self) -> ref[self._ptr[][Int8Builder]] Int8Builder:
-        return self._as[Int8Builder]()
+        return self.as_type[Int8Builder]()
 
     def as_int16(ref self) -> ref[self._ptr[][Int16Builder]] Int16Builder:
-        return self._as[Int16Builder]()
+        return self.as_type[Int16Builder]()
 
     def as_int32(ref self) -> ref[self._ptr[][Int32Builder]] Int32Builder:
-        return self._as[Int32Builder]()
+        return self.as_type[Int32Builder]()
 
     def as_int64(ref self) -> ref[self._ptr[][Int64Builder]] Int64Builder:
-        return self._as[Int64Builder]()
+        return self.as_type[Int64Builder]()
 
     def as_uint8(ref self) -> ref[self._ptr[][UInt8Builder]] UInt8Builder:
-        return self._as[UInt8Builder]()
+        return self.as_type[UInt8Builder]()
 
     def as_uint16(ref self) -> ref[self._ptr[][UInt16Builder]] UInt16Builder:
-        return self._as[UInt16Builder]()
+        return self.as_type[UInt16Builder]()
 
     def as_uint32(ref self) -> ref[self._ptr[][UInt32Builder]] UInt32Builder:
-        return self._as[UInt32Builder]()
+        return self.as_type[UInt32Builder]()
 
     def as_uint64(ref self) -> ref[self._ptr[][UInt64Builder]] UInt64Builder:
-        return self._as[UInt64Builder]()
+        return self.as_type[UInt64Builder]()
 
     def as_float16(ref self) -> ref[self._ptr[][Float16Builder]] Float16Builder:
-        return self._as[Float16Builder]()
+        return self.as_type[Float16Builder]()
 
     def as_float32(ref self) -> ref[self._ptr[][Float32Builder]] Float32Builder:
-        return self._as[Float32Builder]()
+        return self.as_type[Float32Builder]()
 
     def as_float64(ref self) -> ref[self._ptr[][Float64Builder]] Float64Builder:
-        return self._as[Float64Builder]()
+        return self.as_type[Float64Builder]()
 
     def as_string(ref self) -> ref[self._ptr[][StringBuilder]] StringBuilder:
-        return self._as[StringBuilder]()
+        return self.as_type[StringBuilder]()
 
     def as_binary(ref self) -> ref[self._ptr[][BinaryBuilder]] BinaryBuilder:
-        return self._as[BinaryBuilder]()
+        return self.as_type[BinaryBuilder]()
 
     def as_large_string(
         ref self,
     ) -> ref[self._ptr[][LargeStringBuilder]] LargeStringBuilder:
-        return self._as[LargeStringBuilder]()
+        return self.as_type[LargeStringBuilder]()
 
     def as_large_binary(
         ref self,
     ) -> ref[self._ptr[][LargeBinaryBuilder]] LargeBinaryBuilder:
-        return self._as[LargeBinaryBuilder]()
+        return self.as_type[LargeBinaryBuilder]()
 
     def as_list(ref self) -> ref[self._ptr[][ListBuilder]] ListBuilder:
-        return self._as[ListBuilder]()
+        return self.as_type[ListBuilder]()
 
     def as_large_list(
         ref self,
     ) -> ref[self._ptr[][LargeListBuilder]] LargeListBuilder:
-        return self._as[LargeListBuilder]()
+        return self.as_type[LargeListBuilder]()
 
     def as_fixed_size_list(
         ref self,
     ) -> ref[self._ptr[][FixedSizeListBuilder]] FixedSizeListBuilder:
-        return self._as[FixedSizeListBuilder]()
+        return self.as_type[FixedSizeListBuilder]()
 
     def as_fixed_size_binary(
         ref self,
     ) -> ref[self._ptr[][FixedSizeBinaryBuilder]] FixedSizeBinaryBuilder:
-        return self._as[FixedSizeBinaryBuilder]()
+        return self.as_type[FixedSizeBinaryBuilder]()
 
     def as_date32(ref self) -> ref[self._ptr[][Date32Builder]] Date32Builder:
-        return self._as[Date32Builder]()
+        return self.as_type[Date32Builder]()
 
     def as_date64(ref self) -> ref[self._ptr[][Date64Builder]] Date64Builder:
-        return self._as[Date64Builder]()
+        return self.as_type[Date64Builder]()
 
     def as_time32(ref self) -> ref[self._ptr[][Time32Builder]] Time32Builder:
-        return self._as[Time32Builder]()
+        return self.as_type[Time32Builder]()
 
     def as_time64(ref self) -> ref[self._ptr[][Time64Builder]] Time64Builder:
-        return self._as[Time64Builder]()
+        return self.as_type[Time64Builder]()
 
     def as_duration(
         ref self,
     ) -> ref[self._ptr[][DurationBuilder]] DurationBuilder:
-        return self._as[DurationBuilder]()
+        return self.as_type[DurationBuilder]()
 
     def as_timestamp(
         ref self,
     ) -> ref[self._ptr[][TimestampBuilder]] TimestampBuilder:
-        return self._as[TimestampBuilder]()
+        return self.as_type[TimestampBuilder]()
 
     def as_year_month_interval(
         ref self,
     ) -> ref[self._ptr[][YearMonthIntervalBuilder]] YearMonthIntervalBuilder:
-        return self._as[YearMonthIntervalBuilder]()
+        return self.as_type[YearMonthIntervalBuilder]()
 
     def as_day_time_interval(
         ref self,
     ) -> ref[self._ptr[][DayTimeIntervalBuilder]] DayTimeIntervalBuilder:
-        return self._as[DayTimeIntervalBuilder]()
+        return self.as_type[DayTimeIntervalBuilder]()
 
     def as_month_day_nano_interval(
         ref self,
     ) -> ref[
         self._ptr[][MonthDayNanoIntervalBuilder]
     ] MonthDayNanoIntervalBuilder:
-        return self._as[MonthDayNanoIntervalBuilder]()
+        return self.as_type[MonthDayNanoIntervalBuilder]()
 
     def as_decimal32(
         ref self,
     ) -> ref[self._ptr[][Decimal32Builder]] Decimal32Builder:
-        return self._as[Decimal32Builder]()
+        return self.as_type[Decimal32Builder]()
 
     def as_decimal64(
         ref self,
     ) -> ref[self._ptr[][Decimal64Builder]] Decimal64Builder:
-        return self._as[Decimal64Builder]()
+        return self.as_type[Decimal64Builder]()
 
     def as_decimal128(
         ref self,
     ) -> ref[self._ptr[][Decimal128Builder]] Decimal128Builder:
-        return self._as[Decimal128Builder]()
+        return self.as_type[Decimal128Builder]()
 
     def as_decimal256(
         ref self,
     ) -> ref[self._ptr[][Decimal256Builder]] Decimal256Builder:
-        return self._as[Decimal256Builder]()
+        return self.as_type[Decimal256Builder]()
 
     def as_struct(ref self) -> ref[self._ptr[][StructBuilder]] StructBuilder:
-        return self._as[StructBuilder]()
+        return self.as_type[StructBuilder]()
 
     def as_dictionary(
         ref self,
     ) -> ref[self._ptr[][DictionaryBuilder]] DictionaryBuilder:
-        return self._as[DictionaryBuilder]()
+        return self.as_type[DictionaryBuilder]()
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +640,15 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
         self._bitmap.clear(self._length)
         self._null_count += 1
         self._length += 1
+
+    def append_nulls(mut self, count: Int) raises:
+        """Append a run of `count` nulls — one bitmap clear per element, and the
+        null count kept in step, which is what a caller writing the run itself
+        would have had to remember."""
+        self.reserve(count)
+        self._bitmap.set_range(self._length, count, False)
+        self._null_count += count
+        self._length += count
 
     def extend(mut self, values: List[Self.ScalarType]) raises:
         self.reserve(len(values))
@@ -1823,8 +1891,7 @@ def nulls[T: NumericType](size: Int, type: T) raises -> PrimitiveArray[T]:
     Mirrors ``pa.nulls(size, type=pa.int64())``.
     """
     var b = PrimitiveBuilder[T](capacity=size)
-    b.set_length(size)
-    b._null_count = size
+    b.append_nulls(size)
     return b.finish()
 
 

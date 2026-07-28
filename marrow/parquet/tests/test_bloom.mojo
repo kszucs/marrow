@@ -11,11 +11,10 @@ only marrow can read.
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import read_table, write_table, SplitBlockBloomFilter, xxh64
-from marrow.parquet.reader import ParquetFile
-from marrow.tabular import Table
-from marrow.c_data import CArrowArrayStream
+from ...parquet import read_table, write_table, SplitBlockBloomFilter, xxh64
+from ...parquet.reader import ParquetFile
+from ...tabular import Table
+from ...c_data import CArrowArrayStream
 
 
 def _to_marrow(py: PythonObject) raises -> Table:
@@ -317,7 +316,3 @@ def test_no_bloom_filter_by_default() raises:
     var pf = ParquetFile(path)
     assert_false(Bool(pf.bloom_filter(0, 0)))
     remove(path)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

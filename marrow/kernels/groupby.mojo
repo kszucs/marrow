@@ -30,7 +30,7 @@ from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
 from .execution import ExecutionContext
-from .filter import take
+from .filter import Take, take
 from .concat import concat
 from .aggregate import Aggregation, AggFunction
 
@@ -148,7 +148,7 @@ struct HashGrouper(Movable):
         if len(self._key_builders) == 0:
             for k in range(len(keys.children)):
                 self._key_builders.append(AnyBuilder(keys.children[k].dtype()))
-        var gathered = take(keys, rows)
+        var gathered = Take.apply(keys, rows)
         for k in range(len(keys.children)):
             self._key_builders[k].extend(gathered.children[k])
 
@@ -466,7 +466,7 @@ struct GroupBy(Movable):
         var idx = Int32Builder(capacity=s, zeroed=False)
         for i in range(s):
             idx.unsafe_append(Int32(i * stride))
-        var sample = take(keys, idx.finish())
+        var sample = Take.apply(keys, idx.finish())
         var table = SwissHashTable[rapidhash]()
         _ = table.insert(sample, grow_adaptively=True)
         return table.num_keys() * 2 > s
@@ -555,6 +555,12 @@ struct GroupBy(Movable):
                 cnts^,
             )
 
+        # Hand-rolled rather than `ctx.stripe`, and it has to stay that way:
+        # this worker **raises** (it hashes keys inside the stripe), and
+        # `stripe`'s body is typed non-raising. Widening it was tried and
+        # reverted — see the note on `ExecutionContext.stripe`; the parameter
+        # form of `sync_parallelize` that accepts a raising worker needs an
+        # implicitly-capturing closure, which miscompiles there.
         sync_parallelize[worker](num_threads)
 
         # Merge — re-key every chunk into the global grouper ONCE (shared across
@@ -643,7 +649,6 @@ struct GroupBy(Movable):
         def group_partition(
             rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[Int32Array, List[AnyArray]]:
-            var n = len(part_hashes)
             var grouper = HashGrouper()
             var grouped = grouper.consume_hashes(
                 part_hashes, grow_adaptively=not partition
@@ -678,7 +683,7 @@ struct GroupBy(Movable):
                 return group_partition(rows, part_hashes)
 
             parts = RadixPartitioner(
-                num_bits=RADIX_BITS, num_threads=num_threads
+                num_bits=RADIX_BITS, ctx=ExecutionContext.parallel(num_threads)
             ).map_partitions[
                 Tuple[Int32Array, List[AnyArray]], radix_partition
             ](

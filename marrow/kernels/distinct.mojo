@@ -118,7 +118,7 @@ def count_distinct(
             return table.num_keys()
 
         var counts = RadixPartitioner(
-            num_bits=6, num_threads=nt
+            num_bits=6, ctx=ctx.copy()
         ).map_partitions[Int, count_partition](hashes^)
         n = 0
         for i in range(len(counts)):

@@ -9,14 +9,13 @@ own read of the same file.
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import (
+from ...parquet import (
+    ParquetFile,
     read_table,
     write_table,
-    read_page_bounds,
 )
-from marrow.tabular import Table
-from marrow.c_data import CArrowArrayStream
+from ...tabular import Table
+from ...c_data import CArrowArrayStream
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +643,7 @@ def test_page_split_nested() raises:
         )
     )
     # >1 page, and the pages tile all 30 000 top-level rows
-    var pbs = read_page_bounds(path)
+    var pbs = ParquetFile(path).page_bounds()
     assert_true(len(pbs[0][0]) > 1)
     var total = 0
     for p in range(len(pbs[0][0])):
@@ -705,7 +704,3 @@ def test_list_float16() raises:
         pa.list_(pa.float16()),
         "none",
     )
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

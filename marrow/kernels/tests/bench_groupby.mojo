@@ -6,11 +6,11 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import AnyArray
-from marrow.builders import PrimitiveBuilder, Int32Builder, Float64Builder
-from marrow.dtypes import int32, float64, Int32Type, Float64Type
-from marrow.kernels.groupby import GroupBy
-from marrow.kernels.aggregate import (
+from ...arrays import AnyArray
+from ...builders import PrimitiveBuilder, Int32Builder, Float64Builder
+from ...dtypes import int32, float64, Int32Type, Float64Type
+from ...kernels.groupby import GroupBy
+from ...kernels.aggregate import (
     Aggregation,
     SumKernel,
     MinKernel,
@@ -20,7 +20,7 @@ from marrow.kernels.aggregate import (
 )
 
 
-from marrow.testing import BenchSuite, Benchmark
+from ...testing import Benchmark
 
 
 def _make_keys(n: Int, num_groups: Int) raises -> AnyArray:
@@ -114,7 +114,3 @@ def bench_groupby_mean_100k(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

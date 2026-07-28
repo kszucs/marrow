@@ -1,10 +1,9 @@
 """Test the schema.mojo file."""
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 from std.python import Python, PythonObject
-from marrow.schema import Schema, schema
-from marrow.c_data import CArrowSchema
-from marrow.dtypes import (
+from ..schema import Schema, schema
+from ..c_data import CArrowSchema
+from ..dtypes import (
     int8,
     int16,
     int32,
@@ -14,9 +13,9 @@ from marrow.dtypes import (
     uint32,
     uint64,
 )
-from marrow.dtypes import float16, float32, float64, binary, string, list_
-from marrow.dtypes import Field, field
-from marrow.dtypes import Int64Type, StringType, Float64Type
+from ..dtypes import float16, float32, float64, binary, string, list_
+from ..dtypes import Field, field
+from ..dtypes import Int64Type, StringType, Float64Type
 
 
 def test_schema_primitive_fields() raises:
@@ -127,7 +126,7 @@ def test_schema_get_field_index() raises:
     assert_equal(s.get_field_index("missing"), -1)
 
 
-def test_schema_from_pyarrow() raises:
+def test_schema_pyarrow_roundtrip() raises:
     """Test Schema.from_pyarrow convenience method."""
     var pa = Python.import_module("pyarrow")
     var pa_schema = pa.schema(
@@ -243,7 +242,3 @@ def test_schema_from_struct() raises:
         ]
     )
     assert_true(s == expected)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

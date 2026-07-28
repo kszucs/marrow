@@ -1,24 +1,23 @@
 """Tests for the hash join kernel."""
 
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     AnyArray,
     PrimitiveArray,
     StringArray,
     StructArray,
     UInt64Array,
 )
-from marrow.kernels.execution import ExecutionContext
-from marrow.builders import (
+from ...kernels.execution import ExecutionContext
+from ...builders import (
     array,
     PrimitiveBuilder,
     StringBuilder,
     Int32Builder,
     UInt64Builder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     int32,
     int64,
     uint64,
@@ -30,10 +29,11 @@ from marrow.dtypes import (
     UInt64Type,
     Float64Type,
 )
-from marrow.tabular import record_batch
-from marrow.kernels.filter import take
-from marrow.kernels.join import (
+from ...tabular import record_batch
+from ...kernels.filter import take
+from ...kernels.join import (
     hash_join,
+    HashJoin,
     JOIN_INNER,
     JOIN_LEFT,
     JOIN_RIGHT,
@@ -574,7 +574,7 @@ def _constant_hash(
 
 def test_collision_inner_join() raises:
     """With all hashes colliding, key equality filters to correct matches."""
-    from marrow.kernels.join import HashJoin
+    from ...kernels.join import HashJoin
 
     # left: k=[1,2,3], v=[10,20,30]
     # right: k=[2,3,4], v=[100,200,300]
@@ -610,7 +610,7 @@ def test_collision_inner_join() raises:
 
 def test_collision_left_join() raises:
     """With all hashes colliding, left join produces correct unmatched rows."""
-    from marrow.kernels.join import HashJoin
+    from ...kernels.join import HashJoin
 
     var lk = List[Int]()
     lk.append(1)
@@ -664,7 +664,7 @@ def _run_inner(
         _right_on(),
         JOIN_INNER,
         JOIN_ALL,
-        num_threads=num_threads,
+        ctx=ExecutionContext.parallel(num_threads),
     )
 
 
@@ -726,5 +726,70 @@ def test_parallel_partial_match() raises:
     assert_equal(len(serial), n // 2)
 
 
-def main() raises:
-    TestSuite.run[__functions_in_module()]()
+# ---------------------------------------------------------------------------
+# Execution context plumbing
+#
+# `HashJoin` used to store a bare worker count and rebuild
+# `ExecutionContext.parallel(n)` at five internal sites, each of which dropped
+# the caller's device. It now holds the context whole. These pin the observable
+# half of that: which path a given context selects, and that the default did not
+# silently change when `num_threads` was replaced by `ctx`.
+# ---------------------------------------------------------------------------
+
+
+def test_join_default_context_matches_explicit_auto() raises:
+    """`hash_join`'s default is *auto*, not serial.
+
+    The parameter it replaced defaulted to `num_threads=0`, which meant
+    all-cores. Defaulting the context to `.serial()` instead would have quietly
+    made every default join single-threaded — a change no correctness test would
+    have caught, since all three paths return the same rows.
+    """
+    var left = _dense_struct(20_000)
+    var right = _dense_struct(20_000)
+    var default_result = hash_join(left, right, _left_on(), _right_on())
+    var auto_result = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        ctx=ExecutionContext.auto(),
+    )
+    assert_equal(default_result.length, auto_result.length)
+
+
+def test_join_serial_and_parallel_contexts_agree() raises:
+    """The serial single-table path and the radix-partitioned parallel path
+    return the same number of matched rows for the same input."""
+    var left = _dense_struct(20_000)
+    var right = _dense_struct(20_000)
+    var serial = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        ctx=ExecutionContext.serial(),
+    )
+    var parallel = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        ctx=ExecutionContext.parallel(4),
+    )
+    assert_equal(serial.length, parallel.length)
+
+
+def test_hash_join_struct_default_is_serial() raises:
+    """`HashJoin()` built with no argument stays on the serial path.
+
+    `expr/execution.mojo` and `bench_join` both construct it that way, and its
+    old `num_threads=1` default meant serial — unlike the free function's.
+    """
+    var join = HashJoin(ExecutionContext())
+    var left = _dense_struct(20_000)
+    join.build(left, _left_on())
+    var out = join.probe(
+        _dense_struct(20_000), _right_on(), JOIN_INNER, JOIN_ALL
+    )
+    assert_true(out.length > 0)

@@ -1142,81 +1142,86 @@ struct AnyDataType(
 
     # --- compound type accessors ---
 
-    def _as[T: DataType](ref self) -> ref[self._v[T]] T:
-        debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self)
+    def as_type[T: DataType](ref self) -> ref[self._v[T]] T:
+        """This dtype as the concrete `T` it holds — a borrow, no copy.
+
+        The named accessors below are one-liners over it; generic code (a
+        `PrimitiveArray[T]` reading its own dtype) needs the parameterized form.
+        """
+        debug_assert(self._v.isa[T](), "as_type: wrong type, holds ", self)
         return self._v[T]
 
     def as_list(ref self) -> ref[self._v[ListType]] ListType:
         """For list types, returns the inner ListType."""
-        return self._as[ListType]()
+        return self.as_type[ListType]()
 
     def as_large_list(ref self) -> ref[self._v[LargeListType]] LargeListType:
         """For large_list types, returns the inner LargeListType."""
-        return self._as[LargeListType]()
+        return self.as_type[LargeListType]()
 
     def as_fixed_size_list(
         ref self,
     ) -> ref[self._v[FixedSizeListType]] FixedSizeListType:
         """For fixed-size list types, returns the inner FixedSizeListType."""
-        return self._as[FixedSizeListType]()
+        return self.as_type[FixedSizeListType]()
 
     def as_struct(ref self) -> ref[self._v[StructType]] StructType:
         """For struct types, returns the inner StructType."""
-        return self._as[StructType]()
+        return self.as_type[StructType]()
 
     def as_map(ref self) -> ref[self._v[MapType]] MapType:
         """For map types, returns the inner MapType."""
-        return self._as[MapType]()
+        return self.as_type[MapType]()
 
     def as_dictionary(ref self) -> ref[self._v[DictionaryType]] DictionaryType:
         """For dictionary types, returns the inner DictionaryType."""
-        return self._as[DictionaryType]()
+        return self.as_type[DictionaryType]()
 
     def as_fixed_size_binary(
         ref self,
     ) -> ref[self._v[FixedSizeBinaryType]] FixedSizeBinaryType:
         """For fixed-size binary types, returns the inner FixedSizeBinaryType.
         """
-        return self._as[FixedSizeBinaryType]()
+        return self.as_type[FixedSizeBinaryType]()
 
     def as_time32(ref self) -> ref[self._v[Time32Type]] Time32Type:
-        return self._as[Time32Type]()
+        return self.as_type[Time32Type]()
 
     def as_time64(ref self) -> ref[self._v[Time64Type]] Time64Type:
-        return self._as[Time64Type]()
+        return self.as_type[Time64Type]()
 
     def as_timestamp(ref self) -> ref[self._v[TimestampType]] TimestampType:
-        return self._as[TimestampType]()
+        return self.as_type[TimestampType]()
 
     def as_duration(ref self) -> ref[self._v[DurationType]] DurationType:
-        return self._as[DurationType]()
+        return self.as_type[DurationType]()
 
     def as_year_month_interval(
         ref self,
     ) -> ref[self._v[YearMonthIntervalType]] YearMonthIntervalType:
-        return self._as[YearMonthIntervalType]()
+        return self.as_type[YearMonthIntervalType]()
 
     def as_day_time_interval(
         ref self,
     ) -> ref[self._v[DayTimeIntervalType]] DayTimeIntervalType:
-        return self._as[DayTimeIntervalType]()
+        return self.as_type[DayTimeIntervalType]()
 
     def as_month_day_nano_interval(
         ref self,
     ) -> ref[self._v[MonthDayNanoIntervalType]] MonthDayNanoIntervalType:
-        return self._as[MonthDayNanoIntervalType]()
+        return self.as_type[MonthDayNanoIntervalType]()
 
     def as_decimal32(ref self) -> ref[self._v[Decimal32Type]] Decimal32Type:
-        return self._as[Decimal32Type]()
+        return self.as_type[Decimal32Type]()
 
     def as_decimal64(ref self) -> ref[self._v[Decimal64Type]] Decimal64Type:
-        return self._as[Decimal64Type]()
+        return self.as_type[Decimal64Type]()
 
     def as_decimal128(ref self) -> ref[self._v[Decimal128Type]] Decimal128Type:
-        return self._as[Decimal128Type]()
+        return self.as_type[Decimal128Type]()
 
     def as_decimal256(ref self) -> ref[self._v[Decimal256Type]] Decimal256Type:
-        return self._as[Decimal256Type]()
+        return self.as_type[Decimal256Type]()
 
 
 # ---------------------------------------------------------------------------

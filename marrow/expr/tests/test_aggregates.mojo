@@ -10,7 +10,7 @@ ibis/polars do:
             col("amount").max().alias("biggest"),
         ],
     )
-    var out = execute(plan)                       # region | total | biggest
+    var out = plan.execute()                       # region | total | biggest
 
 Keys and inputs are arbitrary expressions (``col("a") * lit(2)``,
 ``col("ts").year()``), ``HAVING`` is a ``.filter(...)`` on top, and leaving
@@ -33,10 +33,9 @@ from std.testing import (
     assert_raises,
 )
 
-from marrow.testing import TestSuite
 
-from marrow.builders import array, Date32Builder, PrimitiveBuilder
-from marrow.dtypes import (
+from ...builders import array, Date32Builder, PrimitiveBuilder
+from ...dtypes import (
     Int64Type,
     TimestampType,
     date32,
@@ -47,27 +46,20 @@ from marrow.dtypes import (
     string,
     timestamp,
 )
-from marrow.schema import schema
-from marrow.tabular import RecordBatch, record_batch
-from marrow.dtypes import AnyDataType, Int32Type, field
-from marrow.kernels.aggregate import (
+from ...schema import schema
+from ...tabular import RecordBatch, record_batch
+from ...dtypes import AnyDataType, Int32Type, StringType
+from ...kernels.aggregate import (
     NumericAgg,
     StringMinMax,
     MinOp,
-    StringType,
     SumKernel,
     MaxKernel,
 )
-from marrow.expr.aggregates import Aggregates
-from marrow.expr.dynamic import DynValue, col, lit
-from marrow.expr.relations import (
-    Aggregate,
-    AnyRelation,
-    InMemoryTable,
-    execute,
-    in_memory_table,
-)
-from marrow.expr.values import AnyValue, col as fused_col
+from ...expr.aggregates import AggFunc
+from ...expr.dynamic import DynValue, col, lit
+from ...expr.relations import AnyRelation, in_memory_table
+from ...expr.values import AnyValue, col as fused_col
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +103,7 @@ def test_group_by_one_aggregate() raises:
             col("amount").sum(),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
 
     assert_equal(out.num_rows(), 2)
     assert_equal(out.num_columns(), 2)
@@ -134,7 +126,7 @@ def test_group_by_several_aggregates_in_one_pass() raises:
             col("amount").mean().alias("avg"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     var east = _row_for(out, "east")
 
     assert_equal(out.num_columns(), 5)
@@ -152,7 +144,7 @@ def test_group_by_computed_input() raises:
             (col("amount") * lit[Int64Type](2)).sum().alias("doubled"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     assert_equal(out.column(1).as_int64()[_row_for(out, "east")].value(), 180)
 
 
@@ -181,7 +173,7 @@ def test_having_is_a_filter_on_the_aggregate() raises:
         )
         .filter(col("total") > lit[Int64Type](80))
     )
-    var out = execute(plan)
+    var out = plan.execute()
     assert_equal(out.num_rows(), 1)
     assert_true(out.column(0).as_string()[0].to_string() == "east")
     assert_equal(out.column(1).as_int64()[0].value(), 90)
@@ -203,7 +195,7 @@ def test_whole_table_aggregate_without_keys() raises:
             col("quantity").count().alias("n"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
 
     assert_equal(out.num_rows(), 1)
     assert_equal(out.num_columns(), 3)
@@ -231,7 +223,7 @@ def test_output_dtypes_match_what_execution_produces() raises:
             col("day").min().alias("earliest"),  # date min keeps date32
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     for i in range(len(plan.schema().fields)):
         assert_equal(plan.schema().fields[i].dtype, out.schema.fields[i].dtype)
 
@@ -260,7 +252,7 @@ def test_min_max_keep_timestamp_unit_and_timezone() raises:
             col("ts").min().alias("first_seen"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     assert_equal(plan.schema().fields[1].dtype, timestamp(second, "UTC"))
     assert_equal(out.column(1).dtype(), timestamp(second, "UTC"))
     assert_equal(out.column(1).as_timestamp()[0].value(), 1000)
@@ -286,7 +278,7 @@ def test_min_max_over_strings_are_lexicographic() raises:
             col("fruit").max().alias("hi"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     assert_true(out.column(1).as_string()[0].to_string() == "apple")
     assert_true(out.column(2).as_string()[0].to_string() == "cherry")
 
@@ -299,7 +291,7 @@ def test_count_distinct_over_any_column() raises:
             col("amount").count_distinct().alias("amounts"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     var east = _row_for(out, "east")
     assert_equal(out.column(1).as_int64()[east].value(), 1)
     assert_equal(out.column(2).as_int64()[east].value(), 3)
@@ -325,7 +317,7 @@ def test_nulls_are_excluded_and_empty_groups_are_null() raises:
             col("v").count().alias("n"),
         ],
     )
-    var out = execute(plan)
+    var out = plan.execute()
 
     ref keys = out.column(0).as_string()
     for i in range(out.num_rows()):
@@ -387,8 +379,8 @@ def test_the_same_plan_can_be_executed_repeatedly() raises:
             col("amount").sum().alias("total"),
         ],
     )
-    var first = execute(plan)
-    var second = execute(plan)
+    var first = plan.execute()
+    var second = plan.execute()
     assert_equal(first.num_rows(), second.num_rows())
     assert_equal(
         first.column(1).as_int64()[_row_for(first, "east")].value(),
@@ -409,46 +401,34 @@ def test_the_same_plan_can_be_executed_repeatedly() raises:
 
 def _fused_sum_max_by_region() raises -> AnyRelation:
     """``SELECT region, sum(amount), max(amount) GROUP BY region``, fused."""
-    var keys = List[AnyValue]()
-    keys.append(AnyValue(fused_col("region", string)))
-
-    var inputs = List[AnyValue]()
-    inputs.append(AnyValue(fused_col("amount", int64)))
-    inputs.append(AnyValue(fused_col("amount", int64)))
-
-    var aggs = Aggregates()
-    aggs.append[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
-    aggs.append[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64))
-
-    return AnyRelation(
-        Aggregate(
-            input=AnyRelation(InMemoryTable(batch=_orders())),
-            keys=keys^,
-            inputs=inputs^,
-            aggs=aggs^,
-            schema=schema(
-                [
-                    field("region", string),
-                    field("total", int64),
-                    field("biggest", int64),
-                ]
-            ),
-        )
+    return in_memory_table(_orders()).aggregate(
+        keys=[AnyValue(fused_col("region", string))],
+        inputs=[
+            AnyValue(fused_col("amount", int64)),
+            AnyValue(fused_col("amount", int64)),
+        ],
+        aggs=[
+            AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64)),
+            AggFunc.of[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64)),
+        ],
+        names=["region", "total", "biggest"],
     )
 
 
 def test_fused_aggregate_matches_the_dynamic_one() raises:
     """Naming the aggregation and naming the function must reach the same
     kernel — the fused path is the dynamic one with the resolution removed."""
-    var fused = execute(_fused_sum_max_by_region())
-    var dynamic = execute(
-        in_memory_table(_orders()).aggregate(
+    var fused = _fused_sum_max_by_region().execute()
+    var dynamic = (
+        in_memory_table(_orders())
+        .aggregate(
             keys=[col("region")],
             aggs=[
                 col("amount").sum().alias("total"),
                 col("amount").max().alias("biggest"),
             ],
         )
+        .execute()
     )
 
     assert_equal(fused.num_rows(), dynamic.num_rows())
@@ -467,7 +447,7 @@ def test_fused_aggregate_matches_the_dynamic_one() raises:
 
 
 def test_fused_aggregate_results() raises:
-    var out = execute(_fused_sum_max_by_region())
+    var out = _fused_sum_max_by_region().execute()
     var east = _row_for(out, "east")
     assert_equal(out.column(1).as_int64()[east].value(), 90)
     assert_equal(out.column(2).as_int64()[east].value(), 50)
@@ -476,27 +456,12 @@ def test_fused_aggregate_results() raises:
 def test_fused_non_numeric_aggregation() raises:
     """A fused plan is not limited to the numeric folds: a bytewise string
     min is just a different `Aggregation` named at compile time."""
-    var keys = List[AnyValue]()
-    keys.append(AnyValue(fused_col("region", string)))
-    var inputs = List[AnyValue]()
-    inputs.append(AnyValue(fused_col("region", string)))
-
-    var aggs = Aggregates()
-    aggs.append[StringMinMax[MinOp, StringType]](AnyDataType(string))
-
-    var plan = AnyRelation(
-        Aggregate(
-            input=AnyRelation(InMemoryTable(batch=_orders())),
-            keys=keys^,
-            inputs=inputs^,
-            aggs=aggs^,
-            schema=schema([field("region", string), field("lo", string)]),
-        )
+    var plan = in_memory_table(_orders()).aggregate(
+        keys=[AnyValue(fused_col("region", string))],
+        inputs=[AnyValue(fused_col("region", string))],
+        aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](AnyDataType(string))],
+        names=["region", "lo"],
     )
-    var out = execute(plan)
+    var out = plan.execute()
     var east = _row_for(out, "east")
     assert_true(out.column(1).as_string()[east].to_string() == "east")
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

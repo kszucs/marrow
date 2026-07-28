@@ -6,7 +6,7 @@ Same query as `query_comptime.mojo`:
 
 built with the existing `AnyRelation`/`DynValue` layer
 (`marrow.expr.relations`, `marrow.expr.dynamic`, `marrow.expr.executor`)
--- `in_memory_table(batch).filter(...).select(...)` then `execute(plan)`, which
+-- `in_memory_table(batch).filter(...).select(...)` then `plan.execute()`, which
 walks the plan through `Planner.build()` into a pull-based
 `RelationProcessor` pipeline, evaluating the predicate via `DynValue.eval()`'s
 tag dispatch. Filter comes before select in the chain (not select-then-filter
@@ -23,7 +23,7 @@ Build + strip + compare against `query_comptime.mojo`:
 from marrow.builders import array
 from marrow.dtypes import int64
 from marrow.tabular import record_batch
-from marrow.expr import col, in_memory_table, execute
+from marrow.expr import col, in_memory_table
 
 
 def main() raises:
@@ -37,5 +37,5 @@ def main() raises:
     var plan = (
         in_memory_table(batch).filter(col("a") > col("b")).select("a", "name")
     )
-    var result = execute(plan)
+    var result = plan.execute()
     print(result)

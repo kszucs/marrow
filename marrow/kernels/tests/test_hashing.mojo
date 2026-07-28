@@ -1,9 +1,8 @@
 from std.testing import assert_equal, assert_true, assert_false
 
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, DictionaryArray, PrimitiveArray, StringArray
-from marrow.builders import (
+from ...arrays import AnyArray, DictionaryArray, PrimitiveArray, StringArray
+from ...builders import (
     array,
     Date32Builder,
     Decimal128Builder,
@@ -13,7 +12,7 @@ from marrow.builders import (
     StringBuilder,
     TimestampBuilder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     int32,
     int64,
     uint8,
@@ -30,12 +29,12 @@ from marrow.dtypes import (
     UInt64Type,
     Float64Type,
 )
-from marrow.arrays import StructArray
-from marrow.dtypes import Field, struct_
-from marrow.expr.aggregates import Sum
-from marrow.kernels.groupby import GroupBy
+from ...arrays import StructArray
+from ...dtypes import Field, struct_
+from ...expr.aggregates import Sum
+from ...kernels.groupby import GroupBy
 
-from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
+from ...kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 
 
 def _children(ref a: AnyArray, ref b: AnyArray) -> List[AnyArray]:
@@ -270,7 +269,7 @@ def test_hash_timestamp_nulls() raises:
 
 
 def test_hash_large_string() raises:
-    """large_string hashes identically to string for the same bytes."""
+    """`large_string` hashes identically to string for the same bytes."""
     var lb = LargeStringBuilder(3)
     lb.append("foo")
     lb.append("bar")
@@ -289,7 +288,7 @@ def test_hash_large_string() raises:
 
 
 def test_hash_decimal128_high_bits() raises:
-    """decimal128 folds both 64-bit limbs — values that differ only above bit 63
+    """`decimal128` folds both 64-bit limbs — values that differ only above bit 63
     must not collide (group-by buckets on the hash alone)."""
     var b = Decimal128Builder(decimal128(38, 0), 3)
     b.append(Scalar[DType.int128](1))
@@ -366,7 +365,3 @@ def test_groupby_large_string_key() raises:
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 4)
     assert_equal(s[1].value(), 6)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

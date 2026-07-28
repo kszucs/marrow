@@ -7,12 +7,11 @@ from std.testing import (
     assert_raises,
 )
 
-from marrow.testing import TestSuite
-from marrow.arrays import AnyArray, StringArray, BoolArray
-from marrow.builders import array, StringBuilder
-from marrow.dtypes import string, int32
+from ...arrays import AnyArray, StringArray, BoolArray
+from ...builders import array, StringBuilder
+from ...dtypes import string, int32
 
-from marrow.kernels.string import (
+from ...kernels.string import (
     LengthKernel,
     UpperKernel,
     LowerKernel,
@@ -352,7 +351,3 @@ def test_like_dispatch_rejects_non_string() raises:
     var s: AnyArray = array([1, 2, 3], int32)
     with assert_raises(contains="expected a string array"):
         _ = LikeKernel.dispatch(s, "%a%")
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -11,6 +11,7 @@ page-index readers reuse the same footer decode without touching column data.
 """
 
 from std.algorithm.functional import sync_parallelize
+from std.memory import ArcPointer
 from std.sys import size_of
 from std.sys.info import num_physical_cores
 from std.memory import unsafe_memcpy
@@ -38,6 +39,7 @@ from .statistics import Statistics
 from .format import (
     FileMetaData,
     ThriftCompactReader,
+    ColumnChunk,
     ColumnIndex,
     OffsetIndex,
     ColumnMetaData,
@@ -52,14 +54,14 @@ from .format import (
 # ---------------------------------------------------------------------------
 
 
-struct Page(Movable):
+struct Page[o: Origin[mut=False]](Movable):
     """A decoded page. `body` is a *view* — into the mmap for uncompressed pages
     (zero copy) or into the `PageReader`'s reused scratch for compressed pages —
     not an owned buffer, so no per-page allocation. `dictionary` marks the
     column chunk's dictionary page (vs a data page)."""
 
     var dictionary: Bool
-    var body: Span[UInt8, ImmUntrackedOrigin]
+    var body: Span[UInt8, Self.o]
     var def_levels: List[Int32]
     var rep_levels: List[Int32]  # only populated for repeated (list) leaves
     var value_offset: Int
@@ -70,7 +72,7 @@ struct Page(Movable):
     def __init__(
         out self,
         *,
-        body: Span[UInt8, ImmUntrackedOrigin],
+        body: Span[UInt8, Self.o],
         num_values: Int,
         num_present: Int,
         value_offset: Int = 0,
@@ -89,9 +91,9 @@ struct Page(Movable):
         self.num_values = num_values
 
     @staticmethod
-    def dictionary_page(
-        body: Span[UInt8, ImmUntrackedOrigin], num_values: Int
-    ) -> Page:
+    def dictionary_page[
+        po: Origin[mut=False]
+    ](body: Span[UInt8, po], num_values: Int) -> Page[po]:
         """The column chunk's dictionary page — carries only its distinct values;
         no levels, no present/null distinction."""
         return Page(
@@ -117,7 +119,7 @@ struct Page(Movable):
     def is_dictionary(self) -> Bool:
         return self.encoding.is_dictionary()
 
-    def values(self) -> Span[UInt8, ImmUntrackedOrigin]:
+    def values(self) -> Span[UInt8, Self.o]:
         """The value bytes (after any level prefix)."""
         return self.body[self.value_offset :]
 
@@ -130,10 +132,17 @@ struct Page(Movable):
 
 
 struct PageReader[o: Origin[mut=False]](Movable):
+    """Iterates the pages of **one column chunk**.
+
+    `data` is the chunk's own bytes — exactly the range `meta.byte_range()`
+    names — and `pos` is relative to it, so the reader never addresses the file
+    as a whole. That is what lets a `ByteSource` fetch a chunk at a time instead
+    of having to hand out a whole-file span."""
+
     var data: Span[UInt8, Self.o]
     var meta: ColumnMetaData
     var leaf: LeafColumn
-    var pos: Int
+    var pos: Int  # chunk-relative offset of the next page header
     var produced: Int  # data-page values yielded so far
     var scratch: List[UInt8]  # reused decompression buffer for compressed pages
 
@@ -144,45 +153,50 @@ struct PageReader[o: Origin[mut=False]](Movable):
         var leaf: LeafColumn,
     ):
         self.data = data
-        if meta.dictionary_page_offset != -1:
-            self.pos = meta.dictionary_page_offset
-        else:
-            self.pos = meta.data_page_offset
+        # The chunk starts at its first page, so the first header is at 0.
+        self.pos = 0
         self.meta = meta^
         self.leaf = leaf^
         self.produced = 0
         self.scratch = List[UInt8]()
 
-    @staticmethod
-    def _untracked(s: Span[UInt8, _]) -> Span[UInt8, ImmUntrackedOrigin]:
-        """Drop origin tracking on a byte span. The backing storage (the mmap,
-        or this reader's decompression scratch) is kept alive for as long as each
-        page is consumed, so the untracked view is always valid in use."""
-        return rebind[Span[UInt8, ImmUntrackedOrigin]](s)
-
     def _body(
         mut self,
-        comp: Span[UInt8, _],
+        comp: Span[UInt8, Self.o],
         uncompressed_size: Int,
         mut codecs: CompressionLibs,
-    ) raises -> Span[UInt8, ImmUntrackedOrigin]:
-        """A view of the page body: the mmap bytes directly for uncompressed
-        pages, or the reused scratch after decompressing."""
+    ) raises -> Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]:
+        """A view of the page body: the source bytes directly for uncompressed
+        pages, or the reused scratch after decompressing.
+
+        The two arms have genuinely different origins — the byte source's, and
+        this reader's own scratch — so the result is their *union*. That union
+        is why this used to launder both through an `ImmUntrackedOrigin`: the
+        return needed one type, and dropping the tracking was the only way to
+        get one. It is not: `origin_of(a, b)` expresses exactly this, and now
+        the compiler knows a page body borrows from whichever of the two it
+        actually came from."""
         var codec = Compression(self.meta.codec)
         if codec == Compression.UNCOMPRESSED:
-            return Self._untracked(comp)
+            return rebind[
+                Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+            ](comp)
         codec.decompress_into(codecs, comp, uncompressed_size, self.scratch)
-        return Self._untracked(Span(self.scratch))
+        return rebind[Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]](
+            Span(self.scratch)
+        )
 
     def has_next(self) -> Bool:
         return self.produced < self.meta.num_values
 
-    def _data_page_v1(
+    def _data_page_v1[
+        bo: Origin[mut=False]
+    ](
         self,
-        var body: Span[UInt8, ImmUntrackedOrigin],
+        var body: Span[UInt8, bo],
         num_values: Int,
         encoding: Encoding,
-    ) raises -> Page:
+    ) raises -> Page[bo]:
         """Decode a v1 data page's leading rep/def level streams and build the
         `Page` — the single construction site for v1 pages (no field-by-field
         mutation)."""
@@ -232,7 +246,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
             def_levels=defs^,
         )
 
-    def next(mut self, mut codecs: CompressionLibs) raises -> Page:
+    def next(
+        mut self, mut codecs: CompressionLibs
+    ) raises -> Page[origin_of(Self.o, origin_of(self.scratch))]:
         var body_start = self.pos
         # advances body_start to the page body
         var ph = PageHeader.read_at(self.data, body_start)
@@ -246,7 +262,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
             raise Error("parquet: page CRC-32 mismatch (corrupt data)")
 
         if ph.type == PageType.DICTIONARY:
-            return Page.dictionary_page(
+            return Page[
+                origin_of(Self.o, origin_of(self.scratch))
+            ].dictionary_page(
                 self._body(comp, ph.uncompressed_page_size, codecs),
                 ph.dictionary_page_header.value().num_values,
             )
@@ -288,7 +306,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
             # otherwise ends flush against the last value byte).
             self.scratch.resize(unsafe_uninit_length=len(self.scratch) + 8)
 
-            var body = Self._untracked(Span(self.scratch))
+            var body = rebind[
+                Span[UInt8, origin_of(Self.o, origin_of(self.scratch))]
+            ](Span(self.scratch))
             var reps = List[Int32]()
             var defs = List[Int32]()
             if (
@@ -1051,6 +1071,8 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         num_rows: Int,
         var selection: Optional[RowSelection] = None,
     ):
+        """`data` is this column chunk's bytes — `meta.byte_range()`, not the
+        whole file."""
         var leveled = leaf.max_rep >= 1
         self.pages = PageReader(data, meta^, leaf^)
         self.num_rows = num_rows
@@ -1710,6 +1732,8 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
     var _source: Self.S
     var _meta: FileMetaData
     var _mapping: SchemaMapping
+    var _codecs: ArcPointer[List[CompressionLibs]]
+    """Reusable per-worker codec handles — see the pool comment in `read`."""
 
     def __init__(out self: ParquetFile[MappedFile], path: String) raises:
         # Convenience: open the local file as a memory map (S == MappedFile).
@@ -1718,6 +1742,7 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
             self._source.read_at(0, self._source.size())
         )
         self._mapping = SchemaMapping.from_parquet(self._meta)
+        self._codecs = ArcPointer(List[CompressionLibs]())
 
     def __init__(out self, var source: Self.S) raises:
         # Read from any byte source; everything downstream goes through it.
@@ -1726,12 +1751,31 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
             self._source.read_at(0, self._source.size())
         )
         self._mapping = SchemaMapping.from_parquet(self._meta)
+        self._codecs = ArcPointer(List[CompressionLibs]())
 
-    def _span(self) -> Span[UInt8, ImmUntrackedOrigin]:
-        """The whole file as one contiguous span. The absolute offsets in the
-        footer/page metadata index into this. (A future non-whole-file
-        `ByteSource` would drive per-region `read_at` calls instead.)"""
-        return self._source.read_at(0, self._source.size())
+    def _read_at(
+        ref self, offset: Int, length: Int
+    ) -> Span[UInt8, origin_of(self)]:
+        """One region of the file. Every read goes through here, so the source
+        is only ever asked for the bytes actually needed — a column chunk, a
+        page index, a bloom filter — never the whole file.
+
+        `_source` is a field of `self`; widening its origin to the file's is
+        sound and is what every caller relies on."""
+        return rebind[Span[UInt8, origin_of(self)]](
+            self._source.read_at(offset, length)
+        )
+
+    def _metadata_at(
+        ref self, offset: Int, length: Int
+    ) -> Span[UInt8, origin_of(self)]:
+        """A metadata region (page index, bloom filter) whose recorded `length`
+        may be absent — writers may omit it. Then the region has to be bounded
+        by the end of the file, and only the Thrift reader knows where it really
+        stops."""
+        return self._read_at(
+            offset, length if length > 0 else self._source.size() - offset
+        )
 
     def metadata(self) -> FileMetaData:
         """The file's footer metadata (row groups, column chunks, statistics).
@@ -1770,8 +1814,6 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         workers. Each worker owns a `CompressionLibs` (the lazy `dlopen` handles
         and reused size cell are not shareable across threads); the mmap and
         metadata are read-only."""
-        var data = self._span()
-
         # the read plan: which column chunks to decode and how to reassemble them
         var plan = self._mapping.project(
             columns.value()
@@ -1814,11 +1856,23 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         for _ in range(total):
             grid.append(None)
 
+        # Per-worker codec handles, reused across calls. Constructing a
+        # `CompressionLibs` is cheap, but the first decompress for a codec
+        # `dlopen`s its library — and a streaming scan calls `read` once per
+        # row-group window, so building them fresh on every call re-paid that open on
+        # every window (measured: 4.7x on a Snappy 16-row-group scan). Workers
+        # touch disjoint slots and the list is grown before dispatch, so this
+        # keeps the "one `CompressionLibs` per worker" rule the handles need.
+        # Shared ownership rather than a `mut self` field on purpose: `read`
+        # must stay a borrow, since `_read_at` hands out spans whose origin is
+        # `self` and `ColumnReader` requires an immutable one.
+        var codecs = self._codecs
+        while len(codecs[]) < nt:
+            codecs[].append(CompressionLibs())
+
         @parameter
         def worker(w: Int) raises:
-            var codecs = (
-                CompressionLibs()
-            )  # per-worker: lazy dlopen handles are not shared
+            ref codecs_w = codecs[][w]
             var t = w
             while t < total:
                 var slot = t // num_leaves
@@ -1834,14 +1888,16 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
                     sel = row_selections.value()[slot].copy()
                 # ColumnReader.decode picks the flat vs leveled path from the
                 # leaf's max repetition, so one call serves every column shape.
+                # Each worker fetches only its own chunk's bytes.
+                var start, length = rg.columns[orig].meta_data.byte_range()
                 var reader = ColumnReader(
-                    data,
+                    self._read_at(start, length),
                     rg.columns[orig].meta_data.copy(),
                     self._mapping.leaves[orig].copy(),
                     rg.num_rows,
                     sel^,
                 )
-                grid[t] = reader.decode(codecs)
+                grid[t] = reader.decode(codecs_w)
                 t += nt
 
         sync_parallelize[worker](nt)
@@ -1881,24 +1937,38 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
             out.append(row^)
         return out^
 
+    def _chunk_page_index(ref self, cc: ColumnChunk) raises -> PageIndex:
+        """One column chunk's page index, each half absent when the writer
+        stored none. The two readers below share this so the offsets are
+        resolved in exactly one place."""
+        var pi = PageIndex()
+        if cc.offset_index_offset >= 0:
+            var r = ThriftCompactReader(
+                self._metadata_at(
+                    cc.offset_index_offset, cc.offset_index_length
+                ),
+                0,
+            )
+            pi.offset_index = OffsetIndex.read(r)
+        if cc.column_index_offset >= 0:
+            var r = ThriftCompactReader(
+                self._metadata_at(
+                    cc.column_index_offset, cc.column_index_length
+                ),
+                0,
+            )
+            pi.column_index = ColumnIndex.read(r)
+        return pi^
+
     def page_index(self) raises -> List[List[PageIndex]]:
         """The raw page index (OffsetIndex + ColumnIndex) for every (row group,
         leaf column), indexed `result[row_group][leaf]`. A chunk without a page
         index yields empty optionals."""
-        var data = self._span()
         var out = List[List[PageIndex]]()
         for ref rg in self._meta.row_groups:
             var row = List[PageIndex]()
             for ci in range(len(rg.columns)):
-                ref cc = rg.columns[ci]
-                var pi = PageIndex()
-                if cc.offset_index_offset >= 0:
-                    var r = ThriftCompactReader(data, cc.offset_index_offset)
-                    pi.offset_index = OffsetIndex.read(r)
-                if cc.column_index_offset >= 0:
-                    var r = ThriftCompactReader(data, cc.column_index_offset)
-                    pi.column_index = ColumnIndex.read(r)
-                row.append(pi^)
+                row.append(self._chunk_page_index(rg.columns[ci]))
             out.append(row^)
         return out^
 
@@ -1912,8 +1982,10 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         ref cc = self._meta.row_groups[row_group].columns[column]
         if cc.meta_data.bloom_filter_offset < 0:
             return None
-        var data = self._span()
-        var r = ThriftCompactReader(data, cc.meta_data.bloom_filter_offset)
+        var data = self._metadata_at(
+            cc.meta_data.bloom_filter_offset, cc.meta_data.bloom_filter_length
+        )
+        var r = ThriftCompactReader(data, 0)
         var hdr = BloomFilterHeader.read(r)
         return SplitBlockBloomFilter.from_bytes(
             data[r.pos : r.pos + hdr.num_bytes]
@@ -1924,18 +1996,15 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         index — indexed `result[rg][leaf][page]`. A column with no page index
         yields an empty page list. Predicate pushdown prunes pages with these.
         """
-        var data = self._span()
         var out = List[List[List[PageBounds]]]()
         for ref rg in self._meta.row_groups:
             var per_col = List[List[PageBounds]]()
             for ci in range(len(rg.columns)):
-                ref cc = rg.columns[ci]
+                var pi = self._chunk_page_index(rg.columns[ci])
                 var pages = List[PageBounds]()
-                if cc.offset_index_offset >= 0 and cc.column_index_offset >= 0:
-                    var ro = ThriftCompactReader(data, cc.offset_index_offset)
-                    var oi = OffsetIndex.read(ro)
-                    var rc = ThriftCompactReader(data, cc.column_index_offset)
-                    var cix = ColumnIndex.read(rc)
+                if pi.offset_index and pi.column_index:
+                    ref oi = pi.offset_index.value()
+                    ref cix = pi.column_index.value()
                     ref dtype = self._mapping.leaves[ci].dtype
                     var np = len(oi.page_locations)
                     for p in range(np):
@@ -1977,7 +2046,9 @@ def read_table(
 
 struct RowSelection(Copyable, Movable):
     """Which rows of a row group to decode when a pushed-down predicate lets the
-    reader skip pages. Row-group-relative, one flag per row: a data page whose
+    reader skip pages.
+
+    Row-group-relative, one flag per row: a data page whose
     rows are all deselected is skipped without decoding; a partially selected
     page keeps only its chosen rows, so every column yields the same rows and
     stays aligned. Built from per-page keep flags, combined with `intersect`, and
@@ -2106,13 +2177,6 @@ struct PageBounds(Copyable, Movable):
         self.max = max^
 
 
-def read_page_bounds(path: String) raises -> List[List[List[PageBounds]]]:
-    """Per (row group, leaf column, data page) decoded bounds, from the page
-    index — indexed `result[rg][leaf][page]` — a convenience wrapper over
-    `ParquetFile(path).page_bounds()`."""
-    return ParquetFile(path).page_bounds()
-
-
 struct ColumnStatistics(Copyable, Movable):
     """Decoded per-column-chunk statistics: `null_count` (-1 if absent) and the
     `min`/`max` bounds as typed scalars (each `None` when the file stored no
@@ -2140,10 +2204,3 @@ struct ColumnStatistics(Copyable, Movable):
                 cs.min = mn^
                 cs.max = mx^
         return cs^
-
-
-def read_statistics(path: String) raises -> List[List[ColumnStatistics]]:
-    """Per-(row group, leaf column) decoded statistics, indexed
-    `result[row_group][leaf]` — a convenience wrapper over
-    `ParquetFile(path).statistics()`."""
-    return ParquetFile(path).statistics()

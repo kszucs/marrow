@@ -10,9 +10,8 @@ Covers the four value families and the universal `AnyValue` box:
 
 from std.testing import assert_true, assert_equal
 
-from marrow.testing import TestSuite
-from marrow.builders import array, ListBuilder, Int64Builder, PrimitiveBuilder
-from marrow.dtypes import (
+from ...builders import array, ListBuilder, Int64Builder, PrimitiveBuilder
+from ...dtypes import (
     int64,
     int32,
     float64,
@@ -25,12 +24,11 @@ from marrow.dtypes import (
     timestamp,
     second,
 )
-from marrow.tabular import record_batch, RecordBatch
-from marrow.scalars import AnyScalar
-from marrow.expr.values import (
+from ...tabular import record_batch, RecordBatch
+from ...scalars import AnyScalar
+from ...expr.values import (
     col,
     lit,
-    slit,
     Add,
     Sub,
     Mul,
@@ -92,7 +90,7 @@ from marrow.expr.values import (
     DayOfWeek,
     DayOfYear,
 )
-from marrow.expr.dynamic import col as dyn_col
+from ...expr.dynamic import col as dyn_col
 
 
 # instantiation is a COMPILE-TIME proof the operand is a fused `NumericValue` node
@@ -400,14 +398,14 @@ def _str_batch2() raises -> RecordBatch:
 
 def test_string_literal_is_scalar() raises:
     # a bare string literal is a scalar Datum (broadcasts lazily at a boundary)
-    var cv = (slit("hi")).execute(_str_batch())
+    var cv = (lit("hi")).execute(_str_batch())
     assert_true(cv.isa[AnyScalar]())
     assert_true(cv[AnyScalar].as_string().to_string() == "hi")
 
 
 def test_concat_chain_fuses() raises:
     # col || "p1" || "p2" over ["ab","cd"] → ["abp1p2","cdp1p2"] — one builder pass
-    var expr = Concat(Concat(col("s", string), slit("p1")), slit("p2"))
+    var expr = Concat(Concat(col("s", string), lit("p1")), lit("p2"))
     var cv = (expr).execute(_str_batch())
     assert_true(into_array(cv, 2) == array(["abp1p2", "cdp1p2"]).to_any())
 
@@ -429,7 +427,7 @@ def test_upper_map_fuses() raises:
 
 def test_map_and_concat_fuse_together() raises:
     # upper(s) || "!" → ["AB!","CD!"] — map + concat in one builder pass
-    var cv = (Concat(Upper(col("s", string)), slit("!"))).execute(_str_batch())
+    var cv = (Concat(Upper(col("s", string)), lit("!"))).execute(_str_batch())
     assert_true(into_array(cv, 2) == array(["AB!", "CD!"]).to_any())
 
 
@@ -478,7 +476,7 @@ def test_num_to_string_fuses_with_concat() raises:
     # cast(n, string) || "!" -> ["1!","2!"] — string breaker read fuses into concat
     var b = record_batch([array([1, 2], int64).copy()], names=["n"])
     var cv = (
-        Concat(NumToString[StringType](col("n", int64)), slit("!"))
+        Concat(NumToString[StringType](col("n", int64)), lit("!"))
     ).execute(b)
     assert_true(into_array(cv, 2) == array(["1!", "2!"]).to_any())
 
@@ -495,7 +493,7 @@ def test_fluent_string() raises:
     # method + operator surface: `s.upper()` and `s || "!"`
     var u = col("s", string).upper().execute(_str_batch())
     assert_true(into_array(u, 2) == array(["AB", "CD"]).to_any())
-    var c = (col("s", string) + slit("!")).execute(_str_batch())
+    var c = (col("s", string) + lit("!")).execute(_str_batch())
     assert_true(into_array(c, 2) == array(["ab!", "cd!"]).to_any())
 
 
@@ -611,7 +609,7 @@ def test_referenced_columns_bare_column() raises:
 def test_referenced_columns_literal_is_empty() raises:
     # a literal reads no columns
     _assert_columns(lit(1, int64).referenced_columns(), List[String]())
-    _assert_columns(slit("x").referenced_columns(), List[String]())
+    _assert_columns(lit("x").referenced_columns(), List[String]())
 
 
 def test_referenced_columns_binary_union() raises:
@@ -1006,7 +1004,3 @@ def test_date_trunc_fluent() raises:
     )
     # truncating to the hour zeroes minutes/seconds
     assert_true(into_array(h, 2) == array([0, 0], int32).to_any())
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

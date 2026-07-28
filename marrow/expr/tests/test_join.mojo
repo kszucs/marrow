@@ -1,18 +1,16 @@
 """Executor-level tests for join plan nodes."""
 
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray
-from marrow.builders import array, PrimitiveBuilder, Int64Builder
-from marrow.dtypes import int64, float64, Int64Type
-from marrow.tabular import record_batch, RecordBatch
-from marrow.expr import (
+from ...arrays import AnyArray
+from ...builders import array, PrimitiveBuilder, Int64Builder
+from ...dtypes import int64, float64, Int64Type
+from ...tabular import record_batch, RecordBatch
+from ...expr import (
     DynValue,
     col,
     lit,
     in_memory_table,
-    execute,
     JOIN_INNER,
     JOIN_LEFT,
     JOIN_SEMI,
@@ -79,7 +77,7 @@ def test_execute_inner_join_basic() raises:
     var keys_left = [col("k")]
     var keys_right = [col("k")]
 
-    var result = execute(left_plan.join(right_plan, keys_left, keys_right))
+    var result = left_plan.join(right_plan, keys_left, keys_right).execute()
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 4)  # k, v, k_right, v_right
 
@@ -108,7 +106,7 @@ def test_execute_inner_join_no_matches() raises:
     var keys_left = [col("k")]
     var keys_right = [col("k")]
 
-    var result = execute(left_plan.join(right_plan, keys_left, keys_right))
+    var result = left_plan.join(right_plan, keys_left, keys_right).execute()
     assert_equal(result.num_rows(), 0)
 
 
@@ -141,9 +139,9 @@ def test_execute_left_join() raises:
     var keys_left = [col("k")]
     var keys_right = [col("k")]
 
-    var result = execute(
+    var result = (
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_LEFT)
-    )
+    ).execute()
     assert_equal(result.num_rows(), 3)
     assert_equal(result.columns[2].null_count(), 2)  # 2 unmatched right nulls
 
@@ -179,9 +177,9 @@ def test_execute_semi_join() raises:
     var keys_left = [col("k")]
     var keys_right = [col("k")]
 
-    var result = execute(
+    var result = (
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_SEMI)
-    )
+    ).execute()
     assert_equal(result.num_rows(), 1)
     assert_equal(result.num_columns(), 2)  # left columns only
 
@@ -215,9 +213,9 @@ def test_execute_anti_join() raises:
     var keys_left = [col("k")]
     var keys_right = [col("k")]
 
-    var result = execute(
+    var result = (
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_ANTI)
-    )
+    ).execute()
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 2)  # left columns only
     ref k = result.columns[0].as_int64()
@@ -262,11 +260,11 @@ def test_join_then_filter() raises:
     var keys_right = [col("k")]
 
     # After join: columns are k(0), v(1), k_right(2), v_right(3)
-    var result = execute(
+    var result = (
         left_plan.join(right_plan, keys_left, keys_right).filter(
             col("v") > lit[Int64Type](10)
         )
-    )
+    ).execute()
     assert_equal(result.num_rows(), 2)
 
 
@@ -278,11 +276,7 @@ def test_join_plan_is_reusable() raises:
     var plan = in_memory_table(left_batch).join(
         in_memory_table(right_batch), [col("k")], [col("k")]
     )
-    var r1 = execute(plan)
-    var r2 = execute(plan)
+    var r1 = plan.execute()
+    var r2 = plan.execute()
     assert_equal(r1.num_rows(), 2)
     assert_equal(r2.num_rows(), 2)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

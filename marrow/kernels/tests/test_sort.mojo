@@ -1,9 +1,8 @@
 """Correctness tests for the sort kernel."""
 
 from std.testing import assert_true, assert_equal
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     AnyArray,
     BoolArray,
     DictionaryArray,
@@ -12,7 +11,7 @@ from marrow.arrays import (
     StringArray,
     StructArray,
 )
-from marrow.builders import (
+from ...builders import (
     array,
     BoolBuilder,
     Date32Builder,
@@ -32,7 +31,7 @@ from marrow.builders import (
     StringBuilder,
     TimestampBuilder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     PrimitiveType,
     int8,
     int16,
@@ -53,10 +52,10 @@ from marrow.dtypes import (
     timestamp,
     Field,
 )
-from marrow.tabular import record_batch
-from marrow.kernels.sort import sort_indices, sort
-from marrow.kernels.filter import take as _take
-from marrow.kernels.execution import ExecutionContext
+from ...tabular import record_batch
+from ...kernels.sort import sort_indices, sort
+from ...kernels.filter import take as _take
+from ...kernels.execution import ExecutionContext
 from std.utils.numerics import nan, inf, neg_inf
 
 
@@ -1003,7 +1002,7 @@ def test_sort_indices_large_string() raises:
 
 
 def test_sort_indices_decimal128() raises:
-    """decimal128 has no UInt64 radix key, so it takes the comparison path —
+    """`decimal128` has no UInt64 radix key, so it takes the comparison path —
     including values that differ only above bit 63."""
     var b = Decimal128Builder(decimal128(38, 0), 3)
     b.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
@@ -1051,7 +1050,3 @@ def test_sort_struct_timestamp_key() raises:
     ref vals = result.field(1).as_int32()
     assert_equal(vals[0].value(), 1)
     assert_equal(vals[2].value(), 3)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -1,9 +1,8 @@
 import std.math as math
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 from std.gpu.host import DeviceContext
 
-from marrow.buffers import Buffer, DeviceType
+from ..buffers import Buffer, DeviceType
 
 
 def test_buffer_device_kind() raises:
@@ -80,7 +79,3 @@ def test_buffer_to_cpu_round_trip() raises:
     assert_true(back.is_cpu())
     assert_equal(back.unsafe_get(0), 42)
     assert_equal(back.unsafe_get(1), 99)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -7,10 +7,9 @@ correctness in both directions.
 
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
-from marrow.testing import TestSuite
-from marrow.dtypes import *
-from marrow.arrays import AnyArray, DictionaryArray
-from marrow.builders import (
+from ..dtypes import *
+from ..arrays import AnyArray, DictionaryArray
+from ..builders import (
     array,
     BoolBuilder,
     Int8Builder,
@@ -28,9 +27,9 @@ from marrow.builders import (
     FixedSizeListBuilder,
     StructBuilder,
 )
-from marrow.schema import Schema
-from marrow.tabular import RecordBatch
-from marrow.ipc import (
+from ..schema import Schema
+from ..tabular import RecordBatch
+from ..ipc import (
     read_ipc_file,
     read_ipc_stream,
     read_ipc_file_schema,
@@ -546,7 +545,7 @@ def test_marrow_reads_pyarrow_stream() raises:
 
 
 def test_marrow_reads_pyarrow_all_types() raises:
-    """marrow correctly reads all Arrow primitive types written by PyArrow."""
+    """Marrow correctly reads all Arrow primitive types written by PyArrow."""
     var pa = Python.import_module("pyarrow")
     var path = _tmp_path()
 
@@ -597,7 +596,7 @@ def test_marrow_reads_pyarrow_all_types() raises:
 
 
 def test_marrow_reads_pyarrow_list() raises:
-    """marrow correctly reads a List(int32) column written by PyArrow."""
+    """Marrow correctly reads a List(int32) column written by PyArrow."""
     var pa = Python.import_module("pyarrow")
     var path = _tmp_path()
 
@@ -624,7 +623,7 @@ def test_marrow_reads_pyarrow_list() raises:
 
 
 def test_marrow_reads_pyarrow_nullable() raises:
-    """marrow correctly reads null values in a column written by PyArrow."""
+    """Marrow correctly reads null values in a column written by PyArrow."""
     var pa = Python.import_module("pyarrow")
     var path = _tmp_path()
 
@@ -695,7 +694,7 @@ def test_stream_dictionary_roundtrip() raises:
 
 
 def test_marrow_reads_pyarrow_dictionary() raises:
-    """marrow correctly reads a dictionary column written by PyArrow."""
+    """Marrow correctly reads a dictionary column written by PyArrow."""
     var pa = Python.import_module("pyarrow")
     var path = _tmp_path()
 
@@ -719,7 +718,3 @@ def test_marrow_reads_pyarrow_dictionary() raises:
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 4)
     assert_true(batches[0].schema.fields[0].dtype.is_dictionary())
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

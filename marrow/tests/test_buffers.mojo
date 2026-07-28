@@ -1,9 +1,8 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 from std.memory import ArcPointer
 
-from marrow.buffers import *
-from marrow.views import BufferView
+from ..buffers import *
+from ..views import BufferView
 
 
 # ---------------------------------------------------------------------------
@@ -775,5 +774,72 @@ def test_bitmapview_difference_length_mismatch_raises() raises:
     assert_true(raised)
 
 
-def main() raises:
-    TestSuite.run[__functions_in_module()]()
+def test_buffer_mmap_file_reads_and_unmaps() raises:
+    """`Buffer.mmap_file` owns its mapping: readable, and unmapped on last drop.
+
+    This is what lets a memory-mapped file be *owned* by a `Buffer` instead of
+    borrowed from something that must be kept alive alongside it — the property
+    the parquet reader's untracked-origin spans currently work around.
+    """
+    from std.os import remove
+
+    var path = "/tmp/marrow_test_mmap_file.bin"
+    with open(path, "w") as f:
+        f.write(String("hello mmap"))
+
+    var buf = Buffer.mmap_file(path)
+    assert_true(buf.is_cpu())
+    assert_false(buf.is_device())
+
+    # Padded to Arrow's 64 bytes even though the file is 10 — the mapping covers
+    # a whole page, so the padding is addressable. `munmap` still gets 10.
+    assert_equal(len(buf), 64)
+
+    var view = buf.view[DType.uint8](0, 10)
+    assert_equal(view.unsafe_get(0), UInt8(ord("h")))
+    assert_equal(view.unsafe_get(9), UInt8(ord("p")))
+
+    # A copy shares the mapping; the unmap fires only when the last one drops.
+    var second = buf
+    _ = buf^
+    assert_equal(second.view[DType.uint8](0, 10).unsafe_get(0), UInt8(ord("h")))
+    _ = second^
+
+    remove(path)
+
+
+def test_buffer_mmap_file_missing_path_raises() raises:
+    var raised = False
+    try:
+        _ = Buffer.mmap_file("/tmp/marrow_no_such_file_xyz.bin")
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_buffer_mapped_size_is_the_file_length() raises:
+    """`mapped_size()` is the true file length; `len()` is the padded logical
+    size. Callers addressing *file* offsets — the Parquet footer does — need the
+    former, and conflating them reads past the end."""
+    from std.os import remove
+
+    var path = "/tmp/marrow_test_mapped_size.bin"
+    with open(path, "w") as f:
+        f.write(String("hello mmap"))
+    var mapped = Buffer.mmap_file(path)
+
+    assert_equal(mapped.mapped_size(), 10)
+    assert_equal(len(mapped), 64)
+    _ = mapped^
+    remove(path)
+
+
+def test_buffer_mapped_size_raises_for_other_kinds() raises:
+    """A heap buffer has no mapping extent to report."""
+    var buf = Buffer.alloc_zeroed[DType.uint8](64).to_immutable()
+    var raised = False
+    try:
+        _ = buf.mapped_size()
+    except:
+        raised = True
+    assert_true(raised)

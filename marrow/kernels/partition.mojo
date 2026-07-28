@@ -17,6 +17,7 @@ from std.algorithm.functional import sync_parallelize
 from ..arrays import Int32Array, UInt64Array
 from ..buffers import Buffer
 from ..dtypes import int32, uint64
+from .execution import ExecutionContext
 
 
 comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
@@ -26,7 +27,12 @@ dispatch + per-thread histogram overhead would dominate."""
 
 def radix_histogram[
     bucket_of: def(Int) capturing[_] -> Int
-](n: Int, num_buckets: Int, num_threads: Int) -> Tuple[List[Int], List[Int]]:
+](
+    n: Int,
+    num_buckets: Int,
+    ctx: ExecutionContext,
+    min_parallel_size: Int = _MIN_PARALLEL_PARTITION_ROWS,
+) -> Tuple[List[Int], List[Int]]:
     """One counting/radix pass' histogram + partition-major prefix sum.
 
     Buckets ``n`` items (``bucket_of(i)`` gives item ``i``'s bucket in
@@ -42,21 +48,24 @@ def radix_histogram[
     - ``bucket_start[b]`` — global start of bucket ``b`` (``bucket_start[0]==0``,
       ``bucket_start[num_buckets]==n``); ``bucket_start[b+1]-bucket_start[b]`` is
       bucket ``b``'s size.
+
+    The returned ``write_offsets`` is indexed by stripe, so the caller's scatter
+    **must** stripe the same way: call ``ctx.stripe_workers(n, min_parallel_size)``
+    with this same ``min_parallel_size``. Disagree and the scatter reads a cursor
+    belonging to another stripe, which duplicates and drops rows rather than
+    failing — see the coverage assertions in ``test_partition.mojo``.
     """
-    var chunk = (n + num_threads - 1) // num_threads
+    var num_threads = ctx.stripe_workers(n, min_parallel_size)
     var hist = List[Int](length=num_threads * num_buckets, fill=0)
 
+    @always_inline
     @parameter
-    def hist_worker(t: Int):
-        var start = t * chunk
-        if start >= n:
-            return
-        var end = min(start + chunk, n)
+    def hist_worker(t: Int, start: Int, end: Int):
         var base = t * num_buckets
         for i in range(start, end):
             hist[base + bucket_of(i)] += 1
 
-    sync_parallelize[hist_worker](num_threads)
+    ctx.stripe[hist_worker](n, min_parallel_size)
 
     var write_offsets = List[Int](length=num_threads * num_buckets, fill=0)
     var bucket_start = List[Int](length=num_buckets + 1, fill=0)
@@ -160,19 +169,24 @@ struct RadixPartitioner(Partitioner):
     var _num_partitions: Int
     """Cached ``1 << num_bits``."""
 
-    var num_threads: Int
-    """Workers used for the histogram + scatter passes. ``1`` forces
-    serial; ``>1`` uses per-thread histograms and parallel scatter."""
+    var ctx: ExecutionContext
+    """How the histogram + scatter passes execute. Held whole rather than
+    reduced to a worker count, so a caller's device survives and both passes
+    derive their stripe count from the same place."""
 
-    def __init__(out self, num_bits: Int = 6, num_threads: Int = 1):
+    def __init__(
+        out self,
+        num_bits: Int = 6,
+        var ctx: ExecutionContext = ExecutionContext(),
+    ):
         self.num_bits = num_bits
         self._num_partitions = 1 << num_bits
-        self.num_threads = max(1, num_threads)
+        self.ctx = ctx^
 
     def __init__(out self, *, copy: Self):
         self.num_bits = copy.num_bits
         self._num_partitions = copy._num_partitions
-        self.num_threads = copy.num_threads
+        self.ctx = copy.ctx.copy()
 
     def num_partitions(self) -> Int:
         return self._num_partitions
@@ -199,10 +213,12 @@ struct RadixPartitioner(Partitioner):
         var shift = UInt64(64 - self.num_bits)
         var src = hashes.values()
 
-        var nt = self.num_threads
-        if n < _MIN_PARALLEL_PARTITION_ROWS:
-            nt = 1  # dispatch overhead would dominate
-        var chunk = (n + nt - 1) // nt
+        # The histogram and the scatter both index `write_offsets` by stripe, so
+        # they must stripe identically. What guarantees that is passing the same
+        # `(ctx, _MIN_PARALLEL_PARTITION_ROWS)` pair to both — `stripe_workers`
+        # and `stripe` agree by construction given equal arguments, and
+        # `test_partition.mojo` asserts the row coverage that would break first
+        # if they ever drifted.
 
         # 1-2. Histogram rows by top-bit partition id + prefix-sum into per-thread
         # write cursors (shared with the radix sort, cf. ``radix_histogram``).
@@ -210,7 +226,9 @@ struct RadixPartitioner(Partitioner):
         def bucket_of(i: Int) -> Int:
             return Int(UInt64(src.load[1](i)) >> shift)
 
-        var offsets = radix_histogram[bucket_of](n, p, nt)
+        var offsets = radix_histogram[bucket_of](
+            n, p, self.ctx, _MIN_PARALLEL_PARTITION_ROWS
+        )
         var write_offsets = offsets[0].copy()
         var partition_offsets = offsets[1].copy()  # bucket_start
 
@@ -227,12 +245,9 @@ struct RadixPartitioner(Partitioner):
         # place as the cursor — avoiding a per-worker ``List[Int]``
         # allocation (each alloc contends on tcmalloc's page heap
         # spinlock, which showed up as ~11% of worker time in profiling).
+        @always_inline
         @parameter
-        def scatter_worker(t: Int):
-            var start = t * chunk
-            if start >= n:
-                return
-            var end = min(start + chunk, n)
+        def scatter_worker(t: Int, start: Int, end: Int):
             var base = t * p
             for i in range(start, end):
                 var h = UInt64(src.load[1](i))
@@ -242,7 +257,7 @@ struct RadixPartitioner(Partitioner):
                 hash_view.store[1](pos, h)
                 write_offsets[base + pid] = pos + 1
 
-        sync_parallelize[scatter_worker](nt)
+        self.ctx.stripe[scatter_worker](n, _MIN_PARALLEL_PARTITION_ROWS)
 
         # 5. Freeze buffers once, then expose per-partition slices via
         # ref-counted shares (ArcPointer bumps — O(1)).
@@ -275,7 +290,7 @@ struct RadixPartitioner(Partitioner):
         # `Optional[R]` (used for the per-worker result slots below) only
         # conditionally conforms to it, so an unconstrained `R` makes the
         # slot list linear and unable to be dropped.
-        R: Copyable & ImplicitlyDeletable & Movable,
+        R: Copyable & ImplicitlyDeletable,
         op: def(Int, Int32Array, UInt64Array) raises capturing[_] -> R,
     ](self, var hashes: UInt64Array) raises -> List[R]:
         """Run ``op`` on every partition in parallel and collect the results.

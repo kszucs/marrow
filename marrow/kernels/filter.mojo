@@ -71,7 +71,6 @@ from std.algorithm.functional import sync_parallelize
 
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
-from .helpers import Kernel
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +84,7 @@ from .helpers import Kernel
 # ---------------------------------------------------------------------------
 
 
-struct Filter(Kernel):
+struct Filter:
     """Selection kernel — keep elements where a boolean ``mask`` is True.
 
     The typed leaves are the ``apply`` overloads below; each operates directly on
@@ -157,6 +156,18 @@ struct Filter(Kernel):
             return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
         else:
             raise Error("filter: unsupported dtype ", dt)
+
+    @staticmethod
+    def drop_null[
+        T: PrimitiveType
+    ](
+        array: PrimitiveArray[T],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveArray[T]:
+        """The valid elements only, keeping the array's type."""
+        if not array.bitmap:
+            return array.copy()
+        return Self.apply(array, array.validity().value(), ctx)
 
     @staticmethod
     def drop_null(
@@ -605,7 +616,7 @@ struct Filter(Kernel):
         )
 
 
-struct Take(Kernel):
+struct Take:
     """Gather kernel — collect elements at arbitrary indices (null index → null).
 
     The typed leaves are the ``apply`` overloads below; ``dispatch`` resolves a
@@ -719,40 +730,25 @@ struct Take(Kernel):
         var null_count = 0
 
         if not has_null_indices and not has_src_nulls:
-            # Fast path: no nulls — pure SIMD gather, no bitmap.
-            if ctx.wants_parallel(n):
-                var nt = ctx.resolved_num_threads()
-                # Round chunk up to a SIMD width so each worker owns a
-                # self-contained gather boundary and the tail scalar loop
-                # only runs at the very end of the last worker's stripe.
-                var chunk = ((n + nt - 1) // nt + W - 1) // W * W
-
-                @parameter
-                def worker(t: Int):
-                    var start = t * chunk
-                    if start >= n:
-                        return
-                    var end = min(start + chunk, n)
-                    var k = start
-                    while k + W <= end:
-                        var offsets = idx.load[W](k).cast[DType.int64]()
-                        var vals = src.gather[W](offsets)
-                        out.store[W](k, vals)
-                        k += W
-                    while k < end:
-                        out.unsafe_set(k, src[Int(idx.unsafe_get(k))])
-                        k += 1
-
-                sync_parallelize[worker](nt)
-            else:
-                while i + W <= n:
-                    var offsets = idx.load[W](i).cast[DType.int64]()
+            # Fast path: no nulls — pure SIMD gather, no bitmap. Written once;
+            # `stripe` decides whether it runs on this thread or across workers.
+            # `align=W` keeps every stripe boundary on a vector boundary, so the
+            # scalar tail runs at the end of the last stripe rather than once
+            # per stripe.
+            @always_inline
+            @parameter
+            def gather(wid: Int, start: Int, end: Int):
+                var k = start
+                while k + W <= end:
+                    var offsets = idx.load[W](k).cast[DType.int64]()
                     var vals = src.gather[W](offsets)
-                    out.store[W](i, vals)
-                    i += W
-                while i < n:
-                    out.unsafe_set(i, src[Int(idx.unsafe_get(i))])
-                    i += 1
+                    out.store[W](k, vals)
+                    k += W
+                while k < end:
+                    out.unsafe_set(k, src[Int(idx.unsafe_get(k))])
+                    k += 1
+
+            ctx.stripe[gather](n, align=W)
         else:
             # TODO: optimize this, the implementation below could be vectorized
             # Slow path: null indices or source nulls — scalar + bitmap.
@@ -793,6 +789,8 @@ struct Take(Kernel):
         Args:
             array: Source bool array.
             indices: Row indices to gather. Null index → null output.
+            ctx: Execution context (currently unused — accepted for
+                signature parity with the other `take` overloads).
 
         Returns:
             A new BoolArray with one element per index.
@@ -827,6 +825,8 @@ struct Take(Kernel):
         Args:
             array: Source binary-like array (string/binary, 32- or 64-bit offsets).
             indices: Row indices to gather. Null index → null output.
+            ctx: Execution context (currently unused — accepted for
+                signature parity with the other `take` overloads).
 
         Returns:
             A new BinaryLikeArray[T] with one element per index.
@@ -1125,7 +1125,9 @@ struct Take(Kernel):
 
 
 # ---------------------------------------------------------------------------
-# Public API — thin free delegators to the Filter / Take kernels
+# Public API — the three `pc.*` entry points. Everything typed is a method on
+# the `Filter` / `Take` kernels; adding an array type means teaching those, not
+# writing another delegator here.
 # ---------------------------------------------------------------------------
 
 
@@ -1139,91 +1141,6 @@ def filter(
     return Filter.dispatch(array, m.values(), ctx)
 
 
-def filter[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: BoolArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter[
-    T: BinaryLikeType
-](
-    array: BinaryLikeArray[T],
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BinaryLikeArray[T]:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: NullArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> NullArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: FixedSizeBinaryArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeBinaryArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter[
-    T: ListLikeType
-](
-    array: ListLikeArray[T],
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> ListLikeArray[T]:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: FixedSizeListArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeListArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: DictionaryArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> DictionaryArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def filter(
-    array: StructArray,
-    mask: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> StructArray:
-    return Filter.apply(array, mask.values(), ctx)
-
-
-def drop_null(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyArray:
-    """Remove null elements using the validity bitmap as the selection."""
-    return Filter.drop_null(array, ctx)
-
-
 def take(
     array: AnyArray,
     indices: Int32Array,
@@ -1233,111 +1150,8 @@ def take(
     return Take.dispatch(array, indices, ctx)
 
 
-def take[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: BoolArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take[
-    T: BinaryLikeType
-](
-    array: BinaryLikeArray[T],
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BinaryLikeArray[T]:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: NullArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> NullArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: FixedSizeBinaryArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeBinaryArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take[
-    T: ListLikeType
-](
-    array: ListLikeArray[T],
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> ListLikeArray[T]:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: FixedSizeListArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> FixedSizeListArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: DictionaryArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> DictionaryArray:
-    return Take.apply(array, indices, ctx)
-
-
-def take(
-    array: StructArray,
-    indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> StructArray:
-    return Take.apply(array, indices, ctx)
-
-
-def drop_null[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Create a new array containing only the valid (non-null) elements.
-
-    Uses the array's validity bitmap directly as the filter selection.
-
-    Args:
-        array: The input array.
-        ctx: Execution context (currently unused — accepted for signature
-            uniformity across kernels).
-
-    Returns:
-        A new PrimitiveArray containing only valid elements.
-    """
-    if not array.bitmap:
-        return array.copy()
-    return Filter.apply(array, array.validity().value(), ctx)
-
-
-def _drop_null_bool(
-    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> BoolArray:
-    """Drop null elements from a bool array."""
-    if not array.bitmap:
-        return array.copy()
-    return Filter.apply(array, array.validity().value(), ctx)
+def drop_null(
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyArray:
+    """Remove null elements using the validity bitmap as the selection."""
+    return Filter.drop_null(array, ctx)

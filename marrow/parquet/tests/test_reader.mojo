@@ -9,10 +9,9 @@ from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.math import isnan, isinf
 from std.python import Python, PythonObject
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import read_table, ParquetFile
-from marrow.parquet.source import MappedFile
-from marrow.tabular import Table
+from ...parquet import read_table, ParquetFile
+from ...parquet.source import MappedFile
+from ...tabular import Table
 
 
 # ---------------------------------------------------------------------------
@@ -971,7 +970,3 @@ def test_read_from_byte_source() raises:
     assert_equal(String(col_s[0]), "apple")
     assert_equal(String(col_s[4]), "elder")
     remove(path)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

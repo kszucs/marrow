@@ -43,7 +43,7 @@ from ..arrays import (
 )
 from ..buffers import Buffer, Bitmap
 from ..dtypes import AnyDataType, DType, TemporalType, TimeUnit
-from .helpers import Kernel
+from .core import Kernel
 
 
 # ---------------------------------------------------------------------------

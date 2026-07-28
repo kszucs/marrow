@@ -2,18 +2,17 @@ from std.testing import assert_equal, assert_true, assert_false
 from std.math import isnan, isinf
 from std.python import Python, PythonObject
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import (
+from ...parquet import (
+    ParquetFile,
     read_table,
     write_table,
     read_page_index,
-    read_page_bounds,
 )
-from marrow.parquet.writer import FileWriter
-from marrow.parquet.codecs import Compression, Encoding
-from marrow.utils import Crc32
-from marrow.tabular import Table
-from marrow.c_data import CArrowArrayStream
+from ...parquet.writer import FileWriter
+from ...parquet.codecs import Compression, Encoding
+from ...utils import Crc32
+from ...tabular import Table
+from ...c_data import CArrowArrayStream
 
 
 def _to_marrow(py: PythonObject) raises -> Table:
@@ -935,7 +934,7 @@ def test_compression_zstd() raises:
 
 def _page_rows(path: String, col: Int) raises -> Int:
     """Total rows across a column's data pages (must equal the row count)."""
-    var pbs = read_page_bounds(path)
+    var pbs = ParquetFile(path).page_bounds()
     var total = 0
     for p in range(len(pbs[0][col])):
         total += pbs[0][col][p].copy().num_rows
@@ -959,7 +958,7 @@ def test_page_split_flat() raises:
     assert_equal(read_table(path).num_rows(), 50000)
 
     # the chunk is split into >1 page and the pages tile all rows
-    var pbs = read_page_bounds(path)
+    var pbs = ParquetFile(path).page_bounds()
     assert_true(len(pbs[0][0]) > 1)
     assert_equal(_page_rows(path, 0), 50000)
     # per-page bounds are populated; first page starts at value 0
@@ -989,7 +988,7 @@ def test_page_split_dictionary() raises:
 
     assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
     assert_equal(read_table(path).num_rows(), 50000)
-    var pbs = read_page_bounds(path)
+    var pbs = ParquetFile(path).page_bounds()
     assert_true(len(pbs[0][0]) > 1)
     assert_equal(_page_rows(path, 0), 50000)
     # a single dictionary page precedes the data pages
@@ -998,7 +997,7 @@ def test_page_split_dictionary() raises:
     remove(path)
 
 
-def test_float16_roundtrip() raises:
+def test_writer_float16_roundtrip() raises:
     # float16 is physically FIXED_LEN_BYTE_ARRAY(2) + FLOAT16 logical; verify
     # both encodings round-trip through marrow write and read, incl. nulls and
     # the signed-zero-normalised min/max statistic.
@@ -1166,7 +1165,3 @@ def test_page_checksum() raises:
         # marrow reads its own checksummed file (runs the verify branch)
         assert_equal(read_table(path).num_rows(), 200)
         remove(path)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -1,9 +1,8 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, PrimitiveArray
-from marrow.scalars import AnyScalar
-from marrow.builders import (
+from ...arrays import AnyArray, PrimitiveArray
+from ...scalars import AnyScalar
+from ...builders import (
     array,
     nulls,
     PrimitiveBuilder,
@@ -12,7 +11,7 @@ from marrow.builders import (
     Date32Builder,
     TimestampBuilder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     int32,
     int64,
     float64,
@@ -23,13 +22,13 @@ from marrow.dtypes import (
     Int32Type,
     Int64Type,
 )
-from marrow.expr.aggregates import (
+from ...expr.aggregates import (
     Sum,
     Mean,
     Min,
     Max,
 )
-from marrow.kernels.aggregate import (
+from ...kernels.aggregate import (
     Aggregation,
     AggFunction,
     SumKernel,
@@ -56,7 +55,7 @@ def whole[F: AggFunction](value: AnyArray) raises -> AnyScalar:
 
 def test_sumtyped() raises:
     var a = array([1, 2, 3, 4, 5], int64)
-    var result = SumKernel.apply[Int64Type](a)
+    var result = SumKernel.reduce[Int64Type](a)
     assert_equal(result.value(), 15)
 
 
@@ -66,19 +65,19 @@ def test_sumwith_nulls() raises:
     a.append(10)
     a.append(20)
     a.append_null()  # index 2 is null
-    var result = SumKernel.apply[Int32Type](a.finish())
+    var result = SumKernel.reduce[Int32Type](a.finish())
     assert_equal(result.value(), 30)
 
 
 def test_sumall_nulls() raises:
     var a = nulls(5, int64)
-    var result = SumKernel.apply[Int64Type](a)
+    var result = SumKernel.reduce[Int64Type](a)
     assert_equal(result.value(), 0)
 
 
 def test_sumempty() raises:
     var a = array(int32)
-    var result = SumKernel.apply[Int32Type](a)
+    var result = SumKernel.reduce[Int32Type](a)
     assert_equal(result.value(), 0)
 
 
@@ -260,7 +259,3 @@ def test_min_max_timestamp_preserves_unit_tz() raises:
     assert_true(mn.type() == timestamp(second, "UTC").to_any())
     assert_equal(mn.as_timestamp().value(), 1000)
     assert_equal(whole[Max](a).as_timestamp().value(), 3000)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

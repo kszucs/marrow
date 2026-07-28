@@ -10,12 +10,11 @@ from std.gpu.host import DeviceContext, get_gpu_target
 from std.sys import has_accelerator
 from std.sys.info import simd_width_of
 from std.testing import assert_equal, assert_false, assert_true
-from marrow.testing import TestSuite
 from std.utils.coord import Coord
 
-from marrow.buffers import Bitmap, Buffer
-from marrow.kernels.execution import ExecutionContext
-from marrow.views import apply, reduce, BitmapView, BufferView
+from ..buffers import Bitmap, Buffer
+from ..kernels.execution import ExecutionContext
+from ..views import apply, reduce, BitmapView, BufferView
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +584,3 @@ def test_reduce_sum_with_bitmap_gpu() raises:
         ExecutionContext.gpu(ctx),
     )
     assert_equal(result, Int32(40))
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

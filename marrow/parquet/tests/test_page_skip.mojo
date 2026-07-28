@@ -8,10 +8,9 @@ nullable, string/dict)."""
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.python import Python, PythonObject
 from std.os import remove
-from marrow.testing import TestSuite
-from marrow.parquet import read_table
-from marrow.parquet.reader import RowSelection
-from marrow.tabular import Table
+from ...parquet import read_table
+from ...parquet.reader import RowSelection
+from ...tabular import Table
 
 
 def _write(tbl: PythonObject) raises -> String:
@@ -280,7 +279,3 @@ def test_none_selected() raises:
     var s = RowSelection(sv^)
     assert_false(s.selects_any())
     assert_equal(s.num_selected(), 0)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

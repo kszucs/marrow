@@ -49,7 +49,7 @@ expected payoff for the next round of optimization:
 
 1. **Fused equality verification**
    Current ``SwissHashTable.probe`` does
-   ``take(build_keys, bi) + take(probe_keys, pi) + equal(...)`` which
+   ``take(build_keys, bi) + take(probe_keys, pi) + EqKernel.apply(...)`` which
    allocates three intermediate Arrays (two gathered keys + one mask)
    then ``filter`` rebuilds two Int32 arrays from the candidates.
    A fused kernel could walk ``(bi[i], pi[i])`` once, load
@@ -107,7 +107,6 @@ See ``docs/joins-design.md`` for the high-level architecture and the
 """
 
 from std.gpu.host import DeviceContext
-from std.sys.info import num_physical_cores
 
 from ..arrays import (
     PrimitiveArray,
@@ -128,9 +127,8 @@ from ..dtypes import (
     struct_,
     null,
 )
-from .compare import equal
 from .execution import ExecutionContext
-from .filter import take, filter
+from .filter import Take, filter, take
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
@@ -342,7 +340,12 @@ struct HashJoin[
     """
 
     # Global state (shared by both paths)
-    var _num_threads: Int
+    var _ctx: ExecutionContext
+    """How this join executes — held whole rather than destructured to a worker
+    count. It used to be a bare `_num_threads: Int`, which five internal sites
+    then rebuilt into `ExecutionContext.parallel(n)`; every one of those
+    silently dropped the caller's GPU device, since that factory sets
+    `device=None`."""
     var _left_key_indices: List[Int]
     var _left_dtype: AnyDataType
     var _left_data: Optional[StructArray]
@@ -361,18 +364,17 @@ struct HashJoin[
     numbers back to the original build-side row index after probe."""
     var _radix_bits: Int
 
-    def __init__(out self, num_threads: Int = 1):
+    def __init__(out self, var ctx: ExecutionContext = ExecutionContext()):
         """Create a HashJoin.
 
         Args:
-            num_threads: ``1`` for serial (default), ``>1`` for partition-
-                parallel build + probe, ``0`` means auto-pick via
-                ``num_physical_cores()``.
+            ctx: How to execute. ``ExecutionContext.serial()`` forces the serial
+                single-table path; ``.parallel(n)`` runs radix-partitioned
+                parallel build + probe across ``n`` workers; ``.parallel()`` /
+                ``.auto()`` picks ``num_physical_cores()``. Builds smaller than
+                ``_PARALLEL_THRESHOLD`` fall back to serial regardless.
         """
-        var nt = num_threads
-        if nt == 0:
-            nt = num_physical_cores()
-        self._num_threads = nt
+        self._ctx = ctx^
         self._left_key_indices = List[Int]()
         self._left_dtype = null
         self._left_data = None
@@ -388,7 +390,10 @@ struct HashJoin[
     # ------------------------------------------------------------------
 
     def build(mut self, left: StructArray, left_key_indices: List[Int]) raises:
-        if self._num_threads <= 1 or left.length < _PARALLEL_THRESHOLD:
+        if (
+            self._ctx.resolved_num_threads() <= 1
+            or left.length < _PARALLEL_THRESHOLD
+        ):
             self.build_serial(left, left_key_indices)
         else:
             self.build_parallel(left, left_key_indices)
@@ -400,7 +405,10 @@ struct HashJoin[
         kind: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
-        if self._num_threads <= 1 or self._left_rows < _PARALLEL_THRESHOLD:
+        if (
+            self._ctx.resolved_num_threads() <= 1
+            or self._left_rows < _PARALLEL_THRESHOLD
+        ):
             return self.probe_serial(right, right_key_indices, kind, strictness)
         return self.probe_parallel(right, right_key_indices, kind, strictness)
 
@@ -415,7 +423,7 @@ struct HashJoin[
         self._left_rows = left.length
         self._left_data = left.copy()
         self._left_key_indices = left_key_indices.copy()
-        var ctx = ExecutionContext.parallel(self._num_threads)
+        var ctx = self._ctx.copy()
         self._table.build(left.select(left_key_indices), ctx)
 
     def probe_serial(
@@ -432,7 +440,7 @@ struct HashJoin[
             right_keys,
             self._left_rows,
             single_match=strictness == JOIN_ANY,
-            ctx=ExecutionContext.parallel(self._num_threads),
+            ctx=self._ctx.copy(),
         )
         var verified = (pairs[0].copy(), pairs[1].copy())
         var final = self._emit_unmatched(
@@ -468,7 +476,8 @@ struct HashJoin[
         # matching worker (avoids moving/copying a SwissHashTable out of a
         # result), so the op only returns the cheap (keys, rows) per partition.
         var partitioner = RadixPartitioner(
-            num_bits=self._radix_bits, num_threads=self._num_threads
+            num_bits=self._radix_bits,
+            ctx=self._ctx.copy(),
         )
         var p = partitioner.num_partitions()
         var tables = List[SwissHashTable[Self.hasher]](capacity=p)
@@ -479,13 +488,11 @@ struct HashJoin[
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[StructArray, Int32Array]:
-            var k = take(left_keys, rows)
+            var k = Take.apply(left_keys, rows)
             tables[i].build_hashes(part_hashes)
             return (k^, rows.copy())
 
-        var hashes = Self.hasher(
-            left_keys, ExecutionContext.parallel(self._num_threads)
-        )
+        var hashes = Self.hasher(left_keys, self._ctx.copy())
         var parts = partitioner.map_partitions[
             Tuple[StructArray, Int32Array], build_partition
         ](hashes^)
@@ -528,7 +535,7 @@ struct HashJoin[
         def probe_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises -> IndexPairs:
-            var probe_keys_i = take(right_keys, rows)
+            var probe_keys_i = Take.apply(right_keys, rows)
             var pairs = self._tables[i].probe(
                 self._left_partition_keys[i],
                 probe_keys_i,
@@ -537,16 +544,15 @@ struct HashJoin[
                 hashes=part_hashes.copy(),
             )
             return (
-                take(self._left_partition_rows[i], pairs[0]),
-                take(rows, pairs[1]),
+                Take.apply(self._left_partition_rows[i], pairs[0]),
+                Take.apply(rows, pairs[1]),
             )
 
         # 1. Hash probe side in parallel; 2-3. partition + parallel probe.
-        var probe_hashes = Self.hasher(
-            right_keys, ExecutionContext.parallel(self._num_threads)
-        )
+        var probe_hashes = Self.hasher(right_keys, self._ctx.copy())
         var pairs_per_partition = RadixPartitioner(
-            num_bits=self._radix_bits, num_threads=self._num_threads
+            num_bits=self._radix_bits,
+            ctx=self._ctx.copy(),
         ).map_partitions[IndexPairs, probe_partition](probe_hashes^)
 
         # 4. Concat per-partition pairs into a single IndexPairs.
@@ -673,7 +679,7 @@ struct HashJoin[
         """
         ref left = self._left_data.value()
         var out_cols = List[AnyArray]()
-        var ctx = ExecutionContext.parallel(self._num_threads)
+        var ctx = self._ctx.copy()
 
         for c in range(len(left.children)):
             out_cols.append(take(left.children[c].copy(), pairs[0], ctx))
@@ -720,8 +726,7 @@ def hash_join(
     right_on: List[Int],
     kind: UInt8 = JOIN_INNER,
     strictness: UInt8 = JOIN_ALL,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-    num_threads: Int = 0,
+    ctx: ExecutionContext = ExecutionContext.auto(),
 ) raises -> StructArray:
     """Equijoin two StructArrays on positional key column indices.
 
@@ -735,12 +740,13 @@ def hash_join(
         kind: Join direction (JOIN_INNER, JOIN_LEFT, JOIN_RIGHT, JOIN_FULL,
               JOIN_SEMI, JOIN_ANTI).
         strictness: JOIN_ALL (default) or JOIN_ANY.
-        ctx: Optional GPU device context (future GPU acceleration hook).
-        num_threads: Worker count for the partition-parallel path.
-            ``0`` (default) auto-picks ``num_physical_cores()``; ``1`` forces
-            the serial single-table path; ``>1`` runs radix-partitioned
-            parallel build + probe. Builds smaller than
+        ctx: How to execute. ``.auto()`` (default) picks
+            ``num_physical_cores()`` workers; ``.serial()`` forces the serial
+            single-table path; ``.parallel(n)`` runs radix-partitioned parallel
+            build + probe across ``n``. Builds smaller than
             ``_PARALLEL_THRESHOLD`` always fall back to serial regardless.
+            Any GPU device on the context now survives into the join's internal
+            dispatches; it previously did not.
 
     Returns:
         Output StructArray:
@@ -750,6 +756,6 @@ def hash_join(
     if len(left_on) != len(right_on):
         raise Error("hash_join: len(left_on) != len(right_on)")
 
-    var join = HashJoin(num_threads=num_threads)
+    var join = HashJoin(ctx.copy())
     join.build(left, left_on)
     return join.probe(right, right_on, kind, strictness)

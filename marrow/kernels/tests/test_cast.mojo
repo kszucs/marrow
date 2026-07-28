@@ -1,15 +1,14 @@
 from std.testing import assert_equal, assert_true, assert_raises
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, NullArray, DictionaryArray
-from marrow.builders import (
+from ...arrays import AnyArray, NullArray, DictionaryArray
+from ...builders import (
     array,
     FixedSizeBinaryBuilder,
     ListBuilder,
     StructBuilder,
     Int32Builder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     bool_,
     null,
     timestamp,
@@ -49,7 +48,7 @@ from marrow.dtypes import (
     UInt8Type,
     Int64Type,
 )
-from marrow.kernels.cast import cast, NumericCast
+from ...kernels.cast import cast, NumericCast
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +525,3 @@ def test_dictionary_decode_then_cast() raises:
         values=values^,
     )
     assert_true(cast(d, int64).as_int64() == array([10, 20, 30, 20], int64))
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

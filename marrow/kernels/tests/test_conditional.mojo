@@ -15,13 +15,12 @@ Expected value/null patterns match PyArrow's ``pc.case_when``, ``pc.coalesce``,
 
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
 
-from marrow.testing import TestSuite
-from marrow.arrays import AnyArray, BoolArray, Int64Array, StringArray
-from marrow.builders import array, StringBuilder
-from marrow.dtypes import Int64Type, int64, int32, float64
-from marrow.scalars import Int64Scalar
+from ...arrays import AnyArray, BoolArray, Int64Array, StringArray
+from ...builders import array, StringBuilder
+from ...dtypes import Int64Type, int64, int32, float64
+from ...scalars import Int64Scalar
 
-from marrow.kernels.conditional import case_when, coalesce, nullif, fill_null
+from ...kernels.conditional import case_when, coalesce, nullif, fill_null
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +328,3 @@ def test_fill_null_length_mismatch_raises() raises:
     var ff: AnyArray = fill.copy()
     with assert_raises():
         _ = fill_null(aa, ff)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

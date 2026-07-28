@@ -1,12 +1,11 @@
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
 from std.python import Python
 from std.os import remove
-from marrow.parquet import read_table, write_table
-from marrow.tabular import Table, RecordBatch
-from marrow.arrays import AnyArray, PrimitiveArray, StringArray
-from marrow.schema import Schema
-from marrow.dtypes import Field, int32, int64, float64, string
+from ..parquet import read_table, write_table
+from ..tabular import Table, RecordBatch
+from ..arrays import AnyArray, PrimitiveArray, StringArray
+from ..schema import Schema
+from ..dtypes import Field, int32, int64, float64, string
 
 
 def _make_table() raises -> Table:
@@ -19,7 +18,7 @@ def _make_table() raises -> Table:
             z=pa.array(Python.list("a", "b", "c")),
         )
     )
-    from marrow.c_data import CArrowArrayStream
+    from ..c_data import CArrowArrayStream
 
     var capsule = py_table.__arrow_c_stream__(Python.none())
     return CArrowArrayStream.from_pycapsule(capsule).to_table()
@@ -110,7 +109,3 @@ def test_write_readable_by_pyarrow() raises:
     assert_equal(String(py=pa_table.column("z").to_pylist()[0]), "a")
 
     remove(path)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

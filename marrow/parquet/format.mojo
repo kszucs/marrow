@@ -933,6 +933,21 @@ struct ColumnMetaData(Copyable, Movable):
         # min/max are only usable when both bounds are present.
         self.has_min_max = seen_min and seen_max
 
+    def byte_range(self) -> Tuple[Int, Int]:
+        """The chunk's `(offset, length)` in the file — every page of the chunk
+        and nothing else.
+
+        The chunk begins at its dictionary page when it has one, else at its
+        first data page; `total_compressed_size` covers all of its pages. This
+        is the only place that computes it, so a reader can fetch a chunk
+        without knowing where the rest of the file lives (mirrors arrow-rs'
+        `ColumnChunkMetaData::byte_range`)."""
+        var start = (
+            self.dictionary_page_offset if self.dictionary_page_offset
+            != -1 else self.data_page_offset
+        )
+        return (start, self.total_compressed_size)
+
     def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)

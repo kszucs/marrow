@@ -7,8 +7,7 @@ from std.testing import (
     assert_raises,
 )
 
-from marrow.testing import TestSuite
-from marrow.arrays import (
+from ...arrays import (
     AnyArray,
     Int32Array,
     Date32Array,
@@ -18,8 +17,8 @@ from marrow.arrays import (
     TimestampArray,
     PrimitiveArray,
 )
-from marrow.builders import PrimitiveBuilder, array
-from marrow.dtypes import (
+from ...builders import PrimitiveBuilder, array
+from ...dtypes import (
     int32,
     date32,
     date64,
@@ -36,7 +35,7 @@ from marrow.dtypes import (
     Time64Type,
     TimestampType,
 )
-from marrow.kernels.temporal import (
+from ...kernels.temporal import (
     YearKernel,
     MonthKernel,
     DayKernel,
@@ -330,7 +329,3 @@ def test_cross_check_date_trunc_pyarrow() raises:
             assert_equal(
                 Int(r.as_timestamp()[i].value()), Int(py=pa_r[i].value)
             )
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

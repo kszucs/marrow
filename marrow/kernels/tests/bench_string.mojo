@@ -9,10 +9,10 @@ array x scalar-pattern overload, which compiles it once per call.
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import StringArray
-from marrow.builders import StringBuilder
-from marrow.kernels.string import LikeKernel, ILikeKernel
-from marrow.testing import BenchSuite, Benchmark
+from ...arrays import StringArray
+from ...builders import StringBuilder
+from ...kernels.string import LikeKernel, ILikeKernel
+from ...testing import Benchmark
 
 
 def _urls(n: Int) raises -> StringArray:
@@ -157,7 +157,3 @@ def bench_ilike_array_100k(mut b: Benchmark) raises:
     b.iter[call]()
     keep(data)
     keep(pattern)
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

@@ -12,18 +12,18 @@ the other a dimension table.
 Run with:
     pixi run pytest marrow/kernels/tests/bench_join.mojo --benchmark
 
-Larger 100M-row comparisons live in ``python/tests/bench_join_parallel.py``
+Larger 100M-row comparisons live in ``python/marrow/tests/bench_join_parallel.py``
 where competitor runtimes (DuckDB/Polars) can be run at full parallelism.
 """
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import PrimitiveArray, AnyArray, StructArray
-from marrow.builders import PrimitiveBuilder, Int64Builder
-from marrow.dtypes import int64, Int64Type, struct_, Field
-from marrow.kernels.join import JOIN_INNER, JOIN_ALL
-from marrow.kernels.join import HashJoin, hash_join
-from marrow.testing import BenchSuite, Benchmark
+from ...arrays import PrimitiveArray, AnyArray, StructArray
+from ...builders import PrimitiveBuilder, Int64Builder
+from ...dtypes import int64, Int64Type, struct_, Field
+from ...kernels.join import JOIN_INNER, JOIN_ALL
+from ...kernels.join import HashJoin, hash_join
+from ...testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +223,3 @@ def bench_join_shape_1m_x_10m(mut b: Benchmark) raises:
 def bench_join_shape_10m_x_1m(mut b: Benchmark) raises:
     """10M-row build × 1M-row probe — 10:1 fan-out."""
     _bench_full(b, 10_000_000, 1_000_000)
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

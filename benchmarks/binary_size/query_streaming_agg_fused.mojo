@@ -18,9 +18,9 @@ from marrow.dtypes import AnyDataType, Int64Type, int64, string, field
 from marrow.kernels.aggregate import NumericAgg, SumKernel, MinKernel
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.aggregates import Aggregates
+from marrow.expr.aggregates import AggFunc
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation, execute
+from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation
 
 
 def main() raises:
@@ -38,9 +38,13 @@ def main() raises:
     aggs.append(AnyValue(col("a", int64)))
     aggs.append(AnyValue(col("b", int64)))
 
-    var funcs = Aggregates()
-    funcs.append[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
-    funcs.append[NumericAgg[MinKernel, Int64Type]](AnyDataType(int64))
+    var funcs = List[AggFunc]()
+    funcs.append(
+        AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64))
+    )
+    funcs.append(
+        AggFunc.of[NumericAgg[MinKernel, Int64Type]](AnyDataType(int64))
+    )
 
     var agg = Aggregate(
         input=AnyRelation(InMemoryTable(batch=batch)),
@@ -51,4 +55,4 @@ def main() raises:
             [field("name", string), field("a", int64), field("b", int64)]
         ),
     )
-    print(execute(AnyRelation(agg^)))
+    print(AnyRelation(agg^).execute())

@@ -4,10 +4,9 @@ from std.testing import (
     assert_false,
     assert_raises,
 )
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, PrimitiveArray
-from marrow.builders import (
+from ...arrays import AnyArray, PrimitiveArray
+from ...builders import (
     array,
     arange,
     PrimitiveBuilder,
@@ -15,7 +14,7 @@ from marrow.builders import (
     Float32Builder,
     Float64Builder,
 )
-from marrow.dtypes import (
+from ...dtypes import (
     int32,
     int64,
     float32,
@@ -25,7 +24,7 @@ from marrow.dtypes import (
     Float32Type,
     Float64Type,
 )
-from marrow.kernels.arithmetic import (
+from ...kernels.numeric import (
     AddKernel,
     SubKernel,
     MulKernel,
@@ -52,7 +51,7 @@ from marrow.kernels.arithmetic import (
     SinKernel,
     CosKernel,
 )
-from marrow.kernels.execution import ExecutionContext
+from ...kernels.execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +690,3 @@ def test_add_dispatch_parallel_small() raises:
     assert_equal(result[0].value(), 0)
     assert_equal(result[50].value(), 100)
     assert_equal(result[99].value(), 198)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

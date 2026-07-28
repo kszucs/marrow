@@ -14,8 +14,8 @@ Run with: pixi run pytest marrow/tests/bench_bitmap.mojo --benchmark
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.buffers import Bitmap, Buffer
-from marrow.testing import BenchSuite, Benchmark
+from ..buffers import Bitmap, Buffer
+from ..testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +184,8 @@ def _bench_and(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
     keep(len(lhs))
     keep(len(rhs))
+    keep(len(lhs_view))
+    keep(len(rhs_view))
 
 
 def bench_and_1k(mut b: Benchmark) raises:
@@ -230,6 +232,8 @@ def _bench_or(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
     keep(len(lhs))
     keep(len(rhs))
+    keep(len(lhs_view))
+    keep(len(rhs_view))
 
 
 def bench_or_1k(mut b: Benchmark) raises:
@@ -273,6 +277,7 @@ def _bench_invert(mut b: Benchmark, size: Int) raises:
 
     b.iter[call]()
     keep(len(bitmap))
+    keep(len(bitmap_view))
 
 
 def bench_invert_1k(mut b: Benchmark) raises:
@@ -822,6 +827,10 @@ def _bench_filter_bits(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
     keep(len(src))
     keep(len(sel))
+    keep(len(src_view))
+    keep(out_len)
+    keep(sel_start)
+    keep(sel_end)
 
 
 def bench_filter_bits_1k(mut b: Benchmark) raises:
@@ -871,6 +880,10 @@ def _bench_filter_values(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
     keep(len(buf))
     keep(len(sel))
+    keep(len(src_view))
+    keep(out_len)
+    keep(sel_start)
+    keep(sel_end)
 
 
 def bench_filter_values_1k(mut b: Benchmark) raises:
@@ -891,7 +904,3 @@ def bench_filter_values_1m(mut b: Benchmark) raises:
 
 def bench_filter_values_10m(mut b: Benchmark) raises:
     _bench_filter_values(b, 10_000_000)
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

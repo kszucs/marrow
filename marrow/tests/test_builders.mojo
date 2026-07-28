@@ -2,8 +2,7 @@
 ListBuilder, FixedSizeListBuilder, StructBuilder) and factory functions."""
 
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
-from marrow.arrays import (
+from ..arrays import (
     AnyArray,
     BoolArray,
     PrimitiveArray,
@@ -12,7 +11,7 @@ from marrow.arrays import (
     FixedSizeListArray,
     StructArray,
 )
-from marrow.builders import (
+from ..builders import (
     AnyBuilder,
     BoolBuilder,
     PrimitiveBuilder,
@@ -30,8 +29,8 @@ from marrow.builders import (
     Float32Builder,
     Float64Builder,
 )
-from marrow.dtypes import *
-from marrow.views import BitmapView
+from ..dtypes import *
+from ..views import BitmapView
 
 
 # ---------------------------------------------------------------------------
@@ -827,7 +826,3 @@ def test_any_builder_finish_dispatch_list() raises:
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
     assert_equal(len(arr.to_data().buffers[0]), 64)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -29,7 +29,7 @@ IS_NULL - Null check
 IF_ELSE - Conditional
 LENGTH - String byte length (dispatches to kernels.string.LengthKernel)
 LIKE/ILIKE - SQL LIKE pattern match (kernels.string.LikeKernel/ILikeKernel)
-IS_IN - Set membership (kernels.membership.is_in)
+IS_IN - Set membership (kernels.membership.IsInKernel)
 COALESCE/NULLIF/CASE_WHEN - Conditional / null handling (kernels.conditional)
 YEAR/MONTH/DAY/HOUR/MINUTE/SECOND/DAY_OF_WEEK/QUARTER/DAY_OF_YEAR - Temporal
   field extraction (kernels.temporal); DATE_TRUNC - floor to a unit boundary
@@ -42,7 +42,7 @@ from ..scalars import AnyScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
-from ..kernels.arithmetic import (
+from ..kernels.numeric import (
     AddKernel,
     SubKernel,
     MulKernel,
@@ -58,19 +58,30 @@ from ..kernels.boolean import (
     NotKernel,
     XorKernel,
     NotNullKernel,
-    is_null,
-    select,
+    IsNullKernel,
 )
-from ..kernels.compare import (
-    equal,
+from ..kernels.numeric import (
+    NumericCompareKernel,
+    EqKernel,
     NeKernel,
     LtKernel,
     LeKernel,
     GtKernel,
     GeKernel,
 )
-from ..kernels.string import LengthKernel, LikeKernel, ILikeKernel
-from ..kernels.membership import is_in as is_in_kernel
+from ..kernels.string import (
+    StringPredicateKernel,
+    StringEqKernel,
+    StringNeKernel,
+    StringLtKernel,
+    StringLeKernel,
+    StringGtKernel,
+    StringGeKernel,
+    LengthKernel,
+    LikeKernel,
+    ILikeKernel,
+)
+from ..kernels.membership import IsInKernel
 from ..kernels.conditional import (
     coalesce as coalesce_kernel,
     nullif as nullif_kernel,
@@ -137,6 +148,66 @@ comptime DAY_OF_WEEK: UInt8 = 38
 comptime QUARTER: UInt8 = 39
 comptime DAY_OF_YEAR: UInt8 = 40
 comptime DATE_TRUNC: UInt8 = 41
+
+
+# ---------------------------------------------------------------------------
+# Operand promotion — what `a + b` means when the operands are not the same
+# numeric type. This is the interpreted counterpart of the fused lane's
+# comptime `promote[L.OutType, R.OutType]` (`values.mojo`), and it lives here
+# for the same reason `_compare` picks its kernel family here: deciding what an
+# operator *means* is this layer's job. Kernels stay array-in/array-out and
+# strict — `Kernel.expect_same_dtype` keeps meaning what it says, which the
+# kernels that genuinely require identical types (`nullif`, `case_when`'s
+# candidates) still rely on.
+#
+# ⚠️ BINSIZE: `eval`'s twelve binary arms call this inline on purpose. Folding
+# them into one `_arith[K: BinaryNumericKernel]` helper reads better and costs
+# **+115,600 bytes** on the `query_dynvalue` gate (5,438,904 -> 5,554,504) —
+# a parameterised method is instantiated per kernel, and each instantiation
+# carries its own copy of everything it touches. Inline, the same change is
+# +16,528. A generic wrapper around an already-erased dispatch is not free.
+# ---------------------------------------------------------------------------
+
+
+def _numeric_rank(t: AnyDataType) -> Int:
+    """Runtime twin of `values._rank`: bit width, with every float outranking
+    every integer. The two must stay in step — that they agree is exactly what
+    makes the fused and interpreted lanes accept the same operand pairings and
+    produce the same output dtype.
+
+    The width comes from the `is_*` predicates rather than `byte_width()`,
+    which resolves through `variant_dispatch[PrimitiveType]` and would
+    instantiate its closure for *every* primitive dtype — temporal, interval
+    and decimal included — to answer a question this only ever asks about the
+    eleven numeric ones."""
+    var width: Int
+    if t.is_int8() or t.is_uint8():
+        width = 8
+    elif t.is_int16() or t.is_uint16() or t.is_float16():
+        width = 16
+    elif t.is_int32() or t.is_uint32() or t.is_float32():
+        width = 32
+    else:
+        width = 64
+    return width + (1000 if t.is_floating_point() else 0)
+
+
+def _promote_operands(mut left: AnyArray, mut right: AnyArray) raises:
+    """Widen the narrower of two numeric operands so the kernel sees one dtype.
+
+    Only numeric-to-numeric pairs promote; anything else is passed through
+    untouched and a genuine mismatch still raises from the kernel. It costs
+    nothing in the interpreter's reachable set: `cast_array` is already linked
+    in by the `CAST` tag (measured — stubbing these two calls out left
+    `query_dynvalue` byte-identical)."""
+    var lt = left.dtype()
+    var rt = right.dtype()
+    if lt == rt or not lt.is_numeric() or not rt.is_numeric():
+        return
+    if _numeric_rank(lt) >= _numeric_rank(rt):
+        right = cast_array(right, lt)
+    else:
+        left = cast_array(left, rt)
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +378,25 @@ struct DynValue(
         """
         return True
 
+    def _compare[
+        N: NumericCompareKernel, S: StringPredicateKernel
+    ](self, left: AnyArray, right: AnyArray) raises -> AnyArray:
+        """Apply one comparison operator, choosing the kernel family the
+        operands belong to.
+
+        Numeric and string comparison are unrelated implementations — SIMD over
+        fixed-width lanes versus an elementwise walk over variable-width data —
+        so the operator names a *pair* of kernels and the dtype picks one. This
+        used to live inside the numeric kernel as a `comptime StringKernel` plus
+        a dtype branch in its `dispatch`, which made every numeric comparison
+        carry a string counterpart it never used. Interpreting an operator is
+        this layer's job; the kernels stay one family each.
+        """
+        if left.dtype().is_string() or left.dtype().is_large_string():
+            return S.dispatch(left, right)
+        else:
+            return N.dispatch(left, right)
+
     def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate this expression tree against *batch*, dispatching on tag."""
         if self._tag == LOAD:
@@ -322,51 +412,65 @@ struct DynValue(
         elif self._tag == LITERAL:
             return self._value.value().repeat(batch.num_rows())
         elif self._tag == ADD:
-            return AddKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return AddKernel.dispatch(left, right)
         elif self._tag == SUB:
-            return SubKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return SubKernel.dispatch(left, right)
         elif self._tag == MUL:
-            return MulKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return MulKernel.dispatch(left, right)
         elif self._tag == DIV:
-            return DivKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return DivKernel.dispatch(left, right)
         elif self._tag == MOD:
-            return ModKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return ModKernel.dispatch(left, right)
         elif self._tag == FLOORDIV:
-            return FloordivKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return FloordivKernel.dispatch(left, right)
         elif self._tag == EQ:
-            return equal(self._args[0].eval(batch), self._args[1].eval(batch))
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[EqKernel, StringEqKernel](left, right)
         elif self._tag == NE:
-            return NeKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[NeKernel, StringNeKernel](left, right)
         elif self._tag == LT:
-            return LtKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[LtKernel, StringLtKernel](left, right)
         elif self._tag == LE:
-            return LeKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[LeKernel, StringLeKernel](left, right)
         elif self._tag == GT:
-            return GtKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[GtKernel, StringGtKernel](left, right)
         elif self._tag == GE:
-            return GeKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[GeKernel, StringGeKernel](left, right)
         elif self._tag == AND:
             return AndKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
@@ -386,7 +490,7 @@ struct DynValue(
         elif self._tag == NOT:
             return NotKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == IS_NULL:
-            return is_null(self._args[0].eval(batch))
+            return IsNullKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == NOT_NULL:
             return NotNullKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == LENGTH:
@@ -394,9 +498,11 @@ struct DynValue(
         elif self._tag == CAST:
             return cast_array(self._args[0].eval(batch), self._cast_to.value())
         elif self._tag == IF_ELSE:
-            return select(
-                self._args[0].eval(batch),
-                self._args[1].eval(batch),
+            # One-branch CASE WHEN: the same null semantics (a null condition
+            # counts as false) and the same dtype coverage as `case_when`.
+            return case_when_kernel(
+                [self._args[0].eval(batch).as_bool().copy()],
+                [self._args[1].eval(batch)],
                 self._args[2].eval(batch),
             )
         elif self._tag == LIKE:
@@ -408,7 +514,7 @@ struct DynValue(
                 left, self._pattern_array(left.length())
             )
         elif self._tag == IS_IN:
-            return is_in_kernel(
+            return IsInKernel.dispatch(
                 self._args[0].eval(batch), self._value_set.value()
             ).to_any()
         elif self._tag == COALESCE:
@@ -603,7 +709,14 @@ struct DynValue(
 
     def write_to[W: Writer](self, mut writer: W):
         if self._tag == LOAD:
-            writer.write(t"input({self._kind_data})")
+            # A named reference renders as its name until `resolve_names` binds
+            # it to a position; rendering it as `input(0)` beforehand would
+            # report an index it does not yet have (every unresolved name
+            # carries `_kind_data == 0`, so they would all print alike).
+            if self._name:
+                writer.write(self._name)
+            else:
+                writer.write(t"input({self._kind_data})")
         elif self._tag == LITERAL:
             writer.write("literal(...)")
         else:
@@ -748,7 +861,7 @@ struct DynValue(
     # --- set membership (kernels.membership) -------------------------------
     def isin(self, value_set: AnyArray) -> DynValue:
         """``self IN value_set`` — the value set is captured in the node and
-        probed by ``kernels.membership.is_in``."""
+        probed by ``kernels.membership.IsInKernel``."""
         return DynValue(
             tag=IS_IN,
             args=[self.copy()],

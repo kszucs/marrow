@@ -2,20 +2,20 @@
 
 Run with:
     pixi run -e bench pytest marrow/kernels/tests/bench_sort.mojo --benchmark
-    pixi run -e bench pytest python/tests/bench_sort.py --benchmark --competition
+    pixi run -e bench pytest python/marrow/tests/bench_sort.py --benchmark --competition
 """
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.testing import BenchSuite, Benchmark
-from marrow.arrays import AnyArray
-from marrow.builders import (
+from ...testing import Benchmark
+from ...arrays import AnyArray
+from ...builders import (
     Int32Builder,
     Int64Builder,
     Float64Builder,
 )
-from marrow.dtypes import int32, int64, float64
-from marrow.kernels.sort import sort_indices
+from ...dtypes import int32, int64, float64
+from ...kernels.sort import sort_indices
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,3 @@ def bench_sort_float64_100k(mut b: Benchmark) raises:
 
 def bench_sort_float64_1m(mut b: Benchmark) raises:
     _bench_sort_float64(b, 1_000_000)
-
-
-def main() raises:
-    BenchSuite.run[__functions_in_module()]()

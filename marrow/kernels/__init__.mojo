@@ -4,17 +4,24 @@ Re-exports kernel structs from the submodules so callers can
 ``import marrow.kernels as mk`` and use e.g. ``mk.AddKernel.dispatch``,
 ``mk.SumKernel.dispatch``, ``mk.filter``, ``mk.sort`` directly.
 
-Shared dispatch helpers (``bitmap_and``, ``binary_array_dispatch`` etc.) live
-in ``marrow.kernels.helpers`` to keep this file as a thin re-export layer.
-
-Submodules:
-  - `arithmetic.mojo` — binary arithmetic, unary math, GPU dispatch via ``elementwise``
-  - `compare.mojo` — comparison kernels producing bit-packed bool output
-  - `aggregate.mojo` — reductions using ``std.algorithm`` (sum, min, max, etc.)
-  - `filter.mojo` — selection/filter kernels
-  - `sort.mojo` — sort kernels
-  - `groupby.mojo` — `GroupBy` grouped aggregation (sum, min, max, count, mean)
-  - `hashing.mojo` — hash_ for PrimitiveArray, StringArray, StructArray, AnyArray
+Submodules — element-wise first, then the ones that reshape or combine rows:
+  - `numeric.mojo` — binary arithmetic and comparison (one family since Q0.7)
+  - `boolean.mojo` — logical ops and validity predicates, Kleene semantics
+  - `string.mojo` — string predicates and transforms
+  - `temporal.mojo` — date/time field extraction and truncation
+  - `cast.mojo` — type conversion
+  - `conditional.mojo` — coalesce / nullif / case_when
+  - `membership.mojo` — `is_in`
+  - `nested.mojo` — list-valued predicates
+  - `aggregate.mojo` — reductions (sum, min, max, mean, any, all)
+  - `distinct.mojo` — exact and approximate distinct counts
+  - `groupby.mojo` — grouped aggregation
+  - `join.mojo` / `hashtable.mojo` / `hashing.mojo` / `partition.mojo` — the
+    hash machinery group-by, join and `is_in` share
+  - `filter.mojo` — selection, take, drop_null
+  - `sort.mojo` — sort and sort_indices
+  - `concat.mojo` — concatenation
+  - `core.mojo` — the `Kernel` root trait; `execution.mojo` — `ExecutionContext`
 """
 
 from marrow.dtypes import (
@@ -53,9 +60,11 @@ from .aggregate import (
     AnyKernel,
     AllKernel,
 )
-from .arithmetic import AddKernel, SubKernel, MulKernel, DivKernel
-from .compare import (
-    equal,
+from .numeric import (
+    AddKernel,
+    SubKernel,
+    MulKernel,
+    DivKernel,
     EqKernel,
     NeKernel,
     LtKernel,
@@ -66,4 +75,5 @@ from .compare import (
 from .cast import cast
 from .distinct import count_distinct, approx_count_distinct
 from .filter import filter, drop_null, take
+from .membership import IsInKernel, is_in
 from .sort import sort_indices, sort

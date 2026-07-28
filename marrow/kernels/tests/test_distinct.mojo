@@ -1,11 +1,10 @@
 from std.testing import assert_equal, assert_true
-from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray
-from marrow.builders import array, nulls, Int64Builder, StringBuilder
-from marrow.dtypes import int32, int64, string
-from marrow.kernels.distinct import count_distinct, approx_count_distinct
-from marrow.kernels.execution import ExecutionContext
+from ...arrays import AnyArray
+from ...builders import array, nulls, Int64Builder, StringBuilder
+from ...dtypes import int32, int64, string
+from ...kernels.distinct import count_distinct, approx_count_distinct
+from ...kernels.execution import ExecutionContext
 
 
 def test_count_distinct_basic() raises:
@@ -105,7 +104,3 @@ def test_count_distinct_parallel_matches_serial() raises:
     var a: AnyArray = b.finish()
     assert_equal(count_distinct(a, ExecutionContext.serial()).value(), 5000)
     assert_equal(count_distinct(a, ExecutionContext.parallel(4)).value(), 5000)
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

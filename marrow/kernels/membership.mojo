@@ -25,93 +25,76 @@ This falls out for free from ``rapidhash`` mapping every null to a single
 ``value_set`` inserted that sentinel bucket.
 """
 
-from ..arrays import (
-    AnyArray,
-    BoolArray,
-    PrimitiveArray,
-    StringArray,
-)
+from ..arrays import AnyArray, Array, BoolArray
 from ..builders import BoolBuilder
-from ..dtypes import PrimitiveType
+from .core import Kernel
 from .execution import ExecutionContext
 from .hashing import rapidhash
 from .hashtable import SwissHashTable
 
 
-# ---------------------------------------------------------------------------
-# Core hash-set build + probe (type-erased — membership is inherently uniform
-# over the 64-bit hash, so all concrete types funnel through here).
-# ---------------------------------------------------------------------------
+struct IsInKernel(Kernel):
+    """Membership predicate — is each element of ``values`` in ``value_set``?
 
-
-def _is_in(
-    values: AnyArray, value_set: AnyArray, ctx: ExecutionContext
-) raises -> BoolArray:
-    """Hash ``value_set`` into a ``SwissHashTable`` once, then probe each value.
-
-    Returns an all-valid ``BoolArray`` of ``len(values)`` — ``true`` where the
-    value's hash is present in the set. Null semantics follow from the shared
-    ``NULL_HASH_SENTINEL`` bucket (see module docstring).
+    Unlike the element-wise kernel families this one has **no typed leaves**:
+    membership is decided entirely on the 64-bit hash, so every data type
+    ``rapidhash`` supports funnels through the same code. There is one
+    implementation, and a newly supported type is one ``rapidhash`` learns —
+    not one this kernel gains an overload for.
     """
-    var n = len(values)
 
-    var table = SwissHashTable[rapidhash]()
-    table.build_hashes(rapidhash(value_set, ctx))
-    var indices = table.probe_hashes(
-        rapidhash(values, ctx),
-        num_build_rows=len(value_set),
-        single_match=True,
-    )
-    ref probe_rows = indices[1]
+    comptime name = "is_in"
 
-    # ``single_match`` → each matching value row appears exactly once; mark it.
-    var mask = List[Bool](length=n, fill=False)
-    for i in range(len(probe_rows)):
-        mask[Int(probe_rows.unsafe_get(i))] = True
+    @staticmethod
+    def apply(
+        values: AnyArray, value_set: AnyArray, ctx: ExecutionContext
+    ) raises -> BoolArray:
+        """Hash ``value_set`` into a ``SwissHashTable`` once, then probe each
+        value.
 
-    var out = BoolBuilder(n)
-    for i in range(n):
-        out.append(mask[i])
-    return out.finish()
+        Returns an all-valid ``BoolArray`` of ``len(values)`` — ``true`` where
+        the value's hash is present in the set. Null semantics follow from the
+        shared ``NULL_HASH_SENTINEL`` bucket (see module docstring)."""
+        var n = len(values)
 
+        var table = SwissHashTable[rapidhash]()
+        table.build_hashes(rapidhash(value_set, ctx))
+        var indices = table.probe_hashes(
+            rapidhash(values, ctx),
+            num_build_rows=len(value_set),
+            single_match=True,
+        )
+        ref probe_rows = indices[1]
 
-# ---------------------------------------------------------------------------
-# Typed overloads — thin typed entry points that guarantee matching element
-# types at compile time and delegate to the shared hash-set probe.
-# ---------------------------------------------------------------------------
+        # ``single_match`` → each matching value row appears exactly once.
+        var mask = List[Bool](length=n, fill=False)
+        for i in range(len(probe_rows)):
+            mask[Int(probe_rows.unsafe_get(i))] = True
 
+        var out = BoolBuilder(n)
+        for i in range(n):
+            out.append(mask[i])
+        return out.finish()
 
-def is_in[
-    T: PrimitiveType
-](
-    values: PrimitiveArray[T],
-    value_set: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Membership of each ``values[i]`` in ``value_set`` for a numeric type."""
-    return _is_in(values.copy(), value_set.copy(), ctx)
-
-
-def is_in(
-    values: BoolArray,
-    value_set: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Membership of each boolean value in ``value_set``."""
-    return _is_in(values.copy(), value_set.copy(), ctx)
-
-
-def is_in(
-    values: StringArray,
-    value_set: StringArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Membership of each string in ``value_set``."""
-    return _is_in(values.copy(), value_set.copy(), ctx)
+    @staticmethod
+    def dispatch(
+        values: AnyArray,
+        value_set: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        """Validate that both operands carry the same type, then probe."""
+        Self.expect_same_dtype(values.dtype(), value_set.dtype())
+        return Self.apply(values, value_set, ctx)
 
 
 # ---------------------------------------------------------------------------
-# Type-erased dispatch — the runtime-typed entry point.
+# Public API — the `pc.*` entry point, in its erased and typed forms. There
+# used to be three typed overloads (`PrimitiveArray[T]`, `BoolArray`,
+# `StringArray`) with byte-identical bodies; one bound on `Array` covers every
+# array type there is, including the ones they omitted. It exists for the call
+# site, not for the kernel: typed arrays are deliberately not
+# `ImplicitlyCopyable`, so without it every caller holding a typed array would
+# have to spell `.copy()` to reach the erased form.
 # ---------------------------------------------------------------------------
 
 
@@ -120,17 +103,27 @@ def is_in(
     value_set: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
-    """Membership of each value in ``value_set`` (runtime-typed).
+    """Membership of each value in ``value_set``.
 
     ``values`` and ``value_set`` must share the same data type. Supports every
     type ``rapidhash`` handles — numeric, bool, string, and the nested types —
     covering the ClickBench ``IN (...)`` case (int) and strings.
     """
-    if values.dtype() != value_set.dtype():
-        raise Error(
-            "is_in: values and value_set must have the same type, got ",
-            values.dtype(),
-            " and ",
-            value_set.dtype(),
-        )
-    return _is_in(values.copy(), value_set.copy(), ctx)
+    return IsInKernel.dispatch(values, value_set, ctx)
+
+
+def is_in[
+    A: Array
+](
+    values: A,
+    value_set: A,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> BoolArray:
+    """Membership of each value in ``value_set``, for two arrays of one type.
+
+    Still validated rather than trusted: a shared Mojo type is not a shared
+    dtype for the types that carry theirs at runtime — two `ListArray`s can
+    disagree about their element type — so this goes through `dispatch` like
+    any other caller.
+    """
+    return IsInKernel.dispatch(values.copy(), value_set.copy(), ctx)

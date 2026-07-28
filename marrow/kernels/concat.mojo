@@ -26,6 +26,7 @@ def concat(
 
     Args:
         arrays: Non-empty list of arrays with the same dtype.
+        ctx: Execution context, forwarded to the per-type kernels.
 
     Raises:
         If arrays is empty or the dtype is unsupported.

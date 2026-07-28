@@ -1,7 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false
-from marrow.testing import TestSuite
 
-from marrow.arrays import (
+from ...arrays import (
     PrimitiveArray,
     BoolArray,
     AnyArray,
@@ -9,8 +8,8 @@ from marrow.arrays import (
     Int32Array,
     TimestampArray,
 )
-from marrow.builders import array, PrimitiveBuilder
-from marrow.dtypes import (
+from ...builders import array, PrimitiveBuilder
+from ...dtypes import (
     int64,
     float64,
     bool_ as bool_dt,
@@ -21,7 +20,7 @@ from marrow.dtypes import (
     second,
     TimestampType,
 )
-from marrow.kernels.arithmetic import (
+from ...kernels.numeric import (
     AddKernel,
     SubKernel,
     AbsKernel,
@@ -29,11 +28,19 @@ from marrow.kernels.arithmetic import (
     ModKernel,
     FloordivKernel,
 )
-from marrow.kernels.boolean import XorKernel
-from marrow.kernels.string import LengthKernel, LikeKernel, ILikeKernel
-from marrow.kernels.compare import LtKernel, LeKernel, GtKernel, GeKernel
-from marrow.kernels.membership import is_in
-from marrow.kernels.temporal import (
+from ...kernels.boolean import XorKernel
+from ...kernels.string import (
+    LengthKernel,
+    LikeKernel,
+    ILikeKernel,
+    StringLtKernel,
+    StringLeKernel,
+    StringGtKernel,
+    StringGeKernel,
+)
+from ...kernels.numeric import LtKernel, LeKernel, GtKernel, GeKernel
+from ...kernels.membership import is_in
+from ...kernels.temporal import (
     YearKernel,
     MonthKernel,
     DayKernel,
@@ -45,8 +52,8 @@ from marrow.kernels.temporal import (
     DayOfYearKernel,
     date_trunc,
 )
-from marrow.tabular import RecordBatch, record_batch
-from marrow.expr import (
+from ...tabular import RecordBatch, record_batch
+from ...expr import (
     DynValue,
     col,
     lit,
@@ -76,7 +83,7 @@ from marrow.expr import (
 
 # The op tags added in this task are not re-exported from ``marrow.expr`` yet
 # (that's a sibling packaging task), so import them from the module directly.
-from marrow.expr.dynamic import (
+from ...expr.dynamic import (
     MOD,
     FLOORDIV,
     XOR,
@@ -517,7 +524,7 @@ def test_string_less_pred() raises:
     var b = array(["apricot", "banana", "blueberry", "durian"])
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec_pred(col(0) < col(1), batch)
-    assert_true(result == LtKernel.apply_string(a, b))
+    assert_true(result == StringLtKernel.apply(a, b))
     assert_true(result == array([True, False, False, True]))
 
 
@@ -527,13 +534,13 @@ def test_string_all_compares() raises:
     var b = array(["a", "b", "cc"])
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     assert_true(
-        _exec_pred(col(0) <= col(1), batch) == LeKernel.apply_string(a, b)
+        _exec_pred(col(0) <= col(1), batch) == StringLeKernel.apply(a, b)
     )
     assert_true(
-        _exec_pred(col(0) > col(1), batch) == GtKernel.apply_string(a, b)
+        _exec_pred(col(0) > col(1), batch) == StringGtKernel.apply(a, b)
     )
     assert_true(
-        _exec_pred(col(0) >= col(1), batch) == GeKernel.apply_string(a, b)
+        _exec_pred(col(0) >= col(1), batch) == StringGeKernel.apply(a, b)
     )
 
 
@@ -786,7 +793,3 @@ def test_temporal_referenced_columns() raises:
     var cols = col("ts").year().referenced_columns()
     assert_equal(len(cols), 1)
     assert_equal(cols[0], "ts")
-
-
-def main() raises:
-    TestSuite.run[__functions_in_module()]()

@@ -138,7 +138,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.AllKernel.dispatch]()]("all")
     mb.def_function[pykernel[mk.drop_null]()]("drop_null")
     mb.def_function[pykernel[_filter_kernel]()]("filter")
-    mb.def_function[pykernel[mk.equal]()]("equal")
+    mb.def_function[pykernel[mk.EqKernel.dispatch]()]("equal")
     mb.def_function[pykernel[mk.NeKernel.dispatch]()]("not_equal")
     mb.def_function[pykernel[mk.LtKernel.dispatch]()]("less")
     mb.def_function[pykernel[mk.LeKernel.dispatch]()]("less_equal")

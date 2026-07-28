@@ -12,8 +12,57 @@ from .buffers import (
 
 import std.math as math
 
-from .dtypes import *
-from .arrays import *
+from std.gpu import DeviceContext
+from .dtypes import (
+    AnyDataType,
+    Field,
+    FixedSizeBinaryType,
+    FixedSizeListType,
+    LargeListType,
+    ListType,
+    MapType,
+    binary,
+    bool_,
+    date32,
+    date64,
+    day_time_interval,
+    decimal128,
+    decimal256,
+    decimal32,
+    decimal64,
+    dictionary,
+    duration,
+    field,
+    float16,
+    float32,
+    float64,
+    int16,
+    int32,
+    int64,
+    int8,
+    large_binary,
+    large_string,
+    microsecond,
+    millisecond,
+    month_day_nano_interval,
+    nanosecond,
+    null,
+    second,
+    string,
+    struct_,
+    time32,
+    time64,
+    timestamp,
+    uint16,
+    uint32,
+    uint64,
+    uint8,
+    year_month_interval,
+)
+from .arrays import (
+    AnyArray,
+    ArrayData,
+)
 from .schema import Schema
 from .tabular import RecordBatch, Table
 
@@ -162,7 +211,7 @@ def _release_schema_capsule(capsule: PyObjectPtr) abi("C"):
             var c_schema = ptr.bitcast[CArrowSchema]()
             # Guard against double-free: an Arrow importer zeroes the release
             # field after taking ownership.
-            if UnsafePointer(to=c_schema[].release).bitcast[UInt64]()[0] != 0:
+            if not c_schema[].is_released():
                 c_schema[].release(c_schema)
             c_schema.free()
     except:
@@ -192,7 +241,7 @@ def _release_exported_schema(
         ptr[].name.free()
     if Int(ptr[].metadata) != 0:
         ptr[].metadata.free()
-    UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
+    ptr[].mark_released()
 
 
 @fieldwise_init
@@ -232,10 +281,21 @@ struct CArrowSchema(Copyable, Movable):
     ) -> None
     var private_data: OpaquePointer[MutUntrackedOrigin]
 
+    def is_released(self) -> Bool:
+        """True once ownership has moved on: the C ABI marks a struct consumed
+        by nulling its `release` callback, and calling it again is a double
+        free."""
+        return UnsafePointer(to=self.release).bitcast[UInt64]()[0] == 0
+
+    def mark_released(mut self):
+        """Give up ownership: null the callback so nobody can release twice.
+
+        This is what an importer does after taking the resources — the C ABI
+        has no other handshake for it."""
+        UnsafePointer(to=self.release).bitcast[UInt64]()[0] = 0
+
     def __del__(deinit self):
-        # Guard: release is zeroed by an Arrow importer after it takes ownership,
-        # so we only call it when we still own the resources.
-        if UnsafePointer(to=self.release).bitcast[UInt64]()[0] != 0:
+        if not self.is_released():
             self.release(
                 UnsafePointer(to=self).unsafe_origin_cast[MutUntrackedOrigin]()
             )
@@ -531,7 +591,7 @@ struct CArrowSchema(Copyable, Movable):
             capsule._obj_ptr, "arrow_schema"
         ).bitcast[CArrowSchema]()
         var schema = src[].copy()
-        UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+        src[].mark_released()
         return schema^
 
     def to_pycapsule(deinit self) raises -> PythonObject:
@@ -750,7 +810,7 @@ def _release_array_capsule(capsule: PyObjectPtr) abi("C"):
             var c_arr = ptr.bitcast[CArrowArray]()
             # Guard: release is zeroed by _release_exported_array after it runs,
             # or by an Arrow importer after it takes ownership.
-            if UnsafePointer(to=c_arr[].release).bitcast[UInt64]()[0] != 0:
+            if not c_arr[].is_released():
                 c_arr[].release(c_arr)
             c_arr.free()
     except:
@@ -794,7 +854,7 @@ def _release_exported_array(
     var data_ptr = ptr[].private_data.bitcast[ArrayData]()
     data_ptr.unsafe_deinit_pointee()
     data_ptr.free()
-    UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
+    ptr[].mark_released()
 
 
 @fieldwise_init
@@ -842,9 +902,21 @@ struct CArrowArray(Copyable, Movable):
     ) -> None
     var private_data: OpaquePointer[MutUntrackedOrigin]
 
+    def is_released(self) -> Bool:
+        """True once ownership has moved on: the C ABI marks a struct consumed
+        by nulling its `release` callback, and calling it again is a double
+        free."""
+        return UnsafePointer(to=self.release).bitcast[UInt64]()[0] == 0
+
+    def mark_released(mut self):
+        """Give up ownership: null the callback so nobody can release twice.
+
+        This is what an importer does after taking the resources — the C ABI
+        has no other handshake for it."""
+        UnsafePointer(to=self.release).bitcast[UInt64]()[0] = 0
+
     def __del__(deinit self):
-        # Guard: release is zeroed by an Arrow importer after it takes ownership.
-        if UnsafePointer(to=self.release).bitcast[UInt64]()[0] != 0:
+        if not self.is_released():
             self.release(
                 UnsafePointer(to=self).unsafe_origin_cast[MutUntrackedOrigin]()
             )
@@ -1111,7 +1183,7 @@ struct CArrowArray(Copyable, Movable):
             capsule._obj_ptr, "arrow_array"
         ).bitcast[CArrowArray]()
         var array = src[].copy()
-        UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+        src[].mark_released()
         return array^
 
     def to_pycapsule(deinit self) raises -> PythonObject:
@@ -1305,7 +1377,7 @@ def _stream_get_next(
         var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
         if data[].index >= len(data[].batches):
             # Signal end-of-stream: set release to null.
-            UnsafePointer(to=array_out[].release).bitcast[UInt64]()[0] = 0
+            array_out[].mark_released()
             return 0
         var batch = data[].batches[data[].index].copy()
         data[].index += 1
@@ -1330,7 +1402,7 @@ def _stream_release(
     var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
     data.unsafe_deinit_pointee()
     data.free()
-    UnsafePointer(to=stream_ptr[].release).bitcast[UInt64]()[0] = 0
+    stream_ptr[].mark_released()
 
 
 def _release_stream_capsule(capsule: PyObjectPtr) abi("C"):
@@ -1341,7 +1413,7 @@ def _release_stream_capsule(capsule: PyObjectPtr) abi("C"):
         var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_array_stream")
         if Int(ptr) != 0:
             var c_stream = ptr.bitcast[CArrowArrayStream]()
-            if UnsafePointer(to=c_stream[].release).bitcast[UInt64]()[0] != 0:
+            if not c_stream[].is_released():
                 c_stream[].release(c_stream)
             c_stream.free()
     except:
@@ -1376,6 +1448,14 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
     ) thin abi("C") -> None
     var private_data: OpaquePointer[MutUntrackedOrigin]
 
+    def is_released(self) -> Bool:
+        """True once ownership has moved on — see `CArrowSchema.is_released`."""
+        return UnsafePointer(to=self.release).bitcast[UInt64]()[0] == 0
+
+    def mark_released(mut self):
+        """Give up ownership: null the callback so nobody can release twice."""
+        UnsafePointer(to=self.release).bitcast[UInt64]()[0] = 0
+
     @staticmethod
     def from_batches(
         var schema: Schema, var batches: List[RecordBatch]
@@ -1406,7 +1486,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
             capsule._obj_ptr, "arrow_array_stream"
         ).bitcast[CArrowArrayStream]()
         var stream = src[].copy()
-        UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+        src[].mark_released()
         return stream
 
     def to_pycapsule(self) raises -> PythonObject:
@@ -1452,7 +1532,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
                     "CArrowArrayStream: get_next failed with code ", err
                 )
             # End-of-stream: release field is null.
-            if UnsafePointer(to=c_array[].release).bitcast[UInt64]()[0] == 0:
+            if c_array[].is_released():
                 c_array.free()
                 break
             var struct_dtype = struct_(schema.fields.copy())

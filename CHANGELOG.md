@@ -21,6 +21,8 @@
 - `map` is a first-class Arrow type: arrays, builders, scalars, casts,
   hashing, selection, Parquet and IPC all carry it.
 - Decimal 32/64/128/256 and fixed-size binary, end to end.
+- Memory mapping is an allocation kind, so the Parquet and IPC readers
+  map a file instead of copying it in.
 
 ### Compute kernels
 
@@ -60,6 +62,8 @@
 - Float unaries and binaries: `sqrt`, `exp`, `exp2`, `log`, `log2`,
   `log10`, `log1p`, `floor`, `ceil`, `trunc`, `round`, `sign`, `sin`,
   `cos`, `pow_`, and row-wise `minimum`/`maximum`.
+- Every parallel loop runs through one striped driver on the execution
+  context, which owns the thread count.
 
 ### Expressions and the query engine
 
@@ -103,6 +107,8 @@
   metadata, and INT96 and float16 columns.
 - Reads parallelize across row groups and columns; page bodies are
   zero-copy out of the mapped file.
+- The scan streams in bounded row-group windows rather than materializing
+  the file.
 
 ### Arrow IPC
 
@@ -120,6 +126,8 @@
   CUDA on NVIDIA. Data movement is explicit: `to_device(ctx)` and
   `to_cpu(ctx)` on buffers, bitmaps and arrays, with kernel results
   staying device-resident.
+- Device codegen is opt-in behind `-D MARROW_GPU=true`, so a default
+  build compiles out every device path.
 
 ### Python
 
@@ -140,4 +148,7 @@
 
 ### Tooling
 
+- A pytest harness that compiles one driver per test selection, selects
+  CPU/GPU and Mojo/Python suites, and splits the unit when the compiler
+  crashes so the offending case reports it.
 - A Quarto documentation site with guides, tutorials and examples.

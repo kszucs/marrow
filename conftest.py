@@ -1,10 +1,13 @@
+import contextlib
+import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,9 +24,109 @@ if "throughput" not in _bm_utils.ALLOWED_COLUMNS:
 _TEST_FN_RE = re.compile(r"^def\s+(test_\w+)\s*\(", re.MULTILINE)
 _BENCH_FN_RE = re.compile(r"^def\s+(bench_\w+)\s*\(", re.MULTILINE)
 
+# Holds the generated drivers (and, under --asan, the binaries built from them).
+RUNNER_DIR = ".test_runners"
+
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _rss_bytes(pid):
+    """Resident size of *pid* in bytes, or 0 if it can no longer be read."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True
+        ).stdout.strip()
+        return int(out) * 1024 if out else 0
+    except (ValueError, OSError):
+        return 0
+
+
+def _progress(pid, label, stream, stop, peak):
+    """Tick a spinner until *stop* is set, tracking the compiler's memory.
+
+    Elaboration is the slow part and its cost shows up as resident memory, so
+    the live RSS is the most informative thing to show while waiting minutes for
+    a single compile.  Sampled once a second — `ps` per frame would be silly.
+    """
+    start = time.monotonic()
+    rss = 0
+    for tick in range(sys.maxsize):
+        if tick % 10 == 0:
+            rss = _rss_bytes(pid) or rss
+            peak[0] = max(peak[0], rss)
+        elapsed = time.monotonic() - start
+        mins, secs = divmod(int(elapsed), 60)
+        clock = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+        mem = f", {rss / 1e9:.1f} GB" if rss else ""
+        frame = _SPINNER_FRAMES[tick % len(_SPINNER_FRAMES)]
+        stream.write(f"\r\033[K{frame} {label} — {clock}{mem}")
+        stream.flush()
+        if stop.wait(0.1):
+            return
+
+
+def run_with_progress(config, cmd, cwd, label):
+    """Run *cmd* to completion, showing progress while it works.
+
+    A single Mojo compile here runs for minutes with no output of its own, which
+    is indistinguishable from a hang.  On a terminal this shows a live spinner
+    (pytest's capture has to be lifted for that); otherwise it prints a plain
+    start/finish pair so CI logs still show what happened.
+    """
+    capman = config.pluginmanager.getplugin("capturemanager") if config else None
+    lifted = (
+        capman.global_and_fixture_disabled() if capman else contextlib.nullcontext()
+    )
+
+    started = time.monotonic()
+    peak = [0]
+    with lifted:
+        # isatty() has to be asked *inside* the lifted block: pytest captures at
+        # the file-descriptor level, so until capture is suspended fd 2 points at
+        # a temp file and every terminal looks non-interactive.
+        stream = sys.__stderr__
+        interactive = stream is not None and stream.isatty()
+        # Start on a line of our own — pytest is mid-way through writing its
+        # per-file progress line, and appending to it reads as garbage.
+        if interactive:
+            stream.write("\n")
+            stream.flush()
+        else:
+            print(f"\n{label} ...", flush=True)
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        stop = threading.Event()
+        ticker = None
+        if interactive:
+            ticker = threading.Thread(
+                target=_progress,
+                args=(proc.pid, label, stream, stop, peak),
+                daemon=True,
+            )
+            ticker.start()
+        out, err = proc.communicate()
+        stop.set()
+        if ticker is not None:
+            ticker.join()
+
+        elapsed = time.monotonic() - started
+        mark = "✓" if proc.returncode == 0 else "✗"
+        mem = f", peak {peak[0] / 1e9:.1f} GB" if peak[0] else ""
+        line = f"{mark} {label} — {elapsed:.0f}s{mem}"
+        if interactive:
+            # Overwrite the spinner, then leave the cursor at column 0 so pytest
+            # resumes its progress line cleanly underneath.
+            stream.write(f"\r\033[K{line}\n")
+            stream.flush()
+        else:
+            print(line, flush=True)
+
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
 
 class MojoRunner:
-    """Builds and executes Mojo test/benchmark commands."""
+    """Generates, builds and executes the Mojo runner for a selection."""
 
     @staticmethod
     def find_asan_lib():
@@ -95,226 +198,211 @@ class MojoRunner:
         return flags
 
     @staticmethod
-    def pkg_include_dir(config):
-        """Return the directory holding the precompiled ``marrow.mojoc``.
+    def flags(config, bench):
+        """Compiler flags for a runner.
 
-        Used as the ``-I`` search path when ``--pkg`` is active (the default)
-        so test files link against the prebuilt package instead of recompiling
-        marrow's source on every build (~5x faster per file, no cross-file
-        cache eviction).  Returns None (callers fall back to ``-I .``) when
-        ``--no-pkg`` is passed, or for ``--benchmark`` runs (marrow must be
-        codegen'd at -O3) and ``--asan`` runs (the package is not
-        ASAN-instrumented, so marrow code must be built from source).
+        Optimization level follows the *kind*, not the session: a benchmark must
+        measure optimized code, a test only has to be correct.  -O1 is the floor
+        — at -O0 the masked-gather intrinsic in `filter`/`take` fails to lower
+        ("failed to produce an archive for the module").
 
-        The package lives directly under ``.test_runners`` and the staging
-        source in a nested subdir, so this include dir never exposes a
-        ``marrow/`` source tree next to ``marrow.mojoc`` (that combination
-        makes the compiler recompile the whole package — pathologically slow).
+        GPU codegen is opt-in (`marrow.utils.GPU_ENABLED` defaults to False), so
+        `--gpu` runs have to ask for it explicitly — without this the device
+        paths are elaborated away and every GPU test would exercise the CPU
+        fallback, or raise "no GPU accelerator available", instead of failing
+        honestly.
         """
-        if (
-            not config.getoption("--pkg")
-            or config.getoption("--no-pkg")
-            or config.getoption("--benchmark")
-            or config.getoption("--asan")
-        ):
-            return None
-        return Path(config.rootpath) / ".test_runners"
-
-    @staticmethod
-    def _library_sources(rootpath):
-        """Yield marrow's library ``.mojo`` files, excluding any ``tests`` dir.
-
-        Test/bench files carry ``def main()`` (they compile to runnable
-        binaries), which ``mojo precompile`` rejects inside a package.  They
-        are consumers of marrow, never part of it, so the precompiled package
-        is built from the library modules only.
-        """
-        src_root = Path(rootpath) / "marrow"
-        for src in src_root.rglob("*.mojo"):
-            if "tests" not in src.relative_to(src_root).parts:
-                yield src
-
-    @staticmethod
-    def _pkg_is_stale(pkg_file, rootpath):
-        """True if ``marrow.mojoc`` is missing or older than any library source.
-
-        Only library modules count (see ``_library_sources``): editing a test
-        file compiles that file from source directly, so it must not trigger a
-        (slow) package rebuild.
-        """
-        if not pkg_file.exists():
-            return True
-        pkg_mtime = pkg_file.stat().st_mtime
-        return any(
-            src.stat().st_mtime > pkg_mtime
-            for src in MojoRunner._library_sources(rootpath)
-        )
-
-    @staticmethod
-    def ensure_pkg(config):
-        """Precompile marrow into ``.test_runners/marrow.mojoc``.
-
-        Stages the library (tests excluded) into a scratch tree, then runs
-        ``mojo precompile`` on it.  Rebuilds only when stale (see
-        ``_pkg_is_stale``), so repeated sessions that only touch test files
-        reuse it.  No-op when ``--pkg`` is inactive.  Returns the include dir,
-        or None.
-        """
-        pkg_dir = MojoRunner.pkg_include_dir(config)
-        if pkg_dir is None:
-            return None
-        pkg_dir.mkdir(parents=True, exist_ok=True)
-        pkg_file = pkg_dir / "marrow.mojoc"
-        if not MojoRunner._pkg_is_stale(pkg_file, config.rootpath):
-            return pkg_dir
-
-        print("precompiling marrow.mojoc (--pkg) ...", flush=True)
-        # Stage a tests-free copy of the library so precompile doesn't choke
-        # on the `def main()` in test files (illegal inside a package).  The
-        # staged `marrow/` lives in a nested subdir, never directly under the
-        # include dir alongside marrow.mojoc.
-        staging = pkg_dir / "marrow_pkg_src"
-        if staging.exists():
-            shutil.rmtree(staging)
-        shutil.copytree(
-            Path(config.rootpath) / "marrow",
-            staging / "marrow",
-            ignore=shutil.ignore_patterns("tests"),
-        )
-        result = subprocess.run(
-            ["mojo", "precompile", str(staging / "marrow"), "-o", str(pkg_file)],
-            cwd=config.rootpath,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            pytest.exit(
-                f"Failed to precompile marrow.mojoc:\n{result.stderr}",
-                returncode=1,
-            )
-        print("marrow.mojoc built successfully", flush=True)
-        return pkg_dir
-
-    @staticmethod
-    def build_cmd(config, fspath, test_names=None):
-        """Return the command to run a Mojo source file with optional test filtering.
-
-        Always compiles to a binary with `mojo build` so that crashes produce
-        symbolicated stack traces.  Binaries are content-hash-cached under
-        .test_runners/ so repeated runs skip recompilation.
-        When *test_names* is provided, appends `--only name1 name2 ...` so that
-        TestSuite skips unselected tests.
-        """
-        benchmark = config.getoption("--benchmark")
-        opt = "-O3" if benchmark else "-O1"
-        assert_flag = [] if benchmark else ["-D", "ASSERT=all"]
-        asan = MojoRunner.asan_flags(config)
-        src = Path(fspath)
-
-        # Always build a binary so crashes produce symbolicated stack traces.
-        # ASAN requires a binary because `mojo run` cannot resolve sanitizer
-        # symbols at runtime; for non-ASAN runs a binary is also needed because
-        # `mojo run` does not honour -g1 for crash symbolication in practice.
-        runners_dir = Path(config.rootpath) / ".test_runners"
-        runners_dir.mkdir(exist_ok=True)
-        binary = runners_dir / src.stem
-
-        # -lm: mojo build on Linux doesn't auto-link libm (needed for
-        # log10f etc.); harmless on macOS where libm is part of libSystem.
+        opt = "-O3" if bench else "-O1"
+        assert_flag = [] if bench else ["-D", "ASSERT=all"]
+        gpu = ["-D", "MARROW_GPU=true"] if config.getoption("--gpu") else []
+        # -lm: mojo doesn't auto-link libm on Linux (needed for log10f etc.);
+        # harmless on macOS where libm is part of libSystem.
         lm = [] if sys.platform == "darwin" else ["-Xlinker", "-lm"]
-        # With --pkg, link against the prebuilt marrow.mojoc instead of
-        # recompiling marrow's source (-I .) for every test file.
-        pkg_dir = MojoRunner.pkg_include_dir(config)
-        include = str(pkg_dir) if pkg_dir is not None else "."
-        build_cmd = (
-            ["mojo", "build", opt, "-g1", "-I", include] + assert_flag + asan + lm + [str(src), "-o", str(binary)]
+        return (
+            [opt, "-g1", "-I", "."]
+            + assert_flag
+            + gpu
+            + MojoRunner.asan_flags(config)
+            + lm
         )
-        result = subprocess.run(
-            build_cmd, cwd=config.rootpath, capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"mojo build failed for {src}:\n{result.stderr}")
-
-        cmd = [str(binary)]
-
-        if test_names:
-            cmd += ["--only"] + list(test_names)
-
-        return cmd
 
     @staticmethod
-    def run_tests(config, fspath, test_names):
-        """Run a Mojo test file with ``--json`` and return {name: (status, error)}."""
-        cmd = MojoRunner.build_cmd(config, fspath, test_names)
-        cmd.append("--json")
-        result = subprocess.run(
-            cmd,
-            cwd=config.rootpath,
-            capture_output=True,
-            text=True,
+    def module_path(rootpath, fspath):
+        """``marrow/expr/tests/test_values.mojo`` -> ``marrow.expr.tests.test_values``."""
+        rel = Path(fspath).resolve().relative_to(Path(rootpath).resolve())
+        return ".".join(rel.with_suffix("").parts)
+
+    @staticmethod
+    def write_driver(rootpath, groups, kind):
+        """Generate one Mojo module that imports and runs the whole selection.
+
+        The compiler accepts a single input file per invocation and
+        re-elaborates all of marrow for each one, so compiling per test file
+        costs that elaboration N times over.  Collapsing the selection into one
+        unit pays it once: the nine ``marrow/expr/tests`` files (280 cases) take
+        4m43s together, against ~200s *each* when built separately.
+
+        Output is deterministic — modules sorted, cases in source order — so an
+        unchanged selection regenerates byte-identical source and hits the Mojo
+        compiler's own artifact cache instead of recompiling from scratch.
+
+        The file is *named* after that content, so concurrent sessions with
+        different selections cannot overwrite each other's driver mid-compile,
+        while the same selection keeps resolving to the same path (and the same
+        cached artifact).
+        """
+        suite = "TestSuite" if kind == "test" else "BenchSuite"
+        lines = [f"from marrow.testing import {suite}"]
+        names = []
+        for fspath in sorted(groups):
+            cases = groups[fspath]
+            if not cases:
+                continue
+            lines.append(
+                f"from {MojoRunner.module_path(rootpath, fspath)} import "
+                + ", ".join(cases)
+            )
+            names.extend(cases)
+
+        cases = ",\n            ".join(names)
+        source = "\n".join(lines) + (
+            f"\n\n\ndef main() raises:\n"
+            f"    {suite}.run[\n        (\n            {cases},\n        )\n    ]()\n"
         )
-        if result.returncode != 0:
-            # Try to parse JSON even on failure (tests may have run partially).
-            try:
-                entries = json.loads(result.stdout)
-            except (json.JSONDecodeError, ValueError):
-                # Couldn't parse — mark all requested tests as failed.
-                return {name: ("FAIL", result.stderr) for name in test_names}
-            parsed = {}
-            for entry in entries:
-                parsed[entry["name"]] = (entry["status"], entry.get("error", ""))
-            # Mark any missing test names as failed.
-            for name in test_names:
-                if name not in parsed:
-                    parsed[name] = ("FAIL", result.stderr)
-            return parsed
+        digest = hashlib.sha256(source.encode()).hexdigest()[:12]
+        driver = Path(rootpath) / RUNNER_DIR / f"_{kind}_driver_{digest}.mojo"
+        driver.parent.mkdir(exist_ok=True)
+        if not driver.exists() or driver.read_text() != source:
+            driver.write_text(source)
+        return driver
 
+    @staticmethod
+    def run_suite(config, groups, kind):
+        """Build the selection as one unit, run it, and return its JSON entries.
+
+        Returns ``(entries, detail)``; *entries* is None when the runner could
+        not be built or its output could not be parsed, and *detail* then holds
+        the compiler/runtime output to report against every selected case.
+
+        ``--asan`` goes through ``mojo build`` because the sanitizer runtime has
+        to be linked into a real binary (and a binary is what gives symbolicated
+        crash traces).  Everything else uses ``mojo run``, which compiles and
+        executes in one step without leaving an artifact behind.
+        """
+        rootpath = Path(config.rootpath)
+        driver = MojoRunner.write_driver(rootpath, groups, kind)
+        flags = MojoRunner.flags(config, bench=kind == "bench")
+
+        cases = sum(len(c) for c in groups.values())
+        files = sum(1 for c in groups.values() if c)
+        noun = "benchmarks" if kind == "bench" else "tests"
+        label = f"compiling {cases} {noun} from {files} files"
+
+        if config.getoption("--asan"):
+            # Same content-addressed stem as the driver, so parallel sessions
+            # never link over each other's binary either.
+            binary = driver.with_suffix("")
+            built = run_with_progress(
+                config,
+                ["mojo", "build"] + flags + [str(driver), "-o", str(binary)],
+                rootpath,
+                f"{label} (asan)",
+            )
+            if built.returncode != 0:
+                return None, f"mojo build failed for {driver}:\n{built.stderr}"
+            result = subprocess.run(
+                [str(binary), "--json"], cwd=rootpath, capture_output=True, text=True
+            )
+        else:
+            # `mojo run` compiles and executes in one step, so the spinner covers
+            # the run too — but compilation is what takes the minutes.
+            result = run_with_progress(
+                config,
+                ["mojo", "run"] + flags + [str(driver), "--json"],
+                rootpath,
+                label,
+            )
+
+        if result.stderr and result.returncode == 0:
+            sys.stderr.write(result.stderr)
         try:
-            entries = json.loads(result.stdout)
+            return json.loads(result.stdout), result.stderr
         except (json.JSONDecodeError, ValueError):
-            return {
-                name: ("FAIL", f"failed to parse JSON:\n{result.stdout}")
-                for name in test_names
-            }
+            detail = "\n".join(
+                part for part in (result.stderr, result.stdout) if part.strip()
+            )
+            return None, detail or f"exit code {result.returncode}"
 
+    @staticmethod
+    def compiler_crashed(detail):
+        """True when the compiler *died* rather than rejecting the source.
+
+        A crash prints a bug-report dump and no diagnostic, and it depends on
+        how much the unit elaborates — the same cases build in smaller units.
+        A real `error:` does not: it would be reported identically in every
+        subset, so splitting on it would only multiply the compile time.
+        """
+        return any(
+            marker in (detail or "")
+            for marker in ("Please submit a bug report", "Stack dump:")
+        )
+
+    @staticmethod
+    def halve(groups):
+        """Split a selection into two, keeping each file's cases in order."""
+        flat = [(f, case) for f in sorted(groups) for case in groups[f]]
+        mid = len(flat) // 2
+        halves = []
+        for part in (flat[:mid], flat[mid:]):
+            group = {}
+            for fspath, case in part:
+                group.setdefault(fspath, []).append(case)
+            halves.append(group)
+        return halves
+
+    @staticmethod
+    def collect(config, groups, kind):
+        """Run the selection and return ``{case name: JSON entry}``.
+
+        One unit is the fast path — marrow's elaboration dominates, so it is
+        paid once for the whole selection.  When the *compiler crashes* on that
+        unit the selection is halved and each half compiled on its own, down to
+        a single case; a case that still cannot be built reports the crash as
+        its own failure instead of failing every case in the selection with it.
+        """
+        entries, detail = MojoRunner.run_suite(config, groups, kind)
+        if entries is not None:
+            return {e["name"]: e for e in entries}
+        names = [name for cases in groups.values() for name in cases]
+        if len(names) > 1 and MojoRunner.compiler_crashed(detail):
+            print(
+                f"compiler crashed on {len(names)} cases — splitting the unit",
+                flush=True,
+            )
+            collected = {}
+            for half in MojoRunner.halve(groups):
+                collected.update(MojoRunner.collect(config, half, kind))
+            return collected
         return {
-            entry["name"]: (entry["status"], entry.get("error", ""))
-            for entry in entries
+            name: {"name": name, "status": "FAIL", "error": detail} for name in names
         }
 
     @staticmethod
-    def run_benches(config, fspath, bench_names=None):
-        """Run a Mojo benchmark file with ``--json`` and return parsed entries.
+    def run_tests(config, groups):
+        """Run every selected test case and return ``{name: (status, error)}``."""
+        entries = MojoRunner.collect(config, groups, "test")
+        parsed = {
+            name: (e["status"], e.get("error", "")) for name, e in entries.items()
+        }
+        for cases in groups.values():
+            for name in cases:
+                parsed.setdefault(name, ("FAIL", "no result reported"))
+        return parsed
 
-        When *bench_names* is provided, passes ``--only name1 name2 ...`` so that
-        BenchSuite skips unselected benchmarks (same pattern as tests).
-        """
-        cmd = MojoRunner.build_cmd(config, fspath, test_names=bench_names)
-        cmd.append("--json")
-        result = subprocess.run(
-            cmd,
-            cwd=config.rootpath,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            detail = (
-                "\n".join(
-                    part for part in (result.stderr, result.stdout) if part.strip()
-                )
-                or f"exit code {result.returncode}"
-            )
-            return {"_error": detail}
-
-        if result.stderr:
-            sys.stderr.write(result.stderr)
-
-        try:
-            entries = json.loads(result.stdout)
-        except (json.JSONDecodeError, ValueError):
-            return {"_error": f"failed to parse JSON output:\n{result.stdout}"}
-
-        return {e["name"]: e for e in entries}
+    @staticmethod
+    def run_benches(config, groups):
+        """Run every selected benchmark and return ``{name: entry}``."""
+        return MojoRunner.collect(config, groups, "bench")
 
 
 def _to_seconds(value, unit):
@@ -542,30 +630,6 @@ def pytest_addoption(parser):
         help="Run Mojo tests under AddressSanitizer (ASAN)",
     )
     parser.addoption(
-        "--pkg",
-        action="store_true",
-        default=False,
-        help=(
-            "Fast build (on by default via pytest.ini): precompile marrow into "
-            "a package once per session and compile test files against it "
-            "(-I <pkgdir>) instead of recompiling the whole library from source "
-            "per file (~5x faster builds, no cross-file cache eviction). "
-            "Trade-off: marrow-internal debug_assert checks are NOT compiled "
-            "with ASSERT=all (mojo precompile ignores -D); test-file asserts "
-            "still run. Ignored for --benchmark and --asan runs."
-        ),
-    )
-    parser.addoption(
-        "--no-pkg",
-        action="store_true",
-        default=False,
-        help=(
-            "Disable the precompiled-marrow fast build (see --pkg) and build "
-            "every test file from source with -I . for full ASSERT=all coverage "
-            "of marrow internals."
-        ),
-    )
-    parser.addoption(
         "--competition",
         action="store_true",
         default=False,
@@ -612,21 +676,6 @@ def _python_excluded(config) -> bool:
     return False
 
 
-def _mojo_excluded(config) -> bool:
-    """Return True if no Mojo test binaries will be built this session.
-
-    Used to skip the (otherwise wasted) marrow precompile on Python-only runs.
-    """
-    if config.getoption("--no-mojo"):
-        return True
-    builds_mojo = (
-        config.getoption("--mojo")
-        or config.getoption("--cpu")
-        or config.getoption("--gpu")
-    )
-    return config.getoption("--python") and not builds_mojo
-
-
 def pytest_ignore_collect(collection_path, config):
     """Skip collecting Python test/bench files when Python tests are not needed."""
     if collection_path.suffix == ".py" and collection_path.name.startswith(
@@ -646,30 +695,30 @@ def pytest_sessionstart(session):
     """Rebuild python/marrow/libmarrow.so before the session when Python tests will run."""
     config = session.config
 
-    # --pkg: precompile marrow.mojoc once on the controller so every Mojo
-    # test file links against it instead of recompiling marrow from source.
-    # Skipped on Python-only sessions, where no Mojo binaries are built.
-    if not hasattr(config, "workerinput") and not _mojo_excluded(config):
-        MojoRunner.ensure_pkg(config)
-
     if _python_excluded(config):
         return
 
     if not hasattr(config, "workerinput"):
-        print("building python/marrow/libmarrow.so ...", flush=True)
         opt = "-O3" if config.getoption("--benchmark") else "-O1"
         cmd = (
             ["mojo", "build", opt, "-g0", "-I", "."]
             + MojoRunner.asan_flags(config)
-            + ["python/bindings/lib.mojo", "--emit", "shared-lib", "-o", "python/marrow/libmarrow.so"]
+            + [
+                "python/bindings/lib.mojo",
+                "--emit",
+                "shared-lib",
+                "-o",
+                "python/marrow/libmarrow.so",
+            ]
         )
-        result = subprocess.run(cmd, cwd=config.rootpath, capture_output=True, text=True)
+        result = run_with_progress(
+            config, cmd, config.rootpath, "compiling python/marrow/libmarrow.so"
+        )
         if result.returncode != 0:
             pytest.exit(
                 f"Failed to build python/marrow/libmarrow.so:\n{result.stderr}",
                 returncode=1,
             )
-        print("python/marrow/libmarrow.so built successfully", flush=True)
 
 
 def pytest_collection_modifyitems(config, items):
@@ -732,8 +781,13 @@ def pytest_itemcollected(item):
 
 
 def pytest_collection_finish(session):
-    """Pre-compute per-file groups for tests and benchmarks."""
-    # Test groups (existing).
+    """Pre-compute the selection each generated runner has to cover.
+
+    ``{file: [case, ...]}`` for tests and benchmarks separately — the two build
+    at different optimization levels, so they cannot share a runner.  Results
+    start as None (not {}) because an empty dict is also a legitimate result and
+    must not re-trigger the run.
+    """
     file_groups = {}
     for item in session.items:
         if isinstance(item, MojoTestItem) and not any(
@@ -744,7 +798,7 @@ def pytest_collection_finish(session):
                 file_groups[key] = []
             file_groups[key].append(item.name)
     session.config._mojo_file_groups = file_groups
-    session.config._mojo_results = {}
+    session.config._mojo_results = None
 
     # Benchmark groups — collect non-skipped bench names per file.
     bench_groups = {}
@@ -757,7 +811,7 @@ def pytest_collection_finish(session):
                 bench_groups[key] = []
             bench_groups[key].append(item.name)
     session.config._mojo_bench_groups = bench_groups
-    session.config._mojo_bench_results = {}
+    session.config._mojo_bench_results = None
 
 
 def pytest_configure(config):
@@ -791,15 +845,17 @@ class MojoTestItem(pytest.Item):
             self.add_marker(pytest.mark.gpu)
 
     def runtest(self):
-        results = self.config._mojo_results
-        fspath = str(self.fspath)
-        if fspath not in results:
-            names = self.config._mojo_file_groups.get(fspath, [self.name])
-            results[fspath] = MojoRunner.run_tests(self.config, fspath, names)
-        file_results = results[fspath]
-        if self.name not in file_results:
+        # The first item to run builds and executes the runner for the whole
+        # selection; every later item just reads its own entry.  Case names are
+        # unique across the suite, so the name alone identifies the result.
+        config = self.config
+        if config._mojo_results is None:
+            config._mojo_results = MojoRunner.run_tests(
+                config, config._mojo_file_groups
+            )
+        if self.name not in config._mojo_results:
             raise MojoTestFailure(f"{self.name} did not appear in test runner output")
-        status, error = file_results[self.name]
+        status, error = config._mojo_results[self.name]
         if status == "FAIL":
             raise MojoTestFailure(error)
 
@@ -813,23 +869,14 @@ class MojoTestItem(pytest.Item):
 class MojoBenchFile(pytest.File):
     """Collect individual benchmark items from a bench_*.mojo file.
 
-    Files using BenchSuite yield one item per ``def bench_*(mut b: Bencher)``
-    function discovered in the source (mirroring MojoTestFile).  Files without
-    discoverable bench functions fall back to a single item per file.
-
-    The Mojo file is compiled and executed once per file; results are cached
-    and individual timings injected into pytest-benchmark.
+    One item per ``def bench_*(mut b: Benchmark)`` in the source, mirroring
+    MojoTestFile.  The selection is compiled and executed as a single runner at
+    -O3; individual timings are injected into pytest-benchmark afterwards.
     """
 
     def collect(self):
-        source = self.path.read_text()
-        bench_names = _BENCH_FN_RE.findall(source)
-        if bench_names:
-            for name in bench_names:
-                yield MojoBenchItem.from_parent(self, name=name)
-        else:
-            # Fallback for old-style files without discoverable bench_* fns.
-            yield MojoBenchItem.from_parent(self, name=self.path.stem)
+        for name in _BENCH_FN_RE.findall(self.path.read_text()):
+            yield MojoBenchItem.from_parent(self, name=name)
 
 
 class MojoBenchItem(pytest.Item):
@@ -839,30 +886,20 @@ class MojoBenchItem(pytest.Item):
         self.add_marker(pytest.mark.benchmark)
 
     def runtest(self):
-        # Run the bench file once per file, cache results (same as MojoTestItem).
-        results = self.config._mojo_bench_results
-        fspath = str(self.fspath)
-        if fspath not in results:
-            bench_names = self.config._mojo_bench_groups.get(fspath, None)
-            results[fspath] = MojoRunner.run_benches(self.config, fspath, bench_names)
-        entries = results[fspath]
+        # As in MojoTestItem: the first item runs the whole selection at once.
+        config = self.config
+        if config._mojo_bench_results is None:
+            config._mojo_bench_results = MojoRunner.run_benches(
+                config, config._mojo_bench_groups
+            )
+        entry = config._mojo_bench_results.get(self.name)
 
-        if "_error" in entries:
-            raise MojoTestFailure(entries["_error"])
-
-        # Look up this benchmark's entry.
-        entry = entries.get(self.name)
-        if entry is not None:
-            self._inject_one(self.name, entry)
-            return
-
-        # Not found by exact name.  For old-style files (dump_report output),
-        # the first item for the file injects all entries; subsequent items
-        # from the same file become no-ops.
-        injected_key = fspath + ":_injected"
-        if injected_key not in results and entries:
-            results[injected_key] = True
-            self._inject_all(entries)
+        if entry is None:
+            raise MojoTestFailure(f"{self.name} did not appear in bench runner output")
+        if entry.get("status") == "FAIL":
+            # The unit this benchmark was in could not be built or run.
+            raise MojoTestFailure(entry.get("error", ""))
+        self._inject_one(self.name, entry)
 
     def _inject_one(self, bench_name, entry):
         """Inject pre-measured timings into pytest-benchmark.
@@ -930,11 +967,6 @@ class MojoBenchItem(pytest.Item):
                 metric_unit = entry.get("throughput_unit", "GElems/s")
                 rate = tp_count * 1e-9 / mean_s
                 fixture.extra_info[f"{metric_name} ({metric_unit})"] = round(rate, 4)
-
-    def _inject_all(self, entries):
-        """Inject all entries (fallback for old-style files)."""
-        for bench_name, entry in entries.items():
-            self._inject_one(bench_name, entry)
 
     def repr_failure(self, excinfo):
         return str(excinfo.value)
@@ -1013,7 +1045,11 @@ class BenchmarkHistory:
     def __init__(self, root, results_dir, history_file=None):
         self._root = Path(root)
         self._results_dir = Path(results_dir)
-        self._history_file = Path(history_file) if history_file else self._root / "benchmarks" / "data.json"
+        self._history_file = (
+            Path(history_file)
+            if history_file
+            else self._root / "benchmarks" / "data.json"
+        )
 
     # -- git metadata -------------------------------------------------------
 
@@ -1048,7 +1084,9 @@ class BenchmarkHistory:
             # Extract source file from fullname (pytest node ID)
             # e.g. "python/tests/bench_compute.py::test_marrow_add[...]" → "bench_compute.py"
             fullname = getattr(b, "fullname", "") or ""
-            file = fullname.split("::")[0].rsplit("/", 1)[-1] if "::" in fullname else None
+            file = (
+                fullname.split("::")[0].rsplit("/", 1)[-1] if "::" in fullname else None
+            )
 
             # Collect extra_info fields (excluding internal keys)
             extra = {}
@@ -1110,7 +1148,15 @@ class BenchmarkHistory:
                     "mean_ns": r["mean_ns"],
                     "throughput_gelems_s": r["throughput_gelems_s"],
                 }
-                for key in ("file", "min_ns", "max_ns", "median_ns", "stddev_ns", "rounds", "extra_info"):
+                for key in (
+                    "file",
+                    "min_ns",
+                    "max_ns",
+                    "median_ns",
+                    "stddev_ns",
+                    "rounds",
+                    "extra_info",
+                ):
                     if key in r:
                         entry[key] = r[key]
                 run_results[r["name"]] = entry
@@ -1214,7 +1260,9 @@ def test_make_envelope(tmp):
     h = _make_history(tmp)
     benchmarks = [
         _FakeBenchmark(
-            "bench_add_10k", 0.001, throughput=1.234,
+            "bench_add_10k",
+            0.001,
+            throughput=1.234,
             fullname="python/tests/bench_compute.py::bench_add_10k",
             extra_info={"lib": "marrow", "n": 10000},
         ),
@@ -1311,7 +1359,205 @@ def test_update_history_max_runs(tmp):
     assert total == 2
 
 
-if __name__ == "__main__":
+class _FakeConfig:
+    """Minimal stand-in for a pytest config: options plus a rootpath."""
+
+    def __init__(self, rootpath, **options):
+        self.rootpath = Path(rootpath)
+        self._options = options
+
+    def getoption(self, name, default=False):
+        return self._options.get(name.lstrip("-").replace("-", "_"), default)
+
+
+def test_flags_test_vs_bench(tmp):
+    config = _FakeConfig(tmp)
+    test_flags = MojoRunner.flags(config, bench=False)
+    bench_flags = MojoRunner.flags(config, bench=True)
+
+    # A test must keep its assertions; a benchmark must measure optimized code.
+    assert "-O1" in test_flags and "-O3" not in test_flags
+    assert "ASSERT=all" in test_flags
+    assert "-O3" in bench_flags and "-O1" not in bench_flags
+    assert "ASSERT=all" not in bench_flags
+    # Both compile against the source tree, never a precompiled package.
+    assert test_flags[test_flags.index("-I") + 1] == "."
+
+
+def test_flags_gpu_is_opt_in(tmp):
+    """GPU codegen is off by default, so --gpu must ask for it explicitly."""
+    assert "MARROW_GPU=true" not in MojoRunner.flags(_FakeConfig(tmp), bench=False)
+    gpu_flags = MojoRunner.flags(_FakeConfig(tmp, gpu=True), bench=False)
+    assert gpu_flags[gpu_flags.index("MARROW_GPU=true") - 1] == "-D"
+    # Benchmarks honour it too — a GPU benchmark must measure the device path.
+    assert "MARROW_GPU=true" in MojoRunner.flags(_FakeConfig(tmp, gpu=True), bench=True)
+
+
+def test_flags_asan_only_when_requested(tmp):
+    assert "--sanitize" not in MojoRunner.flags(_FakeConfig(tmp), bench=False)
+    if MojoRunner.find_asan_lib() is not None:
+        flags = MojoRunner.flags(_FakeConfig(tmp, asan=True), bench=False)
+        assert flags[flags.index("--sanitize") + 1] == "address"
+
+
+def test_module_path(tmp):
+    path = Path(tmp) / "marrow" / "expr" / "tests" / "test_values.mojo"
+    path.parent.mkdir(parents=True)
+    path.touch()
+    assert MojoRunner.module_path(tmp, path) == "marrow.expr.tests.test_values"
+
+
+def _driver_groups(tmp):
+    return {
+        f"{tmp}/marrow/kernels/tests/test_sort.mojo": ["test_sort_one"],
+        f"{tmp}/marrow/tests/test_arrays.mojo": ["test_arrays_one", "test_arrays_two"],
+    }
+
+
+def test_write_driver_imports_every_selected_case(tmp):
+    driver = MojoRunner.write_driver(tmp, _driver_groups(tmp), "test")
+    source = driver.read_text()
+
+    assert driver.name.startswith("_test_driver_") and driver.suffix == ".mojo"
+    assert "from marrow.testing import TestSuite" in source
+    assert (
+        "from marrow.tests.test_arrays import test_arrays_one, test_arrays_two"
+        in source
+    )
+    assert "from marrow.kernels.tests.test_sort import test_sort_one" in source
+    assert "TestSuite.run[" in source
+    for case in ("test_sort_one", "test_arrays_one", "test_arrays_two"):
+        assert f"            {case},\n" in source
+
+
+def test_write_driver_is_deterministic(tmp):
+    """Same selection => same path and byte-identical source, so the cache hits."""
+    groups = _driver_groups(tmp)
+    first = MojoRunner.write_driver(tmp, groups, "test")
+    again = MojoRunner.write_driver(tmp, dict(reversed(list(groups.items()))), "test")
+    assert again == first
+    assert again.read_text() == first.read_text()
+
+
+def test_write_driver_name_is_unique_per_selection(tmp):
+    """Concurrent sessions must not overwrite each other's driver mid-compile."""
+    groups = _driver_groups(tmp)
+    other = dict(groups)
+    other[f"{tmp}/marrow/tests/test_extra.mojo"] = ["test_extra_one"]
+    assert MojoRunner.write_driver(tmp, groups, "test") != MojoRunner.write_driver(
+        tmp, other, "test"
+    )
+    # A bench selection never collides with a test selection either.
+    assert MojoRunner.write_driver(tmp, groups, "bench").name.startswith(
+        "_bench_driver_"
+    )
+
+
+def test_write_driver_leaves_unchanged_file_alone(tmp):
+    """Rewriting identical bytes would bump mtime and defeat the cache."""
+    groups = _driver_groups(tmp)
+    driver = MojoRunner.write_driver(tmp, groups, "test")
+    before = driver.stat().st_mtime_ns
+    assert MojoRunner.write_driver(tmp, groups, "test").stat().st_mtime_ns == before
+
+
+def test_write_driver_bench_kind_uses_bench_suite(tmp):
+    groups = {f"{tmp}/marrow/tests/bench_bitmap.mojo": ["bench_and"]}
+    driver = MojoRunner.write_driver(tmp, groups, "bench")
+    source = driver.read_text()
+
+    # Benchmarks get their own driver: they cannot share -O3 with -O1 tests.
+    assert driver.name.startswith("_bench_driver_")
+    assert "from marrow.testing import BenchSuite" in source
+    assert "BenchSuite.run[" in source
+
+
+def test_write_driver_skips_files_without_cases(tmp):
+    groups = dict(_driver_groups(tmp))
+    groups[f"{tmp}/marrow/tests/test_all_skipped.mojo"] = []
+    assert (
+        "test_all_skipped"
+        not in MojoRunner.write_driver(tmp, groups, "test").read_text()
+    )
+
+
+def test_run_tests_reports_build_failure_against_every_case(tmp):
+    """A runner that fails to build must fail its cases, not vanish silently."""
+    groups = _driver_groups(tmp)
+    original = MojoRunner.run_suite
+    MojoRunner.run_suite = staticmethod(lambda *a, **k: (None, "boom"))
+    try:
+        results = MojoRunner.run_tests(_FakeConfig(tmp), groups)
+    finally:
+        MojoRunner.run_suite = original
+
+    assert set(results) == {"test_sort_one", "test_arrays_one", "test_arrays_two"}
+    assert all(
+        status == "FAIL" and error == "boom" for status, error in results.values()
+    )
+
+
+def test_run_tests_marks_missing_cases_failed(tmp):
+    """A case the runner never reported is a failure, not a silent pass."""
+    groups = {f"{tmp}/marrow/tests/test_arrays.mojo": ["test_ran", "test_vanished"]}
+    original = MojoRunner.run_suite
+    MojoRunner.run_suite = staticmethod(
+        lambda *a, **k: ([{"name": "test_ran", "status": "PASS"}], "")
+    )
+    try:
+        results = MojoRunner.run_tests(_FakeConfig(tmp), groups)
+    finally:
+        MojoRunner.run_suite = original
+
+    assert results["test_ran"][0] == "PASS"
+    assert results["test_vanished"][0] == "FAIL"
+
+
+def test_run_tests_splits_the_unit_when_the_compiler_crashes(tmp):
+    """A compiler crash is a size problem — the halves must still be run."""
+    groups = _driver_groups(tmp)
+    original = MojoRunner.run_suite
+    calls = []
+
+    def fake(config, groups, kind):
+        names = [name for cases in groups.values() for name in cases]
+        calls.append(tuple(names))
+        if len(names) > 1:
+            return None, "Please submit a bug report to https://..."
+        return [{"name": names[0], "status": "PASS"}], ""
+
+    MojoRunner.run_suite = staticmethod(fake)
+    try:
+        results = MojoRunner.run_tests(_FakeConfig(tmp), groups)
+    finally:
+        MojoRunner.run_suite = original
+
+    assert set(results) == {"test_sort_one", "test_arrays_one", "test_arrays_two"}
+    assert all(status == "PASS" for status, _ in results.values())
+    assert len(calls) > 1  # the whole selection, then its halves
+
+
+def test_run_tests_does_not_split_on_a_compile_error(tmp):
+    """A diagnostic fails identically in every subset — splitting is waste."""
+    groups = _driver_groups(tmp)
+    original = MojoRunner.run_suite
+    calls = []
+
+    def fake(config, groups, kind):
+        calls.append(1)
+        return None, "marrow/kernels/filter.mojo:12:5: error: use of unknown 'x'"
+
+    MojoRunner.run_suite = staticmethod(fake)
+    try:
+        results = MojoRunner.run_tests(_FakeConfig(tmp), groups)
+    finally:
+        MojoRunner.run_suite = original
+
+    assert len(calls) == 1
+    assert all(status == "FAIL" for status, _ in results.values())
+
+
+def _run_history_selftests():
     tests = [
         test_make_envelope,
         test_write_envelope,
@@ -1319,8 +1565,32 @@ if __name__ == "__main__":
         test_update_history_idempotent,
         test_update_history_appends,
         test_update_history_max_runs,
+        test_flags_test_vs_bench,
+        test_flags_gpu_is_opt_in,
+        test_flags_asan_only_when_requested,
+        test_module_path,
+        test_write_driver_imports_every_selected_case,
+        test_write_driver_is_deterministic,
+        test_write_driver_name_is_unique_per_selection,
+        test_write_driver_leaves_unchanged_file_alone,
+        test_write_driver_bench_kind_uses_bench_suite,
+        test_write_driver_skips_files_without_cases,
+        test_run_tests_reports_build_failure_against_every_case,
+        test_run_tests_marks_missing_cases_failed,
+        test_run_tests_splits_the_unit_when_the_compiler_crashes,
+        test_run_tests_does_not_split_on_a_compile_error,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory() as tmp:
             test(tmp)
-    print("All BenchmarkHistory tests passed.")
+    print(f"All {len(tests)} conftest selftests passed.")
+
+
+if __name__ == "__main__":
+    # `selftest` runs this file's own BenchmarkHistory tests.  Compiling the
+    # library is `pixi run precompile`, a plain `mojo precompile marrow`.
+    command = sys.argv[1] if len(sys.argv) > 1 else "selftest"
+    if command == "selftest":
+        _run_history_selftests()
+    else:
+        sys.exit(f"conftest.py: unknown command {command!r}")

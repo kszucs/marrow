@@ -16,11 +16,9 @@ Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 
 from std.math import isnan, isinf
 
-from ..arrays import BoolArray, PrimitiveArray, AnyArray
+from ..arrays import BoolArray, AnyArray
 from ..buffers import Bitmap
-from ..builders import PrimitiveBuilder
 from ..dtypes import (
-    NumericType,
     PrimitiveType,
     FloatingType,
     Int8Type,
@@ -36,9 +34,10 @@ from ..dtypes import (
     Float64Type,
     bool_ as bool_dt,
 )
-from ..views import BitmapView, apply
-from .helpers import Kernel
+from ..views import apply
+from .core import Kernel
 from .execution import ExecutionContext
+from ..utils import GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +73,7 @@ trait BoolBinaryKernel(Kernel):
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
         if left.dtype() != bool_dt or right.dtype() != bool_dt:
-            raise Error(t"{Self.name}: inputs must be bool arrays")
+            raise Self.error("inputs must be bool arrays")
         return Self.apply(
             left.as_bool().copy(), right.as_bool().copy(), ctx
         ).to_any()
@@ -104,7 +103,7 @@ trait BoolUnaryKernel(Kernel):
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
         if arr.dtype() != bool_dt:
-            raise Error(t"{Self.name}: input must be a bool array")
+            raise Self.error("input must be a bool array")
         return Self.apply(arr.as_bool().copy(), ctx).to_any()
 
 
@@ -199,7 +198,7 @@ def _kleene[
     var valid = partial.view() | both_valid.view()
 
     var valid_bm = valid.to_immutable()
-    var nulls = n - valid_bm.view().count_set_bits()
+    var nulls = valid_bm.unset_count()
     return BoolArray(
         length=n, nulls=nulls, offset=0, bitmap=valid_bm^, buffer=data^
     )
@@ -303,7 +302,7 @@ struct XorKernel(BoolBinaryKernel):
         var b_valid = _validity_ones(right)
         var valid = a_valid.view() & b_valid.view()
         var valid_bm = valid.to_immutable()
-        var nulls = n - valid_bm.view().count_set_bits()
+        var nulls = valid_bm.unset_count()
         return BoolArray(
             length=n, nulls=nulls, offset=0, bitmap=valid_bm^, buffer=data^
         )
@@ -371,9 +370,13 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
         def leaf[T: FloatingType](d: T) raises -> BoolArray:
             ref prim = arr.as_primitive[T]()
             var n = len(prim)
-            var result = Bitmap.alloc_device(
-                ctx.device.value(), n
-            ) if ctx.is_gpu() else Bitmap.alloc_uninit(n)
+            var result: Bitmap[mut=True]
+            comptime if GPU_ENABLED:
+                result = Bitmap.alloc_device(
+                    ctx.device.value(), n
+                ) if ctx.is_gpu() else Bitmap.alloc_uninit(n)
+            else:
+                result = Bitmap.alloc_uninit(n)
             apply[T.native, Self.core[T.native, _]](
                 prim.values(), result.view(), ctx
             )
@@ -420,97 +423,3 @@ struct IsInfKernel(ValuePredicateKernel):
     @staticmethod
     def core[T: DType, W: Int](x: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return isinf(x)
-
-
-# ---------------------------------------------------------------------------
-# is_null
-# ---------------------------------------------------------------------------
-
-
-# TODO: it should return with the bitmap from the input array instead of creating a new one, but that requires
-def is_null[
-    T: PrimitiveType
-](
-    arr: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Return a bool array that is True where arr has a null value."""
-    var length = len(arr)
-    if not arr.bitmap:
-        return BoolArray(
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=Bitmap.alloc_zeroed(length).to_immutable(),
-        )
-    var bm = (~arr.bitmap.value().view()).to_immutable()
-    return BoolArray(
-        length=length, nulls=0, offset=arr.offset, bitmap=None, buffer=bm
-    )
-
-
-def is_null(
-    arr: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    """Runtime-typed is_null."""
-
-    @parameter
-    def leaf[T: NumericType](d: T) raises -> AnyArray:
-        return is_null(arr.as_primitive[T](), ctx).to_any()
-
-    return arr.dtype().dispatch_numeric[leaf]()
-
-
-# ---------------------------------------------------------------------------
-# select
-# ---------------------------------------------------------------------------
-
-
-def select[
-    T: PrimitiveType
-](
-    mask: BoolArray,
-    then_: PrimitiveArray[T],
-    else_: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise select: result[i] = then_[i] if mask[i] else else_[i]."""
-    var length = len(then_)
-    if len(mask) != length or len(else_) != length:
-        raise Error("select: input arrays must have equal length")
-    var builder = PrimitiveBuilder[T](then_.dtype, length)
-    var data_bv = mask.values()
-    for i in range(length):
-        if data_bv.test(mask.offset + i):
-            builder.unsafe_set(i, then_.unsafe_get(i))
-        else:
-            builder.unsafe_set(i, else_.unsafe_get(i))
-    builder.set_length(length)
-    return builder.finish()
-
-
-# TODO: use SIMD select instead of naive element-wise loop when possible
-def select(
-    mask: AnyArray,
-    then_: AnyArray,
-    else_: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    """Runtime-typed select."""
-    if then_.dtype() != else_.dtype():
-        raise Error(
-            t"select: dtype mismatch: {then_.dtype()} vs {else_.dtype()}"
-        )
-
-    @parameter
-    def leaf[T: NumericType](d: T) raises -> AnyArray:
-        return select(
-            mask.as_bool(),
-            then_.as_primitive[T](),
-            else_.as_primitive[T](),
-            ctx,
-        ).to_any()
-
-    return then_.dtype().dispatch_numeric[leaf]()

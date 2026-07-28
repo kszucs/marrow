@@ -35,34 +35,48 @@ pixi run package
 ### Fast build-error checking (use this while a build is broken)
 
 When the tree does not compile — e.g. after a Mojo upgrade — do **not** iterate
-with `pytest`. It builds one runner per selected test, so a single file costs
-minutes and reports each build error once per test. Use the build-only tasks:
+with `pytest`: it has to elaborate all of marrow before it can report anything.
+Use the build-only task:
 
 ```bash
-pixi run -e dev check_lib                              # whole library, ~10 s
-pixi run -e dev check marrow/tests/test_views.mojo     # one file + imports, ~4 s
+pixi run -e dev precompile                       # everything under marrow/, ~18 s
 ```
 
-`check_lib` compiles every module under `marrow/`, so it catches errors in code
-that no selected test happens to import; `check <file>` then narrows to one
-test and its transitive imports. Both surface **all** errors and warnings in a
-single pass. A `pytest` run of the same file takes ~2.5 min.
+`precompile` is a plain `mojo precompile marrow -o .test_runners/marrow.mojoc`.
+It compiles every module under `marrow/` — tests and benches included, since
+they live in `marrow/**/tests/` and are ordinary importable modules — so it
+catches errors in code no selected test happens to import, and surfaces **all**
+errors and warnings in a single pass.
 
-Caveats for `check_lib`: it compiles `*/tests/*` too, so `'main()' is not
-supported within packages` lines are expected noise. It also compiles modules in
-a *package* context rather than the normal build context, which produces some
-**false positives** that do not affect real builds (currently a set of
-`invalid call to 'bitmap_and'` errors). Treat `check_lib` as a fast way to find
-*candidate* breakage, then confirm each with `check <file>` — that one matches
-how tests actually build.
+A single test file **cannot** be compiled on its own: without a `main()` there
+is nothing to build (`mojo build` errors with `module does not contain a 'main'
+function`). Run it through `pytest` instead.
+
+**Never leave a `marrow.mojoc` where a runner can see it.** Such an artifact
+*shadows the entire `marrow/` source tree*, so every import resolves against the
+stale package instead of the files you just edited. Mojo puts a source file's own
+directory on the import search path, which makes **two** locations dangerous: the
+repo root (runners compile with `-I .`) and **`.test_runners/`**, where the
+generated driver lives.
+
+`precompile` therefore writes to `.precompile/`, which is on neither path. It used
+to write to `.test_runners/`, and that silently broke every following `pytest`
+run — symptom (observed 2026-07-27): a case you just added reports
+`module 'test_<x>' does not contain 'test_<your_new_case>'` and the run fails in
+well under a second, because nothing is compiled at all. Stale artifacts fail
+differently again, with `unable to locate module 'tests'`. If you ever hit either,
+`rm -f .test_runners/marrow.mojoc marrow.mojoc` first.
+
+**The library must stay warning-clean.** Keep `mojo precompile marrow` at 0
+errors rather than letting warnings accumulate until the output is unreadable.
 
 Switch back to `pytest` once it compiles: building is not passing.
 
 ### Running Individual Tests
 
 Always use `pytest` to run tests — never `mojo test` or `mojo run` directly.
-The pytest harness handles build caching, test selection, output parsing, and
-ASAN integration.
+The pytest harness generates the runner, selects cases, parses output, and
+handles ASAN.
 
 ```bash
 # single file
@@ -85,15 +99,68 @@ Useful options:
 --competition            # print a side-by-side comparison table after benchmarks
 ```
 
-The harness compiles runners to `.test_runners/test_runner_<hash>` (content-
-hashed, stable across runs).  Re-running the same test selection skips
-recompilation (~1 s vs ~5 s cold).
+### Fast iteration — one selection, one compilation unit
+
+Compilation dominates, and almost all of it is elaborating **marrow**, not the
+test bodies. The compiler takes a single input file per invocation, so building
+per test file paid that elaboration once per file. The harness instead generates
+**one driver** for the whole selection — `.test_runners/_test_driver_<hash>.mojo`,
+which imports the selected cases and hands them to `TestSuite.run` as a tuple —
+and compiles that. The name is the hash of the driver's own source, so
+concurrent sessions with different selections never overwrite each other, while
+the same selection always resolves to the same path and the same cached
+artifact. Measured on `marrow/expr/tests` (9 files, 280 cases):
+
+| | wall | peak RSS |
+|---|---|---|
+| one generated driver, all 9 files | 4 min 43 s | 17.0 GB |
+| separately: `test_aggregates.mojo` | 204 s | 11.7 GB |
+| separately: `test_join.mojo` | 198 s | 19.6 GB |
+
+Two files on their own cost more than all nine together, and the aggregate peaks
+*below* a single file — N files in one unit cost about what 1 file costs.
+
+Consequences worth knowing:
+
+- **Selecting fewer *files* is what saves time; selecting fewer *cases* is not.**
+  A single `::test_name` builds the same unit as its whole file.
+- **Blast radius is the selection — for compile *errors*.** A diagnostic fails every
+  case in the run, not just its file, because there is one unit.
+- **A compiler *crash* is different: the harness splits the unit and retries.**
+  The Mojo compiler dies (bug-report dump, no diagnostic) on some units simply
+  because of how much they elaborate — the same cases build in smaller units. On
+  a crash `MojoRunner.collect` halves the selection and compiles each half, down
+  to a single case; a case that still cannot be built reports the crash as *its
+  own* failure instead of failing everything selected alongside it. Ordinary
+  `error:` output never splits, since it would be identical in every half.
+  **Known-crashing cases (pre-existing, unrelated to the harness): a test body
+  that filters with a comparison predicate** (`rel.filter(col("a") > …)`) under
+  `TestSuite` — the same code compiles fine in a plain `main()`. That is why five
+  cases in `test_plan.mojo` and one in `test_aggregates.mojo` fail; the rest of
+  each file runs.
+- **Peak memory scales with the unit**, so a full-suite run is a single very
+  large compile. Narrow the selection if memory is tight.
+- **Optimization level follows the kind, not the session.** `bench_*.mojo` builds
+  at `-O3` in its own driver; `test_*.mojo` at `-O1` with `-D ASSERT=all`. They
+  cannot share a unit. `-O0` is not an option: the masked-gather intrinsic in
+  `filter`/`take` fails to lower.
+- **Case names must stay unique across the whole suite** — the runner reports by
+  name, and that is how results map back to pytest items.
+- **The driver is generated deterministically** (modules sorted, cases in source
+  order) so re-running an unchanged selection produces byte-identical source and
+  hits the Mojo compiler's own artifact cache. That cache only ever helps
+  *identical* rebuilds: it does nothing across different files.
+- Ordinary runs use **`mojo run`** — compile and execute in one step, no artifact
+  left behind. **`--asan` runs use `mojo build`**, because the sanitizer runtime
+  has to be linked into a real binary.
+- Always go through `pytest`, never `mojo test` or a hand-written `mojo run`:
+  the harness owns the driver, the flags, and the JSON parsing.
 
 ### Only run the tests the change could have broken
 
 Do **not** run the full suite to validate a scoped change. Select the test
-directories that import the code you touched; a full run costs 8–38 minutes and
-tells you nothing extra about modules the diff cannot reach.
+directories that import the code you touched; it tells you nothing extra about
+modules the diff cannot reach.
 
 For example, after editing `marrow/expr/*` and `marrow/kernels/*`:
 
@@ -101,57 +168,64 @@ For example, after editing `marrow/expr/*` and `marrow/kernels/*`:
 pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests
 ```
 
-Narrow further when the change is narrower — one file, or one case:
+Narrow further when the change is narrower — the win comes from dropping
+*files* from the unit, so a directory or a file helps; a single case does not:
 
 ```bash
 pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo
-pixi run -e dev pytest marrow/expr/tests/test_aggregates.mojo::test_sum_by_key
 ```
 
-Widen only when the change actually reaches wider: touching `arrays`/`buffers`/
-`dtypes`, the Python bindings, or anything re-exported from a package
-`__init__.mojo`. A full `pixi run test_parallel` belongs before a commit that
-lands such a change, not after every edit.
+### Checking everything after a big change
 
-Tests run sequentially by default, but **prefer the `*_parallel` variants for
-any full-suite run** — measured on this repo, `pixi run test_parallel` completes
-the suite in **8m16s versus 38m30s** for `pixi run test`, a 4.7x speedup, with
-identical results. `--dist=loadfile` groups all tests from one `.mojo` file onto
-the same worker so its compiled runner is built once and reused; without that,
-parallelism would recompile the same binary per worker and could be slower.
+```bash
+pixi run -e dev test               # pytest -v, everything
+```
 
-`test_parallel` omits `-v` by default (with `-n auto` the per-test lines from
-several workers interleave); pass it explicitly when you want per-test output:
-`pixi run test_parallel -v`.
-
-Benchmark tasks always pass `-n0` to disable parallelism for accurate timing.
+`pytest-xdist` does not help *within* a run: the selection is a single
+compilation unit, so splitting it across workers makes each worker build a unit
+of its own. Running several independent `pytest` invocations concurrently is
+safe, though — drivers are content-addressed, so their files and (under
+`--asan`) their binaries never collide.
 
 The Python shared library (`python/libmarrow.so`) is rebuilt automatically by
 `conftest.py` before each test session — no manual `build_python` step needed.
 
 ### Writing Mojo Tests
 
-Test files (`test_*.mojo`) use `TestSuite` from `marrow.testing`:
+Test files live next to the code they cover (`marrow/tests/`,
+`marrow/kernels/tests/`, …) and are **plain importable modules** — no `main()`,
+no `TestSuite` import. The harness generates the runner:
 
 ```mojo
-from marrow.testing import TestSuite
+from std.testing import assert_true
+from ..dtypes import int64          # relative: absolute `marrow.x` imports
+                                    # break when compiled as part of the package
 
 def test_something() raises:
     assert_true(1 + 1 == 2)
-
-def main():
-    TestSuite.run[__functions_in_module()]()
 ```
 
-`TestSuite.run` auto-discovers every `test_*` function in the module.
+Rules that the single-runner harness depends on:
+
+- **No `def main()`** — `mojo precompile marrow` rejects `main()` inside a
+  package, and the generated driver supplies the only one. A standalone program
+  belongs in `benchmarks/` instead (see `benchmarks/profiles/`).
+- **Relative imports only** for `marrow.*` — `..x` from `marrow/tests/`, `...x`
+  from `marrow/<sub>/tests/`. Absolute `from marrow.x import` fails with
+  `unable to locate module 'marrow'` when the file is compiled as part of the
+  package.
+- **Test names must be unique across the entire suite**, not just per file — the
+  runner reports results by name.
+- Each tests directory needs an `__init__.mojo`; `marrow/` is a package, so its
+  subdirectories must be declared packages to be importable.
 
 ### Writing Mojo Benchmarks
 
-Benchmark files (`bench_*.mojo`) use `BenchSuite` and `Benchmark` from
-`marrow.testing`:
+Benchmark files (`bench_*.mojo`) live beside their tests, follow the same rules
+(no `main()`, relative imports), and use `Benchmark` from `marrow.testing`:
 
 ```mojo
-from marrow.testing import BenchSuite, Benchmark, BenchMetric
+from marrow.testing import Benchmark, BenchMetric
 
 def bench_my_kernel(mut b: Benchmark) raises:
     var data = _prepare_data(N)
@@ -162,9 +236,6 @@ def bench_my_kernel(mut b: Benchmark) raises:
         keep(my_kernel(data))
     b.iter[call]()
     keep(data)  # prevent ASAP destruction (see note below)
-
-def main():
-    BenchSuite.run[__functions_in_module()]()
 ```
 
 **Important — `keep(data)` after `b.iter[call]()`**: Mojo's ASAP (As-Soon-As-Possible) destruction frees values as early as the compiler believes their last use has passed. When a `@parameter` closure captures a variable (e.g. `data`) and is passed to `b.iter[call]()`, ASAP may determine that `data` is no longer needed *after* the closure is registered but *before* it actually runs, causing a heap-use-after-free inside the iteration loop. Adding `keep(data)` after `b.iter[call]()` forces `data` to remain live through the entire benchmark. This applies to all non-trivial captured values: `StructArray`, `PrimitiveArray[T]`, `SwissHashTable`, `HashJoin`, etc.
@@ -202,9 +273,9 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 
 #### Builders (`marrow/builders.mojo`)
 
-- **`BuilderData`** - Internal mutable builder state, always accessed through `ArcPointer[BuilderData]` for shared ownership.
-- **`Builder`** - Type-erased builder wrapping `ArcPointer[BuilderData]`. Can be constructed from a `DataType` at runtime. `finish()` returns `AnyArray`.
-- **Typed builders** convert implicitly to `Builder` by cloning the `ArcPointer`, so the original typed builder remains usable after passing to a composite builder:
+- **`Builder`** - Trait every typed builder implements.
+- **`AnyBuilder`** - Type-erased builder. Can be constructed from a `DataType` at runtime. `finish()` returns `AnyArray`.
+- **Typed builders** convert implicitly to `AnyBuilder` by cloning the `ArcPointer`, so the original typed builder remains usable after passing to a composite builder:
   - `PrimitiveBuilder[T]` → `PrimitiveArray[T]`
   - `StringBuilder` → `StringArray`
   - `ListBuilder` → `ListArray`
@@ -221,10 +292,14 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 - **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`, and `c_data.mojo` only.** All other files (kernels, arrays, tests, etc.) must not call `unsafe_ptr()` directly. Kernels and array code should operate through `BufferView`/`BitmapView` abstractions instead.
 - **Avoid `AnyOrigin` types (`MutAnyOrigin`, `ImmutAnyOrigin`) and `unsafe_origin_cast`.** Use parametric origins instead (e.g. `out_o: Origin[mut=True]` / `src_o: Origin[mut=False]`) and pass views directly without origin casts.
 
-**Bitmap** (`marrow/bitmap.mojo`):
-- Immutable, bit-packed validity buffer wrapping a `Buffer`
+**Bitmap** (`marrow/buffers.mojo` — *not* a `bitmap.mojo`; it lives beside `Buffer`):
+- `Bitmap[mut=False]` — immutable, bit-packed validity buffer wrapping a `Buffer`
 - Copying is O(1) (ref-count bump)
-- `BitmapBuilder` is the mutable counterpart; `finish()` transfers to immutable `Bitmap`
+- `Bitmap[mut=True]` is the mutable counterpart; `finish()` freezes to `Bitmap[mut=False]`
+
+**Views** (`marrow/views.mojo`):
+- `BufferView` / `BitmapView` — borrowed, offset-applied spans over a `Buffer`/`Bitmap`. These are what
+  kernels compute over; see the `unsafe_ptr()` restriction above.
 
 **DataType** (`marrow/dtypes.mojo`):
 - Struct-based type system matching Arrow specification
@@ -232,9 +307,14 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 - Nested types via `list_(DataType)`, `fixed_size_list_(DataType, size)`, and `struct_(Field, ...)`
 - Uses `code` field for type identification and optional `native` field for DType mapping
 
-**Visitor** (`marrow/visitor.mojo`):
-- `DataTypeVisitor` - runtime dispatch based on `DataType` value
-- `ArrayVisitor` - runtime dispatch from `Array` to typed array overloads
+**Runtime → comptime dispatch** (`marrow/dtypes.mojo`, `marrow/utils.mojo`):
+- There is no visitor module. Runtime dtype dispatch is the `AnyDataType.dispatch_*` family —
+  `dispatch_primitive` / `dispatch_numeric` / `dispatch_integer` / `dispatch_floating` /
+  `dispatch_temporal` / `dispatch_stringlike` / `dispatch_binarylike` / `dispatch_listlike` —
+  each resolving a runtime `DataType` to a comptime type parameter for a `capturing` job.
+- **Dispatch on the widest family the typed leaf accepts** (see the Kernel Implementation Pattern
+  below): a leaf bound on `PrimitiveType` needs one `dispatch_primitive` arm, not one per family.
+- `variant_dispatch*` (`marrow/utils.mojo`) is the comptime adapter over stdlib `Variant`.
 
 **C Data Interface** (`marrow/c_data.mojo`):
 - `CArrowSchema` and `CArrowArray` for zero-copy data exchange
@@ -249,13 +329,15 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 
 ```
 marrow/
-├── dtypes.mojo           # Type system (DataType, Field)
-├── buffers.mojo          # Memory management (Buffer[mut], Allocation)
-├── bitmap.mojo           # Bitmap, BitmapBuilder
+├── dtypes.mojo           # Type system (DataType, Field, AnyDataType.dispatch_*)
+├── buffers.mojo          # Memory management (Buffer[mut], Bitmap[mut], Allocation)
+├── views.mojo            # BufferView, BitmapView — what kernels compute over
 ├── arrays.mojo           # Array, PrimitiveArray, StringArray, ListArray,
 │                         # FixedSizeListArray, StructArray, ChunkedArray
-├── builders.mojo         # Builder, BuilderData, PrimitiveBuilder, StringBuilder,
+├── builders.mojo         # Builder, AnyBuilder, PrimitiveBuilder, StringBuilder,
 │                         # ListBuilder, FixedSizeListBuilder, StructBuilder
+├── scalars.mojo          # Scalar trait, AnyScalar, PrimitiveScalar
+├── utils.mojo            # variant_dispatch*, GPU_ENABLED
 ├── kernels/
 │   ├── arithmetic.mojo   # Element-wise add, subtract, multiply, divide, math
 │   ├── aggregate.mojo    # Sum, mean, min, max, count, product
@@ -267,14 +349,24 @@ marrow/
 │   ├── join.mojo         # Hash join
 │   ├── sort.mojo         # Sort / sort_indices
 │   ├── string.mojo       # String kernels
-│   └── tests/            # Benchmarks and GPU tests
+│   └── tests/            # test_*.mojo + bench_*.mojo for the kernels
+├── expr/
+│   └── tests/            # test_*.mojo for the expression layer
+├── parquet/
+│   └── tests/            # test_*.mojo + bench_*.mojo for parquet
 ├── c_data.mojo           # Arrow C Data Interface
+├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── schema.mojo           # Schema with Fields and metadata
 ├── tabular.mojo          # RecordBatch, Table
-├── visitor.mojo          # DataTypeVisitor, ArrayVisitor traits
-└── tests/                # Core module tests
+└── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # The Python module top level
+└── marrow/tests/         # Python test_*.py and bench_*.py
+benchmarks/               # Standalone programs (they own a `main()`, so they
+                          # cannot live inside the package)
 ```
+
+Tests and benchmarks sit **inside** the package, next to the code they cover.
+That works because they carry no `main()` — see "Writing Mojo Tests".
 
 ## Implementation Patterns
 
@@ -283,10 +375,48 @@ python/                   # The Python module top level
 Mojo lacks dynamic dispatch, so the codebase uses:
 - Type-erased containers (`AnyArray`, `AnyBuilder`) with implicit conversions to/from typed wrappers
 - Compile-time parameterization (`PrimitiveArray[int64]`)
-- Visitor pattern (`ArrayVisitor`, `DataTypeVisitor`) for runtime type dispatch
+- The `AnyDataType.dispatch_*` family for runtime dtype → comptime type dispatch
 - Runtime type checking via `DataType.code` comparison
 
 ## GPU Compute
+
+### GPU codegen is opt-in — `-D MARROW_GPU=true`
+
+**Every device path is compiled out by default.** `marrow.utils.GPU_ENABLED`
+(`marrow/utils.mojo`) is the single switch, defaulting to False, and it gates
+all of it: the device allocations in `cast`/`arithmetic`/`hashing`/`boolean`/
+`compare`, the accelerator arms of `_apply_dispatch`, and
+`has_accelerator_support`, which answers False so a GPU `ExecutionContext`
+raises `"apply: no GPU accelerator available"` at the dispatch site rather than
+silently taking a CPU path.
+
+```bash
+mojo build -D MARROW_GPU=true ...      # opt in
+pixi run -e dev pytest --gpu           # the harness passes it for you
+```
+
+Anything touching device code must add `comptime if GPU_ENABLED:` around it —
+a *runtime* `if ctx.is_gpu()` alone is not enough, since it cannot be
+eliminated at elaboration time. `mojo precompile` rejects `-D` outright, so the
+`precompile` task always builds the CPU-only configuration.
+
+This is the **largest single compile-time lever** in the tree. Cold builds
+(fresh `MODULAR_CACHE_DIR`; a repeated identical compile just hits the Mojo
+transform cache and measures nothing):
+
+| | GPU off (default) | GPU on |
+|---|---|---|
+| `cast`, numeric x numeric | **14.6 s** | 40.1 s |
+| `cast` + `sort_indices` | **43.7 s** | 85.0 s |
+
+**Both halves must be gated or you get none of it.** The allocations need
+`comptime if GPU_ENABLED` *and* `has_accelerator_support` must answer False.
+Gating either alone measures as no change at all (45.2 s and 84.4 s against
+42.5 s / 84.1 s baselines) — which is exactly why this looked like a dead end
+for a long time.
+
+It does not shed the `libmax`/AsyncRT runtime dependency, though: a binary
+built with GPU off still links it.
 
 ### Architecture
 
@@ -436,7 +566,7 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - Use `deinit` for consuming parameters
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
-- **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly
+- **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly. **But import explicitly, never `from .x import *`.** A wildcard re-exports whatever `x` itself imported, so a name resolves or not depending on which file you entered through — the signature of three separate incidents (a trait shadowing the builtin `Scalar`; `BoolArray` resolving along one path and not another; a "fix" that took errors 2 → 10). The remaining wildcards were replaced with explicit lists; keep it that way.
 - **Open bug:** `ArcPointer[DynValue]` (`expr/values.mojo:2299`) writes its
   trailing `Variant` discriminant one byte past the allocation (`size_of` 416
   vs ≥417 needed), silently corrupting the heap and causing every full-suite
@@ -474,6 +604,21 @@ example. They mostly bite generic trait hierarchies (e.g. `marrow.expr.values`).
   trait's abstract requirement** for conforming structs (you'll see `does not
   implement all requirements for <BaseTrait>`) — declare the member on each
   concrete struct even if a parent trait "provides" it.
+- **A comptime *conditional type* is usable as a type, but carries no trait
+  conformance and does not reduce at a return site** — not even inside a
+  `comptime if` that has already selected the branch. `comptime C[To, V] = V
+  if (V.OutType.native == To.native) else Wrapper[To, V]` resolves fine as an
+  annotation, but a function returning `C[To, V]` cannot return either branch:
+  `cannot implicitly convert 'V' value to 'V if (…) else Wrapper[To, V]'`. The
+  usual `rebind` escape hatch does **not** help — `rebind[C[To, V]](x)` fails
+  with `value of type '<the conditional>' cannot be implicitly copied, it does
+  not conform to 'ImplicitlyCopyable'`, because an unreduced conditional
+  conforms to nothing at all. Note `promote[L, R]` (`expr/values.mojo`) is the
+  same shape and works — the difference is that it is only ever *used* as a
+  type annotation, never returned from a function. Consequence: "wrap this
+  operand only when it needs converting" is not expressible; either always
+  wrap or do the selection somewhere the concrete type is known. This blocked
+  Q0.4's promote-at-construction design.
 
 # How to identify leaky abstractions
 

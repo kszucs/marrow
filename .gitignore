@@ -185,6 +185,7 @@ docs/_freeze/
 kgen.trace.*
 package/
 .test_runners/
+.precompile/
 .benchmarks/
 
 # Benchmark scratch output (transformed into results/ by run_benchmarks.sh)
@@ -199,6 +200,12 @@ package/
 
 # integration test deps (cloned + built by pixi tasks)
 integration/arrow/
+
+# Mojo build artifacts.  A `marrow.mojoc` in the repo root is especially bad:
+# runners compile with `-I .`, so it shadows the whole `marrow/` source tree.
+*.mojoc
+*.mojopkg
+*.dSYM/
 
 # Profiler output from scripts/profile.py
 *.sample.txt

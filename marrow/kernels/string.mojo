@@ -36,7 +36,7 @@ from ..arrays import (
 from ..buffers import Buffer, Bitmap
 from ..builders import BinaryLikeBuilder
 from ..dtypes import StringLikeType, DType
-from .helpers import Kernel, bitmap_and
+from .core import Kernel
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ struct LengthKernel(Kernel):
         elif array.dtype().is_large_string():
             return Self.apply(array.as_large_string()).to_any()
         else:
-            raise Error(t"length: expected a string array, got {array.dtype()}")
+            raise Self.error(t"expected a string array, got {array.dtype()}")
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +146,7 @@ trait StringMapKernel(Kernel):
         elif array.dtype().is_large_string():
             return Self.apply(array.as_large_string()).to_any()
         else:
-            raise Error(
-                t"{Self.name}: expected a string array, got {array.dtype()}"
-            )
+            raise Self.error(t"expected a string array, got {array.dtype()}")
 
 
 struct UpperKernel(StringMapKernel):
@@ -225,7 +223,7 @@ struct CapitalizeKernel(StringMapKernel):
 # ---------------------------------------------------------------------------
 
 
-struct ConcatKernel(Kernel):
+struct ConcatKernel:
     """Element-wise binary string concatenation (`a || b`). `combine` is the fusable
     per-element primitive (the expression layer's `Concat` builds on it); `apply`
     materializes the whole array, null-propagating."""
@@ -278,13 +276,9 @@ trait StringPredicateKernel(Kernel):
     def apply[
         L: StringLikeType, R: StringLikeType
     ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        Self.expect_same_length(len(left), len(right))
         var n = len(left)
-        if len(right) != n:
-            raise Error(
-                t"{Self.name}: arrays must have the same length, got {n} and"
-                t" {len(right)}"
-            )
-        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
+        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):
@@ -294,7 +288,7 @@ trait StringPredicateKernel(Kernel):
                     data.set(i)
         return BoolArray(
             length=n,
-            nulls=n - bm.value().view().count_set_bits() if bm else 0,
+            nulls=bm.value().unset_count() if bm else 0,
             offset=0,
             bitmap=bm,
             buffer=data.to_immutable(),
@@ -309,8 +303,8 @@ trait StringPredicateKernel(Kernel):
                 left.as_large_string(), right.as_large_string()
             ).to_any()
         else:
-            raise Error(
-                t"{Self.name}: expected string arrays, got {left.dtype()} and"
+            raise Self.error(
+                t"expected string arrays, got {left.dtype()} and"
                 t" {right.dtype()}"
             )
 
@@ -363,6 +357,54 @@ struct StringNeKernel(StringPredicateKernel):
         o1: Origin, o2: Origin
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s != pat
+
+
+# Ordering comparisons — lexicographic over UTF-8 bytes, which equals codepoint
+# order. These are the string half of `<` `<=` `>` `>=` `==` `!=`; the numeric
+# half lives in `compare.mojo` as `NumericCompareKernel` conformers. The two are
+# separate families because a variable-width predicate is elementwise and cannot
+# vectorize, so whoever interprets the operator pairs them (see `_compare` in
+# `marrow/expr/dynamic.mojo`).
+
+
+struct StringLtKernel(StringPredicateKernel):
+    comptime name = "less"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s < pat
+
+
+struct StringLeKernel(StringPredicateKernel):
+    comptime name = "less_equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s <= pat
+
+
+struct StringGtKernel(StringPredicateKernel):
+    comptime name = "greater"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s > pat
+
+
+struct StringGeKernel(StringPredicateKernel):
+    comptime name = "greater_equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return not (s < pat)  # StringSlice has no __ge__(StringSlice) overload
 
 
 # ---------------------------------------------------------------------------
@@ -510,8 +552,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         self.literal = String()
         self.tokens = List[Int]()
 
-        @parameter
-        if Self.ignore_case:
+        comptime if Self.ignore_case:
             var folded = pattern.lower()
             self._compile(StringSlice(folded))
         else:
@@ -573,8 +614,7 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
     def matches(self, s: StringSlice) -> Bool:
         """Return True if `s` matches this pattern."""
 
-        @parameter
-        if Self.ignore_case:
+        comptime if Self.ignore_case:
             var fold = _fold_kind(s)
             if fold == _FOLD_NONE:
                 return self._matches_folded(s)

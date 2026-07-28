@@ -266,7 +266,7 @@ struct BloomFilterHeader(Copyable, Movable, ThriftWritable):
         w.write_field_stop()  # empty XxHash
         w.write_field_stop()  # close the hash union
         # compression (4): Uncompressed (union member 1, empty struct)
-        last = w.write_field_begin(TC_STRUCT, 4, last)
+        _ = w.write_field_begin(TC_STRUCT, 4, last)
         _ = w.write_field_begin(TC_STRUCT, 1, 0)
         w.write_field_stop()  # empty Uncompressed
         w.write_field_stop()  # close the compression union
