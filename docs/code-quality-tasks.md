@@ -535,7 +535,7 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > origin in the first place. Both arms have to become views into something ref-counted for
 > `_untracked` to go, so this is one atomic change across the decode path, not a staged one.
 
-**Q1.3 — One file handle per scan (RC8)** · *T2.4 prerequisite* ·
+**Q1.3 — One file handle per scan (RC8)** · ✅ **DONE 2026-07-28, `997f789`** ·
 Depends: Q1.2, **T2.3b merged** · Owns: `marrow/parquet/reader.mojo`, `marrow/expr/execution.mojo` ·
 Done when: `ParquetScanProcessor` opens the file **once**. Today `_read_plan`
 (`execution.mojo:290-292`) calls `read_metadata`, `read_statistics`, `read_page_bounds` and then
