@@ -436,7 +436,10 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > compiler's ability to catch the dangle. Doing `_span()` removal first would just move the
 > dangling problem into every page decode.
 
-> ### ⚠️ `read_at` cannot return a sub-`Buffer` — Arrow alignment (2026-07-28)
+> ### ✅ DONE 2026-07-28 — see `67accba`. Kept for the reasoning; the scope estimates below
+> were wrong three times over, and the reason is recorded at the end.
+>
+> ### `read_at` cannot return a sub-`Buffer` — Arrow alignment
 >
 > The card says `read_at` returns a `Buffer[mut=False]`. For the **whole file** that works.
 > For an arbitrary `(offset, length)` it does not: `Buffer.__init__` asserts
@@ -471,11 +474,12 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > into ~10 decode functions (`_decode_plain`, `_decode_dictionary`, the level readers …) and
 > returned from `PageReader`. Every one has to thread the origin.
 >
-> That is the honest size of Q1.2's body: not a span-type swap but an origin
-> parameterisation across the decode path, in a system whose rules have repeatedly turned
-> out narrower than they look (see the conditional-type and capturing-closure notes in
-> CLAUDE.md). Budget accordingly, and do it in one sitting — a half-parameterised `Page`
-> does not compile, so there is no safe stopping point in the middle.
+> **All three estimates were wrong, in the same direction.** `origin_of(a, b)` is an origin
+> *union* — the stdlib uses it in `Span.__merge_with__` — which is precisely the type `_body`
+> needed for its two arms. With that, `Page[o]` is inferred at the ~10 decode call sites
+> rather than threaded, and the whole change is around 40 lines. The lesson is not about
+> Parquet: three times I sized a task from what the code looked like instead of checking
+> what the type system could express.
 
 > ### `Buffer.mmap_file` exists now — and IPC wants it too (2026-07-28)
 >
