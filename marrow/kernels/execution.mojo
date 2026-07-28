@@ -217,6 +217,21 @@ struct ExecutionContext(
         1 for such a body is a silent throughput loss, not a correctness bug,
         which is exactly why it is a parameter rather than an assumption.
 
+        **``body`` may not raise, and widening it is not a small change.**
+        Tried and reverted 2026-07-28. `sync_parallelize` accepts a raising
+        worker only in its *parameter* form (`sync_parallelize[w](n)`), which
+        needs an implicitly-capturing `@parameter` closure; the *value* form
+        used here takes an explicit capture list and rejects `raises`. Switching
+        to the parameter form compiles — with new "assignment was never used"
+        warnings on the very buffers the body writes — and then **crashes at
+        run time**: the captures are not made and the body reads garbage. The
+        warnings are the tell. `test_partition.mojo`'s coverage assertions catch
+        it immediately, which is what they are for.
+
+        Consequence: a kernel whose stripe body raises keeps its hand-rolled
+        loop. `GroupBy._thread_local_columns` is the one such caller
+        (`groupby.mojo`) — its worker hashes keys inside the stripe.
+
         GPU kernels do not use this: ``wants_parallel`` is always False on the
         GPU path, since the device handles its own parallelism, so a caller with
         a device branch takes it before reaching here.

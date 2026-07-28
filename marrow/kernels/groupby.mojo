@@ -555,6 +555,12 @@ struct GroupBy(Movable):
                 cnts^,
             )
 
+        # Hand-rolled rather than `ctx.stripe`, and it has to stay that way:
+        # this worker **raises** (it hashes keys inside the stripe), and
+        # `stripe`'s body is typed non-raising. Widening it was tried and
+        # reverted — see the note on `ExecutionContext.stripe`; the parameter
+        # form of `sync_parallelize` that accepts a raising worker needs an
+        # implicitly-capturing closure, which miscompiles there.
         sync_parallelize[worker](num_threads)
 
         # Merge — re-key every chunk into the global grouper ONCE (shared across
