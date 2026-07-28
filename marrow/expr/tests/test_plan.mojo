@@ -125,24 +125,18 @@ def test_project_infers_computed_dtypes() raises:
     assert_equal(s.fields[0].dtype, int64)
 
 
-def test_project_mixed_dtype_arithmetic_raises() raises:
-    """**Known lane divergence.** The fused algebra promotes mixed operand
-    widths (`NumericBinary`/`NumericCompare` both compute in `promote[L, R]`),
-    but the interpreted lane the plan builder uses demands identical dtypes —
-    `Kernel.expect_same_dtype`. So `int64 + float64` executes in one lane and
-    raises in the other, and `.project()` surfaces that at plan-build time
-    because it probes the expression's dtype.
+def test_project_mixed_dtype_arithmetic_promotes() raises:
+    """`int64 + float64` projects as float64 — the wider operand's type.
 
-    Asserted so the divergence is visible: when the interpreted lane learns to
-    promote, this test fails and should become a promotion assertion
-    (`x + y` -> float64)."""
-    var raised = False
-    try:
-        _ = _scan().project(names=["z"], values=[col("x") + col("y")])
-    except e:
-        raised = True
-        assert_true(String(e).find("dtype mismatch") != -1)
-    assert_true(raised)
+    This used to assert the *divergence*: the fused algebra promoted
+    (`promote[L, R]`) while the interpreted lane the plan builder uses demanded
+    identical dtypes and raised `add: dtype mismatch: int64 vs float64`, which
+    `.project()` surfaced at plan-build time because it probes the expression's
+    dtype against a 0-row batch. Both lanes promote now (Q0.4)."""
+    var plan = _scan().project(names=["z"], values=[col("x") + col("y")])
+    var s = plan.schema()
+    assert_equal(len(s), 1)
+    assert_equal(s.fields[0].dtype, float64)
 
 
 def test_project_exprs() raises:

@@ -162,11 +162,17 @@ def test_parity_eq() raises:
 
 
 # ---------------------------------------------------------------------------
-# Mixed-width comparison. The runtime `LT/GT` tags route through `compare.mojo`'s
-# `dispatch`, which *rejects* a dtype mismatch outright, so there is no
-# `DynValue` counterpart here — pin the fused result instead. `NumericCompare`
-# widens both operands to `promote[L, R]` exactly like `NumericBinary`; casting
-# only the right one into the left's type truncated (D4).
+# Mixed operand types. Both lanes promote to the wider operand — the fused one
+# at comptime (`promote[L, R]`), the interpreted one in `_promote_operands`
+# before it reaches a kernel — so the pairings a fused tree accepts are exactly
+# the ones the interpreter accepts, with the same result. `NumericCompare`
+# widens *both* operands; casting only the right one into the left's type
+# truncated (D4), which is what the int32/int64 case below pins.
+#
+# Parity coverage here is keyed on the *fused* lane's accepted domain, not on
+# the intersection of the two — an operand pairing only one lane accepts is
+# invisible to a test that can only build what both allow, which is how the
+# int64/float64 divergence (Q0.4) survived this suite.
 # ---------------------------------------------------------------------------
 
 
@@ -178,10 +184,52 @@ def _mixed_width_batch() raises -> RecordBatch:
 
 
 def test_parity_mixed_width_gt() raises:
+    """`int32 > int64` compares in the wider operand's domain, both lanes."""
     assert_fused(
         Gt(fcol("a", int32), fcol("b", int64)),
         array([False, True, False]).to_any(),
         _mixed_width_batch(),
+    )
+    assert_parity(
+        Gt(fcol("a", int32), fcol("b", int64)),
+        dcol(0) > dcol(1),
+        _mixed_width_batch(),
+    )
+
+
+def _int_float_batch() raises -> RecordBatch:
+    var a = array([1, 5, 3], int64)
+    var b = array([0.5, 2.25, 3.0], float64)
+    return record_batch([a^, b^], names=["a", "b"])
+
+
+def test_parity_int_float_add() raises:
+    """`int64 + float64`: a float outranks every integer, so both lanes compute
+    in float64. This is the pairing the interpreted lane used to reject with
+    `add: dtype mismatch: int64 vs float64` while the fused lane executed it."""
+    assert_fused(
+        fcol("a", int64) + fcol("b", float64),
+        array([1.5, 7.25, 6.0], float64).to_any(),
+        _int_float_batch(),
+    )
+    assert_parity(
+        fcol("a", int64) + fcol("b", float64),
+        dcol(0) + dcol(1),
+        _int_float_batch(),
+    )
+
+
+def test_parity_int_float_gt() raises:
+    """`int64 > float64` compares in float64, not by truncating the float."""
+    assert_fused(
+        Gt(fcol("a", int64), fcol("b", float64)),
+        array([True, True, False]).to_any(),
+        _int_float_batch(),
+    )
+    assert_parity(
+        Gt(fcol("a", int64), fcol("b", float64)),
+        dcol(0) > dcol(1),
+        _int_float_batch(),
     )
 
 

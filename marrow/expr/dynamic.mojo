@@ -151,6 +151,66 @@ comptime DATE_TRUNC: UInt8 = 41
 
 
 # ---------------------------------------------------------------------------
+# Operand promotion — what `a + b` means when the operands are not the same
+# numeric type. This is the interpreted counterpart of the fused lane's
+# comptime `promote[L.OutType, R.OutType]` (`values.mojo`), and it lives here
+# for the same reason `_compare` picks its kernel family here: deciding what an
+# operator *means* is this layer's job. Kernels stay array-in/array-out and
+# strict — `Kernel.expect_same_dtype` keeps meaning what it says, which the
+# kernels that genuinely require identical types (`nullif`, `case_when`'s
+# candidates) still rely on.
+#
+# ⚠️ BINSIZE: `eval`'s twelve binary arms call this inline on purpose. Folding
+# them into one `_arith[K: BinaryNumericKernel]` helper reads better and costs
+# **+115,600 bytes** on the `query_dynvalue` gate (5,438,904 -> 5,554,504) —
+# a parameterised method is instantiated per kernel, and each instantiation
+# carries its own copy of everything it touches. Inline, the same change is
+# +16,528. A generic wrapper around an already-erased dispatch is not free.
+# ---------------------------------------------------------------------------
+
+
+def _numeric_rank(t: AnyDataType) -> Int:
+    """Runtime twin of `values._rank`: bit width, with every float outranking
+    every integer. The two must stay in step — that they agree is exactly what
+    makes the fused and interpreted lanes accept the same operand pairings and
+    produce the same output dtype.
+
+    The width comes from the `is_*` predicates rather than `byte_width()`,
+    which resolves through `variant_dispatch[PrimitiveType]` and would
+    instantiate its closure for *every* primitive dtype — temporal, interval
+    and decimal included — to answer a question this only ever asks about the
+    eleven numeric ones."""
+    var width: Int
+    if t.is_int8() or t.is_uint8():
+        width = 8
+    elif t.is_int16() or t.is_uint16() or t.is_float16():
+        width = 16
+    elif t.is_int32() or t.is_uint32() or t.is_float32():
+        width = 32
+    else:
+        width = 64
+    return width + (1000 if t.is_floating_point() else 0)
+
+
+def _promote_operands(mut left: AnyArray, mut right: AnyArray) raises:
+    """Widen the narrower of two numeric operands so the kernel sees one dtype.
+
+    Only numeric-to-numeric pairs promote; anything else is passed through
+    untouched and a genuine mismatch still raises from the kernel. It costs
+    nothing in the interpreter's reachable set: `cast_array` is already linked
+    in by the `CAST` tag (measured — stubbing these two calls out left
+    `query_dynvalue` byte-identical)."""
+    var lt = left.dtype()
+    var rt = right.dtype()
+    if lt == rt or not lt.is_numeric() or not rt.is_numeric():
+        return
+    if _numeric_rank(lt) >= _numeric_rank(rt):
+        right = cast_array(right, lt)
+    else:
+        left = cast_array(left, rt)
+
+
+# ---------------------------------------------------------------------------
 # DynValue - unified n-ary term expression node
 # ---------------------------------------------------------------------------
 
@@ -352,53 +412,65 @@ struct DynValue(
         elif self._tag == LITERAL:
             return self._value.value().repeat(batch.num_rows())
         elif self._tag == ADD:
-            return AddKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return AddKernel.dispatch(left, right)
         elif self._tag == SUB:
-            return SubKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return SubKernel.dispatch(left, right)
         elif self._tag == MUL:
-            return MulKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return MulKernel.dispatch(left, right)
         elif self._tag == DIV:
-            return DivKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return DivKernel.dispatch(left, right)
         elif self._tag == MOD:
-            return ModKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return ModKernel.dispatch(left, right)
         elif self._tag == FLOORDIV:
-            return FloordivKernel.dispatch(
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return FloordivKernel.dispatch(left, right)
         elif self._tag == EQ:
-            return self._compare[EqKernel, StringEqKernel](
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[EqKernel, StringEqKernel](left, right)
         elif self._tag == NE:
-            return self._compare[NeKernel, StringNeKernel](
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[NeKernel, StringNeKernel](left, right)
         elif self._tag == LT:
-            return self._compare[LtKernel, StringLtKernel](
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[LtKernel, StringLtKernel](left, right)
         elif self._tag == LE:
-            return self._compare[LeKernel, StringLeKernel](
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[LeKernel, StringLeKernel](left, right)
         elif self._tag == GT:
-            return self._compare[GtKernel, StringGtKernel](
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[GtKernel, StringGtKernel](left, right)
         elif self._tag == GE:
-            return self._compare[GeKernel, StringGeKernel](
-                self._args[0].eval(batch), self._args[1].eval(batch)
-            )
+            var left = self._args[0].eval(batch)
+            var right = self._args[1].eval(batch)
+            _promote_operands(left, right)
+            return self._compare[GeKernel, StringGeKernel](left, right)
         elif self._tag == AND:
             return AndKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
