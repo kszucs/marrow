@@ -276,7 +276,54 @@ public names so no caller outside `marrow/kernels` changes; the test files merge
 split on purpose (say which); fused stripped size reported before/after — expected
 unchanged, since this moves no code across a DCE boundary.
 
-**Q0.4 — Lane divergence on mixed-dtype arithmetic** · *Tier 0, found 2026-07-27* ·
+**Q0.4 — Lane divergence on mixed-dtype arithmetic** · ✅ **DONE** *(2026-07-28)* ·
+*Tier 0, found 2026-07-27* ·
+
+**Resolution: option (b) — promote in the interpreted lane, at the expression layer.**
+`DynValue._promote_operands` (`expr/dynamic.mojo`) widens the narrower of two numeric
+operands before `_arith`/`_compare` hand them to a kernel, using `_numeric_rank` — the
+runtime twin of `values._rank`, same rule (every float outranks every integer). So both
+lanes accept the same operand pairings and produce the same dtype, while kernels stay
+array-in/array-out and strict: `expect_same_dtype` is untouched and still means what it
+says for `nullif` and `case_when`'s candidates.
+
+It sits beside `_compare`, which already picks a kernel *family* from the operand dtypes —
+deciding what an operator means is that layer's job, and this is the same decision.
+
+**Binary size, measured on `query_dynvalue` stripped** (the fused gates are byte-identical
+throughout — the fused nodes did not change):
+
+| | bytes | Δ vs HEAD |
+|---|---|---|
+| before | 5,438,904 | — |
+| via a `_arith[K: BinaryNumericKernel]` helper | 5,554,504 | **+115,600** |
+| **inline in each of `eval`'s twelve binary arms** | **5,455,432** | **+16,528** |
+| inline, with both `cast_array` calls stubbed out | 5,455,440 | +16,536 |
+
+Two things fall out of that. First, the tidy version is the expensive one: a parameterised
+method is instantiated per kernel and each instantiation carries its own copy of what it
+touches, so wrapping an already-erased dispatch in a generic helper cost seven times the
+change itself. The twelve inline call sites are deliberate and marked ⚠️ BINSIZE.
+
+Second, **the cast fanout is free here** — stubbing both `cast_array` calls changes
+nothing, because `cast` is already linked in by `DynValue`'s own `CAST` arm. That is the
+real difference from the reverted kernel-layer version, which made it reachable from every
+erased binary dispatch including the fused gates'.
+
+The fused nodes are unchanged — they had no bug, and always-wrapping every operand in a
+`NumericCast` was a binary-size risk for no correctness gain. **The gap that remains, stated
+rather than papered over:** direct node construction (`Gt(a, b)`, and the `binary_size`
+gates) still relies on the fused nodes' internal `ArgType = promote[…]` widening, and the
+interpreted lane promotes at *execution*, not construction — so a `DynValue` tree's output
+dtype is only known once it meets real data (which is what `.project()`'s 0-row probe is
+for; see Q0.5).
+
+`test_parity.mojo` covers `int64 + float64` and `int32 > int64` through both lanes, and
+`test_plan.mojo`'s `test_project_mixed_dtype_arithmetic_promotes` (was `…_raises`) now
+asserts float64 instead of the divergence.
+
+<details><summary>Original finding and the designs that did not work</summary>
+
 **Reverted 2026-07-27 — first attempt fixed it at the wrong layer.** Promotion was put in
 the erased kernel dispatches (`AnyDataType.promote` + cast both operands). That works and
 all 415 tests passed, but it puts type-algebra decisions in the kernel layer, which is
@@ -359,7 +406,9 @@ the *divergence* so it stays visible — is turned into a promotion assertion.
 > Note what the parity suite did not catch. `test_parity.mojo` compares fused against
 > dynamic for expressions it can build in both, so an operand pairing only the fused lane
 > accepts is invisible to it. Parity coverage should be keyed on the *fused* lane's accepted
-> domain, not on the intersection.
+> domain, not on the intersection. (That rule is now written into the suite itself.)
+
+</details>
 
 ---
 

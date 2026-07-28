@@ -333,12 +333,49 @@ extract/date_trunc/literal — Q19/35/36/40/43) and **computed aggregate inputs*
 (Q7/22/23), and a post-aggregate **`HAVING`** filter (Q28/29). Tested against those query
 shapes.
 
-**T2.4 — Streaming Parquet scan + projection-into-scan** · *M1/Must* · Depends: T0.2,
-T2.3b · Owns: `marrow/parquet/reader.mojo`, `marrow/expr/execution.mojo`
-(`ParquetScanProcessor`) · ⚠️ *serialize after T2.3a/b (same file)* · Done when:
+**T2.4 — Streaming Parquet scan + projection-into-scan** · ✅ **DONE** *(2026-07-28)* ·
+*M1/Must* · Depends: T0.2, T2.3b · Owns: `marrow/parquet/reader.mojo`,
+`marrow/expr/execution.mojo` (`ParquetScanProcessor`) · Done when:
 `ParquetScanProcessor` decodes per-row-group (memory no longer scales with file size)
 over a `ByteSource`, and pushes `columns=` (projection) into `read_table`; tested for
 memory + correctness.
+
+Three changes, in order:
+
+1. **`PageReader` is chunk-relative.** It used to take the whole-file span and seek to
+   absolute footer offsets; it now takes exactly one column chunk's bytes
+   (`ColumnMetaData.byte_range()`, new — the single place the dictionary-page-vs-data-page
+   start rule lives, mirroring arrow-rs) and starts at 0. `ParquetFile._span()` is gone:
+   every read goes through `_read_at(offset, length)`, so the page index and bloom filter
+   fetch their own recorded extents too (`_metadata_at` falls back to end-of-file only for
+   writers that omit the length). **This is what makes a non-whole-file `ByteSource`
+   possible at all** — nothing in the decode path asks for the file any more.
+2. **The scan streams row groups.** `ParquetScanProcessor` opens the file once, fixes the
+   read plan once, then decodes **a window of row groups bounded by `_WINDOW_BYTES`
+   (64 MB) of decoded data**, dropping the previous window. Groups are handed out one at
+   a time, so morsels never straddle a group boundary — which changes no rows, only how
+   the pipeline is driven.
+
+   > **The window is not a shortcut; one group per read is 1.6x–4.7x slower than
+   > reading the file whole.** Two causes, both found only after building
+   > `marrow/expr/tests/bench_scan.mojo` — the scan operator had no benchmark, and
+   > `bench_parquet.mojo` covers `read_table`, which still takes the all-groups path.
+   > (a) `ParquetFile.read` parallelizes over the (row group x leaf) grid, so a one-group
+   > read of a 2-column projection has two slots to spread across every core; and each
+   > read ends on a barrier whose stragglers no longer overlap the next group's work.
+   > (b) every worker built a fresh `CompressionLibs`, and the first decompress for a
+   > codec `dlopen`s its library — harmless at one read per file, 4.7x at one per group.
+   > Fixed by pooling the handles on the `ParquetFile`. A byte budget states the memory
+   > bound honestly (a constant, independent of file size) and restores throughput to
+   > **0.75x–0.93x of reading the file whole** — i.e. faster than before the task.
+3. **The scan's schema is the projection.** Its column names are pushed into `read()`, so
+   unselected chunks are never touched. That required decoupling pruning from column
+   position: statistics/page bounds are indexed by *file leaf*, the predicate by the
+   scan's own schema, so `_leaf_map` translates and returns empty (pruning off, groups
+   kept whole) for a nested file or an unmatched name, rather than misaligning the two.
+
+Tested in `marrow/expr/tests/test_pushdown.mojo`: one-row-group-per-morsel, morsels not
+spanning groups, projection (including reordering), and projection-with-pruning aligned.
 
 > **Serialize T2.3a → T2.3b → T2.4** — all three own `execution.mojo` (and 2.3a/b own
 > `relations.mojo`). Meanwhile T2.1 + T2.2 run in parallel to the whole chain (they own

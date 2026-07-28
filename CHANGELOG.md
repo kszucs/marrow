@@ -2,8 +2,58 @@
 
 ## [Unreleased]
 
+### Features
+
+- **The Parquet scan streams row groups and projects into the read (T2.4).**
+  `ParquetScanProcessor` used to decode the whole file into one `Table` on the first pull
+  and slice it, so resident memory scaled with file size. It now opens the file once,
+  fixes the pushdown plan once, and decodes **a bounded window of row groups at a time**
+  (64 MB of decoded data), dropping the previous window; groups are handed out one at a
+  time so morsels never straddle a row-group boundary, which changes no rows. The
+  scan's schema is now also its **projection** — only its columns are read, so unselected
+  column chunks are never decoded, and `parquet_scan(path, schema, morsel_size=...)`
+  narrowing the schema is how a projection gets pushed down. Pruning was decoupled from
+  column position to make that safe: statistics are indexed by file leaf, the predicate by
+  the scan's schema, and a nested file or an unmatched name turns pruning off rather than
+  misaligning the two. Net effect on throughput, measured against reading the file whole:
+  **0.75x–0.93x** (i.e. faster) on every multi-row-group case, flat on single-group.
+
 ### Fixes
 
+- **Parquet reads no longer re-`dlopen` a codec library per call.** `ParquetFile.read`
+  built a fresh `CompressionLibs` in each worker, and the first decompress for a codec
+  opens its shared library. That was invisible while a scan issued one `read` for the
+  whole file; once it issued one per row group it dominated — a Snappy 16-row-group scan
+  ran **4.7x slower**. The handles are now pooled on the `ParquetFile` (shared ownership,
+  so `read` stays a borrow — `_read_at` hands out spans whose origin is `self` and
+  `ColumnReader` needs an immutable one) and reused across calls, one slot per worker.
+
+### Refactors
+
+- **`PageReader` reads one column chunk, not the file.** It took a whole-file span and
+  seeked to absolute footer offsets; it now takes exactly the chunk's bytes and starts at
+  0. `ColumnMetaData.byte_range()` (new) is the single place the "start at the dictionary
+  page if there is one" rule lives. `ParquetFile._span()` is gone — the page index and
+  bloom filter fetch their own recorded extents through `_read_at`/`_metadata_at`, and
+  `page_index()`/`page_bounds()` now share one `_chunk_page_index` instead of decoding the
+  same two Thrift structs twice. Nothing in the decode path asks for the whole file any
+  more, which is the precondition for a streaming or remote `ByteSource`.
+
+### Fixes
+
+- **The two expression lanes agree on mixed-dtype arithmetic again (Q0.4).** The fused
+  algebra promoted mixed operands (`promote[L, R]`) while the interpreted lane demanded
+  identical dtypes, so `int64 + float64` executed in one lane and raised
+  `add: dtype mismatch: int64 vs float64` in the other — and `.project()` surfaced it at
+  *plan-build* time, since it probes each expression against a 0-row batch. `DynValue` now
+  widens the narrower numeric operand before handing it to a kernel, by the same rule the
+  fused lane uses at comptime (every float outranks every integer). It is done in the
+  expression layer, beside the `_compare` that already picks a kernel family from operand
+  dtypes — kernels stay array-in/array-out and strict, and `expect_same_dtype` still means
+  what it says for `nullif` and `case_when`'s candidates. Costs +16,528 bytes on
+  `query_dynvalue` and nothing on the fused gates; the promotion is written inline in each
+  of `eval`'s twelve binary arms because folding them into one generic helper cost
+  +115,600 instead (⚠️ BINSIZE note at the call sites).
 - **`precompile` no longer breaks every following `pytest` run.** It wrote its package
   artifact to `.test_runners/`, and Mojo puts a source file's own directory on the import
   search path — so a `marrow.mojoc` sitting next to the generated test driver *shadowed the
