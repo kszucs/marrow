@@ -233,15 +233,6 @@ struct _FieldIpcInfo(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-def _read_le[T: DType](buf: List[UInt8], pos: Int) raises -> Scalar[T]:
-    """Bounds-checked little-endian read from a `List` (IPC parses untrusted
-    metadata, so an out-of-range offset raises rather than reading past the end).
-    """
-    if pos < 0 or pos + size_of[T]() - 1 >= len(buf):
-        raise Error("ipc: _read_le out of bounds at " + String(pos))
-    return LittleEndian.fixed[T](Span(buf), pos)
-
-
 def _padding_to(pos: Int, alignment: Int) -> Int:
     return (alignment - (pos % alignment)) % alignment
 
@@ -483,23 +474,23 @@ struct _FlatbufReader(Movable):
         self._buf = buf^
 
     def root(self) raises -> UInt32:
-        return _read_le[DType.uint32](self._buf, 0)
+        return LittleEndian.checked[DType.uint32](self._buf, 0)
 
     def _field_voffset(self, table_pos: UInt32, slot: Int) raises -> UInt16:
         var tp = Int(table_pos)
-        var soffset_raw = _read_le[DType.uint32](self._buf, tp)
+        var soffset_raw = LittleEndian.checked[DType.uint32](self._buf, tp)
         var vt = Int(table_pos - soffset_raw)
         if vt < 0 or vt >= len(self._buf):
             raise Error(
                 "flatbuffers: vtable position out of bounds: " + String(vt)
             )
-        var vt_size = Int(_read_le[DType.uint16](self._buf, vt))
+        var vt_size = Int(LittleEndian.checked[DType.uint16](self._buf, vt))
         var slot_byte = 4 + slot * 2
         if slot_byte + 1 >= vt_size:
             return UInt16(0)
         if vt + slot_byte + 1 >= len(self._buf):
             return UInt16(0)
-        return _read_le[DType.uint16](self._buf, vt + slot_byte)
+        return LittleEndian.checked[DType.uint16](self._buf, vt + slot_byte)
 
     def read_u8(
         self, tp: UInt32, slot: Int, default: UInt8 = 0
@@ -507,7 +498,7 @@ struct _FlatbufReader(Movable):
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
-        return _read_le[DType.uint8](self._buf, Int(tp) + Int(voff))
+        return LittleEndian.checked[DType.uint8](self._buf, Int(tp) + Int(voff))
 
     def read_u16(
         self, tp: UInt32, slot: Int, default: UInt16 = 0
@@ -515,7 +506,7 @@ struct _FlatbufReader(Movable):
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
-        return _read_le[DType.uint16](self._buf, Int(tp) + Int(voff))
+        return LittleEndian.checked[DType.uint16](self._buf, Int(tp) + Int(voff))
 
     def read_i32(
         self, tp: UInt32, slot: Int, default: Int32 = 0
@@ -523,7 +514,7 @@ struct _FlatbufReader(Movable):
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
-        return _read_le[DType.int32](self._buf, Int(tp) + Int(voff))
+        return LittleEndian.checked[DType.int32](self._buf, Int(tp) + Int(voff))
 
     def read_i64(
         self, tp: UInt32, slot: Int, default: Int64 = 0
@@ -531,7 +522,7 @@ struct _FlatbufReader(Movable):
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
-        return _read_le[DType.int64](self._buf, Int(tp) + Int(voff))
+        return LittleEndian.checked[DType.int64](self._buf, Int(tp) + Int(voff))
 
     def read_bool(
         self, tp: UInt32, slot: Int, default: Bool = False
@@ -539,7 +530,7 @@ struct _FlatbufReader(Movable):
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
-        return _read_le[DType.uint8](self._buf, Int(tp) + Int(voff)) != UInt8(0)
+        return LittleEndian.checked[DType.uint8](self._buf, Int(tp) + Int(voff)) != UInt8(0)
 
     def read_string(
         self, tp: UInt32, slot: Int, default: String = ""
@@ -548,8 +539,8 @@ struct _FlatbufReader(Movable):
         if voff == 0:
             return default
         var ref_pos = Int(tp) + Int(voff)
-        var str_pos = ref_pos + Int(_read_le[DType.uint32](self._buf, ref_pos))
-        var length = Int(_read_le[DType.uint32](self._buf, str_pos))
+        var str_pos = ref_pos + Int(LittleEndian.checked[DType.uint32](self._buf, ref_pos))
+        var length = Int(LittleEndian.checked[DType.uint32](self._buf, str_pos))
         if str_pos + 4 + length > len(self._buf):
             raise Error("flatbuffers: string extends beyond buffer")
         var bytes = List[UInt8](capacity=length)
@@ -564,7 +555,7 @@ struct _FlatbufReader(Movable):
                 "flatbuffers: absent offset field at slot " + String(slot)
             )
         var ref_pos = Int(tp) + Int(voff)
-        return UInt32(ref_pos) + _read_le[DType.uint32](self._buf, ref_pos)
+        return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](self._buf, ref_pos)
 
     def read_table(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
@@ -573,10 +564,10 @@ struct _FlatbufReader(Movable):
                 "flatbuffers: absent offset field at slot " + String(slot)
             )
         var ref_pos = Int(tp) + Int(voff)
-        return UInt32(ref_pos) + _read_le[DType.uint32](self._buf, ref_pos)
+        return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](self._buf, ref_pos)
 
     def vector_len(self, vec_pos: UInt32) raises -> UInt32:
-        return _read_le[DType.uint32](self._buf, Int(vec_pos))
+        return LittleEndian.checked[DType.uint32](self._buf, Int(vec_pos))
 
     def vec_offset(self, vec_pos: UInt32, i: UInt32) raises -> UInt32:
         var vlen = self.vector_len(vec_pos)
@@ -588,7 +579,7 @@ struct _FlatbufReader(Movable):
                 + String(vlen)
             )
         var elem_pos = Int(vec_pos) + 4 + Int(i) * 4
-        return UInt32(elem_pos) + _read_le[DType.uint32](self._buf, elem_pos)
+        return UInt32(elem_pos) + LittleEndian.checked[DType.uint32](self._buf, elem_pos)
 
     def vec_struct_bytes(
         self, vec_pos: UInt32, i: UInt32, struct_size: Int
@@ -1319,9 +1310,9 @@ struct _IpcDecoder(Movable):
             var sb = self._r.vec_struct_bytes(dv, UInt32(i), 24)
             dict_blocks.append(
                 _Block(
-                    _read_le[DType.int64](sb, 0),
-                    _read_le[DType.int32](sb, 8),
-                    _read_le[DType.int64](sb, 16),
+                    LittleEndian.checked[DType.int64](sb, 0),
+                    LittleEndian.checked[DType.int32](sb, 8),
+                    LittleEndian.checked[DType.int64](sb, 16),
                 )
             )
         var rb_vec = self._r.read_vector(footer_pos, 3)
@@ -1330,9 +1321,9 @@ struct _IpcDecoder(Movable):
             var sb = self._r.vec_struct_bytes(rb_vec, UInt32(i), 24)
             blocks.append(
                 _Block(
-                    _read_le[DType.int64](sb, 0),
-                    _read_le[DType.int32](sb, 8),
-                    _read_le[DType.int64](sb, 16),
+                    LittleEndian.checked[DType.int64](sb, 0),
+                    LittleEndian.checked[DType.int32](sb, 8),
+                    LittleEndian.checked[DType.int64](sb, 16),
                 )
             )
         return Schema(fields=fields^, metadata=metadata^)
@@ -1362,7 +1353,7 @@ struct _IpcDecoder(Movable):
             var sb = self._r.vec_struct_bytes(nodes_vec, UInt32(i), 16)
             nodes.append(
                 _FieldNode(
-                    _read_le[DType.int64](sb, 0), _read_le[DType.int64](sb, 8)
+                    LittleEndian.checked[DType.int64](sb, 0), LittleEndian.checked[DType.int64](sb, 8)
                 )
             )
 
@@ -1372,7 +1363,7 @@ struct _IpcDecoder(Movable):
             var sb = self._r.vec_struct_bytes(bufs_vec, UInt32(i), 16)
             bufs.append(
                 _BodyBuffer(
-                    _read_le[DType.int64](sb, 0), _read_le[DType.int64](sb, 8)
+                    LittleEndian.checked[DType.int64](sb, 0), LittleEndian.checked[DType.int64](sb, 8)
                 )
             )
 
@@ -1594,14 +1585,14 @@ struct _MessageReader(Movable):
         if self._pos + 4 > n:
             return False
 
-        var marker = _read_le[DType.int32](self._bytes, self._pos)
+        var marker = LittleEndian.checked[DType.int32](self._bytes, self._pos)
         var metadata_len: Int
         var meta_start: Int
         if UInt32(marker) == UInt32(0xFFFFFFFF):
             if self._pos + 8 > n:
                 return False
             metadata_len = Int(
-                _read_le[DType.int32](self._bytes, self._pos + 4)
+                LittleEndian.checked[DType.int32](self._bytes, self._pos + 4)
             )
             meta_start = self._pos + 8
         else:
@@ -2128,7 +2119,7 @@ struct RecordBatchFileReader(Movable):
             if file_bytes[n - 6 + i] != magic[i]:
                 raise Error("IPC file: bad trailing magic")
 
-        var footer_size = Int(_read_le[DType.int32](file_bytes, n - 10))
+        var footer_size = Int(LittleEndian.checked[DType.int32](file_bytes, n - 10))
         var footer_start = n - 10 - footer_size
         var footer_bytes = List[UInt8](capacity=footer_size)
         for i in range(footer_size):

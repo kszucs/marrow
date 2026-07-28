@@ -86,6 +86,29 @@ struct LittleEndian:
         return SIMD[T, 1].from_bytes[big_endian=False](arr)
 
     @staticmethod
+    def checked[T: DType](data: Span[UInt8, _], pos: Int) raises -> Scalar[T]:
+        """`fixed`, but raising when the read would run past the end.
+
+        The bounds-checked form belongs here rather than being re-derived by
+        each caller: a format parser reads *untrusted* offsets, so "raise rather
+        than read past the end" is a property of the read, not of any one
+        parser. `ipc.mojo` had its own `_read_le` doing exactly this over a
+        `List`, which also pinned its buffers to `List` and made a memory-mapped
+        source impossible.
+        """
+        if pos < 0 or pos + size_of[Scalar[T]]() > len(data):
+            raise Error(
+                "LittleEndian.checked: ",
+                size_of[Scalar[T]](),
+                "-byte read at ",
+                pos,
+                " is out of bounds for ",
+                len(data),
+                " bytes",
+            )
+        return Self.fixed[T](data, pos)
+
+    @staticmethod
     def write[T: DType](mut buf: List[UInt8], pos: Int, val: Scalar[T]):
         """Write `val` as `T`-width little-endian bytes into `buf` at `pos` (the
         destination slots must already exist)."""
