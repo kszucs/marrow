@@ -436,6 +436,36 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > compiler's ability to catch the dangle. Doing `_span()` removal first would just move the
 > dangling problem into every page decode.
 
+> ### ⚠️ `Buffer.from_foreign` cannot wrap an mmap today — surveyed 2026-07-28
+>
+> The step above ("`MappedFile` wraps the mmap via `Buffer.from_foreign`") does not work as
+> written, and it is the first thing the task hits. `Allocation.foreign` takes a release
+> callback typed `def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None` — **pointer
+> only**, and `thin` means it cannot capture. `munmap(ptr, length)` needs the length, and
+> there is nowhere to put it.
+>
+> This is not an oversight in `Allocation`: the FOREIGN kind exists for the Arrow C Data
+> Interface, where the pointer *is* the `ArrowArray`/`ArrowSchema` struct and the producer's
+> callback recovers everything it needs from it. A raw byte mapping has no such header.
+>
+> So Q1.2 has a prerequisite of its own. Pick one before starting:
+>
+> - **(a) Widen the release callback** to carry the size (or make it capturing). Touches
+>   `buffers.mojo` — a contended core file — and every FOREIGN producer in `c_data.mojo`.
+>   Cleanest, and `Allocation` is not covered by the array/scalar/builder layout freeze.
+> - **(b) Give `Allocation` an owner slot** — an `ArcPointer` to something whose destructor
+>   does the unmapping, so `MappedFile` itself becomes the owner and the Buffer just shares
+>   it. Smaller blast radius than (a), adds a field to `Allocation`.
+> - **(c) Have `MappedFile` allocate an owned `Buffer` and copy** — kills the zero-copy
+>   property the whole seam exists for. Rejected unless measurement says the copy is free.
+>
+> Scope check while surveying: `reader.mojo` has **19** `Span[UInt8` sites and **9**
+> `ImmUntrackedOrigin` uses, plus `PageHeader.read_at`'s thrift reader, `Page.body`,
+> `PageReader.data` and `_body` — whose two arms return *either* an mmap span *or* a span
+> into `PageReader.scratch`, which is exactly why they were unified under an untracked
+> origin in the first place. Both arms have to become views into something ref-counted for
+> `_untracked` to go, so this is one atomic change across the decode path, not a staged one.
+
 **Q1.3 — One file handle per scan (RC8)** · *T2.4 prerequisite* ·
 Depends: Q1.2, **T2.3b merged** · Owns: `marrow/parquet/reader.mojo`, `marrow/expr/execution.mojo` ·
 Done when: `ParquetScanProcessor` opens the file **once**. Today `_read_plan`
