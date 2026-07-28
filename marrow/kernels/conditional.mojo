@@ -11,12 +11,10 @@ set of candidate arrays:
 
 All four are **type-agnostic**: they work for numeric, bool and string/binary
 values (and any other type ``take`` supports) because they are built entirely
-from existing kernel primitives rather than per-type element loops:
-
-1. every kernel computes a per-row ``Int32`` *branch selector* (which candidate
-   to pick, or null), and
-2. delegates to ``_multiplex`` — which ``concat``s the candidates into one array
-   and gathers the chosen elements with a single ``take``.
+from existing kernel primitives rather than per-type element loops. They are
+also all the *same shape*, and `Selection` below is that shape made explicit:
+decide per row which candidate supplies the value (or that the row is null),
+then gather. A kernel body is only the decision.
 
 This selection-vector / gather formulation matches Arrow C++ semantics
 (``ExecArrayCaseWhen`` treats a null condition as *false*; ``coalesce`` /
@@ -31,6 +29,7 @@ from ..arrays import AnyArray, BoolArray, Int32Array, PrimitiveArray
 from ..scalars import AnyScalar
 from ..builders import Int32Builder
 from ..dtypes import PrimitiveType
+from .core import Kernel
 from .execution import ExecutionContext
 from .concat import concat
 from .filter import take
@@ -38,54 +37,104 @@ from .numeric import equal_any
 
 
 # ---------------------------------------------------------------------------
-# Shared selection engine
+# Selection — the shared engine
 # ---------------------------------------------------------------------------
 
 
-def _require_uniform(candidates: List[AnyArray]) raises -> Int:
-    """Validate that every candidate shares one length and one dtype; return the
-    common length. Raises on an empty list or any mismatch."""
-    if len(candidates) == 0:
-        raise Error("conditional: at least one candidate array is required")
-    var length = candidates[0].length()
-    var dt = candidates[0].dtype()
-    for k in range(1, len(candidates)):
-        if candidates[k].length() != length:
-            raise Error(
-                t"conditional: candidate length mismatch:"
-                t" {candidates[k].length()} != {length}"
-            )
-        if candidates[k].dtype() != dt:
-            raise Error(
-                t"conditional: candidate dtype mismatch:"
-                t" {candidates[k].dtype()} != {dt}"
-            )
-    return length
+struct Selection:
+    """N same-shaped candidate arrays plus the per-row branch selector over
+    them.
 
+    Construction validates that the candidates share one length and one dtype;
+    `choose`/`choose_null` record a decision per row; `gather` resolves the
+    whole thing with one `concat` and one `take`. The candidates are
+    concatenated into a single length-``N*L`` array and row ``i``'s absolute
+    index is ``sel[i] * L + i``, so the result dtype follows `take` and no
+    per-type logic is needed anywhere in this module.
 
-def _multiplex(
-    candidates: List[AnyArray],
-    sel: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    """Gather one element per row from `candidates` according to `sel`.
-
-    `candidates` must be N same-length (L) same-dtype arrays and `sel` a
-    length-L branch-selector array whose valid values lie in ``[0, N)`` (a null
-    selector yields a null output element). The candidates are concatenated into
-    a single length-``N*L`` array and the per-row absolute index
-    ``sel[i] * L + i`` is gathered with one `take` — so the result dtype follows
-    `take` and no per-type logic is needed here.
+    **Deliberately not parameterised on the kernel** (`Selection[K: Kernel]`
+    would read better and let errors attribute themselves statically). It holds
+    `concat` and `take`, whose fanout is large, and a parameterised type is
+    instantiated per kernel — four copies of that fanout. Q0.4 measured the
+    same mistake at +115,600 bytes; the kernel's name is carried as a runtime
+    field instead, and mirrors `Kernel.error`'s format because it cannot call
+    it.
     """
-    var length = len(sel)
-    var big = concat(candidates, ctx)
-    var idx = Int32Builder(capacity=length)
-    for i in range(length):
-        if sel.is_valid(i):
-            idx.append(Int32(Int(sel.unsafe_get(i)) * length + i))
-        else:
-            idx.append_null()
-    return take(big, idx.finish(), ctx)
+
+    var _name: StaticString
+    var _candidates: List[AnyArray]
+    var _length: Int
+    var _sel: Int32Builder
+
+    def __init__(
+        out self, name: StaticString, var candidates: List[AnyArray]
+    ) raises:
+        """Validate that every candidate shares one length and one dtype."""
+        if len(candidates) == 0:
+            raise Error(name, ": at least one candidate array is required")
+        var length = candidates[0].length()
+        var dtype = candidates[0].dtype()
+        for k in range(1, len(candidates)):
+            if candidates[k].length() != length:
+                raise Error(
+                    name,
+                    (
+                        t": candidate length mismatch:"
+                        t" {candidates[k].length()} != {length}"
+                    ),
+                )
+            if candidates[k].dtype() != dtype:
+                raise Error(
+                    name,
+                    (
+                        t": candidate dtype mismatch:"
+                        t" {candidates[k].dtype()} != {dtype}"
+                    ),
+                )
+        self._name = name
+        self._candidates = candidates^
+        self._length = length
+        self._sel = Int32Builder(capacity=length)
+
+    def name(self) -> StaticString:
+        """The owning kernel's name, for diagnostics raised from here."""
+        return self._name
+
+    def length(self) -> Int:
+        """The common candidate length — the number of decisions to record."""
+        return self._length
+
+    def choose(mut self, k: Int) raises:
+        """Row takes candidate `k`."""
+        self._sel.append(Int32(k))
+
+    def choose_null(mut self) raises:
+        """Row is null — no candidate supplies it."""
+        self._sel.append_null()
+
+    def gather(mut self, ctx: ExecutionContext) raises -> AnyArray:
+        """Resolve every recorded decision: one `concat`, one `take`."""
+        var length = self._length
+        var big = concat(self._candidates, ctx)
+        var sel = self._sel.finish()
+        var idx = Int32Builder(capacity=length)
+        for i in range(length):
+            if sel.is_valid(i):
+                idx.append(Int32(Int(sel.unsafe_get(i)) * length + i))
+            else:
+                idx.append_null()
+        return take(big, idx.finish(), ctx)
+
+
+def _as_any[
+    T: PrimitiveType
+](values: List[PrimitiveArray[T]]) -> List[AnyArray]:
+    """Erase a typed candidate list — what every typed overload below opens
+    with."""
+    var out = List[AnyArray](capacity=len(values))
+    for k in range(len(values)):
+        out.append(values[k].copy())
+    return out^
 
 
 # ---------------------------------------------------------------------------
@@ -93,10 +142,58 @@ def _multiplex(
 # ---------------------------------------------------------------------------
 
 
+struct CaseWhenKernel(Kernel):
+    """Multi-branch ``CASE WHEN`` — the first branch whose condition is
+    valid-and-true."""
+
+    comptime name = "case_when"
+
+    @staticmethod
+    def apply(
+        conditions: List[BoolArray],
+        values: List[AnyArray],
+        var else_: Optional[AnyArray],
+        ctx: ExecutionContext,
+    ) raises -> AnyArray:
+        var m = len(conditions)
+        if m == 0:
+            raise Self.error("at least one condition is required")
+        if len(values) != m:
+            raise Self.error(
+                t"got {m} conditions but {len(values)} value arrays"
+            )
+
+        var candidates = List[AnyArray](capacity=m + 1)
+        for k in range(m):
+            candidates.append(values[k].copy())
+        var have_else = Bool(else_)
+        if have_else:
+            candidates.append(else_.value().copy())
+
+        var sel = Selection(Self.name, candidates^)
+        for k in range(m):
+            Self.expect_same_length(len(conditions[k]), sel.length())
+
+        for i in range(sel.length()):
+            var chosen = -1
+            for k in range(m):
+                var c = conditions[k][i]
+                if c.is_valid() and c.value():
+                    chosen = k
+                    break
+            if chosen >= 0:
+                sel.choose(chosen)
+            elif have_else:
+                sel.choose(m)  # the else branch is the last candidate
+            else:
+                sel.choose_null()
+        return sel.gather(ctx)
+
+
 def case_when(
     conditions: List[BoolArray],
     values: List[AnyArray],
-    else_: Optional[AnyArray] = None,
+    var else_: Optional[AnyArray] = None,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Multi-branch ``CASE WHEN`` selection (PyArrow ``pc.case_when``).
@@ -114,45 +211,7 @@ def case_when(
         else_: Optional fallback value array; null-fallback when omitted.
         ctx: Execution context, forwarded to `concat` / `take`.
     """
-    var m = len(conditions)
-    if m == 0:
-        raise Error("case_when: at least one condition is required")
-    if len(values) != m:
-        raise Error(
-            t"case_when: got {m} conditions but {len(values)} value arrays"
-        )
-
-    var candidates = List[AnyArray]()
-    for k in range(m):
-        candidates.append(values[k].copy())
-    var have_else = Bool(else_)
-    if have_else:
-        candidates.append(else_.value().copy())
-
-    var length = _require_uniform(candidates)
-    for k in range(m):
-        if len(conditions[k]) != length:
-            raise Error(
-                t"case_when: condition length {len(conditions[k])} != value"
-                t" length {length}"
-            )
-
-    var sel = Int32Builder(capacity=length)
-    for i in range(length):
-        var chosen = -1
-        for k in range(m):
-            var c = conditions[k][i]
-            if c.is_valid() and c.value():
-                chosen = k
-                break
-        if chosen >= 0:
-            sel.append(Int32(chosen))
-        elif have_else:
-            sel.append(Int32(m))
-        else:
-            sel.append_null()
-
-    return _multiplex(candidates, sel.finish(), ctx)
+    return CaseWhenKernel.apply(conditions, values, else_^, ctx)
 
 
 def case_when[
@@ -160,24 +219,50 @@ def case_when[
 ](
     conditions: List[BoolArray],
     values: List[PrimitiveArray[T]],
-    else_: Optional[PrimitiveArray[T]] = None,
+    var else_: Optional[PrimitiveArray[T]] = None,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
-    """Typed ``case_when`` over primitive branches — delegates to the erased
-    engine and re-wraps the result."""
-    var vv = List[AnyArray]()
-    for k in range(len(values)):
-        vv.append(values[k].copy())
+    """Typed ``case_when`` over primitive branches."""
     var e = Optional[AnyArray](None)
     if else_:
         var ea: AnyArray = else_.value().copy()
         e = ea^
-    return case_when(conditions, vv, e^, ctx).as_primitive[T]().copy()
+    return (
+        CaseWhenKernel.apply(conditions, _as_any(values), e^, ctx)
+        .as_primitive[T]()
+        .copy()
+    )
 
 
 # ---------------------------------------------------------------------------
 # coalesce
 # ---------------------------------------------------------------------------
+
+
+struct CoalesceKernel(Kernel):
+    """First non-null value across N arrays, elementwise."""
+
+    comptime name = "coalesce"
+
+    @staticmethod
+    def apply(arrays: List[AnyArray], ctx: ExecutionContext) raises -> AnyArray:
+        var candidates = List[AnyArray](capacity=len(arrays))
+        for k in range(len(arrays)):
+            candidates.append(arrays[k].copy())
+        var n = len(candidates)
+        var sel = Selection(Self.name, candidates^)
+
+        for i in range(sel.length()):
+            var chosen = -1
+            for k in range(n):
+                if arrays[k].is_valid(i):
+                    chosen = k
+                    break
+            if chosen >= 0:
+                sel.choose(chosen)
+            else:
+                sel.choose_null()
+        return sel.gather(ctx)
 
 
 def coalesce(
@@ -186,24 +271,7 @@ def coalesce(
 ) raises -> AnyArray:
     """First non-null value across `arrays`, elementwise (PyArrow
     ``pc.coalesce``). If every input is null in a row, the output is null."""
-    var candidates = List[AnyArray]()
-    for k in range(len(arrays)):
-        candidates.append(arrays[k].copy())
-    var length = _require_uniform(candidates)
-
-    var sel = Int32Builder(capacity=length)
-    for i in range(length):
-        var chosen = -1
-        for k in range(len(candidates)):
-            if candidates[k].is_valid(i):
-                chosen = k
-                break
-        if chosen >= 0:
-            sel.append(Int32(chosen))
-        else:
-            sel.append_null()
-
-    return _multiplex(candidates, sel.finish(), ctx)
+    return CoalesceKernel.apply(arrays, ctx)
 
 
 def coalesce[
@@ -213,15 +281,40 @@ def coalesce[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Typed ``coalesce`` over primitive arrays."""
-    var aa = List[AnyArray]()
-    for k in range(len(arrays)):
-        aa.append(arrays[k].copy())
-    return coalesce(aa, ctx).as_primitive[T]().copy()
+    return CoalesceKernel.apply(_as_any(arrays), ctx).as_primitive[T]().copy()
 
 
 # ---------------------------------------------------------------------------
 # nullif
 # ---------------------------------------------------------------------------
+
+
+struct NullifKernel(Kernel):
+    """``a`` with the elements equal to ``b`` set to null (SQL ``NULLIF``)."""
+
+    comptime name = "nullif"
+
+    @staticmethod
+    def apply(
+        a: AnyArray, b: AnyArray, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        Self.expect_same_dtype(a.dtype(), b.dtype())
+        Self.expect_same_length(a.length(), b.length())
+
+        # `nullif` is defined for any dtype with an equality, so it needs the
+        # family-picking primitive rather than either comparison kernel directly.
+        var eq = equal_any(a, b, ctx)
+        var candidates = List[AnyArray](capacity=1)
+        candidates.append(a.copy())
+        var sel = Selection(Self.name, candidates^)
+
+        for i in range(sel.length()):
+            var e = eq[i]
+            if e.is_valid() and e.value():
+                sel.choose_null()  # a == b  ->  null
+            else:
+                sel.choose(0)  # keep a[i]
+        return sel.gather(ctx)
 
 
 def nullif(
@@ -233,27 +326,7 @@ def nullif(
     (SQL ``NULLIF``). A row is nulled only where both are valid and equal; where
     either is null the comparison is not true, so ``a`` is kept (and remains
     null if ``a`` was null there)."""
-    if a.dtype() != b.dtype():
-        raise Error(t"nullif: dtype mismatch: {a.dtype()} != {b.dtype()}")
-    var length = a.length()
-    if b.length() != length:
-        raise Error(t"nullif: length mismatch: {a.length()} != {b.length()}")
-
-    # `nullif` is defined for any dtype with an equality, so it needs the
-    # family-picking primitive rather than either comparison kernel directly.
-    var eq = equal_any(a.copy(), b.copy(), ctx)
-    var candidates = List[AnyArray]()
-    candidates.append(a.copy())
-
-    var sel = Int32Builder(capacity=length)
-    for i in range(length):
-        var e = eq[i]
-        if e.is_valid() and e.value():
-            sel.append_null()  # a == b  ->  null
-        else:
-            sel.append(Int32(0))  # keep a[i]
-
-    return _multiplex(candidates, sel.finish(), ctx)
+    return NullifKernel.apply(a, b, ctx)
 
 
 def nullif[
@@ -264,14 +337,34 @@ def nullif[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Typed ``nullif`` over primitive arrays."""
-    var aa: AnyArray = a.copy()
-    var bb: AnyArray = b.copy()
-    return nullif(aa, bb, ctx).as_primitive[T]().copy()
+    return NullifKernel.apply(a.copy(), b.copy(), ctx).as_primitive[T]().copy()
 
 
 # ---------------------------------------------------------------------------
 # fill_null
 # ---------------------------------------------------------------------------
+
+
+struct FillNullKernel(Kernel):
+    """``a`` with its nulls replaced from a second array."""
+
+    comptime name = "fill_null"
+
+    @staticmethod
+    def apply(
+        a: AnyArray, fill: AnyArray, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        Self.expect_same_dtype(a.dtype(), fill.dtype())
+        Self.expect_same_length(a.length(), fill.length())
+
+        var candidates = List[AnyArray](capacity=2)
+        candidates.append(a.copy())
+        candidates.append(fill.copy())
+        var sel = Selection(Self.name, candidates^)
+
+        for i in range(sel.length()):
+            sel.choose(0 if a.is_valid(i) else 1)
+        return sel.gather(ctx)
 
 
 def fill_null(
@@ -283,26 +376,7 @@ def fill_null(
     (PyArrow ``pc.fill_null`` with an array replacement). Where `a` is valid the
     output keeps `a`; where `a` is null it takes `fill` (which itself may be
     null, leaving a null)."""
-    if a.dtype() != fill.dtype():
-        raise Error(t"fill_null: dtype mismatch: {a.dtype()} != {fill.dtype()}")
-    var length = a.length()
-    if fill.length() != length:
-        raise Error(
-            t"fill_null: length mismatch: {a.length()} != {fill.length()}"
-        )
-
-    var candidates = List[AnyArray]()
-    candidates.append(a.copy())
-    candidates.append(fill.copy())
-
-    var sel = Int32Builder(capacity=length)
-    for i in range(length):
-        if a.is_valid(i):
-            sel.append(Int32(0))
-        else:
-            sel.append(Int32(1))
-
-    return _multiplex(candidates, sel.finish(), ctx)
+    return FillNullKernel.apply(a, fill, ctx)
 
 
 def fill_null(
@@ -313,7 +387,7 @@ def fill_null(
     """Replace the nulls of `a` with a scalar (PyArrow ``pc.fill_null`` with a
     scalar replacement). The scalar is broadcast to `a`'s length via
     ``AnyScalar.repeat`` and forwarded to the array overload."""
-    return fill_null(a, fill.repeat(a.length()), ctx)
+    return FillNullKernel.apply(a, fill.repeat(a.length()), ctx)
 
 
 def fill_null[
@@ -326,6 +400,9 @@ def fill_null[
     """Typed ``fill_null`` replacing nulls of `a` with a primitive scalar."""
     from ..scalars import PrimitiveScalar
 
-    var aa: AnyArray = a.copy()
     var s = PrimitiveScalar[T](Optional[Scalar[T.native]](fill), a.dtype.copy())
-    return fill_null(aa, s^.to_any(), ctx).as_primitive[T]().copy()
+    return (
+        FillNullKernel.apply(a.copy(), s^.to_any().repeat(len(a)), ctx)
+        .as_primitive[T]()
+        .copy()
+    )
