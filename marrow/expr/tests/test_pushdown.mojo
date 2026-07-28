@@ -11,7 +11,7 @@ from std.os import remove
 from ...dtypes import Int64Type, int64, field
 from ...schema import Schema, schema
 from ...scalars import AnyScalar
-from ...parquet import read_table, read_statistics
+from ...parquet import read_table, ParquetFile
 from ...expr.relations import (
     ParquetScan,
     parquet_scan,
@@ -53,7 +53,7 @@ def test_read_table_row_groups() raises:
 def test_row_group_prune_decision() raises:
     var path = String("/tmp/marrow_pd_decide.parquet")
     _write_sorted(path, 3000, 1000)
-    var stats = read_statistics(path)
+    var stats = ParquetFile(path).statistics()
     assert_equal(len(stats), 3)
     var pred = AnyValue(col("x") > lit[Int64Type](Int64(1500)))
     var sch = schema([field("x", int64)])

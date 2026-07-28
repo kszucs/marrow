@@ -12,11 +12,9 @@ from .reader import (
     ParquetFile,
     read_table,
     read_metadata,
-    read_statistics,
     ColumnStatistics,
     read_page_index,
     PageIndex,
-    read_page_bounds,
     PageBounds,
     RowSelection,
 )

@@ -1,5 +1,5 @@
 """Reading file metadata. Column statistics: `read_metadata` (raw footer) and
-`read_statistics` (decoded typed min/max) — marrow reads the bounds PyArrow
+`ParquetFile.statistics()` (decoded typed min/max) — marrow reads the bounds PyArrow
 writes, and round-trips its own (the write side is covered against PyArrow in
 test_writer.mojo). Page index: `read_page_index` parses the OffsetIndex +
 ColumnIndex PyArrow writes for a multi-page column, and the per-page bounds must
@@ -11,9 +11,8 @@ from std.python import Python, PythonObject
 from std.os import remove
 from ...parquet import (
     read_metadata,
-    read_statistics,
+    ParquetFile,
     read_page_index,
-    read_page_bounds,
     write_table,
 )
 from ...tabular import Table
@@ -56,7 +55,7 @@ def test_read_int_minmax() raises:
         ),
         use_dictionary=False,
     )
-    var st = read_statistics(path)
+    var st = ParquetFile(path).statistics()
     assert_equal(len(st), 1)  # one row group
     ref cs = st[0][0]
     assert_true(Bool(cs.min))
@@ -72,7 +71,7 @@ def test_read_uint_minmax() raises:
         _col(pa.array(Python.list(1, 3000000000, 2), type=pa.uint32())),
         use_dictionary=False,
     )
-    ref cs = read_statistics(path)[0][0]
+    ref cs = ParquetFile(path).statistics()[0][0]
     assert_equal(cs.min.value().as_uint32().value(), UInt32(1))
     assert_equal(
         cs.max.value().as_uint32().value(), UInt32(3000000000)
@@ -91,7 +90,7 @@ def test_read_float_minmax() raises:
         ),
         use_dictionary=False,
     )
-    ref cs = read_statistics(path)[0][0]
+    ref cs = ParquetFile(path).statistics()[0][0]
     assert_true(cs.min.value().as_float64().value() == -2.5)
     assert_true(cs.max.value().as_float64().value() == 3.25)
     remove(path)
@@ -103,7 +102,7 @@ def test_read_string_minmax() raises:
         _col(pa.array(Python.list("banana", "apple", "cherry", Python.none()))),
         use_dictionary=False,
     )
-    ref cs = read_statistics(path)[0][0]
+    ref cs = ParquetFile(path).statistics()[0][0]
     assert_true(Bool(cs.min))
     assert_equal(cs.min.value().as_string().to_string(), "apple")
     assert_equal(cs.max.value().as_string().to_string(), "cherry")
@@ -121,7 +120,7 @@ def test_read_stats_multiple_row_groups() raises:
     pq.write_table(
         tbl, path, row_group_size=1000, use_dictionary=False, compression="none"
     )
-    var st = read_statistics(path)
+    var st = ParquetFile(path).statistics()
     assert_equal(len(st), 3)  # 3 row groups
     # first row group covers rows [0, 1000)
     assert_equal(st[0][0].min.value().as_int64().value(), 0)
@@ -148,7 +147,7 @@ def test_roundtrip_own_stats() raises:
     var path = String("/tmp/marrow_stats_rt.parquet")
     write_table(t, path)
 
-    var st = read_statistics(path)
+    var st = ParquetFile(path).statistics()
     assert_equal(st[0][0].min.value().as_int64().value(), 2)
     assert_equal(st[0][0].max.value().as_int64().value(), 11)
     assert_equal(st[0][0].null_count, 1)
@@ -239,7 +238,7 @@ def test_marrow_file_has_page_index() raises:
     assert_true(Bool(pi[0][0].offset_index))
     assert_true(Bool(pi[0][0].column_index))
     # one data page covering all rows, with the correct bounds and null count
-    var pb = read_page_bounds(path)
+    var pb = ParquetFile(path).page_bounds()
     assert_equal(len(pb[0][0]), 1)
     var pg = pb[0][0][0].copy()
     assert_equal(pg.num_rows, 5)
@@ -281,7 +280,7 @@ def test_read_temporal_minmax() raises:
         ),
         use_dictionary=False,
     )
-    ref cs = read_statistics(path)[0][0]
+    ref cs = ParquetFile(path).statistics()[0][0]
     assert_true(Bool(cs.min))
     assert_equal(cs.min.value().as_timestamp().value(), Int64(1))
     assert_equal(cs.max.value().as_timestamp().value(), Int64(10))
@@ -291,7 +290,7 @@ def test_read_temporal_minmax() raises:
         _col(pa.array(Python.list(10, 3, 7), type=pa.date32())),
         use_dictionary=False,
     )
-    ref ds = read_statistics(dpath)[0][0]
+    ref ds = ParquetFile(dpath).statistics()[0][0]
     assert_equal(ds.min.value().as_date32().value(), Int32(3))
     assert_equal(ds.max.value().as_date32().value(), Int32(10))
     remove(dpath)
@@ -309,7 +308,7 @@ def test_read_decimal_minmax() raises:
         ),
         use_dictionary=False,
     )
-    ref cs = read_statistics(path)[0][0]
+    ref cs = ParquetFile(path).statistics()[0][0]
     assert_true(Bool(cs.min))
     assert_equal(Int(cs.min.value().as_decimal128().value()), -325)
     assert_equal(Int(cs.max.value().as_decimal128().value()), 200)
@@ -325,7 +324,7 @@ def test_read_fixed_size_binary_minmax() raises:
         _col(pa.array(vals, type=pa.binary(2))),
         use_dictionary=False,
     )
-    ref cs = read_statistics(path)[0][0]
+    ref cs = ParquetFile(path).statistics()[0][0]
     assert_true(Bool(cs.min))
     assert_true(
         cs.min.value().as_fixed_size_binary().value() == [UInt8(97), UInt8(97)]
@@ -344,7 +343,7 @@ def test_read_float16_minmax() raises:
         _col(pa.array(Python.list(1.5, 2.5, 3.0, 4.5), type=pa.float16())),
         use_dictionary=False,
     )
-    ref cs = read_statistics(path)[0][0]
+    ref cs = ParquetFile(path).statistics()[0][0]
     assert_true(Bool(cs.min))
     assert_true(cs.min.value().as_float16().value() == Float16(1.5))
     assert_true(cs.max.value().as_float16().value() == Float16(4.5))

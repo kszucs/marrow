@@ -32,11 +32,9 @@ from ..kernels.groupby import HashGrouper
 from .aggregates import AggFunc
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
+from ..parquet.source import MappedFile
 from ..parquet import (
-    read_table,
-    read_metadata,
-    read_statistics,
-    read_page_bounds,
+    ParquetFile,
     RowSelection,
     ColumnStatistics,
     PageBounds,
@@ -273,7 +271,7 @@ struct ParquetScanProcessor(Processor):
         return sel^
 
     def _read_plan(
-        self,
+        self, pf: ParquetFile[MappedFile]
     ) raises -> Tuple[Optional[List[Int]], Optional[List[RowSelection]]]:
         """The pushdown plan: which row groups to read and, when the page index
         lets the reader skip pages, a per-group row selection. Returns
@@ -282,9 +280,9 @@ struct ParquetScanProcessor(Processor):
         count != top-level column count) — those groups are kept whole."""
         if not self._predicate:
             return (None, None)
-        var meta = read_metadata(self.path)
-        var stats = read_statistics(self.path)
-        var pages = read_page_bounds(self.path)
+        var meta = pf.metadata()
+        var stats = pf.statistics()
+        var pages = pf.page_bounds()
         var ncols = len(self._schema.fields)
         var groups = List[Int]()
         var selections = List[RowSelection]()
@@ -308,11 +306,15 @@ struct ParquetScanProcessor(Processor):
 
     def pull(mut self) raises -> RecordBatch:
         if not self._batch:
-            var plan = self._read_plan()
-            var table = read_table(
-                self.path,
-                row_groups=plan[0].copy(),
-                row_selections=plan[1].copy(),
+            # One open per scan. Each of these used to construct its own
+            # `ParquetFile` — four memory maps and four footer parses for a
+            # single logical read.
+            var pf = ParquetFile(self.path)
+            var plan = self._read_plan(pf)
+            var table = pf.read(
+                None,
+                plan[0].copy(),
+                plan[1].copy(),
             )
             var batches = table.to_batches()
             if len(batches) == 0:

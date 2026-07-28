@@ -2125,13 +2125,6 @@ struct PageBounds(Copyable, Movable):
         self.max = max^
 
 
-def read_page_bounds(path: String) raises -> List[List[List[PageBounds]]]:
-    """Per (row group, leaf column, data page) decoded bounds, from the page
-    index — indexed `result[rg][leaf][page]` — a convenience wrapper over
-    `ParquetFile(path).page_bounds()`."""
-    return ParquetFile(path).page_bounds()
-
-
 struct ColumnStatistics(Copyable, Movable):
     """Decoded per-column-chunk statistics: `null_count` (-1 if absent) and the
     `min`/`max` bounds as typed scalars (each `None` when the file stored no
@@ -2159,10 +2152,3 @@ struct ColumnStatistics(Copyable, Movable):
                 cs.min = mn^
                 cs.max = mx^
         return cs^
-
-
-def read_statistics(path: String) raises -> List[List[ColumnStatistics]]:
-    """Per-(row group, leaf column) decoded statistics, indexed
-    `result[row_group][leaf]` — a convenience wrapper over
-    `ParquetFile(path).statistics()`."""
-    return ParquetFile(path).statistics()

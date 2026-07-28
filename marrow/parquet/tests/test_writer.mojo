@@ -3,10 +3,10 @@ from std.math import isnan, isinf
 from std.python import Python, PythonObject
 from std.os import remove
 from ...parquet import (
+    ParquetFile,
     read_table,
     write_table,
     read_page_index,
-    read_page_bounds,
 )
 from ...parquet.writer import FileWriter
 from ...parquet.codecs import Compression, Encoding
@@ -934,7 +934,7 @@ def test_compression_zstd() raises:
 
 def _page_rows(path: String, col: Int) raises -> Int:
     """Total rows across a column's data pages (must equal the row count)."""
-    var pbs = read_page_bounds(path)
+    var pbs = ParquetFile(path).page_bounds()
     var total = 0
     for p in range(len(pbs[0][col])):
         total += pbs[0][col][p].copy().num_rows
@@ -958,7 +958,7 @@ def test_page_split_flat() raises:
     assert_equal(read_table(path).num_rows(), 50000)
 
     # the chunk is split into >1 page and the pages tile all rows
-    var pbs = read_page_bounds(path)
+    var pbs = ParquetFile(path).page_bounds()
     assert_true(len(pbs[0][0]) > 1)
     assert_equal(_page_rows(path, 0), 50000)
     # per-page bounds are populated; first page starts at value 0
@@ -988,7 +988,7 @@ def test_page_split_dictionary() raises:
 
     assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
     assert_equal(read_table(path).num_rows(), 50000)
-    var pbs = read_page_bounds(path)
+    var pbs = ParquetFile(path).page_bounds()
     assert_true(len(pbs[0][0]) > 1)
     assert_equal(_page_rows(path, 0), 50000)
     # a single dictionary page precedes the data pages
