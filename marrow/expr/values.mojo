@@ -138,7 +138,7 @@ from ..kernels.string import (
     LikeKernel,
     ILikeKernel,
 )
-from ..kernels.membership import is_in
+from ..kernels.membership import IsInKernel
 from ..kernels.conditional import coalesce, nullif, case_when
 from ..kernels.temporal import (
     TemporalExtractKernel,
@@ -1603,7 +1603,7 @@ comptime StrGe = StringPredicate[StringGeKernel, _, _]
 # ---------------------------------------------------------------------------
 # is_in — SQL `x IN (...)`. A bool breaker over any value family: `prepare`
 # hashes the captured value-set once and probes the operand column (reusing
-# `kernels.membership.is_in`), then `vectorwise` loads the mask. The output is
+# `kernels.membership.IsInKernel`), then `vectorwise` loads the mask. The output is
 # always valid (PyArrow `is_in` never nulls), so validity defaults to `None`.
 # ---------------------------------------------------------------------------
 @fieldwise_init
@@ -1620,7 +1620,7 @@ struct IsIn[A: Value](BoolValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(is_in(arr, self._value_set.copy()).to_any())
+        ctx.append(IsInKernel.dispatch(arr, self._value_set.copy()).to_any())
 
     @always_inline
     def vectorwise[

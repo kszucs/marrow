@@ -29,7 +29,7 @@ IS_NULL - Null check
 IF_ELSE - Conditional
 LENGTH - String byte length (dispatches to kernels.string.LengthKernel)
 LIKE/ILIKE - SQL LIKE pattern match (kernels.string.LikeKernel/ILikeKernel)
-IS_IN - Set membership (kernels.membership.is_in)
+IS_IN - Set membership (kernels.membership.IsInKernel)
 COALESCE/NULLIF/CASE_WHEN - Conditional / null handling (kernels.conditional)
 YEAR/MONTH/DAY/HOUR/MINUTE/SECOND/DAY_OF_WEEK/QUARTER/DAY_OF_YEAR - Temporal
   field extraction (kernels.temporal); DATE_TRUNC - floor to a unit boundary
@@ -81,7 +81,7 @@ from ..kernels.string import (
     LikeKernel,
     ILikeKernel,
 )
-from ..kernels.membership import is_in as is_in_kernel
+from ..kernels.membership import IsInKernel
 from ..kernels.conditional import (
     coalesce as coalesce_kernel,
     nullif as nullif_kernel,
@@ -514,7 +514,7 @@ struct DynValue(
                 left, self._pattern_array(left.length())
             )
         elif self._tag == IS_IN:
-            return is_in_kernel(
+            return IsInKernel.dispatch(
                 self._args[0].eval(batch), self._value_set.value()
             ).to_any()
         elif self._tag == COALESCE:
@@ -861,7 +861,7 @@ struct DynValue(
     # --- set membership (kernels.membership) -------------------------------
     def isin(self, value_set: AnyArray) -> DynValue:
         """``self IN value_set`` — the value set is captured in the node and
-        probed by ``kernels.membership.is_in``."""
+        probed by ``kernels.membership.IsInKernel``."""
         return DynValue(
             tag=IS_IN,
             args=[self.copy()],
