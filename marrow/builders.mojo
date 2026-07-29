@@ -153,7 +153,15 @@ trait Builder(ImplicitlyDeletable, Movable, Sized):
     ) raises -> Self.ArrayType:
         ...
 
-    def reset(mut self):
+    def reset(mut self) raises:
+        """Discard accumulated state and start over.
+
+        `raises` for the same reason `Array.slice` does: the erased
+        implementation dispatches over a variant and an uncovered member falls
+        through. Typed builders stay non-raising, and Mojo accepts a
+        non-raising body against a raising requirement, so their call sites are
+        unaffected.
+        """
         ...
 
 
@@ -162,7 +170,7 @@ trait Builder(ImplicitlyDeletable, Movable, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct DynBuilder(ImplicitlyCopyable, Movable):
+struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
     """Type-erased builder container.
 
     Wraps any `Builder`-conforming type in a Variant on the heap behind an
@@ -361,10 +369,15 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
 
         variant_dispatch_raises[Builder, func=f](self._ptr[])
 
-    def finish(mut self) raises -> DynArray:
+    comptime ArrayType = DynArray
+    """`Builder`'s companion-array member. This is what `DynArray: Array`
+    unblocked: the trait requires `ArrayType: Array`, and until the erased array
+    conformed there was nothing for the erased builder to name."""
+
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
         @parameter
         def f[T: Builder](mut b: T) raises -> DynArray:
-            return b.finish().to_dyn()
+            return b.finish(shrink_to_fit=shrink_to_fit).to_dyn()
 
         return variant_dispatch_raises[Builder, func=f](self._ptr[])
 

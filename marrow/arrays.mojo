@@ -162,7 +162,15 @@ trait Array(
     def to_data(self) raises -> ArrayData:
         ...
 
-    def slice(self, offset: Int, length: Int) -> Self:
+    def slice(self, offset: Int, length: Int) raises -> Self:
+        """A zero-copy slice.
+
+        `raises` because the erased implementation can fail: `DynArray.slice`
+        dispatches over its variant, and an uncovered member falls through. Every
+        *typed* implementation is non-raising and stays that way -- Mojo accepts
+        a non-raising body against a raising requirement, so typed call sites are
+        unaffected. Only generic code holding `[T: Array]` has to propagate.
+        """
         ...
 
     def __getitem__(self, index: Int) raises -> Self.ScalarType:
@@ -2093,6 +2101,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
 
 
 struct DynArray(
+    Array,
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
@@ -2164,6 +2173,16 @@ struct DynArray(
     def __init__[T: Array](out self, var array: T):
         self._v = Self.VariantType(array^)
 
+    def __init__(out self, data: ArrayData) raises:
+        """`Array`'s constructor-from-`ArrayData`, delegating to `from_data`.
+
+        The static factory stays the implementation and the primary spelling;
+        this exists so the trait is satisfied without moving 30-odd call sites.
+        No ambiguity with the `@implicit [T: Array]` constructor above:
+        `ArrayData` is only `Copyable, Movable` and does not conform to `Array`.
+        """
+        self = DynArray.from_data(data)
+
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
@@ -2203,6 +2222,21 @@ struct DynArray(
 
         return variant_dispatch[Array, func=f](self._v)
 
+    comptime ScalarType = DynScalar
+    """`Array`'s companion-scalar member. `DynScalar` conforms to `ArrowScalar`,
+    which is what lets this conform to `Array` in turn — the two erasures line
+    up rather than each needing its own escape hatch."""
+
+    def type(self) -> DynType:
+        """`Array`'s spelling of `dtype()`.
+
+        Both names exist because both are load-bearing: `Array` requires
+        `type()`, while ~200 call sites and the `Builder` trait say `dtype()`.
+        Renaming either would be a large diff for no behaviour, so this is a
+        one-line forward and `dtype()` remains the one with the implementation.
+        """
+        return self.dtype()
+
     def dtype(self) -> DynType:
         @parameter
         def f[T: Array](a: T) -> DynType:
@@ -2234,11 +2268,11 @@ struct DynArray(
         """
 
         @parameter
-        def f[T: Array](a: T) -> DynArray:
+        def f[T: Array](a: T) raises -> DynArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
 
-        return variant_dispatch[Array, func=f](self._v)
+        return variant_dispatch_raises[Array, func=f](self._v)
 
     def view(self, var dtype: DynType) raises -> DynArray:
         """Reinterpret this array's buffers under a same-layout `dtype`.

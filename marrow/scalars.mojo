@@ -556,11 +556,19 @@ struct DictionaryScalar(ArrowScalar):
 # ---------------------------------------------------------------------------
 
 
-struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
+struct DynScalar(
+    ArrowScalar, ConvertibleToPython, Copyable, Equatable, Movable, Writable
+):
     """Type-erased scalar container backed by a Variant.
 
     Wraps any typed scalar inline in a discriminated union.
     Runtime dispatch goes through the `_dispatch` helper.
+
+    **Conforms to `ArrowScalar` itself.** The erased scalar is a *peer* of the
+    typed ones rather than something above them, so generic code bound on
+    `ArrowScalar` accepts either and there is no separate erased overload set to
+    keep in step. `DynArray.ScalarType` is this, which is what lets `DynArray`
+    conform to `Array` in turn.
     """
 
     comptime VariantType = Variant[
@@ -660,6 +668,17 @@ struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     def is_null(self) -> Bool:
         return not self.is_valid()
+
+    def to_dyn(deinit self) -> DynScalar:
+        """Already erased — hand back `self`.
+
+        Overriding this is not a convenience, it is required. The trait's
+        default body is `DynScalar(self^)`, which for `Self = DynScalar` would
+        ask the variant to hold a `DynScalar`; it deliberately does not list
+        itself, so the default would fail to instantiate. `DynType` and
+        `DynArray` override it for exactly the same reason.
+        """
+        return self^
 
     # --- typed downcasts ---
 
