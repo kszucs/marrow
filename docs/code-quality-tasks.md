@@ -440,11 +440,25 @@ gate reported "no change" and the change was simply invisible to it:**
   every gate**, because no gate constructs a `ParquetScan`. The DCE property is real (that
   is *why* it is zero), but it means the entire AOT Parquet surface has never been measured.
 
-Done when there is one minimal gate program per operator family — scan, sort/limit, join,
-and one per fused value family — `compare.py`'s `NAMES` covers them, each has its expected
-stripped size recorded, and the three orphan binaries (`query_comptime`,
-`query_erased_aot`, `query_hybrid` — untracked, no `.mojo` source, so `compare.py` never
-rebuilds them and their sizes are stale artifacts) are deleted.
+**Item 2 — coverage — ✅ DONE 2026-07-29 (`3bee28b`).** Five gates added, each the
+`query_streaming` shape plus one thing so the delta is what the thing costs, and the three
+orphan binaries deleted. Measured in `__text`:
+
+| gate | Δ vs floor | what it adds |
+|---|---:|---|
+| `query_arith` | +7,644 | fused `+ - *` |
+| `query_scan` | +1,033,560 | `ParquetScan` — the whole reader |
+| `query_sort` | +2,432,604 | `Sort` + top-K |
+| `query_join` | +2,567,388 | `Join` |
+| `query_exprs` | +2,641,244 | string, conditional, membership, cast, temporal |
+
+`query_arith` is the sharpest vindication of fixing the metric first: **+7,644 bytes of
+code, and 16 bytes _smaller_ by stripped file size.** The old metric would have called
+fused arithmetic free.
+
+`query_exprs` covers five families in one program on purpose — the sweep is now ~20 minutes
+and a suite nobody runs measures nothing. It trades per-family attribution for regression
+detection; split one out when it needs its own number.
 
 > **Watch the cost of the gate itself.** Each program is a full `-O3` build: five currently
 > take ~10 min on an M-series laptop. Fifteen would take ~35 and nobody would run it. Keep

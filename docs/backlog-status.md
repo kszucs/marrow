@@ -15,8 +15,8 @@ than read off their own headers. **Last verified: 2026-07-29.**
 
 ## Closed recently
 
-**Quality.** Q0.2, Q0.3, **Q0.4**, Q1.1, Q1.2, Q1.3, Q2.4, Q2.5 step 2, Q3.4's headline,
-Q0.7, part of Q3.3, and layering L1/L4/L5/L9. Q0.6 was *measured* and closed as a net
+**Quality.** Q0.2, Q0.3, **Q0.4**, **Q0.8**, Q1.1, Q1.2, Q1.3, Q2.4, Q2.5 step 2,
+**Q3.1**, Q3.4's headline, Q0.7, part of Q3.3, and layering L1/L4/L5/L9. Q0.6 was *measured* and closed as a net
 increase (sharing the binary dispatch default costs more lines than it saves). L7's premise
 no longer holds — `Kernel` carries `error()` and the argument checks, so it is not a
 name-only marker.
@@ -32,7 +32,6 @@ complete — T2.1–T2.3b (fused and dynamic wiring, Sort/Limit/TopK, Aggregate 
 
 | task | what is left |
 |---|---|
-| **Q0.8** | Metric ✅ **fixed 2026-07-29** (`compare.py` now measures the `__text` section, not page-padded file size, and takes gate names). Coverage still open: **it exercises the fused lane in two shapes** — `col`/`>` and `Sum`/`Min`. Scan, sort, join, and every other fused value family are unmeasured, so the gate answers "no change" to changes it cannot see (Q0.4 and T2.4 both). CLAUDE.md makes gating on it a hard constraint. |
 | **Q0.5** | A fused value's `OutType` is statically known, so `project`/`aggregate` need not probe it by executing against a 0-row batch. Worth ~16 KB of *file size* on the fused gate — re-measure as `__text` first, see Q0.8 — and retires the hand-built `benchmarks/binary_size` exception. Also the residual half of Q0.4: the interpreted lane promotes at *execution*, so a `DynValue` tree's output dtype is still only knowable by running it. |
 | ~~**Q3.1**~~ | ✅ **Complete, verified 2026-07-29.** Items 1, 3, 6, 7 turned out to be done already (`filter.mojo` has exactly the 3 free functions the task says to keep; `is_null`/`select`/`equal`, `hash_identity`, `_drop_null_bool`, `reinterpret_array`, `temporal_backing_dtype` no longer exist). Item 4/5 **done 2026-07-29**: `membership.mojo` 5 free fns → 2 + `IsInKernel`; `conditional.mojo` → 5 kernel structs over a shared `Selection`; `temporal.mojo` 18 → 7, with `CalendarUnit` replacing the `String` unit and the ten one-line delegators deleted. Item 2 **done 2026-07-29** — but its premise was stale: `RapidHash`/`SortIndices` already existed, so only the redundant delegators went (`rapidhash` 5 overloads → 2, `sort_indices` 4 → 1). Kernel free functions now total **61**, down from the 122 the task counted. `distinct.mojo` (6) and `concat.mojo` (1) still have no struct, but neither has a per-type dispatch to drift — the defect that motivates a struct does not apply, so they are left alone. |
 | **Q3.3 tail** | `ipc.mojo` still has 12 free fns. `_slice_body` still copies each column buffer byte-by-byte; a memcpy needs a new `Buffer` factory, since `unsafe_ptr()` is restricted to `buffers`/`views`/`c_data`. |
