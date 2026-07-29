@@ -1772,11 +1772,19 @@ size risk in the plan).
   columns?" predicate is re-derived **three times with different membership**, and `JOIN_CROSS`
   silently falls into the LEFT/RIGHT/FULL branch); `JoinIndex` (split `SwissHashTable`'s two
   mutually-exclusive lifecycles); `BuildPartition` (replace three lockstep-indexed `List`s).
-- **Q4.2 — Expr op registry (RC9).** ⚠️ BINSIZE. One `marrow/expr/ops.mojo` comptime registry
-  driving F1's tags/names/uniform arms *and* F2's aliases. **F2 currently has ~30 operators F1
-  lacks** and nothing enforces parity. ~80% of the wiring duplication is eliminable and is **not**
-  load-bearing for DCE (the small-binary property comes from which trampoline `AnyValue.__init__`
-  instantiates). Build the dynamic table only inside `DynValue.eval`.
+- ~~**Q4.2 — Expr op registry (RC9).**~~ **Dropped 2026-07-29.** It bundled two problems
+  behind one solution: wiring duplication (each operator spelled out ~6 times) and parity
+  drift between the lanes. The registry only ever addressed the first, in the two most
+  size-sensitive files in the tree, on a duplication-reduction claim that should stand on its
+  own merits — and it is not worth a ⚠️ BINSIZE refactor of `values.mojo`/`dynamic.mojo`.
+
+  The inventory behind the "~30 operators" claim, verified 2026-07-29 so it is not lost:
+  F1 has 41 tags; genuinely F2-only are **~23 scalar operators** — `Ceil`, `Floor`, `Round`,
+  `Sign`, `Sqrt`, `Exp`, `Ln`, `Pow`, `IsNan`, `IsInf`, `Concat`, `Upper`, `Lower`,
+  `Capitalize`, `Reverse`, `Strip`, `LStrip`, `RStrip`, `StartsWith`, `EndsWith`,
+  `StrContains`, `ListContains`, `ListLength` — plus the window/reduction nodes. `IF_ELSE` is
+  F1-only. Several apparent gaps are not real: `StrEq`…`StrGe` are reached by F1's `EQ`…`GE`
+  through `_compare`'s string arm, and the `*To*` cast nodes by F1's single `CAST`.
 - **Q4.6 — Give the AOT lane a comptime-projected Parquet scan** · *found 2026-07-29, measured* ·
   Depends: Q4.3 (same seam) · Owns: `marrow/parquet/reader.mojo`, `marrow/expr/relations.mojo` ·
 
