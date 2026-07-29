@@ -122,7 +122,7 @@ trait StringLikeType(BinaryLikeType):
 
 
 trait ListLikeType(DataType):
-    """Variable-length list types (list, large_list).
+    """Variable-length list types (list, large_list, map).
 
     Provides `comptime offset: DType` — the physical integer type of the
     offset buffer (int32 for standard list, int64 for large_list).
@@ -1057,7 +1057,10 @@ struct DynType(
         return self._v.isa[LargeListType]()
 
     def is_list_like(self) -> Bool:
-        return self.is_list() or self.is_large_list()
+        # Map included: `MapType` conforms to `ListLikeType` and
+        # `dispatch_listlike` walks it, so a predicate that excluded it forced
+        # every caller to write `is_list_like() or is_map()` by hand.
+        return self.is_list() or self.is_large_list() or self.is_map()
 
     def is_fixed_size_list(self) -> Bool:
         return self._v.isa[FixedSizeListType]()

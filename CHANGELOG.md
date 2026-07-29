@@ -20,6 +20,13 @@
 
 ### Fixes
 
+- **`DynType.is_list_like()` admits map, matching `ListLikeType`.** `MapType` conforms to
+  `ListLikeType` and `dispatch_listlike` walks it, but the predicate guarding that dispatch
+  returned False for map — so a kernel that guarded with `is_list_like()` rejected map
+  columns its own typed leaf accepts. `rapidhash` was already writing
+  `is_list_like() or is_map()` by hand to work around it; that workaround is gone, and
+  `array_length` over a map now returns its entry count instead of raising.
+
 - **Parquet reads no longer re-`dlopen` a codec library per call.** `ParquetFile.read`
   built a fresh `CompressionLibs` in each worker, and the first decompress for a codec
   opens its shared library. That was invisible while a scan issued one `read` for the

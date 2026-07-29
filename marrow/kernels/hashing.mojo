@@ -303,7 +303,7 @@ struct RapidHash(Kernel):
                 return RapidHash.apply(keys.as_binary_like[T](), ctx)
 
             return dt.dispatch_binarylike[binarylike]()
-        elif dt.is_list_like() or dt.is_map():
+        elif dt.is_list_like():
 
             @parameter
             def listlike[T: ListLikeType](d: T) raises -> UInt64Array:

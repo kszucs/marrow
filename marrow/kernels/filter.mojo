@@ -136,12 +136,15 @@ struct Filter(Kernel):
             ).to_dyn()
         elif dt.is_struct():
             return Filter.apply(array.as_struct(), mask, ctx).to_dyn()
-        elif dt.is_list():
-            return Filter.apply(array.as_list(), mask, ctx).to_dyn()
-        elif dt.is_large_list():
-            return Filter.apply(array.as_large_list(), mask, ctx).to_dyn()
-        elif dt.is_map():
-            return Filter.apply(array.as_map(), mask, ctx).to_dyn()
+        elif dt.is_list_like():
+
+            @parameter
+            def listlike[T: ListLikeType](d: T) raises -> DynArray:
+                return Filter.apply(
+                    array.as_list_like[T](), mask, ctx
+                ).to_dyn()
+
+            return dt.dispatch_listlike[listlike]()
         elif dt.is_fixed_size_list():
             return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_dyn()
         elif dt.is_dictionary():
@@ -659,12 +662,15 @@ struct Take(Kernel):
             ).to_dyn()
         elif dt.is_struct():
             return Take.apply(array.as_struct(), indices, ctx).to_dyn()
-        elif dt.is_list():
-            return Take.apply(array.as_list(), indices, ctx).to_dyn()
-        elif dt.is_large_list():
-            return Take.apply(array.as_large_list(), indices, ctx).to_dyn()
-        elif dt.is_map():
-            return Take.apply(array.as_map(), indices, ctx).to_dyn()
+        elif dt.is_list_like():
+
+            @parameter
+            def listlike[T: ListLikeType](d: T) raises -> DynArray:
+                return Take.apply(
+                    array.as_list_like[T](), indices, ctx
+                ).to_dyn()
+
+            return dt.dispatch_listlike[listlike]()
         elif dt.is_fixed_size_list():
             return Take.apply(array.as_fixed_size_list(), indices, ctx).to_dyn()
         elif dt.is_dictionary():
