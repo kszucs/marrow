@@ -451,6 +451,28 @@ rebuilds them and their sizes are stale artifacts) are deleted.
 > each gate to the minimum that links its family, and add a `--only` filter so a change can
 > re-measure the one gate it plausibly moved before the full sweep.
 
+**First fix the metric: stripped file size is quantized to 16 KB and this repository has
+been quoting it.** Apple Silicon uses 16 KB pages, so a `__TEXT` segment is padded up to a
+multiple of 16,384 and the stripped binary's *file size* moves in 16 KB steps. Measured on
+`query_dynvalue` for the Q3.1 `CalendarUnit` change (2026-07-29):
+
+| | `__text` (code) | `__TEXT` segment | stripped file |
+|---|---|---|---|
+| before | 5,264,436 | 5,373,952 | 5,438,920 |
+| after | 5,266,164 | 5,390,336 | 5,455,424 |
+| Δ | **+1,728** | +16,384 (one page) | +16,504 |
+
+So the gate as it stands **cannot see a change smaller than 16 KB, and reports a phantom
+16 KB jump when a small one crosses a page boundary**. Symbol counts confirmed it: 2,267 →
+2,266, i.e. one *fewer* symbol for a "+16,504-byte regression".
+
+Earlier figures in this document that came from stripped file size are page-quantized and
+should be read as directional only — including Q0.4's "+16,528" and the conditional
+refactor's "-16,528" (that these were the same number to the byte, in opposite directions,
+was the tell). `compare.py` already collects a `__TEXT` column; the ratio table and the
+recorded expectations must move to **`size -m <binary>` → `Section __text`**, which is the
+only figure here that tracks code.
+
 ---
 
 ### Accepted known defects (not scheduled)

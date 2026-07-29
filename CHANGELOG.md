@@ -37,8 +37,10 @@
   `IsInKernel`, and `CaseWhenKernel`/`CoalesceKernel`/`NullifKernel`/`FillNullKernel` over a
   shared `Selection` engine that owns the candidates, the per-row branch selector, and the
   `concat`+`take` gather. Diagnostics come from `Kernel.error`/`expect_same_dtype`/
-  `expect_same_length` instead of four hand-rolled phrasings. Collapsing the four inlined
-  copies takes **16,528 bytes off `query_dynvalue`**, paying back Q0.4's cost exactly.
+  `expect_same_length` instead of four hand-rolled phrasings, and `date_trunc` takes a
+  `CalendarUnit` instead of a `String`, parsed at plan-build time by the frontends so an
+  unsupported unit can no longer reach the kernel. Ten temporal free functions that
+  forwarded to exactly one kernel each are gone.
 - **`PageReader` reads one column chunk, not the file.** It took a whole-file span and
   seeked to absolute footer offsets; it now takes exactly the chunk's bytes and starts at
   0. `ColumnMetaData.byte_range()` (new) is the single place the "start at the dictionary
@@ -61,8 +63,10 @@
   dtypes — kernels stay array-in/array-out and strict, and `expect_same_dtype` still means
   what it says for `nullif` and `case_when`'s candidates. Costs +16,528 bytes on
   `query_dynvalue` and nothing on the fused gates; the promotion is written inline in each
-  of `eval`'s twelve binary arms because folding them into one generic helper cost
-  +115,600 instead (⚠️ BINSIZE note at the call sites).
+  of `eval`'s twelve binary arms because folding them into one generic helper measured far
+  larger (⚠️ BINSIZE note at the call sites). Note the byte figures previously quoted here
+  came from stripped *file* size, which is quantized to 16 KB pages on Apple Silicon — see
+  Q0.8; code-size deltas should be read from `size -m` → `Section __text`.
 - **`precompile` no longer breaks every following `pytest` run.** It wrote its package
   artifact to `.test_runners/`, and Mojo puts a source file's own directory on the import
   search path — so a `marrow.mojoc` sitting next to the generated test driver *shadowed the

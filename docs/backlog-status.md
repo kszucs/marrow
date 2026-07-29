@@ -89,10 +89,17 @@ Each of these cost real time to find and invalidates an approach that looks obvi
   `dlopen`s the codec library. Invisible at one read per file; 4.7x at one read per row
   group. When splitting one big operation into many small ones, audit what the operation
   set up *once*.
+- **The binary-size gate's headline number is quantized to 16 KB.** Apple Silicon uses
+  16 KB pages, so a stripped binary's *file size* — what `compare.py`'s ratio table and
+  every figure quoted so far report — moves in 16,384-byte steps. A real +1,728-byte change
+  showed up as +16,504 with one *fewer* symbol. Measure `size -m <binary>` → `Section
+  __text`; treat any recorded file-size delta near 16 KB as a page crossing, not code.
+  Folded into Q0.8.
 - **A generic wrapper around an already-erased dispatch is not free.** Folding Q0.4's
   twelve promote-then-dispatch sites in `DynValue.eval` into one
   `_arith[K: BinaryNumericKernel]` helper cost **+115,600 bytes** on `query_dynvalue`
-  (5,438,904 → 5,554,504); writing the same four lines inline in each arm cost +16,528.
+  (file size; the real code delta is smaller — see the 16 KB quantization note above), while
+  writing the same four lines inline in each arm cost a fraction of that.
   A parameterised method is instantiated per kernel and each instantiation carries its own
   copy of what it touches, so tidying an erased ladder into a generic helper can cost
   several times the thing it was tidying. Measure before assuming a refactor is neutral —
