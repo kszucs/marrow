@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true
 
-from ...arrays import AnyArray
+from ...arrays import DynArray
 from ...builders import array, nulls, Int64Builder, StringBuilder
 from ...dtypes import int32, int64, string
 from ...kernels.distinct import count_distinct, approx_count_distinct
@@ -8,17 +8,17 @@ from ...kernels.execution import ExecutionContext
 
 
 def test_count_distinct_basic() raises:
-    var a: AnyArray = array([1, 2, 2, 3, 3, 3], int32)
+    var a: DynArray = array([1, 2, 2, 3, 3, 3], int32)
     assert_equal(count_distinct(a).value(), 3)
 
 
 def test_count_distinct_all_unique() raises:
-    var a: AnyArray = array([10, 20, 30, 40], int64)
+    var a: DynArray = array([10, 20, 30, 40], int64)
     assert_equal(count_distinct(a).value(), 4)
 
 
 def test_count_distinct_all_same() raises:
-    var a: AnyArray = array([7, 7, 7, 7, 7], int32)
+    var a: DynArray = array([7, 7, 7, 7, 7], int32)
     assert_equal(count_distinct(a).value(), 1)
 
 
@@ -35,12 +35,12 @@ def test_count_distinct_excludes_nulls() raises:
 
 
 def test_count_distinct_empty() raises:
-    var a: AnyArray = array(int32)
+    var a: DynArray = array(int32)
     assert_equal(count_distinct(a).value(), 0)
 
 
 def test_count_distinct_all_null() raises:
-    var a: AnyArray = nulls(5, int64)
+    var a: DynArray = nulls(5, int64)
     assert_equal(count_distinct(a).value(), 0)
 
 
@@ -54,7 +54,7 @@ def test_count_distinct_strings() raises:
     assert_equal(count_distinct(b.finish()).value(), 3)
 
 
-def _distinct_int64(n: Int, distinct: Int) raises -> AnyArray:
+def _distinct_int64(n: Int, distinct: Int) raises -> DynArray:
     """`n` rows drawn from `distinct` distinct values (i % distinct)."""
     var b = Int64Builder(n)
     for i in range(n):
@@ -101,6 +101,6 @@ def test_count_distinct_parallel_matches_serial() raises:
             b.append_null()
         else:
             b.append(Int64(i % 5000))
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     assert_equal(count_distinct(a, ExecutionContext.serial()).value(), 5000)
     assert_equal(count_distinct(a, ExecutionContext.parallel(4)).value(), 5000)

@@ -43,13 +43,13 @@ fields — hour/minute/second — via ``views.apply``).
 """
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     ArrayData,
     Int32Array,
     PrimitiveArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..dtypes import AnyDataType, DType, TemporalType, TimeUnit
+from ..dtypes import DynType, DType, TemporalType, TimeUnit
 from .core import Kernel
 
 
@@ -82,7 +82,7 @@ def _unit_tps(u: TimeUnit) -> Int:
         return 1_000_000_000
 
 
-def _ticks_per_second(dt: AnyDataType) raises -> Int:
+def _ticks_per_second(dt: DynType) raises -> Int:
     """Ticks per second for a temporal dtype whose one tick is <= 1 second
     (date64, timestamp, time32, time64, duration)."""
     if dt.is_date64():
@@ -201,18 +201,18 @@ trait TemporalExtractKernel(Kernel):
         return _extract[T, Self.component](array, Self.calendar, Self.name)
 
     @staticmethod
-    def dispatch(array: AnyArray) raises -> AnyArray:
+    def dispatch(array: DynArray) raises -> DynArray:
         var dt = array.dtype()
         if dt.is_date32():
-            return Self.apply(array.as_date32()).to_any()
+            return Self.apply(array.as_date32()).to_dyn()
         elif dt.is_date64():
-            return Self.apply(array.as_date64()).to_any()
+            return Self.apply(array.as_date64()).to_dyn()
         elif dt.is_timestamp():
-            return Self.apply(array.as_timestamp()).to_any()
+            return Self.apply(array.as_timestamp()).to_dyn()
         elif dt.is_time32():
-            return Self.apply(array.as_time32()).to_any()
+            return Self.apply(array.as_time32()).to_dyn()
         elif dt.is_time64():
-            return Self.apply(array.as_time64()).to_any()
+            return Self.apply(array.as_time64()).to_dyn()
         else:
             raise Error(t"{Self.name}: expected a temporal array, got {dt}")
 
@@ -396,9 +396,7 @@ comptime unit_day = CalendarUnit(3)
 
 def _trunc[
     N: DType
-](
-    data: ArrayData, dt: AnyDataType, ticks_per_unit: Int, n: Int
-) raises -> AnyArray:
+](data: ArrayData, dt: DynType, ticks_per_unit: Int, n: Int) raises -> DynArray:
     """Floor each ``N``-typed tick count to a multiple of ``ticks_per_unit``,
     keeping the same tick resolution and dtype."""
     var out = Buffer.alloc_uninit[N](n)
@@ -414,7 +412,7 @@ def _trunc[
     if data.bitmap:
         var v = data.bitmap.value().view(data.offset, n)
         vbm = v.union(v).to_immutable()
-    return AnyArray.from_data(
+    return DynArray.from_data(
         ArrayData(
             dtype=dt.copy(),
             length=n,
@@ -433,7 +431,7 @@ struct DateTruncKernel(Kernel):
     comptime name = "date_trunc"
 
     @staticmethod
-    def apply(array: AnyArray, unit: CalendarUnit) raises -> AnyArray:
+    def apply(array: DynArray, unit: CalendarUnit) raises -> DynArray:
         var dt = array.dtype()
         if dt.is_date32():
             # date32 is already day-granular: any unit <= day is a no-op.

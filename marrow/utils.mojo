@@ -336,9 +336,9 @@ def variant_dispatch_raises[
 # non-numeric columns catchably.
 #
 # One member per dtype family trait in `dtypes.mojo`, so a kernel never has to
-# spell out its own ladder: adding a dtype to `AnyDataType.VariantType` extends
+# spell out its own ladder: adding a dtype to `DynType.VariantType` extends
 # every family it conforms to at once. Pick the *narrowest* family that covers
 # the leaf — each member instantiates `func` once per conforming variant arm, so
-# `AnyDataType.dispatch_primitive` costs roughly twice `AnyDataType.dispatch_numeric` in code
+# `DynType.dispatch_primitive` costs roughly twice `DynType.dispatch_numeric` in code
 # size.
 # ---------------------------------------------------------------------------

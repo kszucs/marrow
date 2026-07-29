@@ -54,7 +54,7 @@ cross-package dependency (`dyn.values` importing `aot.values` traits).
   constructed* (parsed SQL, Python-driven plans).
 - **Processors fold into relation nodes** ("fat nodes": node = operator =
   executor). The `Planner`'s open per-kind switch — the 30x size killer — is
-  **deleted**; each relation self-executes, dispatched through the `AnyRelation`
+  **deleted**; each relation self-executes, dispatched through the `DynRelation`
   vtable (references only its own `execute`, no central switch).
 
 ## Target structure
@@ -69,7 +69,7 @@ marrow/expr/
   runtime.mojo    # DynValue — the tag-interpreter node, boxable into AnyValue
                   #   [was dyn/values.mojo; Expr -> DynValue, FUSED slots dropped]
   relations.mojo  # one self-executing relational op set (Scan/Filter/Project/Join)
-                  #   + AnyRelation box
+                  #   + DynRelation box
                   #   [merges aot/erased.mojo relations + dyn/relations.mojo
                   #    + dyn/executor.mojo processors]
 ```
@@ -88,7 +88,7 @@ is optional if `values.mojo` grows too large.
    based on whether streaming must survive.
 2. **`AnyValue` boxing surface** — its constructors (in `values.mojo`) currently
    overload on `Column` / `BoolValue`. They need an overload (or a shared trait)
-   covering the **erased** `DynValue`, which produces `AnyArray` directly rather
+   covering the **erased** `DynValue`, which produces `DynArray` directly rather
    than being a statically-typed `Column`/`BoolValue`.
 3. **Column consolidation** — today there are two `NumericColumn`s (positional in
    `aot/values.mojo`, name-resolved in `aot/relations.mojo`). Keep the
@@ -157,14 +157,14 @@ is optional if `values.mojo` grows too large.
    | variant | `__TEXT` | note |
    |---|---:|---|
    | pure streaming (pull morsels, no materialize) | 294,912 B | the fat-node design's true cost: +65 KB over single-shot for the pull machinery + `slice`; **no `Planner`** |
-   | `query_streaming` (`collect()`, general `concat`) | 835,584 B | `AnyBuilder(dtype)`'s open all-dtype switch |
+   | `query_streaming` (`collect()`, general `concat`) | 835,584 B | `DynBuilder(dtype)`'s open all-dtype switch |
    | `query_streaming` (`collect()`, local flat `concat`) | 425,984 B | bounded: flat typed builders only |
    | `query_runtime` (Planner executor) | 7,651,328 B | for reference |
 
    **The streaming design itself is size-safe** (~295 KB, no `Planner`, fusion
    intact). The `collect()` cost is materialization-only (pure morsel consumers
    never hit it). Root cause, corrected after measuring: the general
-   `marrow.kernels.concat` routes through `AnyBuilder(dtype)` — an open switch
+   `marrow.kernels.concat` routes through `DynBuilder(dtype)` — an open switch
    over *every* dtype (incl. nested list/struct) that is **never DCE'd** even
    for a provably-`int64` direct call (163 KB with the fallback replaced by a
    `raise`, vs 754 KB with it) because nested types genuinely need it. So
@@ -176,7 +176,7 @@ is optional if `values.mojo` grows too large.
    residual ~131 KB over pure streaming is the flat typed builders: through the
    `pull` trampoline the collected column dtypes are **opaque**, so all flat
    builders link (bounded), not just the two used — inherent to type-erased
-   streaming materialization, not the nested `AnyBuilder` explosion. Remaining
+   streaming materialization, not the nested `DynBuilder` explosion. Remaining
    Phase-2 work: `Scan`/`Filter`/`Project` are folded; `Aggregate`/`Join` and
    the `DynValue` plan-manipulation API still to port.
 3. **Physically consolidate** into `marrow/expr/`, do the renames

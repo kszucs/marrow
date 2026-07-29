@@ -7,7 +7,7 @@ from std.testing import assert_true, assert_false
 from ... import dtypes as dt
 from ...dtypes import int64, Int64Type, Field
 from ...schema import Schema
-from ...scalars import AnyScalar, Int64Scalar
+from ...scalars import DynScalar, Int64Scalar
 from ...expr.pruning import PruneStats
 from ...expr.values import AnyValue
 from ...expr.dynamic import col, lit
@@ -24,12 +24,12 @@ def _stats(xmin: Int, xmax: Int, ymin: Int, ymax: Int) raises -> PruneStats:
     var fields = List[Field]()
     fields.append(Field("x", int64))
     fields.append(Field("y", int64))
-    var mins = List[Optional[AnyScalar]]()
-    var maxs = List[Optional[AnyScalar]]()
-    mins.append(Optional[AnyScalar](Int64Scalar(Int64(xmin))))
-    maxs.append(Optional[AnyScalar](Int64Scalar(Int64(xmax))))
-    mins.append(Optional[AnyScalar](Int64Scalar(Int64(ymin))))
-    maxs.append(Optional[AnyScalar](Int64Scalar(Int64(ymax))))
+    var mins = List[Optional[DynScalar]]()
+    var maxs = List[Optional[DynScalar]]()
+    mins.append(Optional[DynScalar](Int64Scalar(Int64(xmin))))
+    maxs.append(Optional[DynScalar](Int64Scalar(Int64(xmax))))
+    mins.append(Optional[DynScalar](Int64Scalar(Int64(ymin))))
+    maxs.append(Optional[DynScalar](Int64Scalar(Int64(ymax))))
     return PruneStats(Schema(fields=fields^), mins^, maxs^)
 
 
@@ -98,8 +98,8 @@ def test_unknown_stats_keeps() raises:
     # a column with no stats (None bounds) must never be pruned
     var fields = List[Field]()
     fields.append(Field("x", int64))
-    var mins = List[Optional[AnyScalar]]()
-    var maxs = List[Optional[AnyScalar]]()
+    var mins = List[Optional[DynScalar]]()
+    var maxs = List[Optional[DynScalar]]()
     mins.append(None)
     maxs.append(None)
     var stats = PruneStats(Schema(fields=fields^), mins^, maxs^)

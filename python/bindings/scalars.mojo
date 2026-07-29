@@ -1,6 +1,6 @@
 """Python bindings for Arrow scalars.
 
-Exposes AnyScalar as a Python type ``Scalar`` with rich comparison,
+Exposes DynScalar as a Python type ``Scalar`` with rich comparison,
 ``as_py()``, ``is_valid()``, ``type()``, ``__str__``, ``__repr__``, and
 ``__bool__`` support.
 
@@ -11,19 +11,19 @@ References:
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
-from marrow.scalars import AnyScalar
-from marrow.arrays import AnyArray
-from marrow.dtypes import AnyDataType
+from marrow.scalars import DynScalar
+from marrow.arrays import DynArray
+from marrow.dtypes import DynType
 from helpers import pymethod
 
 
 # ---------------------------------------------------------------------------
-# Helper: extract native Python value from an AnyScalar
+# Helper: extract native Python value from an DynScalar
 # ---------------------------------------------------------------------------
 
 
-def _as_py(scalar: AnyScalar) raises -> PythonObject:
-    """Convert a Mojo AnyScalar to a native Python value (int, float, bool, str, None).
+def _as_py(scalar: DynScalar) raises -> PythonObject:
+    """Convert a Mojo DynScalar to a native Python value (int, float, bool, str, None).
     """
     if scalar.is_null():
         return PythonObject(None)
@@ -80,24 +80,24 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
 
 
 def _scalar_as_py(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[AnyScalar]()
+    var ptr = py_self.downcast_value_ptr[DynScalar]()
     return _as_py(ptr[])
 
 
 def _scalar_str(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[AnyScalar]()
+    var ptr = py_self.downcast_value_ptr[DynScalar]()
     return PythonObject(String(ptr[]))
 
 
 def _scalar_repr(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[AnyScalar]()
+    var ptr = py_self.downcast_value_ptr[DynScalar]()
     if ptr[].is_null():
         return PythonObject("<marrow.Scalar: null>")
     return PythonObject("<marrow.Scalar: " + String.write(ptr[]) + ">")
 
 
 def _scalar_bool(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[AnyScalar]()
+    var ptr = py_self.downcast_value_ptr[DynScalar]()
     """Support bool(scalar) — needed for truthiness checks like ``assert arr[0]``.
     """
     var py_val = _as_py(ptr[])
@@ -110,7 +110,7 @@ def _scalar_bool(py_self: PythonObject) raises -> PythonObject:
 
 
 # def _scalar_rich_compare(
-#     first: AnyScalar,
+#     first: DynScalar,
 #     second: PythonObject,
 #     op: Int,
 # ) raises -> Bool:
@@ -138,15 +138,15 @@ def _scalar_bool(py_self: PythonObject) raises -> PythonObject:
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Register the Scalar Python type."""
-    ref scalar_py = mb.add_type[AnyScalar]("Scalar")
+    ref scalar_py = mb.add_type[DynScalar]("Scalar")
     _ = (
         scalar_py.def_method[_scalar_as_py]("as_py")
-        .def_method[pymethod[AnyScalar.is_valid]()]("is_valid")
-        .def_method[pymethod[AnyScalar.is_null]()]("is_null")
-        .def_method[pymethod[AnyScalar.type]()]("type")
+        .def_method[pymethod[DynScalar.is_valid]()]("is_valid")
+        .def_method[pymethod[DynScalar.is_null]()]("is_null")
+        .def_method[pymethod[DynScalar.type]()]("type")
         .def_method[_scalar_str]("__str__")
         .def_method[_scalar_repr]("__repr__")
         .def_method[_scalar_bool]("__bool__")
     )
-    # var scalar_tp = TypeProtocolBuilder[AnyScalar](scalar_py)
+    # var scalar_tp = TypeProtocolBuilder[DynScalar](scalar_py)
     # _ = scalar_tp.def_richcompare[_scalar_rich_compare]()

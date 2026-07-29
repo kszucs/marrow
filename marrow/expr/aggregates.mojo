@@ -34,19 +34,19 @@ Two ways in, one destination:
 - **dynamic** — ``aggs.append("sum", value_dtype)``, which goes through
   ``marrow.expr.dynamic.resolve_agg``: one string comparison per aggregate, once,
   when the plan is built. The Python ``group_by(...).aggregate([...])`` binding
-  and ``AnyRelation.aggregate(...)`` start here.
+  and ``DynRelation.aggregate(...)`` start here.
 
 The fused path is the dynamic one with the resolution removed — never a second
 implementation.
 """
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     StructArray,
     Int32Array,
     Int64Array,
 )
-from ..dtypes import AnyDataType, Field
+from ..dtypes import DynType, Field
 from ..schema import Schema
 from ..tabular import RecordBatch
 from ..dtypes import NumericType, StringLikeType, TemporalType
@@ -89,7 +89,7 @@ struct NumericFold[K: AggKernel](AggFunction):
     @staticmethod
     def resolve[
         job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
+    ](value_dtype: DynType) raises:
         if not value_dtype.is_numeric():
             raise Error(
                 "aggregate '",
@@ -116,7 +116,7 @@ struct OrderPreserving[Op: MinMaxOp](AggFunction):
     @staticmethod
     def resolve[
         job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
+    ](value_dtype: DynType) raises:
         if value_dtype.is_numeric():
 
             @parameter
@@ -157,7 +157,7 @@ struct CountValid(AggFunction):
     @staticmethod
     def resolve[
         job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
+    ](value_dtype: DynType) raises:
         if value_dtype.is_numeric():
 
             @parameter
@@ -177,7 +177,7 @@ struct DistinctCount[exact: Bool](AggFunction):
     @staticmethod
     def resolve[
         job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
+    ](value_dtype: DynType) raises:
         job[DistinctAgg[Self.exact]]()
 
 
@@ -193,7 +193,7 @@ comptime ApproxCountDistinct = DistinctCount[False]
 
 def resolve_agg[
     job: def[A: Aggregation]() raises capturing[_] -> None
-](name: String, value_dtype: AnyDataType) raises:
+](name: String, value_dtype: DynType) raises:
     """Resolve an aggregate function *name* over a ``value_dtype`` column to the
     ``Aggregation`` that implements it, and run ``job[A]``.
 
@@ -260,7 +260,7 @@ struct AggFunc(Copyable, Movable, Writable):
     dispatches on it: the one place a name becomes a type is ``resolve_agg``,
     and everything an aggregate can do comes out of that single resolution."""
 
-    var out_dtype: AnyDataType
+    var out_dtype: DynType
     """This aggregate's output dtype over the column it was resolved against."""
 
     var is_mergeable: Bool
@@ -270,23 +270,23 @@ struct AggFunc(Copyable, Movable, Writable):
     column) are dedicated per-group passes rather than the ``AggState`` fold the
     merge understands."""
 
-    var _grouped_fn: def(Int32Array, AnyArray, Int) thin raises -> AnyArray
+    var _grouped_fn: def(Int32Array, DynArray, Int) thin raises -> DynArray
 
     @staticmethod
     def _grouped[
         A: Aggregation
-    ](gids: Int32Array, value: AnyArray, num_groups: Int) raises -> AnyArray:
+    ](gids: Int32Array, value: DynArray, num_groups: Int) raises -> DynArray:
         """The erasure boundary: a typed column in, a typed column out, widened
-        back to ``AnyArray`` only for the caller's heterogeneous column list."""
-        return A.grouped(gids, A.from_any(value), num_groups).to_any()
+        back to ``DynArray`` only for the caller's heterogeneous column list."""
+        return A.grouped(gids, A.from_any(value), num_groups).to_dyn()
 
     def __init__(
         out self,
         *,
         var func_name: String,
-        var out_dtype: AnyDataType,
+        var out_dtype: DynType,
         is_mergeable: Bool,
-        grouped_fn: def(Int32Array, AnyArray, Int) thin raises -> AnyArray,
+        grouped_fn: def(Int32Array, DynArray, Int) thin raises -> DynArray,
     ):
         self.name = func_name^
         self.out_dtype = out_dtype^
@@ -294,7 +294,7 @@ struct AggFunc(Copyable, Movable, Writable):
         self._grouped_fn = grouped_fn
 
     @staticmethod
-    def of[A: Aggregation](value_dtype: AnyDataType) raises -> AggFunc:
+    def of[A: Aggregation](value_dtype: DynType) raises -> AggFunc:
         """The fused (AOT) form: the aggregation is named directly, so nothing
         is resolved at run time and every other instantiation is dead code."""
         return AggFunc(
@@ -304,7 +304,7 @@ struct AggFunc(Copyable, Movable, Writable):
             grouped_fn=Self._grouped[A],
         )
 
-    def __init__(out self, name: String, value_dtype: AnyDataType) raises:
+    def __init__(out self, name: String, value_dtype: DynType) raises:
         """The dynamic form: resolve a function *name* over a column dtype
         (``marrow.expr.dynamic.resolve_agg`` — the one string comparison)."""
         var box = List[AggFunc]()
@@ -317,8 +317,8 @@ struct AggFunc(Copyable, Movable, Writable):
         self = box[0].copy()
 
     def grouped(
-        self, gids: Int32Array, value: AnyArray, num_groups: Int
-    ) raises -> AnyArray:
+        self, gids: Int32Array, value: DynArray, num_groups: Int
+    ) raises -> DynArray:
         """One aggregate column over precomputed group ids."""
         return self._grouped_fn(gids, value, num_groups)
 
@@ -340,53 +340,53 @@ struct AggFold(Copyable, Movable):
     ``FoldedAggregates.append`` gets this and its ``AggFunc`` out of the same
     single resolution."""
 
-    var _whole_fn: def(AnyArray, Int) thin raises -> AnyArray
-    var _partials_fn: def(Int32Array, AnyArray, Int) thin raises -> Tuple[
-        AnyArray, Int64Array
+    var _whole_fn: def(DynArray, Int) thin raises -> DynArray
+    var _partials_fn: def(Int32Array, DynArray, Int) thin raises -> Tuple[
+        DynArray, Int64Array
     ]
     var _merge_fn: def(
-        List[Int32Array], List[AnyArray], List[Int64Array], Int
-    ) thin raises -> AnyArray
+        List[Int32Array], List[DynArray], List[Int64Array], Int
+    ) thin raises -> DynArray
 
     @staticmethod
     def _whole[
         A: Aggregation
-    ](value: AnyArray, num_threads: Int) raises -> AnyArray:
-        return A.whole(A.from_any(value), num_threads).to_any()
+    ](value: DynArray, num_threads: Int) raises -> DynArray:
+        return A.whole(A.from_any(value), num_threads).to_dyn()
 
     @staticmethod
     def _partials[
         A: Aggregation
-    ](gids: Int32Array, value: AnyArray, num_groups: Int) raises -> Tuple[
-        AnyArray, Int64Array
+    ](gids: Int32Array, value: DynArray, num_groups: Int) raises -> Tuple[
+        DynArray, Int64Array
     ]:
         var parts = A.partials(gids, A.from_any(value), num_groups)
-        return (parts[0].copy().to_any(), parts[1].copy())
+        return (parts[0].copy().to_dyn(), parts[1].copy())
 
     @staticmethod
     def _merge[
         A: Aggregation
     ](
         remap: List[Int32Array],
-        accs: List[AnyArray],
+        accs: List[DynArray],
         cnts: List[Int64Array],
         num_groups: Int,
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         var typed = List[A.OutArray]()
         for t in range(len(accs)):
             typed.append(A.OutArray(accs[t].to_data()))
-        return A.merge(remap, typed, cnts, num_groups).to_any()
+        return A.merge(remap, typed, cnts, num_groups).to_dyn()
 
     def __init__(
         out self,
         *,
-        whole_fn: def(AnyArray, Int) thin raises -> AnyArray,
-        partials_fn: def(Int32Array, AnyArray, Int) thin raises -> Tuple[
-            AnyArray, Int64Array
+        whole_fn: def(DynArray, Int) thin raises -> DynArray,
+        partials_fn: def(Int32Array, DynArray, Int) thin raises -> Tuple[
+            DynArray, Int64Array
         ],
         merge_fn: def(
-            List[Int32Array], List[AnyArray], List[Int64Array], Int
-        ) thin raises -> AnyArray,
+            List[Int32Array], List[DynArray], List[Int64Array], Int
+        ) thin raises -> DynArray,
     ):
         self._whole_fn = whole_fn
         self._partials_fn = partials_fn
@@ -400,13 +400,13 @@ struct AggFold(Copyable, Movable):
             merge_fn=Self._merge[A],
         )
 
-    def whole(self, value: AnyArray, num_threads: Int = 0) raises -> AnyArray:
+    def whole(self, value: DynArray, num_threads: Int = 0) raises -> DynArray:
         """The whole-table aggregate as a one-row column."""
         return self._whole_fn(value, num_threads)
 
     def partials(
-        self, gids: Int32Array, value: AnyArray, num_groups: Int
-    ) raises -> Tuple[AnyArray, Int64Array]:
+        self, gids: Int32Array, value: DynArray, num_groups: Int
+    ) raises -> Tuple[DynArray, Int64Array]:
         """A thread-local partial fold: raw per-group accumulator + valid counts.
         """
         return self._partials_fn(gids, value, num_groups)
@@ -414,10 +414,10 @@ struct AggFold(Copyable, Movable):
     def merge(
         self,
         remap: List[Int32Array],
-        accs: List[AnyArray],
+        accs: List[DynArray],
         cnts: List[Int64Array],
         num_groups: Int,
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Fold every thread's partials at remapped group ids and finalize."""
         return self._merge_fn(remap, accs, cnts, num_groups)
 
@@ -447,13 +447,13 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
     def __len__(self) -> Int:
         return len(self._funcs)
 
-    def append[A: Aggregation](mut self, value_dtype: AnyDataType) raises:
+    def append[A: Aggregation](mut self, value_dtype: DynType) raises:
         """Add aggregation ``A`` over a ``value_dtype`` column (AOT — the
         aggregation is named, so there is nothing to resolve)."""
         self._funcs.append(AggFunc.of[A](value_dtype))
         self._folds.append(AggFold.of[A]())
 
-    def append(mut self, name: String, value_dtype: AnyDataType) raises:
+    def append(mut self, name: String, value_dtype: DynType) raises:
         """Add the aggregate ``name`` over a ``value_dtype`` column — the one
         name→type step, producing both boxes from the same ``Aggregation``."""
         var funcs = List[AggFunc]()
@@ -489,29 +489,29 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         return True
 
     def grouped(
-        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
-    ) raises -> AnyArray:
+        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+    ) raises -> DynArray:
         return self._funcs[column].grouped(gids, values, num_groups)
 
     def partials(
-        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
-    ) raises -> Tuple[AnyArray, Int64Array]:
+        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+    ) raises -> Tuple[DynArray, Int64Array]:
         return self._folds[column].partials(gids, values, num_groups)
 
     def merge(
         self,
         column: Int,
         remap: List[Int32Array],
-        accs: List[AnyArray],
+        accs: List[DynArray],
         cnts: List[Int64Array],
         num_groups: Int,
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         return self._folds[column].merge(remap, accs, cnts, num_groups)
 
     # -- the drivers --------------------------------------------------------
 
     def grouped(
-        self, gb: GroupBy, values: List[AnyArray]
+        self, gb: GroupBy, values: List[DynArray]
     ) raises -> RecordBatch:
         """Apply every aggregate over one grouping of ``gb``'s keys.
 
@@ -523,7 +523,7 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         return self._named(gb.aggregate_all(self, values), gb.keys())
 
     def whole(
-        self, values: List[AnyArray], num_threads: Int = 0
+        self, values: List[DynArray], num_threads: Int = 0
     ) raises -> RecordBatch:
         """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
 
@@ -535,7 +535,7 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         if len(values) != len(self._funcs):
             raise Error("aggregate: one value column per aggregate is required")
         var out_fields = List[Field]()
-        var out_cols = List[AnyArray]()
+        var out_cols = List[DynArray]()
         for j in range(len(self._funcs)):
             var col = self._folds[j].whole(values[j], num_threads)
             out_fields.append(Field(self._funcs[j].name, col.dtype().copy()))
@@ -550,7 +550,7 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         from the keys struct and the aggregate names from this set."""
         ref kstruct = keys.dtype.as_struct()
         var fields = List[Field]()
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for k in range(len(grouped.keys)):
             fields.append(kstruct.fields[k].copy())
             cols.append(grouped.keys[k].copy())

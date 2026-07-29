@@ -18,7 +18,7 @@ where competitor runtimes (DuckDB/Polars) can be run at full parallelism.
 
 from std.benchmark import BenchMetric, keep
 
-from ...arrays import PrimitiveArray, AnyArray, StructArray
+from ...arrays import PrimitiveArray, DynArray, StructArray
 from ...builders import PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, Int64Type, struct_, Field
 from ...kernels.join import JOIN_INNER, JOIN_ALL
@@ -43,9 +43,9 @@ def _make_struct(n: Int, key_stride: Int = 1) raises -> StructArray:
     for i in range(n):
         kb.append(Scalar[int64.native](i * key_stride))
         vb.append(Scalar[int64.native](i * 10))
-    var cols = List[AnyArray]()
-    cols.append(kb.finish().to_any())
-    cols.append(vb.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
     return StructArray(
         dtype=struct_(Field("k", int64), Field("v", int64)),
         length=n,

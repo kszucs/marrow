@@ -17,7 +17,7 @@ from std.sys import size_of
 from std.sys.info import num_physical_cores
 from std.memory import unsafe_memcpy
 
-from ..arrays import AnyArray, ArrayData
+from ..arrays import DynArray, ArrayData
 from ..buffers import Buffer, Bitmap
 from ..builders import (
     BinaryLikeBuilder,
@@ -27,7 +27,7 @@ from ..builders import (
 )
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
-from ..scalars import AnyScalar
+from ..scalars import DynScalar
 from .. import dtypes as dt
 from ..dtypes import (
     BinaryLikeType,
@@ -414,9 +414,9 @@ def _finish_primitive(
     var bitmap: Bitmap[mut=True],
     wpos: Int,
     null_count: Int,
-    var dtype: dt.AnyDataType,
-) raises -> AnyArray:
-    """Freeze a fixed-width builder's storage into an `AnyArray` — the shared
+    var dtype: dt.DynType,
+) raises -> DynArray:
+    """Freeze a fixed-width builder's storage into an `DynArray` — the shared
     tail of every primitive-backed leaf (numeric, temporal, decimal): one values
     buffer, a validity bitmap only when a null occurred, length `wpos`."""
     var buffers = List[Buffer[mut=False]]()
@@ -424,7 +424,7 @@ def _finish_primitive(
     var bm: Optional[Bitmap[mut=False]] = None
     if null_count > 0:
         bm = bitmap^.to_immutable(length=wpos)
-    return AnyArray.from_data(
+    return DynArray.from_data(
         ArrayData(
             dtype=dtype^,
             length=wpos,
@@ -454,7 +454,7 @@ def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
     )
 
 
-def _retag(var arr: AnyArray, var dtype: dt.AnyDataType) raises -> AnyArray:
+def _retag(var arr: DynArray, var dtype: dt.DynType) raises -> DynArray:
     """Reinterpret `arr`'s buffers under a logical `dtype` of the same layout.
     Used to give a leveled temporal column its Arrow type (the growing builder
     produces the int32/int64 storage type)."""
@@ -473,7 +473,7 @@ trait LeafBuilder(ImplicitlyDeletable, Movable):
         """
         ...
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         ...
 
 
@@ -490,7 +490,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
 
     comptime SAME = Self.store_dt == Self.phys_dt
 
-    var dtype: dt.AnyDataType
+    var dtype: dt.DynType
     var max_def: Int
     var num_rows: Int
     var values: Buffer[mut=True]
@@ -612,7 +612,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         )
         self._scatter(page, present.unsafe_ptr(), mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         return _finish_primitive(
             self.values^,
             self.bitmap^,
@@ -726,9 +726,9 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
             )
             self._scatter_values(page, values, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         var b = self.builder^
-        var out: AnyArray = b.finish()
+        var out: DynArray = b.finish()
         return out^
 
 
@@ -772,7 +772,7 @@ struct _FixedWidthAcc[native: DType](Movable):
         self.null_count += 1
         self.wpos += 1
 
-    def finish(deinit self, var dtype: dt.AnyDataType) raises -> AnyArray:
+    def finish(deinit self, var dtype: dt.DynType) raises -> DynArray:
         return _finish_primitive(
             self.values^, self.bitmap^, self.wpos, self.null_count, dtype^
         )
@@ -788,7 +788,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
 
     comptime FULL = size_of[Scalar[Self.native]]()
 
-    var dtype: dt.AnyDataType
+    var dtype: dt.DynType
     var max_def: Int
     var width: Int
     var acc: _FixedWidthAcc[Self.native]
@@ -851,7 +851,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         self._place(page, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         return self.acc^.finish(self.dtype^)
 
 
@@ -861,7 +861,7 @@ struct Int96LeafBuilder(LeafBuilder):
     decoding each fixed-width value with `_int96_nanos` instead of big-endian.
     """
 
-    var dtype: dt.AnyDataType  # timestamp(ns)
+    var dtype: dt.DynType  # timestamp(ns)
     var max_def: Int
     var acc: _FixedWidthAcc[DType.int64]
     var dict: List[Int64]
@@ -905,7 +905,7 @@ struct Int96LeafBuilder(LeafBuilder):
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         self._place(page, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         return self.acc^.finish(self.dtype^)
 
 
@@ -970,9 +970,9 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         self._place(page, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         var b = self.builder^
-        var out: AnyArray = b.finish()
+        var out: DynArray = b.finish()
         return out^
 
 
@@ -1048,9 +1048,9 @@ struct BoolLeafBuilder(LeafBuilder):
                 mask.copy(),
             )
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         var b = self.builder^
-        var out: AnyArray = b.finish()
+        var out: DynArray = b.finish()
         return out^
 
 
@@ -1306,11 +1306,11 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
 
     def _build[
         B: LeafBuilder
-    ](mut self, var builder: B, mut codecs: CompressionLibs) raises -> AnyArray:
+    ](mut self, var builder: B, mut codecs: CompressionLibs) raises -> DynArray:
         self._run(builder, codecs)
         return builder^.finish()
 
-    def _flat_leaf(mut self, var arr: AnyArray) raises -> DecodedLeaf:
+    def _flat_leaf(mut self, var arr: DynArray) raises -> DecodedLeaf:
         """Wrap a flat-path array with the carry-def levels accumulated during
         the build (empty unless the leaf is under a nullable struct)."""
         var defs = self.def_out^
@@ -1371,7 +1371,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         mut codecs: CompressionLibs,
         floor: Int,
         max_def: Int,
-        var retag_to: Optional[dt.AnyDataType] = None,
+        var retag_to: Optional[dt.DynType] = None,
     ) raises -> DecodedLeaf:
         """Leveled primitive decode. `retag_to`, when set, reinterprets the
         int32/int64 storage array under a temporal Arrow type (the leaf's dtype).
@@ -1406,7 +1406,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         self._drive_leveled[
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
-        var arr: AnyArray = builder.finish()
+        var arr: DynArray = builder.finish()
         if retag_to:
             arr = _retag(arr^, retag_to.take())
         return DecodedLeaf(arr^, rep_out^, def_out^)
@@ -1750,7 +1750,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         self._drive_leveled[
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
-        var arr: AnyArray = builder.finish()
+        var arr: DynArray = builder.finish()
         return DecodedLeaf(
             _retag(arr^, self.pages.leaf.dtype.copy()), rep_out^, def_out^
         )
@@ -2151,7 +2151,7 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
             var decoded = List[DecodedLeaf]()
             for ci in range(num_leaves):
                 decoded.append(grid[i * num_leaves + ci].take())
-            var cols = List[AnyArray]()
+            var cols = List[DynArray]()
             for ref node in plan.nodes:
                 cols.append(node.assemble(decoded))
             batches.append(
@@ -2256,8 +2256,8 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
                             oi.page_locations[p + 1].first_row_index if p + 1
                             < np else rg.num_rows
                         )
-                        var mn: Optional[AnyScalar] = None
-                        var mx: Optional[AnyScalar] = None
+                        var mn: Optional[DynScalar] = None
+                        var mx: Optional[DynScalar] = None
                         # an all-null page (or a missing bound) prunes nothing
                         if not (p < len(cix.null_pages) and cix.null_pages[p]):
                             if p < len(cix.min_values):
@@ -2413,14 +2413,14 @@ struct PageBounds(Copyable, Movable):
     (each `None` when the page is all-null or carried no bound)."""
 
     var num_rows: Int
-    var min: Optional[AnyScalar]
-    var max: Optional[AnyScalar]
+    var min: Optional[DynScalar]
+    var max: Optional[DynScalar]
 
     def __init__(
         out self,
         num_rows: Int,
-        var min: Optional[AnyScalar],
-        var max: Optional[AnyScalar],
+        var min: Optional[DynScalar],
+        var max: Optional[DynScalar],
     ):
         self.num_rows = num_rows
         self.min = min^
@@ -2433,8 +2433,8 @@ struct ColumnStatistics(Copyable, Movable):
     usable bound, so absence is in the type rather than a separate flag)."""
 
     var null_count: Int
-    var min: Optional[AnyScalar]
-    var max: Optional[AnyScalar]
+    var min: Optional[DynScalar]
+    var max: Optional[DynScalar]
 
     def __init__(out self):
         self.null_count = -1
@@ -2442,7 +2442,7 @@ struct ColumnStatistics(Copyable, Movable):
         self.max = None
 
     @staticmethod
-    def from_metadata(dtype: dt.AnyDataType, cm: ColumnMetaData) raises -> Self:
+    def from_metadata(dtype: dt.DynType, cm: ColumnMetaData) raises -> Self:
         """Decode a column chunk's `ColumnMetaData` statistics: `null_count` plus
         the min/max bounds as typed scalars (kept only when both decode)."""
         var cs = Self()

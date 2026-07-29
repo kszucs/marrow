@@ -16,7 +16,7 @@ nodes (static) implement `prune(stats)`, so either kind of expression can be
 evaluated against the index.
 """
 
-from ..scalars import AnyScalar
+from ..scalars import DynScalar
 from ..schema import Schema
 from ..utils import variant_dispatch_raises
 from .. import dtypes as dt
@@ -27,14 +27,14 @@ struct PruneBound(Copyable, Movable):
     `[lo, hi]` (`None` bound = unknown); boolean predicates fill `maybe_true`.
     """
 
-    var lo: Optional[AnyScalar]
-    var hi: Optional[AnyScalar]
+    var lo: Optional[DynScalar]
+    var hi: Optional[DynScalar]
     var maybe_true: Bool
 
     def __init__(
         out self,
-        var lo: Optional[AnyScalar],
-        var hi: Optional[AnyScalar],
+        var lo: Optional[DynScalar],
+        var hi: Optional[DynScalar],
         maybe_true: Bool,
     ):
         self.lo = lo^
@@ -48,7 +48,7 @@ struct PruneBound(Copyable, Movable):
 
     @staticmethod
     def interval(
-        var lo: Optional[AnyScalar], var hi: Optional[AnyScalar]
+        var lo: Optional[DynScalar], var hi: Optional[DynScalar]
     ) -> Self:
         return Self(lo^, hi^, True)
 
@@ -85,7 +85,7 @@ struct PruneBound(Copyable, Movable):
 
     @staticmethod
     def _cmp_bounds(
-        a: Optional[AnyScalar], b: Optional[AnyScalar]
+        a: Optional[DynScalar], b: Optional[DynScalar]
     ) raises -> Optional[Int]:
         """Three-way compare two interval bounds, or None when either is unknown
         (missing) or incomparable — callers treat None as "maybe", staying
@@ -99,11 +99,11 @@ struct PruneBound(Copyable, Movable):
         return -1 if x < y else (1 if x > y else 0)
 
     @staticmethod
-    def _cmp_scalar(a: AnyScalar, b: AnyScalar) raises -> Optional[Int]:
+    def _cmp_scalar(a: DynScalar, b: DynScalar) raises -> Optional[Int]:
         """Three-way compare two valid scalars of the same type; None if either
         is null, the types differ, or the type is not orderable here.
 
-        The numeric arm reuses ``AnyDataType.dispatch_numeric`` — the same
+        The numeric arm reuses ``DynType.dispatch_numeric`` — the same
         runtime-dtype → comptime-``NumericType`` selector the cast/compare
         kernels use — so the per-dtype comparison is written once here instead
         of a hand-rolled 11-way switch."""
@@ -140,14 +140,14 @@ struct PruneStats(Copyable, Movable):
     means the column has no usable statistic (treated as unknown)."""
 
     var schema: Schema
-    var mins: List[Optional[AnyScalar]]
-    var maxs: List[Optional[AnyScalar]]
+    var mins: List[Optional[DynScalar]]
+    var maxs: List[Optional[DynScalar]]
 
     def __init__(
         out self,
         var schema: Schema,
-        var mins: List[Optional[AnyScalar]],
-        var maxs: List[Optional[AnyScalar]],
+        var mins: List[Optional[DynScalar]],
+        var maxs: List[Optional[DynScalar]],
     ):
         self.schema = schema^
         self.mins = mins^
@@ -155,12 +155,12 @@ struct PruneStats(Copyable, Movable):
 
     def by_index(
         self, i: Int
-    ) -> Tuple[Optional[AnyScalar], Optional[AnyScalar]]:
+    ) -> Tuple[Optional[DynScalar], Optional[DynScalar]]:
         if i < 0 or i >= len(self.mins):
             return (None, None)
         return (self.mins[i].copy(), self.maxs[i].copy())
 
     def by_name(
         self, name: String
-    ) raises -> Tuple[Optional[AnyScalar], Optional[AnyScalar]]:
+    ) raises -> Tuple[Optional[DynScalar], Optional[DynScalar]]:
         return self.by_index(self.schema.get_field_index(name))

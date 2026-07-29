@@ -87,7 +87,7 @@ A single array struct replaces both `PrimitiveArray` and `TemporalArray`:
 
 ```mojo
 struct PrimitiveArray[T: PrimitiveType]:
-    var dtype: AnyDataType          # full logical type at runtime
+    var dtype: DynType          # full logical type at runtime
     var length: Int
     var nulls: Int
     var offset: Int
@@ -98,7 +98,7 @@ struct PrimitiveArray[T: PrimitiveType]:
 The `dtype` field is the key addition:
 
 - For `NumericType` arrays it is always derivable from `T` (e.g. `Int32Type` →
-  `AnyDataType(Int32Type())`), so it is slightly redundant but keeps the struct
+  `DynType(Int32Type())`), so it is slightly redundant but keeps the struct
   uniform.
 - For `TemporalType` arrays it carries the time unit and timezone.
 - For `DecimalType` arrays it carries precision and scale.
@@ -180,7 +180,7 @@ def add[T: DecimalType](
     var result_scale     = max(s1, s2)
     var result_precision = max(left_type.precision()  - s1,
                                right_type.precision() - s2) + result_scale + 1
-    var result_dtype = AnyDataType(decimal128(result_precision, result_scale))
+    var result_dtype = DynType(decimal128(result_precision, result_scale))
     # scalar loop: promote each pair to wider type, align, add, check overflow
     ...
     return PrimitiveArray[T](dtype=result_dtype^, ...)
@@ -209,7 +209,7 @@ is needed (matching Arrow Rust's `i256 { low: UInt128, high: Int128 }`).
 
 - `TemporalArray[T]` is removed. Rename to `PrimitiveArray[T]` throughout. Type aliases
   (`TimestampArray` etc.) preserve the public names.
-- `AnyArray.VariantType` gains decimal entries; `as_decimal32()`, `as_decimal64()`,
+- `DynArray.VariantType` gains decimal entries; `as_decimal32()`, `as_decimal64()`,
   `as_decimal128()`, `as_decimal256()` shorthand accessors are added alongside the
   existing temporal shorthands.
 - `binary_array_dispatch` gains a decimal branch that routes to decimal-specific

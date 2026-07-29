@@ -16,7 +16,7 @@ from std.algorithm.backend.vectorize import vectorize
 from std.utils.index import IndexList
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     ListLikeArray,
     Int32Array,
     BoolArray,
@@ -75,11 +75,11 @@ struct ArrayLengthKernel:
         )
 
     @staticmethod
-    def dispatch(array: AnyArray) raises -> AnyArray:
+    def dispatch(array: DynArray) raises -> DynArray:
         if array.dtype().is_list():
-            return Self.apply(array.as_list()).to_any()
+            return Self.apply(array.as_list()).to_dyn()
         elif array.dtype().is_large_list():
-            return Self.apply(array.as_large_list()).to_any()
+            return Self.apply(array.as_large_list()).to_dyn()
         else:
             raise Error(
                 t"array_length: expected a list array, got {array.dtype()}"
@@ -138,20 +138,20 @@ struct ArrayContainsKernel:
 
     @staticmethod
     def dispatch(
-        list: AnyArray,
-        elem: AnyArray,
+        list: DynArray,
+        elem: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         @parameter
-        def leaf[V: NumericType](d: V) raises -> AnyArray:
+        def leaf[V: NumericType](d: V) raises -> DynArray:
             if list.dtype().is_list():
                 return Self.apply(
                     list.as_list(), elem.as_primitive[V](), ctx
-                ).to_any()
+                ).to_dyn()
             elif list.dtype().is_large_list():
                 return Self.apply(
                     list.as_large_list(), elem.as_primitive[V](), ctx
-                ).to_any()
+                ).to_dyn()
             else:
                 raise Error(
                     t"array_contains: expected a list array, got {list.dtype()}"

@@ -35,10 +35,10 @@ YEAR/MONTH/DAY/HOUR/MINUTE/SECOND/DAY_OF_WEEK/QUARTER/DAY_OF_YEAR - Temporal
   field extraction (kernels.temporal); DATE_TRUNC - floor to a unit boundary
 """
 
-from ..arrays import AnyArray, BoolArray
+from ..arrays import DynArray, BoolArray
 from ..builders import StringBuilder
-from ..dtypes import AnyDataType, NumericType
-from ..scalars import AnyScalar, PrimitiveScalar
+from ..dtypes import DynType, NumericType
+from ..scalars import DynScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
@@ -170,7 +170,7 @@ comptime DATE_TRUNC: UInt8 = 41
 # ---------------------------------------------------------------------------
 
 
-def _numeric_rank(t: AnyDataType) -> Int:
+def _numeric_rank(t: DynType) -> Int:
     """Runtime twin of `values._rank`: bit width, with every float outranking
     every integer. The two must stay in step — that they agree is exactly what
     makes the fused and interpreted lanes accept the same operand pairings and
@@ -193,7 +193,7 @@ def _numeric_rank(t: AnyDataType) -> Int:
     return width + (1000 if t.is_floating_point() else 0)
 
 
-def _promote_operands(mut left: AnyArray, mut right: AnyArray) raises:
+def _promote_operands(mut left: DynArray, mut right: DynArray) raises:
     """Widen the narrower of two numeric operands so the kernel sees one dtype.
 
     Only numeric-to-numeric pairs promote; anything else is passed through
@@ -233,11 +233,11 @@ struct DynValue(
     var _tag: UInt8
     var _args: List[DynValue]
     var _kind_data: UInt8
-    var _value: Optional[AnyScalar]
+    var _value: Optional[DynScalar]
     var _name: String
-    var _cast_to: Optional[AnyDataType]
+    var _cast_to: Optional[DynType]
     """Target dtype for a CAST node (None for every other tag)."""
-    var _value_set: Optional[AnyArray]
+    var _value_set: Optional[DynArray]
     """Captured value-set array for an IS_IN node (None for every other tag)."""
 
     def __init__(
@@ -245,10 +245,10 @@ struct DynValue(
         tag: UInt8,
         var args: List[DynValue],
         kind_data: UInt8,
-        var value: Optional[AnyScalar],
+        var value: Optional[DynScalar],
         var name: String,
-        var cast_to: Optional[AnyDataType] = None,
-        var value_set: Optional[AnyArray] = None,
+        var cast_to: Optional[DynType] = None,
+        var value_set: Optional[DynArray] = None,
     ):
         self._tag = tag
         self._args = args^
@@ -294,7 +294,7 @@ struct DynValue(
         else:
             return String()
 
-    def execute(self, batch: RecordBatch) raises -> AnyArray:
+    def execute(self, batch: RecordBatch) raises -> DynArray:
         """Evaluate against *batch*. This is the ``AnyValue``-box entry point the
         fused/streaming relations call per morsel; ``eval`` resolves named
         ``col(...)`` references inline (a per-column schema lookup, no tree copy),
@@ -331,7 +331,7 @@ struct DynValue(
             result._args[i] = self._args[i].resolve_names(schema)
         return result^
 
-    def dtype(self) -> Optional[AnyDataType]:
+    def dtype(self) -> Optional[DynType]:
         if self._tag == LITERAL:
             return self._value.value().type()
         elif self._tag == CAST:
@@ -381,7 +381,7 @@ struct DynValue(
 
     def _compare[
         N: NumericCompareKernel, S: StringPredicateKernel
-    ](self, left: AnyArray, right: AnyArray) raises -> AnyArray:
+    ](self, left: DynArray, right: DynArray) raises -> DynArray:
         """Apply one comparison operator, choosing the kernel family the
         operands belong to.
 
@@ -398,7 +398,7 @@ struct DynValue(
         else:
             return N.dispatch(left, right)
 
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
+    def eval(self, batch: RecordBatch) raises -> DynArray:
         """Evaluate this expression tree against *batch*, dispatching on tag."""
         if self._tag == LOAD:
             # Named LOADs resolve their position by name here (one schema lookup
@@ -517,9 +517,9 @@ struct DynValue(
         elif self._tag == IS_IN:
             return IsInKernel.dispatch(
                 self._args[0].eval(batch), self._value_set.value()
-            ).to_any()
+            ).to_dyn()
         elif self._tag == COALESCE:
-            var arrays = List[AnyArray]()
+            var arrays = List[DynArray]()
             for i in range(len(self._args)):
                 arrays.append(self._args[i].eval(batch))
             return coalesce_kernel(arrays)
@@ -531,13 +531,13 @@ struct DynValue(
             var has_else = Int(self._kind_data)
             var m = (len(self._args) - has_else) // 2
             var conditions = List[BoolArray]()
-            var values = List[AnyArray]()
+            var values = List[DynArray]()
             for k in range(m):
                 conditions.append(
                     self._args[2 * k].eval(batch).as_bool().copy()
                 )
                 values.append(self._args[2 * k + 1].eval(batch))
-            var else_ = Optional[AnyArray](None)
+            var else_ = Optional[DynArray](None)
             if has_else == 1:
                 else_ = self._args[len(self._args) - 1].eval(batch)
             return case_when_kernel(conditions, values, else_^)
@@ -566,7 +566,7 @@ struct DynValue(
         else:
             raise Error("DynValue.eval: unknown expression kind ", self._tag)
 
-    def _pattern_array(self, n: Int) raises -> AnyArray:
+    def _pattern_array(self, n: Int) raises -> DynArray:
         """Broadcast a LIKE/ILIKE pattern (stored in ``_name``) into an ``n``-row
         ``StringArray`` — the string-predicate kernels compare element-wise, so
         the constant pattern is materialised once per morsel here."""
@@ -764,7 +764,7 @@ struct DynValue(
             name=String(),
         )
 
-    def cast(self, to: AnyDataType) -> DynValue:
+    def cast(self, to: DynType) -> DynValue:
         """Build a runtime cast node — ``col("a").cast(float64)``. Evaluated by
         the ``marrow.kernels.cast`` router (numeric/bool/temporal families)."""
         return DynValue(
@@ -863,7 +863,7 @@ struct DynValue(
         )
 
     # --- set membership (kernels.membership) -------------------------------
-    def isin(self, value_set: AnyArray) -> DynValue:
+    def isin(self, value_set: DynArray) -> DynValue:
         """``self IN value_set`` — the value set is captured in the node and
         probed by ``kernels.membership.IsInKernel``."""
         return DynValue(
@@ -931,7 +931,7 @@ struct DynValue(
     # An aggregate is not another `DynValue` tag: it does not produce a value
     # per row, it collapses rows within a group. `col("x").sum()` therefore
     # yields a `DynAgg` — this expression plus the aggregate applied to it —
-    # which `AnyRelation.aggregate` turns into an output column.
+    # which `DynRelation.aggregate` turns into an output column.
 
     def aggregate(self, var func: String) -> DynAgg:
         """Apply the aggregate named ``func`` to this expression. The named
@@ -1028,7 +1028,7 @@ def lit[T: NumericType](value: Scalar[T.native]) raises -> DynValue:
         tag=LITERAL,
         args=List[DynValue](),
         kind_data=0,
-        value=PrimitiveScalar[T](value).to_any(),
+        value=PrimitiveScalar[T](value).to_dyn(),
         name=String(),
     )
 

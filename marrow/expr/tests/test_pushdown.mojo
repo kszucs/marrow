@@ -15,12 +15,12 @@ from std.python import Python
 from std.os import remove
 from ...dtypes import Int64Type, int64, string, field
 from ...schema import Schema, schema
-from ...scalars import AnyScalar
+from ...scalars import DynScalar
 from ...parquet import read_table, ParquetFile, LeafSet
 from ...expr.relations import (
     ParquetScan,
     parquet_scan,
-    AnyRelation,
+    DynRelation,
     Filter,
     RELATION_PARQUET_SCAN,
 )
@@ -86,8 +86,8 @@ def test_row_group_prune_decision() raises:
     var sch = schema([field("x", int64)])
     var keep = List[Bool]()
     for rg in range(len(stats)):
-        var mins = List[Optional[AnyScalar]]()
-        var maxs = List[Optional[AnyScalar]]()
+        var mins = List[Optional[DynScalar]]()
+        var maxs = List[Optional[DynScalar]]()
         mins.append(stats[rg][0].min.copy())
         maxs.append(stats[rg][0].max.copy())
         var ps = PruneStats(Schema(copy=sch), mins^, maxs^)

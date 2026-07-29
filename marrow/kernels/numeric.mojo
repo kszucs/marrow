@@ -1,7 +1,7 @@
 """Element-wise kernels over numeric arrays — arithmetic and comparison.
 
 One module because they are one kind of thing: both are numeric-only, both are
-three-tier, both resolve a runtime dtype through `AnyDataType.dispatch_numeric`.
+three-tier, both resolve a runtime dtype through `DynType.dispatch_numeric`.
 What separates an `AddKernel` from an `LtKernel` is the `core` functor and the
 output layout — values for arithmetic, a bit-packed `BoolArray` for comparison.
 
@@ -18,8 +18,8 @@ Three tiers per operation:
   kernel fusion.
 - **Tier 1 (apply)** — `KernelStruct.apply[T: PrimitiveType]`: allocates an
   output buffer, propagates null bitmaps, dispatches CPU/GPU via `apply()`.
-- **Tier 2 (dispatch)** — `KernelStruct.dispatch(AnyArray)`: runtime-typed entry
-  point; resolves the dtype to the typed `apply` via `AnyDataType.dispatch_numeric`
+- **Tier 2 (dispatch)** — `KernelStruct.dispatch(DynArray)`: runtime-typed entry
+  point; resolves the dtype to the typed `apply` via `DynType.dispatch_numeric`
   / `.dispatch_floating`.
 
 Structural kernels (filter, sort, concat, …) operate on array layout rather than
@@ -36,7 +36,7 @@ every child column agreeing, which is how the hash table verifies key rows.
 
 import std.math as math
 
-from ..arrays import PrimitiveArray, AnyArray, BoolArray, StructArray
+from ..arrays import PrimitiveArray, DynArray, BoolArray, StructArray
 from ..buffers import Buffer, Bitmap
 from ..views import apply
 from ..dtypes import (
@@ -105,17 +105,17 @@ trait BinaryNumericKernel(BinaryKernel):
 
     @staticmethod
     def dispatch(
-        left: AnyArray,
-        right: AnyArray,
+        left: DynArray,
+        right: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
-        def leaf[T: NumericType](d: T) raises -> AnyArray:
+        def leaf[T: NumericType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
-            ).to_any()
+            ).to_dyn()
 
         return left.dtype().dispatch_numeric[leaf]()
 
@@ -125,17 +125,17 @@ trait BinaryFloatKernel(BinaryKernel):
 
     @staticmethod
     def dispatch(
-        left: AnyArray,
-        right: AnyArray,
+        left: DynArray,
+        right: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
-        def leaf[T: FloatingType](d: T) raises -> AnyArray:
+        def leaf[T: FloatingType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
-            ).to_any()
+            ).to_dyn()
 
         return left.dtype().dispatch_floating[leaf]()
 
@@ -186,12 +186,12 @@ trait UnaryNumericKernel(UnaryKernel):
 
     @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         @parameter
-        def leaf[T: NumericType](d: T) raises -> AnyArray:
-            return Self.apply(array.as_primitive[T](), ctx).to_any()
+        def leaf[T: NumericType](d: T) raises -> DynArray:
+            return Self.apply(array.as_primitive[T](), ctx).to_dyn()
 
         return array.dtype().dispatch_numeric[leaf]()
 
@@ -201,12 +201,12 @@ trait UnaryFloatKernel(UnaryKernel):
 
     @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         @parameter
-        def leaf[T: FloatingType](d: T) raises -> AnyArray:
-            return Self.apply(array.as_primitive[T](), ctx).to_any()
+        def leaf[T: FloatingType](d: T) raises -> DynArray:
+            return Self.apply(array.as_primitive[T](), ctx).to_dyn()
 
         return array.dtype().dispatch_floating[leaf]()
 
@@ -546,17 +546,17 @@ trait NumericCompareKernel(Kernel):
 
     @staticmethod
     def dispatch(
-        left: AnyArray,
-        right: AnyArray,
+        left: DynArray,
+        right: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
         @parameter
-        def leaf[T: NumericType](d: T) raises -> AnyArray:
+        def leaf[T: NumericType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
-            ).to_any()
+            ).to_dyn()
 
         return left.dtype().dispatch_numeric[leaf]()
 
@@ -567,8 +567,8 @@ trait NumericCompareKernel(Kernel):
 
 
 def equal_any(
-    left: AnyArray,
-    right: AnyArray,
+    left: DynArray,
+    right: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Equality over any comparable dtype, picking the kernel family.

@@ -266,7 +266,7 @@ standalone binary:
 | System | What's measured | Stripped size |
 |--------|----------------|--------------|
 | **Marrow fused** (AOT) | single query, exact types, full DCE | **52 KB** |
-| **Marrow dispatch** | 3 kernels × 11 numeric types + AnyArray | **1.1 MB** |
+| **Marrow dispatch** | 3 kernels × 11 numeric types + DynArray | **1.1 MB** |
 | **DuckDB v1.5.2 CLI** | full database engine | **35 MB** |
 | **libduckdb.dylib** | shared library | **47 MB** |
 | **DataFusion** (est.) | Rust query engine CLI | **~20–40 MB** |

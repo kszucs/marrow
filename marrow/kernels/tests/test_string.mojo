@@ -7,7 +7,7 @@ from std.testing import (
     assert_raises,
 )
 
-from ...arrays import AnyArray, StringArray, BoolArray
+from ...arrays import DynArray, StringArray, BoolArray
 from ...builders import array, StringBuilder
 from ...dtypes import string, int32
 
@@ -338,7 +338,7 @@ def test_ilike_multibyte() raises:
 
 
 def test_like_dispatch_scalar_pattern() raises:
-    var s: AnyArray = array(["google.com", "yahoo.com"])
+    var s: DynArray = array(["google.com", "yahoo.com"])
     assert_true(
         LikeKernel.dispatch(s, "%google%").as_bool() == array([True, False])
     )
@@ -348,6 +348,6 @@ def test_like_dispatch_scalar_pattern() raises:
 
 
 def test_like_dispatch_rejects_non_string() raises:
-    var s: AnyArray = array([1, 2, 3], int32)
+    var s: DynArray = array([1, 2, 3], int32)
     with assert_raises(contains="expected a string array"):
         _ = LikeKernel.dispatch(s, "%a%")

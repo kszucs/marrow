@@ -2,7 +2,7 @@
 
 from std.testing import assert_equal, assert_true
 
-from ...arrays import AnyArray
+from ...arrays import DynArray
 from ...builders import array, PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, float64, Int64Type
 from ...tabular import record_batch, RecordBatch
@@ -32,9 +32,9 @@ def _batch(k: List[Int], v: List[Int]) raises -> RecordBatch:
         a.append(Scalar[int64.native](x))
     for x in v:
         b.append(Scalar[int64.native](x))
-    var cols = List[AnyArray]()
-    cols.append(a.finish().to_any())
-    cols.append(b.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(a.finish().to_dyn())
+    cols.append(b.finish().to_dyn())
     return record_batch(cols^, names=["k", "v"])
 
 

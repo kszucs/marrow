@@ -15,7 +15,7 @@ Trait hierarchy:
         ├── IntervalType(PrimitiveType)
         └── DecimalType(PrimitiveType)
 
-`AnyDataType` is the type-erased runtime container backed by a `Variant` — no
+`DynType` is the type-erased runtime container backed by a `Variant` — no
 heap allocation, no vtable, direct member access.
 
 Concrete zero-size type structs (one per Arrow type):
@@ -59,8 +59,8 @@ trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     dtype to its typed scalar/array. Provided at the family traits
     (`NumericType`/`StringLikeType`/…) and on the standalone concrete types."""
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self^)
+    def to_dyn(deinit self) -> DynType:
+        return DynType(self^)
 
 
 trait PrimitiveType(DataType, ImplicitlyCopyable):
@@ -468,14 +468,14 @@ struct Field(
     Writable,
 ):
     var name: String
-    var dtype: AnyDataType
+    var dtype: DynType
     var nullable: Bool
     var metadata: Dict[String, String]
 
     def __init__(
         out self,
         name: String,
-        var dtype: AnyDataType,
+        var dtype: DynType,
         nullable: Bool = True,
         var metadata: Dict[String, String] = {},
     ):
@@ -530,7 +530,7 @@ struct ListType(DataType, ListLikeType):
     def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
-    def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
+    def value_type(ref self) -> ref[self.item[].dtype] DynType:
         return self.item[].dtype
 
     def write_to[W: Writer](self, mut writer: W):
@@ -554,7 +554,7 @@ struct LargeListType(DataType, ListLikeType):
     def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
-    def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
+    def value_type(ref self) -> ref[self.item[].dtype] DynType:
         return self.item[].dtype
 
     def write_to[W: Writer](self, mut writer: W):
@@ -579,7 +579,7 @@ struct FixedSizeListType(DataType):
     def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
-    def value_type(self) -> AnyDataType:
+    def value_type(self) -> DynType:
         return self.item[].dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -634,8 +634,8 @@ struct MapType(DataType, ListLikeType):
 
     def __init__(
         out self,
-        var key_type: AnyDataType,
-        var value_type: AnyDataType,
+        var key_type: DynType,
+        var value_type: DynType,
         value_nullable: Bool = True,
         keys_sorted: Bool = False,
     ):
@@ -674,10 +674,10 @@ struct MapType(DataType, ListLikeType):
     def item_field(self) -> Field:
         return self.entries[].dtype.as_struct().fields[1].copy()
 
-    def key_type(self) -> AnyDataType:
+    def key_type(self) -> DynType:
         return self.entries[].dtype.as_struct().fields[0].dtype.copy()
 
-    def item_type(self) -> AnyDataType:
+    def item_type(self) -> DynType:
         return self.entries[].dtype.as_struct().fields[1].dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -692,14 +692,14 @@ struct DictionaryType(DataType):
     The value type (the dictionary) can be any Arrow type.
     """
 
-    var _index_type: OwnedPointer[AnyDataType]
-    var _value_type: OwnedPointer[AnyDataType]
+    var _index_type: OwnedPointer[DynType]
+    var _value_type: OwnedPointer[DynType]
     var ordered: Bool
 
     def __init__(
         out self,
-        var index_type: AnyDataType,
-        var value_type: AnyDataType,
+        var index_type: DynType,
+        var value_type: DynType,
         ordered: Bool = False,
     ) raises:
         if not index_type.is_integer():
@@ -716,16 +716,16 @@ struct DictionaryType(DataType):
         self._value_type = OwnedPointer(copy._value_type[].copy())
         self.ordered = copy.ordered
 
-    # Explicit (empty) destructor: `OwnedPointer[AnyDataType]` is not implicitly
+    # Explicit (empty) destructor: `OwnedPointer[DynType]` is not implicitly
     # deletable, so the compiler cannot synthesize one. Fields are still
     # destroyed automatically after the body runs.
     def __del__(deinit self):
         pass
 
-    def index_type(ref self) -> ref[self._index_type[]] AnyDataType:
+    def index_type(ref self) -> ref[self._index_type[]] DynType:
         return self._index_type[]
 
-    def value_type(ref self) -> ref[self._value_type[]] AnyDataType:
+    def value_type(ref self) -> ref[self._value_type[]] DynType:
         return self._value_type[]
 
     def __eq__(self, other: Self) -> Bool:
@@ -748,11 +748,11 @@ struct DictionaryType(DataType):
 
 
 # ---------------------------------------------------------------------------
-# AnyDataType — Variant-based type-erased handle
+# DynType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
 
 
-struct AnyDataType(
+struct DynType(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
@@ -762,7 +762,7 @@ struct AnyDataType(
     Writable,
 ):
     # Type-erased: no single companion. Placeholders satisfy the `DataType`
-    # requirement (a typed scalar/array of an `AnyDataType` is never built).
+    # requirement (a typed scalar/array of an `DynType` is never built).
 
     comptime VariantType = Variant[
         NullType,
@@ -892,7 +892,7 @@ struct AnyDataType(
         `func`."""
         return variant_dispatch_raises[ListLikeType, func=func](self._v)
 
-    def to_any(deinit self) -> AnyDataType:
+    def to_dyn(deinit self) -> DynType:
         return self^
 
     def __init__(out self, *, copy: Self):
@@ -912,7 +912,7 @@ struct AnyDataType(
         try:
             capsule = py.__arrow_c_schema__()
         except:
-            raise Error("cannot convert Python object to AnyDataType")
+            raise Error("cannot convert Python object to DynType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
 
     def to_python_object(var self) raises -> PythonObject:
@@ -1229,25 +1229,23 @@ struct AnyDataType(
 # ---------------------------------------------------------------------------
 
 
-def field(name: String, var dtype: AnyDataType, nullable: Bool = True) -> Field:
+def field(name: String, var dtype: DynType, nullable: Bool = True) -> Field:
     """Construct a Field. Equivalent to PyArrow's ``pa.field()``."""
     return Field(name, dtype^, nullable)
 
 
-def list_(var value_type: AnyDataType) -> ListType:
+def list_(var value_type: DynType) -> ListType:
     """Construct a list type. Equivalent to PyArrow's ``pa.list_()``."""
     return ListType(field("item", value_type^))
 
 
-def large_list_(var value_type: AnyDataType) -> LargeListType:
+def large_list_(var value_type: DynType) -> LargeListType:
     """Construct a large_list type. Equivalent to PyArrow's ``pa.large_list()``.
     """
     return LargeListType(field("item", value_type^))
 
 
-def fixed_size_list_(
-    var value_type: AnyDataType, size: Int
-) -> FixedSizeListType:
+def fixed_size_list_(var value_type: DynType, size: Int) -> FixedSizeListType:
     """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size.
     """
     return FixedSizeListType(field("item", value_type^), size)
@@ -1315,8 +1313,8 @@ def struct_(var fields: List[Field]) -> StructType:
 
 
 def dictionary(
-    var index_type: AnyDataType,
-    var value_type: AnyDataType,
+    var index_type: DynType,
+    var value_type: DynType,
     ordered: Bool = False,
 ) raises -> DictionaryType:
     """Construct a dictionary type. Equivalent to PyArrow's ``pa.dictionary()``.
@@ -1335,8 +1333,8 @@ def struct_(var *fields: Field) -> StructType:
 
 
 def map_(
-    var key_type: AnyDataType,
-    var item_type: AnyDataType,
+    var key_type: DynType,
+    var item_type: DynType,
     keys_sorted: Bool = False,
 ) -> MapType:
     """Construct a map type. Equivalent to PyArrow's ``pa.map_(key_type,

@@ -18,7 +18,7 @@ from ..arrays import (
     PrimitiveArray,
     StringArray,
     BinaryLikeArray,
-    AnyArray,
+    DynArray,
     StructArray,
     NullArray,
     FixedSizeBinaryArray,
@@ -36,7 +36,7 @@ from ..builders import (
     BinaryLikeBuilder,
 )
 from ..dtypes import (
-    AnyDataType,
+    DynType,
     PrimitiveType,
     NumericType,
     TemporalType,
@@ -106,14 +106,14 @@ struct Filter:
 
     @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and filter it by `mask`."""
         var dt = array.dtype()
         if dt == bool_:
-            return Filter.apply(array.as_bool(), mask, ctx).to_any()
+            return Filter.apply(array.as_bool(), mask, ctx).to_dyn()
         elif dt.is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
@@ -123,37 +123,37 @@ struct Filter:
             # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
-                return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
+            def primitive[T: PrimitiveType](d: T) raises -> DynArray:
+                return Filter.apply(array.as_primitive[T](), mask, ctx).to_dyn()
 
             return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
-            def binarylike[T: BinaryLikeType](d: T) raises -> AnyArray:
+            def binarylike[T: BinaryLikeType](d: T) raises -> DynArray:
                 return Filter.apply(
                     array.as_binary_like[T](), mask, ctx
-                ).to_any()
+                ).to_dyn()
 
             return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
-            return Filter.apply(array.as_null(), mask, ctx).to_any()
+            return Filter.apply(array.as_null(), mask, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
             return Filter.apply(
                 array.as_fixed_size_binary(), mask, ctx
-            ).to_any()
+            ).to_dyn()
         elif dt.is_struct():
-            return Filter.apply(array.as_struct(), mask, ctx).to_any()
+            return Filter.apply(array.as_struct(), mask, ctx).to_dyn()
         elif dt.is_list():
-            return Filter.apply(array.as_list(), mask, ctx).to_any()
+            return Filter.apply(array.as_list(), mask, ctx).to_dyn()
         elif dt.is_large_list():
-            return Filter.apply(array.as_large_list(), mask, ctx).to_any()
+            return Filter.apply(array.as_large_list(), mask, ctx).to_dyn()
         elif dt.is_map():
-            return Filter.apply(array.as_map(), mask, ctx).to_any()
+            return Filter.apply(array.as_map(), mask, ctx).to_dyn()
         elif dt.is_fixed_size_list():
-            return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_any()
+            return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_dyn()
         elif dt.is_dictionary():
-            return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
+            return Filter.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
             raise Error("filter: unsupported dtype ", dt)
 
@@ -171,11 +171,11 @@ struct Filter:
 
     @staticmethod
     def drop_null(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
+        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> DynArray:
         """Remove null elements: the validity bitmap is itself the keep-mask."""
         if array.dtype().is_null():
-            return NullArray(length=0).to_any()
+            return NullArray(length=0).to_dyn()
         var data = array.to_data()
         if not data.bitmap:
             return array.copy()
@@ -627,14 +627,14 @@ struct Take:
 
     @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         indices: Int32Array,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and gather it at `indices`."""
         var dt = array.dtype()
         if dt == bool_:
-            return Take.apply(array.as_bool(), indices, ctx).to_any()
+            return Take.apply(array.as_bool(), indices, ctx).to_dyn()
         elif dt.is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
@@ -644,39 +644,39 @@ struct Take:
             # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
+            def primitive[T: PrimitiveType](d: T) raises -> DynArray:
                 return Take.apply(
                     array.as_primitive[T](), indices, ctx
-                ).to_any()
+                ).to_dyn()
 
             return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
-            def binarylike[T: BinaryLikeType](d: T) raises -> AnyArray:
+            def binarylike[T: BinaryLikeType](d: T) raises -> DynArray:
                 return Take.apply(
                     array.as_binary_like[T](), indices, ctx
-                ).to_any()
+                ).to_dyn()
 
             return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
-            return Take.apply(array.as_null(), indices, ctx).to_any()
+            return Take.apply(array.as_null(), indices, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
             return Take.apply(
                 array.as_fixed_size_binary(), indices, ctx
-            ).to_any()
+            ).to_dyn()
         elif dt.is_struct():
-            return Take.apply(array.as_struct(), indices, ctx).to_any()
+            return Take.apply(array.as_struct(), indices, ctx).to_dyn()
         elif dt.is_list():
-            return Take.apply(array.as_list(), indices, ctx).to_any()
+            return Take.apply(array.as_list(), indices, ctx).to_dyn()
         elif dt.is_large_list():
-            return Take.apply(array.as_large_list(), indices, ctx).to_any()
+            return Take.apply(array.as_large_list(), indices, ctx).to_dyn()
         elif dt.is_map():
-            return Take.apply(array.as_map(), indices, ctx).to_any()
+            return Take.apply(array.as_map(), indices, ctx).to_dyn()
         elif dt.is_fixed_size_list():
-            return Take.apply(array.as_fixed_size_list(), indices, ctx).to_any()
+            return Take.apply(array.as_fixed_size_list(), indices, ctx).to_dyn()
         elif dt.is_dictionary():
-            return Take.apply(array.as_dictionary(), indices, ctx).to_any()
+            return Take.apply(array.as_dictionary(), indices, ctx).to_dyn()
         else:
             raise Error("take: unsupported dtype ", dt)
 
@@ -1092,7 +1092,7 @@ struct Take:
         """
         var n = len(array)
         var out_length = len(indices)
-        var children = List[AnyArray]()
+        var children = List[DynArray]()
         for c in range(len(array.children)):
             children.append(
                 Take.dispatch(
@@ -1132,26 +1132,26 @@ struct Take:
 
 
 def filter(
-    array: AnyArray,
-    mask: AnyArray,
+    array: DynArray,
+    mask: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Filter `array`, keeping elements where boolean `mask` is True."""
     var m = mask.as_bool().copy()
     return Filter.dispatch(array, m.values(), ctx)
 
 
 def take(
-    array: AnyArray,
+    array: DynArray,
     indices: Int32Array,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Gather elements of `array` at `indices` (null index -> null element)."""
     return Take.dispatch(array, indices, ctx)
 
 
 def drop_null(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyArray:
+    array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> DynArray:
     """Remove null elements using the validity bitmap as the selection."""
     return Filter.drop_null(array, ctx)

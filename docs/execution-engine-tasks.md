@@ -225,7 +225,7 @@ first/last stay M2.)
 / `temporal.mojo` / `aggregate.mojo`+`groupby.mojo` — **disjoint. Run all five in
 parallel.** Safe to start alongside Wave 0 (no Wave-0 task owns any of these).
 
-**FU-1 — `rapidhash(AnyArray)` large_string branch** · *M2/Should* · Depends: — · Owns:
+**FU-1 — `rapidhash(DynArray)` large_string branch** · *M2/Should* · Depends: — · Owns:
 `marrow/kernels/hashing.mojo` (+ re-enable the dropped large_string cases in
 `test_membership.mojo` etc.) · **Discovered during Wave 1 (T1.2).** `rapidhash`'s
 type-erased dispatch handles `is_string()` (int32 offsets) but not `is_large_string()`, so
@@ -288,7 +288,7 @@ processor `take` only the data columns.
 Wave 1→expr wiring: (a) `Coalesce`/`Nullif`/`CaseWhen` breakers re-run their kernel in
 `validity()` (the T0.7 `validity(batch)` contract has no `ctx`, so it can't read the bitmap
 `prepare()` already materialized — 2× compute when nested under a fused parent); (b) the IN
-value-set is a raw `_value_set: AnyArray` field on *every* `DynValue` and on the fused `IsIn`
+value-set is a raw `_value_set: DynArray` field on *every* `DynValue` and on the fused `IsIn`
 rather than a literal-set `Value` operand (leaky node model); (c) `_name` is overloaded to
 carry the LIKE pattern / `date_trunc` unit; (d) the fused `Coalesce`/`CaseWhen` hard-code
 2-operand/1-branch arity while the kernels + dynamic frontend are variadic (N-ary `CASE`
@@ -391,20 +391,20 @@ dominates, note that T2.3b's kernel dep T1.5 must be merged first.)
 `marrow/expr/optimize.mojo` (new), `marrow/expr/tests/test_optimize.mojo` (new); minimal
 accessor additions to `relations.mojo` **only if unavoidable** (prefer read-only over the
 existing `kind()`/node API) · Reads: `relations.mojo`, `values.mojo`, `pruning.mojo` ·
-Done when: a rule-list `AnyRelation -> AnyRelation` implements projection pushdown
+Done when: a rule-list `DynRelation -> DynRelation` implements projection pushdown
 (uses `referenced_columns()`), predicate pushdown with conjunct splitting on AND
 (feeding the existing Parquet pruning), and limit pushdown; each rule unit-tested.
 
 **T3.2 — Python bindings for the lazy engine** · *M1/Must* · Depends: T0.4, T2.2, T2.3a ·
 Owns: `python/bindings/lazy.mojo` (new); registration line in
 `python/bindings/lib.mojo` (trivial-conflict) · Reads: `expr/*` · Done when: `AnyValue`,
-`AnyRelation`, `col`/`lit`/`if_else`, plan builders, and `execute(plan, ctx)` are exposed
+`DynRelation`, `col`/`lit`/`if_else`, plan builders, and `execute(plan, ctx)` are exposed
 through `PythonModuleBuilder.add_type`; smoke-tested from Python.
 
 **T3.3 — Python ibis-flavored `Table`/`Column` API** · *M1/Must* · Depends: T3.2 · Owns:
 `python/marrow/expr.py` (new), `python/marrow/tests/test_expr.py` (new); export lines in
 `python/marrow/__init__.py` (trivial-conflict) · Reads: `lazy.mojo` surface · Done when:
-a thin pure-Python `Column` (over `DynValue`) and `Table` (over `AnyRelation`) implement
+a thin pure-Python `Column` (over `DynValue`) and `Table` (over `DynRelation`) implement
 the **ibis-flavored** surface in §3.1, deferred (build-not-execute), terminating in
 `.execute()`/`.to_pyarrow()`. **No ibis dependency, no ibis backend — ibis is a loose
 naming guideline, not a parity target.** `marrow.table(schema)` and
@@ -428,7 +428,7 @@ T3.1 + T2.4. T3.1 (`optimize.mojo`, new) is disjoint from the Python lane.
 The Python F1 surface is a **thin native** API — two pure-Python wrappers over the
 already-built engine. It borrows ibis *names and feel*, nothing more: no `ibis` import,
 no operation graph, no backend contract, no type-coercion layer. Every method just
-builds an `AnyRelation`/`DynValue` and defers; execution is one `execute(plan, ctx)`
+builds an `DynRelation`/`DynValue` and defers; execution is one `execute(plan, ctx)`
 call. Scope it to what M1 (ClickBench) needs; grow method-by-method later.
 
 **`Column`** — wraps a `DynValue`; column refs resolve by name against the table schema
@@ -449,12 +449,12 @@ t.ts.year(),  t.ts.month(),  t.ts.day()                       # temporal
 t.a.name("total")                                             # alias output
 ```
 
-**`Table`** — wraps an `AnyRelation`; methods build and return a new `Table` (immutable,
+**`Table`** — wraps an `DynRelation`; methods build and return a new `Table` (immutable,
 cheap `ArcPointer` copy). ibis-style names, mapped to existing/near-term relational nodes:
 
 | Method | Maps to | Milestone |
 |---|---|---|
-| `t.filter(pred)` (accepts `Column` or list, AND-ed) | `AnyRelation.filter` | M1 |
+| `t.filter(pred)` (accepts `Column` or list, AND-ed) | `DynRelation.filter` | M1 |
 | `t.select(*cols, **named)` | computed `Project` (T2.3a) | M1 |
 | `t.mutate(**named)` (add cols, keep the rest) | computed `Project` | M1 |
 | `t.group_by(*keys).aggregate(**named)` **and** `t.aggregate(metrics, by=[...])` | `Aggregate` | M1 |

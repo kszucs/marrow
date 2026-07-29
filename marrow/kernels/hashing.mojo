@@ -13,7 +13,7 @@ Public API — the ``RapidHash`` kernel:
     - StructArray: per-column hash with combining (multi-key)
     - ListLikeArray[T] / FixedSizeListArray: fold the child hashes per row
   - ``RapidHash.dispatch``: runtime-typed dispatch, routed through the
-    ``AnyDataType.dispatch_*`` family rather than a hand-written dtype ladder.
+    ``DynType.dispatch_*`` family rather than a hand-written dtype ladder.
     Temporal, interval, and decimal32/64 columns are hashed through their
     typed leaf (bound on ``PrimitiveType``); dictionary columns through their
     decoded values,
@@ -35,7 +35,7 @@ from ..arrays import (
     StructArray,
     ListLikeArray,
     FixedSizeListArray,
-    AnyArray,
+    DynArray,
     UInt64Array,
 )
 from ..builders import UInt64Builder
@@ -267,7 +267,7 @@ struct RapidHash:
     """Column hashing kernel — one ``UInt64`` per row.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``AnyDataType.dispatch_*`` family
+    runtime-typed array to the matching leaf via the ``DynType.dispatch_*`` family
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. Null elements hash to ``NULL_HASH_SENTINEL`` so
     that "null == null" holds for grouping and joining (Arrow's `hash_*`
@@ -281,7 +281,7 @@ struct RapidHash:
 
     @staticmethod
     def dispatch(
-        keys: AnyArray,
+        keys: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> UInt64Array:
         """Resolve `keys`'s runtime dtype and hash it."""
@@ -594,7 +594,7 @@ struct RapidHash:
 #
 # Two entry points, each with a reason to exist:
 #
-# - `rapidhash(AnyArray)` is the `pc.*`-style erased one.
+# - `rapidhash(DynArray)` is the `pc.*`-style erased one.
 # - `rapidhash(StructArray)` is what `SwissHashTable[hasher]` / `HashJoin[hasher]`
 #   bind as a comptime *function value*; their `hasher` parameter is typed
 #   `def(StructArray, ExecutionContext) raises -> UInt64Array`, so this needs to
@@ -610,7 +610,7 @@ struct RapidHash:
 
 
 def rapidhash(
-    keys: AnyArray,
+    keys: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> UInt64Array:
     """Hash `keys` element-wise; nulls hash to ``NULL_HASH_SENTINEL``."""

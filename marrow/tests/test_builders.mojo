@@ -3,7 +3,7 @@ ListBuilder, FixedSizeListBuilder, StructBuilder) and factory functions."""
 
 from std.testing import assert_equal, assert_true, assert_false
 from ..arrays import (
-    AnyArray,
+    DynArray,
     BoolArray,
     PrimitiveArray,
     StringArray,
@@ -12,7 +12,7 @@ from ..arrays import (
     StructArray,
 )
 from ..builders import (
-    AnyBuilder,
+    DynBuilder,
     BoolBuilder,
     PrimitiveBuilder,
     StringBuilder,
@@ -98,7 +98,7 @@ def test_bool_builder_as_any_builder() raises:
     var b = BoolBuilder(2)
     b.append(True)
     b.append(False)
-    var builder: AnyBuilder = b^
+    var builder: DynBuilder = b^
     assert_equal(builder.length(), 2)
 
 
@@ -172,7 +172,7 @@ def test_primitive_builder_as_any_builder() raises:
     b.append(1)
     b.append(2)
     b.append(3)
-    var builder: AnyBuilder = b^
+    var builder: DynBuilder = b^
     assert_equal(builder.length(), 3)
     assert_equal(builder.dtype(), int64)
 
@@ -311,7 +311,7 @@ def test_string_builder_unsafe_append_string_slice() raises:
 def test_string_builder_as_any_builder() raises:
     var b = StringBuilder(1)
     b.append("test")
-    var builder: AnyBuilder = b^
+    var builder: DynBuilder = b^
     assert_equal(builder.length(), 1)
     assert_equal(builder.dtype(), string)
 
@@ -372,7 +372,7 @@ def test_list_builder_empty_list() raises:
 
 def test_list_builder_dtype() raises:
     var child = Int64Builder()
-    var b: AnyBuilder = ListBuilder(child^)
+    var b: DynBuilder = ListBuilder(child^)
     assert_equal(b.dtype(), list_(int64))
 
 
@@ -471,7 +471,7 @@ def test_fixed_size_list_builder_with_nulls() raises:
 
 def test_fixed_size_list_builder_dtype() raises:
     var child = Int32Builder()
-    var b: AnyBuilder = FixedSizeListBuilder(child^, list_size=3)
+    var b: DynBuilder = FixedSizeListBuilder(child^, list_size=3)
     assert_equal(b.dtype(), fixed_size_list_(int32, 3))
 
 
@@ -785,12 +785,12 @@ def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
 
 
 def test_any_builder_finish_dispatch_primitive() raises:
-    """AnyBuilder.finish() dispatches to PrimitiveBuilder.finish() and returns AnyArray.
+    """DynBuilder.finish() dispatches to PrimitiveBuilder.finish() and returns DynArray.
     """
     var b = Int32Builder(10)
     b.append(42)
     b.append(99)
-    var builder: AnyBuilder = b^
+    var builder: DynBuilder = b^
     var arr = builder.finish()
     assert_equal(arr.length(), 2)
     assert_equal(arr.as_int32()[0].value(), 42)
@@ -800,12 +800,12 @@ def test_any_builder_finish_dispatch_primitive() raises:
 
 
 def test_any_builder_finish_dispatch_string() raises:
-    """AnyBuilder.finish() dispatches to StringBuilder.finish() and returns AnyArray.
+    """DynBuilder.finish() dispatches to StringBuilder.finish() and returns DynArray.
     """
     var b = StringBuilder(10)
     b.append("foo")
     b.append("bar")
-    var builder: AnyBuilder = b^
+    var builder: DynBuilder = b^
     var arr = builder.finish()
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
@@ -813,7 +813,7 @@ def test_any_builder_finish_dispatch_string() raises:
 
 
 def test_any_builder_finish_dispatch_list() raises:
-    """AnyBuilder.finish() dispatches to ListBuilder.finish() and returns AnyArray.
+    """DynBuilder.finish() dispatches to ListBuilder.finish() and returns DynArray.
     """
     var child = Int32Builder()
     child.append(1)
@@ -821,7 +821,7 @@ def test_any_builder_finish_dispatch_list() raises:
     var b = ListBuilder(child^, 10)
     b.append_valid()
     b.append_valid()
-    var builder: AnyBuilder = b^
+    var builder: DynBuilder = b^
     var arr = builder.finish()
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes

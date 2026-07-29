@@ -55,7 +55,7 @@ trait AggKernel(Kernel):
     comptime is_distinct: Bool = False       # replaces agg_is_distinct(tag)
 
     @staticmethod
-    def out_dtype(value_dtype: AnyDataType) raises -> AnyDataType
+    def out_dtype(value_dtype: DynType) raises -> DynType
 ```
 
 `out_dtype` is a **property of the aggregate**, with exactly four answers:

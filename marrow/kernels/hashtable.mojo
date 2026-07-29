@@ -11,7 +11,7 @@ from std.memory import pack_bits
 from std.sys import size_of
 from ..arrays import (
     PrimitiveArray,
-    AnyArray,
+    DynArray,
     StructArray,
     Int32Array,
     UInt64Array,

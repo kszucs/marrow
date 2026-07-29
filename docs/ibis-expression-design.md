@@ -38,9 +38,9 @@ with the relational/execution layers later. Ignore `marrow/expr/dynamic.mojo`.
   dtype `comptime OutType: DataType` and an associated output-array type, with
   `execute(self, batch) -> <that typed array>` — so `execute()` is uniform on *every* `Value` and
   generic code can run any node. `core[W]` stays as the SIMD lane primitive (only on lane families).
-- **No `AnyArray`, no type-erased types.** `execute()` returns the family's concrete typed array
+- **No `DynArray`, no type-erased types.** `execute()` returns the family's concrete typed array
   (`PrimitiveArray[OutType]` / `BoolArray` / `StringArray` / `StructArray` / `ListArray`); typed
-  scalars, not `AnyScalar`. No `AnyValue` box. Where an existing `arrays.mojo` API returns `AnyArray`
+  scalars, not `DynScalar`. No `AnyValue` box. Where an existing `arrays.mojo` API returns `DynArray`
   (e.g. `StructArray.field`), downcast to the typed array immediately at the call site.
 - **No `Optional` inputs/outputs.** Strict, concrete signatures everywhere (incl. the materialization
   cache — a typed array initialized 0-length, overwritten in `prepare`).
@@ -178,7 +178,7 @@ kernel-side marker traits and no `fusion_markers.mojo`**:
 - `StructField` reflects the child dtype (`reflect[T].field[name].T`, the `Table[T]` trick one level
   deeper) and returns a **child-family-typed leaf** (numeric child → `NumericValue`, string child →
   `StringValue`) that fuses like a column. Its `core`/`execute` gets the child via
-  `parent.execute(batch).field(name)` downcast immediately to the typed array (no `AnyArray` flow).
+  `parent.execute(batch).field(name)` downcast immediately to the typed array (no `DynArray` flow).
 - `ArrayLength[L: ListValue](NumericValue)` reads list offsets (`off[i+1]-off[i]`, true-SIMD).
 - `ArrayContains` = string-style materialize→`BoolValue` boundary.
 

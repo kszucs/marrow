@@ -25,7 +25,7 @@ This falls out for free from ``rapidhash`` mapping every null to a single
 ``value_set`` inserted that sentinel bucket.
 """
 
-from ..arrays import AnyArray, Array, BoolArray
+from ..arrays import DynArray, Array, BoolArray
 from ..builders import BoolBuilder
 from .core import Kernel
 from .execution import ExecutionContext
@@ -47,7 +47,7 @@ struct IsInKernel(Kernel):
 
     @staticmethod
     def apply(
-        values: AnyArray, value_set: AnyArray, ctx: ExecutionContext
+        values: DynArray, value_set: DynArray, ctx: ExecutionContext
     ) raises -> BoolArray:
         """Hash ``value_set`` into a ``SwissHashTable`` once, then probe each
         value.
@@ -78,8 +78,8 @@ struct IsInKernel(Kernel):
 
     @staticmethod
     def dispatch(
-        values: AnyArray,
-        value_set: AnyArray,
+        values: DynArray,
+        value_set: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
         """Validate that both operands carry the same type, then probe."""
@@ -99,8 +99,8 @@ struct IsInKernel(Kernel):
 
 
 def is_in(
-    values: AnyArray,
-    value_set: AnyArray,
+    values: DynArray,
+    value_set: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Membership of each value in ``value_set``.

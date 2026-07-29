@@ -15,7 +15,7 @@ writer mirrors the reader's structure.
 from std.pathlib import Path
 from std.sys import size_of
 
-from ..arrays import AnyArray, PrimitiveArray, BinaryLikeArray
+from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
 from ..dtypes import PrimitiveType, NumericType
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
@@ -90,7 +90,7 @@ struct ColumnWriter(Movable):
         self.write_bloom = write_bloom
         self.write_crc = write_crc
 
-    def _encode_values(self, col: AnyArray, mut body: List[UInt8]) raises:
+    def _encode_values(self, col: DynArray, mut body: List[UInt8]) raises:
         """Dispatch on the leaf's Arrow type to the right `Plain` encoder (the
         writer's mirror of the reader's decode dispatch)."""
         ref vt = self.leaf.dtype
@@ -200,7 +200,7 @@ struct ColumnWriter(Movable):
                 hashes.append(xxh64(arr.unsafe_get(UInt(i)).as_bytes()))
 
     def _hash_fixed_size_binary(
-        self, col: AnyArray, mut hashes: List[UInt64]
+        self, col: DynArray, mut hashes: List[UInt64]
     ) raises:
         """Hash each present fixed-size-binary value's raw bytes."""
         ref fsb = col.as_fixed_size_binary()
@@ -209,7 +209,7 @@ struct ColumnWriter(Movable):
                 hashes.append(xxh64(Span(fsb[i].value())))
 
     def _bloom_hashes(
-        self, col: AnyArray, mut hashes: List[UInt64]
+        self, col: DynArray, mut hashes: List[UInt64]
     ) raises -> Bool:
         """XXH64 of each present value's physical bytes; False for a type marrow
         does not bloom-filter (bool)."""
@@ -276,7 +276,7 @@ struct ColumnWriter(Movable):
             return False
         return True
 
-    def _bloom_bytes(self, col: AnyArray) raises -> List[UInt8]:
+    def _bloom_bytes(self, col: DynArray) raises -> List[UInt8]:
         """The serialized split-block bloom filter for `col`, or an empty list
         when the column has no bloom-filterable values. Sized to the distinct
         hash count (deduped) so low-cardinality columns stay small."""
@@ -292,7 +292,7 @@ struct ColumnWriter(Movable):
         return bf.to_bytes()
 
     @staticmethod
-    def can_bloom(dtype: dt.AnyDataType) -> Bool:
+    def can_bloom(dtype: dt.DynType) -> Bool:
         """Whether a column of `dtype` is bloom-filtered when enabled — integer,
         floating-point, byte-array, temporal, decimal, and fixed-size-binary
         columns (everything with a stable physical byte encoding except bool).
@@ -307,7 +307,7 @@ struct ColumnWriter(Movable):
         )
 
     @staticmethod
-    def can_dictionary(dtype: dt.AnyDataType) -> Bool:
+    def can_dictionary(dtype: dt.DynType) -> Bool:
         """Whether a column of `dtype` is dictionary-encoded when requested —
         numeric and byte-array columns (bool and unsupported types stay PLAIN).
         """
@@ -331,7 +331,7 @@ struct ColumnWriter(Movable):
                 out.append(Int64(arr[i].value()))
 
     @staticmethod
-    def can_delta(dtype: dt.AnyDataType, encoding: Encoding) -> Bool:
+    def can_delta(dtype: dt.DynType, encoding: Encoding) -> Bool:
         """Whether `encoding` (a DELTA_* variant) applies to `dtype`."""
         if encoding == Encoding.DELTA_BINARY_PACKED:
             return dtype.is_signed_integer()
@@ -343,12 +343,12 @@ struct ColumnWriter(Movable):
         return False
 
     @staticmethod
-    def can_bss(dtype: dt.AnyDataType) -> Bool:
+    def can_bss(dtype: dt.DynType) -> Bool:
         """BYTE_STREAM_SPLIT applies to floating-point columns."""
         return dtype.is_floating_point()
 
     @staticmethod
-    def supports(encoding: Encoding, dtype: dt.AnyDataType) -> Bool:
+    def supports(encoding: Encoding, dtype: dt.DynType) -> Bool:
         """Whether `encoding` is a valid value encoding for a column of `dtype`.
         PLAIN is always valid; the others require a compatible type."""
         if encoding == Encoding.PLAIN:
@@ -360,7 +360,7 @@ struct ColumnWriter(Movable):
         else:
             return Self.can_delta(dtype, encoding)
 
-    def _encode_bss(self, col: AnyArray, mut out: List[UInt8]) raises:
+    def _encode_bss(self, col: DynArray, mut out: List[UInt8]) raises:
         """BYTE_STREAM_SPLIT-encode the present float values."""
         ref vt = self.leaf.dtype
         if vt == dt.float32:
@@ -384,7 +384,7 @@ struct ColumnWriter(Movable):
         else:  # DELTA_BYTE_ARRAY
             DeltaByteArray.encode(arr, out)
 
-    def _encode_delta(self, col: AnyArray, mut out: List[UInt8]) raises:
+    def _encode_delta(self, col: DynArray, mut out: List[UInt8]) raises:
         """Delta-encode the present values per `self.encoding`."""
         var ints = List[Int64]()
         ref vt = self.leaf.dtype
@@ -450,7 +450,7 @@ struct ColumnWriter(Movable):
 
     def _rows_per_page(
         self,
-        values: AnyArray,
+        values: DynArray,
         encoding: Encoding,
         dict_width: Int,
         num_rows: Int,
@@ -580,7 +580,7 @@ struct ColumnWriter(Movable):
 
     def write(
         self,
-        values: AnyArray,
+        values: DynArray,
         def_levels: List[Int32],
         rep_levels: List[Int32],
         path: List[String],
@@ -882,7 +882,7 @@ struct FileWriter(Movable):
         for ci in range(len(nodes)):
             var col_leaves = List[Int]()
             nodes[ci].collect_leaf_indices(col_leaves)
-            var leaf_values = List[AnyArray]()
+            var leaf_values = List[DynArray]()
             nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_values)
 
             # Per-leaf rep/def levels: empty for a flat column (each leaf derives

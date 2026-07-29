@@ -7,7 +7,7 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from ...arrays import PrimitiveArray, AnyArray, StructArray
+from ...arrays import PrimitiveArray, DynArray, StructArray
 from ...buffers import Bitmap
 from ...builders import PrimitiveBuilder, UInt64Builder
 from ...dtypes import uint64, UInt64Type, struct_, Field
@@ -21,8 +21,8 @@ def _make_keys(n: Int) raises -> StructArray:
     var b = UInt64Builder(capacity=n)
     for i in range(n):
         b.append(Scalar[uint64.native](i * 0x9E3779B97F4A7C15 + 1))
-    var children = List[AnyArray]()
-    children.append(b.finish().to_any())
+    var children = List[DynArray]()
+    children.append(b.finish().to_dyn())
     return StructArray(
         dtype=struct_(Field("k", uint64)),
         length=n,

@@ -27,7 +27,7 @@ from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.parquet import leaf_of
 from marrow.schema import schema
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import ParquetScan, Project, AnyRelation
+from marrow.expr.relations import ParquetScan, Project, DynRelation
 
 
 def main() raises:
@@ -36,7 +36,7 @@ def main() raises:
     )
 
     # The scan is compiled for exactly the leaf kinds this plan can meet.
-    var filtered = AnyRelation(
+    var filtered = DynRelation(
         ParquetScan[leaf_of[Int64Type]() | leaf_of[StringType]()](
             path=String("orders.parquet"), schema=sch
         )
@@ -50,4 +50,4 @@ def main() raises:
         values=values^,
         schema=schema([field("a", int64)]),
     )
-    print(AnyRelation(proj^).execute())
+    print(DynRelation(proj^).execute())

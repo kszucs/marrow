@@ -10,7 +10,7 @@ run in parallel without merge conflicts, following the same conventions as
 **Landed (2026-07-27, branch `agg`).** Q0.0 (closed upstream), Q0.2, Q0.3, Q1.1, Q1.4,
 Q2.1, Q2.2, Q2.3, Q2.6, Q3.4, Q5.3, the core half of Q3.2 (`BitmapView.to_owned`,
 `Bitmap.unset_count`, `ArrayData.owned_validity`, the `BitmapView`-private SIMD functors),
-the expr half of Q3.5 (`AnyRelation.execute`, one `lit`, the validity helpers), and Q3.1's
+the expr half of Q3.5 (`DynRelation.execute`, one `lit`, the validity helpers), and Q3.1's
 filter/take delegators. Fused `query_streaming` stripped size held at 1,307,624 across all
 of them.
 
@@ -20,8 +20,8 @@ of them.
 >
 > | task | evidence |
 > |---|---|
-> | **Q1.1** (both halves) | the eight `AnyDataType.dispatch_*` methods (`dtypes.mojo:813-886`); `RapidHash` (`hashing.mojo:266`) and `SortIndices` (`sort.mojo:347`) structs route through them |
-> | **Q3.2**, `dispatch_over_*` half | the ladders became `AnyDataType` methods, not free functions — the 64-call-site item |
+> | **Q1.1** (both halves) | the eight `DynType.dispatch_*` methods (`dtypes.mojo:813-886`); `RapidHash` (`hashing.mojo:266`) and `SortIndices` (`sort.mojo:347`) structs route through them |
+> | **Q3.2**, `dispatch_over_*` half | the ladders became `DynType` methods, not free functions — the 64-call-site item |
 > | **Q3.4** headline | the 24 duplicated top-level compute fns are gone; `python/marrow/__init__.py` keeps only `array`/`field`/`schema`/`record_batch`/`table` + ipc, which is PyArrow's shape |
 > | **Q2.5** step 2 | `reinterpret_array` has **no occurrences tree-wide**; so do `hash_identity` and the duplicate `bitmap_and` |
 > | **L1**, **L4**, **L5** (layering doc) | see `expr-kernels-layering-tasks.md` — all three verified done |
@@ -44,7 +44,7 @@ of them.
 >
 > The five long-standing `test_plan.mojo` crashes were attributed to an upstream bug ("a
 > test body that filters with a comparison predicate under `TestSuite`"). That was wrong.
-> **All five were tests that built plans by hand** — `AnyRelation(ParquetScan(...))` then
+> **All five were tests that built plans by hand** — `DynRelation(ParquetScan(...))` then
 > `Filter(input=..., predicate=col(0) > lit(...))` with a hand-written output schema.
 > Rewriting the file through the plan-building API (`parquet_scan(...).filter(...)`,
 > `.project(...)`) made every crash disappear: the whole 21-case file now compiles as **one**
@@ -213,7 +213,7 @@ Depends: — · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.
 
 `BinaryNumericKernel.dispatch` and `NumericCompareKernel.dispatch` are **byte-identical**
 — `expect_same_dtype`, a `leaf[T: NumericType]` closure calling
-`Self.apply(l.as_primitive[T](), r.as_primitive[T](), ctx).to_any()`, then
+`Self.apply(l.as_primitive[T](), r.as_primitive[T](), ctx).to_dyn()`, then
 `dispatch_numeric[leaf]()`. `BinaryFloatKernel.dispatch` is the same again with
 `dispatch_floating`.
 
@@ -226,8 +226,8 @@ why the duplication exists at all.
 **Closed as not worth doing — counted 2026-07-27, after Q0.7 put the bodies side by side.**
 
 The only mechanism available is a shared trait providing `dispatch` in terms of an abstract
-`_apply_any[T](left, right, ctx) -> AnyArray`, which each family implements as a one-line
-`return Self.apply(l, r, c).to_any()` shim. (That erasure is required because `apply`'s
+`_apply_any[T](left, right, ctx) -> DynArray`, which each family implements as a one-line
+`return Self.apply(l, r, c).to_dyn()` shim. (That erasure is required because `apply`'s
 return type — `PrimitiveArray[T]` vs `BoolArray` — depends on the *method's* type parameter
 and so cannot be an associated type.) Counting it:
 
@@ -260,7 +260,7 @@ new `marrow/kernels/numeric.mojo`, `marrow/kernels/__init__.mojo`, every importe
 (+ `marrow/kernels/tests/test_arithmetic.mojo`, `test_compare.mojo`) · ⚠️ BINSIZE ·
 
 The two modules are now the same kind of thing: both numeric-only, both three-tier
-(`core` / `apply` / `dispatch`), both dispatching through `AnyDataType.dispatch_numeric`.
+(`core` / `apply` / `dispatch`), both dispatching through `DynType.dispatch_numeric`.
 What differs between an `AddKernel` and an `LtKernel` is the `core` functor and the output
 layout — not enough to justify two modules. Comparison stopped being "the string-aware one"
 when `NumericCompareKernel` dropped `comptime StringKernel` (`f5374e9`).
@@ -325,7 +325,7 @@ asserts float64 instead of the divergence.
 <details><summary>Original finding and the designs that did not work</summary>
 
 **Reverted 2026-07-27 — first attempt fixed it at the wrong layer.** Promotion was put in
-the erased kernel dispatches (`AnyDataType.promote` + cast both operands). That works and
+the erased kernel dispatches (`DynType.promote` + cast both operands). That works and
 all 415 tests passed, but it puts type-algebra decisions in the kernel layer, which is
 exactly the leak the layering rules forbid — kernels are array-in/array-out and must not
 decide what an operator means. It also cost `query_dynvalue` +82,576 bytes by making the
@@ -750,7 +750,7 @@ aggregate binaries are all but identical (`kernels::execution` 1051 vs 1054, `vi
 `dtypes` 744 vs 772, `hashing` 225 vs 225) and both are ~7.6x the filter+project baseline. What
 costs is the **grouping**, which is runtime-dtype in both: `HashGrouper.consume_keys` →
 `kernels/hashing.mojo` (which imports `kernels/cast`) pulls in **797 `marrow::kernels::cast`
-symbols — 20 % of the fused binary's total** — plus `concat`/`take` over `AnyArray`. Closing the
+symbols — 20 % of the fused binary's total** — plus `concat`/`take` over `DynArray`. Closing the
 next order of magnitude needs a **comptime key spec** (fused grouping), not more work on the
 aggregate side; Q1.1's `hashing`/`sort` dtype-ladder rework is the adjacent lever.
 
@@ -771,7 +771,7 @@ trait AggKernel(Kernel):
     comptime is_distinct: Bool = False               # replaces agg_is_distinct(tag)
     comptime AccType[V: PrimitiveType]: PrimitiveType
     @staticmethod
-    def acc_dtype(input: AnyDataType) raises -> AnyDataType   # replaces agg_out_dtype(tag, dt)
+    def acc_dtype(input: DynType) raises -> DynType   # replaces agg_out_dtype(tag, dt)
 
 def dispatch_agg[
     job: def[K: AggKernel]() raises capturing[_] -> None
@@ -806,7 +806,7 @@ cannot be conjured without its dtype instance. The fix is to thread it:
 
 ```mojo
 @staticmethod
-def acc_dtype(input: AnyDataType) raises -> AnyDataType   # on AggKernel
+def acc_dtype(input: DynType) raises -> DynType   # on AggKernel
 ```
 — `Min`/`Max` → `input`; `Sum`/`Product` → `Int64Type()`/`Float64Type()` by physical width;
 `Count` → `Int64Type()`; `Mean` → `Float64Type()`. Then use the two-argument
@@ -1024,7 +1024,7 @@ because none knows the set before the query runs.
 def aggregate[K: AggKernel, V: PrimitiveType](
     gids: Int32Array, num_groups: Int, values: PrimitiveArray[V],
     ctx: ExecutionContext,
-) raises -> AnyArray
+) raises -> DynArray
 
 # fused multi-aggregate — the surface F2 generates
 struct FusedAggregation[*Ks: AggKernel, *Vs: PrimitiveType]:
@@ -1037,7 +1037,7 @@ struct FusedAggregation[*Ks: AggKernel, *Vs: PrimitiveType]:
 
     def update(mut self, gids: Int32Array, inputs: Tuple[...], num_groups: Int) raises
     def merge(mut self, other: Self, remap: Int32Array) raises   # partitioned/parallel fold
-    def finish(mut self, num_groups: Int) raises -> List[AnyArray]
+    def finish(mut self, num_groups: Int) raises -> List[DynArray]
 ```
 
 **Mojo feasibility, checked:**
@@ -1397,7 +1397,7 @@ struct Grouping(Movable):
     holds by construction and the count can never be read early."""
     var _gids: List[Int32Array]      # one per consumed batch, in order
     var _num_groups: Int
-    var _key_columns: List[AnyArray]
+    var _key_columns: List[DynArray]
 ```
 
 `HashGrouper.consume_keys` keeps returning the per-batch gids (the streaming path needs them as it
@@ -1490,7 +1490,7 @@ What did work, and is worth keeping in a retry:
 - **`acc_instance[V](input) -> AccType[V]`** — the comptime-typed counterpart of `acc_dtype`. This
   is the piece that gets past the `Defaultable` wall without a downcast: `min`/`max` return the
   input's own dtype (unit and timezone intact), the widening aggregates return a defaultable
-  numeric one. Routing through `AnyDataType` instead needs the private `_as`, i.e. trades one leak
+  numeric one. Routing through `DynType` instead needs the private `_as`, i.e. trades one leak
   for another.
 - Threading the accumulator instance through `AggState.__init__(input_dtype)` and its 8
   construction sites, plus `agg_out_dtype` / `agg_dtype`, which all default-construct `AccType[V]`.
@@ -1503,7 +1503,7 @@ kernel-layer change is done.
 **Q2.6 — Delete `reinterpret_array`** · Depends: Q2.5 for the `groupby` half ·
 Owns: `marrow/kernels/{filter,sort,hashing,groupby,aggregate}.mojo` ·
 
-`reinterpret_array` (+ `AnyDataType.storage_type()` and `temporal_backing_dtype`) exists because
+`reinterpret_array` (+ `DynType.storage_type()` and `temporal_backing_dtype`) exists because
 the *dispatch layer* routes temporal columns through the **numeric** branch — even though every
 typed leaf is already bound on `PrimitiveType`, which temporal satisfies. It is not needed for
 correctness anywhere:
@@ -1535,10 +1535,10 @@ expense.
 **Q2.1 — Add the missing accessors (RC1)** · Depends: — · Owns: `marrow/dtypes.mojo`,
 `marrow/buffers.mojo`, `marrow/builders.mojo`, `marrow/utils.mojo`, `marrow/expr/values.mojo` ·
 ⚠️ BINSIZE · Done when no type reaches into another's `_`-prefixed fields:
-`AnyDataType` exposes its variant (kills `dt._v` in `utils.mojo:287-316` and `arrays.mojo:447`);
+`DynType` exposes its variant (kills `dt._v` in `utils.mojo:287-316` and `arrays.mojo:447`);
 `Allocation` exposes `is_device()`/`is_host()` (kills `Buffer`'s `_host`/`_device` probing — and
 **fixes `Buffer.resize` mishandling DEVICE memory**); `PrimitiveBuilder.append_nulls(n)` replaces
-`b._null_count = size`; `Context.get[A]` goes through `AnyArray._as[A]()`.
+`b._null_count = size`; `Context.get[A]` goes through `DynArray._as[A]()`.
 
 **Q2.2 — One concept, one owner (RC2)** · Depends: Q0.2 · Owns: `marrow/kernels/compare.mojo`,
 `marrow/kernels/string.mojo`, `marrow/kernels/arithmetic.mojo`, `marrow/kernels/__init__.mojo`,
@@ -1630,9 +1630,9 @@ consume, after which they are genuinely disjoint.
 
 | wave | task | owns | why here |
 |---|---|---|---|
-| **1** | **Q3.2** core + memory | `views.mojo`, `buffers.mojo`, `arrays.mojo`, `utils.mojo`, `scalars.mojo`, `builders.mojo`, `c_data.mojo` | The hub. Lands `BitmapView.to_owned`, `Bitmap.unset_count`, `Bitmap.intersect`, `AnyArray.view(dtype)`, `ArrayData.owned_validity`, `PrimitiveArray.nulls/arange`, and moves `_apply_dispatch`/`_reduce_dispatch` onto `ExecutionContext`. **Run solo.** |
-| **2a** | **Q3.1** kernels | `marrow/kernels/*` (+ tests) | Consumes `Bitmap.intersect` (for `bitmap_and`) and `AnyArray.view`. Biggest item: delete the **20** `filter`/`take` typed delegators, keep 3. |
-| **2b** | **Q3.3** parquet + IPC | `marrow/ipc.mojo`, `marrow/parquet/*` | Consumes `LittleEndian.checked` and `AnyArray.view` from wave 1 — which is exactly what made `_read_le` and `_retag` cross-cutting before. |
+| **1** | **Q3.2** core + memory | `views.mojo`, `buffers.mojo`, `arrays.mojo`, `utils.mojo`, `scalars.mojo`, `builders.mojo`, `c_data.mojo` | The hub. Lands `BitmapView.to_owned`, `Bitmap.unset_count`, `Bitmap.intersect`, `DynArray.view(dtype)`, `ArrayData.owned_validity`, `PrimitiveArray.nulls/arange`, and moves `_apply_dispatch`/`_reduce_dispatch` onto `ExecutionContext`. **Run solo.** |
+| **2a** | **Q3.1** kernels | `marrow/kernels/*` (+ tests) | Consumes `Bitmap.intersect` (for `bitmap_and`) and `DynArray.view`. Biggest item: delete the **20** `filter`/`take` typed delegators, keep 3. |
+| **2b** | **Q3.3** parquet + IPC | `marrow/ipc.mojo`, `marrow/parquet/*` | Consumes `LittleEndian.checked` and `DynArray.view` from wave 1 — which is exactly what made `_read_le` and `_retag` cross-cutting before. |
 | **2c** | **Q3.4 item 3** python | `python/bindings/*`, `marrow/tabular.mojo`, `marrow/scalars.mojo` (`as_py` only) | Items 1/2/4 already landed (`81fa29a`). ⚠️ touches `scalars.mojo`, so it must follow wave 1, not run beside it. |
 | **3** | **Q3.5** expr | `marrow/expr/*` | ⚠️ BINSIZE. Consumes `owned_validity` / `to_owned` / `unset_count` from wave 1. Also contends with **Q2.5** on `expr/values.mojo` — pick one; do not run both. |
 
@@ -1708,12 +1708,12 @@ Everything else becomes a method, static factory, private method of its one owni
 5. Delete the **9 temporal delegators** (`year`, `month`, …) called only by tests — but see
    the typed-delegator finding above before counting them as dead.
 6. Move `reinterpret_array` / `temporal_backing_dtype` out of `aggregate.mojo` onto
-   `AnyArray` / `AnyDataType` (today `filter.mojo` imports from *aggregate* to filter a timestamp).
+   `DynArray` / `DynType` (today `filter.mojo` imports from *aggregate* to filter a timestamp).
 7. Delete verified-dead: `hash_identity` ×3, `_drop_null_bool`.
 
 **Q3.2 — Core + memory (41 of 89)** · Depends: Q2.1, Q2.3 · Owns: `marrow/views.mojo`,
 `marrow/utils.mojo`, `marrow/builders.mojo`, `marrow/scalars.mojo`, `marrow/c_data.mojo` ·
-⚠️ BINSIZE · Key moves: `dispatch_over_*` → methods on `AnyDataType` (**64 call sites**, removes
+⚠️ BINSIZE · Key moves: `dispatch_over_*` → methods on `DynType` (**64 call sites**, removes
 the largest private-field reach-in); `_apply_dispatch`/`_reduce_dispatch` → `ExecutionContext`
 (their bodies read *only* `ctx` accessors); the two bitmap↔bitmap `apply` overloads → private
 methods on `BitmapView` (they read `_data`/`_offset`/`_length` from module scope); `nulls()` →
@@ -1727,7 +1727,7 @@ The 13 `KEEP-FREE` here (C-ABI callbacks + `variant_dispatch*`) are genuinely fo
 `marrow/parquet/*` · Only 3 survive (`pq.read_table`, `pq.read_metadata`, `pq.write_table`).
 Highlights: `_walk_slots` → `Page.scatter` (highest fan-in in the package); `_read_le` →
 `LittleEndian.checked` (**28 call sites, 4 structs**); `xxh64` + 3 helpers → an `XxHash64`
-namespace next to `Crc32`; `_retag` → `AnyArray.view(dtype)` (that is `pyarrow.Array.view`);
+namespace next to `Crc32`; `_retag` → `DynArray.view(dtype)` (that is `pyarrow.Array.view`);
 delete the 6 redundant `read_ipc_*`/`write_ipc_*` wrappers (each is one constructor call).
 
 **Q3.4 — Python layer (65 delete, 19 relocate)** · Depends: — · Owns: `python/marrow/*.py`,
@@ -1746,7 +1746,7 @@ value in the whole plan for effort: delete the **24 duplicated compute functions
 `python/marrow/__init__.py` (they ship *contradictory* `null_placement` defaults vs `compute.py`;
 `filter`/`take`/`drop_null`/`sort`/`sort_indices` each exist **three** times — top-level,
 `compute.py`, *and* as `Array` methods; `min`/`max`/`sum`/`any`/`all`/`filter` shadow builtins).
-Then: `_as_py` → `AnyScalar.as_py()` (58 lines of core type dispatch stranded in bindings);
+Then: `_as_py` → `DynScalar.as_py()` (58 lines of core type dispatch stranded in bindings);
 `_record_batch_join`/`group_by`/`aggregate`/`sort_by` (~265 lines of real semantics) → methods on
 `RecordBatch` — they currently exist *only* for Python callers and import `marrow.expr.relations`
 inside a function body, inverting CLAUDE.md's mandated split. Raise `NotImplementedError` on the
@@ -1756,7 +1756,7 @@ kwargs currently accepted and silently ignored (`skip_nulls`, `mode`, `boundsche
 `marrow/expr/dynamic.mojo`, `marrow/expr/relations.mojo` · ⚠️ BINSIZE · `_column_validity` +
 `_result_validity` → one `ArrayData.owned_validity()`; `_view_to_owned` → `BitmapView.to_owned()`
 (add the offset-0 fast path — it currently allocates and does a full pass **per column per batch**);
-`_nulls_of` → `Bitmap.unset_count()`; `relations.execute` → `AnyRelation.execute(ctx)` (the only
+`_nulls_of` → `Bitmap.unset_count()`; `relations.execute` → `DynRelation.execute(ctx)` (the only
 plan verb that is not a method, and it collides with `Value.execute`); `slit` → a `lit` overload;
 fix `lit`'s `value: Int` (today `lit(3.5, float64)` is unrepresentable).
 **Measure before/after**: `_rank`/`promote` → `dtypes.mojo` and any `ColumnSet` type are the two
@@ -1819,10 +1819,10 @@ size risk in the plan).
   test must stay *ungated*, because an INT96 column's Arrow dtype is `timestamp(ns)` and
   gating it lets the column fall through to the temporal arm and be decoded as INT64.
 
-  **The relational lane carries it too.** `AnyRelation.filter` used to push a predicate by
+  **The relational lane carries it too.** `DynRelation.filter` used to push a predicate by
   downcasting to a concrete `ParquetScan` and rebuilding it, which silently rebuilt a
   `ParquetScan[narrow]` as the default full-ladder one — losing the narrowing. Returning
-  `Optional[AnyRelation]` from a virtual **does not compile** (it puts `AnyRelation` inside
+  `Optional[DynRelation]` from a virtual **does not compile** (it puts `DynRelation` inside
   its own trampoline field type and Mojo rejects the struct as recursive), so
   `Relation.with_predicate` returns the rebuilt node as an erased `ArcPointer[NoneType]`:
   the rebuilt node has the *same concrete type*, so the caller keeps its trampolines and

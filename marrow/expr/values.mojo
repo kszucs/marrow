@@ -38,7 +38,7 @@ from ..schema import Schema
 from ..tabular import RecordBatch
 from ..arrays import (
     Array,
-    AnyArray,
+    DynArray,
     PrimitiveArray,
     Int64Array,
     Int32Array,
@@ -46,13 +46,13 @@ from ..arrays import (
     BinaryLikeArray,
     StringArray,
 )
-from ..scalars import AnyScalar, BoolScalar, PrimitiveScalar, StringScalar
+from ..scalars import DynScalar, BoolScalar, PrimitiveScalar, StringScalar
 from ..buffers import Buffer, Bitmap
 from ..builders import Int64Builder, BinaryLikeBuilder
 from ..views import apply, BitmapView
 from ..dtypes import (
     FloatingType,
-    AnyDataType,
+    DynType,
     DataType,
     NumericType,
     DType,
@@ -187,15 +187,15 @@ from ..kernels.cast import (
 # ---------------------------------------------------------------------------
 # Datum — Scalar | Array, the uniform `execute` result.
 # ---------------------------------------------------------------------------
-comptime Datum = Variant[AnyScalar, AnyArray]
+comptime Datum = Variant[DynScalar, DynArray]
 
 
-def into_array(d: Datum, n: Int) raises -> AnyArray:
+def into_array(d: Datum, n: Int) raises -> DynArray:
     """Force `d` to an array of length `n` — broadcasting a scalar (lazy until here).
     """
-    if d.isa[AnyScalar]():
-        return d[AnyScalar].repeat(n)
-    return d[AnyArray].copy()
+    if d.isa[DynScalar]():
+        return d[DynScalar].repeat(n)
+    return d[DynArray].copy()
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ struct Context(Copyable, Movable):
         """Typed slot read — `ctx.get[BoolArray](i)`. Pulls the typed array straight
         out of the slot's `Datum` (a ref-count bump), skipping the `as_xxx().copy()`
         dance at every breaker read."""
-        return self._slots[i][AnyArray].as_type[A]().copy()
+        return self._slots[i][DynArray].as_type[A]().copy()
 
     def size(self) -> Int:
         return len(self._slots)
@@ -234,7 +234,7 @@ struct Context(Copyable, Movable):
 #    recompute. A keyed dedup in `prepare` (map subtree-key -> slot) can restore it.
 #  - SCHEDULER: independent breakers run sequentially in `prepare`; they are
 #    independent stages and can be scheduled to run concurrently.
-#  - `AnyScalar.repeat` has no string support, so a string *scalar* cannot broadcast
+#  - `DynScalar.repeat` has no string support, so a string *scalar* cannot broadcast
 #    to a column yet (core-array machinery, orthogonal to fusion).
 
 
@@ -482,7 +482,7 @@ trait NumericValue(Value):
             var v = self.vectorwise[1](batch, ctx, slot, 0)[0].cast[
                 Self.OutType.native
             ]()
-            return PrimitiveScalar[Self.OutType](v).to_any()
+            return PrimitiveScalar[Self.OutType](v).to_dyn()
         else:  # columnar → one fused vectorized pass
             var length = batch.num_rows()
             var buf = Buffer.alloc_uninit[native](length)
@@ -503,7 +503,7 @@ trait NumericValue(Value):
                 bitmap=v^,
                 buffer=buf.to_immutable(),
             )
-            return arr^.to_any()
+            return arr^.to_dyn()
 
     # --- aggregates without a fused reduction -------------------------------
     #
@@ -828,7 +828,7 @@ trait BoolValue(Value):
             offset=0,
             bitmap=v^,
             buffer=bm.to_immutable(),
-        ).to_any()
+        ).to_dyn()
 
 
 @fieldwise_init
@@ -1003,7 +1003,7 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
         var arr = (
             into_array(self.a.execute(batch), batch.num_rows()).as_bool().copy()
         )
-        ctx.append(BoolScalar(Self.K.reduce(arr)).to_any())
+        ctx.append(BoolScalar(Self.K.reduce(arr)).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1013,7 +1013,7 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
     ]:
         var d = ctx.get(slot)
         slot += 1
-        return SIMD[DType.bool, W](d[AnyScalar].as_bool().value())
+        return SIMD[DType.bool, W](d[DynScalar].as_bool().value())
 
 
 comptime Any = BoolReduce[AnyKernel, _]
@@ -1073,7 +1073,7 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Self.K.apply(arr).to_any())
+        ctx.append(Self.K.apply(arr).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1180,7 +1180,7 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
             .copy()
         )
         ctx.append(
-            StringToNumKernel.apply[StringType, Self.To, False](s).to_any()
+            StringToNumKernel.apply[StringType, Self.To, False](s).to_dyn()
         )
 
     @always_inline
@@ -1213,7 +1213,7 @@ struct StringToBool[A: StringValue](BoolValue):
             .as_string()
             .copy()
         )
-        ctx.append(StringToBoolKernel.apply[StringType, False](s).to_any())
+        ctx.append(StringToBoolKernel.apply[StringType, False](s).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1305,14 +1305,14 @@ trait StringValue(Value):
         self.prepare(batch, ctx)
         comptime if Self.OutShape == 0:
             var slot = 0
-            return StringScalar(self.elementwise(batch, ctx, slot, 0)).to_any()
+            return StringScalar(self.elementwise(batch, ctx, slot, 0)).to_dyn()
         else:
             var n = batch.num_rows()
             var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
             for i in range(n):
                 var slot = 0
                 builder.append(self.elementwise(batch, ctx, slot, i))
-            return builder.finish().to_any()
+            return builder.finish().to_dyn()
 
     # --- aggregates (marrow.expr.aggregates) --------------------------------
 
@@ -1568,7 +1568,7 @@ struct StringPredicate[
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n).as_string().copy()
         var ra = into_array(self.r.execute(batch), n).as_string().copy()
-        ctx.append(Self.K.apply(la, ra).to_any())
+        ctx.append(Self.K.apply(la, ra).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1614,14 +1614,14 @@ struct IsIn[A: Value](BoolValue):
     comptime IsBreaker = True
     comptime NativeType = DType.int32
     var a: Self.A
-    var _value_set: AnyArray
+    var _value_set: DynArray
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(IsInKernel.dispatch(arr, self._value_set.copy()).to_any())
+        ctx.append(IsInKernel.dispatch(arr, self._value_set.copy()).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1702,7 +1702,7 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
         # The operand's dtype is `A.OutType`, so the reduce is the fully typed
         # one — no dtype dispatch, and the erasure is only the `Context` slot.
         var arg = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Self.K.reduce(arg.as_primitive[Self.A.OutType]()).to_any())
+        ctx.append(Self.K.reduce(arg.as_primitive[Self.A.OutType]()).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1713,7 +1713,7 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
         var d = ctx.get(slot)
         slot += 1
         return SIMD[Self.OutType.native, W](
-            d[AnyScalar].as_primitive[Self.OutType]().value()
+            d[DynScalar].as_primitive[Self.OutType]().value()
         )
 
 
@@ -1744,7 +1744,7 @@ trait WindowKernel:
     comptime OutType: NumericType
 
     @staticmethod
-    def evaluate_all(values: AnyArray) raises -> AnyArray:
+    def evaluate_all(values: DynArray) raises -> DynArray:
         ...
 
 
@@ -1753,13 +1753,13 @@ struct RowNumberKernel(WindowKernel):
     comptime OutType = Int64Type
 
     @staticmethod
-    def evaluate_all(values: AnyArray) raises -> AnyArray:
+    def evaluate_all(values: DynArray) raises -> DynArray:
         # frame-independent (DataFusion `evaluate_all`): row_number = 1..n.
         var n = len(values)
         var b = Int64Builder(n)
         for i in range(n):
             b.append(Int64(i + 1))
-        return b.finish().to_any()
+        return b.finish().to_dyn()
 
 
 @fieldwise_init
@@ -1809,14 +1809,14 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 # data-dependent-validity breakers over two same-dtype numeric operands.
 trait ConditionalBinaryKernel:
     @staticmethod
-    def combine(la: AnyArray, ra: AnyArray) raises -> AnyArray:
+    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
         ...
 
 
 struct CoalesceOp(ConditionalBinaryKernel):
     @staticmethod
-    def combine(la: AnyArray, ra: AnyArray) raises -> AnyArray:
-        var candidates = List[AnyArray]()
+    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
+        var candidates = List[DynArray]()
         candidates.append(la.copy())
         candidates.append(ra.copy())
         return coalesce(candidates)
@@ -1824,7 +1824,7 @@ struct CoalesceOp(ConditionalBinaryKernel):
 
 struct NullifOp(ConditionalBinaryKernel):
     @staticmethod
-    def combine(la: AnyArray, ra: AnyArray) raises -> AnyArray:
+    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
         return nullif(la, ra)
 
 
@@ -1846,7 +1846,7 @@ struct ConditionalBinary[
             self.l.referenced_columns(), self.r.referenced_columns()
         )
 
-    def _result(self, batch: RecordBatch) raises -> AnyArray:
+    def _result(self, batch: RecordBatch) raises -> DynArray:
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n)
         var ra = into_array(self.r.execute(batch), n)
@@ -1897,14 +1897,14 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
             self.otherwise.referenced_columns(),
         )
 
-    def _result(self, batch: RecordBatch) raises -> AnyArray:
+    def _result(self, batch: RecordBatch) raises -> DynArray:
         var n = batch.num_rows()
         var ca = into_array(self.cond.execute(batch), n).as_bool().copy()
         var conditions = List[BoolArray]()
         conditions.append(ca^)
-        var values = List[AnyArray]()
+        var values = List[DynArray]()
         values.append(into_array(self.then.execute(batch), n))
-        var else_ = Optional[AnyArray](
+        var else_ = Optional[DynArray](
             into_array(self.otherwise.execute(batch), n)
         )
         return case_when(conditions, values, else_^)
@@ -2201,18 +2201,18 @@ struct AnyValue(Copyable, Movable, Writable):
     Boxes either:
 
       * a comptime fused `Value` node — `execute` runs the fused engine against a
-        fresh context and returns a column (`AnyArray`); `prune` is the conservative
+        fresh context and returns a column (`DynArray`); `prune` is the conservative
         `unknown()` (the comptime lane has no statistics pruning — always sound,
         since a caller only skips data it has proven cannot match).
       * a runtime `DynValue` interpreter (`marrow.expr.dynamic`) — `execute` is
-        already an `AnyArray`, and `prune` carries the *real* min/max rule.
+        already an `DynArray`, and `prune` carries the *real* min/max rule.
 
     This is the same dual-box design as `values.AnyValue`, so the relational plan
     (built from untyped `DynValue`) runs unchanged, while typed subtrees fuse.
     """
 
     var _boxed: ArcPointer[NoneType]
-    var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> AnyArray
+    var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> DynArray
     var _prune_fn: def(
         ArcPointer[NoneType], PruneStats
     ) thin raises -> PruneBound
@@ -2225,7 +2225,7 @@ struct AnyValue(Copyable, Movable, Writable):
     @staticmethod
     def _exec_tramp[
         V: Value
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> DynArray:
         var ctx = Context()
         var d = rebind[ArcPointer[V]](ptr)[].execute(batch, ctx)
         return into_array(d, batch.num_rows())
@@ -2272,7 +2272,7 @@ struct AnyValue(Copyable, Movable, Writable):
     @staticmethod
     def _exec_tramp_dyn(
         ptr: ArcPointer[NoneType], batch: RecordBatch
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         return rebind[ArcPointer[DynValue]](ptr)[].execute(batch)
 
     @staticmethod
@@ -2312,7 +2312,7 @@ struct AnyValue(Copyable, Movable, Writable):
         self._referenced_columns_fn = Self._referenced_columns_tramp_dyn
         self._is_deterministic_fn = Self._is_deterministic_tramp_dyn
 
-    def execute(self, batch: RecordBatch) raises -> AnyArray:
+    def execute(self, batch: RecordBatch) raises -> DynArray:
         return self._execute(self._boxed, batch)
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
@@ -2412,7 +2412,7 @@ struct AggExpr(Copyable, Movable, Writable):
     var input: AnyValue
     var _unresolved: Optional[DynValue]
     var _func: String
-    var _of: Optional[def(AnyDataType) thin raises -> AggFunc]
+    var _of: Optional[def(DynType) thin raises -> AggFunc]
 
     @implicit
     def __init__[
@@ -2441,7 +2441,7 @@ struct AggExpr(Copyable, Movable, Writable):
         *,
         var out_name: String,
         var input: AnyValue,
-        of: def(AnyDataType) thin raises -> AggFunc,
+        of: def(DynType) thin raises -> AggFunc,
     ):
         self.out_name = out_name^
         self.input = input^
@@ -2470,7 +2470,7 @@ struct AggExpr(Copyable, Movable, Writable):
             return AnyValue(self._unresolved.value().resolve_names(schema))
         return self.input.copy()
 
-    def resolve(self, in_dtype: AnyDataType) raises -> AggFunc:
+    def resolve(self, in_dtype: DynType) raises -> AggFunc:
         """The aggregate, bound to the dtype its input turned out to have."""
         if self._of:
             return self._of.value()(in_dtype)

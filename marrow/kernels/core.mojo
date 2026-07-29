@@ -10,7 +10,7 @@ a caller sees is the same sentence whichever kernel raised it, and a new family
 inherits it by conforming rather than by copying the message.
 """
 
-from ..dtypes import AnyDataType
+from ..dtypes import DynType
 
 
 trait Kernel:
@@ -33,7 +33,7 @@ trait Kernel:
             )
 
     @staticmethod
-    def expect_same_dtype(left: AnyDataType, right: AnyDataType) raises:
+    def expect_same_dtype(left: DynType, right: DynType) raises:
         """Raise unless both operands carry the same dtype."""
         if left != right:
             raise Self.error(t"dtype mismatch: {left} vs {right}")

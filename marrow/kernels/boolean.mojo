@@ -8,7 +8,7 @@ Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 - **Tier 1 (apply)** — ``Kernel.apply``: typed ``BoolArray`` API.  Operates
   directly on bit-packed bitmaps via 64-bit word operations — more efficient
   than element-wise SIMD for packed bits.
-- **Tier 2 (dispatch)** — ``Kernel.dispatch``: type-erased ``AnyArray`` entry.
+- **Tier 2 (dispatch)** — ``Kernel.dispatch``: type-erased ``DynArray`` entry.
   Default implementation in the trait; concrete structs only define ``core``
   and ``apply``.
 """
@@ -16,7 +16,7 @@ Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 
 from std.math import isnan, isinf
 
-from ..arrays import BoolArray, AnyArray
+from ..arrays import BoolArray, DynArray
 from ..buffers import Bitmap
 from ..dtypes import (
     PrimitiveType,
@@ -68,15 +68,15 @@ trait BoolBinaryKernel(Kernel):
 
     @staticmethod
     def dispatch(
-        left: AnyArray,
-        right: AnyArray,
+        left: DynArray,
+        right: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         if left.dtype() != bool_dt or right.dtype() != bool_dt:
             raise Self.error("inputs must be bool arrays")
         return Self.apply(
             left.as_bool().copy(), right.as_bool().copy(), ctx
-        ).to_any()
+        ).to_dyn()
 
 
 trait BoolUnaryKernel(Kernel):
@@ -99,38 +99,38 @@ trait BoolUnaryKernel(Kernel):
 
     @staticmethod
     def dispatch(
-        arr: AnyArray,
+        arr: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         if arr.dtype() != bool_dt:
             raise Self.error("input must be a bool array")
-        return Self.apply(arr.as_bool().copy(), ctx).to_any()
+        return Self.apply(arr.as_bool().copy(), ctx).to_dyn()
 
 
 trait UnaryPredicateKernel(Kernel):
-    """Element-wise `array -> bool` predicate over a runtime-typed `AnyArray`.
+    """Element-wise `array -> bool` predicate over a runtime-typed `DynArray`.
 
     Unlike `BoolUnaryKernel` (bool -> bool) these take *any* array and produce a
     `BoolArray`. Validity predicates (`is_null`/`not_null`) read only the bitmap;
     value predicates (`is_nan`/`is_inf`) scan the values. Concrete kernels define
     `apply` (which owns type resolution — over any dtype for the validity ones,
     over floating dtypes for the value ones); `dispatch` defaults to
-    `apply(...).to_any()`, mirroring the other kernel traits.
+    `apply(...).to_dyn()`, mirroring the other kernel traits.
     """
 
     @staticmethod
     def apply(
-        arr: AnyArray,
+        arr: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
         ...
 
     @staticmethod
     def dispatch(
-        arr: AnyArray,
+        arr: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return Self.apply(arr, ctx).to_any()
+    ) raises -> DynArray:
+        return Self.apply(arr, ctx).to_dyn()
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +330,7 @@ trait NullPredicateKernel(UnaryPredicateKernel):
 
     @staticmethod
     def apply(
-        arr: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+        arr: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> BoolArray:
         var n = len(arr)
         var validity = arr.to_data().validity()
@@ -364,7 +364,7 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
 
     @staticmethod
     def apply(
-        arr: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+        arr: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> BoolArray:
         @parameter
         def leaf[T: FloatingType](d: T) raises -> BoolArray:

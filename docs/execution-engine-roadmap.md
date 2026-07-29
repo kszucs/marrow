@@ -168,14 +168,14 @@ date_diff) or string↔timestamp parsing. No **decimal arithmetic**. Aggregates 
 non-numeric columns. `LengthKernel`/`ArrayLengthKernel` don't propagate nulls.
 
 **G8 — AOT relational monomorphization deferred.** F2 works today only at the
-*expression* level (a fused `Value` boxed into a runtime `AnyRelation`). The
+*expression* level (a fused `Value` boxed into a runtime `DynRelation`). The
 fully-typed relational plan (`Table[T]`, `Project[*Es]`, typed `HashJoin[L,R,LK,RK]`,
 `Env`/`Param` late binding) that yields a fully-DCE'd *relational* binary is unbuilt,
 partly blocked on a Mojo `reflect` resolution bug (`values.mojo:1595`).
 
 **G9 — Data-model computational thinness.** `ChunkedArray` is a length-aware
 container only (no `slice`/`__getitem__`/`null_count`/`filter`/`cast`); `Table` has no
-`slice`/`select`/`filter`/`sort`/`concat_tables`. Kernels target `AnyArray`, not
+`slice`/`select`/`filter`/`sort`/`concat_tables`. Kernels target `DynArray`, not
 `ChunkedArray`.
 
 ---
@@ -185,11 +185,11 @@ container only (no `slice`/`__getitem__`/`null_count`/`filter`/`cast`); `Table` 
 These shape many tasks; decide them first.
 
 - **D1 — F1 drives `DynValue`; F2 drives fused `Value`. Both go through the same
-  `AnyRelation` plan and `execute()`.** Do *not* build a second execution path for
+  `DynRelation` plan and `execute()`.** Do *not* build a second execution path for
   Python. The Python `LazyFrame.collect()` maps to `execute(plan, ctx)`. Confirmed
   viable by the audit; the only new work is binding + Python wrappers + growing
   `DynValue`.
-- **D2 — Grow the relational layer as *erased* nodes (`AnyRelation`) first.** Add
+- **D2 — Grow the relational layer as *erased* nodes (`DynRelation`) first.** Add
   `Sort`/`Limit`/`Distinct`/`Union`/`Window` as runtime relational nodes over
   `AnyValue`. Defer the fully-typed `Project[*Es]`/`Table[T]` monomorphized
   relational plan (G8) to M3+ — it is an optimization of F2, not a correctness gate,
@@ -199,8 +199,8 @@ These shape many tasks; decide them first.
   len)` + `size()`), implemented by both `MappedFile` (local) and an OpenDAL-backed
   source. This unblocks streaming row-group iteration *and* remote scans with one
   abstraction. Do this before wiring OpenDAL.
-- **D4 — Optimizer is a rule-list over the immutable `AnyRelation` IR**, mirroring
-  DataFusion. Each rule is a pure `AnyRelation -> AnyRelation` rewrite. Add
+- **D4 — Optimizer is a rule-list over the immutable `DynRelation` IR**, mirroring
+  DataFusion. Each rule is a pure `DynRelation -> DynRelation` rewrite. Add
   `referenced_columns()` / `is_deterministic()` metadata to `AnyValue` first
   (prerequisite for pushdown).
 - **D5 — Fix Kleene null semantics in the boolean kernels before M1 ships.** Wrong
@@ -224,8 +224,8 @@ polish. **Won't** = explicitly out of scope for this roadmap.
 |---|---|---|
 | Python `Column` wrapper over `DynValue` (forward `+ - * / == < > & \| ~`, `.cast`, `.is_null`, `.isin`, reductions, string/temporal methods) | **Must** | `DynValue` already has the dunders (`dynamic.mojo:413-468`); pure-Python `Column`. |
 | Python `col()`, `lit()` (with runtime dtype inference incl. string/temporal), `if_else` | **Must** | `lit` is parametric on numeric type today — needs a runtime-dtype `lit`. |
-| Python **ibis-flavored** `Table` over `AnyRelation` (`.filter/.select/.mutate/.group_by/.aggregate/.order_by/.limit/.join`) building, not executing; `.execute()`/`.to_pyarrow()` | **Must** | Thin native wrapper — **not** an ibis backend, no `ibis` dep. `AnyRelation` fluent API exists (`relations.mojo:211-335`). See tasks §3.1. |
-| Bind `AnyValue`/`AnyRelation` through `PythonModuleBuilder.add_type` | **Must** | New binding territory; watch trait/associated-type elaboration hazards (CLAUDE.md). |
+| Python **ibis-flavored** `Table` over `DynRelation` (`.filter/.select/.mutate/.group_by/.aggregate/.order_by/.limit/.join`) building, not executing; `.execute()`/`.to_pyarrow()` | **Must** | Thin native wrapper — **not** an ibis backend, no `ibis` dep. `DynRelation` fluent API exists (`relations.mojo:211-335`). See tasks §3.1. |
+| Bind `AnyValue`/`DynRelation` through `PythonModuleBuilder.add_type` | **Must** | New binding territory; watch trait/associated-type elaboration hazards (CLAUDE.md). |
 | `marrow.read_parquet(path/glob)` / `marrow.table(schema)` returning a `Table` | **Must** | Wraps `parquet_scan`; see scan workstream. |
 | Route Python eager `join/group_by/sort_by` through `execute(plan)` (unify paths) or keep documented eager shortcuts | **Should** | Today they bypass the expr layer (`tabular.mojo`). Avoid two divergent code paths. |
 | Mojo AOT DSL: ergonomic `col("a", int64)`-style builders documented end-to-end for M1 query shapes | **Must** | Expression-level fused builders exist (`values.mojo:1605`); document + fill gaps. |
@@ -234,7 +234,7 @@ polish. **Won't** = explicitly out of scope for this roadmap.
 | Full **ibis backend** (`ibis.backends.marrow`, translating the ibis op graph) or an `ibis` runtime dependency | **Won't** | ibis is a *loose naming guideline* only. A real backend drags in ibis's op catalog, type coercion, and backend test contract — over-engineering. Ship the thin native `Table`/`Column`. |
 | `pandas`-style eager `DataFrame` API | **Won't** | Deferred-only per the brief; the existing eager RecordBatch surface stays as-is. |
 
-### 4.2 Relational operators (the `AnyRelation` IR + `Processor` tree)
+### 4.2 Relational operators (the `DynRelation` IR + `Processor` tree)
 
 | Operator | MoSCoW | Notes |
 |---|---|---|
@@ -464,7 +464,7 @@ subquery decorrelation; set-op kernels; Hive partition discovery at scale.
   tuples), vectorization wins memory-bound (latency hiding). Modern systems go hybrid.
   **This maps cleanly onto marrow's two frontends**: F2 (Mojo `comptime`
   monomorphization) = HyPer/Umbra-style compiled small binaries; F1 (type-erased
-  `DynValue` interpreter over `AnyArray`) = the vectorized path. Small binaries come
+  `DynValue` interpreter over `DynArray`) = the vectorized path. Small binaries come
   from embedding only the operators/types the query uses + DCE — exactly the
   `benchmarks/binary_size/` property.
 - **Benchmarks**: ClickBench (single flat table, ~100M rows, 43 q, **no joins** —

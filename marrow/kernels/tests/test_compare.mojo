@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false
 
-from ...arrays import PrimitiveArray, AnyArray
+from ...arrays import PrimitiveArray, DynArray
 from ...builders import (
     array,
     PrimitiveBuilder,
@@ -191,26 +191,26 @@ def test_output_length() raises:
 
 
 # ---------------------------------------------------------------------------
-# Runtime-typed AnyArray overloads
+# Runtime-typed DynArray overloads
 # ---------------------------------------------------------------------------
 
 
 def test_equal_array_overload() raises:
-    """Type-erased EqKernel.dispatch(AnyArray, AnyArray) resolves the dtype."""
-    var a: AnyArray = array([1, 2, 3], int64)
-    var b: AnyArray = array([1, 0, 3], int64)
+    """Type-erased EqKernel.dispatch(DynArray, DynArray) resolves the dtype."""
+    var a: DynArray = array([1, 2, 3], int64)
+    var b: DynArray = array([1, 0, 3], int64)
     var result = EqKernel.dispatch(a, b)
     assert_equal(result.length(), 3)
 
 
 def test_dtype_mismatch_raises() raises:
     """Type-erased kernels raise on dtype mismatch."""
-    var a: AnyArray = array([1, 2, 3], int64)
+    var a: DynArray = array([1, 2, 3], int64)
     var fb = Float64Builder(3)
     fb.unsafe_append(1.0)
     fb.unsafe_append(2.0)
     fb.unsafe_append(3.0)
-    var b: AnyArray = fb.finish()
+    var b: DynArray = fb.finish()
     var raised = False
     try:
         _ = EqKernel.dispatch(a, b)
@@ -311,8 +311,8 @@ def test_string_compare_nulls() raises:
 def test_string_dispatch_anyarray() raises:
     """String ordering goes through the string kernel family: `LtKernel` is
     numeric-only and would not resolve a string dtype."""
-    var a: AnyArray = array(["a", "bb", "c"])
-    var b: AnyArray = array(["b", "bb", "a"])
+    var a: DynArray = array(["a", "bb", "c"])
+    var b: DynArray = array(["b", "bb", "a"])
     var r = StringLtKernel.dispatch(a, b)
     assert_equal(r.length(), 3)
     ref rb = r.as_bool()

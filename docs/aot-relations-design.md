@@ -95,7 +95,7 @@ if not dt and agg_expr.kind() == LOAD:
     dt = input_schema.fields[Int(agg_expr.kind_data())].dtype.copy()
 ...
 else:
-    value_dtypes.append(AnyDataType(float64))   # fallback guess
+    value_dtypes.append(DynType(float64))   # fallback guess
 ```
 
 In the typed layer the child's type *is* the answer — no schema round-trip, no
@@ -267,7 +267,7 @@ trait Named:
         ...
 
 trait Column(Named, Value):
-    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+    def to_array(self, batch: RecordBatch) raises -> DynArray:
         ...
 ```
 
@@ -318,7 +318,7 @@ struct Project[*Es: Column](Relation):
         self.exprs = exprs^
 
     def execute(self, batch: RecordBatch) raises -> RecordBatch:
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         var fields = List[Field]()
         comptime for i in range(Self.Es.__len__()):
             ref e = self.exprs[i]
@@ -336,8 +336,8 @@ this small: every element exposes `to_array()` and `field_name()`, so there is
 no numeric-vs-string `comptime if` and no per-sub-trait erasure helper — each
 column executes as its own monomorphized, fused kernel and erases its own
 result. The **only** dynamic step is collecting heterogeneous columns into
-`List[AnyArray]` / `RecordBatch` — inherently heterogeneous and O(#columns),
-so `AnyArray` is the correct join point. Nothing about per-element compute
+`List[DynArray]` / `RecordBatch` — inherently heterogeneous and O(#columns),
+so `DynArray` is the correct join point. Nothing about per-element compute
 goes through tag dispatch.
 
 **Construction takes a pre-built `Tuple[*Es]`, not bare variadic args** —
@@ -376,9 +376,9 @@ struct Filter[Input: Relation, Pred: BoolValue](Relation):
     var predicate: Self.Pred
 
     def execute(self, batch: RecordBatch) raises -> RecordBatch:
-        var mask = self.predicate.execute(batch).to_any()   # fused BoolArray
+        var mask = self.predicate.execute(batch).to_dyn()   # fused BoolArray
         var projected = self.input.execute(batch)
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for i in range(len(projected.columns)):
             cols.append(filter(projected.columns[i].copy(), mask.copy()))
         return RecordBatch(projected.schema.copy(), cols^)
@@ -403,7 +403,7 @@ or consulted at runtime by `NumericColumn`/`Project`/`Filter` themselves.
 ### Bridge to the erased layer — not yet built (milestone 6)
 
 Mirror the `FUSED` boxing that carries a comptime scalar node into `Expr`: give
-the typed relation an `AnyRelation(typed_plan)` boxing path so a
+the typed relation an `DynRelation(typed_plan)` boxing path so a
 statically-built plan can still flow into the existing executor / Python
 driver when upstream types aren't known. Harder than the scalar bridge: it
 needs `Project`/`Filter` to expose a schema *without* executing (a
@@ -443,7 +443,7 @@ slice.
 5. ✅ `Filter[Input, Pred].execute -> RecordBatch` with `.filter(pred)`
    chaining off `Project`. Tested in `test_relations.mojo`, including the
    exact milestone DoD round trip below.
-6. ⬜ `AnyRelation(typed_plan)` bridge. Not started — see *Bridge to the
+6. ⬜ `DynRelation(typed_plan)` bridge. Not started — see *Bridge to the
    erased layer* above for why it's a bigger scope decision than the rest.
 
 ## Definition of done
@@ -452,7 +452,7 @@ slice.
   `Project(Tuple(t.a, t.b)).filter(Gt(t.a, t.b)).execute(batch)` and produces
   a `RecordBatch` equal to the hand-written `marrow/dyn/relations.mojo` equivalent —
   `test_filter_matches_hand_written_relations_equivalent` executes *both*
-  paths (typed `execute()` and erased `execute(AnyRelation)` via
+  paths (typed `execute()` and erased `execute(DynRelation)` via
   `in_memory_table(batch).select(...).filter(...)`) and asserts schema +
   column equality.
 - ⬜ A test pinning the plan's *type* to the fully-specialized nested form —
@@ -505,7 +505,7 @@ execution environment:
 ```mojo
 struct Env:
     var tables: Catalog    # name -> RecordBatch  (late-bound data sources)
-    var params: Bindings   # name -> AnyScalar     (late-bound scalar params)
+    var params: Bindings   # name -> DynScalar     (late-bound scalar params)
 ```
 
 (Distinct from the join kernel's `ExecutionContext`, which is the GPU/threading
@@ -660,7 +660,7 @@ monomorphized.
 
 ### Type-safety of the binding — open question
 
-`Bindings(min_amount = 100.0)` hands a `Param[Float64Type]` node an `AnyScalar`
+`Bindings(min_amount = 100.0)` hands a `Param[Float64Type]` node an `DynScalar`
 at execute; a dtype mismatch is a **runtime** error. The `Params[Args]()` handle
 closes half the gap (the node's dtype is comptime-checked against the plan), but
 the *provided value* is still checked at execute. Fully-static binding would
@@ -749,7 +749,7 @@ mask, then filters each projected column — two passes, two materializations. T
 
 Above the boundary — relations, conjunction lists, projection lists — everything
 is runtime, walkable, and rewritable, and does not fuse (it is already columnar/
-`AnyArray`-erased). Below the boundary — inside one `AnyValue` — is a single
+`DynArray`-erased). Below the boundary — inside one `AnyValue` — is a single
 monomorphized fused kernel, opaque to rewrites.
 
 This cleanly partitions which rewrites the design admits:
@@ -855,10 +855,10 @@ staging only earns its keep once runtime/cost-based rewriting is in play.
   later-defined structs) — same constraint noted in
   `unified-plan-hierarchy.md`.
 - **Dynamic SQL.** A plan parsed from a runtime SQL string produces erased
-  `AnyRelation` / `Expr` nodes regardless; it gets the runtime path, not AOT
+  `DynRelation` / `Expr` nodes regardless; it gets the runtime path, not AOT
   specialization. The AOT path requires the plan expressed as Mojo types before
   `mojo build`.
-- **One-way bridge.** `AnyRelation(typed_plan)` (once built, milestone 6)
+- **One-way bridge.** `DynRelation(typed_plan)` (once built, milestone 6)
   would box comptime → erased; the reverse is impossible, since comptime
   types are fixed before compilation finishes.
 - **`VariadicPack` forwarding.** Confirmed, not just suspected: a pack

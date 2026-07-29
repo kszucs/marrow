@@ -3,7 +3,7 @@
 from std.testing import assert_true, assert_equal
 
 from ...arrays import (
-    AnyArray,
+    DynArray,
     BoolArray,
     DictionaryArray,
     Int32Array,
@@ -75,9 +75,9 @@ def _make_struct(col0: List[Int], col1: List[Int]) raises -> StructArray:
         a.append(Scalar[int32.native](v))
     for v in col1:
         b.append(Scalar[int32.native](v))
-    var cols = List[AnyArray]()
-    cols.append(a.finish().to_any())
-    cols.append(b.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(a.finish().to_dyn())
+    cols.append(b.finish().to_dyn())
     return record_batch(cols^, names=["k", "v"]).to_struct_array()
 
 
@@ -166,7 +166,7 @@ def _check_order_string(
 
 
 def _assert_sorted(
-    a: AnyArray,
+    a: DynArray,
     idx: Int32Array,
     ascending: Bool = True,
     nulls_first: Bool = True,
@@ -220,7 +220,7 @@ def _assert_sorted(
 
 
 def _assert_values_sorted(
-    a: AnyArray, ascending: Bool = True, nulls_first: Bool = True
+    a: DynArray, ascending: Bool = True, nulls_first: Bool = True
 ) raises:
     """Assert that the array's values are already in sorted order."""
     var n = len(a)
@@ -236,21 +236,21 @@ def _assert_values_sorted(
 
 
 def test_sort_indices_empty() raises:
-    var a: AnyArray = array(int32)
+    var a: DynArray = array(int32)
     var idx = sort_indices(a)
     assert_equal(len(idx), 0)
     _assert_sorted(a, idx)
 
 
 def test_sort_indices_single_element() raises:
-    var a: AnyArray = array([42], int32)
+    var a: DynArray = array([42], int32)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 0)
     _assert_sorted(a, idx)
 
 
 def test_sort_indices_two_elements_asc() raises:
-    var a: AnyArray = array([5, 3], int32)
+    var a: DynArray = array([5, 3], int32)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 0)
@@ -258,7 +258,7 @@ def test_sort_indices_two_elements_asc() raises:
 
 
 def test_sort_indices_all_equal() raises:
-    var a: AnyArray = array([7, 7, 7], int32)
+    var a: DynArray = array([7, 7, 7], int32)
     var idx = sort_indices(a)
     assert_equal(len(idx), 3)
     var seen: List[Bool] = [False, False, False]
@@ -274,7 +274,7 @@ def test_sort_indices_all_equal() raises:
 
 
 def test_sort_indices_int32_ascending() raises:
-    var a: AnyArray = array([3, 1, 4, 1, 5], int32)
+    var a: DynArray = array([3, 1, 4, 1, 5], int32)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 2), 0)  # value 3
     assert_equal(_idx(idx, 3), 2)  # value 4
@@ -286,7 +286,7 @@ def test_sort_indices_int32_ascending() raises:
 
 
 def test_sort_indices_int32_descending() raises:
-    var a: AnyArray = array([3, 1, 4, 1, 5], int32)
+    var a: DynArray = array([3, 1, 4, 1, 5], int32)
     var idx = sort_indices(a, ascending=False)
     assert_equal(_idx(idx, 0), 4)  # 5
     assert_equal(_idx(idx, 1), 2)  # 4
@@ -295,7 +295,7 @@ def test_sort_indices_int32_descending() raises:
 
 
 def test_sort_indices_int32_already_sorted() raises:
-    var a: AnyArray = array([1, 2, 3, 4, 5], int32)
+    var a: DynArray = array([1, 2, 3, 4, 5], int32)
     var idx = sort_indices(a)
     for i in range(5):
         assert_equal(_idx(idx, i), i)
@@ -303,7 +303,7 @@ def test_sort_indices_int32_already_sorted() raises:
 
 
 def test_sort_indices_int32_reverse_sorted() raises:
-    var a: AnyArray = array([5, 4, 3, 2, 1], int32)
+    var a: DynArray = array([5, 4, 3, 2, 1], int32)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 4)
     assert_equal(_idx(idx, 1), 3)
@@ -319,7 +319,7 @@ def test_sort_indices_int32_reverse_sorted() raises:
 
 
 def test_sort_indices_int64_ascending() raises:
-    var a: AnyArray = array([300, 100, 200], int64)
+    var a: DynArray = array([300, 100, 200], int64)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 2)
@@ -328,7 +328,7 @@ def test_sort_indices_int64_ascending() raises:
 
 
 def test_sort_indices_int64_descending() raises:
-    var a: AnyArray = array([300, 100, 200], int64)
+    var a: DynArray = array([300, 100, 200], int64)
     var idx = sort_indices(a, ascending=False)
     assert_equal(_idx(idx, 0), 0)
     assert_equal(_idx(idx, 1), 2)
@@ -343,7 +343,7 @@ def test_sort_indices_int64_negative() raises:
     b.append(Int64(-9223372036854775808))  # INT64_MIN
     b.append(Int64(9223372036854775807))  # INT64_MAX
     b.append(Int64(-1))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)  # INT64_MIN
     assert_equal(_idx(idx, 1), 3)  # -1
@@ -358,7 +358,7 @@ def test_sort_indices_int64_radix() raises:
     var b = Int64Builder(capacity=N)
     for i in range(N):
         b.append(Int64(N - 1 - i))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(len(idx), N)
     _assert_sorted(a, idx)
@@ -375,7 +375,7 @@ def test_sort_indices_int8_negative() raises:
     b.append(Int8(-1))
     b.append(Int8(0))
     b.append(Int8(127))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 0)
     assert_equal(_idx(idx, 1), 1)
@@ -385,7 +385,7 @@ def test_sort_indices_int8_negative() raises:
 
 
 def test_sort_indices_int16_mixed() raises:
-    var a: AnyArray = array([-100, 0, -1, 100], int16)
+    var a: DynArray = array([-100, 0, -1, 100], int16)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 0)  # -100
     assert_equal(_idx(idx, 1), 2)  # -1
@@ -400,7 +400,7 @@ def test_sort_indices_int16_mixed() raises:
 
 
 def test_sort_indices_uint8() raises:
-    var a: AnyArray = array([200, 100, 50, 150], uint8)
+    var a: DynArray = array([200, 100, 50, 150], uint8)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 2)
     assert_equal(_idx(idx, 1), 1)
@@ -410,7 +410,7 @@ def test_sort_indices_uint8() raises:
 
 
 def test_sort_indices_uint16() raises:
-    var a: AnyArray = array([65535, 0, 1000, 255], uint16)
+    var a: DynArray = array([65535, 0, 1000, 255], uint16)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)  # 0
     assert_equal(_idx(idx, 1), 3)  # 255
@@ -420,7 +420,7 @@ def test_sort_indices_uint16() raises:
 
 
 def test_sort_indices_uint32() raises:
-    var a: AnyArray = array([3, 1, 2], uint32)
+    var a: DynArray = array([3, 1, 2], uint32)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 2)
@@ -433,7 +433,7 @@ def test_sort_indices_uint64() raises:
     b.append(UInt64(18446744073709551615))  # UINT64_MAX
     b.append(UInt64(0))
     b.append(UInt64(1000))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)  # 0
     assert_equal(_idx(idx, 1), 2)  # 1000
@@ -451,7 +451,7 @@ def test_sort_indices_float16() raises:
     b.append(Float16(3.0))
     b.append(Float16(1.0))
     b.append(Float16(-2.0))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 2)  # -2.0
     assert_equal(_idx(idx, 1), 1)  # 1.0
@@ -460,7 +460,7 @@ def test_sort_indices_float16() raises:
 
 
 def test_sort_indices_float32_ascending() raises:
-    var a: AnyArray = array([3.0, 1.0, 2.0], float32)
+    var a: DynArray = array([3.0, 1.0, 2.0], float32)
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 2)
@@ -475,7 +475,7 @@ def test_sort_indices_float32_nan_ascending() raises:
     b.append(Float32(3.0e38))
     b.append(nan[float32.native]())
     b.append(Float32(-1.0))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 3)  # -1.0
     assert_equal(_idx(idx, 1), 0)  # 1.0
@@ -491,7 +491,7 @@ def test_sort_indices_float32_nan_descending() raises:
     b.append(Float32(3.0e38))
     b.append(nan[float32.native]())
     b.append(Float32(-1.0))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, ascending=False)
     assert_equal(_idx(idx, 0), 2)  # NaN first
     assert_equal(_idx(idx, 1), 1)  # 3e38
@@ -506,7 +506,7 @@ def test_sort_indices_float64_inf() raises:
     b.append(neg_inf[float64.native]())
     b.append(Float64(1.0))
     b.append(inf[float64.native]())
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)  # -inf
     assert_equal(_idx(idx, 1), 0)  # 0.0
@@ -520,7 +520,7 @@ def test_sort_indices_float64_nan() raises:
     b.append(Float64(1.0))
     b.append(nan[float64.native]())
     b.append(Float64(-1.0))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 2)  # -1.0
     assert_equal(_idx(idx, 1), 0)  # 1.0
@@ -535,7 +535,7 @@ def test_sort_indices_float64_negative() raises:
     b.append(Float64(-0.5))
     b.append(Float64(0.5))
     b.append(Float64(1.5))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 0)
     assert_equal(_idx(idx, 1), 1)
@@ -556,7 +556,7 @@ def test_sort_indices_nulls_first() raises:
     b.append(Int32(1))
     b.append_null()
     b.append(Int32(5))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, nulls_first=True)
     var i0 = _idx(idx, 0)
     var i1 = _idx(idx, 1)
@@ -574,7 +574,7 @@ def test_sort_indices_nulls_last() raises:
     b.append(Int32(1))
     b.append_null()
     b.append(Int32(5))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, nulls_first=False)
     assert_equal(_idx(idx, 0), 2)  # 1
     assert_equal(_idx(idx, 1), 0)  # 3
@@ -590,7 +590,7 @@ def test_sort_indices_all_null() raises:
     b.append_null()
     b.append_null()
     b.append_null()
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(len(idx), 3)
     _assert_sorted(a, idx)
@@ -602,7 +602,7 @@ def test_sort_indices_float64_null() raises:
     b.append_null()
     b.append(Float64(1.0))
     b.append_null()
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, nulls_first=False)
     assert_equal(_idx(idx, 0), 2)  # 1.0
     assert_equal(_idx(idx, 1), 0)  # 2.0
@@ -623,7 +623,7 @@ def test_sort_indices_bool_ascending() raises:
     b.append(False)
     b.append(True)
     b.append(False)
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 3)
@@ -638,7 +638,7 @@ def test_sort_indices_bool_descending() raises:
     b.append(False)
     b.append(True)
     b.append(False)
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, ascending=False)
     assert_equal(_idx(idx, 0), 0)
     assert_equal(_idx(idx, 1), 2)
@@ -653,7 +653,7 @@ def test_sort_indices_bool_nulls_first() raises:
     b.append_null()
     b.append(False)
     b.append(True)
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, nulls_first=True)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 2)
@@ -668,7 +668,7 @@ def test_sort_indices_bool_nulls_last() raises:
     b.append_null()
     b.append(False)
     b.append(True)
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, nulls_first=False)
     assert_equal(_idx(idx, 0), 2)  # False
     assert_equal(_idx(idx, 1), 0)  # True
@@ -688,7 +688,7 @@ def test_sort_indices_string_ascending() raises:
     b.append("apple")
     b.append("cherry")
     b.append("apricot")
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 3)
@@ -702,7 +702,7 @@ def test_sort_indices_string_descending() raises:
     b.append("a")
     b.append("c")
     b.append("b")
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, ascending=False)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 2)
@@ -716,7 +716,7 @@ def test_sort_indices_string_nulls_first() raises:
     b.append_null()
     b.append("a")
     b.append_null()
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, nulls_first=True)
     var i0 = _idx(idx, 0)
     var i1 = _idx(idx, 1)
@@ -732,7 +732,7 @@ def test_sort_indices_string_nulls_last() raises:
     b.append_null()
     b.append("a")
     b.append_null()
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, nulls_first=False)
     assert_equal(_idx(idx, 0), 2)  # "a"
     assert_equal(_idx(idx, 1), 0)  # "b"
@@ -755,7 +755,7 @@ def test_sort_indices_stable_int32() raises:
     b.append(Int32(2))
     b.append(Int32(1))
     b.append(Int32(3))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, stable=True)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 3)
@@ -772,7 +772,7 @@ def test_sort_indices_stable_string() raises:
     b.append("a")
     b.append("b")
     b.append("a")
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, stable=True)
     assert_equal(_idx(idx, 0), 1)
     assert_equal(_idx(idx, 1), 3)
@@ -787,7 +787,7 @@ def test_sort_indices_stable_string() raises:
 
 
 def test_sort_indices_limit() raises:
-    var a: AnyArray = array([5, 3, 1, 4, 2], int32)
+    var a: DynArray = array([5, 3, 1, 4, 2], int32)
     var idx = sort_indices(a, limit=3)
     assert_equal(len(idx), 3)
     assert_equal(_idx(idx, 0), 2)  # 1
@@ -799,7 +799,7 @@ def test_sort_indices_limit() raises:
 
 
 def test_sort_indices_limit_exceeds_length() raises:
-    var a: AnyArray = array([2, 1], int32)
+    var a: DynArray = array([2, 1], int32)
     var idx = sort_indices(a, limit=100)
     assert_equal(len(idx), 2)
     assert_equal(_idx(idx, 0), 1)
@@ -818,7 +818,7 @@ def test_sort_indices_int32_large_pdqsort() raises:
     for i in range(N // 2):
         b.append(Int32(N - 1 - i))
         b.append(Int32(i))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(len(idx), N)
     _assert_sorted(a, idx)
@@ -829,7 +829,7 @@ def test_sort_indices_int64_large_radix() raises:
     var b = Int64Builder(capacity=N)
     for i in range(N):
         b.append(Int64(N - 1 - i))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a)
     assert_equal(len(idx), N)
     _assert_sorted(a, idx)
@@ -928,7 +928,7 @@ def test_sort_indices_serial_context() raises:
     var b = Int64Builder(capacity=N)
     for i in range(N):
         b.append(Int64(N - 1 - i))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, ctx=ExecutionContext.serial())
     assert_equal(len(idx), N)
     _assert_sorted(a, idx)
@@ -940,7 +940,7 @@ def test_sort_indices_parallel_context() raises:
     var b = Int64Builder(capacity=N)
     for i in range(N):
         b.append(Int64(N - 1 - i))
-    var a: AnyArray = b.finish().to_any()
+    var a: DynArray = b.finish().to_dyn()
     var idx = sort_indices(a, ctx=ExecutionContext.parallel())
     assert_equal(len(idx), N)
     _assert_sorted(a, idx)
@@ -966,7 +966,7 @@ def test_sort_indices_date32() raises:
     var b = Date32Builder(date32(), 4)
     for d in [19000, 18500, 19100, 18800]:
         b.append(Scalar[int32.native](d))
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     _assert_perm(sort_indices(a), [1, 3, 0, 2])
     _assert_perm(sort_indices(a, ascending=False), [2, 0, 3, 1])
 
@@ -977,7 +977,7 @@ def test_sort_indices_timestamp_negative() raises:
     var b = TimestampBuilder(timestamp(microsecond, "UTC"), 4)
     for t in [1_000, -5_000, 0, -1]:
         b.append(Scalar[int64.native](t))
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     _assert_perm(sort_indices(a), [1, 3, 2, 0])
 
 
@@ -987,7 +987,7 @@ def test_sort_indices_timestamp_nulls() raises:
     b.append_null()
     b.append(Scalar[int64.native](10))
     b.append(Scalar[int64.native](20))
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     _assert_perm(sort_indices(a, nulls_first=False), [2, 3, 0, 1])
     _assert_perm(sort_indices(a, nulls_first=True), [1, 2, 3, 0])
 
@@ -996,7 +996,7 @@ def test_sort_indices_large_string() raises:
     var b = LargeStringBuilder(4)
     for s in ["pear", "apple", "fig", "banana"]:
         b.append(s)
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     _assert_perm(sort_indices(a), [1, 3, 2, 0])
     _assert_perm(sort_indices(a, ascending=False), [0, 2, 3, 1])
 
@@ -1008,7 +1008,7 @@ def test_sort_indices_decimal128() raises:
     b.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
     b.append(Scalar[DType.int128](-1))
     b.append(Scalar[DType.int128](5))
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     _assert_perm(sort_indices(a), [1, 2, 0])
 
 
@@ -1021,7 +1021,7 @@ def test_sort_indices_dictionary() raises:
     var ib = Int32Builder(3)
     for i in [0, 1, 2]:
         ib.append(Int32(i))
-    var a: AnyArray = DictionaryArray.from_arrays(ib.finish(), values.finish())
+    var a: DynArray = DictionaryArray.from_arrays(ib.finish(), values.finish())
     _assert_perm(sort_indices(a), [1, 2, 0])
 
 
@@ -1034,9 +1034,9 @@ def test_sort_struct_timestamp_key() raises:
     var v = Int32Builder(3)
     for x in [3, 1, 2]:
         v.append(Int32(x))
-    var cols = List[AnyArray]()
-    cols.append(ts.finish().to_any())
-    cols.append(v.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(ts.finish().to_dyn())
+    cols.append(v.finish().to_dyn())
     var sa = record_batch(cols^, names=["t", "v"]).to_struct_array()
 
     var result = sort(sa, [0], [True])
@@ -1045,7 +1045,7 @@ def test_sort_struct_timestamp_key() raises:
     assert_equal(k[1].value(), 200)
     assert_equal(k[2].value(), 300)
     assert_true(
-        result.field(0).dtype() == timestamp(microsecond, "UTC").to_any()
+        result.field(0).dtype() == timestamp(microsecond, "UTC").to_dyn()
     )
     ref vals = result.field(1).as_int32()
     assert_equal(vals[0].value(), 1)

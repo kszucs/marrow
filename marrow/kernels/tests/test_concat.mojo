@@ -6,7 +6,7 @@ from std.testing import (
 )
 
 from ...arrays import (
-    AnyArray,
+    DynArray,
     PrimitiveArray,
     BoolArray,
     StringArray,
@@ -36,7 +36,7 @@ from ...kernels.concat import concat
 
 
 def test_concat_primitive() raises:
-    var arrs: List[AnyArray] = [
+    var arrs: List[DynArray] = [
         array([1, 2], int32),
         array([3, 4, 5], int32),
     ]
@@ -51,7 +51,7 @@ def test_concat_primitive() raises:
 
 
 def test_concat_single() raises:
-    var arrs: List[AnyArray] = [array([10, 20, 30], int32)]
+    var arrs: List[DynArray] = [array([10, 20, 30], int32)]
     var tmp = concat(arrs)
     ref result = tmp.as_int32()
     assert_equal(result.length, 3)
@@ -60,7 +60,7 @@ def test_concat_single() raises:
 
 
 def test_concat_empty_list_raises() raises:
-    var arrs = List[AnyArray]()
+    var arrs = List[DynArray]()
     with assert_raises():
         _ = concat(arrs)
 
@@ -73,9 +73,9 @@ def test_concat_with_nulls() raises:
     var b2 = Int32Builder()
     b2.append(4)
     b2.append_null()
-    var arrs: List[AnyArray] = [
-        b1.finish().to_any(),
-        b2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        b1.finish().to_dyn(),
+        b2.finish().to_dyn(),
     ]
     var tmp_with_nulls = concat(arrs)
     ref result = tmp_with_nulls.as_int32()
@@ -96,7 +96,7 @@ def test_concat_with_offset() raises:
     var a = arange[Int32Type](0, 5)
     var s1 = a.slice(1, 3)  # [1, 2, 3], offset=1
     var s2 = a.slice(4, 1)  # [4], offset=4
-    var arrs: List[AnyArray] = [s1^, s2^]
+    var arrs: List[DynArray] = [s1^, s2^]
     var tmp_offset = concat(arrs)
     ref result = tmp_offset.as_int32()
     assert_equal(result.length, 4)
@@ -113,8 +113,8 @@ def test_concat_with_offset_and_nulls() raises:
     b.append_null()
     b.append(3)
     var sliced = b.finish().slice(1, 2)  # [null, 3], offset=1
-    var arrs: List[AnyArray] = [
-        (sliced^).to_any(),
+    var arrs: List[DynArray] = [
+        (sliced^).to_dyn(),
         array([4], int32),
     ]
     var tmp_offset_nulls = concat(arrs)
@@ -134,9 +134,9 @@ def test_concat_with_offset_and_nulls() raises:
 
 
 def test_concat_bool() raises:
-    var arrs: List[AnyArray] = [
-        array([True, False, True]).to_any(),
-        array([False, True]).to_any(),
+    var arrs: List[DynArray] = [
+        array([True, False, True]).to_dyn(),
+        array([False, True]).to_dyn(),
     ]
     var tmp_bool = concat(arrs)
     ref result = tmp_bool.as_bool()
@@ -152,7 +152,7 @@ def test_concat_bool_with_offset() raises:
     # [True, False, True, False] slice at offset=1 → [False, True, False]
     var a = array([True, False, True, False])
     var sliced = a.slice(1, 3)
-    var arrs: List[AnyArray] = [(sliced^).to_any(), array([True]).to_any()]
+    var arrs: List[DynArray] = [(sliced^).to_dyn(), array([True]).to_dyn()]
     var tmp_bool_offset = concat(arrs)
     ref result = tmp_bool_offset.as_bool()
     assert_equal(result.length, 4)
@@ -173,9 +173,9 @@ def test_concat_string() raises:
     s1.append("world")
     var s2 = StringBuilder()
     s2.append("foo")
-    var arrs: List[AnyArray] = [
-        s1.finish().to_any(),
-        s2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        s1.finish().to_dyn(),
+        s2.finish().to_dyn(),
     ]
     var tmp_str = concat(arrs)
     ref result = tmp_str.as_string()
@@ -192,9 +192,9 @@ def test_concat_string_with_nulls() raises:
     s1.append("b")
     var s2 = StringBuilder()
     s2.append("c")
-    var arrs: List[AnyArray] = [
-        s1.finish().to_any(),
-        s2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        s1.finish().to_dyn(),
+        s2.finish().to_dyn(),
     ]
     var tmp_str_nulls = concat(arrs)
     ref result = tmp_str_nulls.as_string()
@@ -232,9 +232,9 @@ def test_concat_list() raises:
     c2.append(5)
     c2.append(6)
     lb2.append_valid()  # [4, 5, 6]
-    var arrs: List[AnyArray] = [
-        lb1.finish().to_any(),
-        lb2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        lb1.finish().to_dyn(),
+        lb2.finish().to_dyn(),
     ]
     var tmp_list = concat(arrs)
     ref result = tmp_list.as_list()
@@ -268,9 +268,9 @@ def test_concat_list_with_nulls() raises:
     c2.append(2)
     c2.append(3)
     lb2.append_valid()  # [2, 3]
-    var arrs: List[AnyArray] = [
-        lb1.finish().to_any(),
-        lb2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        lb1.finish().to_dyn(),
+        lb2.finish().to_dyn(),
     ]
     var tmp_list_nulls = concat(arrs)
     ref result = tmp_list_nulls.as_list()
@@ -308,9 +308,9 @@ def test_concat_fixed_size_list() raises:
     child2.append(6.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.append_valid()
-    var arrs: List[AnyArray] = [
-        fsl1.finish().to_any(),
-        fsl2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        fsl1.finish().to_dyn(),
+        fsl2.finish().to_dyn(),
     ]
     var tmp_fsl = concat(arrs)
     ref result = tmp_fsl.as_fixed_size_list()
@@ -347,9 +347,9 @@ def test_concat_fixed_size_list_with_offset() raises:
     child2.append(8.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.append_valid()
-    var arrs: List[AnyArray] = [
-        (sliced^).to_any(),
-        fsl2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        (sliced^).to_dyn(),
+        fsl2.finish().to_dyn(),
     ]
     var tmp_fsl_offset = concat(arrs)
     ref result = tmp_fsl_offset.as_fixed_size_list()
@@ -386,9 +386,9 @@ def test_concat_struct() raises:
     sb2.field_builder(0).as_int32().append(3)
     sb2.field_builder(1).as_float32().append(0.7)
     sb2.append_valid()
-    var arrs: List[AnyArray] = [
-        sb1.finish().to_any(),
-        sb2.finish().to_any(),
+    var arrs: List[DynArray] = [
+        sb1.finish().to_dyn(),
+        sb2.finish().to_dyn(),
     ]
     var tmp_struct = concat(arrs)
     ref result = tmp_struct.as_struct()
@@ -410,7 +410,7 @@ def test_concat_struct() raises:
 
 
 def test_combine_chunks_delegates() raises:
-    var chunks: List[AnyArray] = [
+    var chunks: List[DynArray] = [
         array([10, 20], int32),
         array([30], int32),
         array([40, 50], int32),

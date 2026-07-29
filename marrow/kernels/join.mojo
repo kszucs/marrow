@@ -38,7 +38,7 @@ time budget looks roughly like this (from ``sample``-based profiling):
   25%  take SIMD gather           — random gather of output columns
   14%  SwissHashTable.build_hashes — insertion + slot claim
   11%  nested semaphore waits     — tcmalloc spinlock on take's output buf
-   8%  take(AnyArray) dispatch    — runtime type dispatch
+   8%  take(DynArray) dispatch    — runtime type dispatch
    7%  RadixPartitioner scatter   — histogram + scatter passes
    2%  tcmalloc::PageHeap::New    — allocator
    ... dispatch + allocator small ops
@@ -110,7 +110,7 @@ from std.gpu.host import DeviceContext
 
 from ..arrays import (
     PrimitiveArray,
-    AnyArray,
+    DynArray,
     StructArray,
     Int32Array,
     UInt64Array,
@@ -118,7 +118,7 @@ from ..arrays import (
 from ..buffers import Buffer
 from ..builders import PrimitiveBuilder, Int32Builder
 from ..dtypes import (
-    AnyDataType,
+    DynType,
     Field,
     int32,
     uint64,
@@ -214,7 +214,7 @@ def _concat_int32(
 
     Used by the parallel probe path to merge per-partition pair arrays
     into a single ``IndexPairs``. Direct buffer-level memcpy rather than
-    going through the generic ``concat(AnyArray)`` path — the per-
+    going through the generic ``concat(DynArray)`` path — the per-
     partition pair arrays are always valid dense Int32 buffers with
     ``nulls == 0``, so we can skip bitmap and type-dispatch overhead.
     """
@@ -277,7 +277,7 @@ trait Join(Movable):
         """Probe with right (probe) side data.  Return assembled output."""
         ...
 
-    def build_dtype(self) -> AnyDataType:
+    def build_dtype(self) -> DynType:
         """DataType of the build side (for output schema construction)."""
         ...
 
@@ -347,7 +347,7 @@ struct HashJoin[
     silently dropped the caller's GPU device, since that factory sets
     `device=None`."""
     var _left_key_indices: List[Int]
-    var _left_dtype: AnyDataType
+    var _left_dtype: DynType
     var _left_data: Optional[StructArray]
     var _left_rows: Int
 
@@ -636,13 +636,13 @@ struct HashJoin[
                     rb.append(Scalar[int32.native](i))
         return (lb.finish(), rb.finish())
 
-    def build_dtype(self) -> AnyDataType:
+    def build_dtype(self) -> DynType:
         return self._left_dtype.copy()
 
     def num_left_rows(self) -> Int:
         return self._left_rows
 
-    def output_dtype(self, probe: StructArray, kind: UInt8) -> AnyDataType:
+    def output_dtype(self, probe: StructArray, kind: UInt8) -> DynType:
         """Build the output struct DataType for a join result."""
         var fields = List[Field]()
         for ref f in self._left_dtype.as_struct().fields:
@@ -678,7 +678,7 @@ struct HashJoin[
         stripe (its own grain threshold inside ``apply``).
         """
         ref left = self._left_data.value()
-        var out_cols = List[AnyArray]()
+        var out_cols = List[DynArray]()
         var ctx = self._ctx.copy()
 
         for c in range(len(left.children)):

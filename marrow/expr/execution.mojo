@@ -7,7 +7,7 @@ execution state (scan offset, built hash index, grouper, child processors) and
 yields morsels through ``pull()``.
 
 - ``Processor``     — the trait each ``*Processor`` implements (``schema``/``pull``).
-- ``AnyProcessor``  — the type-erased, move-only container; also the pull driver
+- ``DynProcessor``  — the type-erased, move-only container; also the pull driver
                       (``collect()`` drains it into one ``RecordBatch``).
 - ``InMemoryTableProcessor`` / ``ParquetScanProcessor`` / ``FilterProcessor`` /
   ``ProjectProcessor`` / ``AggregateProcessor`` / ``JoinProcessor`` — one per
@@ -21,7 +21,7 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 from std.memory import ArcPointer
 from std.sys.info import num_physical_cores
 
-from ..arrays import AnyArray, StructArray
+from ..arrays import DynArray, StructArray
 from .. import dtypes as dt
 from ..schema import Schema
 from ..builders import Int32Builder
@@ -41,7 +41,7 @@ from ..parquet import (
     ColumnStatistics,
     PageBounds,
 )
-from ..scalars import AnyScalar
+from ..scalars import DynScalar
 from .values import AnyValue
 from .pruning import PruneStats
 from ..kernels.execution import ExecutionContext
@@ -71,7 +71,7 @@ struct Exhausted(TrivialRegisterPassable, Writable):
 
 
 # ---------------------------------------------------------------------------
-# Processor trait + AnyProcessor
+# Processor trait + DynProcessor
 # ---------------------------------------------------------------------------
 
 
@@ -91,7 +91,7 @@ trait Processor(ImplicitlyDeletable, Movable):
         ...
 
 
-struct AnyProcessor(Movable):
+struct DynProcessor(Movable):
     """Type-erased, move-only processor behind an ``ArcPointer``; also the pull
     driver (``collect()`` drains it into one ``RecordBatch``)."""
 
@@ -141,14 +141,14 @@ struct AnyProcessor(Movable):
             except Exhausted:
                 break
         if len(batches) == 0:
-            return RecordBatch(schema=self.schema(), columns=List[AnyArray]())
+            return RecordBatch(schema=self.schema(), columns=List[DynArray]())
         if len(batches) == 1:
             return RecordBatch(copy=batches[0])
         var schema = batches[0].schema
         var num_cols = batches[0].num_columns()
-        var result_cols = List[AnyArray](capacity=num_cols)
+        var result_cols = List[DynArray](capacity=num_cols)
         for c in range(num_cols):
-            var col_arrays = List[AnyArray](capacity=len(batches))
+            var col_arrays = List[DynArray](capacity=len(batches))
             for b in range(len(batches)):
                 col_arrays.append(batches[b].columns[c].copy())
             result_cols.append(concat(col_arrays))
@@ -264,7 +264,7 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
         return out^
 
     def _bounds_of(
-        self, mins: List[Optional[AnyScalar]], maxs: List[Optional[AnyScalar]]
+        self, mins: List[Optional[DynScalar]], maxs: List[Optional[DynScalar]]
     ) raises -> PruneStats:
         """A `PruneStats` over this scan's schema from parallel min/max lists.
         """
@@ -289,8 +289,8 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
     ) raises -> Bool:
         """Whether the predicate might match some row of a group, from its
         per-column chunk statistics."""
-        var mins = List[Optional[AnyScalar]]()
-        var maxs = List[Optional[AnyScalar]]()
+        var mins = List[Optional[DynScalar]]()
+        var maxs = List[Optional[DynScalar]]()
         for c in range(len(leaf_of)):
             mins.append(rg_stats[leaf_of[c]].min.copy())
             maxs.append(rg_stats[leaf_of[c]].max.copy())
@@ -319,8 +319,8 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
             var keep = List[Bool]()
             var page_rows = List[Int]()
             for p in range(len(pages)):
-                var mins = List[Optional[AnyScalar]]()
-                var maxs = List[Optional[AnyScalar]]()
+                var mins = List[Optional[DynScalar]]()
+                var maxs = List[Optional[DynScalar]]()
                 for cc in range(ncols):
                     if cc == c:
                         mins.append(pages[p].min.copy())
@@ -491,10 +491,10 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
 struct FilterProcessor(Processor):
     """Keeps rows where the predicate is True; skips empty morsels."""
 
-    var input: AnyProcessor
+    var input: DynProcessor
     var predicate: AnyValue
 
-    def __init__(out self, *, var input: AnyProcessor, var predicate: AnyValue):
+    def __init__(out self, *, var input: DynProcessor, var predicate: AnyValue):
         self.input = input^
         self.predicate = predicate^
 
@@ -506,7 +506,7 @@ struct FilterProcessor(Processor):
         while True:
             var batch = self.input.pull()
             var mask = self.predicate.execute(batch)
-            var cols = List[AnyArray]()
+            var cols = List[DynArray]()
             for i in range(batch.num_columns()):
                 cols.append(filter(batch.columns[i].copy(), mask.copy()))
             var result = RecordBatch(schema=batch.schema.copy(), columns=cols^)
@@ -517,14 +517,14 @@ struct FilterProcessor(Processor):
 struct ProjectProcessor(Processor):
     """Evaluates each projected value against every input morsel."""
 
-    var input: AnyProcessor
+    var input: DynProcessor
     var values: List[AnyValue]
     var _schema: Schema
 
     def __init__(
         out self,
         *,
-        var input: AnyProcessor,
+        var input: DynProcessor,
         var values: List[AnyValue],
         var schema: Schema,
     ):
@@ -537,7 +537,7 @@ struct ProjectProcessor(Processor):
 
     def pull(mut self) raises -> RecordBatch:
         var batch = self.input.pull()  # raises Exhausted when done
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for ref v in self.values:
             cols.append(v.execute(batch))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
@@ -551,13 +551,13 @@ struct LimitProcessor(Processor):
     the length boundary is sliced, so the total emitted row count is exactly
     ``min(length, available - offset)`` regardless of morsel size."""
 
-    var input: AnyProcessor
+    var input: DynProcessor
     var _schema: Schema
     var _skip: Int
     var _remaining: Int
 
     def __init__(
-        out self, *, var input: AnyProcessor, offset: Int, length: Int
+        out self, *, var input: DynProcessor, offset: Int, length: Int
     ):
         self.input = input^
         self._schema = self.input.schema()
@@ -604,7 +604,7 @@ struct SortProcessor(Processor):
     sorted order. When ``limit`` is set the kernel's top-K path (a truncated
     permutation) runs instead of a full sort followed by a slice."""
 
-    var input: AnyProcessor
+    var input: DynProcessor
     var keys: List[AnyValue]
     var ascending: List[Bool]
     var nulls_first: Bool
@@ -617,7 +617,7 @@ struct SortProcessor(Processor):
     def __init__(
         out self,
         *,
-        var input: AnyProcessor,
+        var input: DynProcessor,
         var keys: List[AnyValue],
         var ascending: List[Bool],
         nulls_first: Bool,
@@ -655,7 +655,7 @@ struct SortProcessor(Processor):
         # are the input columns unchanged.
         var num_keys = len(self.keys)
         var fields = List[dt.Field]()
-        var children = List[AnyArray]()
+        var children = List[DynArray]()
         for i in range(num_keys):
             var kcol = self.keys[i].execute(full)
             fields.append(dt.Field("__sort_key" + String(i), kcol.dtype()))
@@ -688,7 +688,7 @@ struct SortProcessor(Processor):
         )
 
         # The trailing fields are the sorted data columns.
-        var out_cols = List[AnyArray]()
+        var out_cols = List[DynArray]()
         for i in range(full.num_columns()):
             out_cols.append(ordered.field(num_keys + i))
         return RecordBatch(schema=self._schema.copy(), columns=out_cols^)
@@ -712,7 +712,7 @@ struct AggregateProcessor(Processor):
     ``rel.aggregate(...).filter(col("total") > lit(10))`` is exactly a
     post-aggregate filter over the aggregate output schema."""
 
-    var input: AnyProcessor
+    var input: DynProcessor
     var keys: List[AnyValue]
     var inputs: List[AnyValue]
     var aggs: List[AggFunc]
@@ -724,7 +724,7 @@ struct AggregateProcessor(Processor):
     def __init__(
         out self,
         *,
-        var input: AnyProcessor,
+        var input: DynProcessor,
         var keys: List[AnyValue],
         var inputs: List[AnyValue],
         var aggs: List[AggFunc],
@@ -759,17 +759,17 @@ struct AggregateProcessor(Processor):
         # Phase 1 — drain the input, grouping the keys morsel by morsel and
         # buffering the group ids + the evaluated value columns.
         var keyless = len(self.keys) == 0
-        var gid_chunks = List[AnyArray]()
-        var value_chunks = List[List[AnyArray]]()
+        var gid_chunks = List[DynArray]()
+        var value_chunks = List[List[DynArray]]()
         for _ in range(len(self.inputs)):
-            value_chunks.append(List[AnyArray]())
+            value_chunks.append(List[DynArray]())
         var morsels = 0
         while True:
             try:
                 var batch = self.input.pull()
                 morsels += 1
                 if not keyless:
-                    var key_children = List[AnyArray]()
+                    var key_children = List[DynArray]()
                     for i in range(len(self.keys)):
                         key_children.append(self.keys[i].execute(batch))
                     var key_struct = StructArray(
@@ -800,7 +800,7 @@ struct AggregateProcessor(Processor):
             # and that measured +13% on the fused binary-size gate for a path a
             # keyed query never runs. The eager `RecordBatch.aggregate` binding
             # still takes the fast route.
-            var values = List[AnyArray]()
+            var values = List[DynArray]()
             for i in range(len(self.inputs)):
                 values.append(concat(value_chunks[i], self._ctx))
                 value_chunks[i].clear()
@@ -810,7 +810,7 @@ struct AggregateProcessor(Processor):
                 zeros.append(Int32(0))
             var group_zero = zeros.finish()
 
-            var cols = List[AnyArray]()
+            var cols = List[DynArray]()
             for i in range(len(self.aggs)):
                 cols.append(self.aggs[i].grouped(group_zero, values[i], 1))
             return RecordBatch(schema=self._schema.copy(), columns=cols^)
@@ -822,7 +822,7 @@ struct AggregateProcessor(Processor):
         var gids = gids_any.as_int32().copy()
         var num_groups = self._grouper.num_groups()
         var grouped_keys = self._grouper.key_columns(self._key_fields())
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for i in range(len(grouped_keys)):
             cols.append(grouped_keys[i].copy())
         for i in range(len(self.aggs)):
@@ -835,8 +835,8 @@ struct AggregateProcessor(Processor):
 struct JoinProcessor(Processor):
     """Builds the left side fully on first pull, then streams the right side."""
 
-    var left: AnyProcessor
-    var right: AnyProcessor
+    var left: DynProcessor
+    var right: DynProcessor
     var left_key_indices: List[Int]
     var right_key_indices: List[Int]
     var join_kind: UInt8
@@ -848,8 +848,8 @@ struct JoinProcessor(Processor):
     def __init__(
         out self,
         *,
-        var left: AnyProcessor,
-        var right: AnyProcessor,
+        var left: DynProcessor,
+        var right: DynProcessor,
         var left_key_indices: List[Int],
         var right_key_indices: List[Int],
         join_kind: UInt8,

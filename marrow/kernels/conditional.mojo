@@ -25,8 +25,8 @@ Cross-checked against PyArrow ``pc.case_when``, ``pc.coalesce``,
 ``pc.if_else`` and ``pc.fill_null``.
 """
 
-from ..arrays import AnyArray, BoolArray, Int32Array, PrimitiveArray
-from ..scalars import AnyScalar
+from ..arrays import DynArray, BoolArray, Int32Array, PrimitiveArray
+from ..scalars import DynScalar
 from ..builders import Int32Builder
 from ..dtypes import PrimitiveType
 from .core import Kernel
@@ -62,12 +62,12 @@ struct Selection:
     """
 
     var _name: StaticString
-    var _candidates: List[AnyArray]
+    var _candidates: List[DynArray]
     var _length: Int
     var _sel: Int32Builder
 
     def __init__(
-        out self, name: StaticString, var candidates: List[AnyArray]
+        out self, name: StaticString, var candidates: List[DynArray]
     ) raises:
         """Validate that every candidate shares one length and one dtype."""
         if len(candidates) == 0:
@@ -112,7 +112,7 @@ struct Selection:
         """Row is null — no candidate supplies it."""
         self._sel.append_null()
 
-    def gather(mut self, ctx: ExecutionContext) raises -> AnyArray:
+    def gather(mut self, ctx: ExecutionContext) raises -> DynArray:
         """Resolve every recorded decision: one `concat`, one `take`."""
         var length = self._length
         var big = concat(self._candidates, ctx)
@@ -128,10 +128,10 @@ struct Selection:
 
 def _as_any[
     T: PrimitiveType
-](values: List[PrimitiveArray[T]]) -> List[AnyArray]:
+](values: List[PrimitiveArray[T]]) -> List[DynArray]:
     """Erase a typed candidate list — what every typed overload below opens
     with."""
-    var out = List[AnyArray](capacity=len(values))
+    var out = List[DynArray](capacity=len(values))
     for k in range(len(values)):
         out.append(values[k].copy())
     return out^
@@ -151,10 +151,10 @@ struct CaseWhenKernel(Kernel):
     @staticmethod
     def apply(
         conditions: List[BoolArray],
-        values: List[AnyArray],
-        var else_: Optional[AnyArray],
+        values: List[DynArray],
+        var else_: Optional[DynArray],
         ctx: ExecutionContext,
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         var m = len(conditions)
         if m == 0:
             raise Self.error("at least one condition is required")
@@ -163,7 +163,7 @@ struct CaseWhenKernel(Kernel):
                 t"got {m} conditions but {len(values)} value arrays"
             )
 
-        var candidates = List[AnyArray](capacity=m + 1)
+        var candidates = List[DynArray](capacity=m + 1)
         for k in range(m):
             candidates.append(values[k].copy())
         var have_else = Bool(else_)
@@ -192,10 +192,10 @@ struct CaseWhenKernel(Kernel):
 
 def case_when(
     conditions: List[BoolArray],
-    values: List[AnyArray],
-    var else_: Optional[AnyArray] = None,
+    values: List[DynArray],
+    var else_: Optional[DynArray] = None,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Multi-branch ``CASE WHEN`` selection (PyArrow ``pc.case_when``).
 
     For each row the output is the value of the first ``values[k]`` whose
@@ -223,9 +223,9 @@ def case_when[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Typed ``case_when`` over primitive branches."""
-    var e = Optional[AnyArray](None)
+    var e = Optional[DynArray](None)
     if else_:
-        var ea: AnyArray = else_.value().copy()
+        var ea: DynArray = else_.value().copy()
         e = ea^
     return (
         CaseWhenKernel.apply(conditions, _as_any(values), e^, ctx)
@@ -245,8 +245,8 @@ struct CoalesceKernel(Kernel):
     comptime name = "coalesce"
 
     @staticmethod
-    def apply(arrays: List[AnyArray], ctx: ExecutionContext) raises -> AnyArray:
-        var candidates = List[AnyArray](capacity=len(arrays))
+    def apply(arrays: List[DynArray], ctx: ExecutionContext) raises -> DynArray:
+        var candidates = List[DynArray](capacity=len(arrays))
         for k in range(len(arrays)):
             candidates.append(arrays[k].copy())
         var n = len(candidates)
@@ -266,9 +266,9 @@ struct CoalesceKernel(Kernel):
 
 
 def coalesce(
-    arrays: List[AnyArray],
+    arrays: List[DynArray],
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """First non-null value across `arrays`, elementwise (PyArrow
     ``pc.coalesce``). If every input is null in a row, the output is null."""
     return CoalesceKernel.apply(arrays, ctx)
@@ -296,15 +296,15 @@ struct NullifKernel(Kernel):
 
     @staticmethod
     def apply(
-        a: AnyArray, b: AnyArray, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        a: DynArray, b: DynArray, ctx: ExecutionContext
+    ) raises -> DynArray:
         Self.expect_same_dtype(a.dtype(), b.dtype())
         Self.expect_same_length(a.length(), b.length())
 
         # `nullif` is defined for any dtype with an equality, so it needs the
         # family-picking primitive rather than either comparison kernel directly.
         var eq = equal_any(a, b, ctx)
-        var candidates = List[AnyArray](capacity=1)
+        var candidates = List[DynArray](capacity=1)
         candidates.append(a.copy())
         var sel = Selection(Self.name, candidates^)
 
@@ -318,10 +318,10 @@ struct NullifKernel(Kernel):
 
 
 def nullif(
-    a: AnyArray,
-    b: AnyArray,
+    a: DynArray,
+    b: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """``nullif(a, b)`` — ``a`` with the elements equal to ``b`` set to null
     (SQL ``NULLIF``). A row is nulled only where both are valid and equal; where
     either is null the comparison is not true, so ``a`` is kept (and remains
@@ -352,12 +352,12 @@ struct FillNullKernel(Kernel):
 
     @staticmethod
     def apply(
-        a: AnyArray, fill: AnyArray, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        a: DynArray, fill: DynArray, ctx: ExecutionContext
+    ) raises -> DynArray:
         Self.expect_same_dtype(a.dtype(), fill.dtype())
         Self.expect_same_length(a.length(), fill.length())
 
-        var candidates = List[AnyArray](capacity=2)
+        var candidates = List[DynArray](capacity=2)
         candidates.append(a.copy())
         candidates.append(fill.copy())
         var sel = Selection(Self.name, candidates^)
@@ -368,10 +368,10 @@ struct FillNullKernel(Kernel):
 
 
 def fill_null(
-    a: AnyArray,
-    fill: AnyArray,
+    a: DynArray,
+    fill: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Replace the nulls of `a` with the corresponding elements of `fill`
     (PyArrow ``pc.fill_null`` with an array replacement). Where `a` is valid the
     output keeps `a`; where `a` is null it takes `fill` (which itself may be
@@ -380,13 +380,13 @@ def fill_null(
 
 
 def fill_null(
-    a: AnyArray,
-    fill: AnyScalar,
+    a: DynArray,
+    fill: DynScalar,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Replace the nulls of `a` with a scalar (PyArrow ``pc.fill_null`` with a
     scalar replacement). The scalar is broadcast to `a`'s length via
-    ``AnyScalar.repeat`` and forwarded to the array overload."""
+    ``DynScalar.repeat`` and forwarded to the array overload."""
     return FillNullKernel.apply(a, fill.repeat(a.length()), ctx)
 
 
@@ -402,7 +402,7 @@ def fill_null[
 
     var s = PrimitiveScalar[T](Optional[Scalar[T.native]](fill), a.dtype.copy())
     return (
-        FillNullKernel.apply(a.copy(), s^.to_any().repeat(len(a)), ctx)
+        FillNullKernel.apply(a.copy(), s^.to_dyn().repeat(len(a)), ctx)
         .as_primitive[T]()
         .copy()
     )

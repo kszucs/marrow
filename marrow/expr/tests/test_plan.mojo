@@ -18,7 +18,7 @@ from ...schema import schema
 from ...tabular import record_batch
 from ...expr import col, lit, in_memory_table
 from ...expr.relations import (
-    AnyRelation,
+    DynRelation,
     Filter,
     Project,
     Sort,
@@ -28,7 +28,7 @@ from ...expr.relations import (
 )
 
 
-def _scan() raises -> AnyRelation:
+def _scan() raises -> DynRelation:
     """The two-column source every structural test builds on."""
     return parquet_scan("t", schema([field("x", int64), field("y", float64)]))
 
@@ -52,7 +52,7 @@ def test_parquet_scan_write_to() raises:
 
 
 def test_parquet_scan_downcast() raises:
-    """AnyRelation wrapping a ParquetScan can be downcast to access path."""
+    """DynRelation wrapping a ParquetScan can be downcast to access path."""
     assert_equal(_scan().downcast[ParquetScan[LeafSet.all()]]()[].path, "t")
 
 
@@ -211,12 +211,12 @@ def test_sort_limit_offset_does_not_fold() raises:
 
 
 # ---------------------------------------------------------------------------
-# AnyRelation type erasure
+# DynRelation type erasure
 # ---------------------------------------------------------------------------
 
 
 def test_anyrelation_o1_copy() raises:
-    """AnyRelation copies share the same underlying allocation (O(1))."""
+    """DynRelation copies share the same underlying allocation (O(1))."""
     var src = _scan()
     var copy = src  # O(1) ref-count bump
     assert_equal(copy.schema().fields[0].name, "x")

@@ -48,7 +48,7 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...dtypes import AnyDataType, Int32Type, StringType
+from ...dtypes import DynType, Int32Type, StringType
 from ...kernels.aggregate import (
     NumericAgg,
     StringMinMax,
@@ -58,7 +58,7 @@ from ...kernels.aggregate import (
 )
 from ...expr.aggregates import AggFunc
 from ...expr.dynamic import DynValue, col, lit
-from ...expr.relations import AnyRelation, in_memory_table
+from ...expr.relations import DynRelation, in_memory_table
 from ...expr.values import AnyValue, col as fused_col
 
 
@@ -76,7 +76,7 @@ def _orders() raises -> RecordBatch:
     for d in days:
         db.append(Int32(d))
     return record_batch(
-        [region.copy(), amount.copy(), quantity.copy(), db.finish().to_any()],
+        [region.copy(), amount.copy(), quantity.copy(), db.finish().to_dyn()],
         names=["region", "amount", "quantity", "day"],
     )
 
@@ -243,7 +243,7 @@ def test_min_max_keep_timestamp_unit_and_timezone() raises:
     tb.append(Int64(1000))
     tb.append(Int64(2000))
     var batch = record_batch(
-        [array(["a", "a", "a"]).to_any(), tb.finish().to_any()],
+        [array(["a", "a", "a"]).to_dyn(), tb.finish().to_dyn()],
         names=["k", "ts"],
     )
     var plan = in_memory_table(batch).aggregate(
@@ -266,8 +266,8 @@ def test_min_max_keep_timestamp_unit_and_timezone() raises:
 def test_min_max_over_strings_are_lexicographic() raises:
     var batch = record_batch(
         [
-            array(["a", "a", "a"]).to_any(),
-            array(["banana", "apple", "cherry"]).to_any(),
+            array(["a", "a", "a"]).to_dyn(),
+            array(["banana", "apple", "cherry"]).to_dyn(),
         ],
         names=["k", "fruit"],
     )
@@ -307,7 +307,7 @@ def test_nulls_are_excluded_and_empty_groups_are_null() raises:
     vb.append_null()
     vb.append_null()
     var batch = record_batch(
-        [array(["a", "a", "a", "b", "b"]).to_any(), vb.finish().to_any()],
+        [array(["a", "a", "a", "b", "b"]).to_dyn(), vb.finish().to_dyn()],
         names=["k", "v"],
     )
     var plan = in_memory_table(batch).aggregate(
@@ -399,7 +399,7 @@ def test_the_same_plan_can_be_executed_repeatedly() raises:
 # ---------------------------------------------------------------------------
 
 
-def _fused_sum_max_by_region() raises -> AnyRelation:
+def _fused_sum_max_by_region() raises -> DynRelation:
     """``SELECT region, sum(amount), max(amount) GROUP BY region``, fused."""
     return in_memory_table(_orders()).aggregate(
         keys=[AnyValue(fused_col("region", string))],
@@ -408,8 +408,8 @@ def _fused_sum_max_by_region() raises -> AnyRelation:
             AnyValue(fused_col("amount", int64)),
         ],
         aggs=[
-            AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64)),
-            AggFunc.of[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64)),
+            AggFunc.of[NumericAgg[SumKernel, Int64Type]](DynType(int64)),
+            AggFunc.of[NumericAgg[MaxKernel, Int64Type]](DynType(int64)),
         ],
         names=["region", "total", "biggest"],
     )
@@ -459,7 +459,7 @@ def test_fused_non_numeric_aggregation() raises:
     var plan = in_memory_table(_orders()).aggregate(
         keys=[AnyValue(fused_col("region", string))],
         inputs=[AnyValue(fused_col("region", string))],
-        aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](AnyDataType(string))],
+        aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](DynType(string))],
         names=["region", "lo"],
     )
     var out = plan.execute()

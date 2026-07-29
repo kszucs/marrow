@@ -3,7 +3,7 @@ from std.python import Python, PythonObject
 from std.memory import alloc
 from ..c_data import *
 from ..tabular import Table
-from ..arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
+from ..arrays import DynArray, BoolArray, PrimitiveArray, StringArray
 from ..builders import PrimitiveBuilder, StringBuilder, BoolBuilder
 from ..dtypes import *
 
@@ -314,7 +314,7 @@ def test_numeric_dtypes() raises:
     pa_types.append(pa.uint64())
     pa_types.append(pa.float32())
     pa_types.append(pa.float64())
-    var arrow_types = List[AnyDataType]()
+    var arrow_types = List[DynType]()
     arrow_types.append(int8)
     arrow_types.append(uint8)
     arrow_types.append(int16)
@@ -365,7 +365,7 @@ def test_bool_array_from_pyarrow() raises:
 
 
 def test_primitive_array_no_nulls() raises:
-    """AnyArray with no nulls: buffers[0] (validity bitmap) pointer is null."""
+    """DynArray with no nulls: buffers[0] (validity bitmap) pointer is null."""
     var pa = Python.import_module("pyarrow")
 
     var pyarr = pa.array(Python.list(10, 20, 30))
@@ -553,7 +553,7 @@ def test_c_data_fixed_size_list_with_nulls() raises:
 
 def test_schema_from_dtype_all_types() raises:
     """All supported dtypes survive a from_dtype → to_dtype roundtrip."""
-    var types = List[AnyDataType]()
+    var types = List[DynType]()
     types.append(int8)
     types.append(uint8)
     types.append(int16)
@@ -577,13 +577,13 @@ def test_schema_from_dtype_all_types() raises:
 
     # Nested types
     var list_dt = list_(int64)
-    var c_list = CArrowSchema.from_dtype(list_dt.copy().to_any())
+    var c_list = CArrowSchema.from_dtype(list_dt.copy().to_dyn())
     var rt_list = c_list.to_dtype()
     assert_true(rt_list.is_list())
     assert_equal(rt_list.as_list().value_type(), int64)
 
     var fsl_dt = fixed_size_list_(float32, 4)
-    var c_fsl = CArrowSchema.from_dtype(fsl_dt.copy().to_any())
+    var c_fsl = CArrowSchema.from_dtype(fsl_dt.copy().to_dyn())
     var rt_fsl = c_fsl.to_dtype()
     assert_true(rt_fsl.is_fixed_size_list())
     ref rt_fsl_t = rt_fsl.as_fixed_size_list()
@@ -593,7 +593,7 @@ def test_schema_from_dtype_all_types() raises:
     var struct_fields = List[Field]()
     struct_fields.append(Field("a", int32, True))
     var struct_dt = struct_(struct_fields^)
-    var c_struct = CArrowSchema.from_dtype(struct_dt.copy().to_any())
+    var c_struct = CArrowSchema.from_dtype(struct_dt.copy().to_dyn())
     var rt_struct = c_struct.to_dtype()
     assert_true(rt_struct.is_struct())
     var rt_sf = rt_struct.as_struct().fields.copy()
@@ -695,47 +695,47 @@ def test_temporal_dtype_schema_roundtrip() raises:
     time32[s] and timestamp[s, tz] failed to parse back from PyArrow capsules.
     """
     # date
-    var c = CArrowSchema.from_dtype(date32().to_any())
-    assert_equal(c.to_dtype(), date32().to_any())
-    c = CArrowSchema.from_dtype(date64().to_any())
-    assert_equal(c.to_dtype(), date64().to_any())
+    var c = CArrowSchema.from_dtype(date32().to_dyn())
+    assert_equal(c.to_dtype(), date32().to_dyn())
+    c = CArrowSchema.from_dtype(date64().to_dyn())
+    assert_equal(c.to_dtype(), date64().to_dyn())
     # time32 — seconds unit was the bug (tts, not ttS)
-    c = CArrowSchema.from_dtype(time32(second).to_any())
-    assert_equal(c.to_dtype(), time32(second).to_any())
-    c = CArrowSchema.from_dtype(time32(millisecond).to_any())
-    assert_equal(c.to_dtype(), time32(millisecond).to_any())
+    c = CArrowSchema.from_dtype(time32(second).to_dyn())
+    assert_equal(c.to_dtype(), time32(second).to_dyn())
+    c = CArrowSchema.from_dtype(time32(millisecond).to_dyn())
+    assert_equal(c.to_dtype(), time32(millisecond).to_dyn())
     # time64
-    c = CArrowSchema.from_dtype(time64(microsecond).to_any())
-    assert_equal(c.to_dtype(), time64(microsecond).to_any())
-    c = CArrowSchema.from_dtype(time64(nanosecond).to_any())
-    assert_equal(c.to_dtype(), time64(nanosecond).to_any())
+    c = CArrowSchema.from_dtype(time64(microsecond).to_dyn())
+    assert_equal(c.to_dtype(), time64(microsecond).to_dyn())
+    c = CArrowSchema.from_dtype(time64(nanosecond).to_dyn())
+    assert_equal(c.to_dtype(), time64(nanosecond).to_dyn())
     # timestamp — seconds unit was the bug (tss:, not tsS:)
-    c = CArrowSchema.from_dtype(timestamp(second).to_any())
-    assert_equal(c.to_dtype(), timestamp(second).to_any())
-    c = CArrowSchema.from_dtype(timestamp(millisecond).to_any())
-    assert_equal(c.to_dtype(), timestamp(millisecond).to_any())
-    c = CArrowSchema.from_dtype(timestamp(microsecond).to_any())
-    assert_equal(c.to_dtype(), timestamp(microsecond).to_any())
-    c = CArrowSchema.from_dtype(timestamp(nanosecond).to_any())
-    assert_equal(c.to_dtype(), timestamp(nanosecond).to_any())
+    c = CArrowSchema.from_dtype(timestamp(second).to_dyn())
+    assert_equal(c.to_dtype(), timestamp(second).to_dyn())
+    c = CArrowSchema.from_dtype(timestamp(millisecond).to_dyn())
+    assert_equal(c.to_dtype(), timestamp(millisecond).to_dyn())
+    c = CArrowSchema.from_dtype(timestamp(microsecond).to_dyn())
+    assert_equal(c.to_dtype(), timestamp(microsecond).to_dyn())
+    c = CArrowSchema.from_dtype(timestamp(nanosecond).to_dyn())
+    assert_equal(c.to_dtype(), timestamp(nanosecond).to_dyn())
     # timestamp with timezone — seconds+tz was the bug (tss:UTC, not tsS:UTC)
-    c = CArrowSchema.from_dtype(timestamp(second, "UTC").to_any())
-    assert_equal(c.to_dtype(), timestamp(second, "UTC").to_any())
-    c = CArrowSchema.from_dtype(timestamp(millisecond, "US/Eastern").to_any())
-    assert_equal(c.to_dtype(), timestamp(millisecond, "US/Eastern").to_any())
-    c = CArrowSchema.from_dtype(timestamp(microsecond, "Europe/Paris").to_any())
-    assert_equal(c.to_dtype(), timestamp(microsecond, "Europe/Paris").to_any())
-    c = CArrowSchema.from_dtype(timestamp(nanosecond, "US/Pacific").to_any())
-    assert_equal(c.to_dtype(), timestamp(nanosecond, "US/Pacific").to_any())
+    c = CArrowSchema.from_dtype(timestamp(second, "UTC").to_dyn())
+    assert_equal(c.to_dtype(), timestamp(second, "UTC").to_dyn())
+    c = CArrowSchema.from_dtype(timestamp(millisecond, "US/Eastern").to_dyn())
+    assert_equal(c.to_dtype(), timestamp(millisecond, "US/Eastern").to_dyn())
+    c = CArrowSchema.from_dtype(timestamp(microsecond, "Europe/Paris").to_dyn())
+    assert_equal(c.to_dtype(), timestamp(microsecond, "Europe/Paris").to_dyn())
+    c = CArrowSchema.from_dtype(timestamp(nanosecond, "US/Pacific").to_dyn())
+    assert_equal(c.to_dtype(), timestamp(nanosecond, "US/Pacific").to_dyn())
     # duration
-    c = CArrowSchema.from_dtype(duration(second).to_any())
-    assert_equal(c.to_dtype(), duration(second).to_any())
-    c = CArrowSchema.from_dtype(duration(millisecond).to_any())
-    assert_equal(c.to_dtype(), duration(millisecond).to_any())
-    c = CArrowSchema.from_dtype(duration(microsecond).to_any())
-    assert_equal(c.to_dtype(), duration(microsecond).to_any())
-    c = CArrowSchema.from_dtype(duration(nanosecond).to_any())
-    assert_equal(c.to_dtype(), duration(nanosecond).to_any())
+    c = CArrowSchema.from_dtype(duration(second).to_dyn())
+    assert_equal(c.to_dtype(), duration(second).to_dyn())
+    c = CArrowSchema.from_dtype(duration(millisecond).to_dyn())
+    assert_equal(c.to_dtype(), duration(millisecond).to_dyn())
+    c = CArrowSchema.from_dtype(duration(microsecond).to_dyn())
+    assert_equal(c.to_dtype(), duration(microsecond).to_dyn())
+    c = CArrowSchema.from_dtype(duration(nanosecond).to_dyn())
+    assert_equal(c.to_dtype(), duration(nanosecond).to_dyn())
 
 
 def test_temporal_schema_from_pyarrow() raises:
@@ -747,44 +747,44 @@ def test_temporal_schema_from_pyarrow() raises:
     var pa = Python.import_module("pyarrow")
 
     var c = c_schema_from_pyobj(pa.date32())
-    assert_equal(c.to_dtype(), date32().to_any())
+    assert_equal(c.to_dtype(), date32().to_dyn())
     c = c_schema_from_pyobj(pa.date64())
-    assert_equal(c.to_dtype(), date64().to_any())
+    assert_equal(c.to_dtype(), date64().to_dyn())
     # time32[s] — was broken (ttS), now tts
     c = c_schema_from_pyobj(pa.time32("s"))
-    assert_equal(c.to_dtype(), time32(second).to_any())
+    assert_equal(c.to_dtype(), time32(second).to_dyn())
     c = c_schema_from_pyobj(pa.time32("ms"))
-    assert_equal(c.to_dtype(), time32(millisecond).to_any())
+    assert_equal(c.to_dtype(), time32(millisecond).to_dyn())
     c = c_schema_from_pyobj(pa.time64("us"))
-    assert_equal(c.to_dtype(), time64(microsecond).to_any())
+    assert_equal(c.to_dtype(), time64(microsecond).to_dyn())
     c = c_schema_from_pyobj(pa.time64("ns"))
-    assert_equal(c.to_dtype(), time64(nanosecond).to_any())
+    assert_equal(c.to_dtype(), time64(nanosecond).to_dyn())
     # timestamp[s] — was broken (tsS:), now tss:
     c = c_schema_from_pyobj(pa.timestamp("s"))
-    assert_equal(c.to_dtype(), timestamp(second).to_any())
+    assert_equal(c.to_dtype(), timestamp(second).to_dyn())
     c = c_schema_from_pyobj(pa.timestamp("ms"))
-    assert_equal(c.to_dtype(), timestamp(millisecond).to_any())
+    assert_equal(c.to_dtype(), timestamp(millisecond).to_dyn())
     c = c_schema_from_pyobj(pa.timestamp("us"))
-    assert_equal(c.to_dtype(), timestamp(microsecond).to_any())
+    assert_equal(c.to_dtype(), timestamp(microsecond).to_dyn())
     c = c_schema_from_pyobj(pa.timestamp("ns"))
-    assert_equal(c.to_dtype(), timestamp(nanosecond).to_any())
+    assert_equal(c.to_dtype(), timestamp(nanosecond).to_dyn())
     # timestamp with timezone — was broken for seconds unit
     c = c_schema_from_pyobj(pa.timestamp("s", tz="UTC"))
-    assert_equal(c.to_dtype(), timestamp(second, "UTC").to_any())
+    assert_equal(c.to_dtype(), timestamp(second, "UTC").to_dyn())
     c = c_schema_from_pyobj(pa.timestamp("ms", tz="US/Eastern"))
-    assert_equal(c.to_dtype(), timestamp(millisecond, "US/Eastern").to_any())
+    assert_equal(c.to_dtype(), timestamp(millisecond, "US/Eastern").to_dyn())
     c = c_schema_from_pyobj(pa.timestamp("us", tz="Europe/Paris"))
-    assert_equal(c.to_dtype(), timestamp(microsecond, "Europe/Paris").to_any())
+    assert_equal(c.to_dtype(), timestamp(microsecond, "Europe/Paris").to_dyn())
     c = c_schema_from_pyobj(pa.timestamp("ns", tz="US/Pacific"))
-    assert_equal(c.to_dtype(), timestamp(nanosecond, "US/Pacific").to_any())
+    assert_equal(c.to_dtype(), timestamp(nanosecond, "US/Pacific").to_dyn())
     c = c_schema_from_pyobj(pa.duration("s"))
-    assert_equal(c.to_dtype(), duration(second).to_any())
+    assert_equal(c.to_dtype(), duration(second).to_dyn())
     c = c_schema_from_pyobj(pa.duration("ms"))
-    assert_equal(c.to_dtype(), duration(millisecond).to_any())
+    assert_equal(c.to_dtype(), duration(millisecond).to_dyn())
     c = c_schema_from_pyobj(pa.duration("us"))
-    assert_equal(c.to_dtype(), duration(microsecond).to_any())
+    assert_equal(c.to_dtype(), duration(microsecond).to_dyn())
     c = c_schema_from_pyobj(pa.duration("ns"))
-    assert_equal(c.to_dtype(), duration(nanosecond).to_any())
+    assert_equal(c.to_dtype(), duration(nanosecond).to_dyn())
 
 
 def test_date32_array_from_pyarrow() raises:
@@ -859,7 +859,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_d32 = c_array_from_pyobj(
         pa.array(Python.list(100), type=pa.date32())
     )
-    var data_d32 = ca_d32^.to_array(date32().to_any())
+    var data_d32 = ca_d32^.to_array(date32().to_dyn())
     ref arr_d32 = data_d32.as_date32()
     assert_equal(arr_d32[0].value(), 100)
 
@@ -867,7 +867,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_d64 = c_array_from_pyobj(
         pa.array(Python.list(86400000), type=pa.date64())
     )
-    var data_d64 = ca_d64^.to_array(date64().to_any())
+    var data_d64 = ca_d64^.to_array(date64().to_dyn())
     ref arr_d64 = data_d64.as_date64()
     assert_equal(arr_d64[0].value(), 86400000)
 
@@ -875,7 +875,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_t32s = c_array_from_pyobj(
         pa.array(Python.list(3600), type=pa.time32("s"))
     )
-    var data_t32s = ca_t32s^.to_array(time32(second).to_any())
+    var data_t32s = ca_t32s^.to_array(time32(second).to_dyn())
     ref arr_t32s = data_t32s.as_time32()
     assert_equal(arr_t32s[0].value(), 3600)
 
@@ -883,7 +883,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_t32m = c_array_from_pyobj(
         pa.array(Python.list(3600000), type=pa.time32("ms"))
     )
-    var data_t32m = ca_t32m^.to_array(time32(millisecond).to_any())
+    var data_t32m = ca_t32m^.to_array(time32(millisecond).to_dyn())
     ref arr_t32m = data_t32m.as_time32()
     assert_equal(arr_t32m[0].value(), 3600000)
 
@@ -891,7 +891,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_t64u = c_array_from_pyobj(
         pa.array(Python.list(3600000000), type=pa.time64("us"))
     )
-    var data_t64u = ca_t64u^.to_array(time64(microsecond).to_any())
+    var data_t64u = ca_t64u^.to_array(time64(microsecond).to_dyn())
     ref arr_t64u = data_t64u.as_time64()
     assert_equal(arr_t64u[0].value(), 3600000000)
 
@@ -899,7 +899,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_t64n = c_array_from_pyobj(
         pa.array(Python.list(3600000000000), type=pa.time64("ns"))
     )
-    var data_t64n = ca_t64n^.to_array(time64(nanosecond).to_any())
+    var data_t64n = ca_t64n^.to_array(time64(nanosecond).to_dyn())
     ref arr_t64n = data_t64n.as_time64()
     assert_equal(arr_t64n[0].value(), 3600000000000)
 
@@ -907,7 +907,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_ts_s = c_array_from_pyobj(
         pa.array(Python.list(1000), type=pa.timestamp("s"))
     )
-    var data_ts_s = ca_ts_s^.to_array(timestamp(second).to_any())
+    var data_ts_s = ca_ts_s^.to_array(timestamp(second).to_dyn())
     ref arr_ts_s = data_ts_s.as_timestamp()
     assert_equal(arr_ts_s[0].value(), 1000)
 
@@ -915,7 +915,7 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_ts_ntz = c_array_from_pyobj(
         pa.array(Python.list(1000000000000), type=pa.timestamp("ns", tz="UTC"))
     )
-    var data_ts_ntz = ca_ts_ntz^.to_array(timestamp(nanosecond, "UTC").to_any())
+    var data_ts_ntz = ca_ts_ntz^.to_array(timestamp(nanosecond, "UTC").to_dyn())
     ref arr_ts_ntz = data_ts_ntz.as_timestamp()
     assert_equal(arr_ts_ntz[0].value(), 1000000000000)
 
@@ -923,28 +923,26 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     var ca_dur = c_array_from_pyobj(
         pa.array(Python.list(5000), type=pa.duration("ms"))
     )
-    var data_dur = ca_dur^.to_array(duration(millisecond).to_any())
+    var data_dur = ca_dur^.to_array(duration(millisecond).to_dyn())
     ref arr_dur = data_dur.as_duration()
     assert_equal(arr_dur[0].value(), 5000)
 
 
 def test_dictionary_dtype_schema_roundtrip() raises:
     """CArrowSchema round-trip for dictionary(int32, string)."""
-    var dt = dictionary(AnyDataType(int32), AnyDataType(string)).to_any()
+    var dt = dictionary(DynType(int32), DynType(string)).to_dyn()
     var c_schema = CArrowSchema.from_dtype(dt)
     var rt = c_schema.to_dtype()
     assert_true(rt.is_dictionary())
     ref dd = rt.as_dictionary()
-    assert_true(dd.index_type() == AnyDataType(int32))
-    assert_true(dd.value_type() == AnyDataType(string))
+    assert_true(dd.index_type() == DynType(int32))
+    assert_true(dd.value_type() == DynType(string))
     assert_false(dd.ordered)
 
 
 def test_dictionary_ordered_roundtrip() raises:
     """ARROW_FLAG_DICT_ORDERED is preserved in the schema round-trip."""
-    var dt = dictionary(
-        AnyDataType(int8), AnyDataType(int32), ordered=True
-    ).to_any()
+    var dt = dictionary(DynType(int8), DynType(int32), ordered=True).to_dyn()
     var c_schema = CArrowSchema.from_dtype(dt)
     var rt = c_schema.to_dtype()
     assert_true(rt.is_dictionary())
@@ -984,14 +982,14 @@ def test_dictionary_to_pyarrow() raises:
     var vb = StringBuilder()
     vb.append("red")
     vb.append("green")
-    var values: AnyArray = vb.finish()
+    var values: DynArray = vb.finish()
 
     var ib = Int32Builder()
     ib.append(0)
     ib.append(1)
     ib.append(0)
-    var indices: AnyArray = ib.finish()
-    var arr: AnyArray = DictionaryArray.from_arrays(indices^, values^)
+    var indices: DynArray = ib.finish()
+    var arr: DynArray = DictionaryArray.from_arrays(indices^, values^)
 
     # Verify CArrowSchema structure: format = "i" (int32 index), dictionary != null
     var c_schema = CArrowSchema.from_dtype(arr.dtype())
@@ -1031,9 +1029,7 @@ def test_map_dtype_from_pyarrow() raises:
 
 def test_map_dtype_schema_roundtrip() raises:
     """CArrowSchema round-trip for map(string, int64) incl. keys_sorted flag."""
-    var dt = map_(
-        AnyDataType(string), AnyDataType(int64), keys_sorted=True
-    ).to_any()
+    var dt = map_(DynType(string), DynType(int64), keys_sorted=True).to_dyn()
     var c_schema = CArrowSchema.from_dtype(dt)
     var fmt = String(
         StringSlice(
@@ -1114,7 +1110,7 @@ def test_map_array_roundtrip() raises:
     vb.append(20)
     vb.append(30)
 
-    var arr: AnyArray = MapArray.from_arrays(
+    var arr: DynArray = MapArray.from_arrays(
         ob.finish(), kb.finish(), vb.finish()
     )
     assert_true(arr.dtype().is_map())

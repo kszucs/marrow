@@ -12,7 +12,7 @@ from std.python.bindings import PythonModuleBuilder
 
 from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
-from marrow.arrays import AnyArray, ChunkedArray
+from marrow.arrays import DynArray, ChunkedArray
 from marrow.dtypes import Field
 from std.memory import ArcPointer, UnsafePointer
 from std.builtin.type_aliases import MutAnyOrigin
@@ -31,7 +31,7 @@ from helpers import pymethod
 # ---------------------------------------------------------------------------
 
 
-def _to_pydict(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
+def _to_pydict(schema: Schema, columns: List[DynArray]) raises -> PythonObject:
     """Convert schema + columns to a Python dict mapping names to value lists.
     """
     var builtins = Python.import_module("builtins")
@@ -46,7 +46,7 @@ def _to_pydict(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
     return result
 
 
-def _to_pylist(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
+def _to_pylist(schema: Schema, columns: List[DynArray]) raises -> PythonObject:
     """Convert schema + columns to a Python list of row dicts."""
     var builtins = Python.import_module("builtins")
     var n_rows = columns[0].length() if len(columns) > 0 else 0
@@ -65,14 +65,14 @@ def _to_pylist(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
 
 
 def _export_c_array(
-    schema: Schema, columns: List[AnyArray]
+    schema: Schema, columns: List[DynArray]
 ) raises -> PythonObject:
     """Export schema + columns as Arrow C Data Interface capsule pair."""
     var schema_cap = CArrowSchema.from_schema(schema).to_pycapsule()
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     for col in columns:
         cols.append(col.copy())
-    var struct_arr: AnyArray = RecordBatch(
+    var struct_arr: DynArray = RecordBatch(
         schema=schema, columns=cols^
     ).to_struct_array()
     var array_cap = CArrowArray.from_array(struct_arr).to_pycapsule()
@@ -82,10 +82,10 @@ def _export_c_array(
 def _build_from_dict(data: PythonObject) raises -> RecordBatch:
     """Build a RecordBatch from a Python dict of {name: array}."""
     var fields = List[Field]()
-    var columns = List[AnyArray]()
+    var columns = List[DynArray]()
     for key in data:
         var name = String(py=key)
-        var arr = AnyArray(py=data[key])
+        var arr = DynArray(py=data[key])
         fields.append(Field(name=name, dtype=arr.dtype()))
         columns.append(arr^)
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
@@ -96,10 +96,10 @@ def _build_from_arrays(
 ) raises -> RecordBatch:
     """Build a RecordBatch from a list of arrays + names."""
     var fields = List[Field]()
-    var columns = List[AnyArray]()
+    var columns = List[DynArray]()
     var i = 0
     for arr_obj in data:
-        var arr = AnyArray(py=arr_obj)
+        var arr = DynArray(py=arr_obj)
         var name = String(py=names_obj[i])
         fields.append(Field(name=name, dtype=arr.dtype()))
         columns.append(arr^)
@@ -112,9 +112,9 @@ def _build_from_arrays_with_schema(
 ) raises -> RecordBatch:
     """Build a RecordBatch from a list of arrays + explicit schema."""
     var schema = Schema(py=schema_obj)
-    var columns = List[AnyArray]()
+    var columns = List[DynArray]()
     for arr_obj in data:
-        columns.append(AnyArray(py=arr_obj))
+        columns.append(DynArray(py=arr_obj))
     return RecordBatch(schema=schema^, columns=columns^)
 
 
@@ -515,7 +515,7 @@ def _record_batch_group_by(
     var key_struct = rb.select(key_indices).to_struct_array()
 
     # Resolve the (value column, aggregate function) pairs and their output names.
-    var value_cols = List[AnyArray]()
+    var value_cols = List[DynArray]()
     var aggs = FoldedAggregates()
     var agg_names = List[String]()
     for j in range(Int(funcs.__len__())):
@@ -534,7 +534,7 @@ def _record_batch_group_by(
     # `res` is [key columns..., aggregate columns...]; rename the aggregates.
     var n_keys = len(res.columns) - len(aggs)
     var out_fields = List[Field]()
-    var out_columns = List[AnyArray]()
+    var out_columns = List[DynArray]()
     for c in range(n_keys):
         out_fields.append(res.schema.fields[c].copy())
         out_columns.append(res.columns[c].copy())
@@ -565,7 +565,7 @@ def _record_batch_aggregate(
     aggregate. ``count`` of a non-null column gives ``COUNT(*)``.
     """
     ref rb = ptr[]
-    var value_cols = List[AnyArray]()
+    var value_cols = List[DynArray]()
     var aggs = FoldedAggregates()
     var names = List[String]()
     for j in range(Int(funcs.__len__())):
@@ -580,7 +580,7 @@ def _record_batch_aggregate(
 
     var res = aggs.whole(value_cols)
     var out_fields = List[Field]()
-    var out_cols = List[AnyArray]()
+    var out_cols = List[DynArray]()
     for j in range(len(aggs)):
         out_fields.append(Field(names[j], res.schema.fields[j].dtype.copy()))
         out_cols.append(res.columns[j].copy())

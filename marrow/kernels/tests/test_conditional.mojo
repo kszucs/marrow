@@ -15,7 +15,7 @@ Expected value/null patterns match PyArrow's ``pc.case_when``, ``pc.coalesce``,
 
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
 
-from ...arrays import AnyArray, BoolArray, Int64Array, StringArray
+from ...arrays import DynArray, BoolArray, Int64Array, StringArray
 from ...builders import array, StringBuilder
 from ...dtypes import Int64Type, int64, int32, float64
 from ...scalars import Int64Scalar
@@ -28,7 +28,7 @@ from ...kernels.conditional import case_when, coalesce, nullif, fill_null
 # ---------------------------------------------------------------------------
 
 
-def _any(a: Int64Array) raises -> AnyArray:
+def _any(a: Int64Array) raises -> DynArray:
     return a.copy()
 
 
@@ -58,10 +58,10 @@ def test_case_when_two_branches_with_else() raises:
     var conds = List[BoolArray]()
     conds.append(c0.copy())
     conds.append(c1.copy())
-    var vals = List[AnyArray]()
+    var vals = List[DynArray]()
     vals.append(v0.copy())
     vals.append(v1.copy())
-    var else_: AnyArray = e.copy()
+    var else_: DynArray = e.copy()
 
     # row2: c0 null -> treated as false -> c1 true -> v1[2]
     # row3: no cond true -> else
@@ -77,9 +77,9 @@ def test_case_when_selected_value_null_propagates() raises:
 
     var conds = List[BoolArray]()
     conds.append(c0.copy())
-    var vals = List[AnyArray]()
+    var vals = List[DynArray]()
     vals.append(v0.copy())
-    var else_: AnyArray = e.copy()
+    var else_: DynArray = e.copy()
 
     var r = case_when(conds, vals, else_^)
     # row0: c0 true but v0[0] is null -> null
@@ -93,7 +93,7 @@ def test_case_when_no_else_is_null() raises:
 
     var conds = List[BoolArray]()
     conds.append(c0.copy())
-    var vals = List[AnyArray]()
+    var vals = List[DynArray]()
     vals.append(v0.copy())
 
     var r = case_when(conds, vals)
@@ -109,9 +109,9 @@ def test_case_when_string() raises:
 
     var conds = List[BoolArray]()
     conds.append(c0.copy())
-    var vals = List[AnyArray]()
+    var vals = List[DynArray]()
     vals.append(v0.copy())
-    var else_: AnyArray = e.copy()
+    var else_: DynArray = e.copy()
 
     var r = case_when(conds, vals, else_^)
     # ["a", else "y", c0 null -> else "z"]
@@ -144,7 +144,7 @@ def test_coalesce_three_arrays() raises:
     var b = array([None, 2, None, None], int64)
     var c = array([None, None, 3, None], int64)
 
-    var arrays = List[AnyArray]()
+    var arrays = List[DynArray]()
     arrays.append(a.copy())
     arrays.append(b.copy())
     arrays.append(c.copy())
@@ -160,7 +160,7 @@ def test_coalesce_prefers_first_non_null() raises:
     var b = array([1, 20, None], int64)
     var c = array([2, 30, 3], int64)
 
-    var arrays = List[AnyArray]()
+    var arrays = List[DynArray]()
     arrays.append(a.copy())
     arrays.append(b.copy())
     arrays.append(c.copy())
@@ -174,7 +174,7 @@ def test_coalesce_string() raises:
     var a = _strs(["x", "", ""], [True, False, False])
     var b = _strs(["", "y", ""], [False, True, False])
 
-    var arrays = List[AnyArray]()
+    var arrays = List[DynArray]()
     arrays.append(a.copy())
     arrays.append(b.copy())
 
@@ -192,8 +192,8 @@ def test_coalesce_string() raises:
 def test_nullif_basic() raises:
     var a = array([1, 2, 3, 4], int64)
     var b = array([1, 0, 3, 0], int64)
-    var aa: AnyArray = a.copy()
-    var bb: AnyArray = b.copy()
+    var aa: DynArray = a.copy()
+    var bb: DynArray = b.copy()
 
     var r = nullif(aa, bb)
     # null where a == b (rows 0 and 2)
@@ -204,8 +204,8 @@ def test_nullif_basic() raises:
 def test_nullif_with_nulls() raises:
     var a = array([1, None, 3], int64)
     var b = array([1, 2, None], int64)
-    var aa: AnyArray = a.copy()
-    var bb: AnyArray = b.copy()
+    var aa: DynArray = a.copy()
+    var bb: DynArray = b.copy()
 
     var r = nullif(aa, bb)
     # row0: 1==1 -> null; row1: a null -> keep (null); row2: b null -> keep 3
@@ -216,8 +216,8 @@ def test_nullif_with_nulls() raises:
 def test_nullif_string() raises:
     var a = _strs(["a", "b", "c"], [True, True, True])
     var b = _strs(["a", "x", "c"], [True, True, True])
-    var aa: AnyArray = a.copy()
-    var bb: AnyArray = b.copy()
+    var aa: DynArray = a.copy()
+    var bb: DynArray = b.copy()
 
     var r = nullif(aa, bb)
     var expected = _strs(["", "b", ""], [False, True, False])
@@ -240,8 +240,8 @@ def test_nullif_typed_overload() raises:
 def test_fill_null_array() raises:
     var a = array([1, None, 3, None], int64)
     var fill = array([10, 20, 30, 40], int64)
-    var aa: AnyArray = a.copy()
-    var ff: AnyArray = fill.copy()
+    var aa: DynArray = a.copy()
+    var ff: DynArray = fill.copy()
 
     var r = fill_null(aa, ff)
     assert_true(r.as_int64() == array([1, 20, 3, 40], int64))
@@ -251,8 +251,8 @@ def test_fill_null_array() raises:
 def test_fill_null_array_with_null_fill() raises:
     var a = array([1, None, 3, None], int64)
     var fill = array([10, None, 30, 40], int64)
-    var aa: AnyArray = a.copy()
-    var ff: AnyArray = fill.copy()
+    var aa: DynArray = a.copy()
+    var ff: DynArray = fill.copy()
 
     var r = fill_null(aa, ff)
     # row1: a null and fill null -> stays null
@@ -262,9 +262,9 @@ def test_fill_null_array_with_null_fill() raises:
 
 def test_fill_null_scalar() raises:
     var a = array([1, None, 3, None], int64)
-    var aa: AnyArray = a.copy()
+    var aa: DynArray = a.copy()
 
-    var r = fill_null(aa, Int64Scalar(99).to_any())
+    var r = fill_null(aa, Int64Scalar(99).to_dyn())
     assert_true(r.as_int64() == array([1, 99, 3, 99], int64))
     assert_equal(r.null_count(), 0)
 
@@ -272,8 +272,8 @@ def test_fill_null_scalar() raises:
 def test_fill_null_string_array() raises:
     var a = _strs(["a", "", "c"], [True, False, True])
     var fill = _strs(["X", "Y", "Z"], [True, True, True])
-    var aa: AnyArray = a.copy()
-    var ff: AnyArray = fill.copy()
+    var aa: DynArray = a.copy()
+    var ff: DynArray = fill.copy()
 
     var r = fill_null(aa, ff)
     var expected = _strs(["a", "Y", "c"], [True, True, True])
@@ -299,7 +299,7 @@ def test_case_when_condition_count_mismatch_raises() raises:
 
     var conds = List[BoolArray]()
     conds.append(c0.copy())
-    var vals = List[AnyArray]()
+    var vals = List[DynArray]()
     vals.append(v0.copy())
     vals.append(v1.copy())
     with assert_raises():
@@ -307,7 +307,7 @@ def test_case_when_condition_count_mismatch_raises() raises:
 
 
 def test_coalesce_empty_raises() raises:
-    var arrays = List[AnyArray]()
+    var arrays = List[DynArray]()
     with assert_raises():
         _ = coalesce(arrays)
 
@@ -315,8 +315,8 @@ def test_coalesce_empty_raises() raises:
 def test_nullif_dtype_mismatch_raises() raises:
     var a = array([1, 2], int64)
     var b = array([1, 2], int32)
-    var aa: AnyArray = a.copy()
-    var bb: AnyArray = b.copy()
+    var aa: DynArray = a.copy()
+    var bb: DynArray = b.copy()
     with assert_raises():
         _ = nullif(aa, bb)
 
@@ -324,7 +324,7 @@ def test_nullif_dtype_mismatch_raises() raises:
 def test_fill_null_length_mismatch_raises() raises:
     var a = array([1, None, 3], int64)
     var fill = array([9, 9], int64)
-    var aa: AnyArray = a.copy()
-    var ff: AnyArray = fill.copy()
+    var aa: DynArray = a.copy()
+    var ff: DynArray = fill.copy()
     with assert_raises():
         _ = fill_null(aa, ff)

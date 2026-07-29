@@ -18,102 +18,102 @@ def _field_type(py_self: PythonObject) raises -> PythonObject:
 
 def null() raises -> PythonObject:
     """Create a null DataType."""
-    return dt.null.to_any().to_python_object()
+    return dt.null.to_dyn().to_python_object()
 
 
 def bool_() raises -> PythonObject:
     """Create a boolean DataType."""
-    return dt.bool_.to_any().to_python_object()
+    return dt.bool_.to_dyn().to_python_object()
 
 
 def int8() raises -> PythonObject:
     """Create an int8 DataType."""
-    return dt.int8.to_any().to_python_object()
+    return dt.int8.to_dyn().to_python_object()
 
 
 def int16() raises -> PythonObject:
     """Create an int16 DataType."""
-    return dt.int16.to_any().to_python_object()
+    return dt.int16.to_dyn().to_python_object()
 
 
 def int32() raises -> PythonObject:
     """Create an int32 DataType."""
-    return dt.int32.to_any().to_python_object()
+    return dt.int32.to_dyn().to_python_object()
 
 
 def int64() raises -> PythonObject:
     """Create an int64 DataType."""
-    return dt.int64.to_any().to_python_object()
+    return dt.int64.to_dyn().to_python_object()
 
 
 def uint8() raises -> PythonObject:
     """Create a uint8 DataType."""
-    return dt.uint8.to_any().to_python_object()
+    return dt.uint8.to_dyn().to_python_object()
 
 
 def uint16() raises -> PythonObject:
     """Create a uint16 DataType."""
-    return dt.uint16.to_any().to_python_object()
+    return dt.uint16.to_dyn().to_python_object()
 
 
 def uint32() raises -> PythonObject:
     """Create a uint32 DataType."""
-    return dt.uint32.to_any().to_python_object()
+    return dt.uint32.to_dyn().to_python_object()
 
 
 def uint64() raises -> PythonObject:
     """Create a uint64 DataType."""
-    return dt.uint64.to_any().to_python_object()
+    return dt.uint64.to_dyn().to_python_object()
 
 
 def float16() raises -> PythonObject:
     """Create a float16 DataType."""
-    return dt.float16.to_any().to_python_object()
+    return dt.float16.to_dyn().to_python_object()
 
 
 def float32() raises -> PythonObject:
     """Create a float32 DataType."""
-    return dt.float32.to_any().to_python_object()
+    return dt.float32.to_dyn().to_python_object()
 
 
 def float64() raises -> PythonObject:
     """Create a float64 DataType."""
-    return dt.float64.to_any().to_python_object()
+    return dt.float64.to_dyn().to_python_object()
 
 
 def string() raises -> PythonObject:
     """Create a string DataType."""
-    return dt.string.to_any().to_python_object()
+    return dt.string.to_dyn().to_python_object()
 
 
 def binary() raises -> PythonObject:
     """Create a binary DataType."""
-    return dt.binary.to_any().to_python_object()
+    return dt.binary.to_dyn().to_python_object()
 
 
 def fixed_size_binary(byte_width: PythonObject) raises -> PythonObject:
     """Create a fixed-size binary DataType."""
-    return dt.fixed_size_binary_(Int(py=byte_width)).to_any().to_python_object()
+    return dt.fixed_size_binary_(Int(py=byte_width)).to_dyn().to_python_object()
 
 
 def date32() raises -> PythonObject:
     """Create a date32 DataType."""
-    return dt.date32().to_any().to_python_object()
+    return dt.date32().to_dyn().to_python_object()
 
 
 def date64() raises -> PythonObject:
     """Create a date64 DataType."""
-    return dt.date64().to_any().to_python_object()
+    return dt.date64().to_dyn().to_python_object()
 
 
 def time32(unit: PythonObject) raises -> PythonObject:
     """Create a time32 DataType."""
-    return dt.time32(_parse_time_unit(unit)).to_any().to_python_object()
+    return dt.time32(_parse_time_unit(unit)).to_dyn().to_python_object()
 
 
 def time64(unit: PythonObject) raises -> PythonObject:
     """Create a time64 DataType."""
-    return dt.time64(_parse_time_unit(unit)).to_any().to_python_object()
+    return dt.time64(_parse_time_unit(unit)).to_dyn().to_python_object()
 
 
 def timestamp(
@@ -122,28 +122,28 @@ def timestamp(
     """Create a timestamp DataType."""
     var tz_str = "" if tz is None else String(py=tz)
     return (
-        dt.timestamp(_parse_time_unit(unit), tz_str).to_any().to_python_object()
+        dt.timestamp(_parse_time_unit(unit), tz_str).to_dyn().to_python_object()
     )
 
 
 def duration(unit: PythonObject) raises -> PythonObject:
     """Create a duration DataType."""
-    return dt.duration(_parse_time_unit(unit)).to_any().to_python_object()
+    return dt.duration(_parse_time_unit(unit)).to_dyn().to_python_object()
 
 
 def year_month_interval() raises -> PythonObject:
     """Create a year_month_interval DataType."""
-    return dt.year_month_interval().to_any().to_python_object()
+    return dt.year_month_interval().to_dyn().to_python_object()
 
 
 def day_time_interval() raises -> PythonObject:
     """Create a day_time_interval DataType."""
-    return dt.day_time_interval().to_any().to_python_object()
+    return dt.day_time_interval().to_dyn().to_python_object()
 
 
 def month_day_nano_interval() raises -> PythonObject:
     """Create a month_day_nano_interval DataType."""
-    return dt.month_day_nano_interval().to_any().to_python_object()
+    return dt.month_day_nano_interval().to_dyn().to_python_object()
 
 
 def _parse_time_unit(unit: PythonObject) raises -> dt.TimeUnit:
@@ -177,7 +177,7 @@ def field(
 
     return dt.Field(
         name=String(py=name),
-        dtype=dt.AnyDataType(py=type),
+        dtype=dt.DynType(py=type),
         nullable=Bool(py=nullable),
         metadata=m^,
     ).to_python_object()
@@ -185,17 +185,17 @@ def field(
 
 def list_(value_type: PythonObject) raises -> PythonObject:
     """Create a list DataType from a value type."""
-    var d = dt.AnyDataType(py=value_type)
-    return dt.list_(d^).to_any().to_python_object()
+    var d = dt.DynType(py=value_type)
+    return dt.list_(d^).to_dyn().to_python_object()
 
 
 def fixed_size_list_(
     value_type: PythonObject, list_size: PythonObject
 ) raises -> PythonObject:
     """Create a fixed-size list DataType from a value type and list size."""
-    var d = dt.AnyDataType(py=value_type)
+    var d = dt.DynType(py=value_type)
     return (
-        dt.fixed_size_list_(d^, Int(py=list_size)).to_any().to_python_object()
+        dt.fixed_size_list_(d^, Int(py=list_size)).to_dyn().to_python_object()
     )
 
 
@@ -204,7 +204,7 @@ def struct_(fields_obj: PythonObject) raises -> PythonObject:
     var fields = List[dt.Field]()
     for f in fields_obj:
         fields.append(dt.Field(py=f))
-    return dt.struct_(fields^).to_any().to_python_object()
+    return dt.struct_(fields^).to_dyn().to_python_object()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
@@ -215,7 +215,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_field_name]("name")
         .def_method[_field_type]("type")
     )
-    _ = mb.add_type[dt.AnyDataType]("DataType")
+    _ = mb.add_type[dt.DynType]("DataType")
 
     mb.def_function[null]("null")
     mb.def_function[bool_]("bool_")

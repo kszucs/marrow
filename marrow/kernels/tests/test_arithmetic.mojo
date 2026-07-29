@@ -5,7 +5,7 @@ from std.testing import (
     assert_raises,
 )
 
-from ...arrays import AnyArray, PrimitiveArray
+from ...arrays import DynArray, PrimitiveArray
 from ...builders import (
     array,
     arange,
@@ -95,8 +95,8 @@ def test_add_length_mismatch() raises:
 
 
 def test_add_untyped() raises:
-    var a: AnyArray = array([1, 2, 3], int64)
-    var b: AnyArray = array([4, 5, 6], int64)
+    var a: DynArray = array([1, 2, 3], int64)
+    var b: DynArray = array([4, 5, 6], int64)
     var result = AddKernel.dispatch(a, b)
     assert_equal(result.length(), 3)
     ref typed = result.as_int64()
@@ -165,8 +165,8 @@ def test_sub_with_nulls() raises:
 
 
 def test_sub_untyped() raises:
-    var a: AnyArray = array([10, 20, 30], int64)
-    var b: AnyArray = array([1, 2, 3], int64)
+    var a: DynArray = array([10, 20, 30], int64)
+    var b: DynArray = array([1, 2, 3], int64)
     var result = SubKernel.dispatch(a, b)
     ref typed = result.as_int64()
     assert_equal(typed[0].value(), 9)

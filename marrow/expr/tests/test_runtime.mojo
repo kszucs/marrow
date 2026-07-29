@@ -3,7 +3,7 @@ from std.testing import assert_equal, assert_true, assert_false
 from ...arrays import (
     PrimitiveArray,
     BoolArray,
-    AnyArray,
+    DynArray,
     Int64Array,
     Int32Array,
     TimestampArray,
@@ -607,7 +607,7 @@ def test_like_referenced_columns() raises:
 def test_isin_int_expr() raises:
     """ClickBench ``x IN (-1, 6)`` shape via ``.isin``."""
     var a = array([-1, 0, 6, 3, 6], int64)
-    var value_set: AnyArray = array([-1, 6], int64)
+    var value_set: DynArray = array([-1, 6], int64)
     var batch = record_batch([a.copy()], names=["c0"])
     var result = _exec_pred(col(0).isin(value_set), batch)
     assert_true(result == array([True, False, True, False, True]))
@@ -616,14 +616,14 @@ def test_isin_int_expr() raises:
 
 def test_isin_string_expr() raises:
     var a = array(["apple", "banana", "cherry", "apple"])
-    var value_set: AnyArray = array(["apple", "cherry"])
+    var value_set: DynArray = array(["apple", "cherry"])
     var batch = record_batch([a^], names=["c0"])
     var result = _exec_pred(col(0).isin(value_set), batch)
     assert_true(result == array([True, False, True, True]))
 
 
 def test_isin_kind_and_metadata() raises:
-    var value_set: AnyArray = array([1, 2], int64)
+    var value_set: DynArray = array([1, 2], int64)
     var expr = col(0).isin(value_set)
     assert_equal(expr.kind(), IS_IN)
     assert_equal(String(expr), "is_in(input(0), value_set)")

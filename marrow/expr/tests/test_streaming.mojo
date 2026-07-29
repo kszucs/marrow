@@ -29,7 +29,7 @@ from ...dtypes import (
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
 from ...expr.values import Gt, AnyValue, col
-from ...expr.relations import AnyRelation, Sort, in_memory_table
+from ...expr.relations import DynRelation, Sort, in_memory_table
 from ...expr.dynamic import col as dyn_col, lit, case_when, if_else
 
 
@@ -42,7 +42,7 @@ def _batch() raises -> RecordBatch:
     )
 
 
-def _fused_plan(morsel: Int) raises -> AnyRelation:
+def _fused_plan(morsel: Int) raises -> DynRelation:
     """SELECT a, name WHERE a > b, fused values, given a morsel size."""
     return (
         in_memory_table(_batch(), morsel_size=morsel)

@@ -4,11 +4,11 @@ Two layers, cleanly separated:
 
 - ``Relation`` nodes are **pure, immutable descriptions** (``kind``/``schema``/
   ``to_processor``): they hold only their parameters and child relations, no execution
-  state. ``AnyRelation`` erases them behind an ``ArcPointer``, so copying a plan
+  state. ``DynRelation`` erases them behind an ``ArcPointer``, so copying a plan
   is an O(1) share and the plan is a reusable, inspectable, rewritable template.
 - ``Processor`` (``schema``/``pull``) is the executing layer, built by
   ``Relation.to_processor(ctx)``; it owns *all* mutable state (scan offset, built hash
-  index, grouper, child operators). ``AnyProcessor`` erases it and drives the
+  index, grouper, child operators). ``DynProcessor`` erases it and drives the
   pull loop (``collect``). Operators are single-use and move-only.
 
 ``execute(plan, ctx)`` opens the plan into a fresh operator tree and drains it,
@@ -26,15 +26,15 @@ constructors take one, so a hand-built plan can declare a schema its own
 expressions do not produce.
 
 ``in_memory_table(batch[, morsel_size])`` / ``parquet_scan(path, schema)`` — leaf sources.
-``AnyRelation.select(*names)``                   — project columns by name.
-``AnyRelation.project(names, values)``           — project computed expressions.
-``AnyRelation.filter(pred)``                     — filter rows by predicate.
-``AnyRelation.aggregate(keys, aggs)``            — grouped aggregation
+``DynRelation.select(*names)``                   — project columns by name.
+``DynRelation.project(names, values)``           — project computed expressions.
+``DynRelation.filter(pred)``                     — filter rows by predicate.
+``DynRelation.aggregate(keys, aggs)``            — grouped aggregation
 (``HAVING`` is a ``.filter(...)`` on top of it).
-``AnyRelation.sort(keys, ascending)`` / ``.limit(n[, offset])`` — order and slice
+``DynRelation.sort(keys, ascending)`` / ``.limit(n[, offset])`` — order and slice
 (``.sort(...).limit(k)`` folds into the sort kernel's top-K path).
-``AnyRelation.join(right, left_on, right_on)``   — hash join.
-``AnyRelation.execute()``                        — drain to a single RecordBatch.
+``DynRelation.join(right, left_on, right_on)``   — hash join.
+``DynRelation.execute()``                        — drain to a single RecordBatch.
 
 ``project`` and ``aggregate`` each have two overloads, one per expression lane:
 one taking interpreted ``DynValue``s (names resolved against the input schema
@@ -59,7 +59,7 @@ from .aggregates import AggFunc
 from ..parquet import LeafSet
 from .execution import (
     DEFAULT_MORSEL_SIZE,
-    AnyProcessor,
+    DynProcessor,
     InMemoryTableProcessor,
     ParquetScanProcessor,
     FilterProcessor,
@@ -87,7 +87,7 @@ from ..kernels.join import (
 
 
 # Relation kind discriminants — let a plan-building step recognise a node behind
-# `AnyRelation` (e.g. to push a filter into a `ParquetScan`) without a full RTTI.
+# `DynRelation` (e.g. to push a filter into a `ParquetScan`) without a full RTTI.
 comptime RELATION_GENERIC: Int = 0
 comptime RELATION_PARQUET_SCAN: Int = 1
 comptime RELATION_SORT: Int = 2
@@ -108,10 +108,10 @@ trait Relation(ImplicitlyDeletable, Movable):
         erased pointer — or `None` when it cannot use one, which is every node
         but a scan.
 
-        Returns the erased data rather than an `AnyRelation` on purpose. The
+        Returns the erased data rather than an `DynRelation` on purpose. The
         rebuilt node has the *same concrete type* as this one, so the caller can
         keep its own trampolines and swap only the pointer; returning
-        `Optional[AnyRelation]` instead puts `AnyRelation` inside its own
+        `Optional[DynRelation]` instead puts `DynRelation` inside its own
         trampoline field type and Mojo rejects the struct as recursive.
 
         This replaces a `downcast` to a concrete `ParquetScan`, which stopped
@@ -125,7 +125,7 @@ trait Relation(ImplicitlyDeletable, Movable):
     def schema(self) -> Schema:
         ...
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         """Build the physical operator for this node (opening its children)."""
         ...
 
@@ -138,14 +138,14 @@ trait Relation(ImplicitlyDeletable, Movable):
 
 
 # ---------------------------------------------------------------------------
-# AnyRelation — type-erased IR container + plan-building API
+# DynRelation — type-erased IR container + plan-building API
 # ---------------------------------------------------------------------------
 
 
-struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
+struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     """Type-erased plan node behind an ``ArcPointer``.
 
-    Nodes are immutable descriptions, so copying an ``AnyRelation`` is an O(1)
+    Nodes are immutable descriptions, so copying an ``DynRelation`` is an O(1)
     ``ArcPointer`` share — no deep clone, no reset. ``to_processor(ctx)`` builds the
     operator tree that executes; the plan is never mutated, so it is a reusable
     template and copies never share execution state. Carries the plan-building
@@ -155,7 +155,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_to_processor: def(
         ArcPointer[NoneType], ExecutionContext
-    ) thin raises -> AnyProcessor
+    ) thin raises -> DynProcessor
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
     var _virt_kind: def(ArcPointer[NoneType]) thin -> Int
@@ -182,7 +182,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     @staticmethod
     def _tramp_to_processor[
         T: Relation
-    ](ptr: ArcPointer[NoneType], ctx: ExecutionContext) raises -> AnyProcessor:
+    ](ptr: ArcPointer[NoneType], ctx: ExecutionContext) raises -> DynProcessor:
         return rebind[ArcPointer[T]](ptr)[].to_processor(ctx)
 
     @staticmethod
@@ -240,7 +240,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     def to_processor(
         self, ctx: ExecutionContext = ExecutionContext()
-    ) raises -> AnyProcessor:
+    ) raises -> DynProcessor:
         """Build the operator tree for this plan; the plan is left untouched."""
         return self._virt_to_processor(self._data, ctx)
 
@@ -257,7 +257,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     # --- plan-building API ---
 
-    def select(self, *names: String) raises -> AnyRelation:
+    def select(self, *names: String) raises -> DynRelation:
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
@@ -271,7 +271,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             col_names.append(name)
             exprs.append(AnyValue(col(idx)))
             fields.append(schema.fields[idx].copy())
-        return AnyRelation(
+        return DynRelation(
             Project(
                 input=self,
                 names=col_names^,
@@ -280,7 +280,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             )
         )
 
-    def filter(self, var predicate: AnyValue) raises -> AnyRelation:
+    def filter(self, var predicate: AnyValue) raises -> DynRelation:
         """Filter rows by a boolean predicate. Column references resolve by name
         against the batch schema when the boxed value executes.
 
@@ -292,14 +292,14 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         if data:
             # Same concrete node type, so the trampolines still apply — copy
             # them and swap in the rebuilt node's data.
-            var pushed = AnyRelation(copy=self)
+            var pushed = DynRelation(copy=self)
             pushed._data = data.take()
-            return AnyRelation(Filter(input=pushed^, predicate=predicate^))
-        return AnyRelation(Filter(input=self, predicate=predicate^))
+            return DynRelation(Filter(input=pushed^, predicate=predicate^))
+        return DynRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
         self, keys: List[DynValue], aggs: List[AggExpr]
-    ) raises -> AnyRelation:
+    ) raises -> DynRelation:
         """Grouped aggregation — ``GROUP BY keys`` with one output column per
         aggregate.
 
@@ -363,7 +363,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             fields.append(Field(aggs[i].out_name, resolved[i].out_dtype.copy()))
             input_exprs.append(v^)
 
-        return AnyRelation(
+        return DynRelation(
             Aggregate(
                 input=self,
                 keys=key_exprs^,
@@ -379,7 +379,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var inputs: List[AnyValue],
         var aggs: List[AggFunc],
         names: List[String],
-    ) raises -> AnyRelation:
+    ) raises -> DynRelation:
         """Grouped aggregation from an already-resolved aggregate spec — the
         fused counterpart of the ``keys``/``aggs`` overload above.
 
@@ -411,7 +411,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             fields.append(Field(names[i], keys[i].execute(probe).dtype()))
         for j in range(len(aggs)):
             fields.append(Field(names[len(keys) + j], aggs[j].out_dtype.copy()))
-        return AnyRelation(
+        return DynRelation(
             Aggregate(
                 input=self,
                 keys=keys^,
@@ -423,12 +423,12 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     def join(
         self,
-        right: AnyRelation,
+        right: DynRelation,
         left_on: List[DynValue],
         right_on: List[DynValue],
         how: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
-    ) raises -> AnyRelation:
+    ) raises -> DynRelation:
         """Hash join on equijoin key expressions."""
         if len(left_on) != len(right_on):
             raise Error("join: len(left_on) != len(right_on)")
@@ -464,7 +464,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                     name = name + "_right"
                 fields.append(Field(name, f.dtype.copy()))
 
-        return AnyRelation(
+        return DynRelation(
             Join(
                 left=self,
                 right=right,
@@ -478,7 +478,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     def project(
         self, names: List[String], var values: List[AnyValue]
-    ) raises -> AnyRelation:
+    ) raises -> DynRelation:
         """Project arbitrary named expressions (computed columns).
 
         Unlike ``select`` (column pass-through), each value is an expression
@@ -509,7 +509,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var fields = List[Field]()
         for i in range(len(values)):
             fields.append(Field(names[i], values[i].execute(probe).dtype()))
-        return AnyRelation(
+        return DynRelation(
             Project(
                 input=self,
                 names=names.copy(),
@@ -524,7 +524,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         ascending: List[Bool],
         nulls_first: Bool = True,
         stable: Bool = True,
-    ) raises -> AnyRelation:
+    ) raises -> DynRelation:
         """Sort by one or more key expressions (a pipeline breaker).
 
         Each key has its own ascending/descending direction; ``nulls_first`` and
@@ -539,7 +539,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var key_exprs = List[AnyValue]()
         for ref k in keys:
             key_exprs.append(AnyValue(k.resolve_names(input_schema)))
-        return AnyRelation(
+        return DynRelation(
             Sort(
                 input=self,
                 keys=key_exprs^,
@@ -551,7 +551,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             )
         )
 
-    def limit(self, length: Int, offset: Int = 0) raises -> AnyRelation:
+    def limit(self, length: Int, offset: Int = 0) raises -> DynRelation:
         """Keep at most ``length`` rows after skipping ``offset`` rows.
 
         Top-K fast path: when this limits a ``Sort`` with no existing limit and
@@ -561,7 +561,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         if offset == 0 and self.kind() == RELATION_SORT:
             ref s = self.downcast[Sort]()[]
             if not s.limit:
-                return AnyRelation(
+                return DynRelation(
                     Sort(
                         input=s.input.copy(),
                         keys=s.keys.copy(),
@@ -572,7 +572,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                         schema=s.schema(),
                     )
                 )
-        return AnyRelation(Limit(input=self, offset=offset, length=length))
+        return DynRelation(Limit(input=self, offset=offset, length=length))
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +595,7 @@ struct InMemoryTable(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return InMemoryTableProcessor(
             batch=RecordBatch(copy=self.batch),  # shares buffers (O(1))
             morsel_size=self.morsel_size,
@@ -610,7 +610,7 @@ struct InMemoryTable(Relation):
 
 def in_memory_table(
     batch: RecordBatch, morsel_size: Int = DEFAULT_MORSEL_SIZE
-) -> AnyRelation:
+) -> DynRelation:
     """Create a relation backed by an in-memory RecordBatch.
 
     ``morsel_size`` is the number of rows each ``pull()`` yields. It never
@@ -670,7 +670,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     def kind(self) -> Int:
         return RELATION_PARQUET_SCAN
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return ParquetScanProcessor[Self.leaves](
             path=self.path.copy(),
             schema=Schema(copy=self._schema),
@@ -686,7 +686,7 @@ def parquet_scan[
     leaves: LeafSet = LeafSet.all()
 ](
     path: String, schema: Schema, morsel_size: Int = DEFAULT_MORSEL_SIZE
-) -> AnyRelation:
+) -> DynRelation:
     """Create a Parquet file scan with a known schema.
 
     The schema *is* the projection: only its columns are read out of the file.
@@ -705,17 +705,17 @@ def parquet_scan[
 struct Filter(Relation):
     """Apply a boolean predicate; keep rows where True (schema unchanged)."""
 
-    var input: AnyRelation
+    var input: DynRelation
     var predicate: AnyValue
 
-    def __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
+    def __init__(out self, *, var input: DynRelation, var predicate: AnyValue):
         self.input = input^
         self.predicate = predicate^
 
     def schema(self) -> Schema:
         return self.input.schema()
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return FilterProcessor(
             input=self.input.to_processor(ctx), predicate=self.predicate.copy()
         )
@@ -729,7 +729,7 @@ struct Filter(Relation):
 struct Project(Relation):
     """Evaluate a list of named expressions into output columns."""
 
-    var input: AnyRelation
+    var input: DynRelation
     var names: List[String]
     var values: List[AnyValue]
     var _schema: Schema
@@ -737,7 +737,7 @@ struct Project(Relation):
     def __init__(
         out self,
         *,
-        var input: AnyRelation,
+        var input: DynRelation,
         var names: List[String],
         var values: List[AnyValue],
         var schema: Schema,
@@ -750,7 +750,7 @@ struct Project(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return ProjectProcessor(
             input=self.input.to_processor(ctx),
             values=self.values.copy(),
@@ -771,11 +771,11 @@ struct Project(Relation):
 struct Limit(Relation):
     """Row limit/offset — streaming: skip ``offset`` rows, keep ``length``."""
 
-    var input: AnyRelation
+    var input: DynRelation
     var offset: Int
     var length: Int
 
-    def __init__(out self, *, var input: AnyRelation, offset: Int, length: Int):
+    def __init__(out self, *, var input: DynRelation, offset: Int, length: Int):
         self.input = input^
         self.offset = offset
         self.length = length
@@ -783,7 +783,7 @@ struct Limit(Relation):
     def schema(self) -> Schema:
         return self.input.schema()
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return LimitProcessor(
             input=self.input.to_processor(ctx),
             offset=self.offset,
@@ -807,7 +807,7 @@ struct Sort(Relation):
     rows), which the plan builder folds in when a ``Limit`` immediately follows a
     ``Sort``."""
 
-    var input: AnyRelation
+    var input: DynRelation
     var keys: List[AnyValue]
     var ascending: List[Bool]
     var nulls_first: Bool
@@ -818,7 +818,7 @@ struct Sort(Relation):
     def __init__(
         out self,
         *,
-        var input: AnyRelation,
+        var input: DynRelation,
         var keys: List[AnyValue],
         var ascending: List[Bool],
         nulls_first: Bool,
@@ -840,7 +840,7 @@ struct Sort(Relation):
     def kind(self) -> Int:
         return RELATION_SORT
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return SortProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
@@ -870,9 +870,9 @@ struct Aggregate(Relation):
     ``aggs[i]`` is the aggregate applied to the value expression ``inputs[i]``.
     Each carries a *comptime* ``Aggregation``, so a plan built from fused values
     and ``AggFunc.of[A]`` carries no function-name interpretation at all;
-    ``AnyRelation.aggregate`` produces the same node from runtime names."""
+    ``DynRelation.aggregate`` produces the same node from runtime names."""
 
-    var input: AnyRelation
+    var input: DynRelation
     var keys: List[AnyValue]
     var inputs: List[AnyValue]
     var aggs: List[AggFunc]
@@ -881,7 +881,7 @@ struct Aggregate(Relation):
     def __init__(
         out self,
         *,
-        var input: AnyRelation,
+        var input: DynRelation,
         var keys: List[AnyValue],
         var inputs: List[AnyValue],
         var aggs: List[AggFunc],
@@ -896,7 +896,7 @@ struct Aggregate(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return AggregateProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
@@ -918,8 +918,8 @@ struct Aggregate(Relation):
 struct Join(Relation):
     """Equijoin — the descriptive node (key indices, kind, output schema)."""
 
-    var left: AnyRelation
-    var right: AnyRelation
+    var left: DynRelation
+    var right: DynRelation
     var left_key_indices: List[Int]
     var right_key_indices: List[Int]
     var join_kind: UInt8
@@ -929,8 +929,8 @@ struct Join(Relation):
     def __init__(
         out self,
         *,
-        var left: AnyRelation,
-        var right: AnyRelation,
+        var left: DynRelation,
+        var right: DynRelation,
         var left_key_indices: List[Int],
         var right_key_indices: List[Int],
         join_kind: UInt8,
@@ -948,7 +948,7 @@ struct Join(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
         return JoinProcessor(
             left=self.left.to_processor(ctx),
             right=self.right.to_processor(ctx),

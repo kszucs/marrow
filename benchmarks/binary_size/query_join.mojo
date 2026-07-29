@@ -16,7 +16,7 @@ from marrow.builders import array
 from marrow.dtypes import int64, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.relations import InMemoryTable, Join, AnyRelation
+from marrow.expr.relations import InMemoryTable, Join, DynRelation
 
 
 def main() raises:
@@ -29,8 +29,8 @@ def main() raises:
     var right = record_batch([rk.copy(), rv.copy()], names=["k", "rv"])
 
     var joined = Join(
-        left=AnyRelation(InMemoryTable(batch=left)),
-        right=AnyRelation(InMemoryTable(batch=right)),
+        left=DynRelation(InMemoryTable(batch=left)),
+        right=DynRelation(InMemoryTable(batch=right)),
         left_key_indices=[0],
         right_key_indices=[0],
         join_kind=0,  # inner
@@ -43,4 +43,4 @@ def main() raises:
             ]
         ),
     )
-    print(AnyRelation(joined^).execute())
+    print(DynRelation(joined^).execute())

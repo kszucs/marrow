@@ -28,7 +28,7 @@ from std.algorithm.backend.vectorize import vectorize
 from std.utils.index import IndexList
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     BinaryLikeArray,
     BoolArray,
     Int32Array,
@@ -103,11 +103,11 @@ struct LengthKernel(Kernel):
         )
 
     @staticmethod
-    def dispatch(array: AnyArray) raises -> AnyArray:
+    def dispatch(array: DynArray) raises -> DynArray:
         if array.dtype().is_string():
-            return Self.apply(array.as_string()).to_any()
+            return Self.apply(array.as_string()).to_dyn()
         elif array.dtype().is_large_string():
-            return Self.apply(array.as_large_string()).to_any()
+            return Self.apply(array.as_large_string()).to_dyn()
         else:
             raise Self.error(t"expected a string array, got {array.dtype()}")
 
@@ -140,11 +140,11 @@ trait StringMapKernel(Kernel):
         return builder.finish()
 
     @staticmethod
-    def dispatch(array: AnyArray) raises -> AnyArray:
+    def dispatch(array: DynArray) raises -> DynArray:
         if array.dtype().is_string():
-            return Self.apply(array.as_string()).to_any()
+            return Self.apply(array.as_string()).to_dyn()
         elif array.dtype().is_large_string():
-            return Self.apply(array.as_large_string()).to_any()
+            return Self.apply(array.as_large_string()).to_dyn()
         else:
             raise Self.error(t"expected a string array, got {array.dtype()}")
 
@@ -295,13 +295,13 @@ trait StringPredicateKernel(Kernel):
         )
 
     @staticmethod
-    def dispatch(left: AnyArray, right: AnyArray) raises -> AnyArray:
+    def dispatch(left: DynArray, right: DynArray) raises -> DynArray:
         if left.dtype().is_string() and right.dtype().is_string():
-            return Self.apply(left.as_string(), right.as_string()).to_any()
+            return Self.apply(left.as_string(), right.as_string()).to_dyn()
         elif left.dtype().is_large_string() and right.dtype().is_large_string():
             return Self.apply(
                 left.as_large_string(), right.as_large_string()
-            ).to_any()
+            ).to_dyn()
         else:
             raise Self.error(
                 t"expected string arrays, got {left.dtype()} and"
@@ -674,13 +674,13 @@ def _match_pattern[
 
 def _dispatch_pattern[
     ignore_case: Bool
-](name: StringSlice, array: AnyArray, pattern: StringSlice) raises -> AnyArray:
+](name: StringSlice, array: DynArray, pattern: StringSlice) raises -> DynArray:
     """Type-erased entry point for the scalar-pattern overloads."""
     var compiled = LikePattern[ignore_case](pattern)
     if array.dtype().is_string():
-        return _match_pattern(array.as_string(), compiled).to_any()
+        return _match_pattern(array.as_string(), compiled).to_dyn()
     elif array.dtype().is_large_string():
-        return _match_pattern(array.as_large_string(), compiled).to_any()
+        return _match_pattern(array.as_large_string(), compiled).to_dyn()
     else:
         raise Error(t"{name}: expected a string array, got {array.dtype()}")
 
@@ -709,7 +709,7 @@ struct LikeKernel(StringPredicateKernel):
         return _match_pattern(array, LikePattern[False](pattern))
 
     @staticmethod
-    def dispatch(array: AnyArray, pattern: StringSlice) raises -> AnyArray:
+    def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
         return _dispatch_pattern[False](Self.name, array, pattern)
 
 
@@ -732,5 +732,5 @@ struct ILikeKernel(StringPredicateKernel):
         return _match_pattern(array, LikePattern[True](pattern))
 
     @staticmethod
-    def dispatch(array: AnyArray, pattern: StringSlice) raises -> AnyArray:
+    def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
         return _dispatch_pattern[True](Self.name, array, pattern)

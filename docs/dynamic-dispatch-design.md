@@ -3,9 +3,9 @@
 ## Problem
 
 Mojo lacks runtime polymorphism (no virtual methods, no trait objects). Marrow needs
-type-erased containers (`AnyArray`, `AnyBuilder`, `AnyConverter`) that dispatch to
+type-erased containers (`DynArray`, `DynBuilder`, `AnyConverter`) that dispatch to
 concrete typed implementations at runtime — e.g. holding `PrimitiveArray[int32]`,
-`ListArray`, and `StructArray` in a single `List[AnyArray]`.
+`ListArray`, and `StructArray` in a single `List[DynArray]`.
 
 ## Mechanism: Function-Pointer Trampolines
 
@@ -17,7 +17,7 @@ Each type-erased container (`Any*`) stores:
 
 ```
 ┌─────────────────────────────────────┐
-│ AnyArray                            │
+│ DynArray                            │
 │                                     │
 │  _data: ArcPointer[NoneType] ──────────► heap: ArcInner<PrimitiveArray[int64]>
 │  _virt_length:    fn(ptr) -> Int    │         { refcount, value }
@@ -70,7 +70,7 @@ trampoline.
 
 `downcast[T]()` returns `ArcPointer[T]` with a bumped refcount. The caller
 must ensure the type matches (no runtime check). The returned handle keeps
-data alive independently of the `AnyArray`:
+data alive independently of the `DynArray`:
 
 ```mojo
 fn downcast[T: Array](self) -> ArcPointer[T]:
@@ -82,7 +82,7 @@ fn downcast[T: Array](self) -> ArcPointer[T]:
 Based on analysis of the Arrow C++ codebase (`libarrow`), these are the dynamic
 methods each type-erased container needs.
 
-### AnyArray
+### DynArray
 
 Arrow's C++ `Array` has only a virtual destructor. All other methods operate on
 the flat `ArrayData` struct and dispatch via the Visitor pattern externally. We
@@ -95,9 +95,9 @@ adopt a similar minimal surface:
 | `is_valid` | `(self, Int) -> Bool` | Validity bitmap check |
 | `type` | `(self) -> DataType` | Runtime type introspection |
 | `n_children` | `(self) -> Int` | Number of child arrays |
-| `child` | `(self, Int) -> AnyArray` | Access child by index |
+| `child` | `(self, Int) -> DynArray` | Access child by index |
 | `n_buffers` | `(self) -> Int` | Number of buffers |
-| `slice` | `(self, Int, Int) -> AnyArray` | Zero-copy slice |
+| `slice` | `(self, Int, Int) -> DynArray` | Zero-copy slice |
 
 The trait that typed arrays implement:
 
@@ -108,15 +108,15 @@ trait Array(Movable, ImplicitlyDestructible):
     fn is_valid(self, index: Int) -> Bool: ...
     fn type(self) -> DataType: ...
     fn n_children(self) -> Int: ...
-    fn child(self, index: Int) -> AnyArray: ...
+    fn child(self, index: Int) -> DynArray: ...
     fn n_buffers(self) -> Int: ...
-    fn slice(self, offset: Int, length: Int) -> AnyArray: ...
+    fn slice(self, offset: Int, length: Int) -> DynArray: ...
 ```
 
 Typed arrays: `PrimitiveArray[T: DataType]`, `ListArray`, `StructArray`,
 `StringArray`, `FixedSizeListArray`.
 
-### AnyBuilder
+### DynBuilder
 
 Arrow's `ArrayBuilder` has 6 pure virtual methods — the richest virtual surface
 of the three hierarchies. Builders are inherently polymorphic because composite
@@ -128,14 +128,14 @@ builders (struct, list) hold child builders whose types are determined at runtim
 | `append_nulls` | `(mut self, Int)` | Append n nulls |
 | `append_empty_value` | `(mut self)` | Append zero-initialized non-null |
 | `append_empty_values` | `(mut self, Int)` | Append n empty values |
-| `finish` | `(mut self) -> AnyArray` | Produce the array |
+| `finish` | `(mut self) -> DynArray` | Produce the array |
 | `type` | `(self) -> DataType` | Builder's target type |
 | `length` | `(self) -> Int` | Current length |
 | `null_count` | `(self) -> Int` | Current null count |
 | `resize` | `(mut self, Int)` | Resize capacity |
 | `reset` | `(mut self)` | Reset to empty |
 | `append_scalar` | `(mut self, Scalar)` | Type-erased value append |
-| `append_array_slice` | `(mut self, AnyArray, Int, Int)` | Append from existing array |
+| `append_array_slice` | `(mut self, DynArray, Int, Int)` | Append from existing array |
 
 The trait:
 
@@ -145,7 +145,7 @@ trait Builder(Movable, ImplicitlyDestructible):
     fn append_nulls(mut self, n: Int) raises: ...
     fn append_empty_value(mut self) raises: ...
     fn append_empty_values(mut self, n: Int) raises: ...
-    fn finish(mut self) raises -> AnyArray: ...
+    fn finish(mut self) raises -> DynArray: ...
     fn type(self) -> DataType: ...
     fn length(self) -> Int: ...
     fn null_count(self) -> Int: ...
@@ -166,7 +166,7 @@ The virtual surface is small because most type-specific logic lives in the
 |--------|-----------|-------|
 | `append` | `(mut self, PythonObject) raises` | Convert + append one value |
 | `extend` | `(mut self, PythonObject, Int) raises` | Convert a sequence |
-| `finish` | `(mut self) raises -> AnyArray` | Produce the array |
+| `finish` | `(mut self) raises -> DynArray` | Produce the array |
 | `type` | `(self) -> DataType` | Target type |
 | `reserve` | `(mut self, Int) raises` | Pre-allocate |
 | `reset` | `(mut self)` | Reset to empty |
@@ -177,7 +177,7 @@ The trait:
 trait Converter(Movable, ImplicitlyDestructible):
     fn append(mut self, value: PythonObject) raises: ...
     fn extend(mut self, values: PythonObject, size: Int) raises: ...
-    fn finish(mut self) raises -> AnyArray: ...
+    fn finish(mut self) raises -> DynArray: ...
     fn type(self) -> DataType: ...
     fn reserve(mut self, capacity: Int) raises: ...
     fn reset(mut self): ...
@@ -192,14 +192,14 @@ the type code. We would use the same pattern via `DataTypeVisitor`.
 ## Type Relationships
 
 ```
-trait Array ──────────────► AnyArray (type-erased, fn-ptr vtable)
+trait Array ──────────────► DynArray (type-erased, fn-ptr vtable)
   │  PrimitiveArray[T]         │  .downcast[T]() -> ArcPointer[T]
   │  ListArray                 │  .length(), .null_count(), .is_valid()
   │  StructArray               │  .type(), .child(), .slice()
   │  StringArray               │
   │  FixedSizeListArray        │
 
-trait Builder ────────────► AnyBuilder (type-erased, fn-ptr vtable)
+trait Builder ────────────► DynBuilder (type-erased, fn-ptr vtable)
   │  PrimitiveBuilder[T]       │  .downcast[T]() -> ArcPointer[T]
   │  ListBuilder               │  .append_null(), .finish(), .type()
   │  StructBuilder             │  .append_scalar(), .append_array_slice()
@@ -238,27 +238,27 @@ This gives us type erasure with zero overhead beyond the function pointer call.
 Mojo requires `deinit` (not `var`) to move fields out of self during destruction.
 `var self` causes "field destroyed out of the middle of a value" errors.
 
-**Why `ImplicitlyCopyable` on `AnyArray` but not on the `Array` trait?**
-`AnyArray` needs `ImplicitlyCopyable` to be stored in `List[AnyArray]`. The trait
+**Why `ImplicitlyCopyable` on `DynArray` but not on the `Array` trait?**
+`DynArray` needs `ImplicitlyCopyable` to be stored in `List[DynArray]`. The trait
 doesn't require it because concrete types like `ListArray` contain `List` fields
-which aren't `ImplicitlyCopyable`. The `AnyArray` wrapper adds copyability through
+which aren't `ImplicitlyCopyable`. The `DynArray` wrapper adds copyability through
 `ArcPointer` ref-counting.
 
 **Why a generic `downcast[T]` instead of `as_primitive[T]`, `as_list()`, etc.?**
-`AnyArray` is defined before the concrete types (it only depends on the `Array`
+`DynArray` is defined before the concrete types (it only depends on the `Array`
 trait). Adding methods that return concrete types would create circular references.
 A generic `downcast[T: Array]` avoids this by using the trait bound.
 
 ## Prototype Status
 
-The current prototype in `marrow/dyn.mojo` implements `AnyArray` with 3 virtual
+The current prototype in `marrow/dyn.mojo` implements `DynArray` with 3 virtual
 methods (`length`, `null_count`, `is_valid`) plus typed destruction. Tests cover
 all array types, heterogeneous lists, nested structures, copy semantics, refcount
 safety, and upcast/downcast round-trips.
 
 Next steps:
 - Expand `Array` trait with `type()`, `child()`, `slice()`
-- Implement `AnyBuilder` with the same pattern
+- Implement `DynBuilder` with the same pattern
 - Implement `AnyConverter` for Python interop
 - Replace the existing `Array`/`Builder` types in `marrow/arrays.mojo` and
   `marrow/builders.mojo` with this pattern

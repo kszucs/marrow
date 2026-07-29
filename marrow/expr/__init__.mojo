@@ -9,7 +9,7 @@ links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 named column leaves (``NumericColumn``/``StringColumn``) with the ``Table[Tbl]()``
 and ``col(name, dtype)`` builders, and ``AnyValue`` — the universal value box the
 relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
-``AnyRelation.execute``).
+``DynRelation.execute``).
 
 ``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
@@ -22,7 +22,7 @@ that are pure, immutable, and cheaply copied, plus the plan-building API and
 
 ``execution.mojo`` — the **execution layer**: the ``Processor`` each
 ``Relation.to_processor(ctx)`` builds (pull-based, owning all mutable state — offset,
-hash index, grouper, child processors), erased behind ``AnyProcessor`` which
+hash index, grouper, child processors), erased behind ``DynProcessor`` which
 drives ``collect()``. ``plan.execute()`` opens a plan into a fresh processor tree and
 drains it, so a plan is a reusable template. Depends only on the value box and
 kernels (one-way: ``relations`` → ``execution``).
@@ -72,13 +72,13 @@ from .aggregates import AggFunc, FoldedAggregates
 from .execution import (
     # Execution layer (processors built by Relation.to_processor)
     Processor,
-    AnyProcessor,
+    DynProcessor,
     Exhausted,
 )
 from .relations import (
     # Descriptive IR nodes
     Relation,
-    AnyRelation,
+    DynRelation,
     Filter,
     Project,
     InMemoryTable,

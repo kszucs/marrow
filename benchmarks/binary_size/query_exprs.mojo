@@ -36,7 +36,7 @@ from marrow.expr.values import (
     Coalesce,
     Year,
 )
-from marrow.expr.relations import InMemoryTable, Project, AnyRelation
+from marrow.expr.relations import InMemoryTable, Project, DynRelation
 
 
 def main() raises:
@@ -62,7 +62,7 @@ def main() raises:
     values.append(AnyValue(Year(col("ts", timestamp(second)))))
 
     var proj = Project(
-        input=AnyRelation(InMemoryTable(batch=batch)),
+        input=DynRelation(InMemoryTable(batch=batch)),
         names=["lk", "co", "isin", "cast", "yr"],
         values=values^,
         schema=schema(
@@ -75,4 +75,4 @@ def main() raises:
             ]
         ),
     )
-    print(AnyRelation(proj^).execute())
+    print(DynRelation(proj^).execute())

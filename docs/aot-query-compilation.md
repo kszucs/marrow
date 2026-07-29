@@ -60,27 +60,27 @@ encodes nodes as Mojo parameter types:
 
 ```mojo
 trait Expr:
-    alias result_dtype: AnyDataType
-    fn eval(batch: RecordBatch) raises -> AnyArray          # AOT path
+    alias result_dtype: DynType
+    fn eval(batch: RecordBatch) raises -> DynArray          # AOT path
     fn to_processor(self) -> AnyValueProcessor              # runtime bridge
 
-struct ColRef[idx: Int, dt: AnyDataType](Expr):
+struct ColRef[idx: Int, dt: DynType](Expr):
     alias result_dtype = dt
-    fn eval(batch: RecordBatch) raises -> AnyArray:
+    fn eval(batch: RecordBatch) raises -> DynArray:
         return batch.columns[idx]
     fn to_processor(self) -> AnyValueProcessor:
         return AnyValueProcessor(ColumnProcessor(idx))
 
-struct Literal[value: AnyArray](Expr):
+struct Literal[value: DynArray](Expr):
     alias result_dtype = value.dtype()
-    fn eval(batch: RecordBatch) raises -> AnyArray:
+    fn eval(batch: RecordBatch) raises -> DynArray:
         return value
     fn to_processor(self) -> AnyValueProcessor:
         return AnyValueProcessor(LiteralProcessor(value))
 
 struct Binary[op: UInt8, L: Expr, R: Expr](Expr):
     alias result_dtype = promote_dtype[L.result_dtype, R.result_dtype]()
-    fn eval(batch: RecordBatch) raises -> AnyArray:
+    fn eval(batch: RecordBatch) raises -> DynArray:
         var l = L.eval(batch)
         var r = R.eval(batch)
         comptime if op == ADD:
@@ -98,9 +98,9 @@ struct Binary[op: UInt8, L: Expr, R: Expr](Expr):
             op=op,
         ))
 
-struct Cast[Child: Expr, to: AnyDataType](Expr):
+struct Cast[Child: Expr, to: DynType](Expr):
     alias result_dtype = to
-    fn eval(batch: RecordBatch) raises -> AnyArray:
+    fn eval(batch: RecordBatch) raises -> DynArray:
         return cast(Child.eval(batch), to)
     fn to_processor(self) -> AnyValueProcessor:
         return AnyValueProcessor(CastProcessor(Child.to_processor(), to))

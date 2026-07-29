@@ -8,7 +8,7 @@ Run with:
 from std.benchmark import BenchMetric, keep
 
 from ...testing import Benchmark
-from ...arrays import AnyArray
+from ...arrays import DynArray
 from ...builders import (
     Int32Builder,
     Int64Builder,
@@ -23,7 +23,7 @@ from ...kernels.sort import sort_indices
 # ---------------------------------------------------------------------------
 
 
-def _random_int32(n: Int) raises -> AnyArray:
+def _random_int32(n: Int) raises -> DynArray:
     var b = Int32Builder(capacity=n)
     var s: UInt64 = 0x123456789ABCDEF0
     for _ in range(n):
@@ -31,10 +31,10 @@ def _random_int32(n: Int) raises -> AnyArray:
         s ^= s >> 7
         s ^= s << 17
         b.append(s.cast[int32.native]())
-    return b.finish().to_any()
+    return b.finish().to_dyn()
 
 
-def _random_int64(n: Int) raises -> AnyArray:
+def _random_int64(n: Int) raises -> DynArray:
     var b = Int64Builder(capacity=n)
     var s: UInt64 = 0xFEDCBA9876543210
     for _ in range(n):
@@ -42,10 +42,10 @@ def _random_int64(n: Int) raises -> AnyArray:
         s ^= s >> 7
         s ^= s << 17
         b.append(s.cast[int64.native]())
-    return b.finish().to_any()
+    return b.finish().to_dyn()
 
 
-def _random_float64(n: Int) raises -> AnyArray:
+def _random_float64(n: Int) raises -> DynArray:
     var b = Float64Builder(capacity=n)
     var s: UInt64 = 0xABCDEF0123456789
     for _ in range(n):
@@ -55,7 +55,7 @@ def _random_float64(n: Int) raises -> AnyArray:
         # Map to [0, 1) by using the mantissa bits.
         var f = (s >> 11).cast[float64.native]() * (1.0 / Float64(1 << 53))
         b.append(f)
-    return b.finish().to_any()
+    return b.finish().to_dyn()
 
 
 # ---------------------------------------------------------------------------

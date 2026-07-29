@@ -165,8 +165,8 @@ comptime JOIN_ALGO_GRACE_HASH: UInt8 = 4  # out-of-memory hash join (future)
 comptime JOIN_NODE: UInt8 = 6
 
 struct Join(Relation):
-    var left: AnyRelation
-    var right: AnyRelation
+    var left: DynRelation
+    var right: DynRelation
     var left_keys: List[AnyValue]   # Column exprs resolved to left schema
     var right_keys: List[AnyValue]  # Column exprs resolved to right schema
     var kind: UInt8
@@ -175,17 +175,17 @@ struct Join(Relation):
     var schema_: Schema             # pre-computed output schema
 ```
 
-`AnyRelation.join(right, left_on, right_on, how, strictness)` is the plan-building API.
+`DynRelation.join(right, left_on, right_on, how, strictness)` is the plan-building API.
 
 ### `_gather()` Kernel (`marrow/kernels/join.mojo`)
 
 The fundamental primitive: collect elements at arbitrary indices, with `-1` producing null.
 
 ```mojo
-def _gather(array: AnyArray, indices: List[Int32]) raises -> AnyArray
+def _gather(array: DynArray, indices: List[Int32]) raises -> DynArray
 ```
 
-Typed overloads for `PrimitiveArray[T]`, `StringArray`; then `AnyArray` dispatch. Pattern follows `filter_()` in `filter.mojo`. This is also Arrow's `take` operation — independently useful.
+Typed overloads for `PrimitiveArray[T]`, `StringArray`; then `DynArray` dispatch. Pattern follows `filter_()` in `filter.mojo`. This is also Arrow's `take` operation — independently useful.
 
 ### `JoinHashTable` (open-addressing with intrusive chaining)
 
@@ -196,7 +196,7 @@ struct JoinHashTable(Movable):
     var _chain_next: List[Int32]     # intrusive linked list for collisions
     var _capacity: Int
     var _mask: Int
-    var _build_keys: List[AnyArray]  # stored for equality re-check
+    var _build_keys: List[DynArray]  # stored for equality re-check
     var _num_rows: Int
 ```
 
@@ -274,18 +274,18 @@ Prerequisite for Sort-Merge Join, ASOF Join, IEJoin, and ORDER BY in query plans
 ```mojo
 # Single-column sort: returns permutation indices.
 # Equivalent to numpy.argsort or Arrow's sort_indices.
-def argsort(array: AnyArray, ascending: Bool = True, nulls_first: Bool = True) raises -> PrimitiveArray[int32]
+def argsort(array: DynArray, ascending: Bool = True, nulls_first: Bool = True) raises -> PrimitiveArray[int32]
 
 # Multi-column sort: sort by (arrays[0], arrays[1], ...) with per-column direction.
 # Equivalent to Arrow's sort_record_batch.
 def argsort_multi(
-    arrays: List[AnyArray],
+    arrays: List[DynArray],
     ascending: List[Bool],
     nulls_first: Bool = True,
 ) raises -> PrimitiveArray[int32]
 
 # Apply a permutation to produce a sorted array. Reuses _gather().
-def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray
+def take(array: DynArray, indices: PrimitiveArray[int32]) raises -> DynArray
 ```
 
 **Sort algorithm**: radix sort for fixed-width primitive types (O(N), SIMD-amenable, cache-friendly); comparison-based introsort for strings and multi-column with complex comparators.
@@ -295,7 +295,7 @@ def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray
 comptime SORT_NODE: UInt8 = 7
 
 struct Sort(Relation):
-    var input: AnyRelation
+    var input: DynRelation
     var keys: List[AnyValue]
     var ascending: List[Bool]
     var schema_: Schema   # same schema as input
@@ -419,7 +419,7 @@ then per partition `take` + `probe_hashes` (raw candidate pairs) +
 `equal` / `filter_` for equality verification + remap partition-local
 indices → original row numbering. Per-partition `IndexPairs` merge into
 a single result via a direct Int32 buffer memcpy (skipping the generic
-`concat(AnyArray)` dispatch). Output assembly (`_assemble`) runs
+`concat(DynArray)` dispatch). Output assembly (`_assemble`) runs
 after `sync_parallelize` completes and passes an
 `ExecutionContext.parallel(num_threads)` to each per-column `take`;
 `take`'s no-null fast path stripes its SIMD gather loop across workers
@@ -498,7 +498,7 @@ All kernel functions accept `Optional[DeviceContext] = None` trailing parameter 
 
 | File | Role |
 |---|---|
-| `marrow/expr/relations.mojo` | `JOIN_NODE`, kind/strictness/algorithm constants, `Join` struct, `AnyRelation.join()`. Later: `SORT_NODE`, `Sort` |
+| `marrow/expr/relations.mojo` | `JOIN_NODE`, kind/strictness/algorithm constants, `Join` struct, `DynRelation.join()`. Later: `SORT_NODE`, `Sort` |
 | `marrow/expr/executor.mojo` | `JoinProcessor`, `SortProcessor` (Phase 2), `SortMergeJoinProcessor` (Phase 3) |
 | `marrow/kernels/join.mojo` | `_gather()`, `JoinHashTable`, `IndexPairs`, `hash_join()`, `sort_merge_join()` (Phase 3) |
 | `marrow/kernels/sort.mojo` | `argsort()`, `argsort_multi()`, `take()` (Phase 2) |

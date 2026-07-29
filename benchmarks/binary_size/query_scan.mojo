@@ -21,14 +21,14 @@ not run them.
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import ParquetScan, Project, AnyRelation
+from marrow.expr.relations import ParquetScan, Project, DynRelation
 
 
 def main() raises:
     var sch = schema(
         [field("a", int64), field("b", int64), field("name", string)]
     )
-    var filtered = AnyRelation(
+    var filtered = DynRelation(
         ParquetScan(path=String("orders.parquet"), schema=sch)
     ).filter(AnyValue(col("a", int64) > col("b", int64)))
 
@@ -40,4 +40,4 @@ def main() raises:
         values=values^,
         schema=schema([field("a", int64)]),
     )
-    print(AnyRelation(proj^).execute())
+    print(DynRelation(proj^).execute())

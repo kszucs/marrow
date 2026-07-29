@@ -22,7 +22,7 @@ the fusion axis and the trait organization.
    supports (numeric / bool / string / …) are expressed as the trait it conforms
    to; shared machinery (`apply`, `dispatch`, `execute`) lives on the traits.
 4. **Typed *and* type-erased entry points** — `apply[T]` / `apply(StringArray)`
-   for known types, `dispatch(AnyArray)` for runtime types.
+   for known types, `dispatch(DynArray)` for runtime types.
 5. **Graceful degradation** — an operation that can't express a per-lane `core`
    still participates in fused expressions by materializing (`apply`) and
    re-entering fusion as a leaf. Fusion is never all-or-nothing.
@@ -144,7 +144,7 @@ column-like node whose `core[W](idx)` is just `array.values().load[W](idx)`.
 
 ```
 struct Materialized(NumericValue | BoolValue | StringValue):
-    var array: AnyArray                       # produced eagerly, once
+    var array: DynArray                       # produced eagerly, once
     core[W](self, _, idx) = array.values().load[W](idx)    # leaf load
 ```
 
@@ -197,7 +197,7 @@ Equal.core -> `l.eq(r)`   (vs EqKernel.core = a.eq(b))
 trait NumericBinaryKernel(Kernel):
     core[T: DType, W: Int](a: SIMD[T,W], b: SIMD[T,W]) -> SIMD[T,W]   # only requirement
     apply[T: PrimitiveType](l, r, ctx) -> PrimitiveArray[T]           # default (views.apply)
-    dispatch(AnyArray, AnyArray, ctx) -> AnyArray                     # default (numeric)
+    dispatch(DynArray, DynArray, ctx) -> DynArray                     # default (numeric)
 
 struct AddKernel(NumericBinaryKernel):
     comptime name = "add"
@@ -295,7 +295,7 @@ Each phase builds and keeps tests green before the next.
 | Phase | Deliverable | Notes |
 |---|---|---|
 | **1 — reference slice** | `NumericBinaryKernel` trait + generic `FusedBinary[K,…]`; port `Add`/`Sub` onto it, delegating to `AddKernel.core`/`SubKernel.core`. Prove "one core, two runners" against the real code. | Smallest change that removes duplication; template for the rest. |
-| **2 — `Materialized` leaf** | The `apply → fusion leaf` adapter (§5). Any `AnyArray` becomes a `NumericValue`/`BoolValue`/`StringValue` leaf via buffer load. | Unlocks correctness for *every* op immediately; makes later phases optimizations, not gates. |
+| **2 — `Materialized` leaf** | The `apply → fusion leaf` adapter (§5). Any `DynArray` becomes a `NumericValue`/`BoolValue`/`StringValue` leaf via buffer load. | Unlocks correctness for *every* op immediately; makes later phases optimizations, not gates. |
 | **3 — numeric completeness** | Generic `FusedUnary[K,…]`, remaining `FusedBinary`/`FusedCompare` ops (`Mul`/`Div`/`Min`/`Max`, `neg`/`abs`/…, `Le`/`Ge`/`Ne`), `Literal`. | After this, `(s.len() + a) * 2` fuses end-to-end. |
 | **4 — compare kernels as structs** | Consolidate `compare.mojo` onto the `CompareKernel` trait (numeric `core` + string `compare`), struct equality as a free function, callers + binding updated. | Also the fix for the removed free-function `equal` family. |
 | **5 — string fixed-output fusion** | `s1 == s2` etc. as pseudo-SIMD `FusedCompare` (string path fills `SIMD[bool,W]`); resolve the per-tree width question for pure-string predicates. | Fuses string predicates into mixed numeric/string filters. |

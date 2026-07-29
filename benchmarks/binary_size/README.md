@@ -16,7 +16,7 @@ output:
   themselves single-shot (no `Planner`/`RelationProcessor`). Tests whether a
   runtime plan tree can keep the comptime binary size.
 - **`query_hybrid.mojo`** — relational *structure* stays runtime/type-erased
-  (`marrow.dyn`'s `AnyRelation`, `Planner.build()`, the pull-based
+  (`marrow.dyn`'s `DynRelation`, `Planner.build()`, the pull-based
   `RelationProcessor` pipeline — same as `query_runtime.mojo`), but the
   *predicate* is a comptime-typed `Gt(Column, Column)` node
   (`marrow.aot.values`) boxed into a runtime `Expr` via the `FUSED` tag
@@ -131,7 +131,7 @@ from erasing the *relational* layer (`marrow.dyn`), not the scalar/value
 layer.** `in_memory_table(batch).filter(predicate).select(...)` still walks
 through `Planner.build()`, which links in every `RelationProcessor` kind
 (`Scan`, `Filter`, `Project`, `Aggregate`, `Join`, `ParquetScan`, ...)
-regardless of which ones this query actually uses, plus the `AnyRelation`
+regardless of which ones this query actually uses, plus the `DynRelation`
 vtable/trampoline machinery. `Expr.eval()`'s own op branches (`ADD`, `SUB`,
 `MUL`, `DIV`, `EQ`, `NE`, `LT`, `LE`, `GT`, `GE`, `AND`, `OR`, `NEG`, `ABS`,
 `NOT`, `IS_NULL`, `IF_ELSE`, `CAST`, `LENGTH`) are a comparatively small slice
@@ -211,9 +211,9 @@ Why the biggest buckets are so lopsided: `comptime_query` only ever
 instantiates the *exact* concrete types this one query needs —
 `Column[Orders,"a",Int64Type]`, `StringColumn[Orders,"name"]`, `Gt[...]` —
 nothing else exists at compile time, so nothing else gets generated.
-`query_hybrid`/`query_runtime` go through `AnyArray`, which erases the dtype
-to a runtime tag — any code operating on an `AnyArray` (`Expr.eval()`,
-`AnyRelation`'s processors, kernel dispatch functions) can't know at compile
+`query_hybrid`/`query_runtime` go through `DynArray`, which erases the dtype
+to a runtime tag — any code operating on an `DynArray` (`Expr.eval()`,
+`DynRelation`'s processors, kernel dispatch functions) can't know at compile
 time which dtype it'll see, so the compiler generates a full typed
 instantiation *per supported dtype*, "just in case." `kernels::execution`
 (667, the CPU/GPU dispatch layer under every kernel) and `kernels::arithmetic`

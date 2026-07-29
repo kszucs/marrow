@@ -2,7 +2,7 @@
 
 Every stable op is expressible two ways: as a fused comptime ``Value`` tree
 (``values.mojo``) and as a runtime tag-based ``DynValue`` tree (``dynamic.mojo``).
-Both box into the shared ``AnyValue`` and expose ``execute(batch) -> AnyArray``.
+Both box into the shared ``AnyValue`` and expose ``execute(batch) -> DynArray``.
 This suite asserts the two drivers agree element-for-element on the same input,
 so the runtime interpreter can never silently diverge from the fused algebra it
 mirrors.
@@ -24,7 +24,7 @@ runtime ``select``.
 
 from std.testing import assert_true
 
-from ...arrays import AnyArray, Int64Array
+from ...arrays import DynArray, Int64Array
 from ...builders import array, PrimitiveBuilder
 from ...dtypes import (
     int64,
@@ -78,7 +78,7 @@ from ...expr.dynamic import (
 
 
 def assert_fused(
-    var fused: AnyValue, expected: AnyArray, batch: RecordBatch
+    var fused: AnyValue, expected: DynArray, batch: RecordBatch
 ) raises:
     """Assert a fused node matches an expected array. Used for ops the runtime
     ``DynValue`` interpreter does not yet expose — their cross-driver parity case
@@ -189,7 +189,7 @@ def test_parity_mixed_width_gt() raises:
     """`int32 > int64` compares in the wider operand's domain, both lanes."""
     assert_fused(
         Gt(fcol("a", int32), fcol("b", int64)),
-        array([False, True, False]).to_any(),
+        array([False, True, False]).to_dyn(),
         _mixed_width_batch(),
     )
     assert_parity(
@@ -211,7 +211,7 @@ def test_parity_int_float_add() raises:
     `add: dtype mismatch: int64 vs float64` while the fused lane executed it."""
     assert_fused(
         fcol("a", int64) + fcol("b", float64),
-        array([1.5, 7.25, 6.0], float64).to_any(),
+        array([1.5, 7.25, 6.0], float64).to_dyn(),
         _int_float_batch(),
     )
     assert_parity(
@@ -225,7 +225,7 @@ def test_parity_int_float_gt() raises:
     """`int64 > float64` compares in float64, not by truncating the float."""
     assert_fused(
         Gt(fcol("a", int64), fcol("b", float64)),
-        array([True, True, False]).to_any(),
+        array([True, True, False]).to_dyn(),
         _int_float_batch(),
     )
     assert_parity(
@@ -363,7 +363,7 @@ def test_parity_any_ignores_null_bits() raises:
     # the one set bit belongs to a null row -> False (a raw popcount says True)
     assert_fused(
         Any(Lt(fcol("a", int64), flit(1, int64))),
-        array([False, False, False]).to_any(),
+        array([False, False, False]).to_dyn(),
         _null_bits_batch(),
     )
 
@@ -372,7 +372,7 @@ def test_parity_all_ignores_null_bits() raises:
     # every VALID row is true -> True (popcount==valid-count says False)
     assert_fused(
         All(Lt(fcol("b", int64), flit(1, int64))),
-        array([True, True, True]).to_any(),
+        array([True, True, True]).to_dyn(),
         _null_bits_batch(),
     )
 
@@ -440,7 +440,7 @@ def _like_batch() raises -> RecordBatch:
 def test_parity_like() raises:
     assert_fused(
         Like(fcol("s", string), fcol("pat", string)),
-        array([True, True, False]).to_any(),
+        array([True, True, False]).to_dyn(),
         _like_batch(),
     )
 
@@ -451,7 +451,7 @@ def test_parity_ilike() raises:
     var b = record_batch([s^, pat^], names=["s", "pat"])
     assert_fused(
         ILike(fcol("s", string), fcol("pat", string)),
-        array([True, True, False]).to_any(),
+        array([True, True, False]).to_dyn(),
         b,
     )
 
@@ -460,7 +460,7 @@ def test_parity_is_in() raises:
     # a=[1,5,3,10,7,2] IN {3,7} -> [F,F,T,F,T,F]
     assert_fused(
         IsIn(fcol("a", int64), array([3, 7], int64)),
-        array([False, False, True, False, True, False]).to_any(),
+        array([False, False, True, False, True, False]).to_dyn(),
         _ab_batch(),
     )
 
@@ -471,7 +471,7 @@ def test_parity_coalesce() raises:
     var batch = record_batch([a^, b^], names=["a", "b"])
     assert_fused(
         Coalesce(fcol("a", int64), fcol("b", int64)),
-        array([1, 20, None, 4], int64).to_any(),
+        array([1, 20, None, 4], int64).to_dyn(),
         batch,
     )
 
@@ -482,7 +482,7 @@ def test_parity_nullif() raises:
     var batch = record_batch([a^, b^], names=["a", "b"])
     assert_fused(
         Nullif(fcol("a", int64), fcol("b", int64)),
-        array([1, None, None, 4], int64).to_any(),
+        array([1, None, None, 4], int64).to_dyn(),
         batch,
     )
 
@@ -495,7 +495,7 @@ def test_parity_case_when() raises:
             fcol("a", int64),
             fcol("b", int64),
         ),
-        array([9, 5, 3, 10, 7, 8], int64).to_any(),
+        array([9, 5, 3, 10, 7, 8], int64).to_dyn(),
         _ab_batch(),
     )
 
@@ -511,7 +511,7 @@ def _ts_batch() raises -> RecordBatch:
 def test_parity_year() raises:
     assert_fused(
         Year(fcol("ts", timestamp(second))),
-        array([2019, 2020], int32).to_any(),
+        array([2019, 2020], int32).to_dyn(),
         _ts_batch(),
     )
 
@@ -520,6 +520,6 @@ def test_parity_date_trunc() raises:
     # hour(date_trunc(ts, "day")) == 0 for every row
     assert_fused(
         Hour(DateTrunc(fcol("ts", timestamp(second)), unit_day)),
-        array([0, 0], int32).to_any(),
+        array([0, 0], int32).to_dyn(),
         _ts_batch(),
     )

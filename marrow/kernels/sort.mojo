@@ -8,7 +8,7 @@ delegators.
   - BoolArray: O(N) counting sort.
   - BinaryLikeArray[T]: stdlib comparison sort (bytewise lexicographic).
 
-`SortIndices.dispatch` resolves a runtime dtype through the `AnyDataType.dispatch_*`
+`SortIndices.dispatch` resolves a runtime dtype through the `DynType.dispatch_*`
 family. Temporal, interval, and decimal32/64 columns sort through their
 typed leaf (bound on `PrimitiveType`); dictionary columns sort by their
 decoded values. `SortIndices.multi` composes single-column permutations into a
@@ -27,7 +27,7 @@ Serial cost breakdown at N=10M (from macOS `sample`, 50 iters, 8-bit baseline):
   hist    × passes   29.0%   ~76 ms  — sequential reads, 8 passes
   take (gather)       2.6%    ~7 ms  — parallel SIMD gather
   assemble            0.9%    ~2 ms  — memcpy-style null placement
-  dispatch/encode     2.7%    ~7 ms  — AnyArray dispatch + encode loop
+  dispatch/encode     2.7%    ~7 ms  — DynArray dispatch + encode loop
 """
 
 from std.builtin.sort import sort as _sort_impl
@@ -39,7 +39,7 @@ from ..arrays import (
     BoolArray,
     PrimitiveArray,
     StructArray,
-    AnyArray,
+    DynArray,
     Int32Array,
 )
 from ..buffers import Buffer
@@ -345,7 +345,7 @@ struct SortIndices:
     """Sort-permutation kernel — the indices that would sort a column.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``AnyDataType.dispatch_*`` family
+    runtime-typed array to the matching leaf via the ``DynType.dispatch_*`` family
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. ``multi`` composes single-column permutations
     into a multi-key ordering.
@@ -361,7 +361,7 @@ struct SortIndices:
 
     @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         ascending: Bool = True,
         nulls_first: Bool = True,
         stable: Bool = False,
@@ -769,7 +769,7 @@ struct SortIndices:
 
 
 def sort_indices(
-    array: AnyArray,
+    array: DynArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
     stable: Bool = False,

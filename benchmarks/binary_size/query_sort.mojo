@@ -16,7 +16,7 @@ from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import InMemoryTable, Sort, AnyRelation
+from marrow.expr.relations import InMemoryTable, Sort, DynRelation
 
 
 def main() raises:
@@ -29,7 +29,7 @@ def main() raises:
     keys.append(AnyValue(col("a", int64)))
 
     var sorted = Sort(
-        input=AnyRelation(InMemoryTable(batch=batch)),
+        input=DynRelation(InMemoryTable(batch=batch)),
         keys=keys^,
         ascending=[True],
         nulls_first=True,
@@ -37,4 +37,4 @@ def main() raises:
         limit=Optional(3),
         schema=sch,
     )
-    print(AnyRelation(sorted^).execute())
+    print(DynRelation(sorted^).execute())

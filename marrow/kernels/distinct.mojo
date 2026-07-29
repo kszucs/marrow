@@ -21,7 +21,7 @@ Both exclude nulls — SQL ``COUNT(DISTINCT x)`` semantics, PyArrow's ``only_val
 import std.math as math
 from std.bit import count_leading_zeros
 
-from ..arrays import AnyArray, Int32Array, Int64Array, UInt64Array, StructArray
+from ..arrays import DynArray, Int32Array, Int64Array, UInt64Array, StructArray
 from ..builders import Int64Builder
 from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
@@ -85,7 +85,7 @@ comptime _HLL_P_GROUPED = 11
 
 
 def count_distinct(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> Int64Scalar:
     """Exact count of distinct non-null values.
 
@@ -131,7 +131,7 @@ def count_distinct(
 
 
 def approx_count_distinct(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> Int64Scalar:
     """Approximate count of distinct non-null values via HyperLogLog.
 
@@ -166,7 +166,7 @@ def approx_count_distinct(
 
 def count_distinct_grouped(
     gids: Int32Array,
-    value: AnyArray,
+    value: DynArray,
     num_groups: Int,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int64Array:
@@ -180,7 +180,7 @@ def count_distinct_grouped(
     var n = len(gids)
     # Hash the (group_id, value) pair per row via the struct hasher (per-field
     # rapidhash + combine) — reusing the exact join/group-by hashing path.
-    var children = List[AnyArray]()
+    var children = List[DynArray]()
     children.append(gids.copy())
     children.append(value.copy())
     var pairs = StructArray(
@@ -213,7 +213,7 @@ def count_distinct_grouped(
 
 def approx_count_distinct_grouped(
     gids: Int32Array,
-    value: AnyArray,
+    value: DynArray,
     num_groups: Int,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int64Array:

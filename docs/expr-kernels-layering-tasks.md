@@ -123,8 +123,8 @@ Two edges are backwards **conceptually** even though they are forwards structura
 | `ThreadPartials` | one worker's frozen per-group state | ✔ |
 | `Aggregates` | the aggregate **set** + the drivers that share one grouping pass | ⚠ L5 |
 | `Relation` | pure immutable IR node | ✔ |
-| `AnyRelation` | erasure box **+** fluent plan-building API **+** `kind()` RTTI | ⚠ L9 |
-| `Processor` / `AnyProcessor` | pull-based physical operator + drain driver | ✔ |
+| `DynRelation` | erasure box **+** fluent plan-building API **+** `kind()` RTTI | ⚠ L9 |
+| `Processor` / `DynProcessor` | pull-based physical operator + drain driver | ✔ |
 | 8 `*Processor`s | one per node kind | ✔ except `ParquetScanProcessor` (L6) |
 | `Exhausted` | end-of-stream sentinel | ✔ |
 
@@ -204,7 +204,7 @@ flags the hazard) and `_kind_data` carries "column index or op kind". The known 
 corruption (`size_of` 416 vs ≥417 needed for `ArcPointer[DynValue]`) is a direct consequence of
 this width.
 
-**L9 — minor, batched.** `AnyRelation` bundles erasure + the whole fluent plan-building API +
+**L9 — minor, batched.** `DynRelation` bundles erasure + the whole fluent plan-building API +
 `kind()` RTTI. `kernels/distinct.mojo` hosts `count_distinct_grouped` /
 `approx_count_distinct_grouped`, so "grouped aggregation" is split across `aggregate.mojo` and
 `distinct.mojo`. `bitmap_and` exists twice (`kernels/helpers` alias over `Bitmap.intersect`) and is
@@ -261,7 +261,7 @@ Owns: `marrow/kernels/groupby.mojo`, `marrow/expr/aggregates.mojo`,
 Done when:
 
 - `aggregate_columns` / `_by_partition` / `aggregate[A]` / `apply[F]` return key columns +
-  aggregate columns (e.g. `Tuple[List[AnyArray], List[AnyArray]]` or a small typed result struct),
+  aggregate columns (e.g. `Tuple[List[DynArray], List[DynArray]]` or a small typed result struct),
   not `RecordBatch`, and take no `names: List[String]`.
 - `marrow/kernels/groupby.mojo` no longer imports `..schema` or `..tabular` — making `marrow/kernels`
   free of the tabular layer entirely (verify: `grep -rn "tabular\|schema" marrow/kernels/*.mojo`
@@ -349,7 +349,7 @@ generic "scan with pushdown support" discriminant rather than a format name in t
 
 **L9 — Minor, batchable** · Depends: — · Owns: as listed per item:
 
-- `marrow/expr/relations.mojo` — separate `AnyRelation`'s erasure mechanics from the fluent
+- `marrow/expr/relations.mojo` — separate `DynRelation`'s erasure mechanics from the fluent
   plan-building API (`select`/`filter`/`aggregate`/`join`). The box should be a box; the builder
   API can be free functions or a thin wrapper over it.
 - `marrow/kernels/distinct.mojo`, `marrow/kernels/aggregate.mojo` — `count_distinct_grouped` /

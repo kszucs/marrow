@@ -160,9 +160,9 @@ def argsort(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array
 
-# Convenience: single-column argsort on AnyArray.
+# Convenience: single-column argsort on DynArray.
 def argsort(
-    array: AnyArray,
+    array: DynArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
     stable: Bool = False,
@@ -171,7 +171,7 @@ def argsort(
 ) raises -> Int32Array
 
 # Apply a permutation to materialise sorted output. Reuses _gather() from join.mojo.
-def take(array: AnyArray, indices: Int32Array, ctx: ExecutionContext = ...) raises -> AnyArray
+def take(array: DynArray, indices: Int32Array, ctx: ExecutionContext = ...) raises -> DynArray
 def take(array: StructArray, indices: Int32Array, ctx: ExecutionContext = ...) raises -> StructArray
 
 # Convenience: sort StructArray and return sorted copy.
@@ -471,7 +471,7 @@ if ctx.is_gpu():
 ### Algorithm Selection
 
 ```
-argsort(AnyArray, ...)
+argsort(DynArray, ...)
   │
   ├── BoolArray                → BoolSorter (count pass, O(N), zero comparisons)
   │
@@ -483,7 +483,7 @@ argsort(AnyArray, ...)
 
 argsort(StructArray, key_indices, ...)
   │
-  ├── len(key_indices) == 1    → argsort(AnyArray) on that column
+  ├── len(key_indices) == 1    → argsort(DynArray) on that column
   │
   └── len(key_indices) > 1     → PermutationRefinement
           Sort by key[0] (dispatch to above)
@@ -522,7 +522,7 @@ Matches PyArrow's `Array.sort()`, `Array.argsort()`, `RecordBatch.sort_by()`.
 comptime SORT_NODE: UInt8 = 7
 
 struct Sort(Relation):
-    var input: AnyRelation
+    var input: DynRelation
     var keys: List[AnyValue]           # column exprs resolved to input schema
     var ascending: List[Bool]
     var nulls_first: Bool
@@ -549,8 +549,8 @@ Each phase ships with tests **and** benchmarks.
 2. **`_argsort_primitive[T](values, ascending, nulls_first, stable, limit, ctx)`**: two `alloc_uninit` pair-buffers; encoding transform; LSD radix with serial + parallel branches (`ctx.wants_parallel`); insertion sort fallback for N < 64.
 3. **`_argsort_string(array, ascending, nulls_first, stable, limit, ctx)`**: `alloc_uninit` index buffer + iota; stdlib `sort[cmp_fn]` with 4-byte prefix optimisation. CPU only (Phase 1).
 4. **`_argsort_bool(array, ascending, nulls_first)`**: count pass, direct index construction. O(N).
-5. **`argsort(AnyArray, ...)`**: type-dispatch via `ArrayVisitor`.
-6. **`take(AnyArray, Int32Array, ctx)`**: thin wrapper over `_gather()` from `join.mojo`. Full permutations always hit the no-null fast path.
+5. **`argsort(DynArray, ...)`**: type-dispatch via `ArrayVisitor`.
+6. **`take(DynArray, Int32Array, ctx)`**: thin wrapper over `_gather()` from `join.mojo`. Full permutations always hit the no-null fast path.
 7. **`sort(StructArray, key_indices, ascending, ...)`**: `argsort` → `take` per child column → new StructArray (following join's `_assemble` pattern).
 
 **Tests** (`marrow/tests/test_sort.mojo`): correctness vs PyArrow `sort_to_indices` / `RecordBatch.sort_by` as oracle. Cases: ascending/descending, nulls_first/last, stable/unstable, floats with NaN/±Inf/−0.0, BoolArray, empty array, single element, already-sorted input (fast-path validation).
@@ -567,7 +567,7 @@ Use `--competition` flag to compare vs Polars, PyArrow, DuckDB.
 
 ### Phase 2 — Multi-column argsort via Permutation Refinement
 
-1. **`_equal_ranges(col: AnyArray, perm: Int32Array)`**: vectorized adjacent-element comparison → `List[(Int, Int)]` equal-value ranges.
+1. **`_equal_ranges(col: DynArray, perm: Int32Array)`**: vectorized adjacent-element comparison → `List[(Int, Int)]` equal-value ranges.
 2. **`_refine_ranges(perm, ranges, col, ascending, cmp_fn)`**: per-range sub-span sort using same `_argsort_primitive` / `_argsort_string` dispatch.
 3. **`argsort(StructArray, key_indices, ascending, nulls_first, stable, limit, ctx)`**: permutation refinement loop.
 4. Per-column null partitioning within ranges.

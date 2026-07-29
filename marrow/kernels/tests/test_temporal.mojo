@@ -8,7 +8,7 @@ from std.testing import (
 )
 
 from ...arrays import (
-    AnyArray,
+    DynArray,
     Int32Array,
     Date32Array,
     Date64Array,
@@ -175,7 +175,7 @@ def test_calendar_field_on_time_raises() raises:
     var micros = 1_000_000
     var a = _t64([micros], time64(microsecond))
     with assert_raises():
-        _ = YearKernel.dispatch(a.copy().to_any())
+        _ = YearKernel.dispatch(a.copy().to_dyn())
 
 
 # --- null propagation ------------------------------------------------------
@@ -211,33 +211,33 @@ def test_pre_epoch_timestamp() raises:
 def test_date_trunc_minute() raises:
     # 2019-06-15 12:30:45 -> 2019-06-15 12:30:00 = 1560601800
     var a = _ts([1_560_601_845], timestamp(second))
-    var r = DateTruncKernel.apply(a.copy().to_any(), unit_minute)
-    assert_true(r.dtype() == timestamp(second).to_any())
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
+    assert_true(r.dtype() == timestamp(second).to_dyn())
     assert_equal(r.as_timestamp()[0].value(), 1_560_601_800)
 
 
 def test_date_trunc_units() raises:
     var a = _ts([1_560_601_845], timestamp(second))  # 2019-06-15 12:30:45
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_any(), unit_second)
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_second)
         .as_timestamp()[0]
         .value(),
         1_560_601_845,
     )
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_any(), unit_minute)
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
         .as_timestamp()[0]
         .value(),
         1_560_601_800,
     )
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_any(), unit_hour)
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_hour)
         .as_timestamp()[0]
         .value(),
         1_560_600_000,  # 2019-06-15 12:00:00
     )
     assert_equal(
-        DateTruncKernel.apply(a.copy().to_any(), unit_day)
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_day)
         .as_timestamp()[0]
         .value(),
         1_560_556_800,  # 2019-06-15 00:00:00
@@ -247,12 +247,12 @@ def test_date_trunc_units() raises:
 def test_date_trunc_millisecond_unit() raises:
     # 2019-06-15 12:30:45.123 ms -> minute -> 2019-06-15 12:30:00.000
     var a = _ts([1_560_601_845_123], timestamp(millisecond))
-    var r = DateTruncKernel.apply(a.copy().to_any(), unit_minute)
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
     assert_equal(r.as_timestamp()[0].value(), 1_560_601_800_000)
 
 
 def test_date_trunc_preserves_nulls() raises:
-    var r = DateTruncKernel.apply(_ts_with_null().to_any(), unit_hour)
+    var r = DateTruncKernel.apply(_ts_with_null().to_dyn(), unit_hour)
     assert_equal(r.null_count(), 1)
     assert_false(r.is_valid(1))
     assert_equal(r.as_timestamp()[0].value(), 1_560_600_000)
@@ -330,7 +330,7 @@ def test_cross_check_date_trunc_pyarrow() raises:
 
     for unit in ["second", "minute", "hour", "day"]:
         var r = DateTruncKernel.apply(
-            a.copy().to_any(), CalendarUnit.parse(unit)
+            a.copy().to_dyn(), CalendarUnit.parse(unit)
         )
         var pa_r = pc.floor_temporal(pa_arr, unit=unit)
         for i in range(len(raw)):

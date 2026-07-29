@@ -19,12 +19,12 @@ the two is the measurement: it is exactly the cost of the aggregate identity
 """
 
 from marrow.builders import array
-from marrow.dtypes import AnyDataType, int64, string, field
+from marrow.dtypes import DynType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.aggregates import AggFunc
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import InMemoryTable, Aggregate, AnyRelation
+from marrow.expr.relations import InMemoryTable, Aggregate, DynRelation
 
 
 def main() raises:
@@ -43,11 +43,11 @@ def main() raises:
     aggs.append(AnyValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
-    funcs.append(AggFunc("sum", AnyDataType(int64)))
-    funcs.append(AggFunc("min", AnyDataType(int64)))
+    funcs.append(AggFunc("sum", DynType(int64)))
+    funcs.append(AggFunc("min", DynType(int64)))
 
     var agg = Aggregate(
-        input=AnyRelation(InMemoryTable(batch=batch)),
+        input=DynRelation(InMemoryTable(batch=batch)),
         keys=keys^,
         inputs=aggs^,
         aggs=funcs^,
@@ -55,4 +55,4 @@ def main() raises:
             [field("name", string), field("a", int64), field("b", int64)]
         ),
     )
-    print(AnyRelation(agg^).execute())
+    print(DynRelation(agg^).execute())

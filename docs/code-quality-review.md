@@ -43,14 +43,14 @@ The single most pervasive issue; present in every subsystem.
 
 - `PrimitiveArray.__init__` reads `data.dtype._v[Self.T]` (`arrays.mojo:447`) — and unlike
   its siblings performs **no** variant check, so a mismatched `ArrayData` aborts instead of raising.
-- `dispatch_over_*` read `AnyDataType._v` from another module (`utils.mojo:287-316`).
+- `dispatch_over_*` read `DynType._v` from another module (`utils.mojo:287-316`).
 - `Buffer.is_cpu/is_device/is_host/resize/to_cpu` probe `Allocation._host`/`._device`
   (`buffers.mojo:563-573,600,732`). **Consequence:** `Buffer.resize` branches on `_host` only,
   so a DEVICE buffer falls through to a CPU `alloc_zeroed` + memcpy from a device pointer.
 - `Bitmap` pokes `self._buffer._ptr` throughout (`buffers.mojo:950-1165`).
 - A free function assigns `b._null_count = size` (`builders.mojo:1827`).
-- `Context.get[A]` does `self._slots[i][AnyArray]._v[A]` (`values.mojo:208`), bypassing the
-  `debug_assert` in `AnyArray._as[T]`.
+- `Context.get[A]` does `self._slots[i][DynArray]._v[A]` (`values.mojo:208`), bypassing the
+  `debug_assert` in `DynArray._as[T]`.
 
 Each is a missing accessor, and each disables the owning type's ability to enforce its
 own invariants. **Rule: add the accessor; never reach through.**
@@ -107,7 +107,7 @@ are literal duplicates), 7 in elementwise kernels, 2 in relational (`rapidhash`,
 `schema.mojo:578,907`).
 
 The cost is not line count — it is **silent coverage gaps**, because a ladder that forgets a
-type compiles fine and raises at runtime: **D5**; `AnyScalar.repeat` covers 11 numeric types and
+type compiles fine and raises at runtime: **D5**; `DynScalar.repeat` covers 11 numeric types and
 raises for bool/string/temporal/decimal, invisible from its signature; parquet's `_dispatch`
 handles INT96 that no sibling ladder knows about, while `min_max` silently returns `False` for
 `binary`/`large_binary`.
@@ -237,7 +237,7 @@ SIMD chunk, and `dynamic.mojo:5` describes bindings that do not exist.
 Distilled across all six reviews — these are what marrow does well and should keep doing.
 
 1. **Type erasure via `Variant` + `variant_dispatch`** — never fn-pointer trampolines or `rebind`.
-   `AnyArray`/`AnyScalar`/`AnyBuilder`/`AnyDataType` share one shape: `comptime VariantType`, one
+   `DynArray`/`DynScalar`/`DynBuilder`/`DynType` share one shape: `comptime VariantType`, one
    `_v`, `@implicit __init__[T: Trait]`, private `_as[T]()` + per-type `as_x()` borrows. Keeps
    dispatch closed and DCE-friendly. *(The `AnyValue` trampolines are the deliberate exception —
    see §4.)*
@@ -426,7 +426,7 @@ the raw-`.bitmap`-instead-of-`.validity()` signature bug nobody questioned.
 ### What the categories reveal
 
 - **DELETE-DUP is the largest kernel category (39).** These are typed overloads that only
-  round-trip through `AnyArray`, or free functions shadowing the `Kernel` struct that replaced
+  round-trip through `DynArray`, or free functions shadowing the `Kernel` struct that replaced
   them. The 18 typed `filter`/`take` overloads are byte-for-byte `return Filter.apply(...)`,
   forming a *third* layer beside `dispatch` and `apply` — which is why adding an array type is a
   six-site edit. Recommendation: **keep exactly 3 free functions here** (`filter`, `take`,
@@ -441,7 +441,7 @@ the raw-`.bitmap`-instead-of-`.validity()` signature bug nobody questioned.
   `_drop_null_bool`, `scalar()` ×2, plus 8 in the Python layer (`*_array_from_arrays` ×3 and their
   3 bindings, `read_ipc_stream_schema` ×2) — **14 dead functions**, free deletions.
 - **Free functions hide encapsulation breaks.** `nulls()` writes `b._null_count` from module scope;
-  `dispatch_over_*` (64 call sites) exist *only* to read `AnyDataType._v` from another module;
+  `dispatch_over_*` (64 call sites) exist *only* to read `DynType._v` from another module;
   `views.mojo`'s two bitmap↔bitmap `apply` overloads read `_data`/`_offset`/`_length` off
   `BitmapView`. Each is RC1 wearing a different hat — **making them methods fixes the reach-through
   for free.**
@@ -466,7 +466,7 @@ A module-level function is justified **only** if one of:
 
 Everything else is a method, a static factory, a private method of its one owning type, or a
 `Kernel` struct. Note even (3) is narrower than it looks: `dispatch_over_*` *appears* to qualify,
-but `AnyDataType` **is** marrow's own type — making them methods removes 64 private-field
+but `DynType` **is** marrow's own type — making them methods removes 64 private-field
 reach-ins.
 
 ### Sequencing note

@@ -14,7 +14,7 @@ import std.math as math
 
 from std.gpu import DeviceContext
 from .dtypes import (
-    AnyDataType,
+    DynType,
     Field,
     FixedSizeBinaryType,
     FixedSizeListType,
@@ -60,7 +60,7 @@ from .dtypes import (
     year_month_interval,
 )
 from .arrays import (
-    AnyArray,
+    DynArray,
     ArrayData,
 )
 from .schema import Schema
@@ -302,7 +302,7 @@ struct CArrowSchema(Copyable, Movable):
 
     @staticmethod
     def from_dtype(
-        dtype: AnyDataType,
+        dtype: DynType,
     ) raises -> CArrowSchema:
         """Build a CArrowSchema value for a DataType.
 
@@ -617,7 +617,7 @@ struct CArrowSchema(Copyable, Movable):
             )
         )
 
-    def to_dtype(self) raises -> AnyDataType:
+    def to_dtype(self) raises -> DynType:
         var fmt = StringSlice(
             unsafe_from_utf8=CStringSlice(
                 unsafe_from_ptr=self.format.as_immutable()
@@ -627,7 +627,7 @@ struct CArrowSchema(Copyable, Movable):
         # The format string is the index type's format (e.g. "i" for int32).
         # Must be checked before the regular format string dispatch.
         if UnsafePointer(to=self.dictionary).bitcast[UInt64]()[0] != 0:
-            var index_type: AnyDataType
+            var index_type: DynType
             if fmt == "c":
                 index_type = int8
             elif fmt == "s":
@@ -651,7 +651,7 @@ struct CArrowSchema(Copyable, Movable):
                 )
             var value_type = self.dictionary[].to_dtype()
             var ordered = Bool(self.flags & ARROW_FLAG_DICT_ORDERED)
-            return dictionary(index_type^, value_type^, ordered).to_any()
+            return dictionary(index_type^, value_type^, ordered).to_dyn()
         # TODO(kszucs): not the nicest, but dictionary literals are not supported yet
         if fmt == "n":
             return null
@@ -690,17 +690,17 @@ struct CArrowSchema(Copyable, Movable):
         elif fmt == "+l":
             # Preserve the child Field as-is (its name may not be the default
             # "item" when constructed by other Arrow implementations).
-            return ListType(self.children[0][].to_field()).to_any()
+            return ListType(self.children[0][].to_field()).to_dyn()
         elif fmt == "+L":
-            return LargeListType(self.children[0][].to_field()).to_any()
+            return LargeListType(self.children[0][].to_field()).to_dyn()
         elif fmt.startswith("+w:"):
             var size = Int(String(fmt).removeprefix("+w:"))
             return FixedSizeListType(
                 self.children[0][].to_field(), size
-            ).to_any()
+            ).to_dyn()
         elif fmt.startswith("w:"):
             var width = Int(String(fmt).removeprefix("w:"))
-            return FixedSizeBinaryType(width).to_any()
+            return FixedSizeBinaryType(width).to_dyn()
         elif fmt == "tdD":
             return date32()
         elif fmt == "tdm":
@@ -716,19 +716,19 @@ struct CArrowSchema(Copyable, Movable):
         elif fmt.startswith("tss:"):
             return timestamp(
                 second, String(String(fmt).removeprefix("tss:"))
-            ).to_any()
+            ).to_dyn()
         elif fmt.startswith("tsm:"):
             return timestamp(
                 millisecond, String(String(fmt).removeprefix("tsm:"))
-            ).to_any()
+            ).to_dyn()
         elif fmt.startswith("tsu:"):
             return timestamp(
                 microsecond, String(String(fmt).removeprefix("tsu:"))
-            ).to_any()
+            ).to_dyn()
         elif fmt.startswith("tsn:"):
             return timestamp(
                 nanosecond, String(String(fmt).removeprefix("tsn:"))
-            ).to_any()
+            ).to_dyn()
         elif fmt == "tDs":
             return duration(second)
         elif fmt == "tDm":
@@ -754,7 +754,7 @@ struct CArrowSchema(Copyable, Movable):
             # rides the schema flags.
             var entries = self.children[0][].to_field()
             var sorted = Bool(self.flags & ARROW_FLAG_MAP_KEYS_SORTED)
-            return MapType(entries^, sorted).to_any()
+            return MapType(entries^, sorted).to_dyn()
         elif fmt.startswith("d:"):
             var rest = String(fmt).removeprefix("d:")
             var parts = rest.split(",")
@@ -864,7 +864,7 @@ struct CArrowArray(Copyable, Movable):
     Ownership model
     ---------------
     Mirrors CArrowSchema.  A CArrowArray value owns its heap resources
-    (buffers pointer array, child struct shells, private_data AnyArray copy)
+    (buffers pointer array, child struct shells, private_data DynArray copy)
     through the `release` callback.
 
     Arrow importers take ownership by copying the struct fields then zeroing
@@ -872,7 +872,7 @@ struct CArrowArray(Copyable, Movable):
     `__del__` guards against a null release so dropping a consumed value is safe.
 
     Lifecycle for Python export (the common path):
-        1. `from_array` builds the struct value, heap-allocating an AnyArray copy
+        1. `from_array` builds the struct value, heap-allocating an DynArray copy
            (private_data) and a buffers pointer array.
         2. `to_pycapsule` moves it onto the heap and wraps it in a PyCapsule.
         3. `_release_array_capsule` calls `_release_exported_array` and frees
@@ -922,7 +922,7 @@ struct CArrowArray(Copyable, Movable):
             )
 
     def to_data(
-        self, dtype: AnyDataType, owner: ArcPointer[Allocation]
+        self, dtype: DynType, owner: ArcPointer[Allocation]
     ) raises -> ArrayData:
         """Build an ArrayData from this CArrowArray, all buffers sharing one owner.
 
@@ -931,7 +931,7 @@ struct CArrowArray(Copyable, Movable):
         the last buffer is dropped.
 
         Buffer sizes are dtype-dependent (same as Arrow C++ and arrow-rs).
-        Typed array construction is delegated to AnyArray.from_data().
+        Typed array construction is delegated to DynArray.from_data().
         """
         # Buffer sizes must cover all elements including the offset, because the
         # raw C buffers start at element 0 regardless of the logical array offset.
@@ -1065,15 +1065,15 @@ struct CArrowArray(Copyable, Movable):
         )
 
     def to_array(
-        self, dtype: AnyDataType, owner: ArcPointer[Allocation]
-    ) raises -> AnyArray:
-        """Build an AnyArray from this CArrowArray.  Thin wrapper over to_data.
+        self, dtype: DynType, owner: ArcPointer[Allocation]
+    ) raises -> DynArray:
+        """Build an DynArray from this CArrowArray.  Thin wrapper over to_data.
         """
-        return AnyArray.from_data(self.to_data(dtype, owner))
+        return DynArray.from_data(self.to_data(dtype, owner))
 
     @staticmethod
-    def from_array(array: AnyArray) raises -> CArrowArray:
-        """Build a CArrowArray from a Mojo AnyArray.  Thin wrapper over from_data.
+    def from_array(array: DynArray) raises -> CArrowArray:
+        """Build a CArrowArray from a Mojo DynArray.  Thin wrapper over from_data.
         """
         return CArrowArray.from_data(array.to_data())
 
@@ -1209,8 +1209,8 @@ struct CArrowArray(Copyable, Movable):
             )
         )
 
-    def to_array(deinit self, dtype: AnyDataType) raises -> AnyArray:
-        """Convert to an AnyArray, taking ownership of the C struct.
+    def to_array(deinit self, dtype: DynType) raises -> DynArray:
+        """Convert to an DynArray, taking ownership of the C struct.
 
         The CArrowArray is moved onto the heap and wrapped in a
         Allocation.  Every Buffer / Bitmap view shares the same
@@ -1283,8 +1283,8 @@ struct CArrowDeviceArray(Movable):
     var reserved2: Int64
 
     def to_array(
-        deinit self, dtype: AnyDataType, ctx: DeviceContext
-    ) raises -> AnyArray:
+        deinit self, dtype: DynType, ctx: DeviceContext
+    ) raises -> DynArray:
         """Import a device array into marrow, taking ownership of the C struct.
 
         The CArrowDeviceArray is moved onto the heap and wrapped in an
@@ -1300,7 +1300,7 @@ struct CArrowDeviceArray(Movable):
             ctx:   The DeviceContext associated with the device buffers.
 
         Returns:
-            An `AnyArray` whose buffers reference the device memory directly
+            An `DynArray` whose buffers reference the device memory directly
             (zero-copy for device types; CPU for ARROW_DEVICE_CPU).
         """
         if Int(self.sync_event) != 0:
@@ -1381,7 +1381,7 @@ def _stream_get_next(
             return 0
         var batch = data[].batches[data[].index].copy()
         data[].index += 1
-        var struct_arr: AnyArray = batch.to_struct_array()
+        var struct_arr: DynArray = batch.to_struct_array()
         array_out.unsafe_write(CArrowArray.from_array(struct_arr))
         return 0
     except:
@@ -1537,7 +1537,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
                 break
             var struct_dtype = struct_(schema.fields.copy())
             var arr = c_array.take_pointee().to_array(struct_dtype^)
-            var columns = List[AnyArray]()
+            var columns = List[DynArray]()
             for child in arr.as_struct().children:
                 columns.append(child.copy())
             batches.append(RecordBatch(schema=schema, columns=columns^))

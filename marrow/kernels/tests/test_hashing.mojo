@@ -1,7 +1,7 @@
 from std.testing import assert_equal, assert_true, assert_false
 
 
-from ...arrays import AnyArray, DictionaryArray, PrimitiveArray, StringArray
+from ...arrays import DynArray, DictionaryArray, PrimitiveArray, StringArray
 from ...builders import (
     array,
     Date32Builder,
@@ -37,15 +37,15 @@ from ...kernels.groupby import GroupBy
 from ...kernels.hashing import RapidHash, rapidhash, NULL_HASH_SENTINEL
 
 
-def _children(ref a: AnyArray, ref b: AnyArray) -> List[AnyArray]:
-    var c = List[AnyArray]()
+def _children(ref a: DynArray, ref b: DynArray) -> List[DynArray]:
+    var c = List[DynArray]()
     c.append(a.copy())
     c.append(b.copy())
     return c^
 
 
-def _children1(ref a: AnyArray) -> List[AnyArray]:
-    var c = List[AnyArray]()
+def _children1(ref a: DynArray) -> List[DynArray]:
+    var c = List[DynArray]()
     c.append(a.copy())
     return c^
 
@@ -129,7 +129,7 @@ def test_hash__string_nulls() raises:
 
 
 def test_hash__dispatch() raises:
-    var a: AnyArray = array([1, 2, 1], int32)
+    var a: DynArray = array([1, 2, 1], int32)
     var h = RapidHash.dispatch(a)
     assert_equal(len(h), 3)
     assert_equal(h[0], h[2])
@@ -139,7 +139,7 @@ def test_hash__dispatch_string() raises:
     var b = StringBuilder(2)
     b.append("x")
     b.append("x")
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
 
     var h = RapidHash.dispatch(a)
     assert_equal(h[0], h[1])
@@ -152,8 +152,8 @@ def test_hash__dispatch_string() raises:
 
 def test_hash_struct_two_fields() raises:
     """StructArray hashing combines per-field hashes."""
-    var a: AnyArray = array([1, 1, 2, 2], int32)
-    var b: AnyArray = array([10, 20, 10, 20], int32)
+    var a: DynArray = array([1, 1, 2, 2], int32)
+    var b: DynArray = array([10, 20, 10, 20], int32)
     var sa = StructArray(
         dtype=struct_(
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
@@ -179,7 +179,7 @@ def test_hash_struct_single_field() raises:
     var a = array([1, 2, 3], int32)
     var h1 = RapidHash.apply(a)
 
-    var arr: AnyArray = a^
+    var arr: DynArray = a^
     var sa = StructArray(
         dtype=struct_(Field("a", arr.dtype().copy())),
         length=3,
@@ -196,8 +196,8 @@ def test_hash_struct_single_field() raises:
 
 def test_hash_dispatch_struct() raises:
     """Type-erased dispatch to struct hash."""
-    var a: AnyArray = array([1, 2, 1], int32)
-    var b: AnyArray = array([3, 3, 3], int32)
+    var a: DynArray = array([1, 2, 1], int32)
+    var b: DynArray = array([3, 3, 3], int32)
     var sa = StructArray(
         dtype=struct_(
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
@@ -222,14 +222,14 @@ def test_hash_dispatch_struct() raises:
 # ---------------------------------------------------------------------------
 
 
-def _date32(var days: List[Int]) raises -> AnyArray:
+def _date32(var days: List[Int]) raises -> DynArray:
     var b = Date32Builder(date32(), len(days))
     for d in days:
         b.append(Scalar[int32.native](d))
     return b.finish()
 
 
-def _timestamp(var micros: List[Int]) raises -> AnyArray:
+def _timestamp(var micros: List[Int]) raises -> DynArray:
     var b = TimestampBuilder(timestamp(microsecond, "UTC"), len(micros))
     for m in micros:
         b.append(Scalar[int64.native](m))
@@ -262,7 +262,7 @@ def test_hash_timestamp_nulls() raises:
     b.append(Scalar[int64.native](10))
     b.append_null()
     b.append(Scalar[int64.native](10))
-    var t: AnyArray = b.finish()
+    var t: DynArray = b.finish()
     var h = RapidHash.dispatch(t)
     assert_equal(h[1].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
     assert_equal(h[0], h[2])
@@ -274,13 +274,13 @@ def test_hash_large_string() raises:
     lb.append("foo")
     lb.append("bar")
     lb.append("foo")
-    var large: AnyArray = lb.finish()
+    var large: DynArray = lb.finish()
 
     var sb = StringBuilder(3)
     sb.append("foo")
     sb.append("bar")
     sb.append("foo")
-    var small: AnyArray = sb.finish()
+    var small: DynArray = sb.finish()
 
     var h = RapidHash.dispatch(large)
     assert_equal(h[0], h[2])
@@ -294,7 +294,7 @@ def test_hash_decimal128_high_bits() raises:
     b.append(Scalar[DType.int128](1))
     b.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
     b.append(Scalar[DType.int128](1))
-    var d: AnyArray = b.finish()
+    var d: DynArray = b.finish()
     var h = RapidHash.dispatch(d)
     assert_equal(h[0], h[2])
     assert_true(h[0] != h[1])
@@ -308,14 +308,14 @@ def test_hash_dictionary_matches_decoded() raises:
     var ib = Int32Builder(4)
     for i in [0, 1, 0, 1]:
         ib.append(Int32(i))
-    var dict_arr: AnyArray = DictionaryArray.from_arrays(
+    var dict_arr: DynArray = DictionaryArray.from_arrays(
         ib.finish(), values.finish()
     )
 
     var plain = StringBuilder(4)
     for s in ["red", "blue", "red", "blue"]:
         plain.append(s)
-    var plain_arr: AnyArray = plain.finish()
+    var plain_arr: DynArray = plain.finish()
 
     var h = RapidHash.dispatch(dict_arr)
     assert_equal(len(h), 4)
@@ -330,7 +330,7 @@ def test_hash_dictionary_matches_decoded() raises:
 
 def test_groupby_date32_key() raises:
     var keys = _date32([19000, 18500, 19000, 18500, 19000])
-    var vals: AnyArray = array([1, 2, 3, 4, 5], int32)
+    var vals: DynArray = array([1, 2, 3, 4, 5], int32)
     var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
@@ -344,7 +344,7 @@ def test_groupby_date32_key() raises:
 
 def test_groupby_timestamp_key() raises:
     var keys = _timestamp([1_000, 2_000, 1_000])
-    var vals: AnyArray = array([10, 20, 30], int32)
+    var vals: DynArray = array([10, 20, 30], int32)
     var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)
@@ -357,8 +357,8 @@ def test_groupby_large_string_key() raises:
     var lb = LargeStringBuilder(4)
     for s in ["a", "b", "a", "b"]:
         lb.append(s)
-    var keys: AnyArray = lb.finish()
-    var vals: AnyArray = array([1, 2, 3, 4], int32)
+    var keys: DynArray = lb.finish()
+    var vals: DynArray = array([1, 2, 3, 4], int32)
     var result = GroupBy(keys).apply[Sum](vals)
 
     assert_equal(result.num_rows(), 2)

@@ -19,7 +19,7 @@ from marrow.dtypes import int64, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.values import col, AnyValue
-from marrow.expr.relations import InMemoryTable, Project, AnyRelation
+from marrow.expr.relations import InMemoryTable, Project, DynRelation
 
 
 def main() raises:
@@ -27,7 +27,7 @@ def main() raises:
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
-    var filtered = AnyRelation(InMemoryTable(batch=batch)).filter(
+    var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
         AnyValue(col("a", int64) > col("b", int64))
     )
     var values = List[AnyValue]()
@@ -43,4 +43,4 @@ def main() raises:
         values=values^,
         schema=schema([field("z", int64)]),
     )
-    print(AnyRelation(proj^).execute())
+    print(DynRelation(proj^).execute())
