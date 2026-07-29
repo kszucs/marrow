@@ -6,6 +6,13 @@ back to a specific package.
 
 Run via `pixi run binary_size` from the repo root, or directly:
     python3 benchmarks/binary_size/compare.py
+
+Pass gate names to measure only those (query_streaming is always included, as
+the ratio baseline) -- a full sweep is five -O3 builds and about ten minutes:
+    python3 benchmarks/binary_size/compare.py query_dynvalue
+
+**Sizes are reported as the `__text` section, not file size.** See
+`text_section_size` for why that distinction is the whole point of this script.
 """
 
 import re
@@ -107,18 +114,23 @@ def count_symbols(binary: Path) -> int:
     return len(nm_lines(binary))
 
 
-def text_segment_size(binary: Path) -> int | None:
-    out = run(["size", str(binary)])
-    lines = [l for l in out.splitlines() if l.strip()]
-    if len(lines) < 2:
-        return None
-    header = lines[0].split()
-    values = lines[1].split()
-    try:
-        idx = header.index("__TEXT")
-    except ValueError:
-        return None
-    return int(values[idx])
+def text_section_size(binary: Path) -> int | None:
+    """Bytes of machine code: the `__text` *section*.
+
+    Not the `__TEXT` segment and not the file size, both of which are padded up
+    to a page boundary — 16 KB on Apple Silicon. Measured 2026-07-29: a change
+    that added 1,728 bytes of code moved the stripped file size by 16,504 and
+    the segment by exactly 16,384, while the symbol count went *down* by one.
+    Any gate reading either of those cannot see a change smaller than a page,
+    and reports a phantom page jump for a small one that crosses a boundary.
+    """
+    out = run(["size", "-m", str(binary)])
+    for line in out.splitlines():
+        parts = line.split()
+        # "\tSection __text: 5266164"
+        if len(parts) >= 3 and parts[0] == "Section" and parts[1] == "__text:":
+            return int(parts[2])
+    return None
 
 
 def bucket_counts(names: list[str]) -> Counter:
@@ -129,6 +141,15 @@ def bucket_counts(names: list[str]) -> Counter:
 
 
 def main() -> None:
+    global NAMES
+    if len(sys.argv) > 1:
+        wanted = set(sys.argv[1:])
+        unknown = wanted - set(NAMES)
+        if unknown:
+            sys.exit(f"unknown gate(s): {', '.join(sorted(unknown))}")
+        # query_streaming is the ratio baseline, so it is always measured.
+        NAMES = [n for n in NAMES if n in wanted or n == "query_streaming"]
+
     for name in NAMES:
         print(f"building {name} ...", file=sys.stderr)
         build_and_strip(name)
@@ -144,14 +165,14 @@ def main() -> None:
                 "stripped": stripped.stat().st_size,
                 "syms": count_symbols(binary),
                 "syms_stripped": count_symbols(stripped),
-                "text": text_segment_size(stripped),
+                "text": text_section_size(stripped),
             }
         )
 
     print()
     print(
         f"{'binary':<16} {'unstripped':>12} {'stripped':>12} "
-        f"{'syms':>8} {'syms(strip)':>12} {'__TEXT':>12}"
+        f"{'syms':>8} {'syms(strip)':>12} {'__text':>12}"
     )
     for r in rows:
         print(
@@ -161,10 +182,17 @@ def main() -> None:
 
     base = next(r for r in rows if r["name"] == "query_streaming")
     print()
-    print("ratio vs. query_streaming (stripped size):")
+    print("ratio vs. query_streaming (__text -- code only, not page-padded):")
     for r in rows:
-        ratio = r["stripped"] / base["stripped"]
+        ratio = r["text"] / base["text"]
         print(f"  {r['name']:<16} {ratio:>6.1f}x")
+    print()
+    print(
+        "Compare runs on __text. The stripped column is page-granular (16 KB on"
+    )
+    print(
+        "Apple Silicon) and moves in steps -- do not quote deltas from it."
+    )
 
     print()
     print("=== per-module symbol counts (unstripped) ===")

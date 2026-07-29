@@ -42,7 +42,47 @@ per-module symbol breakdown below. `benchmarks/binary_size/compare.py` is a
 plain Python script (no dependencies beyond `mojo`, `nm`, `size`, and `strip`
 on `$PATH`) — read it directly if you want to change what gets measured.
 
-## Result (osx-arm64, Mojo 1.0.0b3.dev2026070506)
+## ⚠️ Read this before quoting a number below
+
+**Sizes here must be the `__text` *section*, not the `__TEXT` segment and not the
+file size.** Both of the latter are padded up to a page boundary — 16 KB on
+Apple Silicon — so they move in 16,384-byte steps. Measured 2026-07-29: a change
+that added **1,728 bytes** of code moved the stripped file by 16,504 and the
+segment by exactly 16,384, while the symbol count went *down* by one.
+
+`compare.py` now reports and ratios on `__text`. Two consequences for what
+follows:
+
+- **The 2026-07-05 table below is in the old, page-quantized metric.** Every
+  `__TEXT` figure in it is an exact multiple of 16,384, which is the tell. Its
+  binaries (`query_comptime`, `query_erased_aot`, `query_hybrid`) also no longer
+  have `.mojo` sources, so they cannot be re-measured — treat the table as
+  historical and directional.
+- **"`query_hybrid` and `query_runtime` have the exact same `__TEXT`" does not
+  establish that fusing the predicate saved zero bytes.** Equal page counts are
+  compatible with any difference up to 16 KB. The live gates show exactly this:
+  `query_dynvalue` and `query_runtime` differ by 16 bytes of file and **384
+  bytes of `__text`**. The claim needs re-measuring before it is repeated.
+
+## Current baselines (osx-arm64, 2026-07-29) — `__text`, code only
+
+| binary | `__text` | ratio |
+|---|---:|---:|
+| `query_streaming` | 1,251,672 | 1.0x |
+| `query_streaming_agg_fused` | 3,776,820 | 3.0x |
+| `query_streaming_agg` | 4,150,836 | 3.3x |
+| `query_dynvalue` | 5,266,164 | 4.2x |
+| `query_runtime` | 5,266,548 | 4.2x |
+
+Re-measure one gate without paying for the sweep (five `-O3` builds, ~10 min):
+
+```
+pixi run binary_size query_dynvalue
+```
+
+`query_streaming` is always built, since it is the ratio baseline.
+
+## Result (osx-arm64, Mojo 1.0.0b3.dev2026070506) — historical, page-quantized
 
 | binary | unstripped | stripped | symbols | symbols (stripped) | `__TEXT` |
 |---|---:|---:|---:|---:|---:|
