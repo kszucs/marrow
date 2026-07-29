@@ -451,8 +451,15 @@ rebuilds them and their sizes are stale artifacts) are deleted.
 > each gate to the minimum that links its family, and add a `--only` filter so a change can
 > re-measure the one gate it plausibly moved before the full sweep.
 
-**First fix the metric: stripped file size is quantized to 16 KB and this repository has
-been quoting it.** Apple Silicon uses 16 KB pages, so a `__TEXT` segment is padded up to a
+**Item 1 — fix the metric — ✅ DONE 2026-07-29 (`fc5b15d`).** `compare.py` now reports and
+ratios on the `__text` section, and takes gate names so re-measuring one costs 2 builds
+instead of 5. New `__text` baselines are in `benchmarks/binary_size/README.md`, along with a
+correction: that README's headline claim (`query_hybrid` and `query_runtime` have the same
+`__TEXT`, therefore fusing the predicate saved zero bytes) does not follow from a
+page-quantized number, and cannot be re-checked because those gates have no `.mojo` source.
+
+The original finding, for the record: **stripped file size is quantized to 16 KB and this
+repository had been quoting it.** Apple Silicon uses 16 KB pages, so a `__TEXT` segment is padded up to a
 multiple of 16,384 and the stripped binary's *file size* moves in 16 KB steps. Measured on
 `query_dynvalue` for the Q3.1 `CalendarUnit` change (2026-07-29):
 
@@ -469,9 +476,11 @@ So the gate as it stands **cannot see a change smaller than 16 KB, and reports a
 Earlier figures in this document that came from stripped file size are page-quantized and
 should be read as directional only — including Q0.4's "+16,528" and the conditional
 refactor's "-16,528" (that these were the same number to the byte, in opposite directions,
-was the tell). `compare.py` already collects a `__TEXT` column; the ratio table and the
-recorded expectations must move to **`size -m <binary>` → `Section __text`**, which is the
-only figure here that tracks code.
+was the tell). `compare.py` already collected a `__TEXT` column; the ratio table and the recorded
+expectations moved to **`size -m <binary>` → `Section __text`**, the only figure here that
+tracks code.
+
+**What remains in Q0.8 is the coverage half** — the gate programs themselves, listed above.
 
 ---
 
