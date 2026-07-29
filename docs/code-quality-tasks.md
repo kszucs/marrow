@@ -1777,6 +1777,22 @@ size risk in the plan).
   lacks** and nothing enforces parity. ~80% of the wiring duplication is eliminable and is **not**
   load-bearing for DCE (the small-binary property comes from which trampoline `AnyValue.__init__`
   instantiates). Build the dynamic table only inside `DynValue.eval`.
+- **Q4.6 — Give the AOT lane a comptime-projected Parquet scan** · *found 2026-07-29, measured* ·
+  Depends: Q4.3 (same seam) · Owns: `marrow/parquet/reader.mojo`, `marrow/expr/relations.mojo` ·
+
+  `query_scan` costs **+1,033,560 bytes of `__text`** over the floor gate — a Parquet scan
+  roughly *doubles* a minimal AOT binary (floor is 1,251,672). Attributed with `nm`: the gate's
+  scan declares `int64, int64, string`, yet the binary links **24 `PrimitiveLeafBuilder`
+  instantiations, 8 `ByteArrayLeafBuilder`, `BoolLeafBuilder`**, and decode arms for `Date32`,
+  `Date64`, `Timestamp`, `Binary` and `Bool` — types the query never mentions.
+
+  Cause: `ParquetFile.read` resolves leaf type at **runtime**, so every builder is reachable,
+  even though an AOT scan's schema is a comptime value. The writer is fully DCE'd (0 symbols),
+  which shows the DCE property works — the reader just exposes no comptime seam for it to bite
+  on. Done when an AOT scan instantiates only the leaf builders its own schema names, with the
+  runtime ladder still available for the dynamic lane. Gate it on `query_scan`.
+
+  Not the lever: codec gating. `parquet::codecs` is 32 symbols against `reader`'s 107.
 - **Q4.3 — Parquet leaf visitor.** Collapse the **8 hand-written Arrow-type ladders** in
   `reader`/`writer`/`statistics`/`schema` into one `visit_leaf[V: LeafVisitor]`. They already drift
   (INT96 in one; `binary` missing from another).
