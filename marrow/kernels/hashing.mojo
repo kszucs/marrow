@@ -42,6 +42,7 @@ from ..builders import UInt64Builder
 from ..buffers import Buffer
 from ..views import apply
 from .cast import cast
+from .core import Kernel
 from .execution import ExecutionContext
 from ..dtypes import (
     BinaryLikeType,
@@ -263,7 +264,7 @@ def _combine_hashes[
     return lo_hi[0] ^ lo_hi[1]
 
 
-struct RapidHash:
+struct RapidHash(Kernel):
     """Column hashing kernel — one ``UInt64`` per row.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
@@ -336,7 +337,7 @@ struct RapidHash:
 
             return dt.dispatch_primitive[primitive]()
         else:
-            raise Error("rapidhash: unsupported dtype ", dt)
+            raise Self.error(t"unsupported dtype {dt}")
 
     @staticmethod
     def apply(
@@ -504,7 +505,7 @@ struct RapidHash:
         var n = len(keys)
         var num_fields = len(keys.children)
         if num_fields == 0:
-            raise Error("rapidhash: empty struct array")
+            raise Self.error("empty struct array")
 
         var result = RapidHash.dispatch(
             keys.children[0].slice(keys.offset, n), ctx

@@ -235,7 +235,7 @@ struct CapitalizeKernel(StringMapKernel):
 # ---------------------------------------------------------------------------
 
 
-struct ConcatKernel:
+struct ConcatKernel(Kernel):
     """Element-wise binary string concatenation (`a || b`). `combine` is the fusable
     per-element primitive (the expression layer's `Concat` builds on it); `apply`
     materializes the whole array, null-propagating."""

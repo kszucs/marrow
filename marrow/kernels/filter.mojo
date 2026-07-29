@@ -70,6 +70,7 @@ from ..dtypes import (
 from std.algorithm.functional import sync_parallelize
 
 from ..views import BitmapView, BufferView
+from .core import Kernel
 from .execution import ExecutionContext
 
 
@@ -84,7 +85,7 @@ from .execution import ExecutionContext
 # ---------------------------------------------------------------------------
 
 
-struct Filter:
+struct Filter(Kernel):
     """Selection kernel — keep elements where a boolean ``mask`` is True.
 
     The typed leaves are the ``apply`` overloads below; each operates directly on
@@ -94,15 +95,6 @@ struct Filter:
     """
 
     comptime name = "filter"
-
-    @staticmethod
-    def _require_len(array_len: Int, mask_len: Int) raises:
-        """Validate the mask covers the array exactly (guards the compaction
-        loops against out-of-bounds reads on a mismatched mask)."""
-        if array_len != mask_len:
-            raise Error(
-                t"filter: array length {array_len} != mask length {mask_len}"
-            )
 
     @staticmethod
     def dispatch(
@@ -155,7 +147,7 @@ struct Filter:
         elif dt.is_dictionary():
             return Filter.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
-            raise Error("filter: unsupported dtype ", dt)
+            raise Self.error(t"unsupported dtype {dt}")
 
     @staticmethod
     def drop_null[
@@ -190,7 +182,7 @@ struct Filter:
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveArray[T]:
         """Filter a primitive array, keeping elements where ``mask`` is set."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
@@ -225,7 +217,7 @@ struct Filter:
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
         """Filter a bool array, keeping elements where ``mask`` is set."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
@@ -270,7 +262,7 @@ struct Filter:
         one memcpy (run-merge for dense masks). Validity is filtered in the same
         offset pass.
         """
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         comptime O = T.offset
         var n = len(array)
         var out_len = mask.count_set_bits()
@@ -388,7 +380,7 @@ struct Filter:
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> NullArray:
         """Filter a null array — the result is a shorter all-null array."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         return NullArray(length=mask.count_set_bits())
 
     @staticmethod
@@ -399,7 +391,7 @@ struct Filter:
     ) raises -> FixedSizeBinaryArray:
         """Filter a fixed-size-binary array by compacting the fixed-width byte
         blocks where ``mask`` is set."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var n = len(array)
         var bw = array.byte_width
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
@@ -456,7 +448,7 @@ struct Filter:
         row's contiguous child range and filter the child recursively, building
         the output offsets in the same pass — no index materialization, no take.
         """
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         comptime O = T.offset
         var n = len(array)
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
@@ -518,7 +510,7 @@ struct Filter:
     ) raises -> FixedSizeListArray:
         """Filter a fixed-size-list array column-wise: mark each selected row's
         `size` contiguous child slots and filter the child recursively."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var n = len(array)
         var size = array.dtype.as_fixed_size_list().size
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
@@ -567,7 +559,7 @@ struct Filter:
         """Filter a dictionary array by compacting its (logical) index codes with
         the fast sequential primitive path and sharing the values unchanged — far
         cheaper than a take (no index materialization, no random gather)."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var new_indices = Filter.dispatch(array.indices(), mask, ctx)
         return DictionaryArray(
             dtype=array.type(),
@@ -586,7 +578,7 @@ struct Filter:
     ) raises -> StructArray:
         """Filter a struct array column-wise: filter every child by the same mask
         and compact the struct-level validity."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var n = len(array)
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
@@ -616,7 +608,7 @@ struct Filter:
         )
 
 
-struct Take:
+struct Take(Kernel):
     """Gather kernel — collect elements at arbitrary indices (null index → null).
 
     The typed leaves are the ``apply`` overloads below; ``dispatch`` resolves a
@@ -678,7 +670,7 @@ struct Take:
         elif dt.is_dictionary():
             return Take.apply(array.as_dictionary(), indices, ctx).to_dyn()
         else:
-            raise Error("take: unsupported dtype ", dt)
+            raise Self.error(t"unsupported dtype {dt}")
 
     @staticmethod
     def apply[

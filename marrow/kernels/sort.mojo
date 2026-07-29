@@ -51,6 +51,7 @@ from ..dtypes import (
     Int32Type,
 )
 from .cast import cast
+from .core import Kernel
 from .execution import ExecutionContext
 from .filter import Take
 from .partition import radix_histogram
@@ -341,7 +342,7 @@ def _radix_sort_indices[
     return idx_buf^.to_immutable()
 
 
-struct SortIndices:
+struct SortIndices(Kernel):
     """Sort-permutation kernel — the indices that would sort a column.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
@@ -444,7 +445,7 @@ struct SortIndices:
 
             result = dt.dispatch_primitive[primitive]()
         else:
-            raise Error(t"sort_indices: unsupported dtype {dt}")
+            raise Self.error(t"unsupported dtype {dt}")
 
         if limit:
             var k = min(limit.value(), len(result))
@@ -486,10 +487,10 @@ struct SortIndices:
             ctx: Execution context.
         """
         if len(key_indices) == 0:
-            raise Error("sort: key_indices must not be empty")
+            raise Self.error("key_indices must not be empty")
         if len(key_indices) != len(ascending):
-            raise Error(
-                "sort: key_indices and ascending must have the same length"
+            raise Self.error(
+                "key_indices and ascending must have the same length"
             )
 
         if len(key_indices) == 1:

@@ -53,6 +53,7 @@ from ..dtypes import (
     TimeUnit,
     int32,
 )
+from .core import Kernel
 from .execution import ExecutionContext
 from .filter import take
 from ..utils import GPU_ENABLED
@@ -63,7 +64,7 @@ from ..utils import GPU_ENABLED
 # ---------------------------------------------------------------------------
 
 
-struct NumericCast:
+struct NumericCast(Kernel):
     """Numeric ↔ numeric cast: one ``pop.cast`` per SIMD lane."""
 
     comptime name = "numeric_cast"
@@ -183,7 +184,7 @@ struct NumericCast:
 # ---------------------------------------------------------------------------
 
 
-struct NumToBool:
+struct NumToBool(Kernel):
     """Numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
 
     comptime name = "num_to_bool"
@@ -227,7 +228,7 @@ struct NumToBool:
         )
 
 
-struct BoolToNum:
+struct BoolToNum(Kernel):
     """Bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
 
     comptime name = "bool_to_num"
@@ -281,7 +282,7 @@ struct BoolToNum:
 # ---------------------------------------------------------------------------
 
 
-struct TemporalCast:
+struct TemporalCast(Kernel):
     """Cast temporal ↔ integer / temporal ↔ temporal. Same physical width and
     resolution → a zero-copy relabel (``_reinterpret``); a differing unit → scale
     the underlying integers by the unit ratio (``_scale``)."""
@@ -414,7 +415,7 @@ struct TemporalCast:
 # ---------------------------------------------------------------------------
 
 
-struct StringToNum:
+struct StringToNum(Kernel):
     """Parse strings to a numeric type. ``safe`` is comptime: safe=True raises on
     an unparseable value, safe=False nulls it — the dead branch is elided."""
 
@@ -468,7 +469,7 @@ struct StringToNum:
         return b.finish()
 
 
-struct StringToBool:
+struct StringToBool(Kernel):
     """Parse ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive) to bool.
     ``safe`` comptime: raise vs null on an unrecognized value."""
 
@@ -511,7 +512,7 @@ struct StringToBool:
         return b.finish()
 
 
-struct NumToString:
+struct NumToString(Kernel):
     """Format a numeric array to strings (per-element ``String(value)``)."""
 
     comptime name = "num_to_string"
@@ -544,7 +545,7 @@ struct NumToString:
         return b.finish()
 
 
-struct BoolToString:
+struct BoolToString(Kernel):
     """Format a bool array to ``"true"``/``"false"`` strings."""
 
     comptime name = "bool_to_string"
@@ -578,7 +579,7 @@ struct BoolToString:
 # ---------------------------------------------------------------------------
 
 
-struct BinaryLikeCast:
+struct BinaryLikeCast(Kernel):
     """Cast between the binary-like containers (binary, large_binary, utf8,
     large_utf8). Equal physical offset width → a zero-copy relabel that shares
     the offset and value buffers; differing width (32↔64-bit offsets) → a rebuild
@@ -648,7 +649,7 @@ struct BinaryLikeCast:
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryCast:
+struct FixedSizeBinaryCast(Kernel):
     """Cast fixed-size-binary ↔ variable-length binary. ``to_binary`` derives the
     offset buffer from the fixed width and shares the data bytes; ``from_binary``
     packs each element into a fixed cell, raising when a length ≠ the width."""
@@ -722,7 +723,7 @@ struct FixedSizeBinaryCast:
 # ---------------------------------------------------------------------------
 
 
-struct NullCast:
+struct NullCast(Kernel):
     """Cast a null array to any target type: an all-null array of that type."""
 
     comptime name = "null_cast"
@@ -741,7 +742,7 @@ struct NullCast:
 # ---------------------------------------------------------------------------
 
 
-struct DecimalCast:
+struct DecimalCast(Kernel):
     """Cast decimal ↔ decimal (rescale) and decimal ↔ numeric.
 
     Both sides resolve uniformly to a scalar native and a scale — a decimal to its
@@ -887,7 +888,7 @@ struct DecimalCast:
 # ---------------------------------------------------------------------------
 
 
-struct ListCast:
+struct ListCast(Kernel):
     """Cast a list-like array (list / large_list) to another of the same kind by
     recursively casting its child values to the target's value type; the offset
     buffer and validity are shared unchanged."""
@@ -921,7 +922,7 @@ struct ListCast:
         )
 
 
-struct StructCast:
+struct StructCast(Kernel):
     """Cast struct → struct by recursively casting each field to the target
     field's type (matched by position); the field counts must match."""
 
@@ -955,7 +956,7 @@ struct StructCast:
         )
 
 
-struct DictionaryCast:
+struct DictionaryCast(Kernel):
     """Decode a dictionary array — gather its values by index (``take``) — then
     cast the decoded values to the target type when it differs."""
 

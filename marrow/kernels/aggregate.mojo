@@ -196,12 +196,10 @@ trait AggKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-trait WideningOp:
+trait WideningOp(Kernel):
     """The two things that distinguish `sum` from `product`: the fold's identity
     element and its lane-wise operator. Both widen integers to int64 and floats
     to float64, which is why they share one shell."""
-
-    comptime name: String
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -294,11 +292,10 @@ comptime SumKernel = Widening[SumOp]
 comptime ProductKernel = Widening[ProductOp]
 
 
-trait MinMaxOp:
+trait MinMaxOp(Kernel):
     """The two things that distinguish `min` from `max`: which SIMD lane-wise
     extremum to take, and which sentinel is the fold's identity."""
 
-    comptime name: String
     comptime is_min: Bool
 
     @staticmethod
@@ -757,7 +754,7 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
 # ---------------------------------------------------------------------------
 
 
-trait Aggregation:
+trait Aggregation(Kernel):
     """One aggregate over one input type — the fully resolved, monomorphized
     unit of aggregation.
 
@@ -765,9 +762,6 @@ trait Aggregation:
     `TemporalMinMax[Op, T]`, `StringMinMax[Op, T]`, `CountAgg` and
     `DistinctAgg[exact]`. Which one a runtime dtype maps to is decided once, by
     `AggFunction.resolve`."""
-
-    comptime name: String
-    """The aggregate's name — output-column naming only, never dispatch."""
 
     comptime InArray: Copyable & ImplicitlyDeletable
     """The typed input column this aggregation consumes. `DynArray` for the two
@@ -850,7 +844,7 @@ trait Aggregation:
         )
 
 
-trait AggFunction:
+trait AggFunction(Kernel):
     """An aggregate *function*: a name plus the input dtypes it supports.
 
     The contract for resolving an aggregate against a runtime dtype — `resolve`
@@ -858,8 +852,6 @@ trait AggFunction:
     type and hands the type to a comptime `job`. The catalog of functions
     (`Sum`, `Min`, `Count`, …) and their implementations live in
     `marrow.expr.aggregates`; this layer only executes what it is given."""
-
-    comptime name: String
 
     @staticmethod
     def resolve[

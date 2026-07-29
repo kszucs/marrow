@@ -30,6 +30,22 @@
 
 ### Refactors
 
+- **Every named kernel now conforms to `Kernel`.** Twenty-five kernels carried a
+  `comptime name` without the conformance that gives the name meaning, so
+  `Self.error`/`expect_same_length`/`expect_same_dtype` were unavailable to them and
+  each spelled its own diagnostics. `Filter`'s `_require_len` was `expect_same_length`
+  under another name, at nine call sites; `SortIndices.multi` prefixed its errors
+  `sort:` while the kernel is named `sort_indices`. The aggregate family traits
+  (`WideningOp`, `MinMaxOp`, `Aggregation`, `AggFunction`) descend from `Kernel` rather
+  than re-declaring `comptime name` themselves, which is the drift the root trait
+  exists to prevent.
+
+- **Temporal and nested kernels dispatch through the `dispatch_*` family.**
+  `TemporalExtractKernel` and the two `nested.mojo` kernels hand-wrote if/elif ladders
+  over type families that `dispatch_temporal`/`dispatch_listlike` already cover. One had
+  drifted: the temporal ladder omitted `DurationType`, so `date_trunc` and the
+  extractors rejected duration columns their typed leaves accept.
+
 - **`membership.mojo` and `conditional.mojo` are kernels, not free functions (Q3.1).**
   Neither had a struct, so `is_in` was five free functions (three of them byte-identical
   typed delegators) and the four conditional kernels each re-implemented the same
