@@ -1643,10 +1643,23 @@ Everything else becomes a method, static factory, private method of its one owni
 1. Delete the **20 typed `filter`/`take`/`drop_null` delegators** — keep exactly 3 free
    (`filter`, `take`, `drop_null`, all `pc.*`, all needed by the binding). Adding an array type
    drops from a six-site edit to two. Only 4 have production callers; each is a trivial rewrite.
-2. `hashing.mojo` → `RapidHash` struct (17 fns) and `sort.mojo` → `SortIndices` struct (8 fns) —
-   the two kernel modules with **no struct at all**. Includes renaming the public free function
-   literally named `array()` (`sort.mojo:349`), which forces `import array as _primitive_array`
-   in its own file. *(Fold into Q1.1 if done together.)*
+2. ✅ **DONE 2026-07-29** (`3630b3a`) — **and its premise was already stale when written.**
+   `RapidHash` and `SortIndices` both existed; that half landed with Q1.1, as its own note
+   predicted ("do the struct conversion in the same pass"). `array()` was gone too. What
+   remained was the delegator layer the structs made redundant: `rapidhash` 5 overloads → 2,
+   `sort_indices` 4 → 1.
+
+   The drift this task predicts was there to find: `rapidhash` had five typed overloads
+   against `RapidHash.apply`'s seven — `ListLikeArray` and `FixedSizeListArray` were taught
+   to the kernel and forgotten in the free set. `sort_indices`' three had **no callers at
+   all**, and the `BoolArray` one had silently dropped `stable` and `limit`.
+
+   **Two `rapidhash` free functions are load-bearing, not delegators.** The erased one is
+   the `pc.*` entry; `rapidhash(StructArray)` is what `SwissHashTable[hasher]` /
+   `HashJoin[hasher]` bind — their `hasher` parameter is typed
+   `def(StructArray, ExecutionContext) raises -> UInt64Array`, so it must be a free symbol
+   with that exact signature and a static method will not do. Deleting it breaks seven call
+   sites across `groupby`/`distinct`/`join`/`hashtable`/`membership`.
 3. Delete legacy `is_null`/`select`/`equal` free functions — `expr/dynamic.mojo` calls the **old,
    narrower** ones (numeric-only `is_null`; `select` silently drops validity).
 4. ✅ **DONE 2026-07-28** — `membership.mojo` → `IsInKernel` (`3fa602f`, 5 free fns → 2);
