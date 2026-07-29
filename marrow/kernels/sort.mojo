@@ -391,15 +391,6 @@ struct SortIndices(Kernel):
             result = SortIndices.apply(
                 array.as_bool(), ascending, nulls_first, ctx
             )
-        elif dt.is_numeric():
-
-            @parameter
-            def numeric[T: NumericType](d: T) raises -> Int32Array:
-                return SortIndices.apply(
-                    array.as_primitive[T](), ascending, nulls_first, stable, ctx
-                )
-
-            result = dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
@@ -424,19 +415,16 @@ struct SortIndices(Kernel):
                 None,
                 ctx,
             )
-        elif dt.is_decimal128():
-            result = SortIndices.apply(
-                array.as_decimal128(), ascending, nulls_first, stable, ctx
-            )
-        elif dt.is_decimal256():
-            result = SortIndices.apply(
-                array.as_decimal256(), ascending, nulls_first, stable, ctx
-            )
         elif dt.is_primitive():
-            # `apply` is bound on `PrimitiveType`, so temporal, interval and
-            # decimal32/64 columns sort through the typed leaf directly — the
-            # sort only ever reads `T.native` and validity, never the logical
-            # dtype. No reinterpret to an integer backing is needed.
+            # One arm for every fixed-width type. `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and *all four*
+            # decimal widths sort through the typed leaf directly — the sort
+            # only ever reads `T.native` and validity, never the logical dtype.
+            # No reinterpret to an integer backing is needed.
+            #
+            # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
+            # separate numeric/decimal128/decimal256 arms this replaces were
+            # three more spellings of this one call.
             @parameter
             def primitive[T: PrimitiveType](d: T) raises -> Int32Array:
                 return SortIndices.apply(

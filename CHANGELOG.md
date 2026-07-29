@@ -37,6 +37,16 @@
 
 ### Refactors
 
+- **`rapidhash` and `sort_indices` dispatched the same arm four times (−66 KB).** Both
+  ladders carried separate `is_numeric`, `is_decimal128`, `is_decimal256` and
+  `is_primitive` arms whose bodies were identical: `Decimal128Array` *is*
+  `PrimitiveArray[Decimal128Type]` and `dispatch_primitive` already walks every decimal
+  width, so three of the four were spellings of the fourth. `cast`'s `_on_native`
+  likewise folds onto a new `DynType.dispatch_decimal`, completing the `dispatch_*`
+  family. Measured on `__text`: **−65,856 to −66,176 bytes on all seven gates** that link
+  the erased dispatch path, and **exactly 0** on the fused and typed gates, which never
+  link it.
+
 - **Every named kernel now conforms to `Kernel`.** Twenty-five kernels carried a
   `comptime name` without the conformance that gives the name meaning, so
   `Self.error`/`expect_same_length`/`expect_same_dtype` were unavailable to them and

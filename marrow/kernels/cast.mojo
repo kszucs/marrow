@@ -49,6 +49,7 @@ from ..dtypes import (
     DType,
     FixedSizeBinaryType,
     NumericType,
+    DecimalType,
     StringLikeType,
     TimeUnit,
     int32,
@@ -773,9 +774,18 @@ struct DecimalCast(Kernel):
         return Self._on_native[on_from](array.dtype())
 
     @staticmethod
-    def _scale(dt: DynType) -> Int:
-        """The decimal scale, or 0 for a plain integer/numeric."""
-        if dt.is_decimal32():
+    def _scale(dt: DynType) raises -> Int:
+        """The decimal scale, or 0 for a plain integer/numeric.
+
+        A `DynType` ladder rather than `dispatch_decimal` because it reads a
+        *field*, and traits cannot require fields. It is guarded by
+        `is_decimal()` so a decimal width the ladder does not know raises
+        instead of silently reporting scale 0 — an unscaled decimal would be
+        off by a factor of 10^scale, with no error anywhere.
+        """
+        if not dt.is_decimal():
+            return 0
+        elif dt.is_decimal32():
             return dt.as_decimal32().scale
         elif dt.is_decimal64():
             return dt.as_decimal64().scale
@@ -783,7 +793,8 @@ struct DecimalCast(Kernel):
             return dt.as_decimal128().scale
         elif dt.is_decimal256():
             return dt.as_decimal256().scale
-        return 0
+        else:
+            raise Self.error(t"no scale known for decimal type {dt}")
 
     @staticmethod
     def _on_native[
@@ -791,14 +802,13 @@ struct DecimalCast(Kernel):
     ](dt: DynType) raises -> DynArray:
         """Resolve a decimal to its backing integer, or a numeric to its own
         native, then run ``func`` with that scalar ``DType``."""
-        if dt.is_decimal32():
-            return func[DType.int32]()
-        elif dt.is_decimal64():
-            return func[DType.int64]()
-        elif dt.is_decimal128():
-            return func[DType.int128]()
-        elif dt.is_decimal256():
-            return func[DType.int256]()
+        if dt.is_decimal():
+
+            @parameter
+            def by_dec[T: DecimalType](x: T) raises -> DynArray:
+                return func[T.native]()
+
+            return dt.dispatch_decimal[by_dec]()
         else:
 
             @parameter

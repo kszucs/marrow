@@ -160,6 +160,9 @@ trait DecimalType(PrimitiveType):
     """Fixed-point decimal types backed by int32, int64, int128, or int256.
 
     Logical type carries precision and scale — runtime values in `array.dtype`.
+    Traits cannot require `var` fields, so reading `precision`/`scale` off an
+    erased dtype still needs a `DynType` ladder; `dispatch_decimal` covers the
+    cases that only need `T.native`.
     """
 
     pass
@@ -874,6 +877,20 @@ struct DynType(
         `PrimitiveType`, which the temporal types satisfy.
         """
         return variant_dispatch_raises[TemporalType, func=func](self._v)
+
+    def dispatch_decimal[
+        R: AnyType,
+        //,
+        func: def[T: DecimalType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime decimal dtype to its comptime type and run `func`.
+
+        Only needed when the *logical* type matters (precision, scale) or when
+        the backing integer width drives the code — `T.native`. A kernel that
+        merely reads value bytes should go through `dispatch_primitive`, which
+        the decimal types satisfy.
+        """
+        return variant_dispatch_raises[DecimalType, func=func](self._v)
 
     def dispatch_stringlike[
         R: AnyType,

@@ -289,13 +289,6 @@ struct RapidHash(Kernel):
         var dt = keys.dtype()
         if dt == bool_:
             return RapidHash.apply(keys.as_bool(), ctx)
-        elif dt.is_numeric():
-
-            @parameter
-            def numeric[T: NumericType](d: T) raises -> UInt64Array:
-                return RapidHash.apply(keys.as_primitive[T](), ctx)
-
-            return dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
@@ -322,15 +315,16 @@ struct RapidHash(Kernel):
                 cast(keys, dt.as_dictionary().value_type().copy(), False, ctx),
                 ctx,
             )
-        elif dt.is_decimal128():
-            return RapidHash.apply(keys.as_decimal128(), ctx)
-        elif dt.is_decimal256():
-            return RapidHash.apply(keys.as_decimal256(), ctx)
         elif dt.is_primitive():
-            # `apply` is bound on `PrimitiveType`, so temporal, interval and
-            # decimal32/64 columns hash through the typed leaf directly — the
-            # hash only reads the value bytes via `T.native`, never the logical
+            # One arm for every fixed-width type. `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and *all four*
+            # decimal widths hash through the typed leaf directly — the hash
+            # only reads the value bytes via `T.native`, never the logical
             # dtype. No reinterpret to an integer backing is needed.
+            #
+            # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
+            # separate numeric/decimal128/decimal256 arms this replaces were
+            # three more spellings of this one call.
             @parameter
             def primitive[T: PrimitiveType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_primitive[T](), ctx)
