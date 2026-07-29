@@ -104,12 +104,18 @@ struct LengthKernel(Kernel):
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        if array.dtype().is_string():
-            return Self.apply(array.as_string()).to_dyn()
-        elif array.dtype().is_large_string():
-            return Self.apply(array.as_large_string()).to_dyn()
-        else:
-            raise Self.error(t"expected a string array, got {array.dtype()}")
+        # Guard before dispatching so the diagnostic names *this kernel* and the
+        # family it wanted. `dispatch_stringlike` would otherwise fall through to
+        # `variant_dispatch`'s generic "no arm matched", which says neither.
+        var dt = array.dtype()
+        if not dt.is_string_like():
+            raise Self.error(t"expected a string array, got {dt}")
+
+        @parameter
+        def leaf[T: StringLikeType](d: T) raises -> DynArray:
+            return Self.apply(array.as_binary_like[T]()).to_dyn()
+
+        return dt.dispatch_stringlike[leaf]()
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +147,18 @@ trait StringMapKernel(Kernel):
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
-        if array.dtype().is_string():
-            return Self.apply(array.as_string()).to_dyn()
-        elif array.dtype().is_large_string():
-            return Self.apply(array.as_large_string()).to_dyn()
-        else:
-            raise Self.error(t"expected a string array, got {array.dtype()}")
+        # Guard before dispatching so the diagnostic names *this kernel* and the
+        # family it wanted. `dispatch_stringlike` would otherwise fall through to
+        # `variant_dispatch`'s generic "no arm matched", which says neither.
+        var dt = array.dtype()
+        if not dt.is_string_like():
+            raise Self.error(t"expected a string array, got {dt}")
+
+        @parameter
+        def leaf[T: StringLikeType](d: T) raises -> DynArray:
+            return Self.apply(array.as_binary_like[T]()).to_dyn()
+
+        return dt.dispatch_stringlike[leaf]()
 
 
 struct UpperKernel(StringMapKernel):
@@ -296,17 +308,18 @@ trait StringPredicateKernel(Kernel):
 
     @staticmethod
     def dispatch(left: DynArray, right: DynArray) raises -> DynArray:
-        if left.dtype().is_string() and right.dtype().is_string():
-            return Self.apply(left.as_string(), right.as_string()).to_dyn()
-        elif left.dtype().is_large_string() and right.dtype().is_large_string():
+        Self.expect_same_dtype(left.dtype(), right.dtype())
+        var dt = left.dtype()
+        if not dt.is_string_like():
+            raise Self.error(t"expected string arrays, got {dt}")
+
+        @parameter
+        def leaf[T: StringLikeType](d: T) raises -> DynArray:
             return Self.apply(
-                left.as_large_string(), right.as_large_string()
+                left.as_binary_like[T](), right.as_binary_like[T]()
             ).to_dyn()
-        else:
-            raise Self.error(
-                t"expected string arrays, got {left.dtype()} and"
-                t" {right.dtype()}"
-            )
+
+        return dt.dispatch_stringlike[leaf]()
 
 
 struct StartsWithKernel(StringPredicateKernel):
@@ -677,12 +690,15 @@ def _dispatch_pattern[
 ](name: StringSlice, array: DynArray, pattern: StringSlice) raises -> DynArray:
     """Type-erased entry point for the scalar-pattern overloads."""
     var compiled = LikePattern[ignore_case](pattern)
-    if array.dtype().is_string():
-        return _match_pattern(array.as_string(), compiled).to_dyn()
-    elif array.dtype().is_large_string():
-        return _match_pattern(array.as_large_string(), compiled).to_dyn()
-    else:
-        raise Error(t"{name}: expected a string array, got {array.dtype()}")
+    var dt = array.dtype()
+    if not dt.is_string_like():
+        raise Error(t"{name}: expected a string array, got {dt}")
+
+    @parameter
+    def leaf[T: StringLikeType](d: T) raises -> DynArray:
+        return _match_pattern(array.as_binary_like[T](), compiled).to_dyn()
+
+    return dt.dispatch_stringlike[leaf]()
 
 
 struct LikeKernel(StringPredicateKernel):

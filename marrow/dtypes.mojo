@@ -1035,12 +1035,19 @@ struct DynType(
     def is_large_binary(self) -> Bool:
         return self._v.isa[LargeBinaryType]()
 
+    def is_string_like(self) -> Bool:
+        """A UTF-8 string of either offset width.
+
+        The narrower half of `is_binary_like`: the kernels that require *text*
+        rather than any variable-width payload guard with this, so their
+        diagnostic can name the family before `dispatch_stringlike` reduces the
+        dtype to a comptime type.
+        """
+        return self.is_string() or self.is_large_string()
+
     def is_binary_like(self) -> Bool:
         return (
-            self.is_binary()
-            or self.is_large_binary()
-            or self.is_string()
-            or self.is_large_string()
+            self.is_binary() or self.is_large_binary() or self.is_string_like()
         )
 
     def is_list(self) -> Bool:
