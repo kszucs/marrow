@@ -54,10 +54,18 @@ from .utils import variant_dispatch, variant_dispatch_raises
 
 
 trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
-    """A concrete Arrow type. Each type names its companion `ScalarType` and
-    `ArrayType` (the inverse of `Array.ScalarType`), so generic code can map a
-    dtype to its typed scalar/array. Provided at the family traits
-    (`NumericType`/`StringLikeType`/…) and on the standalone concrete types."""
+    """A concrete Arrow type.
+
+    Deliberately minimal: five inherited traits and one defaulted method, and
+    **no associated types**. It used to name companion `ScalarType`/`ArrayType`
+    members, which forced this module to import `arrays` and `scalars` — both of
+    which import it back. That cycle broke the build three times in one day and
+    the members were removed in `63b93aa`; nothing consumed them. A dtype's
+    companion types are reached from the *array* side instead.
+
+    Because the trait requires so little, `DynType` can satisfy it — the erased
+    dtype is a **peer** of the concrete ones, not a supertype, and generic code
+    bound on `DataType` accepts either."""
 
     def to_dyn(deinit self) -> DynType:
         return DynType(self^)
@@ -761,8 +769,10 @@ struct DynType(
     Movable,
     Writable,
 ):
-    # Type-erased: no single companion. Placeholders satisfy the `DataType`
-    # requirement (a typed scalar/array of an `DynType` is never built).
+    # `to_dyn` is overridden below rather than inherited, and that override is
+    # load-bearing: the trait's default body is `DynType(self^)`, which for
+    # `Self = DynType` would be `DynType(DynType)` — and `DynType` is
+    # deliberately not a member of its own variant.
 
     comptime VariantType = Variant[
         NullType,
