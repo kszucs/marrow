@@ -1801,6 +1801,39 @@ size risk in the plan).
   runtime ladder still available for the dynamic lane. Gate it on `query_scan`.
 
   Not the lever: codec gating. `parquet::codecs` is 32 symbols against `reader`'s 107.
+
+  **Reader half ✅ DONE 2026-07-29.** `LeafSet` is a comptime bitmask, one bit per
+  `_dispatch` arm; `ColumnReader`, `ParquetFile` and `read_table` take it, defaulting to
+  `LeafSet.all()` so the dynamic lane is byte-for-byte unchanged. Each arm sits behind
+  `comptime if Self.leaves.has(...)`. Apples-to-apples on the same program:
+
+  | | `__text` | `PrimitiveLeafBuilder` |
+  |---|---:|---:|
+  | `read_table[LeafSet.all()]` | 1,432,828 | 24 |
+  | `read_table[LEAF_INT64 \| LEAF_STRING]` | **862,252** | **2** |
+
+  **−570,576 bytes, 40% of the program.** Gated by `query_scan_typed`.
+
+  Two hazards found while doing it, both now guarded in the code: the ladder had **no
+  `date64` arm** (Parquet never produces one — do not "helpfully" add it), and the INT96
+  test must stay *ungated*, because an INT96 column's Arrow dtype is `timestamp(ns)` and
+  gating it lets the column fall through to the temporal arm and be decoded as INT64.
+
+  **The relational lane carries it too.** `AnyRelation.filter` used to push a predicate by
+  downcasting to a concrete `ParquetScan` and rebuilding it, which silently rebuilt a
+  `ParquetScan[narrow]` as the default full-ladder one — losing the narrowing. Returning
+  `Optional[AnyRelation]` from a virtual **does not compile** (it puts `AnyRelation` inside
+  its own trampoline field type and Mojo rejects the struct as recursive), so
+  `Relation.with_predicate` returns the rebuilt node as an erased `ArcPointer[NoneType]`:
+  the rebuilt node has the *same concrete type*, so the caller keeps its trampolines and
+  swaps only the pointer. Measured like-for-like with pushdown active, `query_scan`
+  2,287,544 -> `query_scan_typed` **1,757,108** `__text` (**-530,436**); the floor gate also
+  fell 7,240, because the virtual is cheaper than the downcast it replaced.
+
+  `leaf_of[T]()` is the caller-facing form — one overload per dtype family, so a caller says
+  which *types* a read will see rather than which bits. Tight bounds rather than one
+  `[T: DataType]` with `downcast`, because `downcast[T, Trait]()` requires the trait to be
+  `Defaultable` and `TemporalType`/`DecimalType` are not.
 - **Q4.3 — Parquet leaf visitor.** Collapse the **8 hand-written Arrow-type ladders** in
   `reader`/`writer`/`statistics`/`schema` into one `visit_leaf[V: LeafVisitor]`. They already drift
   (INT96 in one; `binary` missing from another).

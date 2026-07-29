@@ -35,6 +35,7 @@ from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet.source import MappedFile
 from ..parquet import (
+    LeafSet,
     ParquetFile,
     RowSelection,
     ColumnStatistics,
@@ -186,7 +187,7 @@ struct InMemoryTableProcessor(Processor):
         return result^
 
 
-struct ParquetScanProcessor(Processor):
+struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
     """Streams a Parquet file a **bounded window of row groups** at a time.
 
     The file is opened once, on the first pull, and stays open for the life of
@@ -217,7 +218,7 @@ struct ParquetScanProcessor(Processor):
     var _schema: Schema
     var morsel_size: Int
     var _predicate: Optional[AnyValue]
-    var _file: Optional[ParquetFile[MappedFile]]
+    var _file: Optional[ParquetFile[MappedFile, Self.leaves]]
     # The read plan, computed once when the file is opened: the row groups to
     # decode in order, and (only when page-level skipping applies) one row
     # selection per entry.
@@ -337,7 +338,7 @@ struct ParquetScanProcessor(Processor):
         return sel^
 
     def _read_plan(
-        self, pf: ParquetFile[MappedFile]
+        self, pf: ParquetFile[MappedFile, Self.leaves]
     ) raises -> Tuple[List[Int], Optional[List[RowSelection]]]:
         """The pushdown plan: which row groups to read, in order, and — when the
         page index lets the reader skip pages — a per-group row selection.
@@ -381,7 +382,7 @@ struct ParquetScanProcessor(Processor):
         and four footer parses for a single logical read. Now the file stays
         open for the life of the processor, which is also what lets row groups
         be decoded one at a time."""
-        var pf = ParquetFile(self.path)
+        var pf = ParquetFile[MappedFile, Self.leaves](self.path)
         var plan = self._read_plan(pf)
         self._groups = plan[0].copy()
         self._selections = plan[1].copy()

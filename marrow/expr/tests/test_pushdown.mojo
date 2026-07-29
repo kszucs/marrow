@@ -16,7 +16,7 @@ from std.os import remove
 from ...dtypes import Int64Type, int64, string, field
 from ...schema import Schema, schema
 from ...scalars import AnyScalar
-from ...parquet import read_table, ParquetFile
+from ...parquet import read_table, ParquetFile, LeafSet
 from ...expr.relations import (
     ParquetScan,
     parquet_scan,
@@ -106,7 +106,7 @@ def test_filter_pushes_predicate_into_scan() raises:
     )
     var f = plan.downcast[Filter]()
     assert_equal(f[].input.kind(), RELATION_PARQUET_SCAN)
-    var scan = f[].input.downcast[ParquetScan]()
+    var scan = f[].input.downcast[ParquetScan[LeafSet.all()]]()
     assert_true(Bool(scan[].predicate))  # predicate was pushed down
 
 

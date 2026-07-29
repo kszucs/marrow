@@ -31,6 +31,7 @@ NAMES = [
     "query_sort",
     "query_join",
     "query_scan",
+    "query_scan_typed",
     "query_streaming_agg_fused",
     "query_streaming_agg",
     "query_dynvalue",

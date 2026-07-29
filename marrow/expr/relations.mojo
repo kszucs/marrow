@@ -56,6 +56,7 @@ from .values import AnyValue, AggExpr
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
 from .aggregates import AggFunc
+from ..parquet import LeafSet
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -100,6 +101,27 @@ trait Relation(ImplicitlyDeletable, Movable):
     recursively), so a plan is a reusable template you can inspect, copy cheaply
     (O(1) — nodes are immutable and shared), and rewrite."""
 
+    def with_predicate(
+        self, var predicate: AnyValue
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """This node rebuilt to carry `predicate` as **pruning metadata**, as an
+        erased pointer — or `None` when it cannot use one, which is every node
+        but a scan.
+
+        Returns the erased data rather than an `AnyRelation` on purpose. The
+        rebuilt node has the *same concrete type* as this one, so the caller can
+        keep its own trampolines and swap only the pointer; returning
+        `Optional[AnyRelation]` instead puts `AnyRelation` inside its own
+        trampoline field type and Mojo rejects the struct as recursive.
+
+        This replaces a `downcast` to a concrete `ParquetScan`, which stopped
+        being correct once `ParquetScan` gained a comptime `LeafSet`: the
+        downcast had to name one parameterisation, so a scan compiled for a
+        narrow set was silently rebuilt as the default full-ladder one. A
+        downcast cannot see a comptime parameter; a virtual can carry it.
+        """
+        return None
+
     def schema(self) -> Schema:
         ...
 
@@ -137,10 +159,21 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
     var _virt_kind: def(ArcPointer[NoneType]) thin -> Int
+    var _virt_with_predicate: def(
+        ArcPointer[NoneType], var AnyValue
+    ) thin raises -> Optional[ArcPointer[NoneType]]
 
     @staticmethod
     def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> Int:
         return rebind[ArcPointer[T]](ptr)[].kind()
+
+    @staticmethod
+    def _tramp_with_predicate[
+        T: Relation
+    ](ptr: ArcPointer[NoneType], var predicate: AnyValue) raises -> Optional[
+        ArcPointer[NoneType]
+    ]:
+        return rebind[ArcPointer[T]](ptr)[].with_predicate(predicate^)
 
     @staticmethod
     def _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
@@ -174,6 +207,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_write_to_string = Self._tramp_write_to_string[T]
         self._virt_drop = Self._tramp_drop[T]
         self._virt_kind = Self._tramp_kind[T]
+        self._virt_with_predicate = Self._tramp_with_predicate[T]
 
     def __init__(out self, *, copy: Self):
         # O(1) share — nodes are immutable, so aliasing is safe.
@@ -183,6 +217,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_write_to_string = copy._virt_write_to_string
         self._virt_drop = copy._virt_drop
         self._virt_kind = copy._virt_kind
+        self._virt_with_predicate = copy._virt_with_predicate
 
     def __del__(deinit self):
         self._virt_drop(self._data^)
@@ -253,17 +288,13 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         scan as pruning metadata (row-group / page skipping); the `Filter` is
         kept so the rows returned are exactly those that satisfy the predicate.
         """
-        if self.kind() == RELATION_PARQUET_SCAN:
-            ref scan = self.downcast[ParquetScan]()[]
-            var pushed = ParquetScan(
-                path=scan.path.copy(),
-                schema=scan.schema(),
-                morsel_size=scan.morsel_size,
-                predicate=Optional(predicate.copy()),
-            )
-            return AnyRelation(
-                Filter(input=AnyRelation(pushed^), predicate=predicate^)
-            )
+        var data = self._virt_with_predicate(self._data, predicate.copy())
+        if data:
+            # Same concrete node type, so the trampolines still apply — copy
+            # them and swap in the rebuilt node's data.
+            var pushed = AnyRelation(copy=self)
+            pushed._data = data.take()
+            return AnyRelation(Filter(input=pushed^, predicate=predicate^))
         return AnyRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
@@ -588,7 +619,7 @@ def in_memory_table(
     return InMemoryTable(batch=batch, morsel_size=morsel_size)
 
 
-struct ParquetScan(Relation):
+struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     """Leaf describing a Parquet file scan with a known schema.
 
     The schema doubles as the **projection**: the scan reads only its own
@@ -622,11 +653,25 @@ struct ParquetScan(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
+    def with_predicate(
+        self, var predicate: AnyValue
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """Accept the predicate as pruning metadata, **keeping `leaves`** —
+        which is the point: `Self.leaves` is in scope here and a downcast at the
+        call site could not have named it."""
+        var pushed = ParquetScan[Self.leaves](
+            path=self.path.copy(),
+            schema=self.schema(),
+            morsel_size=self.morsel_size,
+            predicate=Optional(predicate^),
+        )
+        return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
+
     def kind(self) -> Int:
         return RELATION_PARQUET_SCAN
 
     def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
-        return ParquetScanProcessor(
+        return ParquetScanProcessor[Self.leaves](
             path=self.path.copy(),
             schema=Schema(copy=self._schema),
             morsel_size=self.morsel_size,
@@ -637,7 +682,9 @@ struct ParquetScan(Relation):
         writer.write(t"ParquetScan({self.path})")
 
 
-def parquet_scan(
+def parquet_scan[
+    leaves: LeafSet = LeafSet.all()
+](
     path: String, schema: Schema, morsel_size: Int = DEFAULT_MORSEL_SIZE
 ) -> AnyRelation:
     """Create a Parquet file scan with a known schema.
@@ -645,7 +692,9 @@ def parquet_scan(
     The schema *is* the projection: only its columns are read out of the file.
     ``morsel_size`` bounds how many rows each ``pull()`` yields (morsels never
     straddle a row-group boundary), and never changes the result."""
-    return ParquetScan(path=path, schema=schema, morsel_size=morsel_size)
+    return ParquetScan[leaves](
+        path=path, schema=schema, morsel_size=morsel_size
+    )
 
 
 # ---------------------------------------------------------------------------
