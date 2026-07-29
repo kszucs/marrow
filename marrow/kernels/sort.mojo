@@ -759,8 +759,12 @@ struct SortIndices:
 
 
 # ---------------------------------------------------------------------------
-# Public API — thin free delegators to the SortIndices kernel
-# (``pc.sort_indices`` / ``Table.sort_by``).
+# Public API — the two `pc.*`-style entry points (``pc.sort_indices`` /
+# ``Table.sort_by``). Three typed `sort_indices` overloads used to sit beside
+# them forwarding to `SortIndices.apply`, which is itself typed — so they saved
+# no copy and only gave the kernel a second place to be taught a new array type.
+# They had already drifted: the `BoolArray` one silently dropped `stable` and
+# `limit` from its signature. Call `SortIndices.apply` for a typed array.
 # ---------------------------------------------------------------------------
 
 
@@ -776,39 +780,6 @@ def sort_indices(
     return SortIndices.dispatch(
         array, ascending, nulls_first, stable, limit, ctx
     )
-
-
-def sort_indices[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    stable: Bool = False,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    return SortIndices.apply(array, ascending, nulls_first, stable, ctx)
-
-
-def sort_indices(
-    array: BoolArray,
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    return SortIndices.apply(array, ascending, nulls_first, ctx)
-
-
-def sort_indices[
-    T: BinaryLikeType
-](
-    array: BinaryLikeArray[T],
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    stable: Bool = False,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    return SortIndices.apply(array, ascending, nulls_first, stable, ctx)
 
 
 def sort(

@@ -592,9 +592,20 @@ struct RapidHash:
 # ---------------------------------------------------------------------------
 # Public API — thin free delegators to the RapidHash kernel.
 #
-# These exist because `SwissHashTable[hasher]` / `HashJoin[hasher]` bind the
-# hasher as a comptime *function value*, which needs a single unambiguous
-# symbol rather than an overload set.
+# Two entry points, each with a reason to exist:
+#
+# - `rapidhash(AnyArray)` is the `pc.*`-style erased one.
+# - `rapidhash(StructArray)` is what `SwissHashTable[hasher]` / `HashJoin[hasher]`
+#   bind as a comptime *function value*; their `hasher` parameter is typed
+#   `def(StructArray, ExecutionContext) raises -> UInt64Array`, so this needs to
+#   be a free symbol with exactly that signature. A static method will not do.
+#
+# Three more used to sit here (`BoolArray`, `PrimitiveArray[T]`,
+# `BinaryLikeArray[T]`) forwarding to `RapidHash.apply`, which has seven typed
+# overloads — `ListLikeArray` and `FixedSizeListArray` had been taught to the
+# kernel and forgotten here, so the two lists had already drifted. They saved no
+# copy (`apply` is typed too), so callers now say `RapidHash.apply` and teaching
+# a new array type is one edit again.
 # ---------------------------------------------------------------------------
 
 
@@ -607,32 +618,9 @@ def rapidhash(
 
 
 def rapidhash(
-    keys: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> UInt64Array:
-    return RapidHash.apply(keys, ctx)
-
-
-def rapidhash[
-    T: PrimitiveType
-](
-    keys: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> UInt64Array:
-    return RapidHash.apply(keys, ctx)
-
-
-def rapidhash[
-    T: BinaryLikeType
-](
-    keys: BinaryLikeArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> UInt64Array:
-    return RapidHash.apply(keys, ctx)
-
-
-def rapidhash(
     keys: StructArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> UInt64Array:
+    """Row-wise hash of a struct's fields — the hasher `SwissHashTable` and
+    `HashJoin` bind. See the note above before removing this."""
     return RapidHash.apply(keys, ctx)

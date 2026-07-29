@@ -15,7 +15,7 @@ from ...builders import (
     Int64Builder,
 )
 from ...dtypes import PrimitiveType, int32, int64, Int32Type, Int64Type
-from ...kernels.hashing import rapidhash
+from ...kernels.hashing import RapidHash, rapidhash
 from ...testing import Benchmark
 
 
@@ -51,7 +51,7 @@ def bench_rapidhash_int64_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash[Int64Type](keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -63,7 +63,7 @@ def bench_rapidhash_int64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash[Int64Type](keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -75,7 +75,7 @@ def bench_rapidhash_int64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash[Int64Type](keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -92,7 +92,7 @@ def bench_rapidhash_int32_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash[Int32Type](keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -104,7 +104,7 @@ def bench_rapidhash_int32_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash[Int32Type](keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -116,7 +116,7 @@ def bench_rapidhash_int32_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash[Int32Type](keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -133,7 +133,7 @@ def bench_rapidhash_bool_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash(keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -145,7 +145,7 @@ def bench_rapidhash_bool_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash(keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
@@ -157,7 +157,7 @@ def bench_rapidhash_bool_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(rapidhash(keys)))
+        keep(len(RapidHash.apply(keys)))
 
     b.iter[call]()
     keep(keys)
