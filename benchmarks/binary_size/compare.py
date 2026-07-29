@@ -26,6 +26,11 @@ REPO_ROOT = HERE.parent.parent
 
 NAMES = [
     "query_streaming",
+    "query_arith",
+    "query_exprs",
+    "query_sort",
+    "query_join",
+    "query_scan",
     "query_streaming_agg_fused",
     "query_streaming_agg",
     "query_dynvalue",
@@ -187,12 +192,8 @@ def main() -> None:
         ratio = r["text"] / base["text"]
         print(f"  {r['name']:<16} {ratio:>6.1f}x")
     print()
-    print(
-        "Compare runs on __text. The stripped column is page-granular (16 KB on"
-    )
-    print(
-        "Apple Silicon) and moves in steps -- do not quote deltas from it."
-    )
+    print("Compare runs on __text. The stripped column is page-granular (16 KB on")
+    print("Apple Silicon) and moves in steps -- do not quote deltas from it.")
 
     print()
     print("=== per-module symbol counts (unstripped) ===")

@@ -66,21 +66,37 @@ follows:
 
 ## Current baselines (osx-arm64, 2026-07-29) — `__text`, code only
 
-| binary | `__text` | ratio |
-|---|---:|---:|
-| `query_streaming` | 1,251,672 | 1.0x |
-| `query_streaming_agg_fused` | 3,776,820 | 3.0x |
-| `query_streaming_agg` | 4,150,836 | 3.3x |
-| `query_dynvalue` | 5,266,164 | 4.2x |
-| `query_runtime` | 5,266,548 | 4.2x |
+`query_streaming` is the floor: one `InMemoryTable -> Filter -> Project` with a
+column reference and a comparison. Every other gate is that shape plus one thing,
+so the delta column is what the thing costs in an AOT binary.
 
-Re-measure one gate without paying for the sweep (five `-O3` builds, ~10 min):
+| gate | `__text` | Δ vs floor | what it adds |
+|---|---:|---:|---|
+| `query_streaming` | 1,251,672 | — | the floor: `col`, `>` |
+| `query_arith` | 1,259,316 | +7,644 | fused `+ - *` |
+| `query_scan` | 2,285,232 | +1,033,560 | `ParquetScan` — the whole reader |
+| `query_sort` | 3,684,276 | +2,432,604 | `Sort` + top-K |
+| `query_streaming_agg_fused` | 3,776,820 | +2,525,148 | `Aggregate`, comptime aggs |
+| `query_join` | 3,819,060 | +2,567,388 | `Join` |
+| `query_exprs` | 3,892,916 | +2,641,244 | string, conditional, membership, cast, temporal |
+| `query_streaming_agg` | 4,150,836 | +2,899,164 | `Aggregate`, runtime-named aggs |
+| `query_dynvalue` | 5,266,164 | +4,014,492 | the `DynValue` interpreter |
+| `query_runtime` | 5,266,548 | +4,014,876 | interpreter + runtime plan |
+
+Re-measure one gate without paying for the sweep (ten `-O3` builds, ~20 min):
 
 ```
-pixi run binary_size query_dynvalue
+pixi run binary_size query_scan
 ```
 
 `query_streaming` is always built, since it is the ratio baseline.
+
+### Why the metric had to be fixed first
+
+`query_arith` is the demonstration. Against the floor it is **+7,644 bytes of
+code** — and **16 bytes *smaller* by stripped file size** (1,324,168 vs
+1,324,184). The old metric would have reported fused arithmetic as free, or
+faintly negative. It is neither.
 
 ## Result (osx-arm64, Mojo 1.0.0b3.dev2026070506) — historical, page-quantized
 
