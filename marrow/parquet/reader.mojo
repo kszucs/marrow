@@ -1125,9 +1125,8 @@ comptime LEAF_FIXED_SIZE_BINARY = LeafSet(1 << 22)
 comptime LEAF_INT96 = LeafSet(1 << 23)
 
 
-def leaf_of[T: NumericType]() -> LeafSet:
-    """The bit for a numeric leaf type — say which **types** a read will see,
-    not which bits.
+def leaf_of[T: DataType]() -> LeafSet:
+    """The bit for `T` — say which **types** a read will see, not which bits.
 
     `LeafSet.all()` is the runtime-dispatching default; this is how a caller
     that knows its schema at compile time narrows it without hand-picking
@@ -1140,70 +1139,76 @@ def leaf_of[T: NumericType]() -> LeafSet:
     kernels already make: resolve the type at elaboration and let the branches
     that cannot be reached fold away.
 
-    One overload per family rather than one `[T: DataType]` with `downcast`,
-    because `downcast[T, Trait]()` requires the trait to be `Defaultable` and
-    `TemporalType` / `DecimalType` are not. Under a tight bound the member is
-    directly reachable.
+    One generic, not one overload per family. `downcast[T, Trait]` is a comptime
+    **type alias**, so `downcast[T, Trait].native` reads the member with no
+    bound on `Trait` at all; only `downcast[T, Trait]()`, which *constructs* a
+    value, needs `Defaultable`. `TemporalType`/`DecimalType` are not
+    `Defaultable`, which is why an earlier version of this split into four
+    overloads — that reason was wrong.
+
+    Order matters: temporal and decimal are `PrimitiveType` but not
+    `NumericType`, and `StringLikeType` refines `BinaryLikeType`, so the
+    narrower family has to be tested first in each pair.
     """
-    comptime if T.native == DType.bool:
-        return LEAF_BOOL
-    elif T.native == DType.int8:
-        return LEAF_INT8
-    elif T.native == DType.int16:
-        return LEAF_INT16
-    elif T.native == DType.int32:
-        return LEAF_INT32
-    elif T.native == DType.int64:
-        return LEAF_INT64
-    elif T.native == DType.uint8:
-        return LEAF_UINT8
-    elif T.native == DType.uint16:
-        return LEAF_UINT16
-    elif T.native == DType.uint32:
-        return LEAF_UINT32
-    elif T.native == DType.uint64:
-        return LEAF_UINT64
-    elif T.native == DType.float16:
-        return LEAF_FLOAT16
-    elif T.native == DType.float32:
-        return LEAF_FLOAT32
-    else:
-        return LEAF_FLOAT64
-
-
-def leaf_of[T: TemporalType]() -> LeafSet:
-    """The bit for a date / time / timestamp / duration leaf."""
-    comptime if T.native == DType.int32:
-        return LEAF_TEMPORAL32
-    else:
-        return LEAF_TEMPORAL64
-
-
-def leaf_of[T: DecimalType]() -> LeafSet:
-    """The bit for a decimal leaf, by its storage width."""
-    comptime if T.native == DType.int32:
-        return LEAF_DECIMAL32
-    elif T.native == DType.int64:
-        return LEAF_DECIMAL64
-    elif T.native == DType.int128:
-        return LEAF_DECIMAL128
-    else:
-        return LEAF_DECIMAL256
-
-
-def leaf_of[T: BinaryLikeType]() -> LeafSet:
-    """The bit for a string / binary leaf, by offset width and whether the
-    values are UTF-8."""
-    comptime if T.offset == DType.int32:
-        comptime if conforms_to(T, StringLikeType):
+    comptime if conforms_to(T, TemporalType):
+        comptime if downcast[T, TemporalType].native == DType.int32:
+            return LEAF_TEMPORAL32
+        else:
+            return LEAF_TEMPORAL64
+    elif conforms_to(T, DecimalType):
+        comptime native = downcast[T, DecimalType].native
+        comptime if native == DType.int32:
+            return LEAF_DECIMAL32
+        elif native == DType.int64:
+            return LEAF_DECIMAL64
+        elif native == DType.int128:
+            return LEAF_DECIMAL128
+        else:
+            return LEAF_DECIMAL256
+    elif conforms_to(T, StringLikeType):
+        comptime if downcast[T, StringLikeType].offset == DType.int32:
             return LEAF_STRING
         else:
-            return LEAF_BINARY
-    else:
-        comptime if conforms_to(T, StringLikeType):
             return LEAF_LARGE_STRING
+    elif conforms_to(T, BinaryLikeType):
+        comptime if downcast[T, BinaryLikeType].offset == DType.int32:
+            return LEAF_BINARY
         else:
             return LEAF_LARGE_BINARY
+    elif conforms_to(T, NumericType):
+        comptime native = downcast[T, NumericType].native
+        comptime if native == DType.bool:
+            return LEAF_BOOL
+        elif native == DType.int8:
+            return LEAF_INT8
+        elif native == DType.int16:
+            return LEAF_INT16
+        elif native == DType.int32:
+            return LEAF_INT32
+        elif native == DType.int64:
+            return LEAF_INT64
+        elif native == DType.uint8:
+            return LEAF_UINT8
+        elif native == DType.uint16:
+            return LEAF_UINT16
+        elif native == DType.uint32:
+            return LEAF_UINT32
+        elif native == DType.uint64:
+            return LEAF_UINT64
+        elif native == DType.float16:
+            return LEAF_FLOAT16
+        elif native == DType.float32:
+            return LEAF_FLOAT32
+        else:
+            return LEAF_FLOAT64
+    elif conforms_to(T, PrimitiveType):
+        # bool and fixed-size binary: primitives outside the numeric family
+        comptime if downcast[T, PrimitiveType].native == DType.bool:
+            return LEAF_BOOL
+        else:
+            return LEAF_FIXED_SIZE_BINARY
+    else:
+        return LEAF_FIXED_SIZE_BINARY
 
 
 # ---------------------------------------------------------------------------
