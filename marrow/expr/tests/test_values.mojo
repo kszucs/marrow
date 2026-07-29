@@ -26,6 +26,8 @@ from ...dtypes import (
 )
 from ...tabular import record_batch, RecordBatch
 from ...scalars import AnyScalar
+from ...kernels.temporal import unit_day
+
 from ...expr.values import (
     col,
     lit,
@@ -988,11 +990,11 @@ def test_temporal_null_propagates() raises:
 
 def test_date_trunc_then_extract() raises:
     # date_trunc(ts, "day") zeroes the time-of-day; hour of the truncated ts = 0
-    var expr = Hour(DateTrunc(col("ts", timestamp(second)), "day"))
+    var expr = Hour(DateTrunc(col("ts", timestamp(second)), unit_day))
     var h = (expr).execute(_ts_batch())
     assert_true(into_array(h, 2) == array([0, 0], int32).to_any())
     # the calendar day is preserved by truncation
-    var d = (Day(DateTrunc(col("ts", timestamp(second)), "day"))).execute(
+    var d = (Day(DateTrunc(col("ts", timestamp(second)), unit_day))).execute(
         _ts_batch()
     )
     assert_true(into_array(d, 2) == array([15, 29], int32).to_any())

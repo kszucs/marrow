@@ -50,7 +50,8 @@ from ...kernels.temporal import (
     DayOfWeekKernel,
     QuarterKernel,
     DayOfYearKernel,
-    date_trunc,
+    DateTruncKernel,
+    unit_hour,
 )
 from ...tabular import RecordBatch, record_batch
 from ...expr import (
@@ -769,7 +770,8 @@ def test_date_trunc_expr() raises:
     # 12:30:45 floored to the hour -> 12:00:00 == 1_560_600_000
     assert_true(tmp.as_timestamp() == _ts([1_560_600_000]))
     assert_true(
-        tmp.as_timestamp() == date_trunc(a.copy(), "hour").as_timestamp()
+        tmp.as_timestamp()
+        == DateTruncKernel.apply(a.copy(), unit_hour).as_timestamp()
     )
 
 

@@ -39,6 +39,8 @@ from ...dtypes import (
 )
 from ...tabular import RecordBatch, record_batch
 
+from ...kernels.temporal import unit_day
+
 # Fused comptime algebra (values.mojo)
 from ...expr.values import (
     AnyValue,
@@ -517,7 +519,7 @@ def test_parity_year() raises:
 def test_parity_date_trunc() raises:
     # hour(date_trunc(ts, "day")) == 0 for every row
     assert_fused(
-        Hour(DateTrunc(fcol("ts", timestamp(second)), "day")),
+        Hour(DateTrunc(fcol("ts", timestamp(second)), unit_day)),
         array([0, 0], int32).to_any(),
         _ts_batch(),
     )

@@ -151,7 +151,8 @@ from ..kernels.temporal import (
     DayOfWeekKernel,
     QuarterKernel,
     DayOfYearKernel,
-    date_trunc,
+    CalendarUnit,
+    DateTruncKernel,
 )
 from ..kernels.boolean import (
     BoolBinaryKernel,
@@ -1964,8 +1965,10 @@ trait TemporalValue(Value):
     def day_of_year(self) -> TemporalExtract[DayOfYearKernel, Self]:
         return TemporalExtract[DayOfYearKernel](self.copy())
 
-    def date_trunc(self, var unit: String) -> DateTrunc[Self]:
-        return DateTrunc(self.copy(), unit^)
+    def date_trunc(self, unit: String) raises -> DateTrunc[Self]:
+        """Floor to *unit*. Parsed here, so the fused node carries a validated
+        `CalendarUnit` and an unsupported spelling fails at construction."""
+        return DateTrunc(self.copy(), CalendarUnit.parse(unit))
 
     # --- aggregates (marrow.expr.aggregates) --------------------------------
 
@@ -2052,7 +2055,7 @@ struct DateTrunc[A: TemporalValue](TemporalValue):
     comptime OutType = Self.A.OutType
     comptime OutShape = 1
     var a: Self.A
-    var _unit: String
+    var _unit: CalendarUnit
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2064,7 +2067,7 @@ struct DateTrunc[A: TemporalValue](TemporalValue):
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        return date_trunc(arr, self._unit)
+        return DateTruncKernel.apply(arr, self._unit)
 
 
 comptime Year = TemporalExtract[YearKernel, _]

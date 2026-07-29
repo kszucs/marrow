@@ -8,9 +8,16 @@ Two shapes:
   a temporal array, producing an `Int32Array` (validity propagated unchanged).
   Concrete kernels only define `component`; the typed `apply` and the
   type-erased `dispatch` are defaulted on the `TemporalExtractKernel` trait.
-- **Truncation** (`date_trunc`) — floor a timestamp / date / time array down to a
-  unit boundary (`second` / `minute` / `hour` / `day`), returning the same
-  temporal type.
+- **Truncation** (`DateTruncKernel`) — floor a timestamp / date / time array down
+  to a `CalendarUnit` boundary (`second` / `minute` / `hour` / `day`), returning
+  the same temporal type. The unit is a type, not a `String`, so an unsupported
+  one cannot reach the kernel; callers that start from text parse once at their
+  own boundary with `CalendarUnit.parse`.
+
+Every entry point is a kernel: `YearKernel.dispatch(a)`, not `year(a)`. There
+used to be ten free functions here forwarding to exactly one kernel each, with
+no caller outside the tests that existed to cover them — the expression layer
+already imported the kernels directly.
 
 Representation (see `marrow.dtypes`): temporal values are integer counts since an
 epoch at a `TimeUnit` resolution — `date32` = days since 1970-01-01, `date64` =
@@ -307,65 +314,84 @@ struct SecondKernel(TemporalExtractKernel):
 
 
 # ---------------------------------------------------------------------------
-# Free-function entry points (PyArrow-style names)
-# ---------------------------------------------------------------------------
-
-
-def year(array: AnyArray) raises -> AnyArray:
-    return YearKernel.dispatch(array)
-
-
-def month(array: AnyArray) raises -> AnyArray:
-    return MonthKernel.dispatch(array)
-
-
-def day(array: AnyArray) raises -> AnyArray:
-    return DayKernel.dispatch(array)
-
-
-def hour(array: AnyArray) raises -> AnyArray:
-    return HourKernel.dispatch(array)
-
-
-def minute(array: AnyArray) raises -> AnyArray:
-    return MinuteKernel.dispatch(array)
-
-
-def second(array: AnyArray) raises -> AnyArray:
-    return SecondKernel.dispatch(array)
-
-
-def day_of_week(array: AnyArray) raises -> AnyArray:
-    return DayOfWeekKernel.dispatch(array)
-
-
-def quarter(array: AnyArray) raises -> AnyArray:
-    return QuarterKernel.dispatch(array)
-
-
-def day_of_year(array: AnyArray) raises -> AnyArray:
-    return DayOfYearKernel.dispatch(array)
-
-
-# ---------------------------------------------------------------------------
 # date_trunc — floor a temporal array to a unit boundary
 # ---------------------------------------------------------------------------
 
 
-def _unit_seconds(unit: String) raises -> Int:
-    """Seconds per truncation unit."""
-    if unit == "second":
-        return 1
-    elif unit == "minute":
-        return 60
-    elif unit == "hour":
-        return 3600
-    elif unit == "day":
-        return 86400
-    raise Error(
-        t"date_trunc: unsupported unit '{unit}' (expected"
-        t" second/minute/hour/day)"
-    )
+struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
+    """The boundary `date_trunc` floors to — `second`, `minute`, `hour`, `day`.
+
+    A *calendar* unit, not a storage resolution: distinct from `dtypes.TimeUnit`
+    (`s`/`ms`/`us`/`ns`), which says how finely a timestamp is stored. Named
+    after Arrow C++'s `CalendarUnit`, which plays the same role in
+    `RoundTemporalOptions`.
+
+    This is a type rather than a `String` so an unsupported unit cannot reach
+    the kernel at all. String-driven callers (Python, SQL) convert once at their
+    boundary with `parse`, which is the only place the spelling is known — the
+    expression frontends do it at *construction*, so a bad unit fails when the
+    plan is built rather than on the row that first evaluates it.
+    """
+
+    var value: Int
+
+    def __init__(out self, value: Int):
+        self.value = value
+
+    @staticmethod
+    def parse(unit: String) raises -> Self:
+        """The unit named by `unit`; raises if it names none."""
+        if unit == "second":
+            return Self(0)
+        elif unit == "minute":
+            return Self(1)
+        elif unit == "hour":
+            return Self(2)
+        elif unit == "day":
+            return Self(3)
+        raise Error(
+            t"date_trunc: unsupported unit '{unit}' (expected"
+            t" second/minute/hour/day)"
+        )
+
+    def seconds(self) -> Int:
+        """How many seconds one of these spans."""
+        if self.value == 0:
+            return 1
+        elif self.value == 1:
+            return 60
+        elif self.value == 2:
+            return 3600
+        else:
+            return 86400
+
+    def to_string(self) -> StaticString:
+        """The unit's spelling. `StaticString`, not `String`: these are four
+        literals, and returning an owned `String` would drag its construction
+        into every binary that only ever renders a plan."""
+        if self.value == 0:
+            return "second"
+        elif self.value == 1:
+            return "minute"
+        elif self.value == 2:
+            return "hour"
+        else:
+            return "day"
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.value == other.value
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.value != other.value
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.to_string())
+
+
+comptime unit_second = CalendarUnit(0)
+comptime unit_minute = CalendarUnit(1)
+comptime unit_hour = CalendarUnit(2)
+comptime unit_day = CalendarUnit(3)
 
 
 def _trunc[
@@ -401,25 +427,29 @@ def _trunc[
     )
 
 
-def date_trunc(array: AnyArray, unit: String) raises -> AnyArray:
-    """Truncate a temporal array down to ``unit`` (``second`` / ``minute`` /
-    ``hour`` / ``day``), returning the same temporal type. Timezones are treated
-    as UTC. Matches ``pc.floor_temporal`` for whole-second units."""
-    var dt = array.dtype()
-    var secs = _unit_seconds(unit)  # validate the unit up front
+struct DateTruncKernel(Kernel):
+    """Floor a temporal array to a `CalendarUnit` boundary, keeping its type."""
 
-    if dt.is_date32():
-        # date32 has day granularity: any unit <= day leaves the value unchanged.
-        return array.copy()
-    if not (
-        dt.is_date64() or dt.is_timestamp() or dt.is_time32() or dt.is_time64()
-    ):
-        raise Error(t"date_trunc: unsupported type {dt}")
+    comptime name = "date_trunc"
 
-    var ticks_per_unit = _ticks_per_second(dt) * secs
-    var data = array.to_data()
-    var n = data.length
-    if dt.byte_width() == 4:  # time32
-        return _trunc[DType.int32](data, dt, ticks_per_unit, n)
-    else:  # date64 / timestamp / time64
-        return _trunc[DType.int64](data, dt, ticks_per_unit, n)
+    @staticmethod
+    def apply(array: AnyArray, unit: CalendarUnit) raises -> AnyArray:
+        var dt = array.dtype()
+        if dt.is_date32():
+            # date32 is already day-granular: any unit <= day is a no-op.
+            return array.copy()
+        if not (
+            dt.is_date64()
+            or dt.is_timestamp()
+            or dt.is_time32()
+            or dt.is_time64()
+        ):
+            raise Self.error(t"unsupported type {dt}")
+
+        var ticks_per_unit = _ticks_per_second(dt) * unit.seconds()
+        var data = array.to_data()
+        var n = data.length
+        if dt.byte_width() == 4:  # time32
+            return _trunc[DType.int32](data, dt, ticks_per_unit, n)
+        else:  # date64 / timestamp / time64
+            return _trunc[DType.int64](data, dt, ticks_per_unit, n)

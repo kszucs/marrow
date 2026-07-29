@@ -97,7 +97,8 @@ from ..kernels.temporal import (
     DayOfWeekKernel,
     QuarterKernel,
     DayOfYearKernel,
-    date_trunc as date_trunc_kernel,
+    CalendarUnit,
+    DateTruncKernel,
 )
 from ..kernels.cast import cast as cast_array
 
@@ -284,10 +285,10 @@ struct DynValue(
     def name(self) -> String:
         """Return the column name for a named LOAD node (empty otherwise).
 
-        ``_name`` is overloaded: it also carries the LIKE/ILIKE pattern and the
-        ``date_trunc`` unit. The tag check is what keeps a ``LIKE`` node from
-        reporting ``"%foo%"`` — and a ``DATE_TRUNC`` node ``"day"`` — as its
-        output column name."""
+        ``_name`` is overloaded: it also carries the LIKE/ILIKE pattern. The
+        tag check is what keeps a ``LIKE`` node from reporting ``"%foo%"`` as
+        its output column name. (``date_trunc`` used to be a third meaning; its
+        unit now lives in ``_kind_data`` as a `CalendarUnit`.)"""
         if self._tag == LOAD:
             return self._name.copy()
         else:
@@ -559,7 +560,9 @@ struct DynValue(
         elif self._tag == DAY_OF_YEAR:
             return DayOfYearKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == DATE_TRUNC:
-            return date_trunc_kernel(self._args[0].eval(batch), self._name)
+            return DateTruncKernel.apply(
+                self._args[0].eval(batch), CalendarUnit(Int(self._kind_data))
+            )
         else:
             raise Error("DynValue.eval: unknown expression kind ", self._tag)
 
@@ -729,14 +732,15 @@ struct DynValue(
                     if i > 0:
                         writer.write(t", ")
                     self._args[i].write_to(writer)
-                # LIKE/ILIKE carry their pattern and DATE_TRUNC its unit in
-                # ``_name`` (not an arg node) — surface it in the rendering.
-                if (
-                    self._tag == LIKE
-                    or self._tag == ILIKE
-                    or self._tag == DATE_TRUNC
-                ):
+                # LIKE/ILIKE carry their pattern in ``_name`` and DATE_TRUNC
+                # its unit in ``_kind_data`` — neither is an arg node, so
+                # surface it in the rendering.
+                if self._tag == LIKE or self._tag == ILIKE:
                     writer.write(t", {self._name}")
+                elif self._tag == DATE_TRUNC:
+                    writer.write(
+                        t", ", CalendarUnit(Int(self._kind_data)).to_string()
+                    )
                 elif self._tag == IS_IN:
                     writer.write(t", value_set")
                 writer.write(t")")
@@ -904,15 +908,22 @@ struct DynValue(
     def day_of_year(self) -> DynValue:
         return self._unary(DAY_OF_YEAR)
 
-    def date_trunc(self, var unit: String) -> DynValue:
+    def date_trunc(self, unit: String) raises -> DynValue:
         """Floor a temporal column to *unit* (``second``/``minute``/``hour``/
-        ``day``) — ``kernels.temporal.date_trunc``."""
+        ``day``) — ``kernels.temporal.DateTruncKernel``.
+
+        The unit is parsed **here**, so an unsupported one fails while the plan
+        is being built rather than on the first row that evaluates it, and the
+        kernel only ever sees a `CalendarUnit`. It is then carried in
+        ``_kind_data`` rather than ``_name`` — ``_name`` already doubles as the
+        column name and the LIKE pattern (see L8), and this is one overload of
+        it that did not need to exist."""
         return DynValue(
             tag=DATE_TRUNC,
             args=[self.copy()],
-            kind_data=0,
+            kind_data=UInt8(CalendarUnit.parse(unit).value),
             value=None,
-            name=unit^,
+            name=String(),
         )
 
     # --- aggregates (marrow.expr.aggregates) --------------------------------
