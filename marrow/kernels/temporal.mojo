@@ -202,19 +202,30 @@ trait TemporalExtractKernel(Kernel):
 
     @staticmethod
     def dispatch(array: DynArray) raises -> DynArray:
+        """Resolve the runtime temporal dtype and run the typed `apply`.
+
+        The guard runs first so the diagnostic names this kernel and the family
+        it wanted; `dispatch_temporal` alone would fall through to
+        `variant_dispatch`'s generic "no arm matched", which says neither.
+
+        This used to be a five-arm ladder over date32/date64/timestamp/time32/
+        time64 -- and it had already drifted: `DurationType` is a `TemporalType`
+        that `_ticks_per_second` handles and the ladder had forgotten, so a
+        duration column reported "expected a temporal array" while being one.
+        Walking the family closes that by construction: a temporal type is
+        registered once, and every kernel here picks it up. (Duration still
+        raises for calendar fields, but now from `_extract` naming the actual
+        reason.)
+        """
         var dt = array.dtype()
-        if dt.is_date32():
-            return Self.apply(array.as_date32()).to_dyn()
-        elif dt.is_date64():
-            return Self.apply(array.as_date64()).to_dyn()
-        elif dt.is_timestamp():
-            return Self.apply(array.as_timestamp()).to_dyn()
-        elif dt.is_time32():
-            return Self.apply(array.as_time32()).to_dyn()
-        elif dt.is_time64():
-            return Self.apply(array.as_time64()).to_dyn()
-        else:
-            raise Error(t"{Self.name}: expected a temporal array, got {dt}")
+        if not dt.is_temporal():
+            raise Self.error(t"expected a temporal array, got {dt}")
+
+        @parameter
+        def leaf[T: TemporalType](d: T) raises -> DynArray:
+            return Self.apply(array.as_primitive[T]()).to_dyn()
+
+        return dt.dispatch_temporal[leaf]()
 
 
 # ---------------------------------------------------------------------------
@@ -436,12 +447,7 @@ struct DateTruncKernel(Kernel):
         if dt.is_date32():
             # date32 is already day-granular: any unit <= day is a no-op.
             return array.copy()
-        if not (
-            dt.is_date64()
-            or dt.is_timestamp()
-            or dt.is_time32()
-            or dt.is_time64()
-        ):
+        if not dt.is_temporal():
             raise Self.error(t"unsupported type {dt}")
 
         var ticks_per_unit = _ticks_per_second(dt) * unit.seconds()

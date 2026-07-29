@@ -19,6 +19,8 @@ from ...arrays import (
 )
 from ...builders import PrimitiveBuilder, array
 from ...dtypes import (
+    DurationType,
+    duration,
     int32,
     second,
     date32,
@@ -337,3 +339,33 @@ def test_cross_check_date_trunc_pyarrow() raises:
             assert_equal(
                 Int(r.as_timestamp()[i].value()), Int(py=pa_r[i].value)
             )
+
+
+def test_date_trunc_duration() raises:
+    """`date_trunc` accepts a duration, which the old five-arm ladder rejected.
+
+    `DurationType` is a `TemporalType`, and `_ticks_per_second` always handled
+    it -- only the hand-written ladder had forgotten it. Walking the family
+    closed that gap, so this pins the behaviour rather than leaving it an
+    untested side effect: 3661 seconds floored to the hour is 3600.
+    """
+    var b = PrimitiveBuilder[DurationType](duration(second), capacity=2)
+    b.append(Int64(3661))
+    b.append(Int64(59))
+    var d = b.finish()
+
+    var r = DateTruncKernel.apply(d.copy().to_dyn(), unit_hour)
+    assert_equal(Int(r.as_primitive[DurationType]()[0].value()), 3600)
+    assert_equal(Int(r.as_primitive[DurationType]()[1].value()), 0)
+
+
+def test_extract_rejects_duration_with_a_useful_message() raises:
+    """A duration reaches the extraction kernels now, and is refused by
+    `_extract` naming the real reason rather than by the dispatcher claiming it
+    is not temporal."""
+    var b = PrimitiveBuilder[DurationType](duration(second), capacity=1)
+    b.append(Int64(3661))
+    var d = b.finish()
+
+    with assert_raises(contains="requires a date or timestamp array"):
+        _ = YearKernel.dispatch(d.copy().to_dyn())
