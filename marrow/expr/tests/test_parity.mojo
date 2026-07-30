@@ -27,6 +27,16 @@ from std.testing import assert_true
 from ...arrays import DynArray, Int64Array
 from ...builders import array, PrimitiveBuilder
 from ...dtypes import (
+    DynType,
+    NumericType,
+    int8,
+    int16,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
     int64,
     int32,
     float64,
@@ -43,6 +53,7 @@ from ...kernels.temporal import unit_day
 
 # Fused comptime algebra (values.mojo)
 from ...expr.values import (
+    _rank,
     AnyValue,
     col as fcol,
     lit as flit,
@@ -70,6 +81,7 @@ from ...expr.values import (
 
 # Runtime tag interpreter (dynamic.mojo)
 from ...expr.dynamic import (
+    _numeric_rank,
     DynValue,
     col as dcol,
     lit as dlit,
@@ -523,3 +535,56 @@ def test_parity_date_trunc() raises:
         array([0, 0], int32).to_dyn(),
         _ts_batch(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Rank agreement between the two lanes
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_rank_agrees_across_lanes() raises:
+    """`values._rank[T]()` and `dynamic._numeric_rank(dt)` must return the same
+    rank for every numeric type.
+
+    They cannot be one function: the fused lane needs a comptime `Int` (it feeds
+    `comptime promote[L, R]`) and the interpreter needs a runtime one from an
+    erased `DynType`. So the invariant is that the two agree, and until now
+    nothing checked it — `dynamic.mojo` documents the requirement in a comment
+    and stops there. A drift would not fail loudly; it would make `a + b` pick a
+    different result dtype in the two lanes for the same operand pair, which the
+    end-to-end parity cases only catch for the pairings they happen to name.
+
+    `dispatch_numeric` is what makes this checkable at all: it resolves each
+    runtime dtype to the comptime type its fused counterpart would use, which is
+    exactly the bridge the two functions sit on either side of.
+
+    Reaching for the underscore-private functions is deliberate. The public
+    alternative is a fused instantiation per ordered pair — 121 of them — to
+    observe a property both functions state directly.
+    """
+    var numerics = [
+        DynType(int8),
+        DynType(int16),
+        DynType(int32),
+        DynType(int64),
+        DynType(uint8),
+        DynType(uint16),
+        DynType(uint32),
+        DynType(uint64),
+        DynType(float16),
+        DynType(float32),
+        DynType(float64),
+    ]
+
+    for i in range(len(numerics)):
+        ref dt = numerics[i]
+        var runtime_rank = _numeric_rank(dt)
+
+        @parameter
+        def check[T: NumericType](d: T) raises -> Bool:
+            return _rank[T]() == runtime_rank
+
+        assert_true(
+            dt.dispatch_numeric[check](),
+            String("rank disagreement for ") + String(dt),
+        )
