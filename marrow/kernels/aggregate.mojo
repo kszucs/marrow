@@ -60,7 +60,6 @@ from ..scalars import (
     DynScalar,
     Int64Scalar,
     Float64Scalar,
-    StringScalar,
 )
 from ..views import reduce
 from .core import Kernel

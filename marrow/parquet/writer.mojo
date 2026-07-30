@@ -13,13 +13,13 @@ writer mirrors the reader's structure.
 """
 
 from std.pathlib import Path
-from std.sys import size_of
+
 
 from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
 from ..dtypes import PrimitiveType, NumericType
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
-from ..schema import Schema
+
 
 from .codecs import (
     Rle,

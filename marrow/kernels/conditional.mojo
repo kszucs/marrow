@@ -25,7 +25,7 @@ Cross-checked against PyArrow ``pc.case_when``, ``pc.coalesce``,
 ``pc.if_else`` and ``pc.fill_null``.
 """
 
-from ..arrays import DynArray, BoolArray, Int32Array, PrimitiveArray
+from ..arrays import DynArray, BoolArray, PrimitiveArray
 from ..scalars import DynScalar
 from ..builders import Int32Builder
 from ..dtypes import PrimitiveType

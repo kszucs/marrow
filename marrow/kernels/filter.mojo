@@ -8,15 +8,13 @@ All functions support arrays with non-zero offsets (sliced arrays).
 """
 
 import std.math as math
-from std.bit import pop_count, count_trailing_zeros
+from std.bit import count_trailing_zeros
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
 from ..arrays import (
-    Array,
     BoolArray,
     PrimitiveArray,
-    StringArray,
     BinaryLikeArray,
     DynArray,
     StructArray,
@@ -31,45 +29,23 @@ from ..buffers import Buffer
 from ..buffers import Bitmap
 from ..builders import (
     BoolBuilder,
-    PrimitiveBuilder,
-    StringBuilder,
     BinaryLikeBuilder,
 )
 from ..dtypes import (
-    DynType,
     PrimitiveType,
-    NumericType,
-    TemporalType,
     BinaryLikeType,
     ListLikeType,
-    Int8Type,
-    Int16Type,
     Int32Type,
-    Int64Type,
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    Float16Type,
-    Float32Type,
-    Float64Type,
     bool_,
-    int8,
-    int16,
     int32,
     int64,
     uint8,
-    uint16,
-    uint32,
     uint64,
-    float16,
-    float32,
-    float64,
     string,
 )
 from std.algorithm.functional import sync_parallelize
 
-from ..views import BitmapView, BufferView
+from ..views import BitmapView
 from .core import Kernel
 from .execution import ExecutionContext
 

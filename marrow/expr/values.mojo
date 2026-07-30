@@ -40,7 +40,6 @@ from ..arrays import (
     Array,
     DynArray,
     PrimitiveArray,
-    Int64Array,
     Int32Array,
     BoolArray,
     BinaryLikeArray,
@@ -49,7 +48,7 @@ from ..arrays import (
 from ..scalars import DynScalar, BoolScalar, PrimitiveScalar, StringScalar
 from ..buffers import Buffer, Bitmap
 from ..builders import Int64Builder, BinaryLikeBuilder
-from ..views import apply, BitmapView
+from ..views import apply
 from ..dtypes import (
     FloatingType,
     DynType,

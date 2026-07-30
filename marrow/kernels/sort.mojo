@@ -45,7 +45,6 @@ from ..arrays import (
 from ..buffers import Buffer
 from ..dtypes import (
     BinaryLikeType,
-    NumericType,
     PrimitiveType,
     bool_ as bool_dt,
     Int32Type,

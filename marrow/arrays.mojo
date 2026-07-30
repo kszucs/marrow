@@ -32,14 +32,14 @@ It is used for the C Data Interface, building nested arrays, and other interop
 paths.  It is NOT stored inside DynArray.
 """
 
-from std.bit import pop_count
-from std.memory import memcpy, ArcPointer, OwnedPointer
-from std.sys import size_of
+
+from std.memory import OwnedPointer
+
 from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.utils import Variant
-from std.os import abort
+
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .utils import variant_dispatch, variant_dispatch_raises

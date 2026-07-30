@@ -19,7 +19,7 @@ This layer depends only on the value box (``DynValue``) and the kernels; it does
 """
 
 from std.memory import ArcPointer
-from std.sys.info import num_physical_cores
+
 
 from ..arrays import DynArray, StructArray
 from .. import dtypes as dt

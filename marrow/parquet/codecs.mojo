@@ -27,7 +27,6 @@ from std.memory import unsafe_memcpy
 from ..arrays import (
     DynArray,
     PrimitiveArray,
-    StringArray,
     BinaryLikeArray,
     BoolArray,
     FixedSizeBinaryArray,

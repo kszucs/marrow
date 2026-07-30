@@ -30,7 +30,6 @@ from ..arrays import (
     ArrayData,
     BinaryLikeArray,
     BoolArray,
-    DictionaryArray,
     FixedSizeBinaryArray,
     PrimitiveArray,
 )
@@ -47,7 +46,6 @@ from ..dtypes import (
     DynType,
     BinaryLikeType,
     DType,
-    FixedSizeBinaryType,
     NumericType,
     DecimalType,
     StringLikeType,

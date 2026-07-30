@@ -19,19 +19,7 @@ from std.math import isnan, isinf
 from ..arrays import BoolArray, DynArray
 from ..buffers import Bitmap
 from ..dtypes import (
-    PrimitiveType,
     FloatingType,
-    Int8Type,
-    Int16Type,
-    Int32Type,
-    Int64Type,
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    Float16Type,
-    Float32Type,
-    Float64Type,
     bool_ as bool_dt,
 )
 from ..views import apply

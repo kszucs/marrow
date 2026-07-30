@@ -7,7 +7,7 @@ References:
 - https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html
 - https://arrow.apache.org/docs/python/generated/pyarrow.Table.html
 """
-from std.memory import ArcPointer
+
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .arrays import DynArray, ChunkedArray, StructArray

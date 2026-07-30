@@ -70,6 +70,8 @@ from .execution import (
     LimitProcessor,
 )
 from ..kernels.join import (
+    # JOIN_LEFT/RIGHT/FULL/ANY are unused *here* but re-exported through
+    # `marrow.expr`'s `__init__`, which imports them from this module.
     JOIN_INNER,
     JOIN_LEFT,
     JOIN_RIGHT,

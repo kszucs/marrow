@@ -44,7 +44,7 @@ from .codecs import Encoding, Rle, Plain, Dictionary, Compression
 from ..utils import LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .source import ByteSource, MappedFile
-from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
+from .schema import SchemaMapping, DecodedLeaf, LeafColumn
 from .statistics import Statistics
 from .format import (
     FileMetaData,

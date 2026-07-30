@@ -22,7 +22,7 @@ ArrowScalar trait:
 """
 
 from std.utils import Variant
-from std.os import abort
+
 from std.python import PythonObject
 from std.python.conversions import ConvertibleToPython
 from std.builtin.rebind import downcast
@@ -32,9 +32,6 @@ from .arrays import (
     BoolArray,
     PrimitiveArray,
     StringArray,
-    ListArray,
-    FixedSizeListArray,
-    StructArray,
     DynArray,
 )
 from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
@@ -72,20 +69,9 @@ from .dtypes import (
     YearMonthIntervalType,
     bool_,
     field,
-    float16,
-    float32,
-    float64,
-    int16,
-    int32,
-    int64,
-    int8,
     list_,
     null,
     string,
-    uint16,
-    uint32,
-    uint64,
-    uint8,
 )
 
 # ---------------------------------------------------------------------------

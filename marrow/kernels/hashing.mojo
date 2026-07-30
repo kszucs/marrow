@@ -24,7 +24,7 @@ Public API — the ``RapidHash`` kernel:
 Rapidhash port follows the C reference at https://github.com/Nicoshev/rapidhash
 """
 
-from std.gpu.host import DeviceContext
+
 from std.hashlib import hash as _hash
 from std.sys import size_of
 
@@ -46,7 +46,6 @@ from .core import Kernel
 from .execution import ExecutionContext
 from ..dtypes import (
     BinaryLikeType,
-    NumericType,
     PrimitiveType,
     ListLikeType,
     bool_,

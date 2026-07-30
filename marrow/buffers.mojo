@@ -120,9 +120,6 @@ from std.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from .views import (
     BufferView,
     BitmapView,
-    UnaryFn,
-    BinaryFn,
-    apply as _views_apply,
 )
 
 

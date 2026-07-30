@@ -22,7 +22,7 @@ list, fixed_size_list, struct, dictionary.
 
 from std.math import ceildiv
 from std.pathlib import Path
-from std.sys import size_of
+
 from .arrays import DynArray, ArrayData, DictionaryArray, NullArray
 from .buffers import Buffer, Bitmap
 from .schema import Schema

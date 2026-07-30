@@ -16,13 +16,13 @@ Method names follow Mojo's ``std.collections.bitset.BitSet`` conventions.
 """
 
 from std.sys.info import simd_byte_width, simd_width_of
-from std.sys import size_of, has_accelerator
+from std.sys import size_of
 from marrow.utils import has_accelerator_support
 from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import bitcast, unsafe_memcpy, memset
+from std.memory import bitcast, unsafe_memcpy
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
@@ -32,7 +32,7 @@ from std.algorithm.reduction import _reduce_generator_wrapper
 from std.math import ceildiv
 from std.utils.index import IndexList
 from std.utils.coord import Coord
-from std.gpu.host import DeviceContext, get_gpu_target
+from std.gpu.host import get_gpu_target
 
 from .buffers import Buffer, Bitmap
 from .kernels.execution import ExecutionContext

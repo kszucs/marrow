@@ -37,13 +37,13 @@ Comptime singletons (same names as before):
 """
 
 from std.utils import Variant
-from std.builtin.rebind import downcast, trait_downcast
+
 from std.sys import size_of, bit_width_of
-from std.os import abort
-from std.memory import ArcPointer, OwnedPointer
+
+from std.memory import OwnedPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from std.sys.compile import codegen_unreachable
+
 
 from .utils import variant_dispatch, variant_dispatch_raises
 

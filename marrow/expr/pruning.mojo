@@ -18,7 +18,7 @@ evaluated against the index.
 
 from ..scalars import DynScalar
 from ..schema import Schema
-from ..utils import variant_dispatch_raises
+
 from .. import dtypes as dt
 
 

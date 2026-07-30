@@ -1,7 +1,7 @@
-from std.ffi import external_call, c_char, CStringSlice
+from std.ffi import c_char, CStringSlice
 from std.memory import ArcPointer, unsafe_memcpy
 from std.python import Python, PythonObject
-from std.python._cpython import CPython, PyObjectPtr
+from std.python._cpython import PyObjectPtr
 from std.sys import size_of
 from .buffers import (
     Allocation,

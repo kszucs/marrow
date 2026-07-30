@@ -106,24 +106,19 @@ See ``docs/joins-design.md`` for the high-level architecture and the
 ``Phase 1b`` performance table.
 """
 
-from std.gpu.host import DeviceContext
 
 from ..arrays import (
-    PrimitiveArray,
     DynArray,
     StructArray,
     Int32Array,
     UInt64Array,
 )
 from ..buffers import Buffer
-from ..builders import PrimitiveBuilder, Int32Builder
+from ..builders import Int32Builder
 from ..dtypes import (
     DynType,
     Field,
     int32,
-    uint64,
-    UInt64Type,
-    bool_ as bool_dt,
     struct_,
     null,
 )
