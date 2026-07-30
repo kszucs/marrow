@@ -67,6 +67,11 @@ trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     dtype is a **peer** of the concrete ones, not a supertype, and generic code
     bound on `DataType` accepts either."""
 
+    comptime IsErased: Bool = False
+    """Whether this dtype is the erased one. Lets a node parameterised on a
+    dtype (`NumericColumn[T]`, `NumericLiteral[T]`) know it is in the erased
+    lane without a separate erased node type existing."""
+
     def to_dyn(deinit self) -> DynType:
         return DynType(self^)
 
@@ -780,6 +785,8 @@ struct DynType(
     TemporalType,
     Writable,
 ):
+    comptime IsErased = True
+
     comptime offset = DType.int32
     """Placeholder, never read — see `native`.
 

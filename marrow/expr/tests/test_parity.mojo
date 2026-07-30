@@ -48,12 +48,17 @@ from ...dtypes import (
     second,
 )
 from ...tabular import RecordBatch, record_batch
+from ...schema import schema
+from ...dtypes import field
 
 from ...kernels.temporal import unit_day
 
 # Fused comptime algebra (values.mojo)
 from ...expr.values import (
     _rank,
+    dyncol,
+    dynlit,
+    dyn_if_else,
     DynValue,
     col as fcol,
     lit as flit,
@@ -801,3 +806,65 @@ def test_shared_temporal_extract_over_erased_operand() raises:
 
     var want: DynArray = array([1970, 1970, 1971], int32)
     assert_true(yr.execute(batch) == want)
+
+
+# ---------------------------------------------------------------------------
+# The runtime lane, built entirely from shared nodes
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_factories_build_shared_nodes() raises:
+    """`dyncol("a") + dyncol("b")` is an `Add[DynValue, DynValue]` — the same node
+    the fused lane builds — with no tag anywhere in the tree.
+
+    This is what Step 3 set out to do: the runtime frontend and the AOT frontend
+    now differ only in *which types they instantiate the same nodes with*.
+    """
+    var batch = _ab_batch()
+    var a = dyncol("a")
+    var b = dyncol("b")
+
+    assert_parity(fcol("a", int64) + fcol("b", int64), a + b, batch)
+    assert_parity(fcol("a", int64) > fcol("b", int64), a > b, batch)
+    assert_parity(
+        (fcol("a", int64) + fcol("b", int64)) * fcol("a", int64),
+        (a + b) * a,
+        batch,
+    )
+
+
+def test_runtime_factories_resolve_by_name() raises:
+    """A named erased column resolves against the batch schema at execute time,
+    so a plan can be built before a schema is known."""
+    var batch = _ab_batch()
+    assert_parity(
+        fcol("a", int64) - fcol("b", int64),
+        dyncol("a") - dyncol("b"),
+        batch,
+    )
+
+
+def test_runtime_bound_column_replaces_tag_inspection() raises:
+    """`bound_column` is how the relational layer identifies a join/group key.
+
+    It replaces reaching into the interpreter for `kind() == LOAD` and then
+    `kind_data()`. A bare column answers with its position; anything computed
+    answers -1.
+    """
+    var sch = schema([field("a", int64), field("b", int64)])
+    assert_true(dyncol("a").bound_column(sch) == 0)
+    assert_true(dyncol("b").bound_column(sch) == 1)
+    assert_true((dyncol("a") + dyncol("b")).bound_column(sch) == -1)
+
+
+def test_runtime_literal_and_cast() raises:
+    var batch = _ab_batch()
+    var casted = dyncol("a").cast(DynType(Float64Type()))
+    var out = casted.execute(batch)
+    assert_true(out.dtype() == DynType(Float64Type()))
+
+    assert_parity(
+        fcol("a", int64) + flit(3, int64),
+        dyncol("a") + dynlit[Int64Type](3),
+        batch,
+    )

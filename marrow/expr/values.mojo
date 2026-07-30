@@ -372,6 +372,29 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         """
         return True
 
+    def bound_column(self, schema: Schema) raises -> Int:
+        """This node's column position if it is a bare column reference, else
+        `-1`.
+
+        Join and group keys must be plain columns, and the relational layer used
+        to establish that by asking the interpreter for its tag (`kind() ==
+        LOAD`) and then its payload. That let a caller reach into a
+        representation it should not know about. A node answers for itself
+        instead, and every non-column node inherits "no"."""
+        return -1
+
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        """What this node's value can be, given per-column statistics.
+
+        Defaults to "no information", which is always sound — a caller only ever
+        skips data it has *proven* cannot match. Nodes that can say something
+        useful (columns, literals, comparisons, `and`/`or`) override it.
+
+        This used to be a 9-arm switch on the interpreter's tag. Putting it on
+        the node means a new node cannot be forgotten by it: it either says
+        something or inherits the conservative answer."""
+        return PruneBound.unknown()
+
     # --- validity (null tracking) -------------------------------------------
     def validity(
         self, batch: RecordBatch
@@ -556,10 +579,25 @@ struct NumericColumn[T: NumericType](NumericValue):
 
     comptime OutType = Self.T
     comptime OutShape = 1
+    comptime IsErased = Self.T.IsErased
+    """`NumericColumn[DynType]` *is* the erased column leaf. Reading a column by
+    name needs no dtype — `materialize` hands back `batch.columns[i]` as-is — so
+    the fused leaf already works erased and no separate node is needed."""
+
     var _name: String
 
     def referenced_columns(self) -> List[String]:
         return [self._name.copy()]
+
+    def bound_column(self, schema: Schema) raises -> Int:
+        var i = schema.get_field_index(self._name)
+        if i == -1:
+            raise Error("column '", self._name, "' not found")
+        return i
+
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        var iv = stats.by_name(self._name)
+        return PruneBound.interval(iv[0].copy(), iv[1].copy())
 
     def __init__(out self, var name: String):
         self._name = name^
@@ -596,6 +634,12 @@ struct NumericLiteral[T: NumericType](NumericValue):
 
     comptime OutType = Self.T
     comptime OutShape = 0
+    comptime IsErased = Self.T.IsErased
+
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        var v = PrimitiveScalar[Self.T](self._value).to_dyn()
+        return PruneBound.interval(Optional(v.copy()), Optional(v^))
+
     var _value: Scalar[Self.OutType.native]
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
@@ -988,6 +1032,25 @@ struct NumericCompare[
         else:
             return self._bool_fused(batch, ctx)
 
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        # The interpreter had one switch arm per operator here. `K` names the
+        # operator, so the rule is selected at elaboration instead.
+        var l = self.l.prune(stats)
+        var r = self.r.prune(stats)
+        comptime n = Self.K.name
+        comptime if n == "equal":
+            return PruneBound.boolean(l.maybe_eq(r))
+        elif n == "less":
+            return PruneBound.boolean(l.maybe_lt(r))
+        elif n == "less_equal":
+            return PruneBound.boolean(l.maybe_le(r))
+        elif n == "greater":
+            return PruneBound.boolean(l.maybe_gt(r))
+        elif n == "greater_equal":
+            return PruneBound.boolean(l.maybe_ge(r))
+        else:  # not_equal carries no usable interval rule
+            return PruneBound.unknown()
+
     def referenced_columns(self) -> List[String]:
         return _union_columns(
             self.l.referenced_columns(), self.r.referenced_columns()
@@ -1054,6 +1117,17 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
             return Datum(Self.K.dispatch(l, r))
         else:
             return self._bool_fused(batch, ctx)
+
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        var l = self.l.prune(stats).maybe_true
+        var r = self.r.prune(stats).maybe_true
+        comptime n = Self.K.name
+        comptime if n == "and_":
+            return PruneBound.boolean(l and r)
+        elif n == "or_":
+            return PruneBound.boolean(l or r)
+        else:  # xor tells us nothing about the row group
+            return PruneBound.unknown()
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2493,6 +2567,7 @@ struct DynValue(
     var _write_fn: def(ArcPointer[NoneType]) thin -> String
     var _referenced_columns_fn: def(ArcPointer[NoneType]) thin -> List[String]
     var _is_deterministic_fn: def(ArcPointer[NoneType]) thin -> Bool
+    var _bound_column_fn: def(ArcPointer[NoneType], Schema) thin raises -> Int
     var _resolve_names_fn: def(
         ArcPointer[NoneType], Schema
     ) thin raises -> ArcPointer[NoneType]
@@ -2522,7 +2597,7 @@ struct DynValue(
     def _prune_tramp[
         V: Value
     ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
-        return PruneBound.unknown()  # comptime lane: conservative, always sound
+        return rebind[ArcPointer[V]](ptr)[].prune(stats)
 
     @staticmethod
     def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -2546,6 +2621,12 @@ struct DynValue(
         return rebind[ArcPointer[V]](ptr)[].is_deterministic()
 
     @staticmethod
+    def _bound_column_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> Int:
+        return rebind[ArcPointer[V]](ptr)[].bound_column(schema)
+
+    @staticmethod
     def _resolve_names_tramp[
         V: Value
     ](ptr: ArcPointer[NoneType], schema: Schema) raises -> ArcPointer[NoneType]:
@@ -2562,6 +2643,7 @@ struct DynValue(
         self._write_fn = Self._write_tramp[V]
         self._referenced_columns_fn = Self._referenced_columns_tramp[V]
         self._is_deterministic_fn = Self._is_deterministic_tramp[V]
+        self._bound_column_fn = Self._bound_column_tramp[V]
         self._resolve_names_fn = Self._resolve_names_tramp[V]
 
     # --- runtime `TagValue` box --------------------------------------------
@@ -2594,6 +2676,14 @@ struct DynValue(
         return rebind[ArcPointer[TagValue]](ptr)[].referenced_columns()
 
     @staticmethod
+    def _bound_column_tramp_dyn(
+        ptr: ArcPointer[NoneType], schema: Schema
+    ) raises -> Int:
+        var v = rebind[ArcPointer[TagValue]](ptr)[]
+        var resolved = v.resolve_names(schema)
+        return Int(resolved.kind_data()) if resolved.kind() == 0 else -1
+
+    @staticmethod
     def _resolve_names_tramp_dyn(
         ptr: ArcPointer[NoneType], schema: Schema
     ) raises -> ArcPointer[NoneType]:
@@ -2614,6 +2704,7 @@ struct DynValue(
         self._write_fn = Self._write_tramp_dyn
         self._referenced_columns_fn = Self._referenced_columns_tramp_dyn
         self._is_deterministic_fn = Self._is_deterministic_tramp_dyn
+        self._bound_column_fn = Self._bound_column_tramp_dyn
         self._resolve_names_fn = Self._resolve_names_tramp_dyn
 
     @always_inline
@@ -2734,6 +2825,36 @@ struct DynValue(
     def is_deterministic(self) -> Bool:
         return self._is_deterministic_fn(self._boxed)
 
+    # --- ops whose payload is a runtime value -------------------------------
+    def cast(self, to: DynType) raises -> DynValue:
+        """Cast to a dtype known only at run time.
+
+        `NumericCast[To, A]` fixes its target at compile time, which a runtime
+        dtype does not have — but `dispatch_numeric` resolves the runtime dtype
+        to a comptime one, and every arm boxes into `DynValue`, so the arms unify
+        even though their node types differ. No erased cast node is needed."""
+        var me = self.copy()
+
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> DynValue:
+            return DynValue(NumericCast[T](me.copy()))
+
+        return to.dispatch_numeric[leaf]()
+
+    def like(self, var pattern: String) -> DynValue:
+        """SQL `LIKE`. The pattern is a string constant, so it becomes a
+        `StringLiteral` operand and the node is the shared `Like`."""
+        return DynValue(Like(self.copy(), StringLiteral[StringType](pattern^)))
+
+    def ilike(self, var pattern: String) -> DynValue:
+        return DynValue(ILike(self.copy(), StringLiteral[StringType](pattern^)))
+
+    def isin(self, var value_set: DynArray) -> DynValue:
+        return DynValue(IsIn(self.copy(), value_set^))
+
+    def nullif(self, o: DynValue) -> DynValue:
+        return DynValue(Nullif(self.copy(), o.copy()))
+
     # --- aggregates: resolved from the runtime dtype ------------------------
     #
     # `min`/`max`/`count` are defaulted in `NumericValue`, `StringValue` and
@@ -2763,6 +2884,11 @@ struct DynValue(
 
     def mean(self) -> DynAgg:
         return self.aggregate("mean")
+
+    def bound_column(self, schema: Schema) raises -> Int:
+        """This expression's column position, or -1 if it is not a bare column.
+        """
+        return self._bound_column_fn(self._boxed, schema)
 
     def resolve_names(self, schema: Schema) raises -> DynValue:
         """Bind name references against `schema`, keeping the same node type."""
@@ -2923,3 +3049,30 @@ struct AggExpr(Copyable, Movable, Writable):
         writer.write(self._func if self._func else self.out_name, "(")
         self.input.write_to(writer)
         writer.write(")")
+
+
+# ---------------------------------------------------------------------------
+# Runtime factories — the entry points a frontend without comptime types uses.
+#
+# These used to build `TagValue` interpreter nodes. They now build the same
+# nodes the fused lane builds, boxed into `DynValue`: `dyncol(0) + dyncol(1)` is
+# an `Add[DynValue, DynValue]`, not a tag.
+# ---------------------------------------------------------------------------
+
+
+def dyncol(var name: String) -> DynValue:
+    """Reference to a named column — `NumericColumn[DynType]`, the existing
+    fused leaf instantiated with the erased dtype."""
+    return DynValue(NumericColumn[DynType](name^))
+
+
+def dynlit[T: NumericType](value: Scalar[T.native]) -> DynValue:
+    """A scalar constant. A literal always knows its own type at construction,
+    so this is the ordinary `NumericLiteral[T]` with the *box* doing the
+    erasing."""
+    return DynValue(NumericLiteral[T](value))
+
+
+def dyn_if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
+    """Element-wise conditional — the single-branch `CaseWhen`."""
+    return DynValue(CaseWhen(cond.copy(), then_.copy(), else_.copy()))
