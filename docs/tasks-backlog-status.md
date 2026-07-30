@@ -3,8 +3,8 @@
 A cross-cutting snapshot of the two task backlogs, verified against the code rather
 than read off their own headers. **Last verified: 2026-07-29.**
 
-- `docs/code-quality-tasks.md` — the Q/L tasks (dedup, layering, soundness)
-- `docs/execution-engine-tasks.md` — the T tasks (M1 = ClickBench)
+- `docs/tasks-code-quality.md` — the Q/L tasks (dedup, layering, soundness)
+- `docs/tasks-execution-engine.md` — the T tasks (M1 = ClickBench)
 
 > **Re-verify before trusting this.** Both backlogs' status lines have been wrong before —
 > on 2026-07-27 a sweep found six tasks marked open that were already done, and three

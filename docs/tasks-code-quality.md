@@ -3,7 +3,7 @@
 Companion to **`docs/code-quality-review.md`** (findings + evidence). This file is the
 executable half: discrete, worktree-ready tasks with explicit file ownership so they can be
 run in parallel without merge conflicts, following the same conventions as
-`docs/execution-engine-tasks.md`.
+`docs/tasks-execution-engine.md`.
 
 **Base:** `complete` @ `867d9d6`+ · **Status:** in progress on `agg`.
 
@@ -24,7 +24,7 @@ of them.
 > | **Q3.2**, `dispatch_over_*` half | the ladders became `DynType` methods, not free functions — the 64-call-site item |
 > | **Q3.4** headline | the 24 duplicated top-level compute fns are gone; `python/marrow/__init__.py` keeps only `array`/`field`/`schema`/`record_batch`/`table` + ipc, which is PyArrow's shape |
 > | **Q2.5** step 2 | `reinterpret_array` has **no occurrences tree-wide**; so do `hash_identity` and the duplicate `bitmap_and` |
-> | **L1**, **L4**, **L5** (layering doc) | see `expr-kernels-layering-tasks.md` — all three verified done |
+> | **L1**, **L4**, **L5** (layering doc) | see `tasks-expr-kernels-layering.md` — all three verified done |
 >
 > Still open, re-confirmed: **Q1.2**, **Q1.3**, **Q2.4** (9 hand-rolled `sync_parallelize`
 > loops, no `ctx.stripe`), the rest of **Q3.2** (`_apply_dispatch`/`_reduce_dispatch` still
@@ -39,42 +39,6 @@ of them.
 > (`query_streaming_agg_fused.mojo` used the removed `List.append[A](dtype)` spelling), and
 > the test harness reported a *compiler crash* as a failure of every case in the selection.
 > The harness now halves the unit on a crash and retries.
-
-> ### The compiler-crash cap is lifted — it was our code, not the compiler (2026-07-27)
->
-> The five long-standing `test_plan.mojo` crashes were attributed to an upstream bug ("a
-> test body that filters with a comparison predicate under `TestSuite`"). That was wrong.
-> **All five were tests that built plans by hand** — `DynRelation(ParquetScan(...))` then
-> `Filter(input=..., predicate=col(0) > lit(...))` with a hand-written output schema.
-> Rewriting the file through the plan-building API (`parquet_scan(...).filter(...)`,
-> `.project(...)`) made every crash disappear: the whole 21-case file now compiles as **one**
-> unit and runs, where before the harness had to bisect to single cases and five still died.
->
-> | | crashes | wall |
-> |---|---|---|
-> | hand-built nodes, bisected to single cases | 5 | 390 s |
-> | plan-building API, one unit | **0** | **97 s** |
->
-> This matters well beyond the test file: the cap was believed to block **Q1.2/Q1.3, L6 and
-> Q4.5**, all of which touch the scan/filter path. It does not. Prefer the plan-building API
-> in every new test for this reason, not only for style — and treat "the compiler crashes on
-> this" as a hypothesis about our own elaboration, not a fact about the toolchain.
->
-> The same pass found the real bug the hand-written schema was hiding: see
-> *Lane divergence on mixed-dtype arithmetic* under Tier 0.
-
-**Guiding standard.** These tasks are not chores; the bar is *elegant, performant, encapsulated
-abstractions*. A task is done when the concept has **one owner**, its invariants are enforced by
-construction rather than convention, and the call sites got **simpler**. If a fix adds a
-parameter, a flag, or a second way to do something, it is the wrong fix — prefer the change that
-deletes code. Measure anything on a hot path; never trade a real speedup for tidiness without
-saying so.
-
-**Hard constraint: do not change the layout of arrays, scalars, or builders.** Their fields and
-memory layout are fixed. Adding accessors/methods is fine; adding, removing, reordering, or
-re-typing fields is not. Any task that would require it is out of scope, not deferred.
-
----
 
 ## 0. How to run these
 
@@ -140,32 +104,6 @@ None — `t2.3b-aggregate` and `fu4-like-scalar` are both merged. Re-check befor
 > Q0.0 is closed (upstream fix), so the suite is trustworthy again and these are no longer
 > gated — Q0.2/Q0.3 can run in parallel with everything else.
 
-**Q0.0 — ~~Fix the one-byte heap overflow in `DynValue`~~** · **CLOSED — fixed upstream
-2026-07-25** · No work required.
-
-Was: `ArcPointer[TagValue]` (`expr/values.mojo:2299`) wrote its trailing `Variant` discriminant
-one byte past the allocation (`size_of` 416 vs ≥417 needed), silently corrupting the heap and
-causing **every** full-suite failure.
-
-**Resolved by upgrading Mojo `1.0.0b3.dev2026072217` → `1.0.0b3.dev2026072406`.** It was a
-toolchain bug in the #6401 family (`Variant.__init__` performing an invalid write), never a
-marrow logic error. Verified both ways:
-
-| check | before | after |
-|---|---|---|
-| `expr/tests/test_streaming.mojo` (no ASAN) | 24 failed | **43 passed** |
-| `parquet/tests/test_reader.mojo` (no ASAN) | 35 failed | **35 passed** |
-| `test_streaming` ASAN `heap-buffer-overflow` hits | 86 | **0** |
-
-Lessons worth keeping (they cost real time):
-- **ASAN masked this bug** — `test_reader` passed 35/35 *under* ASAN while failing 35/35 without.
-  Verify toolchain-level memory bugs **without** ASAN; ASAN support is itself an open upstream
-  feature request (#4575).
-- **A Mojo build failure emits no ASAN output**, which is indistinguishable from "no bug" if you
-  only grep for `heap-buffer-overflow`. Always assert the test actually ran.
-- **Minimal reproducers were useless here** — the fault depended on compilation context, so
-  shrinking it produced contradictory results. Only the real suite was authoritative.
-
 **Q0.2 — Fused expression correctness (D3 + D4)** · *Tier 0* · Depends: — ·
 Owns: `marrow/expr/values.mojo`, `marrow/kernels/boolean.mojo`, `marrow/expr/tests/test_values.mojo`,
 `marrow/expr/tests/test_parity.mojo` · ⚠️ BINSIZE · Done when:
@@ -175,11 +113,6 @@ Owns: `marrow/expr/values.mojo`, `marrow/kernels/boolean.mojo`, `marrow/expr/tes
   and re-point `values.mojo:138-153` at `..kernels.aggregate` (the pair `kernels/__init__.mojo`
   already re-exports). Add a parity case with nulls whose data bits are set.
 - Both verified via `test_parity.mojo` (fused == dynamic).
-
-**Q0.3 — `TagValue.name()` tag guard** · *Tier 0, trivial* · Depends: — ·
-Owns: `marrow/expr/dynamic.mojo` · Done when: `name()` returns `String()` unless `_tag == LOAD`,
-so a `LIKE` node stops reporting its pattern (`"%foo%"`) and a `DATE_TRUNC` node its unit as an
-output column name. Add a test.
 
 **Q0.5 — Schema derivation probes by execution, and it costs 16 KB** ·
 *measured 2026-07-27* · Depends: — · Owns: `marrow/expr/relations.mojo`,
@@ -275,142 +208,6 @@ comparison trait, and all their kernel structs; `kernels/__init__.mojo` re-expor
 public names so no caller outside `marrow/kernels` changes; the test files merge or stay
 split on purpose (say which); fused stripped size reported before/after — expected
 unchanged, since this moves no code across a DCE boundary.
-
-**Q0.4 — Lane divergence on mixed-dtype arithmetic** · ✅ **DONE** *(2026-07-28)* ·
-*Tier 0, found 2026-07-27* ·
-
-**Resolution: option (b) — promote in the interpreted lane, at the expression layer.**
-`TagValue._promote_operands` (`expr/dynamic.mojo`) widens the narrower of two numeric
-operands before `_arith`/`_compare` hand them to a kernel, using `_numeric_rank` — the
-runtime twin of `values._rank`, same rule (every float outranks every integer). So both
-lanes accept the same operand pairings and produce the same dtype, while kernels stay
-array-in/array-out and strict: `expect_same_dtype` is untouched and still means what it
-says for `nullif` and `case_when`'s candidates.
-
-It sits beside `_compare`, which already picks a kernel *family* from the operand dtypes —
-deciding what an operator means is that layer's job, and this is the same decision.
-
-**Binary size, measured on `query_dynvalue` stripped** (the fused gates are byte-identical
-throughout — the fused nodes did not change):
-
-| | bytes | Δ vs HEAD |
-|---|---|---|
-| before | 5,438,904 | — |
-| via a `_arith[K: BinaryNumericKernel]` helper | 5,554,504 | **+115,600** |
-| **inline in each of `eval`'s twelve binary arms** | **5,455,432** | **+16,528** |
-| inline, with both `cast_array` calls stubbed out | 5,455,440 | +16,536 |
-
-Two things fall out of that. First, the tidy version is the expensive one: a parameterised
-method is instantiated per kernel and each instantiation carries its own copy of what it
-touches, so wrapping an already-erased dispatch in a generic helper cost seven times the
-change itself. The twelve inline call sites are deliberate and marked ⚠️ BINSIZE.
-
-Second, **the cast fanout is free here** — stubbing both `cast_array` calls changes
-nothing, because `cast` is already linked in by `TagValue`'s own `CAST` arm. That is the
-real difference from the reverted kernel-layer version, which made it reachable from every
-erased binary dispatch including the fused gates'.
-
-The fused nodes are unchanged — they had no bug, and always-wrapping every operand in a
-`NumericCast` was a binary-size risk for no correctness gain. **The gap that remains, stated
-rather than papered over:** direct node construction (`Gt(a, b)`, and the `binary_size`
-gates) still relies on the fused nodes' internal `ArgType = promote[…]` widening, and the
-interpreted lane promotes at *execution*, not construction — so a `TagValue` tree's output
-dtype is only known once it meets real data (which is what `.project()`'s 0-row probe is
-for; see Q0.5).
-
-`test_parity.mojo` covers `int64 + float64` and `int32 > int64` through both lanes, and
-`test_plan.mojo`'s `test_project_mixed_dtype_arithmetic_promotes` (was `…_raises`) now
-asserts float64 instead of the divergence.
-
-<details><summary>Original finding and the designs that did not work</summary>
-
-**Reverted 2026-07-27 — first attempt fixed it at the wrong layer.** Promotion was put in
-the erased kernel dispatches (`DynType.promote` + cast both operands). That works and
-all 415 tests passed, but it puts type-algebra decisions in the kernel layer, which is
-exactly the leak the layering rules forbid — kernels are array-in/array-out and must not
-decide what an operator means. It also cost `query_dynvalue` +82,576 bytes by making the
-cast fanout reachable from every erased binary dispatch.
-
-**The agreed design (owner directive): promote at construction.** `a + b` — i.e.
-`__add__`/`__gt__` and the other operator overloads — inserts the cast on whichever operand
-needs widening, so operands are already the same type by the time any kernel sees them and
-the kernels stay strict. In the fused lane this is comptime and exact:
-`promote[L.OutType, R.OutType]` is known, and `NumericCast` already exists as a fused node,
-so `Add[L, R]` becomes `Add[cast-wrapped L, cast-wrapped R]` and `NumericBinary`'s internal
-`ArgType = promote[...]` widening can go away — the promotion logic moves from every binary
-node's body into the constructors. The interpreted lane should do the same where operand
-dtypes are statically known (literals, casts); where they are not (`col("a")` before schema
-resolution) it stays strict, and that gap should be stated rather than papered over.
-
-**Blocked as designed — probed 2026-07-27, compiler limitation.** The clean version needs
-`__add__`'s *return type* to depend on whether a cast is needed, i.e. a comptime
-conditional type:
-
-```mojo
-comptime coerce[To: NumericType, V: NumericValue] = V if (
-    V.OutType.native == To.native
-) else NumericCast[To, V]
-```
-
-That alias **resolves**, but a function returning it cannot return either branch — not
-even inside a `comptime if` that has already selected one (`cannot implicitly convert 'V'
-value to 'V if (…) else NumericCast[To, V]'`). `rebind` does not rescue it either: an
-unreduced conditional type **conforms to nothing**, so `rebind[coerce[To, V]](x)` fails
-with `does not conform to 'ImplicitlyCopyable'`. (`promote[L, R]` is the same shape and
-works only because it is used as an annotation, never returned.) Recorded in CLAUDE.md's
-"Associated-type & trait gotchas".
-
-So the choice is:
-
-- **(a) Always wrap** — `__add__` returns `Add[NumericCast[P, Self], NumericCast[P, Rhs]]`
-  unconditionally. Correct (a same-type `NumericCast` is the identity) and needs no
-  conditional type, but puts a no-op node on *every* same-typed operand in every fused
-  tree, doubles node depth, and is a real ⚠️ BINSIZE risk for no correctness gain — **the
-  fused lane has no bug today**; its internal `ArgType = promote[…]` widening is already
-  exact.
-- **(b) Leave the fused nodes as they are** and treat this as an interpreted-lane task
-  only, which is where the actual divergence lives.
-
-Recommend (b) unless the always-wrap version measures flat on the fused gate. Note also
-that promotion-at-construction covers only the operator path: `Gt(a, b)` is constructed
-directly by tests and by the `binary_size` gates, so the nodes would still need their
-internal widening — or would have to *require* same-typed operands, making those direct
-constructions compile errors.
-
-Original finding, unchanged: ·
-Owns: `marrow/expr/values.mojo`, `marrow/expr/dynamic.mojo`,
-`marrow/expr/tests/test_parity.mojo`, `marrow/expr/tests/test_plan.mojo` ·
-
-**The two expression lanes disagree about `int64 + float64`.** Q0.2 made the *fused* lane
-promote — `NumericBinary` and `NumericCompare` both compute in `promote[L, R]`, and that is
-what its mixed-width parity case covers. The *interpreted* lane never learned: the erased
-binary path goes through `Kernel.expect_same_dtype` (`kernels/core.mojo:36-39`) and raises
-`add: dtype mismatch: int64 vs float64`. So the same expression executes in one lane and
-raises in the other, and `.project()` surfaces it at **plan-build** time because it probes
-each expression's dtype against a 0-row batch.
-
-Found by rewriting `test_plan.mojo` through the plan-building API. The old test hid it
-perfectly: it built `Project(values=[col(0) + col(1)], schema=[field("z", int64)])` by hand
-and asserted the schema it had just written down — so the expression was never evaluated,
-*and* the declared dtype (`int64` for `int64 + float64`) was wrong in a way nothing could
-catch. This is the general argument for the API revamp: a test that supplies the output
-schema asserts against its own arithmetic.
-
-Done when: the erased binary dispatch casts both operands to `promote(left, right)` before
-selecting a leaf, so both lanes agree; `expect_same_dtype` remains for the kernels that
-genuinely require identical types (`nullif`, `conditional`'s candidates); `test_parity.mojo`
-covers `int64 + float64` and `int32 > int64` **through both lanes**; and
-`test_project_mixed_dtype_arithmetic_raises` in `test_plan.mojo` — which currently asserts
-the *divergence* so it stays visible — is turned into a promotion assertion.
-
-> Note what the parity suite did not catch. `test_parity.mojo` compares fused against
-> dynamic for expressions it can build in both, so an operand pairing only the fused lane
-> accepts is invisible to it. Parity coverage should be keyed on the *fused* lane's accepted
-> domain, not on the intersection. (That rule is now written into the suite itself.)
-
-</details>
-
----
 
 **Q0.8 — The AOT binary-size gate covers two shapes, and its silence reads as evidence** ·
 *Tier 0, found 2026-07-28* · Depends: — · Owns: `benchmarks/binary_size/*` ·
@@ -571,9 +368,6 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > compiler's ability to catch the dangle. Doing `_span()` removal first would just move the
 > dangling problem into every page decode.
 
-> ### ✅ DONE 2026-07-28 — see `67accba`. Kept for the reasoning; the scope estimates below
-> were wrong three times over, and the reason is recorded at the end.
->
 > ### `read_at` cannot return a sub-`Buffer` — Arrow alignment
 >
 > The card says `read_at` returns a `Buffer[mut=False]`. For the **whole file** that works.
@@ -669,17 +463,6 @@ Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`
 > into `PageReader.scratch`, which is exactly why they were unified under an untracked
 > origin in the first place. Both arms have to become views into something ref-counted for
 > `_untracked` to go, so this is one atomic change across the decode path, not a staged one.
-
-**Q1.3 — One file handle per scan (RC8)** · ✅ **DONE 2026-07-28, `997f789`** ·
-Depends: Q1.2, **T2.3b merged** · Owns: `marrow/parquet/reader.mojo`, `marrow/expr/execution.mojo` ·
-Done when: `ParquetScanProcessor` opens the file **once**. Today `_read_plan`
-(`execution.mojo:290-292`) calls `read_metadata`, `read_statistics`, `read_page_bounds` and then
-`read_table` (`:317`) — each constructing its own `ParquetFile`, i.e. **four mmaps and four footer
-parses per logical scan**. Delete the three one-line wrappers (`reader.mojo:2085,2111,2147`, which
-duplicate `ParquetFile` methods and have no PyArrow equivalent) and thread one `ParquetFile`
-through. Then remove `_span()` and make `PageReader` chunk-relative.
-
----
 
 ## Tier 2 — root causes (removes classes of future bugs)
 
@@ -1661,56 +1444,6 @@ Rule to apply (from review §7). A module-level function survives **only** if:
 Everything else becomes a method, static factory, private method of its one owning type, or a
 `Kernel` struct. Full per-function classification is in review §7.
 
-**Q3.1 — Kernels (115 of 122)** · Depends: Q1.1, Q2.2 · Owns: `marrow/kernels/*` (+ tests) ·
-⚠️ wait for `t2.3b-aggregate` and `fu4-like-scalar` · Highest-value order:
-1. Delete the **20 typed `filter`/`take`/`drop_null` delegators** — keep exactly 3 free
-   (`filter`, `take`, `drop_null`, all `pc.*`, all needed by the binding). Adding an array type
-   drops from a six-site edit to two. Only 4 have production callers; each is a trivial rewrite.
-2. ✅ **DONE 2026-07-29** (`3630b3a`) — **and its premise was already stale when written.**
-   `RapidHash` and `SortIndices` both existed; that half landed with Q1.1, as its own note
-   predicted ("do the struct conversion in the same pass"). `array()` was gone too. What
-   remained was the delegator layer the structs made redundant: `rapidhash` 5 overloads → 2,
-   `sort_indices` 4 → 1.
-
-   The drift this task predicts was there to find: `rapidhash` had five typed overloads
-   against `RapidHash.apply`'s seven — `ListLikeArray` and `FixedSizeListArray` were taught
-   to the kernel and forgotten in the free set. `sort_indices`' three had **no callers at
-   all**, and the `BoolArray` one had silently dropped `stable` and `limit`.
-
-   **Two `rapidhash` free functions are load-bearing, not delegators.** The erased one is
-   the `pc.*` entry; `rapidhash(StructArray)` is what `SwissHashTable[hasher]` /
-   `HashJoin[hasher]` bind — their `hasher` parameter is typed
-   `def(StructArray, ExecutionContext) raises -> UInt64Array`, so it must be a free symbol
-   with that exact signature and a static method will not do. Deleting it breaks seven call
-   sites across `groupby`/`distinct`/`join`/`hashtable`/`membership`.
-3. Delete legacy `is_null`/`select`/`equal` free functions — `expr/dynamic.mojo` calls the **old,
-   narrower** ones (numeric-only `is_null`; `select` silently drops validity).
-4. ✅ **DONE 2026-07-28** — `membership.mojo` → `IsInKernel` (`3fa602f`, 5 free fns → 2);
-   `conditional.mojo` → kernel structs over a shared engine (`762b6ba`, 11 → 10 free fns but
-   5 structs where there were none). The engine is named **`Selection`**, not `Multiplex`:
-   it owns the candidates *and* the growing selector, and `gather` is the multiplex step —
-   naming the type after one of its methods was what kept it looking like a free function.
-   Two findings worth carrying into the rest of this task:
-   - **Do not parameterise a shared engine on the kernel.** `Selection[K: Kernel]` reads
-     better and attributes errors statically, but it holds `concat`/`take` and would be
-     instantiated per kernel — Q0.4 measured that shape at +115,600 bytes. A runtime
-     `StaticString` name costs nothing.
-   - **Deduplicating into a type is a size *win*, not a cost.** Collapsing four inlined
-     copies of the selector loop and the uniformity check took `query_dynvalue` down
-     **16,528 bytes** (5,455,440 → 5,438,912).
-   - **Typed delegators are not automatically waste.** The three in `membership.mojo` were
-     (byte-identical bodies), and collapsed to one bound on `Array`. But typed arrays are
-     deliberately not `ImplicitlyCopyable`, so deleting a typed overload outright just moves
-     `.copy()` noise onto every call site. Check the call sites before counting a delegator.
-
-   Still open here: `temporal.mojo` `date_trunc` → `DateTruncKernel` with a `TimeUnit` enum
-   instead of a `String`.
-5. Delete the **9 temporal delegators** (`year`, `month`, …) called only by tests — but see
-   the typed-delegator finding above before counting them as dead.
-6. Move `reinterpret_array` / `temporal_backing_dtype` out of `aggregate.mojo` onto
-   `DynArray` / `DynType` (today `filter.mojo` imports from *aggregate* to filter a timestamp).
-7. Delete verified-dead: `hash_identity` ×3, `_drop_null_bool`.
-
 **Q3.2 — Core + memory (41 of 89)** · Depends: Q2.1, Q2.3 · Owns: `marrow/views.mojo`,
 `marrow/utils.mojo`, `marrow/builders.mojo`, `marrow/scalars.mojo`, `marrow/c_data.mojo` ·
 ⚠️ BINSIZE · Key moves: `dispatch_over_*` → methods on `DynType` (**64 call sites**, removes
@@ -1772,78 +1505,6 @@ size risk in the plan).
   columns?" predicate is re-derived **three times with different membership**, and `JOIN_CROSS`
   silently falls into the LEFT/RIGHT/FULL branch); `JoinIndex` (split `SwissHashTable`'s two
   mutually-exclusive lifecycles); `BuildPartition` (replace three lockstep-indexed `List`s).
-- ~~**Q4.2 — Expr op registry (RC9).**~~ **Dropped 2026-07-29.** It bundled two problems
-  behind one solution: wiring duplication (each operator spelled out ~6 times) and parity
-  drift between the lanes. The registry only ever addressed the first, in the two most
-  size-sensitive files in the tree, on a duplication-reduction claim that should stand on its
-  own merits — and it is not worth a ⚠️ BINSIZE refactor of `values.mojo`/`dynamic.mojo`.
-
-  The inventory behind the "~30 operators" claim, verified 2026-07-29 so it is not lost:
-  F1 has 41 tags; genuinely F2-only are **~23 scalar operators** — `Ceil`, `Floor`, `Round`,
-  `Sign`, `Sqrt`, `Exp`, `Ln`, `Pow`, `IsNan`, `IsInf`, `Concat`, `Upper`, `Lower`,
-  `Capitalize`, `Reverse`, `Strip`, `LStrip`, `RStrip`, `StartsWith`, `EndsWith`,
-  `StrContains`, `ListContains`, `ListLength` — plus the window/reduction nodes. `IF_ELSE` is
-  F1-only. Several apparent gaps are not real: `StrEq`…`StrGe` are reached by F1's `EQ`…`GE`
-  through `_compare`'s string arm, and the `*To*` cast nodes by F1's single `CAST`.
-- **Q4.6 — Give the AOT lane a comptime-projected Parquet scan** · *found 2026-07-29, measured* ·
-  Depends: Q4.3 (same seam) · Owns: `marrow/parquet/reader.mojo`, `marrow/expr/relations.mojo` ·
-
-  `query_scan` costs **+1,033,560 bytes of `__text`** over the floor gate — a Parquet scan
-  roughly *doubles* a minimal AOT binary (floor is 1,251,672). Attributed with `nm`: the gate's
-  scan declares `int64, int64, string`, yet the binary links **24 `PrimitiveLeafBuilder`
-  instantiations, 8 `ByteArrayLeafBuilder`, `BoolLeafBuilder`**, and decode arms for `Date32`,
-  `Date64`, `Timestamp`, `Binary` and `Bool` — types the query never mentions.
-
-  Cause: `ParquetFile.read` resolves leaf type at **runtime**, so every builder is reachable,
-  even though an AOT scan's schema is a comptime value. The writer is fully DCE'd (0 symbols),
-  which shows the DCE property works — the reader just exposes no comptime seam for it to bite
-  on. Done when an AOT scan instantiates only the leaf builders its own schema names, with the
-  runtime ladder still available for the dynamic lane. Gate it on `query_scan`.
-
-  Not the lever: codec gating. `parquet::codecs` is 32 symbols against `reader`'s 107.
-
-  **Reader half ✅ DONE 2026-07-29.** `LeafSet` is a comptime bitmask, one bit per
-  `_dispatch` arm; `ColumnReader`, `ParquetFile` and `read_table` take it, defaulting to
-  `LeafSet.all()` so the dynamic lane is byte-for-byte unchanged. Each arm sits behind
-  `comptime if Self.leaves.has(...)`. Apples-to-apples on the same program:
-
-  | | `__text` | `PrimitiveLeafBuilder` |
-  |---|---:|---:|
-  | `read_table[LeafSet.all()]` | 1,432,828 | 24 |
-  | `read_table[LEAF_INT64 \| LEAF_STRING]` | **862,252** | **2** |
-
-  **−570,576 bytes, 40% of the program.** Gated by `query_scan_typed`.
-
-  Two hazards found while doing it, both now guarded in the code: the ladder had **no
-  `date64` arm** (Parquet never produces one — do not "helpfully" add it), and the INT96
-  test must stay *ungated*, because an INT96 column's Arrow dtype is `timestamp(ns)` and
-  gating it lets the column fall through to the temporal arm and be decoded as INT64.
-
-  **The relational lane carries it too.** `DynRelation.filter` used to push a predicate by
-  downcasting to a concrete `ParquetScan` and rebuilding it, which silently rebuilt a
-  `ParquetScan[narrow]` as the default full-ladder one — losing the narrowing. Returning
-  `Optional[DynRelation]` from a virtual **does not compile** (it puts `DynRelation` inside
-  its own trampoline field type and Mojo rejects the struct as recursive), so
-  `Relation.with_predicate` returns the rebuilt node as an erased `ArcPointer[NoneType]`:
-  the rebuilt node has the *same concrete type*, so the caller keeps its trampolines and
-  swaps only the pointer. Measured like-for-like with pushdown active, `query_scan`
-  2,287,544 -> `query_scan_typed` **1,757,108** `__text` (**-530,436**); the floor gate also
-  fell 7,240, because the virtual is cheaper than the downcast it replaced.
-
-  `leaf_of[T]()` is the caller-facing form — one overload per dtype family, so a caller says
-  which *types* a read will see rather than which bits. Tight bounds rather than one
-  `[T: DataType]` with `downcast`, because `downcast[T, Trait]()` requires the trait to be
-  `Defaultable` and `TemporalType`/`DecimalType` are not.
-- **Q4.3 — Parquet leaf visitor.** Collapse the **8 hand-written Arrow-type ladders** in
-  `reader`/`writer`/`statistics`/`schema` into one `visit_leaf[V: LeafVisitor]`. They already drift
-  (INT96 in one; `binary` missing from another).
-- **Q4.4 — `ipc.mojo` (2318 lines) → a package**, mirroring `parquet/`. Natural split in review §2.
-- **Q4.5 — Fused `prune`.** The AOT frontend **cannot prune row groups at all**
-  (`_prune_tramp` always returns `unknown()`) while `pruning.mojo`'s docstring claims it can — so
-  the performance-oriented frontend loses the biggest available win.
-
----
-
 ## Continuous / cheap
 
 - **Q5.1 — Documentation drift.** CLAUDE.md lists `marrow/bitmap.mojo`, `marrow/visitor.mojo`,
@@ -1876,7 +1537,7 @@ size risk in the plan).
   so one name means one thing, and drop the circular `import *` between `arrays` and `dtypes` in
   favour of explicit imports. That also removes a long-standing readability trap.
 
-- **Q5.2 — Fold untracked items into `execution-engine-tasks.md`** so they are dated and
+- **Q5.2 — Fold untracked items into `tasks-execution-engine.md`** so they are dated and
   closeable: D5 (was untracked), Q0.0, and the RC5 lifetime issue. Mark **FU-1 superseded by
   Q1.1** and **FU-3 absorbed into Q2.2**.
 

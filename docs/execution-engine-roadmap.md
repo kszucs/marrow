@@ -39,7 +39,7 @@ wall-clock vs polars/duckdb on the same box, **and** (for F2) a binary whose
 > **M1 is defined concretely by the 43 ClickBench queries** (`~/Workspace/ClickBench`)
 > run through marrow's frontend, not SQL. The `hits` table is a single wide flat table
 > (~105 cols, no joins/nesting) — ideal first target. A per-query feature→task coverage
-> map is in [`execution-engine-tasks.md`](execution-engine-tasks.md) §6. Reading the
+> map is in [`tasks-execution-engine.md`](tasks-execution-engine.md) §6. Reading the
 > queries **promoted several features from M2 into M1** (min/max on string+date,
 > `count_distinct` as a relational agg, `HAVING`, computed group keys/agg inputs,
 > `date_trunc`) — the rows below and the tasks doc reflect that. Q29 (`REGEXP_REPLACE`)

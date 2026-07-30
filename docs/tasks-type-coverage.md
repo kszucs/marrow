@@ -2,7 +2,7 @@
 
 Companion to the type-gap analysis run on 2026-07-30. This file is the executable
 half: discrete, worktree-ready tasks with explicit file ownership, following the
-conventions of [`execution-engine-tasks.md`](execution-engine-tasks.md) (one task =
+conventions of [`tasks-execution-engine.md`](tasks-execution-engine.md) (one task =
 one worktree = one owned write-set; ownership rules and the quality gate in §1 of
 that file apply verbatim here).
 

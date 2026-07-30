@@ -253,8 +253,8 @@ the rule.
   `cast.mojo` already has. `marrow/expr/aggregates.mojo` holds the erased boxes
   (`AggFunc`, `AggFold`) and `Aggregates`, the set that owns the
   multi-aggregate drivers; `marrow/expr/dynamic.mojo` holds `resolve_agg`, the
-  one string comparison. (`docs/expr-kernels-layering-tasks.md` L1 argues for
-  the catalog going the other way — see `docs/aggregate-followups.md` §6.)
+  one string comparison. (`docs/tasks-expr-kernels-layering.md` L1 argues for
+  the catalog going the other way — see `docs/tasks-aggregate-followups.md` §6.)
 - `GroupBy`'s serial and radix strategies were the same algorithm written four
   times; they are now one driver, `_by_partition[col_agg](..., partition: Bool)`.
   `GroupBy(keys, ctx, strategy)` can force a strategy — §7's prerequisite for
@@ -267,7 +267,7 @@ the rule.
 - Follow-on in the same line of work: aggregates are now written on the
   expression they aggregate (`col("x").sum()`), a keyless `aggregate(...)`
   executes, and `count` of an all-null group is 0 over every dtype. See
-  `docs/aggregate-followups.md`.
+  `docs/tasks-aggregate-followups.md`.
 
 ### Gates
 

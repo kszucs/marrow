@@ -621,7 +621,7 @@ example. They mostly bite generic trait hierarchies (e.g. `marrow.expr.values`).
   annotation, never returned from a function. Consequence: "wrap this operand
   only when it needs converting" is not expressible; either always wrap or do
   the selection somewhere the concrete type is known. This blocked Q0.4's
-  promote-at-construction design (`docs/code-quality-tasks.md`).
+  promote-at-construction design (`docs/tasks-code-quality.md`).
 
 
 # How to identify leaky abstractions

@@ -23,9 +23,9 @@ Tier-A/B tasks were in fact complete. Checked by grep, not by trusting a header:
 
 > **L6/Q1.3's blocker was imaginary.** Both were held up by a "compiler crashes on
 > `rel.filter(col > lit)` under `TestSuite`" cap. That cap was caused by tests building plan
-> nodes by hand, not by the toolchain — see `docs/code-quality-tasks.md`. Both are unblocked.
+> nodes by hand, not by the toolchain — see `docs/tasks-code-quality.md`. Both are unblocked.
 
-Same conventions as `docs/code-quality-tasks.md`: one owner per file, worktree-ready, conventional
+Same conventions as `docs/tasks-code-quality.md`: one owner per file, worktree-ready, conventional
 commits, `CHANGELOG.md` entry per meaningful change. Tasks marked **⚠️ BINSIZE** must run
 `pixi run binary_size` and report the **fused (AOT) `query_streaming` stripped size** before/after,
 re-measured on the task's own base commit.
@@ -344,7 +344,7 @@ generic "scan with pushdown support" discriminant rather than a format name in t
 > morsel slicing) at the same time — pruning and morsel slicing are format-independent and belong
 > to the scan wrapper, not the parquet implementation.
 >
-> Coordinate with **Q1.3** in `docs/code-quality-tasks.md` (one file handle per scan), which owns
+> Coordinate with **Q1.3** in `docs/tasks-code-quality.md` (one file handle per scan), which owns
 > the same two files.
 
 **L9 — Minor, batchable** · Depends: — · Owns: as listed per item:
@@ -374,4 +374,4 @@ L9   (independent, cheap)
 `L1` first: it is mechanical, deletes an import edge, and makes three documents true.
 `L2` is independent of it and equally mechanical. `L5` is the only perf-sensitive task in the set
 and must not be run in parallel with anything else on this machine (see the orchestration lessons
-in `docs/code-quality-tasks.md` §0).
+in `docs/tasks-code-quality.md` §0).

@@ -23,7 +23,7 @@ output schema at compile time. So the gate keeps measuring the floor, and the
 +16,528 is the standing measurement of what schema derivation costs. It is also
 avoidable — a *fused* value's `OutType` is statically known, so probing it by
 execution is unnecessary in principle (see Q4.x in
-`docs/code-quality-tasks.md`); if that lands, these can be converted.
+`docs/tasks-code-quality.md`); if that lands, these can be converted.
 """
 
 from marrow.builders import array

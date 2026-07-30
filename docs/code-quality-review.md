@@ -31,7 +31,7 @@ They are not style opinions. Each is a symptom of a root cause in §2.
 temporal key that `HashGrouper.consume_keys` cannot hash, and sorting by a timestamp
 (Q8/24–27) raises. The ClickBench `hits` table is keyed on `EventDate`/`EventTime`.
 This is a roadmap gap, not just a quality issue — it is not currently tracked in
-`execution-engine-tasks.md`. (FU-1 tracks only the `large_string` half.)
+`tasks-execution-engine.md`. (FU-1 tracks only the `large_string` half.)
 
 ---
 
@@ -376,7 +376,7 @@ RC9 (the op registry — gate on `binary_size`), the parquet visitor to collapse
 `ipc.mojo` → package.
 
 **Continuous.** Fix the doc drift now (it is cheap and actively misleading), and fold the
-un-tracked items above into `docs/execution-engine-tasks.md` as FU entries so they are dated
+un-tracked items above into `docs/tasks-execution-engine.md` as FU entries so they are dated
 and closeable.
 
 ---
@@ -490,7 +490,7 @@ Previously measured at `80ebc10`: **59 failed, 1737 passed, 305 skipped**, confi
 upgrade: `ArcPointer[TagValue]` wrote a `Variant` discriminant one byte past its allocation,
 corrupting the heap cumulatively until it hit live allocator metadata. It was a toolchain
 defect, not marrow logic. Both files now pass in full (43 and 35), and ASAN reports **0**
-`heap-buffer-overflow` hits where it previously reported 86. See `code-quality-tasks.md` Q0.0
+`heap-buffer-overflow` hits where it previously reported 86. See `tasks-code-quality.md` Q0.0
 for the verification table and the methodology lessons (ASAN masked it; build failures look
 identical to clean runs; minimal reproducers were useless).
 
