@@ -76,6 +76,7 @@ from ..kernels.numeric import (
 )
 from ..kernels.numeric import (
     BinaryKernel,
+    BinaryNumericKernel,
     UnaryKernel,
     AddKernel,
     SubKernel,
@@ -170,7 +171,7 @@ from ..kernels.boolean import (
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from .pruning import PruneStats, PruneBound
-from .dynamic import TagValue, DynAgg
+from .dynamic import TagValue, DynAgg, _promote_operands
 from .aggregates import AggFunc
 from ..kernels.cast import (
     NumericCast as NumericCastKernel,
@@ -606,7 +607,7 @@ struct NumericLiteral[T: NumericType](NumericValue):
 
 
 @fieldwise_init
-struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
+struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     NumericValue
 ):
     """Fused arithmetic over two operands, widening to the wider dtype. There is no
@@ -616,11 +617,26 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = promote[Self.L.OutType, Self.R.OutType]
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
+
+    comptime IsErased = Self.L.IsErased or Self.R.IsErased
+    """Propagated, not defaulted: an operand that resolves its types at run time
+    cannot be fused into, so this whole node takes the dispatch arm."""
+
     var l: Self.L
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # One arm for the erased lane. `K` already names the operation, so
+            # this is the same node the fused lane builds — there is no separate
+            # interpreter tag and no switch to add an arm to.
+            var n = batch.num_rows()
+            var l = into_array(self.l.execute(batch), n)
+            var r = into_array(self.r.execute(batch), n)
+            _promote_operands(l, r)
+            return Datum(Self.K.dispatch(l, r))
+        else:
+            return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2462,6 +2478,52 @@ struct DynValue(
     ) -> String:
         """Unreachable — `StringValue`'s counterpart to `vectorwise` above."""
         return String()
+
+    # --- operators: disambiguated, and building the *shared* nodes ----------
+    #
+    # Conforming to several families means inheriting several fluent surfaces,
+    # and they collide: `NumericValue.__add__` yields `Add` while
+    # `StringValue.__add__` yields `Concat`, so `a + b` on two erased operands is
+    # an ambiguous call. The box has to choose, and numeric is what the runtime
+    # interpreter's `ADD` has always meant — string concatenation stays an
+    # explicit `.concat(...)`.
+    #
+    # Each returns the same node the fused lane builds. There is no erased node
+    # type; `Add[DynValue, DynValue]` *is* `Add`.
+    # A *non-generic* overload for the erased-on-erased case. The generic forms
+    # below are not enough on their own: `DynValue` satisfies both
+    # `Rhs: NumericValue` and `Rhs: StringValue`, so `dyn + dyn` matches every
+    # generic candidate equally and the call stays ambiguous. This one is more
+    # specific, so it wins.
+    def __add__(self, o: DynValue) -> Add[DynValue, DynValue]:
+        return Add(self.copy(), o.copy())
+
+    def __sub__(self, o: DynValue) -> Sub[DynValue, DynValue]:
+        return Sub(self.copy(), o.copy())
+
+    def __mul__(self, o: DynValue) -> Mul[DynValue, DynValue]:
+        return Mul(self.copy(), o.copy())
+
+    def __mod__(self, o: DynValue) -> Mod[DynValue, DynValue]:
+        return Mod(self.copy(), o.copy())
+
+    def __floordiv__(self, o: DynValue) -> Floordiv[DynValue, DynValue]:
+        return Floordiv(self.copy(), o.copy())
+
+    def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
+        return Add(self.copy(), o.copy())
+
+    def __sub__[Rhs: NumericValue](self, o: Rhs) -> Sub[Self, Rhs]:
+        return Sub(self.copy(), o.copy())
+
+    def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
+        return Mul(self.copy(), o.copy())
+
+    def __mod__[Rhs: NumericValue](self, o: Rhs) -> Mod[Self, Rhs]:
+        return Mod(self.copy(), o.copy())
+
+    def __floordiv__[Rhs: NumericValue](self, o: Rhs) -> Floordiv[Self, Rhs]:
+        return Floordiv(self.copy(), o.copy())
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         """`Value`'s abstract producer, satisfied by running the boxed node.

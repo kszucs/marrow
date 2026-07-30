@@ -588,3 +588,51 @@ def test_numeric_rank_agrees_across_lanes() raises:
             dt.dispatch_numeric[check](),
             String("rank disagreement for ") + String(dt),
         )
+
+
+# ---------------------------------------------------------------------------
+# One node set: the shared fused nodes, instantiated over erased operands
+# ---------------------------------------------------------------------------
+
+
+def test_shared_node_over_erased_operands() raises:
+    """`a + b` on two erased operands builds `Add[DynValue, DynValue]` — the
+    *same* `Add` the fused lane builds, not a runtime tag.
+
+    This is the whole point of Step 3. `DynValue` conforms to `NumericValue`, so
+    `NumericValue.__add__` applies to it unchanged and yields `Add[Self, Rhs]`
+    with both parameters erased. The node then takes its dispatch arm because
+    `IsErased` propagates from its operands.
+
+    Asserted against the fused tree over the same batch: one node type, two
+    lanes, same answer.
+    """
+    var batch = _ab_batch()
+
+    var lhs: DynValue = dcol(0)
+    var rhs: DynValue = dcol(1)
+    var shared = lhs + rhs  # Add[DynValue, DynValue]
+
+    assert_parity(fcol("a", int64) + fcol("b", int64), shared^, batch)
+
+
+def test_shared_node_nests_over_erased_operands() raises:
+    """`(a + b) * a` — the composite's own `IsErased` propagates, so an erased
+    subtree under another shared node still takes the dispatch arm rather than
+    trying to fuse a lane that does not exist.
+
+    Phase 0 found this the hard way: without propagation the outer node fails to
+    *instantiate*, because its fused arm elaborates `SIMD[DynType.native, W]`.
+    """
+    var batch = _ab_batch()
+
+    var lhs: DynValue = dcol(0)
+    var rhs: DynValue = dcol(1)
+    var again: DynValue = dcol(0)
+    var shared = (lhs + rhs) * again
+
+    assert_parity(
+        (fcol("a", int64) + fcol("b", int64)) * fcol("a", int64),
+        shared^,
+        batch,
+    )
