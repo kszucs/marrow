@@ -713,3 +713,43 @@ def test_shared_compare_node_compares_erased_strings() raises:
     var got = lt.execute(batch)
     var want: DynArray = array([True, False, False])
     assert_true(got == want)
+
+
+def test_shared_payload_nodes_over_erased_operands() raises:
+    """The payload-carrying nodes also serve both lanes.
+
+    These are the ones the isolated gates' favourable assumption did not cover:
+    they are pipeline *breakers* when fused, so `Value.execute` routes them
+    through `prepare` and never calls `materialize` — which is where the erased
+    arm lives. Each therefore makes `IsBreaker` follow `IsErased`: an erased node
+    has no fused loop to break, it computes the column in one dispatch.
+
+    Covers `StringLength`, `StringPredicate` (like) and `ConditionalBinary`
+    (coalesce/nullif); `TemporalExtract` is covered by `test_parity_year`
+    alongside its fused twin.
+    """
+    var s0 = array(["ab", "cde", "f"])
+    var s1 = array(["ab", "xy", "f"])
+    var sbatch = record_batch([s0^, s1^], names=["s", "t"])
+
+    var s: DynValue = dcol(0)
+    var t: DynValue = dcol(1)
+
+    # StringLength — breaker when fused, single dispatch when erased
+    var lens: DynValue = s.length()
+    var want_len: DynArray = array([2, 3, 1], int32)
+    assert_true(lens.execute(sbatch) == want_len)
+
+    # StringPredicate — the string comparison family
+    var eq: DynValue = s == t
+    var want_eq: DynArray = array([True, False, True])
+    assert_true(eq.execute(sbatch) == want_eq)
+
+    # ConditionalBinary — nullif over erased numeric operands
+    var nbatch = _ab_batch()
+    var a: DynValue = dcol(0)
+    var b: DynValue = dcol(1)
+    var nl: DynValue = Nullif(a.copy(), b.copy())
+    var got = nl.execute(nbatch)
+    # a == b only at index 2 (3 == 3), which nullif turns into a null
+    assert_true(got.null_count() == 1)

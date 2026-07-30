@@ -239,10 +239,32 @@ def case_when[
 # ---------------------------------------------------------------------------
 
 
-struct CoalesceKernel(Kernel):
+trait BinaryConditionalKernel(Kernel):
+    """A conditional kernel in its two-operand form.
+
+    `coalesce` is N-ary and `nullif` is binary, so they share no `apply`
+    signature — which is why the expression layer used to declare its own
+    `ConditionalBinaryKernel` trait plus `CoalesceOp`/`NullifOp` structs wrapping
+    the free functions. That put a second, parallel notion of "kernel" in
+    `values.mojo`. The binary form is a property of the kernel, so it is declared
+    here and implemented by the kernels themselves."""
+
+    @staticmethod
+    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
+        ...
+
+
+struct CoalesceKernel(BinaryConditionalKernel):
     """First non-null value across N arrays, elementwise."""
 
     comptime name = "coalesce"
+
+    @staticmethod
+    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
+        var candidates = List[DynArray](capacity=2)
+        candidates.append(la.copy())
+        candidates.append(ra.copy())
+        return Self.apply(candidates, ExecutionContext.serial())
 
     @staticmethod
     def apply(arrays: List[DynArray], ctx: ExecutionContext) raises -> DynArray:
@@ -289,10 +311,14 @@ def coalesce[
 # ---------------------------------------------------------------------------
 
 
-struct NullifKernel(Kernel):
+struct NullifKernel(BinaryConditionalKernel):
     """``a`` with the elements equal to ``b`` set to null (SQL ``NULLIF``)."""
 
     comptime name = "nullif"
+
+    @staticmethod
+    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
+        return Self.apply(la, ra, ExecutionContext.serial())
 
     @staticmethod
     def apply(

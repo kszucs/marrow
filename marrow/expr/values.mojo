@@ -141,7 +141,14 @@ from ..kernels.string import (
     ILikeKernel,
 )
 from ..kernels.membership import IsInKernel
-from ..kernels.conditional import coalesce, nullif, case_when
+from ..kernels.conditional import (
+    coalesce,
+    nullif,
+    case_when,
+    BinaryConditionalKernel,
+    CoalesceKernel,
+    NullifKernel,
+)
 from ..kernels.temporal import (
     TemporalExtractKernel,
     YearKernel,
@@ -1732,13 +1739,23 @@ struct StringPredicate[
 ](BoolValue):
     comptime OutType = BoolType
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime IsBreaker = True
+    comptime IsErased = Self.L.IsErased or Self.R.IsErased
+    # Breaker only when fused: `Value.execute` routes a breaker through
+    # `prepare` and reads its slot, so `materialize` — where the erased arm
+    # lives — would never run. An erased node has no fused loop to break.
+    comptime IsBreaker = not Self.IsErased
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var l: Self.L
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
+        comptime if Self.IsErased:
+            var n = batch.num_rows()
+            var la = into_array(self.l.execute(batch), n)
+            var ra = into_array(self.r.execute(batch), n)
+            return Datum(Self.K.dispatch(la, ra))
+        else:
+            return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1842,11 +1859,19 @@ struct StringLength[A: StringValue](NumericValue):
 
     comptime OutType = Int32Type
     comptime OutShape = 1
-    comptime IsBreaker = True
+    comptime IsErased = Self.A.IsErased
+    # Breaker only when fused: `Value.execute` routes a breaker through
+    # `prepare` and reads its slot, so `materialize` — where the erased arm
+    # lives — would never run. An erased node has no fused loop to break.
+    comptime IsBreaker = not Self.IsErased
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
+        comptime if Self.IsErased:
+            var col = into_array(self.a.execute(batch), batch.num_rows())
+            return Datum(LengthKernel.dispatch(col))
+        else:
+            return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2008,42 +2033,30 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 # in the kernel they call, so one generic node parameterized by a tiny op struct
 # covers both (mirrors `Reduction[K]` / `TemporalExtract[K]`). Both are
 # data-dependent-validity breakers over two same-dtype numeric operands.
-trait ConditionalBinaryKernel:
-    @staticmethod
-    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
-        ...
-
-
-struct CoalesceOp(ConditionalBinaryKernel):
-    @staticmethod
-    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
-        var candidates = List[DynArray]()
-        candidates.append(la.copy())
-        candidates.append(ra.copy())
-        return coalesce(candidates)
-
-
-struct NullifOp(ConditionalBinaryKernel):
-    @staticmethod
-    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
-        return nullif(la, ra)
-
-
 @fieldwise_init
 struct ConditionalBinary[
-    K: ConditionalBinaryKernel, L: NumericValue, R: NumericValue
+    K: BinaryConditionalKernel, L: NumericValue, R: NumericValue
 ](NumericValue):
     """`coalesce`/`nullif` over two same-dtype numeric operands; `K` picks the
     kernel. `prepare` materializes the result once; `vectorwise` loads it."""
 
     comptime OutType = Self.L.OutType
     comptime OutShape = 1
-    comptime IsBreaker = True
+    comptime IsErased = Self.L.IsErased or Self.R.IsErased
+    # Breaker only when fused: `Value.execute` routes a breaker through
+    # `prepare` and reads its slot, so `materialize` — where the erased arm
+    # lives — would never run. An erased node has no fused loop to break.
+    comptime IsBreaker = not Self.IsErased
     var l: Self.L
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # `combine` is already erased (`DynArray` in, `DynArray` out), so
+            # the erased arm is `_result` with nothing around it.
+            return Datum(self._result(batch))
+        else:
+            return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2075,8 +2088,8 @@ struct ConditionalBinary[
         return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
 
 
-comptime Coalesce = ConditionalBinary[CoalesceOp, _, _]
-comptime Nullif = ConditionalBinary[NullifOp, _, _]
+comptime Coalesce = ConditionalBinary[CoalesceKernel, _, _]
+comptime Nullif = ConditionalBinary[NullifKernel, _, _]
 
 
 @fieldwise_init
