@@ -1,6 +1,6 @@
 # Step 3 — replace `TagValue`'s tag interpreter with node structs
 
-Status: **in progress**, started 2026-07-30. Supersedes the Step 3 sketch in
+Status: **complete**, 2026-07-30. Supersedes the Step 3 sketch in
 `~/Workspace/dtype-proto/PLAN.md`, which three findings have overtaken.
 
 ## What changed since the original sketch
@@ -228,6 +228,50 @@ rather than impressions.
 | Phase 1 (`DynType` conformances) | 5,236,148 | 5,236,276 | 1288 passed |
 | Phase 2a (rename + `Value`) | not measured | not measured | 315 passed |
 | Phase 2b (family traits) | 5,236,148 | 5,236,276 | 315 passed |
+| Phase 3 (erased arms, 13 nodes) | 5,236,148 | 5,236,276 | 806 passed |
+| Phase 4 (interpreter deleted) | **3,956,596** | **3,957,620** | 1285 passed |
+
+### Final result
+
+    query_dynvalue   5,236,148 -> 3,956,596   -1,279,552  -24.4%
+    query_runtime    5,236,276 -> 3,957,620   -1,278,656  -24.4%
+    query_streaming  1,266,040 -> 1,303,028      +36,988   +2.9%
+    query_arith      1,274,676 -> 1,310,732      +36,056   +2.8%
+    query_join       3,762,420 -> 3,762,420           +0    0.0%
+
+`dynamic.mojo`: **1,087 -> 113 lines**. 41 tag constants and 99 switch arms
+gone. The erased lane loses **1.28 MB** — past the -15.7% the isolated gates
+predicted.
+
+The fused gates carry ~+37 KB, and ~30 KB of that is `Value.prune`: statistics
+pruning the fused lane **did not have before**, since the box answered
+`unknown()` for every fused node. That is part of Q4.5 delivered as a side
+effect, so it is capability rather than pure cost; ~7 KB remains unaccounted.
+
+Perf vs `BASELINE.md`: 57/57 rows, nothing attributable to this work.
+
+### What the phases actually cost, in surprises
+
+Worth recording because each cost real time and none was in the plan:
+
+1. **The `materialize` catch-22** — every family defaults it, so conforming to
+   two is a compile error, and implementing it manually recurses. Fixed by the
+   `CLAUDE.md` workaround: family-specific helper names plus 32 one-line
+   overrides.
+2. **Triplicated aggregate sugar** — `count_distinct` was defined three times,
+   `min`/`max`/`count` three times with *different* bodies. Duplication across
+   family traits is not inert: it is invisible until one struct conforms to two.
+3. **`__gt__` recursion, only from outside the package.** The box inheriting a
+   fluent surface returning `Gt[Self, Rhs]` made an external program fail to
+   compile while the test suite stayed green. Caught only when a binary-size
+   gate was rebuilt. Fixed by splitting `NumericOps` off `NumericValue`.
+4. **Three erased node types added and removed.** `DynColumn`, `DynLiteral`,
+   `DynCast` were all unnecessary — the box is the erasure boundary. Only
+   `RuntimeCast` survived, because `NumericCast[To]` binds `To` on
+   `NumericType` and cannot express `cast(timestamp(second))`.
+5. **A widened dispatch cost 34 KB.** Fixing `DynScalar.repeat`'s missing
+   string arm by moving to `dispatch_primitive` added ~13 types that build an
+   array each. Narrowed back to numeric + bool + string-like.
 
 ### Phase 2 blocker — **RESOLVED** in `b56b886`
 
