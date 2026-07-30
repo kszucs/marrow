@@ -753,3 +753,33 @@ def test_shared_payload_nodes_over_erased_operands() raises:
     var got = nl.execute(nbatch)
     # a == b only at index 2 (3 == 3), which nullif turns into a null
     assert_true(got.null_count() == 1)
+
+
+def test_shared_cast_isin_casewhen_over_erased_operands() raises:
+    """The last three payload nodes: `cast`, `is_in` and `case_when`.
+
+    `NumericCast` is the only node whose payload survives erasure — `To` stays a
+    comptime type because just the *operand* is erased, so the target dtype is
+    known and the runtime cast router does the rest. `IsIn` carries a value-set
+    array and `CaseWhen` three child values, and both already worked in
+    `DynArray` internally, so their erased arms are the existing helper.
+    """
+    var batch = _ab_batch()
+    var a: DynValue = dcol(0)
+    var b: DynValue = dcol(1)
+
+    # NumericCast — erased operand, comptime target dtype
+    var casted: DynValue = NumericCast[Float64Type](a.copy())
+    var got_cast = casted.execute(batch)
+    assert_true(got_cast.dtype() == DynType(Float64Type()))
+    assert_true(got_cast.length() == 6)
+
+    # IsIn — payload is a value-set array
+    var member: DynValue = IsIn(a.copy(), array([1, 3, 7], int64))
+    var want_in: DynArray = array([True, False, True, False, True, False])
+    assert_true(member.execute(batch) == want_in)
+
+    # CaseWhen — three erased children
+    var picked: DynValue = CaseWhen(a > b, a.copy(), b.copy())
+    var want_pick: DynArray = array([9, 5, 3, 10, 7, 8], int64)
+    assert_true(picked.execute(batch) == want_pick)
