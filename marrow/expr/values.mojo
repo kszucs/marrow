@@ -633,6 +633,23 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
             var n = batch.num_rows()
             var l = into_array(self.l.execute(batch), n)
             var r = into_array(self.r.execute(batch), n)
+
+            comptime if Self.K.name == AddKernel.name:
+                # `+` over erased operands is a *runtime* decision: string-like
+                # means concatenate, otherwise add. It cannot be made when the
+                # tree is built — an erased column's dtype is only known once a
+                # schema is applied, so `DynValue.dtype()` is `None` for exactly
+                # the common case (`col(0) + col(1)`).
+                #
+                # This is the shape `TagValue._compare` already uses: an operator
+                # names a *pair* of kernels and the dtype picks one. The
+                # `comptime if` keeps it honest — only `+` links the string
+                # counterpart, so a `-` or `*` node does not carry a concat path
+                # it can never take. That property is why the equivalent
+                # `comptime StringKernel` was removed from the numeric kernels.
+                if l.dtype().is_string_like():
+                    return Datum(ConcatKernel.dispatch(l, r))
+
             _promote_operands(l, r)
             return Datum(Self.K.dispatch(l, r))
         else:

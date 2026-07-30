@@ -248,6 +248,27 @@ struct ConcatKernel(Kernel):
         return a + b
 
     @staticmethod
+    def dispatch(left: DynArray, right: DynArray) raises -> DynArray:
+        """Resolve two runtime string columns and concatenate them.
+
+        The erased counterpart of `apply`. `DynValue.__add__` needs it: `+` over
+        erased operands cannot know at build time whether it means addition or
+        concatenation, so the choice is made on the runtime dtype."""
+        var dt = left.dtype()
+        if not dt.is_string_like():
+            raise Self.error(t"expected a string array, got {dt}")
+        Self.expect_same_dtype(dt, right.dtype())
+        Self.expect_same_length(len(left), len(right))
+
+        @parameter
+        def leaf[T: StringLikeType](d: T) raises -> DynArray:
+            return Self.apply(
+                left.as_binary_like[T](), right.as_binary_like[T]()
+            ).to_dyn()
+
+        return dt.dispatch_stringlike[leaf]()
+
+    @staticmethod
     def apply[
         T: StringLikeType
     ](

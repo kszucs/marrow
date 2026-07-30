@@ -636,3 +636,29 @@ def test_shared_node_nests_over_erased_operands() raises:
         shared^,
         batch,
     )
+
+
+def test_shared_add_node_concatenates_erased_strings() raises:
+    """`+` on two erased operands means *concatenate* when they turn out to be
+    strings, and *add* when they turn out to be numbers.
+
+    The choice cannot be made when the tree is built: an erased column's dtype
+    is only known once a schema is applied, so `col(0) + col(1)` has no dtype to
+    branch on at construction. It is made in the node's erased arm instead,
+    against the materialized operands — the same shape `TagValue._compare` uses,
+    where an operator names a pair of kernels and the dtype picks one.
+
+    The numeric half of this is `test_shared_node_over_erased_operands`; both go
+    through the same `Add[DynValue, DynValue]`.
+    """
+    var x = array(["a", "c", "e"])
+    var y = array(["b", "d", "f"])
+    var batch = record_batch([x^, y^], names=["x", "y"])
+
+    var lhs: DynValue = dcol(0)
+    var rhs: DynValue = dcol(1)
+    var joined: DynValue = lhs + rhs
+
+    var got = joined.execute(batch)
+    var want: DynArray = array(["ab", "cd", "ef"])
+    assert_true(got == want)
