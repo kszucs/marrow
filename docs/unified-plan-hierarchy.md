@@ -12,7 +12,7 @@ of compile-time types alongside the existing runtime types:
 
 | Runtime | AOT counterpart |
 |---|---|
-| `AnyValue` / `Column` | `ColRef[idx, T]` |
+| `DynValue` / `Column` | `ColRef[idx, T]` |
 | `Binary` heap node | `Binary[op, L, R]` zero-size struct |
 | `DynRelation` / `Filter` | `CtFilter[Child, Pred]` |
 
@@ -27,7 +27,7 @@ Instead of a single `Binary[op, L, R]` or two parallel hierarchies, each
 operation is its own type with default type parameters:
 
 ```mojo
-struct Add[L: Expr = AnyValue, R: Expr = AnyValue](Expr):
+struct Add[L: Expr = DynValue, R: Expr = DynValue](Expr):
     var left:  L
     var right: R
 
@@ -43,42 +43,42 @@ struct Add[L: Expr = AnyValue, R: Expr = AnyValue](Expr):
 | `L`, `R` bound to | `var left: L` size | `left.eval()` | Path |
 |---|---|---|---|
 | `ColRef[0, Int64Type]` | 0 bytes | inlined by compiler | AOT |
-| `AnyValue` | pointer + vtable refs | vtable dispatch | Runtime |
+| `DynValue` | pointer + vtable refs | vtable dispatch | Runtime |
 
 Same struct, same `eval()`, no switch on an `op` constant. The operation is
 the type name. The type parameters decide which execution path is taken.
 
 ## The `Expr` Trait
 
-Both `AnyValue` and concrete zero-size expression types implement `Expr`:
+Both `DynValue` and concrete zero-size expression types implement `Expr`:
 
 ```mojo
 trait Expr:
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> DynArray:
         """Evaluate against a batch. Inlined when Self is a concrete type;
-        vtable-dispatched when Self is AnyValue."""
+        vtable-dispatched when Self is DynValue."""
         ...
 
-    fn to_dyn(self) -> AnyValue:
+    fn to_dyn(self) -> DynValue:
         """Wrap in the type-erased container. Used by plan serialization,
         the Python API, and the runtime bridge."""
         ...
 ```
 
-### `AnyValue` implements `Expr`
+### `DynValue` implements `Expr`
 
-`AnyValue` gains an `eval()` method that walks its own `ArcPointer` tree
+`DynValue` gains an `eval()` method that walks its own `ArcPointer` tree
 through the interpreter — logic currently in `executor.mojo` that moves onto
 the type itself:
 
 ```mojo
-struct AnyValue(Expr):
+struct DynValue(Expr):
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> DynArray:
         return _interpret(self, batch)   # existing executor walk, relocated
 
-    fn to_dyn(self) -> AnyValue:
+    fn to_dyn(self) -> DynValue:
         return self
 ```
 
@@ -90,8 +90,8 @@ struct ColRef[idx: Int, T: DataType](Expr):
     fn eval(self, batch: RecordBatch) raises -> DynArray:
         return batch.columns[idx].copy()
 
-    fn to_dyn(self) -> AnyValue:
-        return AnyValue(Column(index=idx, dtype_=T().to_dyn()))
+    fn to_dyn(self) -> DynValue:
+        return DynValue(Column(index=idx, dtype_=T().to_dyn()))
 
     fn __add__[R: Expr](self, rhs: R) -> Add[Self, R]:   return Add(self, rhs)
     fn __sub__[R: Expr](self, rhs: R) -> Sub[Self, R]:   return Sub(self, rhs)
@@ -109,7 +109,7 @@ struct ColRef[idx: Int, T: DataType](Expr):
     fn __invert__(self) -> Not[Self]:                    return Not(self)
     fn cast[To: DataType](self) -> Cast[Self, To]:       return Cast(self)
 
-struct Add[L: Expr = AnyValue, R: Expr = AnyValue](Expr):
+struct Add[L: Expr = DynValue, R: Expr = DynValue](Expr):
     var left: L
     var right: R
     def __init__(out self, left: L, right: R):
@@ -117,11 +117,11 @@ struct Add[L: Expr = AnyValue, R: Expr = AnyValue](Expr):
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> DynArray:
         return add(self.left.eval(batch), self.right.eval(batch))
-    fn to_dyn(self) -> AnyValue:
-        return AnyValue(RtBinary(op=ADD, left=self.left.to_dyn(), right=self.right.to_dyn()))
+    fn to_dyn(self) -> DynValue:
+        return DynValue(RtBinary(op=ADD, left=self.left.to_dyn(), right=self.right.to_dyn()))
     # operator overloads — same set as ColRef above
 
-struct Greater[L: Expr = AnyValue, R: Expr = AnyValue](Expr):
+struct Greater[L: Expr = DynValue, R: Expr = DynValue](Expr):
     var left: L
     var right: R
     def __init__(out self, left: L, right: R):
@@ -129,39 +129,39 @@ struct Greater[L: Expr = AnyValue, R: Expr = AnyValue](Expr):
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> DynArray:
         return greater(self.left.eval(batch), self.right.eval(batch))
-    fn to_dyn(self) -> AnyValue:
-        return AnyValue(RtBinary(op=GT, left=self.left.to_dyn(), right=self.right.to_dyn()))
+    fn to_dyn(self) -> DynValue:
+        return DynValue(RtBinary(op=GT, left=self.left.to_dyn(), right=self.right.to_dyn()))
     # operator overloads ...
 
 # Sub, Mul, Div, Equal, NotEqual, Less, LessEq, GreaterEq, And, Or follow
 # the same pattern. Each eval() calls the matching single kernel directly —
 # no op switch.
 
-struct Negate[C: Expr = AnyValue](Expr):
+struct Negate[C: Expr = DynValue](Expr):
     var child: C
     def __init__(out self, child: C): self.child = child
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> DynArray:
         return negate(self.child.eval(batch))
-    fn to_dyn(self) -> AnyValue:
-        return AnyValue(RtUnary(op=NEG, child=self.child.to_dyn()))
+    fn to_dyn(self) -> DynValue:
+        return DynValue(RtUnary(op=NEG, child=self.child.to_dyn()))
 
-struct Cast[C: Expr = AnyValue, To: DataType = DynType](Expr):
+struct Cast[C: Expr = DynValue, To: DataType = DynType](Expr):
     var child: C
     def __init__(out self, child: C): self.child = child
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> DynArray:
         return cast(self.child.eval(batch), To().to_dyn())
-    fn to_dyn(self) -> AnyValue:
-        return AnyValue(RtCast(child=self.child.to_dyn(), to=To().to_dyn()))
+    fn to_dyn(self) -> DynValue:
+        return DynValue(RtCast(child=self.child.to_dyn(), to=To().to_dyn()))
 ```
 
 ## Usage: Same Constructor, Two Paths
 
 ```mojo
-# Runtime — default AnyValue params, heap-backed, interpreter-executed
+# Runtime — default DynValue params, heap-backed, interpreter-executed
 var expr = col(0) + lit(1) > lit(0)
-# type: Greater[Add[AnyValue, AnyValue], AnyValue]
+# type: Greater[Add[DynValue, DynValue], DynValue]
 
 var plan = in_memory_table(batch).filter(expr)
 var result = execute(plan, ctx)
@@ -176,7 +176,7 @@ alias plan = Scan[orders_schema](batch).filter(expr)
 var result = run_plan(plan)
 ```
 
-The expression builder chain is identical. `col(0)` returns `AnyValue`;
+The expression builder chain is identical. `col(0)` returns `DynValue`;
 `col[0, Int64Type]()` returns `ColRef[0, Int64Type]`. Everything downstream
 follows from that single choice.
 
@@ -197,14 +197,14 @@ trait CtRelation(Relation):
 ```
 
 `DynRelation` gains `pull()` that delegates to the interpreter, mirroring
-what `AnyValue.eval()` does for expressions.
+what `DynValue.eval()` does for expressions.
 
 ### Unified relation operators
 
 ```mojo
 struct Filter[
     Child: Relation = DynRelation,
-    Pred:  Expr     = AnyValue,
+    Pred:  Expr     = DynValue,
 ](Relation):
     var child: Child
     var pred:  Pred
@@ -246,8 +246,8 @@ struct Filter[
 struct HashJoin[
     Left:     Relation = DynRelation,
     Right:    Relation = DynRelation,
-    LeftKey:  Expr     = AnyValue,
-    RightKey: Expr     = AnyValue,
+    LeftKey:  Expr     = DynValue,
+    RightKey: Expr     = DynValue,
 ](Relation):
     var left:      Left
     var right:     Right
@@ -301,13 +301,13 @@ def execute(owned plan: DynRelation, ctx: ExecutionContext) raises -> RecordBatc
 ### `expr/values.mojo`
 
 - Add the `Expr` trait.
-- Add `eval(batch) raises -> DynArray` and `to_dyn() -> AnyValue` to `AnyValue`.
+- Add `eval(batch) raises -> DynArray` and `to_dyn() -> DynValue` to `DynValue`.
 - Replace the monolithic `Binary` / `Unary` concrete structs with the
   parameterized `Add[L, R]`, `Sub[L, R]`, `Greater[L, R]`, `Negate[C]`,
   etc. The existing `RtBinary` / `RtUnary` names can be kept as aliases or
   renamed to `_RtBinary` (internal use only, bridged via `to_dyn()`).
 - `ColRef`, `IntLit`, `FloatLit`, `Cast` are new; `Column`, `Literal`,
-  `Cast` (existing runtime nodes) remain but are now the `AnyValue`-param
+  `Cast` (existing runtime nodes) remain but are now the `DynValue`-param
   defaults.
 
 ### `expr/relations.mojo`
@@ -315,14 +315,14 @@ def execute(owned plan: DynRelation, ctx: ExecutionContext) raises -> RecordBatc
 - Add `Relation` and `CtRelation` traits.
 - Add `pull()` to `DynRelation`.
 - Replace `Filter`, `Join`, etc. with parameterized versions with default
-  `DynRelation` / `AnyValue` type params.
+  `DynRelation` / `DynValue` type params.
 - Existing concrete runtime nodes (`RtFilter`, `RtJoin`, …) become the
   targets of `to_any_relation()`.
 
 ### `expr/executor.mojo`
 
 - `execute(plan, ctx)` delegates to `plan.pull()` in a loop — the
-  interpreter logic has moved onto `AnyValue.eval()` and
+  interpreter logic has moved onto `DynValue.eval()` and
   `DynRelation.pull()`.
 - `run_plan[P: CtRelation](plan)` is additive.
 
@@ -344,7 +344,7 @@ element-wise operation:
    `binary_array_dispatch`
 4. **Expression node** — `Add.eval()` calls the runtime dispatch version
 
-The dispatch layer exists entirely because `AnyValue` erases the dtype at
+The dispatch layer exists entirely because `DynValue` erases the dtype at
 runtime. When the expression type parameters are concrete, the dtype is known
 at compile time — the dispatch is unnecessary, and all four layers can
 collapse into one struct method.
@@ -353,7 +353,7 @@ collapse into one struct method.
 
 The mechanism that enables this is an associated output array type on the
 `Expr` trait. Concrete expression types override it with a specific array
-type; `AnyValue` keeps the default `DynArray`:
+type; `DynValue` keeps the default `DynArray`:
 
 ```mojo
 trait Expr:
@@ -361,9 +361,9 @@ trait Expr:
 
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> Self.OutArray: ...
-    fn to_dyn(self) -> AnyValue: ...
+    fn to_dyn(self) -> DynValue: ...
 
-struct AnyValue(Expr):
+struct DynValue(Expr):
     alias OutArray = DynArray           # type-erased, runtime dispatch in eval
     @always_inline
     fn eval(self, batch: RecordBatch) raises -> DynArray: ...
@@ -405,10 +405,10 @@ trait BinaryExpr[L: Expr, R: Expr](Expr):
 `Add` then contains only the operation itself:
 
 ```mojo
-struct Add[L: Expr = AnyValue, R: Expr = AnyValue](BinaryExpr[L, R]):
+struct Add[L: Expr = DynValue, R: Expr = DynValue](BinaryExpr[L, R]):
     alias OutArray = _promote[L.OutArray, R.OutArray]()
     # OutArray = PrimitiveArray[Int64Type] when both sides are typed Int64
-    # OutArray = DynArray when either side is AnyValue
+    # OutArray = DynArray when either side is DynValue
 
     var left:  L
     var right: R
@@ -425,7 +425,7 @@ struct Add[L: Expr = AnyValue, R: Expr = AnyValue](BinaryExpr[L, R]):
         # When L.OutArray = DynArray:
         #   add(DynArray, DynArray) — runtime dtype switch
 
-    fn to_dyn(self) -> AnyValue: ...
+    fn to_dyn(self) -> DynValue: ...
     fn __add__[R2: Expr](self, rhs: R2) -> Add[Self, R2]: return Add(self, rhs)
     fn __gt__[R2: Expr](self, rhs: R2) -> Greater[Self, R2]: return Greater(self, rhs)
     ...
@@ -471,12 +471,12 @@ be called in `to_any_relation()`. If `Schema` is later backed by a
 self-contained `InlineArray[FieldDef, N]`, materialization becomes free.
 
 **Dynamic SQL.** A query assembled at runtime from a parsed SQL string
-produces `AnyValue` / `DynRelation` nodes regardless. The default-param
+produces `DynValue` / `DynRelation` nodes regardless. The default-param
 structs handle this correctly — they just do not receive the AOT
 specialization. The AOT path requires the plan to be expressed as Mojo types
 before `mojo build` runs.
 
 **One-way bridge.** `to_dyn()` / `to_any_relation()` convert comptime types
-to runtime. The reverse is impossible: a type-erased `AnyValue` tree cannot
+to runtime. The reverse is impossible: a type-erased `DynValue` tree cannot
 be promoted to a parameterized comptime type at runtime because comptime types
 must be fixed before compilation finishes.

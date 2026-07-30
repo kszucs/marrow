@@ -1,16 +1,16 @@
 """Cross-driver parity harness for the expression system.
 
 Every stable op is expressible two ways: as a fused comptime ``Value`` tree
-(``values.mojo``) and as a runtime tag-based ``DynValue`` tree (``dynamic.mojo``).
-Both box into the shared ``AnyValue`` and expose ``execute(batch) -> DynArray``.
+(``values.mojo``) and as a runtime tag-based ``TagValue`` tree (``dynamic.mojo``).
+Both box into the shared ``DynValue`` and expose ``execute(batch) -> DynArray``.
 This suite asserts the two drivers agree element-for-element on the same input,
 so the runtime interpreter can never silently diverge from the fused algebra it
 mirrors.
 
 ``assert_parity`` is the reusable primitive: hand it a fused ``Value`` and an
-equivalent ``DynValue`` (each implicitly boxed into ``AnyValue``) plus a
+equivalent ``TagValue`` (each implicitly boxed into ``DynValue``) plus a
 ``RecordBatch``; it runs both and asserts the resulting arrays are equal. The
-fused column leaves resolve by name (``col("a", int64)``) and the ``DynValue``
+fused column leaves resolve by name (``col("a", int64)``) and the ``TagValue``
 leaves by position (``col(0)``), so a batch whose columns are named ``a``/``b``
 lets the two trees reference the same data.
 
@@ -54,7 +54,7 @@ from ...kernels.temporal import unit_day
 # Fused comptime algebra (values.mojo)
 from ...expr.values import (
     _rank,
-    AnyValue,
+    DynValue,
     col as fcol,
     lit as flit,
     NumericCast,
@@ -82,7 +82,7 @@ from ...expr.values import (
 # Runtime tag interpreter (dynamic.mojo)
 from ...expr.dynamic import (
     _numeric_rank,
-    DynValue,
+    TagValue,
     col as dcol,
     lit as dlit,
     if_else,
@@ -90,10 +90,10 @@ from ...expr.dynamic import (
 
 
 def assert_fused(
-    var fused: AnyValue, expected: DynArray, batch: RecordBatch
+    var fused: DynValue, expected: DynArray, batch: RecordBatch
 ) raises:
     """Assert a fused node matches an expected array. Used for ops the runtime
-    ``DynValue`` interpreter does not yet expose — their cross-driver parity case
+    ``TagValue`` interpreter does not yet expose — their cross-driver parity case
     is PENDING T2.2 (which wires the same ops into ``dynamic.mojo``); until then
     we pin the fused result against the kernel's expected output."""
     var actual = fused.execute(batch)
@@ -101,7 +101,7 @@ def assert_fused(
 
 
 def assert_parity(
-    var fused: AnyValue, var dyn: AnyValue, batch: RecordBatch
+    var fused: DynValue, var dyn: DynValue, batch: RecordBatch
 ) raises:
     """Execute both drivers against *batch* and assert the arrays are equal."""
     var expected = fused.execute(batch)
@@ -334,7 +334,7 @@ def test_parity_isnull_never_null() raises:
 # ---------------------------------------------------------------------------
 # Kleene 3-valued and_/or_ over nullable masks (T0.7). The fused `BoolValue` lane
 # now tracks validity, reusing the null-correct `AndKernel`/`OrKernel` (Kleene,
-# fixed in T0.1) that the runtime `DynValue` path already routes through, so the
+# fixed in T0.1) that the runtime `TagValue` path already routes through, so the
 # two drivers agree element-for-element — including where a known-false operand
 # forces a valid AND result and a known-true operand forces a valid OR result.
 # ---------------------------------------------------------------------------
@@ -436,7 +436,7 @@ def test_parity_string_ge() raises:
 
 
 # ---------------------------------------------------------------------------
-# Ops the runtime `DynValue` interpreter does not yet expose — like/ilike, is_in,
+# Ops the runtime `TagValue` interpreter does not yet expose — like/ilike, is_in,
 # coalesce, nullif, case_when, temporal. Their cross-driver parity is PENDING
 # T2.2 (which adds these tags to dynamic.mojo). Until then, pin the fused result
 # against the kernel's expected output (`assert_fused`).

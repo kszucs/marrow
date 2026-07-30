@@ -2,8 +2,8 @@
 
 Same query as the other variants (`SELECT a, name FROM orders WHERE a > b`),
 built with `marrow.expr.relations` — the self-executing fat nodes (`InMemoryTable`
-/`Filter`/`Project`, `pull()`-based, no `Planner`) over fused `AnyValue` values.
-Only fused comptime nodes (`col`/`>`) are boxed, so the `DynValue` interpreter and
+/`Filter`/`Project`, `pull()`-based, no `Planner`) over fused `DynValue` values.
+Only fused comptime nodes (`col`/`>`) are boxed, so the `TagValue` interpreter and
 its per-dtype kernel fanout are dead-code-eliminated — this should land near the
 fused path, far below the runtime path. That delta is the unification's DCE proof.
 
@@ -30,7 +30,7 @@ from marrow.builders import array
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.values import col, AnyValue
+from marrow.expr.values import col, DynValue
 from marrow.expr.relations import InMemoryTable, Project, DynRelation
 
 
@@ -43,11 +43,11 @@ def main() raises:
     )
 
     var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
-        AnyValue(col("a", int64) > col("b", int64))
+        DynValue(col("a", int64) > col("b", int64))
     )
-    var values = List[AnyValue]()
-    values.append(AnyValue(col("a", int64)))
-    values.append(AnyValue(col("name", string)))
+    var values = List[DynValue]()
+    values.append(DynValue(col("a", int64)))
+    values.append(DynValue(col("name", string)))
     var proj = Project(
         input=filtered,
         names=["a", "name"],

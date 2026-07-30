@@ -48,12 +48,12 @@ wall-clock vs polars/duckdb on the same box, **and** (for F2) a binary whose
 ### Guiding invariants (do not regress)
 
 1. **Small-binary DCE property** (`benchmarks/binary_size/`, `pixi run binary_size`).
-   The fused-only value box must never make `DynValue`'s interpreter or the open
+   The fused-only value box must never make `TagValue`'s interpreter or the open
    per-dtype kernel fanout reachable. Re-verify at *every* milestone gate, not just
    the end. This is the whole value proposition of F2.
 2. **One engine, two drivers.** Every feature is implemented once in the kernels /
    relational layer and reached by *both* frontends — the fused comptime `Value`
-   path (F2) and the interpreted `DynValue` path (F1). No feature may live in only
+   path (F2) and the interpreted `TagValue` path (F1). No feature may live in only
    one driver. (Current code violates this — see §3.)
 3. **PyArrow-shaped naming** everywhere the surface is user-facing.
 4. **Code quality is an acceptance criterion, not a follow-up.** The codebase must stay
@@ -97,7 +97,7 @@ map, dictionary, binary variants, interval are all present).
 - **Expression engine** (`marrow/expr/values.mojo`) — the dual-representation design
   is real: a rich **fused comptime algebra** (`Value` families: numeric/bool/string/
   list, reductions, casts, pipeline-breaker staging) boxed alongside a **runtime
-  interpreter** (`DynValue`) into one `AnyValue`. Verified byte-identical `__TEXT`
+  interpreter** (`TagValue`) into one `DynValue`. Verified byte-identical `__TEXT`
   for the fused path vs the fully-typed layer, ~30× smaller than the interpreter.
 - **Relational engine** (`marrow/expr/relations.mojo` + `execution.mojo`) — immutable
   plan IR + pull-based Volcano processors (morsel size 65 536): `InMemoryTable`,
@@ -125,7 +125,7 @@ methods that execute immediately over a single in-memory batch. There is **no**
 **zero of it is bound to Python**. ClickBench today runs through eager
 `group_by().aggregate()` on one batch — no filter, no join, no SQL.
 
-**G2 — The runtime (`DynValue`) driver is thin.** F1 must drive `DynValue`, but it
+**G2 — The runtime (`TagValue`) driver is thin.** F1 must drive `TagValue`, but it
 supports only ~20 op tags (arithmetic, compares, and/or, neg/abs/not, is_null,
 if_else, length, cast). It lacks: mod/floordiv/pow, float math, xor, isnan/isinf,
 notnull, any/all, **almost all string ops (only LENGTH)**, all list ops, windows.
@@ -141,7 +141,7 @@ LIMIT`) and beyond.
 **G4 — No optimizer / plan-rewrite layer.** Only the Parquet-scan pruning
 special-case exists. No projection pushdown, no general predicate pushdown, no
 pushdown below joins, no constant folding, no CSE, no limit pushdown, no join
-reordering. `AnyValue` lacks `referenced_columns()` — the prerequisite for
+reordering. `DynValue` lacks `referenced_columns()` — the prerequisite for
 projection pushdown. Designed in `aot-relations-design.md` but unbuilt.
 
 **G5 — Scan is not streaming and not remote.** `ParquetScanProcessor` reads the
@@ -184,14 +184,14 @@ container only (no `slice`/`__getitem__`/`null_count`/`filter`/`cast`); `Table` 
 
 These shape many tasks; decide them first.
 
-- **D1 — F1 drives `DynValue`; F2 drives fused `Value`. Both go through the same
+- **D1 — F1 drives `TagValue`; F2 drives fused `Value`. Both go through the same
   `DynRelation` plan and `execute()`.** Do *not* build a second execution path for
   Python. The Python `LazyFrame.collect()` maps to `execute(plan, ctx)`. Confirmed
   viable by the audit; the only new work is binding + Python wrappers + growing
-  `DynValue`.
+  `TagValue`.
 - **D2 — Grow the relational layer as *erased* nodes (`DynRelation`) first.** Add
   `Sort`/`Limit`/`Distinct`/`Union`/`Window` as runtime relational nodes over
-  `AnyValue`. Defer the fully-typed `Project[*Es]`/`Table[T]` monomorphized
+  `DynValue`. Defer the fully-typed `Project[*Es]`/`Table[T]` monomorphized
   relational plan (G8) to M3+ — it is an optimization of F2, not a correctness gate,
   and it is blocked on a compiler bug. F2's binary-size win is already delivered at
   the expression level.
@@ -201,7 +201,7 @@ These shape many tasks; decide them first.
   abstraction. Do this before wiring OpenDAL.
 - **D4 — Optimizer is a rule-list over the immutable `DynRelation` IR**, mirroring
   DataFusion. Each rule is a pure `DynRelation -> DynRelation` rewrite. Add
-  `referenced_columns()` / `is_deterministic()` metadata to `AnyValue` first
+  `referenced_columns()` / `is_deterministic()` metadata to `DynValue` first
   (prerequisite for pushdown).
 - **D5 — Fix Kleene null semantics in the boolean kernels before M1 ships.** Wrong
   results are worse than missing features; ClickBench filters exercise this.
@@ -222,10 +222,10 @@ polish. **Won't** = explicitly out of scope for this roadmap.
 
 | Feature | MoSCoW | Notes / entry points |
 |---|---|---|
-| Python `Column` wrapper over `DynValue` (forward `+ - * / == < > & \| ~`, `.cast`, `.is_null`, `.isin`, reductions, string/temporal methods) | **Must** | `DynValue` already has the dunders (`dynamic.mojo:413-468`); pure-Python `Column`. |
+| Python `Column` wrapper over `TagValue` (forward `+ - * / == < > & \| ~`, `.cast`, `.is_null`, `.isin`, reductions, string/temporal methods) | **Must** | `TagValue` already has the dunders (`dynamic.mojo:413-468`); pure-Python `Column`. |
 | Python `col()`, `lit()` (with runtime dtype inference incl. string/temporal), `if_else` | **Must** | `lit` is parametric on numeric type today — needs a runtime-dtype `lit`. |
 | Python **ibis-flavored** `Table` over `DynRelation` (`.filter/.select/.mutate/.group_by/.aggregate/.order_by/.limit/.join`) building, not executing; `.execute()`/`.to_pyarrow()` | **Must** | Thin native wrapper — **not** an ibis backend, no `ibis` dep. `DynRelation` fluent API exists (`relations.mojo:211-335`). See tasks §3.1. |
-| Bind `AnyValue`/`DynRelation` through `PythonModuleBuilder.add_type` | **Must** | New binding territory; watch trait/associated-type elaboration hazards (CLAUDE.md). |
+| Bind `DynValue`/`DynRelation` through `PythonModuleBuilder.add_type` | **Must** | New binding territory; watch trait/associated-type elaboration hazards (CLAUDE.md). |
 | `marrow.read_parquet(path/glob)` / `marrow.table(schema)` returning a `Table` | **Must** | Wraps `parquet_scan`; see scan workstream. |
 | Route Python eager `join/group_by/sort_by` through `execute(plan)` (unify paths) or keep documented eager shortcuts | **Should** | Today they bypass the expr layer (`tabular.mojo`). Avoid two divergent code paths. |
 | Mojo AOT DSL: ergonomic `col("a", int64)`-style builders documented end-to-end for M1 query shapes | **Must** | Expression-level fused builders exist (`values.mojo:1605`); document + fill gaps. |
@@ -240,7 +240,7 @@ polish. **Won't** = explicitly out of scope for this roadmap.
 |---|---|---|
 | `Sort` node + processor (wraps existing multi-col sort kernel; nulls, top-K) | **Must** | ClickBench needs `ORDER BY … LIMIT`. No relational Sort node today. |
 | `Limit` / `Offset` / `TopK` node (fuse limit into sort as top-K) | **Must** | Enables limit pushdown (§4.4). |
-| Computed-column `Project` (project arbitrary expressions, not just column passthrough) | **Must** | Today `select()` is passthrough; must evaluate `AnyValue`s and name outputs. |
+| Computed-column `Project` (project arbitrary expressions, not just column passthrough) | **Must** | Today `select()` is passthrough; must evaluate `DynValue`s and name outputs. |
 | `Aggregate`: `HAVING` (post-agg filter), `count_distinct` as an agg func, computed group keys + computed agg inputs | **Must** | ClickBench Q5/6/9–14/19/23/28/30/36/40/43. Node exists; extend. See tasks §6. |
 | Join on **computed keys** (not just bare column index) | **Should** | `column_index` raises on computed keys today (`relations.mojo:355`). H2O/TPC-H. |
 | `Distinct` / `unique` node | **Should** | Needs a distinct-values kernel (§4.5). H2O. |
@@ -265,7 +265,7 @@ polish. **Won't** = explicitly out of scope for this roadmap.
 
 | Rule | MoSCoW | Notes |
 |---|---|---|
-| `referenced_columns()` / `is_deterministic()` metadata on `AnyValue` | **Must** | D4 prerequisite for all pushdown. `DynValue` has `resolve_names`; extend. |
+| `referenced_columns()` / `is_deterministic()` metadata on `DynValue` | **Must** | D4 prerequisite for all pushdown. `TagValue` has `resolve_names`; extend. |
 | **Projection pushdown** (prune unused columns to the scan) | **Must** | Highest ROI on columnar/Parquet. Feeds §4.3 projection-into-scan. |
 | **Predicate pushdown** (filters toward the scan; split conjuncts on AND) | **Must** | Feeds Parquet row-group/page pruning (already wired below the scan). |
 | **Constant folding / expression simplification** | **Should** | Cheap; enables other rules. |
@@ -278,8 +278,8 @@ polish. **Won't** = explicitly out of scope for this roadmap.
 ### 4.5 Kernels & expressions
 
 Every kernel must expose **both** `core[W]` (fused, for F2) *and* `apply`/`dispatch`
-(eager, for F1), and be reachable through a `DynValue` tag (F1) *and* a fused `Value`
-node (F2). Closing the `DynValue`/fused asymmetry (G2) is a running theme.
+(eager, for F1), and be reachable through a `TagValue` tag (F1) *and* a fused `Value`
+node (F2). Closing the `TagValue`/fused asymmetry (G2) is a running theme.
 
 | Feature | MoSCoW | Notes |
 |---|---|---|
@@ -340,10 +340,10 @@ node (F2). Closing the `DynValue`/fused asymmetry (G2) is a running theme.
 |---|---|---|
 | Keep `benchmarks/binary_size/` green at every gate; add a relational-plan size bench | **Must** | Invariant #1. |
 | End-of-wave **quality review** (`/simplify` + abstraction/duplication/free-function audit) gating the next wave | **Must** | Invariant #4. Not cleanup-later — an acceptance gate. |
-| Both-driver parity tests (fused `Value` result == `DynValue` result) per op | **Must** | Invariant #2. Extend `test_values`/`test_runtime`. |
+| Both-driver parity tests (fused `Value` result == `TagValue` result) per op | **Must** | Invariant #2. Extend `test_values`/`test_runtime`. |
 | ClickBench-subset harness runs *through the lazy plan* (not eager one-batch) | **Must** | Currently eager single-batch (`clickbench.py`). |
 | PyArrow/DuckDB cross-check in the test suite for new kernels/ops | **Should** | Existing pattern. |
-| `EXPLAIN` / plan pretty-printer (leverage `write_to`) for both frontends | **Should** | Debuggability; `AnyValue.write_to` exists. |
+| `EXPLAIN` / plan pretty-printer (leverage `write_to`) for both frontends | **Should** | Debuggability; `DynValue.write_to` exists. |
 | Spill/mem-budget config on `ExecutionContext` | **Could** | M2. |
 
 ---
@@ -361,9 +361,9 @@ Prerequisites everything else builds on. Small, high-leverage.
    `LengthKernel`/`ArrayLengthKernel`. *(Must — correctness before features.)*
 2. **`ByteSource` seam** in the Parquet reader (D3); `MappedFile` implements it.
    No behavior change yet — pure refactor with tests. *(Must.)*
-3. **`referenced_columns()` / `is_deterministic()`** on `AnyValue`/`DynValue` (D4).
+3. **`referenced_columns()` / `is_deterministic()`** on `DynValue`/`TagValue` (D4).
    *(Must — unblocks pushdown.)*
-4. **Grow `DynValue`** to reach parity with the fused algebra on the ops M1 needs
+4. **Grow `TagValue`** to reach parity with the fused algebra on the ops M1 needs
    (compares incl. strings, and/or Kleene, is_null/notnull, cast, if_else,
    arithmetic). Add a **both-driver parity test** harness. *(Must — G2.)*
 5. Fix stale `CLAUDE.md` claims. *(Must — cheap.)*
@@ -464,7 +464,7 @@ subquery decorrelation; set-op kernels; Hive partition discovery at scale.
   tuples), vectorization wins memory-bound (latency hiding). Modern systems go hybrid.
   **This maps cleanly onto marrow's two frontends**: F2 (Mojo `comptime`
   monomorphization) = HyPer/Umbra-style compiled small binaries; F1 (type-erased
-  `DynValue` interpreter over `DynArray`) = the vectorized path. Small binaries come
+  `TagValue` interpreter over `DynArray`) = the vectorized path. Small binaries come
   from embedding only the operators/types the query uses + DCE — exactly the
   `benchmarks/binary_size/` property.
 - **Benchmarks**: ClickBench (single flat table, ~100M rows, 43 q, **no joins** —

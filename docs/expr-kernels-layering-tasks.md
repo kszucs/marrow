@@ -15,11 +15,11 @@ Tier-A/B tasks were in fact complete. Checked by grep, not by trusting a header:
 | **L4** — `GroupBy` stops speaking `RecordBatch` | **done** | `kernels/groupby.mojo` imports only `..arrays`/`..builders`/`..dtypes` — no `..schema`, no `..tabular`. `marrow/kernels` is free of the tabular layer |
 | **L5** — one owner for the grouping strategy | **done** | `GROUP_THREAD_LOCAL` no longer crosses into `marrow/expr`; the mergeability check is internal to `GroupBy` (`groupby.mojo:487`) |
 | **L9** — `bitmap_and` duplicate | **done** | no occurrences outside a comment |
-| **L2** — extract `AnyValue` | **open** | still at `values.mojo:2194`; `values.mojo` still imports `.dynamic`. Blocks L6 |
+| **L2** — extract `DynValue` | **open** | still at `values.mojo:2194`; `values.mojo` still imports `.dynamic`. Blocks L6 |
 | **L3** — `AggFunc`'s late binding | **open** | unchanged |
 | **L6** — a `Scan` abstraction | **open** | `RELATION_PARQUET_SCAN` still an IR discriminant (`relations.mojo:78`) |
 | **L7** — split or delete `Kernel` | **re-scope** | **the premise no longer holds.** `Kernel` now carries `error[M](message)` (`kernels/core.mojo:22-25`) plus `expect_same_length` / `expect_same_dtype` — a genuinely shared member across all 73 conformers, which is exactly what the task asked for. "Prefer the delete" is now the wrong advice; close it, or re-scope to the remaining question of whether one trait should serve both element-wise SIMD ops and whole-array algorithm namespaces |
-| **L8** — decompose `DynValue` | **open** | unchanged, and still the root cause of the Q0.0 class of bug |
+| **L8** — decompose `TagValue` | **open** | unchanged, and still the root cause of the Q0.0 class of bug |
 
 > **L6/Q1.3's blocker was imaginary.** Both were held up by a "compiler crashes on
 > `rel.filter(col > lit)` under `TestSuite`" cap. That cap was caused by tests building plan
@@ -113,11 +113,11 @@ Two edges are backwards **conceptually** even though they are forwards structura
 | Type | Responsibility | Single? |
 |---|---|---|
 | `PruneBound` / `PruneStats` | interval arithmetic over column statistics | ✔ |
-| `DynValue` | runtime tagged expression node **+** its interpreter | ⚠ L8 |
+| `TagValue` | runtime tagged expression node **+** its interpreter | ⚠ L8 |
 | `resolve_agg` | aggregate-name → `Aggregation` ladder | ⚠ L1 |
 | `Datum` / `Context` | fusion wire format + breaker slot protocol | ✔ |
 | `Value` + 5 family traits + ~45 node structs | comptime-typed fused expression nodes | ✔ (each) |
-| `AnyValue` | dual-lane erased expression handle (fused `Value` ∪ `DynValue`) | ⚠ L2 |
+| `DynValue` | dual-lane erased expression handle (fused `Value` ∪ `TagValue`) | ⚠ L2 |
 | `AggFunc` | one aggregate erased to a `grouped` function pointer | ⚠ L3 |
 | `AggFold` | the partial/merge pair, erased — split out on purpose for binary size | ✔ |
 | `ThreadPartials` | one worker's frozen per-group state | ✔ |
@@ -141,17 +141,17 @@ they are.** `Sum`, `Product`, `Mean`, `Min`, `Max`, `Count`, `CountDistinct`,
 `expr/aggregates.mojo`'s header lists them as its first layer, and
 `docs/aggregate-kernel-inversion.md` §8 claims `expr/aggregates.mojo` "holds the aggregations, the
 catalog, the erased boxes". Three documents describe the intended layering; none matches the code.
-Separately, `resolve_agg` (`expr/dynamic.mojo:914`) lives next to `DynValue`, whose 41 tags contain
+Separately, `resolve_agg` (`expr/dynamic.mojo:914`) lives next to `TagValue`, whose 41 tags contain
 **no aggregate tags at all** — so `expr.aggregates` imports the runtime interpreter module
 (`expr/aggregates.mojo:53`) purely to reach one name ladder. That is the module the small-binary
 gate exists to keep out of fused builds.
 
-**L2 — `AnyValue` inside `values.mojo` is why the comptime lane depends on the runtime lane.**
+**L2 — `DynValue` inside `values.mojo` is why the comptime lane depends on the runtime lane.**
 `values.mojo` is three modules in one 2380-line file: the `Value` trait hierarchy + ~45 fused
-nodes; the fusion runtime (`Datum`, `Context`, `promote`, `wider`); and `AnyValue`, the box that
-unions fused nodes with `DynValue`. Only the third needs `from .dynamic import DynValue`
-(`values.mojo:158`). `AnyValue` belongs *above* both lanes, not inside one of them. Related
-asymmetry: `AnyValue._prune_tramp[V]` (`values.mojo:2240`) returns `unknown()` unconditionally —
+nodes; the fusion runtime (`Datum`, `Context`, `promote`, `wider`); and `DynValue`, the box that
+unions fused nodes with `TagValue`. Only the third needs `from .dynamic import TagValue`
+(`values.mojo:158`). `DynValue` belongs *above* both lanes, not inside one of them. Related
+asymmetry: `DynValue._prune_tramp[V]` (`values.mojo:2240`) returns `unknown()` unconditionally —
 the box advertises a `prune` capability that only one of its two arms implements.
 
 **L3 — `AggFunc.name` is documented as "never dispatch" but *is* dispatch.**
@@ -197,11 +197,11 @@ algorithm namespaces (`Filter`, `Take`, `SortIndices`, `RapidHash`, `NumericCast
 nothing about behaviour, so it cannot be used to constrain anything — every real constraint is
 carried by a sub-trait (`BinaryKernel`, `AggKernel`, `StringMapKernel`, …).
 
-**L8 — `DynValue` is a god-node.** 41 tags, 7 fields, four responsibilities (tag dispatch,
+**L8 — `TagValue` is a god-node.** 41 tags, 7 fields, four responsibilities (tag dispatch,
 statistics pruning, schema/dtype resolution, display). Two fields are explicitly overloaded:
 `_name` carries "column name **or** LIKE pattern **or** `date_trunc` unit" (its own docstring
 flags the hazard) and `_kind_data` carries "column index or op kind". The known Q0.0 heap
-corruption (`size_of` 416 vs ≥417 needed for `ArcPointer[DynValue]`) is a direct consequence of
+corruption (`size_of` 416 vs ≥417 needed for `ArcPointer[TagValue]`) is a direct consequence of
 this width.
 
 **L9 — minor, batched.** `DynRelation` bundles erasure + the whole fluent plan-building API +
@@ -237,15 +237,15 @@ Owns: `marrow/kernels/aggregate.mojo`, `marrow/expr/aggregates.mojo`, `marrow/ex
 > wanted; the code is what drifted. Moving the catalog is the same amount of work and removes the
 > edge as a side effect.
 
-**L2 — Extract `AnyValue` out of `values.mojo`** · *unblocks fused-lane independence* ·
+**L2 — Extract `DynValue` out of `values.mojo`** · *unblocks fused-lane independence* ·
 Depends: — · ⚠️ BINSIZE · Owns: `marrow/expr/values.mojo`, new `marrow/expr/erased.mojo`,
 `marrow/expr/execution.mojo`, `marrow/expr/relations.mojo`, `marrow/expr/__init__.mojo` ·
 Done when:
 
-- `AnyValue` lives in its own module that imports *both* `values` and `dynamic`; the graph becomes
+- `DynValue` lives in its own module that imports *both* `values` and `dynamic`; the graph becomes
   `values → pruning`, `dynamic → pruning`, `erased → values, dynamic`.
 - `values.mojo` no longer imports `.dynamic`.
-- `execution.mojo` / `relations.mojo` import `AnyValue` from the new module; the public surface in
+- `execution.mojo` / `relations.mojo` import `DynValue` from the new module; the public surface in
   `expr/__init__.mojo` is unchanged.
 - Report the fused stripped size. Expected: unchanged (DCE already removes the interpreter) — the
   win is structural, so a **regression** is the signal to stop and investigate.
@@ -319,13 +319,13 @@ bound on the sub-trait.
 > one-line alias for `Bitmap.intersect` and is the source of the documented `check_lib` false
 > positives. Point callers at `Bitmap.intersect` and delete it.
 
-**L8 — Decompose `DynValue`** · *large; schedule deliberately* · Depends: L1 (removes the
+**L8 — Decompose `TagValue`** · *large; schedule deliberately* · Depends: L1 (removes the
 aggregate ladder from this file first) · ⚠️ BINSIZE ·
 Owns: `marrow/expr/dynamic.mojo`, `marrow/expr/tests/*` · Done when the two overloaded fields are
 gone: `_name` no longer triples as column name / LIKE pattern / `date_trunc` unit, and
 `_kind_data` no longer doubles as column index / op kind. Prefer a payload variant per tag family
 over adding more `Optional` fields — the struct is already 416 bytes and its width is what causes
-the Q0.0 `ArcPointer[DynValue]` discriminant overflow.
+the Q0.0 `ArcPointer[TagValue]` discriminant overflow.
 
 > Sequencing: this is the *fix* for Q0.0's root cause, not a duplicate of it. Do the narrow Q0.0
 > correctness fix first if it is still open; do this when the interpreter is otherwise stable,

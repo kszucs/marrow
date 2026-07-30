@@ -6,7 +6,7 @@ arithmetic nodes (`Add`/`Sub`/`Mul` over `NumericBinary`) cost on top of a
 column reference and a comparison.
 
 **This gate exists because that cost was invisible.** Q0.4 rewrote all twelve of
-`DynValue.eval`'s binary arms and the fused gates came back byte-identical —
+`TagValue.eval`'s binary arms and the fused gates came back byte-identical —
 true, and worthless: neither of them contains a single arithmetic expression.
 A change to the fused numeric algebra could regress arbitrarily without any gate
 noticing.
@@ -18,7 +18,7 @@ from marrow.builders import array
 from marrow.dtypes import int64, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.values import col, AnyValue
+from marrow.expr.values import col, DynValue
 from marrow.expr.relations import InMemoryTable, Project, DynRelation
 
 
@@ -28,11 +28,11 @@ def main() raises:
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
     var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
-        AnyValue(col("a", int64) > col("b", int64))
+        DynValue(col("a", int64) > col("b", int64))
     )
-    var values = List[AnyValue]()
+    var values = List[DynValue]()
     values.append(
-        AnyValue(
+        DynValue(
             (col("a", int64) + col("b", int64)) * col("a", int64)
             - col("b", int64)
         )

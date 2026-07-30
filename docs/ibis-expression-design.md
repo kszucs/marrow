@@ -40,7 +40,7 @@ with the relational/execution layers later. Ignore `marrow/expr/dynamic.mojo`.
   generic code can run any node. `core[W]` stays as the SIMD lane primitive (only on lane families).
 - **No `DynArray`, no type-erased types.** `execute()` returns the family's concrete typed array
   (`PrimitiveArray[OutType]` / `BoolArray` / `StringArray` / `StructArray` / `ListArray`); typed
-  scalars, not `DynScalar`. No `AnyValue` box. Where an existing `arrays.mojo` API returns `DynArray`
+  scalars, not `DynScalar`. No `DynValue` box. Where an existing `arrays.mojo` API returns `DynArray`
   (e.g. `StructArray.field`), downcast to the typed array immediately at the call site.
 - **No `Optional` inputs/outputs.** Strict, concrete signatures everywhere (incl. the materialization
   cache — a typed array initialized 0-length, overwritten in `prepare`).

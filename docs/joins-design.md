@@ -167,8 +167,8 @@ comptime JOIN_NODE: UInt8 = 6
 struct Join(Relation):
     var left: DynRelation
     var right: DynRelation
-    var left_keys: List[AnyValue]   # Column exprs resolved to left schema
-    var right_keys: List[AnyValue]  # Column exprs resolved to right schema
+    var left_keys: List[DynValue]   # Column exprs resolved to left schema
+    var right_keys: List[DynValue]  # Column exprs resolved to right schema
     var kind: UInt8
     var strictness: UInt8
     var algorithm: UInt8
@@ -296,7 +296,7 @@ comptime SORT_NODE: UInt8 = 7
 
 struct Sort(Relation):
     var input: DynRelation
-    var keys: List[AnyValue]
+    var keys: List[DynValue]
     var ascending: List[Bool]
     var schema_: Schema   # same schema as input
 ```

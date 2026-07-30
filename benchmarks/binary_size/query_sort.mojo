@@ -15,7 +15,7 @@ from marrow.builders import array
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.values import col, AnyValue
+from marrow.expr.values import col, DynValue
 from marrow.expr.relations import InMemoryTable, Sort, DynRelation
 
 
@@ -25,8 +25,8 @@ def main() raises:
     var batch = record_batch([a.copy(), nm.copy()], names=["a", "name"])
     var sch = schema([field("a", int64), field("name", string)])
 
-    var keys = List[AnyValue]()
-    keys.append(AnyValue(col("a", int64)))
+    var keys = List[DynValue]()
+    keys.append(DynValue(col("a", int64)))
 
     var sorted = Sort(
         input=DynRelation(InMemoryTable(batch=batch)),

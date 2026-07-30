@@ -9,9 +9,9 @@ output:
   is one nested generic type; `.execute(batch)` compiles straight to column
   loads, a SIMD comparison, and a filter call. No tag dispatch, no vtables.
 - **`query_erased_aot.mojo`** — the "option 1" layer from `marrow.aot.erased`:
-  the relational operators are plain **runtime** structs over `List[AnyValue]`
+  the relational operators are plain **runtime** structs over `List[DynValue]`
   (a walkable, rewritable plan tree, *not* a `*Es` type pack), but each value is
-  a **fused-only** box (`AnyValue`) that trampolines into the concrete node's
+  a **fused-only** box (`DynValue`) that trampolines into the concrete node's
   own `execute()` — no `eval()` tag interpreter. The operators execute
   themselves single-shot (no `Planner`/`RelationProcessor`). Tests whether a
   runtime plan tree can keep the comptime binary size.
@@ -80,7 +80,7 @@ so the delta column is what the thing costs in an AOT binary.
 | `query_join` | 3,819,060 | +2,567,388 | `Join` |
 | `query_exprs` | 3,892,916 | +2,641,244 | string, conditional, membership, cast, temporal |
 | `query_streaming_agg` | 4,150,836 | +2,899,164 | `Aggregate`, runtime-named aggs |
-| `query_dynvalue` | 5,266,164 | +4,014,492 | the `DynValue` interpreter |
+| `query_dynvalue` | 5,266,164 | +4,014,492 | the `TagValue` interpreter |
 | `query_runtime` | 5,266,548 | +4,014,876 | interpreter + runtime plan |
 
 Re-measure one gate without paying for the sweep (ten `-O3` builds, ~20 min):
@@ -149,7 +149,7 @@ strip because there was never a branch to begin with.
 
 `query_erased_aot` is the interesting *positive* result. Its plan is a
 **runtime** object — `Project`/`Filter` are plain structs over
-`List[AnyValue]`, walkable and rewritable, not a `*Es` type pack — yet its
+`List[DynValue]`, walkable and rewritable, not a `*Es` type pack — yet its
 `__TEXT` is **229,376 B, byte-identical to `query_comptime`** (1.0x, versus
 30.9x for the runtime path). Making the plan a runtime, pushdown-friendly tree
 cost *zero* compiled code.
@@ -157,7 +157,7 @@ cost *zero* compiled code.
 Two properties, together, are what buy it — and the per-module table shows both
 holding:
 
-1. **The value box is fused-only.** `AnyValue` trampolines straight into each
+1. **The value box is fused-only.** `DynValue` trampolines straight into each
    node's own fused `execute()` and carries no `eval()` tag-switch, so
    `Expr.eval()` is never reachable. `kernels::arithmetic` (0, vs 371) and
    `kernels::compare` (0, vs 74) confirm the per-op/per-dtype interpreter is

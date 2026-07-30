@@ -2,16 +2,16 @@
 
 One value box, one interpreter, one relational layer. Which node you box
 decides the binary size: box the fused comptime nodes and the interpreter is
-dead-code-eliminated (~250 KB); box a ``DynValue`` and the runtime interpreter
+dead-code-eliminated (~250 KB); box a ``TagValue`` and the runtime interpreter
 links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 
 ``values.mojo`` — the fused comptime algebra (``Add``/``Greater``/``Length``…), the
 named column leaves (``NumericColumn``/``StringColumn``) with the ``Table[Tbl]()``
-and ``col(name, dtype)`` builders, and ``AnyValue`` — the universal value box the
-relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
+and ``col(name, dtype)`` builders, and ``DynValue`` — the universal value box the
+relational layer holds (wraps a fused node *or* a ``TagValue``, exposing only
 ``DynRelation.execute``).
 
-``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
+``dynamic.mojo`` — ``TagValue``, the runtime tag-interpreter node the Python
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
 and operator overloads.
 
@@ -35,8 +35,8 @@ Usage::
 
 from .dynamic import (
     # Unified expression node
-    DynValue,
-    # Free-standing factory functions (return DynValue)
+    TagValue,
+    # Free-standing factory functions (return TagValue)
     col,
     lit,
     if_else,

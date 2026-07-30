@@ -55,7 +55,7 @@ from ...kernels.temporal import (
 )
 from ...tabular import RecordBatch, record_batch
 from ...expr import (
-    DynValue,
+    TagValue,
     col,
     lit,
     if_else,
@@ -110,21 +110,21 @@ from ...expr.dynamic import (
 )
 
 
-def _exec(expr: DynValue, batch: RecordBatch) raises -> Int64Array:
+def _exec(expr: TagValue, batch: RecordBatch) raises -> Int64Array:
     """Helper: evaluate an expression against the batch."""
     var tmp = expr.eval(batch)
     ref result = tmp.as_int64()
     return result.copy()
 
 
-def _exec_length(expr: DynValue, batch: RecordBatch) raises -> Int32Array:
+def _exec_length(expr: TagValue, batch: RecordBatch) raises -> Int32Array:
     """Helper: evaluate a length expression against the batch."""
     var tmp = expr.eval(batch)
     ref result = tmp.as_int32()
     return result.copy()
 
 
-def _exec_pred(expr: DynValue, batch: RecordBatch) raises -> BoolArray:
+def _exec_pred(expr: TagValue, batch: RecordBatch) raises -> BoolArray:
     """Helper: evaluate a predicate expression against the batch."""
     var tmp = expr.eval(batch)
     return tmp.as_bool().copy()
@@ -217,7 +217,7 @@ def test_non_aligned_length() raises:
 
 
 def test_write_to() raises:
-    """AnyValue.write_to produces readable expression strings."""
+    """DynValue.write_to produces readable expression strings."""
     var expr = (col(0) - col(1)).abs()
     assert_equal(String(expr), "abs(sub(input(0), input(1)))")
 

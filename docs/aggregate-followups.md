@@ -46,7 +46,7 @@ rel.aggregate(keys=[col("region")],
                     col("amount").max().alias("biggest")])
 ```
 
-`col("x").sum()` on a `DynValue` gives a `DynAgg` (the function's name plus its
+`col("x").sum()` on a `TagValue` gives a `DynAgg` (the function's name plus its
 input); on a fused node it is the existing `Reduction`, which converts to the
 same `AggExpr` with its `Aggregation` already named — so the AOT spelling is the
 identical call one lane down and resolves nothing at run time. Both lanes mix in
@@ -55,7 +55,7 @@ reduction and go straight to an `AggExpr`.
 
 Left over:
 
-- The **node still holds two parallel lists** (`inputs: List[AnyValue]` +
+- The **node still holds two parallel lists** (`inputs: List[DynValue]` +
   `aggs: Aggregates`); `aggregate()` splits the `AggExpr`s at plan build. Fine
   for now — the split is where the input expression and the resolved aggregate
   genuinely part ways — but it is the obvious next simplification if the node

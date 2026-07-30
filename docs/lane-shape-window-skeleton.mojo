@@ -22,7 +22,7 @@ comptime by node type, not by a flag. `execute` returning a concrete
 trait's abstract `execute` with no associated-type recursion.
 
 Covers the four load-bearing corners: ColumnarValue as the uniform result,
-AnyValue erasure, a dynamic (interpreted) driver sharing the same kernels, and a
+DynValue erasure, a dynamic (interpreted) driver sharing the same kernels, and a
 WindowFunction carrying a runtime spec with erased keys.
 """
 
@@ -247,9 +247,9 @@ struct MatBinary[L: Value, R: Value](Value):
 
 
 # ===========================================================================
-# AnyValue — erase any Value, execute() -> ColumnarValue
+# DynValue — erase any Value, execute() -> ColumnarValue
 # ===========================================================================
-struct AnyValue(Copyable, Movable):
+struct DynValue(Copyable, Movable):
     var _boxed: ArcPointer[NoneType]
     var _execute: def (
         ArcPointer[NoneType], Batch
@@ -280,15 +280,15 @@ struct FrameBound(Copyable, ImplicitlyCopyable, Movable):
 struct WindowSpec(Copyable, Movable):
     var start: FrameBound
     var end: FrameBound
-    var partition_by: List[AnyValue]
-    var order_by: List[AnyValue]
+    var partition_by: List[DynValue]
+    var order_by: List[DynValue]
 
     def __init__(
         out self,
         start: FrameBound,
         end: FrameBound,
-        var partition_by: List[AnyValue],
-        var order_by: List[AnyValue],
+        var partition_by: List[DynValue],
+        var order_by: List[DynValue],
     ):
         self.start = start
         self.end = end
@@ -347,8 +347,8 @@ struct DynExpr(Copyable, ImplicitlyDeletable, Movable):
 
 # ===========================================================================
 def _spec() raises -> WindowSpec:
-    var pb: List[AnyValue] = [AnyValue(Col(1))]
-    var ob = List[AnyValue]()
+    var pb: List[DynValue] = [DynValue(Col(1))]
+    var ob = List[DynValue]()
     return WindowSpec(FrameBound(0, 0), FrameBound(2, 0), pb^, ob^)
 
 
@@ -392,8 +392,8 @@ def main() raises:
         MatBinary(WindowFunction[RowNumberKernel](Col(0), _spec()), Lit(1)).execute(batch),
     )
 
-    # --- AnyValue erasure ---
-    var boxed: AnyValue = Add(Col(0), Lit(10))
+    # --- DynValue erasure ---
+    var boxed: DynValue = Add(Col(0), Lit(10))
     _show("erased col + 10   ", boxed.execute(batch))
 
     # --- dynamic driver, shared AddKernel ---

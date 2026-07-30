@@ -179,7 +179,7 @@ of `alias` tree-wide.)
 - **`SwissHashTable` has two mutually exclusive lifecycles in one struct** — the CSR index is empty
   until `build_hashes`, and `probe` requires the caller to hand the build keys back in. → split the
   probe-side state into a `JoinIndex` that owns it.
-- **`DynValue._name` is triple-overloaded** (column name / LIKE pattern / `date_trunc` unit), and
+- **`TagValue._name` is triple-overloaded** (column name / LIKE pattern / `date_trunc` unit), and
   `name()` returns it with no tag check — so a LIKE node reports `"%foo%"` as its output column name.
   `_value_set` and `_cast_to` likewise sit on all 42 tags. *(Extends FU-7.)*
 
@@ -209,7 +209,7 @@ string ordering compares, `startswith`/`endswith`/`contains`, `row_number`, …)
 covers only the intersection and nothing enforces coverage parity.
 
 **Verdict: ~80% is eliminable and none of the eliminable part is load-bearing for DCE.** The
-small-binary property comes from *which trampoline `AnyValue.__init__` instantiates*, not from the
+small-binary property comes from *which trampoline `DynValue.__init__` instantiates*, not from the
 shape of the interpreter body. What *is* irreducible is having two **executors** — `vectorwise[W]`
 cannot be reached through a runtime tag. A comptime op registry in `marrow/expr/ops.mojo` would
 drive F1's tags/names/uniform arms and F2's aliases from one entry (~30 of 42 tags are uniform
@@ -239,7 +239,7 @@ Distilled across all six reviews — these are what marrow does well and should 
 1. **Type erasure via `Variant` + `variant_dispatch`** — never fn-pointer trampolines or `rebind`.
    `DynArray`/`DynScalar`/`DynBuilder`/`DynType` share one shape: `comptime VariantType`, one
    `_v`, `@implicit __init__[T: Trait]`, private `_as[T]()` + per-type `as_x()` borrows. Keeps
-   dispatch closed and DCE-friendly. *(The `AnyValue` trampolines are the deliberate exception —
+   dispatch closed and DCE-friendly. *(The `DynValue` trampolines are the deliberate exception —
    see §4.)*
 2. **Physically-identical Arrow types are one parameterized struct + aliases** —
    `BinaryLikeArray[T]`, `ListLikeArray[T]`, `_IntegerType[DType]`. Retag rather than rebuild:
@@ -336,14 +336,14 @@ Distilled across all six reviews — these are what marrow does well and should 
 
 Distinguishing these matters; they look like smells and are not.
 
-- **`AnyValue`'s hand-rolled fn-pointer trampolines** — Mojo has no dynamic dispatch; this closed
+- **`DynValue`'s hand-rolled fn-pointer trampolines** — Mojo has no dynamic dispatch; this closed
   erasure *is* the DCE mechanism. The fused/dyn trampoline duplication is the price of the two-box design.
 - **`comptime NativeType` on `BoolValue`** and the "wider of the two" rule — the bit-pack driver must
   pick a SIMD width no operand load can overflow. (D4 is a bug precisely because `NumericCompare`
   *doesn't* follow this.)
 - **`comptime IsBreaker` + `comptime if` in `Value.execute`** — a runtime `if` would link both paths.
-- **`DynValue.__del__(deinit self): pass`** — required for `ImplicitlyDeletable` on a self-referential
-  `List[DynValue]`.
+- **`TagValue.__del__(deinit self): pass`** — required for `ImplicitlyDeletable` on a self-referential
+  `List[TagValue]`.
 - **Associated-type rules** — single projections off a direct trait bound reduce; chained ones
   (`Self.OutType.ArrayType`) do not. Keep companion types as direct associated members. See CLAUDE.md's
   "Associated-type & trait gotchas".
@@ -359,7 +359,7 @@ Distinguishing these matters; they look like smells and are not.
 Nothing here is started. Proposed order, by (risk removed ÷ effort):
 
 **Tier 0 — correctness, small, do first.** D1 (`slice` null count), D2 (`BoolArray` offset), D3
-(re-point the `Any`/`All` import), D4 (`NumericCompare` → `promote`), plus `DynValue.name()`
+(re-point the `Any`/`All` import), D4 (`NumericCompare` → `promote`), plus `TagValue.name()`
 returning `""` unless `_tag == LOAD`. All are small and independently testable.
 
 **Tier 1 — unblocks M1/T2.4.** D5 (temporal/large_string in `rapidhash` + `sort_indices` — fold into
@@ -487,7 +487,7 @@ Previously measured at `80ebc10`: **59 failed, 1737 passed, 305 skipped**, confi
 `parquet/tests/test_reader.mojo` (35) and `expr/tests/test_streaming.mojo` (24).
 
 **All 59 were one bug, now fixed upstream** by the Mojo `dev2026072217 → dev2026072406`
-upgrade: `ArcPointer[DynValue]` wrote a `Variant` discriminant one byte past its allocation,
+upgrade: `ArcPointer[TagValue]` wrote a `Variant` discriminant one byte past its allocation,
 corrupting the heap cumulatively until it hit live allocator metadata. It was a toolchain
 defect, not marrow logic. Both files now pass in full (43 and 35), and ASAN reports **0**
 `heap-buffer-overflow` hits where it previously reported 86. See `code-quality-tasks.md` Q0.0

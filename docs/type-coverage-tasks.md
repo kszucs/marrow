@@ -293,7 +293,7 @@ largest member. Two things this collides with:
    property of `marrow.aot`/`marrow.expr` are hard constraints. Measure before and
    after V1; if a view variant is larger than the current widest member, the growth
    is paid by *every* `DynArray` in the tree, not just view columns.
-2. **The open `ArcPointer[DynValue]` bug** (`expr/values.mojo:2299` — trailing
+2. **The open `ArcPointer[TagValue]` bug** (`expr/values.mojo:2299` — trailing
    `Variant` discriminant written one byte past the allocation, `size_of` 416 vs
    ≥417 needed). Anything that changes variant sizes near that boundary will
    perturb this. Verify **without ASAN** — ASAN masks it.

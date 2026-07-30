@@ -75,7 +75,7 @@ duplicated dispatch as **incomplete** — refactor before proceeding.
 - Give each agent: its card (goal, Owns, Reads, Acceptance), the roadmap section it
   implements, and the two prior-art pointers (Arrow C++/Rust, DataFusion/Polars/DuckDB).
 - Kernel and node work must land **both** drivers where applicable (fused `Value` +
-  `DynValue`) — but those are *different files*, so the schedule often splits "kernel",
+  `TagValue`) — but those are *different files*, so the schedule often splits "kernel",
   "fused wiring", and "dynamic wiring" into sibling tasks that merge together.
 
 ---
@@ -85,7 +85,7 @@ duplicated dispatch as **incomplete** — refactor before proceeding.
 | File | Role | Wanted by |
 |---|---|---|
 | `marrow/expr/values.mojo` | fused comptime `Value` nodes (F2) | metadata, every new fused expr node |
-| `marrow/expr/dynamic.mojo` | `DynValue` interpreter (F1) | op-parity growth, every new dynamic op |
+| `marrow/expr/dynamic.mojo` | `TagValue` interpreter (F1) | op-parity growth, every new dynamic op |
 | `marrow/expr/relations.mojo` | relational IR nodes | Sort/Limit/Project/Distinct/Union, optimizer hooks |
 | `marrow/expr/execution.mojo` | pull-based processors | new operators **and** streaming scan (`ParquetScanProcessor`) |
 | `marrow/expr/pruning.mojo` | pushdown stats | predicate-pushdown work |
@@ -131,20 +131,20 @@ This unblocks streaming (T2.x) and OpenDAL (M2).
 
 **T0.3 — Fused `Value` plan metadata** · *M0/Must* · Depends: — · Owns:
 `marrow/expr/values.mojo`, `marrow/expr/tests/test_values.mojo` · Reads:
-`schema.mojo` · Done when: `AnyValue`/fused `Value` expose `referenced_columns() ->
+`schema.mojo` · Done when: `DynValue`/fused `Value` expose `referenced_columns() ->
 List[String]` and `is_deterministic() -> Bool`; correct for column/literal/binary/unary/
 cast/reduce nodes. Prerequisite for projection & predicate pushdown.
 
-**T0.4 — Grow `DynValue` op parity + metadata + parity harness** · *M0/Must* · Depends:
+**T0.4 — Grow `TagValue` op parity + metadata + parity harness** · *M0/Must* · Depends:
 (soft) T0.1 · Owns: `marrow/expr/dynamic.mojo`, `marrow/expr/tests/test_runtime.mojo`,
 `marrow/expr/tests/test_parity.mojo` (new) · Reads: `marrow/kernels/*`, `values.mojo` ·
-Done when: (a) `DynValue` reaches parity with the fused algebra on the ops M1 needs whose
+Done when: (a) `TagValue` reaches parity with the fused algebra on the ops M1 needs whose
 kernels already exist — arithmetic (incl. mod/floordiv), numeric compares, xor,
 is_null/notnull, cast, if_else (and/or already route through the boolean kernel, so they
 inherit T0.1's Kleene fix automatically); plus `referenced_columns()`/`is_deterministic()`
-on `DynValue`. (String/temporal/is_in dynamic wiring is T2.2, after their kernels land.)
+on `TagValue`. (String/temporal/is_in dynamic wiring is T2.2, after their kernels land.)
 (b) A reusable **cross-driver parity harness** (`test_parity.mojo`) asserts `fused Value
-result == DynValue result` for an expression over a batch, seeded with the stable M0 ops
+result == TagValue result` for an expression over a batch, seeded with the stable M0 ops
 (arithmetic/compare/cast/if_else); every later op-adding task appends a case. The and/or
 Kleene parity case is added at wave integration once T0.1 is merged.
 
@@ -288,7 +288,7 @@ processor `take` only the data columns.
 Wave 1→expr wiring: (a) `Coalesce`/`Nullif`/`CaseWhen` breakers re-run their kernel in
 `validity()` (the T0.7 `validity(batch)` contract has no `ctx`, so it can't read the bitmap
 `prepare()` already materialized — 2× compute when nested under a fused parent); (b) the IN
-value-set is a raw `_value_set: DynArray` field on *every* `DynValue` and on the fused `IsIn`
+value-set is a raw `_value_set: DynArray` field on *every* `TagValue` and on the fused `IsIn`
 rather than a literal-set `Value` operand (leaky node model); (c) `_name` is overloaded to
 carry the LIKE pattern / `date_trunc` unit; (d) the fused `Coalesce`/`CaseWhen` hard-code
 2-operand/1-branch arity while the kernels + dynamic frontend are variadic (N-ary `CASE`
@@ -308,7 +308,7 @@ exist and fuse; parity cases appended to `test_parity.mojo`.
 
 **T2.2 — Dynamic wiring of M1 kernels** · *M1/Must* · Depends: T1.1–T1.4, T0.4 · Owns:
 `marrow/expr/dynamic.mojo`, `test_runtime.mojo` · Reads: the new kernel files · Done
-when: `DynValue` tags for the same ops; parity with T2.1 (append to `test_parity.mojo`).
+when: `TagValue` tags for the same ops; parity with T2.1 (append to `test_parity.mojo`).
 
 > T2.1 (`values.mojo`) and T2.2 (`dynamic.mojo`) are **disjoint files → parallel**. Both
 > append to `test_parity.mojo`; that file gets a single owner this wave (merge the other's
@@ -320,7 +320,7 @@ Depends: — · Owns: `marrow/expr/relations.mojo`, `marrow/expr/execution.mojo`
 · Done when: `Sort` node+processor (multi-col, nulls, wraps sort kernel — ClickBench
 sorts by agg/column/string/timestamp, Q8/24/25/26/27), `Limit`/`Offset`/`TopK`
 node+processor (`OFFSET` needed by Q39–43; limit fuses into sort as top-K), and
-computed-column `Project` (evaluates arbitrary `AnyValue`s, names outputs — Q30/35/36/40)
+computed-column `Project` (evaluates arbitrary `DynValue`s, names outputs — Q30/35/36/40)
 all execute; tested.
 
 **T2.3b — Relational Aggregate completeness + HAVING** · *M1/Must* · Depends: T2.3a,
@@ -397,14 +397,14 @@ Done when: a rule-list `DynRelation -> DynRelation` implements projection pushdo
 
 **T3.2 — Python bindings for the lazy engine** · *M1/Must* · Depends: T0.4, T2.2, T2.3a ·
 Owns: `python/bindings/lazy.mojo` (new); registration line in
-`python/bindings/lib.mojo` (trivial-conflict) · Reads: `expr/*` · Done when: `AnyValue`,
+`python/bindings/lib.mojo` (trivial-conflict) · Reads: `expr/*` · Done when: `DynValue`,
 `DynRelation`, `col`/`lit`/`if_else`, plan builders, and `execute(plan, ctx)` are exposed
 through `PythonModuleBuilder.add_type`; smoke-tested from Python.
 
 **T3.3 — Python ibis-flavored `Table`/`Column` API** · *M1/Must* · Depends: T3.2 · Owns:
 `python/marrow/expr.py` (new), `python/marrow/tests/test_expr.py` (new); export lines in
 `python/marrow/__init__.py` (trivial-conflict) · Reads: `lazy.mojo` surface · Done when:
-a thin pure-Python `Column` (over `DynValue`) and `Table` (over `DynRelation`) implement
+a thin pure-Python `Column` (over `TagValue`) and `Table` (over `DynRelation`) implement
 the **ibis-flavored** surface in §3.1, deferred (build-not-execute), terminating in
 `.execute()`/`.to_pyarrow()`. **No ibis dependency, no ibis backend — ibis is a loose
 naming guideline, not a parity target.** `marrow.table(schema)` and
@@ -428,20 +428,20 @@ T3.1 + T2.4. T3.1 (`optimize.mojo`, new) is disjoint from the Python lane.
 The Python F1 surface is a **thin native** API — two pure-Python wrappers over the
 already-built engine. It borrows ibis *names and feel*, nothing more: no `ibis` import,
 no operation graph, no backend contract, no type-coercion layer. Every method just
-builds an `DynRelation`/`DynValue` and defers; execution is one `execute(plan, ctx)`
+builds an `DynRelation`/`TagValue` and defers; execution is one `execute(plan, ctx)`
 call. Scope it to what M1 (ClickBench) needs; grow method-by-method later.
 
-**`Column`** — wraps a `DynValue`; column refs resolve by name against the table schema
-(marrow's `DynValue.resolve_names` already does this):
+**`Column`** — wraps a `TagValue`; column refs resolve by name against the table schema
+(marrow's `TagValue.resolve_names` already does this):
 
 ```python
 t = ma.read_parquet("hits.parquet")     # -> Table
 t.url                                     # -> Column   (attribute access)
 t["url"]                                  # -> Column   (item access, for odd names)
 
-# operators (forward to DynValue dunders that already exist)
+# operators (forward to TagValue dunders that already exist)
 t.a + t.b,  t.a * 2,  t.price > 30,  (t.a > 0) & (t.b < 10),  ~t.flag
-# methods (ibis-ish names; each maps to a DynValue tag / kernel)
+# methods (ibis-ish names; each maps to a TagValue tag / kernel)
 t.a.cast("int64"),  t.a.isin([1,2,3]),  t.a.is_null(),  t.a.fill_null(0)
 t.a.sum(),  t.a.mean(),  t.a.count(),  t.a.nunique()          # reductions
 t.url.like("%google%"),  t.url.contains("x"),  t.name.upper() # string
@@ -477,7 +477,7 @@ hierarchy or op catalog to "match" it.**
 **Two-frontend symmetry.** This mirrors — loosely — the Mojo AOT DSL (F2), which already
 builds the *same* logical query from `col("a", int64)`-style fused builders
 (`values.mojo:1605`). Same query shape, two drivers: Python `Table`/`Column` →
-interpreted `DynValue`; Mojo `col()` → fused comptime `Value`. Keep the method *names*
+interpreted `TagValue`; Mojo `col()` → fused comptime `Value`. Keep the method *names*
 aligned across the two where cheap, but do not contort either to force identical spelling.
 
 ---

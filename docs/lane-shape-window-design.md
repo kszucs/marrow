@@ -11,8 +11,8 @@ lane-shape-window-skeleton.mojo`):
 whole hierarchy — the `Fusable`/`Value` trait split, `comptime Shape` + `max`
 derivation, fused `core[W]`, `ColumnarValue = Scalar | Array` as the uniform
 `execute` result (which also sidesteps the `-> Self.ArrayType` associated-type
-recursion), `AnyValue` erasure returning it, a dynamic interpreter sharing the same
-kernels, and a `WindowFunction` carrying a runtime `WindowSpec` with `List[AnyValue]`
+recursion), `DynValue` erasure returning it, a dynamic interpreter sharing the same
+kernels, and a `WindowFunction` carrying a runtime `WindowSpec` with `List[DynValue]`
 keys — with no `ExecCtx`, no cursor, no per-node state.
 
 ## 1. Goals & invariants (normative)
@@ -21,7 +21,7 @@ keys — with no `ExecCtx`, no cursor, no per-node state.
    expression monomorphizes to a single straight-line SIMD loop: `core[W]` inlines
    across the whole subtree, no dispatch. Preserve this for every node that fuses.
 2. **Dynamic dispatch reaches parity.** The Python bindings and any runtime-built
-   query run through the `DynValue` interpreter with eager, type-erased kernels —
+   query run through the `TagValue` interpreter with eager, type-erased kernels —
    like DataFusion/Polars. Same results, no fusion.
 3. **Kernels are the shared substrate; only the driver differs.** Every kernel
    exposes `core[W]` (fused) **and** `apply` (eager). A feature is implemented once
@@ -64,7 +64,7 @@ line; shape is `comptime Shape`.
 
 ## 3. Two drivers
 
-| concept | AOT-fused (comptime) | dynamic (`DynValue`) |
+| concept | AOT-fused (comptime) | dynamic (`TagValue`) |
 | --- | --- | --- |
 | result type | `ColumnarValue` | `ColumnarValue` |
 | shape | `comptime Shape ∈ {0,1}` | runtime tag inside `ColumnarValue` |
@@ -132,7 +132,7 @@ WindowFunction.execute: partition/sort/frame(self.arg.execute(batch), keys) -> a
 MatBinary.execute: K.apply(self.l.execute(batch), self.r.execute(batch))    # eager
 
 # dynamic driver
-DynValue.execute(batch) -> ColumnarValue     # node-by-node eager kernels; scalars lazy
+TagValue.execute(batch) -> ColumnarValue     # node-by-node eager kernels; scalars lazy
 ```
 
 **Operator dispatch** picks fused-vs-materialized by operand trait, via overload:
@@ -176,8 +176,8 @@ struct WindowSpec:
     var how: UInt8                       # ROWS | RANGE
     var start: FrameBound
     var end: FrameBound
-    var partition_by: List[AnyValue]     # erased key sub-exprs
-    var order_by: List[AnyValue]         # (+ asc flags)
+    var partition_by: List[DynValue]     # erased key sub-exprs
+    var order_by: List[DynValue]         # (+ asc flags)
 
 struct WindowFunction[Func: WindowKernel, A: Value](Value):
     comptime OutType = Func.OutType[A.OutType]
@@ -227,7 +227,7 @@ Target changes:
    `AggKernel.reduce` → scalar `ColumnarValue`; drop `.repeat(1)`. Add `MatBinary`
    for mixed arithmetic; wire operator dispatch (fusable→fused, else `MatBinary`).
 5. **Add windows** (§7) as `Value` nodes whose `execute` materializes.
-6. **Dynamic parity throughout**: `DynValue.execute -> ColumnarValue` with lazy
+6. **Dynamic parity throughout**: `TagValue.execute -> ColumnarValue` with lazy
    broadcast, reductions/windows via the eager kernels.
 
 Net: no `ExecCtx`, no cursor, no `prepare`, no per-node `_cache`, no flag — the
@@ -238,7 +238,7 @@ returning a `ColumnarValue` on cross-row nodes.
 
 1. **Trait split + `ColumnarValue` + Shape.** `Value`/`Fusable`, `ColumnarValue`,
    `comptime Shape`, `Fusable.execute` default (fused loop / eval-once), literal
-   folding. Dynamic: `DynValue.execute -> ColumnarValue` + lazy broadcast.
+   folding. Dynamic: `TagValue.execute -> ColumnarValue` + lazy broadcast.
    *Done when:* `col+lit` fuses, `lit+lit` folds to a scalar, both drivers agree;
    existing tests green.
 2. **Fusable cores.** `StringLength`/`Counting` offset-subtract (easy, vectorized),
@@ -249,7 +249,7 @@ returning a `ColumnarValue` on cross-row nodes.
    otherwise; drop `.repeat(1)`.
    *Done when:* `x / sum(x)` runs (scalar broadcasts) in both drivers.
 4. **Windows.** `WindowFunction` + `WindowSpec`; kernels starting with `RowNumber`
-   and `RunningAgg[Sum]` (cumulative), then the full family; `.over()` API; `DynValue`
+   and `RunningAgg[Sum]` (cumulative), then the full family; `.over()` API; `TagValue`
    window handling.
    *Done when:* `rank().over(w)` and `sum(x).over(w) + col` run in both drivers.
 

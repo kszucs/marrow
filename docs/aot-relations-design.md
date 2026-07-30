@@ -59,7 +59,7 @@ Two earlier docs cover the scalar/plan AOT story:
   (`ColRef[idx, dt]`, `Binary[op, L, R]`, `Scan[s]`, `Filter[Child, Pred]`).
 - `unified-plan-hierarchy.md` — supersedes it with a *single* hierarchy where
   each operator is its own struct with default type params
-  (`Add[L = AnyValue, R = AnyValue]`) serving both the runtime and AOT paths.
+  (`Add[L = DynValue, R = DynValue]`) serving both the runtime and AOT paths.
 
 What actually shipped (`marrow/aot/values.mojo`) took a third route: dedicated
 comptime nodes (`NumericColumn[T]`, `Add[L, R]`, `Sub[L, R]`, `Length[S]`) whose type
@@ -704,7 +704,7 @@ path.
 ### The measured result — yes, byte-for-byte
 
 `marrow/aot/erased.mojo` replaces the type pack with plain runtime structs:
-`Project`/`Filter` hold `List[AnyValue]`, and `AnyValue` is a **fused-only value
+`Project`/`Filter` hold `List[DynValue]`, and `DynValue` is a **fused-only value
 box** — an `ArcPointer` to the concrete node plus a thin trampoline into that
 node's own fused `execute()`/`to_array()`. Crucially it carries **no `eval()`
 tag-switch** (unlike `dyn.values.Expr`), and the operators execute themselves
@@ -732,7 +732,7 @@ plan in the type system. **Rewritability and ~250 KB binaries are decoupled.**
 
 ### The box is the fusion boundary
 
-Fusion is fully preserved *inside* a box. `AnyValue(Gt(Add(a, b), c))` holds the
+Fusion is fully preserved *inside* a box. `DynValue(Gt(Add(a, b), c))` holds the
 root `Gt[Add[…], …]` node, whose type still encodes the whole subtree, so
 `box.to_array(batch)` trampolines into one fused vectorize loop computing
 `(a+b) > c` per SIMD lane with zero intermediate arrays. The only indirection is
@@ -743,13 +743,13 @@ Boxing loses **zero** fusion, because the typed relational layer never fused
 across operators in the first place: `Filter.execute` materializes the predicate
 mask, then filters each projected column — two passes, two materializations. The
 *only* fusion anywhere is intra-expression, and it lives entirely inside one
-`AnyValue`. So:
+`DynValue`. So:
 
 > **erasure boundary = fusion boundary = rewrite granularity.**
 
 Above the boundary — relations, conjunction lists, projection lists — everything
 is runtime, walkable, and rewritable, and does not fuse (it is already columnar/
-`DynArray`-erased). Below the boundary — inside one `AnyValue` — is a single
+`DynArray`-erased). Below the boundary — inside one `DynValue` — is a single
 monomorphized fused kernel, opaque to rewrites.
 
 This cleanly partitions which rewrites the design admits:
@@ -770,7 +770,7 @@ keep every relation-level rewrite (the ones that matter for pushdown) for free.
 
 ### Projection pushdown
 
-Goal: read/carry only the columns actually needed. Mechanism: give `AnyValue` a
+Goal: read/carry only the columns actually needed. Mechanism: give `DynValue` a
 `referenced_columns() -> List[String]` accessor (one more trampoline; each node
 implements it — a column returns its own name, `Add` returns the union of its
 children). Then, at the relational level:
@@ -793,7 +793,7 @@ metadata union.
 Goal: evaluate each filter as early (and on as narrow an input) as possible,
 especially below a join. Mechanism:
 
-1. Represent a `Filter` as a **list of conjuncts** (`List[AnyValue]`), not a
+1. Represent a `Filter` as a **list of conjuncts** (`List[DynValue]`), not a
    single boxed `AND(...)`. Splitting a conjunction then costs nothing — the
    conjunction is modeled *in the relation*, above the boundary; each conjunct
    stays its own fully-fused box. (Modeling `AND` inside a box instead would
@@ -805,7 +805,7 @@ especially below a join. Mechanism:
    again means the moved predicate resolves against its new, narrower input with
    no re-indexing.
 
-Both rewrites need from `AnyValue` only: `referenced_columns()` (new),
+Both rewrites need from `DynValue` only: `referenced_columns()` (new),
 `dtype()`/`field_name()` (already present), and O(1) cloning (already true — it's
 `ArcPointer`-backed). **None of these de-fuse anything** — they are all metadata
 over an opaque-but-fused box.
@@ -823,7 +823,7 @@ optimization:
   conjunct lists; expression internals visible if intra-expression rewrites are
   needed). All rule-based rewrites run here.
 - **Physical plan** — after rewrites, **lower** each maximal fusible expression
-  subtree into one `AnyValue`. Boxing *is* the lowering step: it trades
+  subtree into one `DynValue`. Boxing *is* the lowering step: it trades
   structural visibility for fusion + the small binary, exactly at the granularity
   the optimizer chose.
 

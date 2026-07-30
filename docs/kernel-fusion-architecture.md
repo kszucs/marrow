@@ -272,7 +272,7 @@ Exists and correct in `values.mojo`:
 - `Add`, `Sub` (numeric); `Less`, `Greater`, `Equal` (comparison); `Cast`,
   `NumToBoolValue`, `BoolToNumValue` (casts, already delegating to kernel cores).
 - `Length` (string→numeric bridge, true SIMD over offsets).
-- `NumericColumn` / `StringColumn` leaves; `AnyValue` erasure box; `col()` /
+- `NumericColumn` / `StringColumn` leaves; `DynValue` erasure box; `col()` /
   `Table[T]`.
 
 Gaps:

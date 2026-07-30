@@ -37,8 +37,8 @@ expressions do not produce.
 ``DynRelation.execute()``                        — drain to a single RecordBatch.
 
 ``project`` and ``aggregate`` each have two overloads, one per expression lane:
-one taking interpreted ``DynValue``s (names resolved against the input schema
-here) and one taking already-bound ``AnyValue``s, so a fused comptime plan uses
+one taking interpreted ``TagValue``s (names resolved against the input schema
+here) and one taking already-bound ``DynValue``s, so a fused comptime plan uses
 the same API rather than assembling nodes by hand.
 
 Example
@@ -52,8 +52,8 @@ from std.memory import ArcPointer
 from ..dtypes import Field
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .values import AnyValue, AggExpr
-from .dynamic import DynValue, col, LOAD
+from .values import DynValue, AggExpr
+from .dynamic import TagValue, col, LOAD
 from ..kernels.execution import ExecutionContext
 from .aggregates import AggFunc
 from ..parquet import LeafSet
@@ -102,7 +102,7 @@ trait Relation(ImplicitlyDeletable, Movable):
     (O(1) — nodes are immutable and shared), and rewrite."""
 
     def with_predicate(
-        self, var predicate: AnyValue
+        self, var predicate: DynValue
     ) raises -> Optional[ArcPointer[NoneType]]:
         """This node rebuilt to carry `predicate` as **pruning metadata**, as an
         erased pointer — or `None` when it cannot use one, which is every node
@@ -160,7 +160,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     var _virt_drop: def(var ArcPointer[NoneType]) thin
     var _virt_kind: def(ArcPointer[NoneType]) thin -> Int
     var _virt_with_predicate: def(
-        ArcPointer[NoneType], var AnyValue
+        ArcPointer[NoneType], var DynValue
     ) thin raises -> Optional[ArcPointer[NoneType]]
 
     @staticmethod
@@ -170,7 +170,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     @staticmethod
     def _tramp_with_predicate[
         T: Relation
-    ](ptr: ArcPointer[NoneType], var predicate: AnyValue) raises -> Optional[
+    ](ptr: ArcPointer[NoneType], var predicate: DynValue) raises -> Optional[
         ArcPointer[NoneType]
     ]:
         return rebind[ArcPointer[T]](ptr)[].with_predicate(predicate^)
@@ -261,7 +261,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
-        var exprs = List[AnyValue]()
+        var exprs = List[DynValue]()
         var fields = List[Field]()
         for i in range(len(names)):
             var name = names[i]
@@ -269,7 +269,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             if idx == -1:
                 raise Error("select: column '" + name + "' not found")
             col_names.append(name)
-            exprs.append(AnyValue(col(idx)))
+            exprs.append(DynValue(col(idx)))
             fields.append(schema.fields[idx].copy())
         return DynRelation(
             Project(
@@ -280,7 +280,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             )
         )
 
-    def filter(self, var predicate: AnyValue) raises -> DynRelation:
+    def filter(self, var predicate: DynValue) raises -> DynRelation:
         """Filter rows by a boolean predicate. Column references resolve by name
         against the batch schema when the boxed value executes.
 
@@ -298,7 +298,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         return DynRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
-        self, keys: List[DynValue], aggs: List[AggExpr]
+        self, keys: List[TagValue], aggs: List[AggExpr]
     ) raises -> DynRelation:
         """Grouped aggregation — ``GROUP BY keys`` with one output column per
         aggregate.
@@ -316,7 +316,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         ``col("ts").date_trunc("month")``, ``case_when(...)``).
 
         Both expression lanes are accepted, and they mix: ``col("x").sum()`` on
-        a ``DynValue`` carries the function's *name* until this call resolves it
+        a ``TagValue`` carries the function's *name* until this call resolves it
         against the input's dtype, while the same call on a fused node
         (``col("x", int64).sum()``) already names its ``Aggregation`` and
         resolves nothing.
@@ -339,14 +339,14 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         var probe = RecordBatch.empty(input_schema)
 
         var fields = List[Field]()
-        var key_exprs = List[AnyValue]()
+        var key_exprs = List[DynValue]()
         for i in range(len(keys)):
             var k = keys[i].resolve_names(input_schema)
             var name = input_schema.fields[
                 Int(k.kind_data())
             ].name if k.kind() == LOAD else "key" + String(i)
             fields.append(Field(name, k.execute(probe).dtype()))
-            key_exprs.append(AnyValue(k^))
+            key_exprs.append(DynValue(k^))
 
         # Resolve each aggregate against the dtype its input turns out to have —
         # the only interpretation step on this path, and the last one: the output
@@ -355,7 +355,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         # timezone; `count` and the distinct counts are int64; `mean` is
         # float64), and an aggregate not defined for the column's type is
         # rejected here rather than at execution.
-        var input_exprs = List[AnyValue]()
+        var input_exprs = List[DynValue]()
         var resolved = List[AggFunc]()
         for i in range(len(aggs)):
             var v = aggs[i].input_for(input_schema)
@@ -375,8 +375,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
 
     def aggregate(
         self,
-        var keys: List[AnyValue],
-        var inputs: List[AnyValue],
+        var keys: List[DynValue],
+        var inputs: List[DynValue],
         var aggs: List[AggFunc],
         names: List[String],
     ) raises -> DynRelation:
@@ -424,8 +424,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     def join(
         self,
         right: DynRelation,
-        left_on: List[DynValue],
-        right_on: List[DynValue],
+        left_on: List[TagValue],
+        right_on: List[TagValue],
         how: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> DynRelation:
@@ -477,7 +477,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         )
 
     def project(
-        self, names: List[String], var values: List[AnyValue]
+        self, names: List[String], var values: List[DynValue]
     ) raises -> DynRelation:
         """Project arbitrary named expressions (computed columns).
 
@@ -492,8 +492,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         unknown column still fails at plan-build time, because the dtype probe
         below executes the expression.
 
-        There is deliberately no ``List[DynValue]`` overload: ``AnyValue``
-        converts implicitly from ``DynValue``, so a second overload would be
+        There is deliberately no ``List[TagValue]`` overload: ``DynValue``
+        converts implicitly from ``TagValue``, so a second overload would be
         shadowed by this one at every call site that passes a list literal —
         reachable only by spelling out the conversion, which is not an API."""
         if len(names) != len(values):
@@ -520,7 +520,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
 
     def sort(
         self,
-        keys: List[DynValue],
+        keys: List[TagValue],
         ascending: List[Bool],
         nulls_first: Bool = True,
         stable: Bool = True,
@@ -536,9 +536,9 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             raise Error("sort: len(keys) != len(ascending)")
 
         var input_schema = self.schema()
-        var key_exprs = List[AnyValue]()
+        var key_exprs = List[DynValue]()
         for ref k in keys:
-            key_exprs.append(AnyValue(k.resolve_names(input_schema)))
+            key_exprs.append(DynValue(k.resolve_names(input_schema)))
         return DynRelation(
             Sort(
                 input=self,
@@ -635,7 +635,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     var path: String
     var _schema: Schema
     var morsel_size: Int
-    var predicate: Optional[AnyValue]
+    var predicate: Optional[DynValue]
 
     def __init__(
         out self,
@@ -643,7 +643,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
         var path: String,
         var schema: Schema,
         morsel_size: Int = DEFAULT_MORSEL_SIZE,
-        var predicate: Optional[AnyValue] = None,
+        var predicate: Optional[DynValue] = None,
     ):
         self.path = path^
         self._schema = schema^
@@ -654,7 +654,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
         return Schema(copy=self._schema)
 
     def with_predicate(
-        self, var predicate: AnyValue
+        self, var predicate: DynValue
     ) raises -> Optional[ArcPointer[NoneType]]:
         """Accept the predicate as pruning metadata, **keeping `leaves`** —
         which is the point: `Self.leaves` is in scope here and a downcast at the
@@ -706,9 +706,9 @@ struct Filter(Relation):
     """Apply a boolean predicate; keep rows where True (schema unchanged)."""
 
     var input: DynRelation
-    var predicate: AnyValue
+    var predicate: DynValue
 
-    def __init__(out self, *, var input: DynRelation, var predicate: AnyValue):
+    def __init__(out self, *, var input: DynRelation, var predicate: DynValue):
         self.input = input^
         self.predicate = predicate^
 
@@ -731,7 +731,7 @@ struct Project(Relation):
 
     var input: DynRelation
     var names: List[String]
-    var values: List[AnyValue]
+    var values: List[DynValue]
     var _schema: Schema
 
     def __init__(
@@ -739,7 +739,7 @@ struct Project(Relation):
         *,
         var input: DynRelation,
         var names: List[String],
-        var values: List[AnyValue],
+        var values: List[DynValue],
         var schema: Schema,
     ):
         self.input = input^
@@ -808,7 +808,7 @@ struct Sort(Relation):
     ``Sort``."""
 
     var input: DynRelation
-    var keys: List[AnyValue]
+    var keys: List[DynValue]
     var ascending: List[Bool]
     var nulls_first: Bool
     var stable: Bool
@@ -819,7 +819,7 @@ struct Sort(Relation):
         out self,
         *,
         var input: DynRelation,
-        var keys: List[AnyValue],
+        var keys: List[DynValue],
         var ascending: List[Bool],
         nulls_first: Bool,
         stable: Bool,
@@ -873,8 +873,8 @@ struct Aggregate(Relation):
     ``DynRelation.aggregate`` produces the same node from runtime names."""
 
     var input: DynRelation
-    var keys: List[AnyValue]
-    var inputs: List[AnyValue]
+    var keys: List[DynValue]
+    var inputs: List[DynValue]
     var aggs: List[AggFunc]
     var _schema: Schema
 
@@ -882,8 +882,8 @@ struct Aggregate(Relation):
         out self,
         *,
         var input: DynRelation,
-        var keys: List[AnyValue],
-        var inputs: List[AnyValue],
+        var keys: List[DynValue],
+        var inputs: List[DynValue],
         var aggs: List[AggFunc],
         var schema: Schema,
     ):

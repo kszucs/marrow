@@ -140,10 +140,10 @@ None — `t2.3b-aggregate` and `fu4-like-scalar` are both merged. Re-check befor
 > Q0.0 is closed (upstream fix), so the suite is trustworthy again and these are no longer
 > gated — Q0.2/Q0.3 can run in parallel with everything else.
 
-**Q0.0 — ~~Fix the one-byte heap overflow in `AnyValue`~~** · **CLOSED — fixed upstream
+**Q0.0 — ~~Fix the one-byte heap overflow in `DynValue`~~** · **CLOSED — fixed upstream
 2026-07-25** · No work required.
 
-Was: `ArcPointer[DynValue]` (`expr/values.mojo:2299`) wrote its trailing `Variant` discriminant
+Was: `ArcPointer[TagValue]` (`expr/values.mojo:2299`) wrote its trailing `Variant` discriminant
 one byte past the allocation (`size_of` 416 vs ≥417 needed), silently corrupting the heap and
 causing **every** full-suite failure.
 
@@ -176,7 +176,7 @@ Owns: `marrow/expr/values.mojo`, `marrow/kernels/boolean.mojo`, `marrow/expr/tes
   already re-exports). Add a parity case with nulls whose data bits are set.
 - Both verified via `test_parity.mojo` (fused == dynamic).
 
-**Q0.3 — `DynValue.name()` tag guard** · *Tier 0, trivial* · Depends: — ·
+**Q0.3 — `TagValue.name()` tag guard** · *Tier 0, trivial* · Depends: — ·
 Owns: `marrow/expr/dynamic.mojo` · Done when: `name()` returns `String()` unless `_tag == LOAD`,
 so a `LIKE` node stops reporting its pattern (`"%foo%"`) and a `DATE_TRUNC` node its unit as an
 output column name. Add a test.
@@ -203,7 +203,7 @@ to the plan-building API and back:
 nodes directly; their docstring says so. Everything else, tests included, uses the API.
 
 Done when the probe is unnecessary for the fused lane: a fused value's `OutType` is
-**statically known**, so `AnyValue` should be able to answer its output dtype without
+**statically known**, so `DynValue` should be able to answer its output dtype without
 executing anything, and only the interpreted arm needs the probe. That reclaims the 16 KB
 *and* lets the gates use the same API as every other caller — at which point this task and
 the gate exception close together.
@@ -280,7 +280,7 @@ unchanged, since this moves no code across a DCE boundary.
 *Tier 0, found 2026-07-27* ·
 
 **Resolution: option (b) — promote in the interpreted lane, at the expression layer.**
-`DynValue._promote_operands` (`expr/dynamic.mojo`) widens the narrower of two numeric
+`TagValue._promote_operands` (`expr/dynamic.mojo`) widens the narrower of two numeric
 operands before `_arith`/`_compare` hand them to a kernel, using `_numeric_rank` — the
 runtime twin of `values._rank`, same rule (every float outranks every integer). So both
 lanes accept the same operand pairings and produce the same dtype, while kernels stay
@@ -306,7 +306,7 @@ touches, so wrapping an already-erased dispatch in a generic helper cost seven t
 change itself. The twelve inline call sites are deliberate and marked ⚠️ BINSIZE.
 
 Second, **the cast fanout is free here** — stubbing both `cast_array` calls changes
-nothing, because `cast` is already linked in by `DynValue`'s own `CAST` arm. That is the
+nothing, because `cast` is already linked in by `TagValue`'s own `CAST` arm. That is the
 real difference from the reverted kernel-layer version, which made it reachable from every
 erased binary dispatch including the fused gates'.
 
@@ -314,7 +314,7 @@ The fused nodes are unchanged — they had no bug, and always-wrapping every ope
 `NumericCast` was a binary-size risk for no correctness gain. **The gap that remains, stated
 rather than papered over:** direct node construction (`Gt(a, b)`, and the `binary_size`
 gates) still relies on the fused nodes' internal `ArgType = promote[…]` widening, and the
-interpreted lane promotes at *execution*, not construction — so a `DynValue` tree's output
+interpreted lane promotes at *execution*, not construction — so a `TagValue` tree's output
 dtype is only known once it meets real data (which is what `.project()`'s 0-row probe is
 for; see Q0.5).
 
@@ -433,7 +433,7 @@ plus `Count`/`Mean`/`Max`/`CountDistinct`.
 **Two measurements from 2026-07-28 show this is not hypothetical, because in both cases the
 gate reported "no change" and the change was simply invisible to it:**
 
-- Q0.4 rewrote all twelve of `DynValue.eval`'s binary arms. The fused gates came back
+- Q0.4 rewrote all twelve of `TagValue.eval`'s binary arms. The fused gates came back
   byte-identical — true, and worthless: **neither fused gate contains a single arithmetic
   expression.**
 - T2.4 rewrote the Parquet read path and the scan processor. It contributed **0 bytes to
@@ -838,7 +838,7 @@ So the `NumericType` bound is not load-bearing for the fold — it is a conseque
 work around by threading a dtype instance through `acc_instance` and eight construction sites,
 and which cascaded into the `Value` tower via `Reduction`'s `NumericValue` conformance.
 
-### Decided: split `aggregate_runtime`; names belong to `DynValue`
+### Decided: split `aggregate_runtime`; names belong to `TagValue`
 
 `GroupBy.aggregate_runtime(values, tags)` is the only reason the kernel layer knows about names
 or tags, and it knows about them because it bundles **two** responsibilities:
@@ -860,7 +860,7 @@ The caller groups once, then loops its aggregate list resolving **name → kerne
 layer**, calling the typed method per column. Hash-once is preserved because `Grouping` is passed
 in — that property came from the bundling, not from the dispatch.
 
-**`DynValue` owns the name/tag routing** (`marrow/expr/dynamic.mojo`). It is the runtime-plan
+**`TagValue` owns the name/tag routing** (`marrow/expr/dynamic.mojo`). It is the runtime-plan
 frontend, so this is where a `String` becomes a kernel; `AggKernel`'s docstring already says
 runtime `name -> kernel` selection "lives in the expression layer, never here". The AOT frontend
 names kernels as types and pays no dispatch at all, which is what the small-binary property wants.
@@ -904,7 +904,7 @@ was logged as an independent cleanup; it is actually the enabling piece here, so
    pass over the group ids. That is a defensible trade for the frontend split; it is **not** a
    free win, and should be stated as such rather than assumed.
 
-The name/tag routing moving to `DynValue` is **independent of all this** and still stands.
+The name/tag routing moving to `TagValue` is **independent of all this** and still stands.
 
 #### Performance: where marrow can actually beat them
 
@@ -946,12 +946,12 @@ from the same kernel set.
 place, never materialising a gid array (what ClickHouse does, minus the indirection). That removes
 the extra pass the grouping/aggregation split costs — see conclusion 4 above.
 
-**This does not conflict with moving name routing to `DynValue` — it is the reason to.** The two
+**This does not conflict with moving name routing to `TagValue` — it is the reason to.** The two
 frontends want different execution:
 
 | frontend | aggregate set | execution |
 |---|---|---|
-| **F1 `DynValue`** | runtime | resolve name → kernel, loop calling typed `aggregate[K]` per column |
+| **F1 `TagValue`** | runtime | resolve name → kernel, loop calling typed `aggregate[K]` per column |
 | **F2 AOT** | comptime | one `FusedAggState[*Ks]`, single pass, zero dispatch |
 
 A kernel layer that speaks only in comptime kernels serves both: F1 loops over it, F2 fuses across
@@ -1068,7 +1068,7 @@ micro-optimisation to defer until profiles justify it.
 
 | frontend | aggregate set | path |
 |---|---|---|
-| **F1 `DynValue`** | runtime | resolve name → kernel in the expression layer, then loop `aggregate[K]` per column (SoA) |
+| **F1 `TagValue`** | runtime | resolve name → kernel in the expression layer, then loop `aggregate[K]` per column (SoA) |
 | **F2 AOT** | comptime | one `FusedAggregation[*Ks, *Vs]`, single pass, zero dispatch |
 
 Both consume the *same* kernel algebra (`AggKernel`), so a new aggregate is written once and both

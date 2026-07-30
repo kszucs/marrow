@@ -1,11 +1,11 @@
 """Type-erased runtime expression nodes for the marrow expression system.
 
-``DynValue`` is the runtime counterpart to the comptime-typed nodes in
+``TagValue`` is the runtime counterpart to the comptime-typed nodes in
 ``marrow.expr.values``.  It lets query plans be built and executed without
 knowing concrete comptime types — this is what the Python bindings (and any
-other runtime-typed caller) drive.  A single ``DynValue`` node carries a tag
+other runtime-typed caller) drive.  A single ``TagValue`` node carries a tag
 plus its child args, and dispatches its own execution by tag in ``eval()``.
-To mix it with fused values, box it into ``AnyValue`` (``marrow.expr.values``)
+To mix it with fused values, box it into ``DynValue`` (``marrow.expr.values``)
 — the one box the relational layer holds.
 
 Factory functions
@@ -14,7 +14,7 @@ Factory functions
 ``lit[T](value)``               — typed scalar literal
 ``if_else(cond, then_, else_)`` — conditional
 
-Operator overloads on ``DynValue``: ``+``, ``-``, ``*``, ``/``, ``>``,
+Operator overloads on ``TagValue``: ``+``, ``-``, ``*``, ``/``, ``>``,
 ``<``, ``>=``, ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~`` (NOT),
 unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.length()``,
 ``.cast(to)``.
@@ -212,11 +212,11 @@ def _promote_operands(mut left: DynArray, mut right: DynArray) raises:
 
 
 # ---------------------------------------------------------------------------
-# DynValue - unified n-ary term expression node
+# TagValue - unified n-ary term expression node
 # ---------------------------------------------------------------------------
 
 
-struct DynValue(
+struct TagValue(
     Copyable,
     ImplicitlyCopyable,
     ImplicitlyDeletable,
@@ -231,7 +231,7 @@ struct DynValue(
     """
 
     var _tag: UInt8
-    var _args: List[DynValue]
+    var _args: List[TagValue]
     var _kind_data: UInt8
     var _value: Optional[DynScalar]
     var _name: String
@@ -243,7 +243,7 @@ struct DynValue(
     def __init__(
         out self,
         tag: UInt8,
-        var args: List[DynValue],
+        var args: List[TagValue],
         kind_data: UInt8,
         var value: Optional[DynScalar],
         var name: String,
@@ -260,7 +260,7 @@ struct DynValue(
 
     def __init__(out self, *, copy: Self):
         self._tag = copy._tag
-        self._args = List[DynValue]()
+        self._args = List[TagValue]()
         for i in range(len(copy._args)):
             self._args.append(copy._args[i].copy())
         self._kind_data = copy._kind_data
@@ -270,7 +270,7 @@ struct DynValue(
         self._value_set = copy._value_set.copy()
 
     # Explicit (empty) destructor so this self-referential struct
-    # (`_args: List[DynValue]`) is ImplicitlyDeletable; fields are still destroyed
+    # (`_args: List[TagValue]`) is ImplicitlyDeletable; fields are still destroyed
     # automatically after the body runs.
     def __del__(deinit self):
         pass
@@ -295,7 +295,7 @@ struct DynValue(
             return String()
 
     def execute(self, batch: RecordBatch) raises -> DynArray:
-        """Evaluate against *batch*. This is the ``AnyValue``-box entry point the
+        """Evaluate against *batch*. This is the ``DynValue``-box entry point the
         fused/streaming relations call per morsel; ``eval`` resolves named
         ``col(...)`` references inline (a per-column schema lookup, no tree copy),
         so there is no per-morsel ``resolve_names`` reconstruction."""
@@ -313,7 +313,7 @@ struct DynValue(
             )
         return Int(resolved.kind_data())
 
-    def resolve_names(self, schema: Schema) raises -> DynValue:
+    def resolve_names(self, schema: Schema) raises -> TagValue:
         """Recursively resolve ``col("name")`` references against *schema*.
 
         Returns a copy of this expression tree with every named LOAD node
@@ -564,7 +564,7 @@ struct DynValue(
                 self._args[0].eval(batch), CalendarUnit(Int(self._kind_data))
             )
         else:
-            raise Error("DynValue.eval: unknown expression kind ", self._tag)
+            raise Error("TagValue.eval: unknown expression kind ", self._tag)
 
     def _pattern_array(self, n: Int) raises -> DynArray:
         """Broadcast a LIKE/ILIKE pattern (stored in ``_name``) into an ``n``-row
@@ -746,8 +746,8 @@ struct DynValue(
                 writer.write(t")")
 
     # Node builders shared by the operator overloads below
-    def _binary(self, tag: UInt8, rhs: DynValue) -> DynValue:
-        return DynValue(
+    def _binary(self, tag: UInt8, rhs: TagValue) -> TagValue:
+        return TagValue(
             tag=tag,
             args=[self.copy(), rhs.copy()],
             kind_data=0,
@@ -755,8 +755,8 @@ struct DynValue(
             name=String(),
         )
 
-    def _unary(self, tag: UInt8) -> DynValue:
-        return DynValue(
+    def _unary(self, tag: UInt8) -> TagValue:
+        return TagValue(
             tag=tag,
             args=[self.copy()],
             kind_data=0,
@@ -764,10 +764,10 @@ struct DynValue(
             name=String(),
         )
 
-    def cast(self, to: DynType) -> DynValue:
+    def cast(self, to: DynType) -> TagValue:
         """Build a runtime cast node — ``col("a").cast(float64)``. Evaluated by
         the ``marrow.kernels.cast`` router (numeric/bool/temporal families)."""
-        return DynValue(
+        return TagValue(
             tag=CAST,
             args=[self.copy()],
             kind_data=0,
@@ -776,75 +776,75 @@ struct DynValue(
             cast_to=to.copy(),
         )
 
-    # Operator overloads (methods on DynValue)
-    def __add__(self, rhs: DynValue) -> DynValue:
+    # Operator overloads (methods on TagValue)
+    def __add__(self, rhs: TagValue) -> TagValue:
         return self._binary(ADD, rhs)
 
-    def __sub__(self, rhs: DynValue) -> DynValue:
+    def __sub__(self, rhs: TagValue) -> TagValue:
         return self._binary(SUB, rhs)
 
-    def __mul__(self, rhs: DynValue) -> DynValue:
+    def __mul__(self, rhs: TagValue) -> TagValue:
         return self._binary(MUL, rhs)
 
-    def __truediv__(self, rhs: DynValue) -> DynValue:
+    def __truediv__(self, rhs: TagValue) -> TagValue:
         return self._binary(DIV, rhs)
 
-    def __mod__(self, rhs: DynValue) -> DynValue:
+    def __mod__(self, rhs: TagValue) -> TagValue:
         return self._binary(MOD, rhs)
 
-    def __floordiv__(self, rhs: DynValue) -> DynValue:
+    def __floordiv__(self, rhs: TagValue) -> TagValue:
         return self._binary(FLOORDIV, rhs)
 
-    def __xor__(self, rhs: DynValue) -> DynValue:
+    def __xor__(self, rhs: TagValue) -> TagValue:
         return self._binary(XOR, rhs)
 
-    def __gt__(self, rhs: DynValue) -> DynValue:
+    def __gt__(self, rhs: TagValue) -> TagValue:
         return self._binary(GT, rhs)
 
-    def __lt__(self, rhs: DynValue) -> DynValue:
+    def __lt__(self, rhs: TagValue) -> TagValue:
         return self._binary(LT, rhs)
 
-    def __ge__(self, rhs: DynValue) -> DynValue:
+    def __ge__(self, rhs: TagValue) -> TagValue:
         return self._binary(GE, rhs)
 
-    def __le__(self, rhs: DynValue) -> DynValue:
+    def __le__(self, rhs: TagValue) -> TagValue:
         return self._binary(LE, rhs)
 
-    def __eq__(self, rhs: DynValue) -> DynValue:
+    def __eq__(self, rhs: TagValue) -> TagValue:
         return self._binary(EQ, rhs)
 
-    def __ne__(self, rhs: DynValue) -> DynValue:
+    def __ne__(self, rhs: TagValue) -> TagValue:
         return self._binary(NE, rhs)
 
-    def __and__(self, rhs: DynValue) -> DynValue:
+    def __and__(self, rhs: TagValue) -> TagValue:
         return self._binary(AND, rhs)
 
-    def __or__(self, rhs: DynValue) -> DynValue:
+    def __or__(self, rhs: TagValue) -> TagValue:
         return self._binary(OR, rhs)
 
-    def __neg__(self) -> DynValue:
+    def __neg__(self) -> TagValue:
         return self._unary(NEG)
 
-    def __invert__(self) -> DynValue:
+    def __invert__(self) -> TagValue:
         return self._unary(NOT)
 
-    def is_null(self) -> DynValue:
+    def is_null(self) -> TagValue:
         return self._unary(IS_NULL)
 
-    def not_null(self) -> DynValue:
+    def not_null(self) -> TagValue:
         return self._unary(NOT_NULL)
 
-    def abs(self) -> DynValue:
+    def abs(self) -> TagValue:
         return self._unary(ABS)
 
-    def length(self) -> DynValue:
+    def length(self) -> TagValue:
         return self._unary(LENGTH)
 
     # --- string pattern matching (kernels.string) --------------------------
-    def like(self, var pattern: String) -> DynValue:
+    def like(self, var pattern: String) -> TagValue:
         """SQL ``LIKE`` against a constant *pattern* (``%``/``_`` wildcards,
         case-sensitive) — dispatches to ``kernels.string.LikeKernel``."""
-        return DynValue(
+        return TagValue(
             tag=LIKE,
             args=[self.copy()],
             kind_data=0,
@@ -852,9 +852,9 @@ struct DynValue(
             name=pattern^,
         )
 
-    def ilike(self, var pattern: String) -> DynValue:
+    def ilike(self, var pattern: String) -> TagValue:
         """Case-insensitive SQL ``LIKE`` — ``kernels.string.ILikeKernel``."""
-        return DynValue(
+        return TagValue(
             tag=ILIKE,
             args=[self.copy()],
             kind_data=0,
@@ -863,10 +863,10 @@ struct DynValue(
         )
 
     # --- set membership (kernels.membership) -------------------------------
-    def isin(self, value_set: DynArray) -> DynValue:
+    def isin(self, value_set: DynArray) -> TagValue:
         """``self IN value_set`` — the value set is captured in the node and
         probed by ``kernels.membership.IsInKernel``."""
-        return DynValue(
+        return TagValue(
             tag=IS_IN,
             args=[self.copy()],
             kind_data=0,
@@ -876,39 +876,39 @@ struct DynValue(
         )
 
     # --- conditional / null handling (kernels.conditional) -----------------
-    def nullif(self, other: DynValue) -> DynValue:
+    def nullif(self, other: TagValue) -> TagValue:
         """``NULLIF(self, other)`` — ``kernels.conditional.nullif``."""
         return self._binary(NULLIF, other)
 
     # --- temporal extraction (kernels.temporal) ----------------------------
-    def year(self) -> DynValue:
+    def year(self) -> TagValue:
         return self._unary(YEAR)
 
-    def month(self) -> DynValue:
+    def month(self) -> TagValue:
         return self._unary(MONTH)
 
-    def day(self) -> DynValue:
+    def day(self) -> TagValue:
         return self._unary(DAY)
 
-    def hour(self) -> DynValue:
+    def hour(self) -> TagValue:
         return self._unary(HOUR)
 
-    def minute(self) -> DynValue:
+    def minute(self) -> TagValue:
         return self._unary(MINUTE)
 
-    def second(self) -> DynValue:
+    def second(self) -> TagValue:
         return self._unary(SECOND)
 
-    def day_of_week(self) -> DynValue:
+    def day_of_week(self) -> TagValue:
         return self._unary(DAY_OF_WEEK)
 
-    def quarter(self) -> DynValue:
+    def quarter(self) -> TagValue:
         return self._unary(QUARTER)
 
-    def day_of_year(self) -> DynValue:
+    def day_of_year(self) -> TagValue:
         return self._unary(DAY_OF_YEAR)
 
-    def date_trunc(self, unit: String) raises -> DynValue:
+    def date_trunc(self, unit: String) raises -> TagValue:
         """Floor a temporal column to *unit* (``second``/``minute``/``hour``/
         ``day``) — ``kernels.temporal.DateTruncKernel``.
 
@@ -918,7 +918,7 @@ struct DynValue(
         ``_kind_data`` rather than ``_name`` — ``_name`` already doubles as the
         column name and the LIKE pattern (see L8), and this is one overload of
         it that did not need to exist."""
-        return DynValue(
+        return TagValue(
             tag=DATE_TRUNC,
             args=[self.copy()],
             kind_data=UInt8(CalendarUnit.parse(unit).value),
@@ -928,7 +928,7 @@ struct DynValue(
 
     # --- aggregates (marrow.expr.aggregates) --------------------------------
     #
-    # An aggregate is not another `DynValue` tag: it does not produce a value
+    # An aggregate is not another `TagValue` tag: it does not produce a value
     # per row, it collapses rows within a group. `col("x").sum()` therefore
     # yields a `DynAgg` — this expression plus the aggregate applied to it —
     # which `DynRelation.aggregate` turns into an output column.
@@ -974,13 +974,13 @@ struct DynAgg(Copyable, Movable, Writable):
     name is used."""
 
     var func: String
-    var input: DynValue
+    var input: TagValue
     var out_name: String
 
     def __init__(
         out self,
         var func: String,
-        var input: DynValue,
+        var input: TagValue,
         var out_name: String = String(),
     ):
         self.func = func^
@@ -1000,42 +1000,42 @@ struct DynAgg(Copyable, Movable, Writable):
 
 
 # ---------------------------------------------------------------------------
-# Factory functions (return DynValue)
+# Factory functions (return TagValue)
 # ---------------------------------------------------------------------------
 
 
-def col(index: Int) -> DynValue:
+def col(index: Int) -> TagValue:
     """Reference to the ``index``-th input column."""
-    return DynValue(
+    return TagValue(
         tag=LOAD,
-        args=List[DynValue](),
+        args=List[TagValue](),
         kind_data=UInt8(index),
         value=None,
         name=String(),
     )
 
 
-def col(var name: String) -> DynValue:
+def col(var name: String) -> TagValue:
     """Reference to a named column."""
-    return DynValue(
-        tag=LOAD, args=List[DynValue](), kind_data=0, value=None, name=name^
+    return TagValue(
+        tag=LOAD, args=List[TagValue](), kind_data=0, value=None, name=name^
     )
 
 
-def lit[T: NumericType](value: Scalar[T.native]) raises -> DynValue:
+def lit[T: NumericType](value: Scalar[T.native]) raises -> TagValue:
     """A scalar constant."""
-    return DynValue(
+    return TagValue(
         tag=LITERAL,
-        args=List[DynValue](),
+        args=List[TagValue](),
         kind_data=0,
         value=PrimitiveScalar[T](value).to_dyn(),
         name=String(),
     )
 
 
-def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
+def if_else(cond: TagValue, then_: TagValue, else_: TagValue) -> TagValue:
     """Element-wise conditional."""
-    return DynValue(
+    return TagValue(
         tag=IF_ELSE,
         args=[cond.copy(), then_.copy(), else_.copy()],
         kind_data=0,
@@ -1044,10 +1044,10 @@ def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
     )
 
 
-def coalesce(var args: List[DynValue]) -> DynValue:
+def coalesce(var args: List[TagValue]) -> TagValue:
     """First non-null value across *args*, elementwise
     (``kernels.conditional.coalesce``)."""
-    return DynValue(
+    return TagValue(
         tag=COALESCE,
         args=args^,
         kind_data=0,
@@ -1057,10 +1057,10 @@ def coalesce(var args: List[DynValue]) -> DynValue:
 
 
 def case_when(
-    conditions: List[DynValue],
-    values: List[DynValue],
-    else_: Optional[DynValue] = None,
-) -> DynValue:
+    conditions: List[TagValue],
+    values: List[TagValue],
+    else_: Optional[TagValue] = None,
+) -> TagValue:
     """Multi-branch ``CASE WHEN`` (``kernels.conditional.case_when``).
 
     ``conditions[k]`` selects ``values[k]`` for the first branch that is
@@ -1069,7 +1069,7 @@ def case_when(
     ``resolve_names`` recurse over every branch; ``kind_data`` flags whether an
     ``else_`` is present.
     """
-    var args = List[DynValue]()
+    var args = List[TagValue]()
     for k in range(len(conditions)):
         args.append(conditions[k].copy())
         args.append(values[k].copy())
@@ -1077,7 +1077,7 @@ def case_when(
     if else_:
         args.append(else_.value().copy())
         has_else = 1
-    return DynValue(
+    return TagValue(
         tag=CASE_WHEN,
         args=args^,
         kind_data=has_else,

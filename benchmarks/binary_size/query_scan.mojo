@@ -20,7 +20,7 @@ not run them.
 
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
-from marrow.expr.values import col, AnyValue
+from marrow.expr.values import col, DynValue
 from marrow.expr.relations import ParquetScan, Project, DynRelation
 
 
@@ -30,10 +30,10 @@ def main() raises:
     )
     var filtered = DynRelation(
         ParquetScan(path=String("orders.parquet"), schema=sch)
-    ).filter(AnyValue(col("a", int64) > col("b", int64)))
+    ).filter(DynValue(col("a", int64) > col("b", int64)))
 
-    var values = List[AnyValue]()
-    values.append(AnyValue(col("a", int64)))
+    var values = List[DynValue]()
+    values.append(DynValue(col("a", int64)))
     var proj = Project(
         input=filtered,
         names=["a"],

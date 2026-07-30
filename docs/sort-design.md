@@ -523,7 +523,7 @@ comptime SORT_NODE: UInt8 = 7
 
 struct Sort(Relation):
     var input: DynRelation
-    var keys: List[AnyValue]           # column exprs resolved to input schema
+    var keys: List[DynValue]           # column exprs resolved to input schema
     var ascending: List[Bool]
     var nulls_first: Bool
     var limit: Optional[Int]

@@ -29,7 +29,7 @@ from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.values import (
     col,
-    AnyValue,
+    DynValue,
     NumericCast,
     Like,
     IsIn,
@@ -54,12 +54,12 @@ def main() raises:
         names=["a", "b", "s", "pat", "ts"],
     )
 
-    var values = List[AnyValue]()
-    values.append(AnyValue(Like(col("s", string), col("pat", string))))
-    values.append(AnyValue(Coalesce(col("a", int64), col("b", int64))))
-    values.append(AnyValue(IsIn(col("a", int64), array([3, 7], int64))))
-    values.append(AnyValue(NumericCast[Float64Type](col("a", int64))))
-    values.append(AnyValue(Year(col("ts", timestamp(second)))))
+    var values = List[DynValue]()
+    values.append(DynValue(Like(col("s", string), col("pat", string))))
+    values.append(DynValue(Coalesce(col("a", int64), col("b", int64))))
+    values.append(DynValue(IsIn(col("a", int64), array([3, 7], int64))))
+    values.append(DynValue(NumericCast[Float64Type](col("a", int64))))
+    values.append(DynValue(Year(col("ts", timestamp(second)))))
 
     var proj = Project(
         input=DynRelation(InMemoryTable(batch=batch)),

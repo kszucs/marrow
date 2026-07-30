@@ -790,7 +790,7 @@ struct DynType(
     comptime native = DType.bool
     """Placeholder, never read.
 
-    `DynType` conforms to the family traits so that `DynValue` can conform to
+    `DynType` conforms to the family traits so that `TagValue` can conform to
     `NumericValue`/`BoolValue`/`StringValue`, which is what lets the fused nodes
     (`NumericBinary[K, L, R]`, ...) accept an erased operand with no change to
     their bounds. Those nodes select the erased arm via `comptime IsErased`, so

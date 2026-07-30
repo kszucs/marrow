@@ -1,4 +1,4 @@
-# Step 3 — replace `DynValue`'s tag interpreter with node structs
+# Step 3 — replace `TagValue`'s tag interpreter with node structs
 
 Status: **in progress**, started 2026-07-30. Supersedes the Step 3 sketch in
 `~/Workspace/dtype-proto/PLAN.md`, which three findings have overtaken.
@@ -17,10 +17,10 @@ need only satisfy the trait. `DynType` can carry a placeholder `native` it never
 uses, because the erased instantiation never reaches `vectorwise` — the
 `comptime if` takes the dispatch arm. Phase 0 confirmed this end to end.
 
-**2. That mechanism already exists.** `AnyValue` (`values.mojo:2270+`) already
+**2. That mechanism already exists.** `DynValue` (`values.mojo:2270+`) already
 boxes via an opaque `ArcPointer[NoneType]` plus `thin` trampolines — exactly the
 "open family" canon. Step 3 is therefore not "build erasure". It is "stop
-`DynValue` being a fat tagged union, and let it box node structs the way fused
+`TagValue` being a fat tagged union, and let it box node structs the way fused
 nodes already box".
 
 **3. The size objection is answered, and it was the real risk.** The codebase
@@ -50,29 +50,29 @@ will not collapse as cleanly. Measure at each phase; do not extrapolate.
 
 ## Design
 
-**One node set. The erased lane is those same nodes, instantiated with `DynValue`
+**One node set. The erased lane is those same nodes, instantiated with `TagValue`
 operands.** There are no `Dyn*` node types — a `DynUnary` would defeat the point.
-`col("a").abs()` builds `Unary[AbsKernel, DynValue]`, and `a.add(b)` builds
-`Add[DynValue, DynValue]`, which is the same `Add` the fused lane uses.
+`col("a").abs()` builds `Unary[AbsKernel, TagValue]`, and `a.add(b)` builds
+`Add[TagValue, TagValue]`, which is the same `Add` the fused lane uses.
 
-`DynValue` **is** a `Value`: it erases the plan *shape* (which node types the
+`TagValue` **is** a `Value`: it erases the plan *shape* (which node types the
 tree is built from) while `DynArray` erases the data *lane*. It replaces
-`AnyValue` outright — that box exists only because the name `DynValue` was taken
+`DynValue` outright — that box exists only because the name `TagValue` was taken
 by the tag interpreter, and it has to carry the union of two representations (a
 fused node *or* an interpreter). Once the interpreter is gone there is one
-representation, so the box erases a single trait and `DynValue` can hold a
-`DynValue` like any other `Value`.
+representation, so the box erases a single trait and `TagValue` can hold a
+`TagValue` like any other `Value`.
 
 This is the shape `~/Workspace/dtype-proto/unified/expr.mojo` already
-demonstrates: `DynValue[In, Out](Value)` over an opaque `ArcPointer[NoneType]`
+demonstrates: `TagValue[In, Out](Value)` over an opaque `ArcPointer[NoneType]`
 plus `thin` trampolines, alongside `Add[L: Value, R: Value]`.
 
 ### The one thing that has to be made to work
 
-`DynValue` implements **every family trait** — `NumericValue`, `BoolValue`,
+`TagValue` implements **every family trait** — `NumericValue`, `BoolValue`,
 `StringValue` — not just `Value`. That is what lets the existing node bounds stay
 exactly as they are: `NumericBinary[K, L: NumericValue, R: NumericValue]` accepts
-`DynValue` for `L` and `R` with no relaxation, so `a.add(b)` on two erased
+`TagValue` for `L` and `R` with no relaxation, so `a.add(b)` on two erased
 operands builds the *same* `Add` the fused lane builds.
 
 The node then picks its strategy at elaboration:
@@ -111,14 +111,14 @@ the result below. (Had it not, the fallback was relaxing the node bounds to
 
 ### What the box carries
 
-`DynValue` keeps the public surface the tag interpreter has today — factories
+`TagValue` keeps the public surface the tag interpreter has today — factories
 (`col`, `lit`, `if_else`), operator overloads, `.cast()`, `.isin()`, `.year()`,
 the aggregate sugar — so callers and tests are unaffected. What changes is that
 each operator constructs a shared node rather than a tagged record: from
 
 ```mojo
 var _tag: UInt8
-var _args: List[DynValue]
+var _args: List[TagValue]
 var _kind_data: UInt8
 var _value: Optional[DynScalar]
 var _name: String
@@ -131,18 +131,18 @@ to an opaque pointer plus trampolines, over node structs that each own their
 `eval`, `prune`, `op_name` and `referenced_columns`.
 
 **No new node types are introduced.** All 41 tags map onto nodes that already
-exist in `values.mojo`, instantiated with `DynValue` operands:
+exist in `values.mojo`, instantiated with `TagValue` operands:
 
 | tags | existing node |
 |---|---|
-| ADD SUB MUL MOD FLOORDIV | `NumericBinary[K, DynValue, DynValue]` |
-| DIV | `FloatBinary[DivKernel, DynValue, DynValue]` |
-| EQ NE LT LE GT GE | `NumericCompare[K, DynValue, DynValue]` |
-| AND OR XOR | `BoolBinary[K, DynValue, DynValue]` |
-| NEG ABS | `NumericUnary[K, DynValue]` |
-| NOT | `BoolUnary[NotKernel, DynValue]` |
-| IS_NULL NOT_NULL | `NullPredicate[K, DynValue]` |
-| CAST | `NumericCast[To, DynValue]` and family |
+| ADD SUB MUL MOD FLOORDIV | `NumericBinary[K, TagValue, TagValue]` |
+| DIV | `FloatBinary[DivKernel, TagValue, TagValue]` |
+| EQ NE LT LE GT GE | `NumericCompare[K, TagValue, TagValue]` |
+| AND OR XOR | `BoolBinary[K, TagValue, TagValue]` |
+| NEG ABS | `NumericUnary[K, TagValue]` |
+| NOT | `BoolUnary[NotKernel, TagValue]` |
+| IS_NULL NOT_NULL | `NullPredicate[K, TagValue]` |
+| CAST | `NumericCast[To, TagValue]` and family |
 | YEAR … DAY_OF_YEAR, DATE_TRUNC | the temporal nodes |
 | LOAD LITERAL | the column and literal leaves |
 
@@ -192,14 +192,14 @@ fallback instead, which is a different and larger diff.
 **Gate:** full suite plus every binary-size gate unchanged — this phase adds
 conformances and must not change a single byte of generated code.
 
-### Phase 2 — `DynValue` replaces `AnyValue`
-The box implements `Value` and the family traits, and takes over `AnyValue`'s
+### Phase 2 — `TagValue` replaces `DynValue`
+The box implements `Value` and the family traits, and takes over `DynValue`'s
 role in `relations.mojo`, `execution.mojo` and the binary-size gate programs.
 The tag interpreter still exists and still works; it is simply one more thing the
 box can hold. **Gate:** suite green, gates within noise.
 
 ### Phase 3 — operators build shared nodes
-`DynValue.__add__` returns `Add[DynValue, DynValue]` re-boxed, and so on through
+`TagValue.__add__` returns `Add[TagValue, TagValue]` re-boxed, and so on through
 the operator surface, each backed by the `comptime if` erased arm in the existing
 node. Tags fall out of use group by group as their operator is converted:
 binaries and compares first (the shape the gates measured), then unary and
@@ -208,7 +208,7 @@ temporal, then the payload-carrying ones (`cast`, `like`, `isin`, `coalesce`,
 `query_dynvalue` / `query_runtime` `__text`.
 
 ### Phase 4 — delete the interpreter
-Remove `_tag`, the tag constants, the three switches, and `AnyValue`. Give
+Remove `_tag`, the tag constants, the three switches, and `DynValue`. Give
 `relations.mojo` its accessor in place of `kind() == LOAD`. **Done when**
 `dynamic.mojo` contains no `_tag` and no switch, and the full suite plus the
 binary-size gate are green.
@@ -234,8 +234,8 @@ struct, three instantiations, all correct:
 
 ```
 fused  : 42     Binary[AddKernel, Column[Int32Type], Column[Int32Type]]
-erased : 42     Binary[AddKernel, DynValue, DynValue]
-nested : 42     Binary[AddKernel, Binary[AddKernel, DynValue, DynValue], DynValue]
+erased : 42     Binary[AddKernel, TagValue, TagValue]
+nested : 42     Binary[AddKernel, Binary[AddKernel, TagValue, TagValue], TagValue]
 ```
 
 All three assumptions hold:
@@ -255,7 +255,7 @@ All three assumptions hold:
 trait, not a struct. A defaulted marker parameter is the idiomatic alternative and
 already has precedent: marrow's `Value` carries `comptime IsBreaker: Bool = False`
 for the same job. So `comptime IsErased: Bool = False` on `Value`, `True` on
-`DynValue`.
+`TagValue`.
 
 **The finding worth carrying into Phase 1: the marker must propagate.**
 

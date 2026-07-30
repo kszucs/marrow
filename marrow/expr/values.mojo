@@ -170,7 +170,7 @@ from ..kernels.boolean import (
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from .pruning import PruneStats, PruneBound
-from .dynamic import DynValue, DynAgg
+from .dynamic import TagValue, DynAgg
 from .aggregates import AggFunc
 from ..kernels.cast import (
     NumericCast as NumericCastKernel,
@@ -299,6 +299,19 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
     # A pipeline breaker (cross-row / materializing) — the family drivers prepare
     # it and read the slot straight back instead of running the fused loop. Default off.
     comptime IsBreaker: Bool = False
+
+    comptime IsErased: Bool = False
+    """Whether this node resolves its operand types at run time.
+
+    `True` only for `DynValue` and for any composite holding one, so a composite
+    must propagate it (`IsErased = L.IsErased or R.IsErased`) rather than just
+    defaulting. A node whose operand is erased cannot fuse — its `vectorwise`
+    would have to call the child's, and an erased child has no lane — so the
+    composite's `materialize` keys off this to take the dispatch arm instead.
+
+    Missing that propagation is not a wrong answer, it is a build failure: the
+    fused arm elaborates `SIMD[Self.OutType.native, W]` against `DynType`'s
+    placeholder `native` and fails to instantiate."""
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         """Produce this node's result `Datum` — the family driver: a numeric `Buffer`,
@@ -2191,10 +2204,10 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 
 
 # ---------------------------------------------------------------------------
-# AnyValue — erase any node to a boxed handle. Because `execute` already returns
+# DynValue — erase any node to a boxed handle. Because `execute` already returns
 # a concrete `Datum`, erasure is a plain fn-pointer trampoline.
 # ---------------------------------------------------------------------------
-struct AnyValue(Copyable, Movable, Writable):
+struct DynValue(Copyable, Movable, Value, Writable):
     """Type-erased expression handle — the boundary the relational engine
     (`marrow.expr.execution`) holds.
 
@@ -2204,12 +2217,19 @@ struct AnyValue(Copyable, Movable, Writable):
         fresh context and returns a column (`DynArray`); `prune` is the conservative
         `unknown()` (the comptime lane has no statistics pruning — always sound,
         since a caller only skips data it has proven cannot match).
-      * a runtime `DynValue` interpreter (`marrow.expr.dynamic`) — `execute` is
+      * a runtime `TagValue` interpreter (`marrow.expr.dynamic`) — `execute` is
         already an `DynArray`, and `prune` carries the *real* min/max rule.
 
-    This is the same dual-box design as `values.AnyValue`, so the relational plan
-    (built from untyped `DynValue`) runs unchanged, while typed subtrees fuse.
+    This is the same dual-box design as `values.DynValue`, so the relational plan
+    (built from untyped `TagValue`) runs unchanged, while typed subtrees fuse.
     """
+
+    comptime OutType = DynType
+    """The erased dtype. `DynType` conforms to every family trait, which is what
+    lets a fused node accept this box as an operand without relaxing its bound."""
+
+    comptime OutShape = 1
+    comptime IsErased = True
 
     var _boxed: ArcPointer[NoneType]
     var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> DynArray
@@ -2243,7 +2263,7 @@ struct AnyValue(Copyable, Movable, Writable):
     @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
         # comptime nodes are not `Writable`; fall back to the column name. The
-        # relational engine only boxes `DynValue` for display, so this branch is
+        # relational engine only boxes `TagValue` for display, so this branch is
         # never the one printed in a plan.
         return rebind[ArcPointer[V]](ptr)[].name()
 
@@ -2268,42 +2288,42 @@ struct AnyValue(Copyable, Movable, Writable):
         self._referenced_columns_fn = Self._referenced_columns_tramp[V]
         self._is_deterministic_fn = Self._is_deterministic_tramp[V]
 
-    # --- runtime `DynValue` box --------------------------------------------
+    # --- runtime `TagValue` box --------------------------------------------
     @staticmethod
     def _exec_tramp_dyn(
         ptr: ArcPointer[NoneType], batch: RecordBatch
     ) raises -> DynArray:
-        return rebind[ArcPointer[DynValue]](ptr)[].execute(batch)
+        return rebind[ArcPointer[TagValue]](ptr)[].execute(batch)
 
     @staticmethod
     def _prune_tramp_dyn(
         ptr: ArcPointer[NoneType], stats: PruneStats
     ) raises -> PruneBound:
-        return rebind[ArcPointer[DynValue]](ptr)[].prune(stats)
+        return rebind[ArcPointer[TagValue]](ptr)[].prune(stats)
 
     @staticmethod
     def _name_tramp_dyn(ptr: ArcPointer[NoneType]) -> String:
-        return rebind[ArcPointer[DynValue]](ptr)[].name()
+        return rebind[ArcPointer[TagValue]](ptr)[].name()
 
     @staticmethod
     def _write_tramp_dyn(ptr: ArcPointer[NoneType]) -> String:
         var s = String()
-        rebind[ArcPointer[DynValue]](ptr)[].write_to(s)
+        rebind[ArcPointer[TagValue]](ptr)[].write_to(s)
         return s^
 
     @staticmethod
     def _referenced_columns_tramp_dyn(
         ptr: ArcPointer[NoneType],
     ) -> List[String]:
-        return rebind[ArcPointer[DynValue]](ptr)[].referenced_columns()
+        return rebind[ArcPointer[TagValue]](ptr)[].referenced_columns()
 
     @staticmethod
     def _is_deterministic_tramp_dyn(ptr: ArcPointer[NoneType]) -> Bool:
-        return rebind[ArcPointer[DynValue]](ptr)[].is_deterministic()
+        return rebind[ArcPointer[TagValue]](ptr)[].is_deterministic()
 
     @implicit
-    def __init__(out self, var dyn: DynValue):
-        var ptr = ArcPointer[DynValue](dyn^)
+    def __init__(out self, var dyn: TagValue):
+        var ptr = ArcPointer[TagValue](dyn^)
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._execute = Self._exec_tramp_dyn
         self._prune_fn = Self._prune_tramp_dyn
@@ -2311,6 +2331,15 @@ struct AnyValue(Copyable, Movable, Writable):
         self._write_fn = Self._write_tramp_dyn
         self._referenced_columns_fn = Self._referenced_columns_tramp_dyn
         self._is_deterministic_fn = Self._is_deterministic_tramp_dyn
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        """`Value`'s abstract producer, satisfied by running the boxed node.
+
+        The box is never fused into, so it ignores `ctx` and hands back a whole
+        column: whatever it holds has already resolved its own types by the time
+        the trampoline returns. This is the erased arm of every composite that
+        takes `DynValue` as an operand."""
+        return Datum(self._execute(self._boxed, batch))
 
     def execute(self, batch: RecordBatch) raises -> DynArray:
         return self._execute(self._boxed, batch)
@@ -2384,7 +2413,7 @@ def lit(value: String) -> StringLiteral[StringType]:
 # AggExpr — one aggregate in a query
 #
 # `col("x").sum()` on a fused node produces one of these with its `Aggregation`
-# already chosen; the same call on a `DynValue` produces a `DynAgg`, which
+# already chosen; the same call on a `TagValue` produces a `DynAgg`, which
 # converts into one and resolves its function name when the plan is built. Both
 # arrive at the same `AggFunc`, which is why `aggregate(...)` takes a single
 # list and does not care which lane each member came from.
@@ -2399,7 +2428,7 @@ struct AggExpr(Copyable, Movable, Writable):
     - **fused / AOT** — ``col("amount", int64).sum()``. The ``Aggregation`` is
       computed from the node's own ``OutType``, so nothing is interpreted: the
       plan points straight at ``AggState[SumKernel, Int64Type]``.
-    - **dynamic** — ``col("amount").sum()`` on a ``DynValue``, which carries the
+    - **dynamic** — ``col("amount").sum()`` on a ``TagValue``, which carries the
       function's *name* until the plan is built and the input's dtype is known.
 
     ``input_for(schema)`` hands back the input expression ready to execute:
@@ -2409,8 +2438,8 @@ struct AggExpr(Copyable, Movable, Writable):
     var out_name: String
     """The output column name — the aggregate's own name unless aliased."""
 
-    var input: AnyValue
-    var _unresolved: Optional[DynValue]
+    var input: DynValue
+    var _unresolved: Optional[TagValue]
     var _func: String
     var _of: Optional[def(DynType) thin raises -> AggFunc]
 
@@ -2431,7 +2460,7 @@ struct AggExpr(Copyable, Movable, Writable):
         if not out_name:
             out_name = agg.func.copy()
         self.out_name = out_name^
-        self.input = AnyValue(agg.input.copy())
+        self.input = DynValue(agg.input.copy())
         self._unresolved = agg.input.copy()
         self._func = agg.func.copy()
         self._of = None
@@ -2440,7 +2469,7 @@ struct AggExpr(Copyable, Movable, Writable):
         out self,
         *,
         var out_name: String,
-        var input: AnyValue,
+        var input: DynValue,
         of: def(DynType) thin raises -> AggFunc,
     ):
         self.out_name = out_name^
@@ -2454,7 +2483,7 @@ struct AggExpr(Copyable, Movable, Writable):
         """From the fused lane: the aggregation is named, not looked up."""
         return AggExpr(
             out_name=String(A.name),
-            input=AnyValue(input^),
+            input=DynValue(input^),
             of=AggFunc.of[A],
         )
 
@@ -2464,10 +2493,10 @@ struct AggExpr(Copyable, Movable, Writable):
         out.out_name = name^
         return out^
 
-    def input_for(self, schema: Schema) raises -> AnyValue:
+    def input_for(self, schema: Schema) raises -> DynValue:
         """The input expression, ready to execute against ``schema``."""
         if self._unresolved:
-            return AnyValue(self._unresolved.value().resolve_names(schema))
+            return DynValue(self._unresolved.value().resolve_names(schema))
         return self.input.copy()
 
     def resolve(self, in_dtype: DynType) raises -> AggFunc:

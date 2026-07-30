@@ -4,11 +4,11 @@ Same query as `query_comptime.mojo`:
 
     SELECT a, name FROM orders WHERE a > b
 
-built with the existing `DynRelation`/`DynValue` layer
+built with the existing `DynRelation`/`TagValue` layer
 (`marrow.expr.relations`, `marrow.expr.dynamic`, `marrow.expr.executor`)
 -- `in_memory_table(batch).filter(...).select(...)` then `plan.execute()`, which
 walks the plan through `Planner.build()` into a pull-based
-`RelationProcessor` pipeline, evaluating the predicate via `DynValue.eval()`'s
+`RelationProcessor` pipeline, evaluating the predicate via `TagValue.eval()`'s
 tag dispatch. Filter comes before select in the chain (not select-then-filter
 as in `query_comptime.mojo`'s call site) because `DynRelation.filter()`
 resolves `col()` names against its *input*'s schema -- `b` must still be

@@ -32,13 +32,13 @@ complete — T2.1–T2.3b (fused and dynamic wiring, Sort/Limit/TopK, Aggregate 
 
 | task | what is left |
 |---|---|
-| **Q0.5** | A fused value's `OutType` is statically known, so `project`/`aggregate` need not probe it by executing against a 0-row batch. Worth ~16 KB of *file size* on the fused gate — re-measure as `__text` first, see Q0.8 — and retires the hand-built `benchmarks/binary_size` exception. Also the residual half of Q0.4: the interpreted lane promotes at *execution*, so a `DynValue` tree's output dtype is still only knowable by running it. |
+| **Q0.5** | A fused value's `OutType` is statically known, so `project`/`aggregate` need not probe it by executing against a 0-row batch. Worth ~16 KB of *file size* on the fused gate — re-measure as `__text` first, see Q0.8 — and retires the hand-built `benchmarks/binary_size` exception. Also the residual half of Q0.4: the interpreted lane promotes at *execution*, so a `TagValue` tree's output dtype is still only knowable by running it. |
 | ~~**Q3.1**~~ | ✅ **Complete, verified 2026-07-29.** Items 1, 3, 6, 7 turned out to be done already (`filter.mojo` has exactly the 3 free functions the task says to keep; `is_null`/`select`/`equal`, `hash_identity`, `_drop_null_bool`, `reinterpret_array`, `temporal_backing_dtype` no longer exist). Item 4/5 **done 2026-07-29**: `membership.mojo` 5 free fns → 2 + `IsInKernel`; `conditional.mojo` → 5 kernel structs over a shared `Selection`; `temporal.mojo` 18 → 7, with `CalendarUnit` replacing the `String` unit and the ten one-line delegators deleted. Item 2 **done 2026-07-29** — but its premise was stale: `RapidHash`/`SortIndices` already existed, so only the redundant delegators went (`rapidhash` 5 overloads → 2, `sort_indices` 4 → 1). Kernel free functions now total **61**, down from the 122 the task counted. `distinct.mojo` (6) and `concat.mojo` (1) still have no struct, but neither has a per-type dispatch to drift — the defect that motivates a struct does not apply, so they are left alone. |
 | **Q3.3 tail** | `ipc.mojo` still has 12 free fns. `_slice_body` still copies each column buffer byte-by-byte; a memcpy needs a new `Buffer` factory, since `unsafe_ptr()` is restricted to `buffers`/`views`/`c_data`. |
 | **Q4.1** | Missing value types: `Grouping`, `JoinKind` (its "emits right columns?" predicate is re-derived three times with different membership), `JoinIndex`, `BuildPartition`. |
 | **Q4.3–Q4.6** | Parquet leaf visitor (8 drifting type ladders), `ipc.mojo` → package, fused `prune` (the AOT frontend cannot prune row groups at all), and **Q4.6** — a Parquet scan doubles a minimal AOT binary because the reader resolves leaf type at runtime. Q4.2 (op registry) was dropped. |
-| **L2 → L6** | Extract `AnyValue` from `values.mojo` (the comptime lane still imports the runtime lane), then a `Scan` trait. **Do L6 before adding CSV/IPC sources, not after.** |
-| **L8** | Decompose `DynValue` — 41 tags, 7 fields, two of them overloaded. Large; schedule alone. |
+| **L2 → L6** | Extract `DynValue` from `values.mojo` (the comptime lane still imports the runtime lane), then a `Scan` trait. **Do L6 before adding CSV/IPC sources, not after.** |
+| **L8** | Decompose `TagValue` — 41 tags, 7 fields, two of them overloaded. Large; schedule alone. |
 | **D1 / D2** | Accepted, not scheduled: both need array-internal changes, which the layout freeze forbids. |
 
 ---
@@ -94,7 +94,7 @@ Each of these cost real time to find and invalidates an approach that looks obvi
   __text`; treat any recorded file-size delta near 16 KB as a page crossing, not code.
   Folded into Q0.8.
 - **A generic wrapper around an already-erased dispatch is not free.** Folding Q0.4's
-  twelve promote-then-dispatch sites in `DynValue.eval` into one
+  twelve promote-then-dispatch sites in `TagValue.eval` into one
   `_arith[K: BinaryNumericKernel]` helper cost **+115,600 bytes** on `query_dynvalue`
   (file size; the real code delta is smaller — see the 16 KB quantization note above), while
   writing the same four lines inline in each arm cost a fraction of that.
@@ -106,7 +106,7 @@ Each of these cost real time to find and invalidates an approach that looks obvi
 - **Reachability intuitions about the interpreter are usually wrong; stub and measure.**
   The kernel-layer version of Q0.4 was reverted partly for making "the cast fanout
   reachable from every erased binary dispatch". In the expression layer that cost is
-  literally zero — `cast` is already linked in by `DynValue`'s `CAST` arm, and stubbing
+  literally zero — `cast` is already linked in by `TagValue`'s `CAST` arm, and stubbing
   both `cast_array` calls out left the gate binary byte-identical.
 - **`origin_of(a, b)` is an origin *union*** (used by `Span.__merge_with__`). It is what
   lets a function return values borrowed from either of two storages — the thing

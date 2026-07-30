@@ -1,11 +1,11 @@
 """Tests for marrow.expr.values — the staged, strategy-pluggable fusion engine.
 
-Covers the four value families and the universal `AnyValue` box:
+Covers the four value families and the universal `DynValue` box:
   * numeric — vectorized SIMD fusion (`Add`/`Mul`/…, reductions, casts, windows)
   * bool    — bit-packed vectorized fusion (comparisons, `And`/`Or`/`Not`, any/all)
   * string  — elementwise fusion (`Concat`/`Upper`/…, predicates, parses)
   * list    — materialize-only columns feeding fixed-width breakers
-  * AnyValue — erases any comptime node OR a runtime `DynValue` behind `execute()`
+  * DynValue — erases any comptime node OR a runtime `TagValue` behind `execute()`
 """
 
 from std.testing import assert_true, assert_equal
@@ -57,7 +57,7 @@ from ...expr.values import (
     WindowSpec,
     FrameBound,
     NumericValue,
-    AnyValue,
+    DynValue,
     into_array,
     Concat,
     Upper,
@@ -542,14 +542,14 @@ def test_list_contains() raises:
 
 
 # ===========================================================================
-# AnyValue — the universal box over a comptime node OR a runtime DynValue
+# DynValue — the universal box over a comptime node OR a runtime TagValue
 # ===========================================================================
 
 
 def test_anyvalue_wraps_dynvalue() raises:
-    # the untyped runtime interpreter (DynValue), boxed in AnyValue, runs via the
+    # the untyped runtime interpreter (TagValue), boxed in DynValue, runs via the
     # tag dispatch — this is what the relational engine builds plans from
-    var boxed: AnyValue = dyn_col(0) + dyn_col(1)
+    var boxed: DynValue = dyn_col(0) + dyn_col(1)
     var cv = boxed.execute(_batch())
     assert_true(cv == array([11, 22, 33, 44], int64).to_dyn())
 
@@ -557,7 +557,7 @@ def test_anyvalue_wraps_dynvalue() raises:
 def test_anyvalue_erases_to_array() raises:
     # box a comptime node; its erased execute yields a column (DynArray), the
     # interface the relational engine consumes
-    var boxed: AnyValue = Add(col("a", int64), lit(10, int64))
+    var boxed: DynValue = Add(col("a", int64), lit(10, int64))
     var cv = boxed.execute(_batch())
     assert_true(cv == array([11, 12, 13, 14], int64).to_dyn())
 
@@ -566,9 +566,9 @@ def test_anyvalue_interchange() raises:
     # a heterogeneous list holds a fused comptime column *and* an interpreter
     # value; both run through the one erased execute — fused-vs-interpreted is
     # only which node you boxed.
-    var values = List[AnyValue]()
-    values.append(AnyValue(col("a", int64)))  # fused comptime
-    values.append(AnyValue(dyn_col("b")))  # runtime interpreter
+    var values = List[DynValue]()
+    values.append(DynValue(col("a", int64)))  # fused comptime
+    values.append(DynValue(dyn_col("b")))  # runtime interpreter
     var batch = _batch()
     assert_true(values[0].execute(batch) == array([1, 2, 3, 4], int64).to_dyn())
     assert_true(
@@ -586,9 +586,9 @@ def test_dynvalue_name_only_for_load() raises:
 
 
 def test_anyvalue_write_to_delegates() raises:
-    # write_to on a DynValue-boxed AnyValue renders the boxed node's expression
+    # write_to on a TagValue-boxed DynValue renders the boxed node's expression
     # form (not just its column name)
-    var boxed: AnyValue = dyn_col("a") + dyn_col("b")
+    var boxed: DynValue = dyn_col("a") + dyn_col("b")
     assert_true(String(boxed).find("add") != -1)
 
 
@@ -640,7 +640,7 @@ def test_referenced_columns_reduction() raises:
 
 def test_referenced_columns_via_anyvalue_box() raises:
     # the erased box threads referenced_columns through the trampoline
-    var boxed: AnyValue = Add(col("a", int64), col("b", int64))
+    var boxed: DynValue = Add(col("a", int64), col("b", int64))
     _assert_columns(boxed.referenced_columns(), ["a", "b"])
 
 
@@ -648,7 +648,7 @@ def test_is_deterministic_default_true() raises:
     # every current node is deterministic — on a node and through the box
     assert_true(Add(col("a", int64), col("b", int64)).is_deterministic())
     assert_true(lit(1, int64).is_deterministic())
-    var boxed: AnyValue = col("a", int64)
+    var boxed: DynValue = col("a", int64)
     assert_true(boxed.is_deterministic())
 
 

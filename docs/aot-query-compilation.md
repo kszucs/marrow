@@ -8,7 +8,7 @@ marrow query plans using Mojo's compile-time metaprogramming system.
 The current execution engine in `marrow/expr/executor.mojo` is a pull-based
 Volcano interpreter:
 
-- `AnyValue` — runtime expression tree, heap-allocated with vtable dispatch
+- `DynValue` — runtime expression tree, heap-allocated with vtable dispatch
   via function pointers
 - `BinaryProcessor.eval()` — runtime `if self.op == ADD` switch over all 20
   op kinds
@@ -62,21 +62,21 @@ encodes nodes as Mojo parameter types:
 trait Expr:
     alias result_dtype: DynType
     fn eval(batch: RecordBatch) raises -> DynArray          # AOT path
-    fn to_processor(self) -> AnyValueProcessor              # runtime bridge
+    fn to_processor(self) -> DynValueProcessor              # runtime bridge
 
 struct ColRef[idx: Int, dt: DynType](Expr):
     alias result_dtype = dt
     fn eval(batch: RecordBatch) raises -> DynArray:
         return batch.columns[idx]
-    fn to_processor(self) -> AnyValueProcessor:
-        return AnyValueProcessor(ColumnProcessor(idx))
+    fn to_processor(self) -> DynValueProcessor:
+        return DynValueProcessor(ColumnProcessor(idx))
 
 struct Literal[value: DynArray](Expr):
     alias result_dtype = value.dtype()
     fn eval(batch: RecordBatch) raises -> DynArray:
         return value
-    fn to_processor(self) -> AnyValueProcessor:
-        return AnyValueProcessor(LiteralProcessor(value))
+    fn to_processor(self) -> DynValueProcessor:
+        return DynValueProcessor(LiteralProcessor(value))
 
 struct Binary[op: UInt8, L: Expr, R: Expr](Expr):
     alias result_dtype = promote_dtype[L.result_dtype, R.result_dtype]()
@@ -90,9 +90,9 @@ struct Binary[op: UInt8, L: Expr, R: Expr](Expr):
         elif op == EQ:
             return eq(l, r)
         # ... all dead branches eliminated at compile time
-    fn to_processor(self) -> AnyValueProcessor:
+    fn to_processor(self) -> DynValueProcessor:
         # op is a comptime UInt8 — materializes implicitly (trivially copyable)
-        return AnyValueProcessor(BinaryProcessor(
+        return DynValueProcessor(BinaryProcessor(
             left=L.to_processor(),
             right=R.to_processor(),
             op=op,
@@ -102,8 +102,8 @@ struct Cast[Child: Expr, to: DynType](Expr):
     alias result_dtype = to
     fn eval(batch: RecordBatch) raises -> DynArray:
         return cast(Child.eval(batch), to)
-    fn to_processor(self) -> AnyValueProcessor:
-        return AnyValueProcessor(CastProcessor(Child.to_processor(), to))
+    fn to_processor(self) -> DynValueProcessor:
+        return DynValueProcessor(CastProcessor(Child.to_processor(), to))
 ```
 
 The `comptime if op == ADD` in `Binary.eval()` is where the elimination
@@ -211,7 +211,7 @@ fn run_plan[P: RelationPlan](owned plan: P) raises -> RecordBatch:
 `P` is specialized at compile time — `plan.pull()` inlines the entire operator
 tree through `P`'s type.
 
-The existing `AnyValue` / `AnyRelationProcessor` / `Planner` / `execute()`
+The existing `DynValue` / `AnyRelationProcessor` / `Planner` / `execute()`
 machinery is unchanged. The runtime interpreted path stays intact.
 
 ## One Plan, Two Execution Modes
@@ -280,7 +280,7 @@ parameterized generics.
 
 ## What Stays Unchanged
 
-- `expr/values.mojo` — the runtime `AnyValue` tree is still the right
+- `expr/values.mojo` — the runtime `DynValue` tree is still the right
   representation for dynamically assembled SQL (parsed strings, Python API
   calls). It remains the input to the interpreted executor.
 - `expr/executor.mojo` — `Planner`, `AnyRelationProcessor`, `execute()`,

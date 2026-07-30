@@ -23,7 +23,7 @@ from marrow.dtypes import DynType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.aggregates import AggFunc
-from marrow.expr.values import col, AnyValue
+from marrow.expr.values import col, DynValue
 from marrow.expr.relations import InMemoryTable, Aggregate, DynRelation
 
 
@@ -35,12 +35,12 @@ def main() raises:
         [a.copy(), b.copy(), nm.copy()], names=["a", "b", "name"]
     )
 
-    var keys = List[AnyValue]()
-    keys.append(AnyValue(col("name", string)))
+    var keys = List[DynValue]()
+    keys.append(DynValue(col("name", string)))
 
-    var aggs = List[AnyValue]()
-    aggs.append(AnyValue(col("a", int64)))
-    aggs.append(AnyValue(col("b", int64)))
+    var aggs = List[DynValue]()
+    aggs.append(DynValue(col("a", int64)))
+    aggs.append(DynValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
     funcs.append(AggFunc("sum", DynType(int64)))
