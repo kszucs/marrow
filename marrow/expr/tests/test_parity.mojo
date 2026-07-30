@@ -783,3 +783,21 @@ def test_shared_cast_isin_casewhen_over_erased_operands() raises:
     var picked: DynValue = CaseWhen(a > b, a.copy(), b.copy())
     var want_pick: DynArray = array([9, 5, 3, 10, 7, 8], int64)
     assert_true(picked.execute(batch) == want_pick)
+
+
+def test_shared_temporal_extract_over_erased_operand() raises:
+    """`year()` on an erased column goes through `TemporalExtract` with an
+    erased operand.
+
+    This node's arm was written before it could be reached — its operand is
+    bound on `TemporalValue`, which `DynValue` could not conform to until
+    `DynAgg` took a `DynValue`. It is asserted here now that it can be.
+    """
+    var ts = array([0, 86_400, 31_536_000], int64)
+    var batch = record_batch([ts^], names=["t"])
+
+    var col: DynValue = dcol(0).cast(timestamp(second))
+    var yr: DynValue = col.year()
+
+    var want: DynArray = array([1970, 1970, 1971], int32)
+    assert_true(yr.execute(batch) == want)

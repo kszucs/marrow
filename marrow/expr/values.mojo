@@ -2261,12 +2261,6 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
     comptime OutShape = 1
     comptime IsErased = Self.A.IsErased
     # Breaker only when fused — see `StringLength`.
-    #
-    # NOT YET REACHABLE. `A` is bound on `TemporalValue`, and `DynValue` does not
-    # conform to that family (see the note on `DynValue`), so no erased operand
-    # can be substituted here today. The arm is written now because it is the
-    # same two lines as its siblings and becomes live the moment the conformance
-    # lands; it is called out rather than left to look tested.
     comptime IsBreaker = not Self.IsErased
     var a: Self.A
 
@@ -2454,21 +2448,13 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 # DynValue — erase any node to a boxed handle. Because `execute` already returns
 # a concrete `Datum`, erasure is a plain fn-pointer trampoline.
 # ---------------------------------------------------------------------------
-# NOTE: `TemporalValue` is deliberately *not* in this list yet, and the reason is
-# a real dependency rather than an oversight. `min`/`max`/`count` are defaulted
-# in `NumericValue`, `StringValue` and `TemporalValue` with genuinely different
-# bodies — each resolves a different `Aggregation` (`Min` vs `StringMinMax` vs
-# `TemporalMinMax`) — so conforming to a third family makes them ambiguous and
-# they must be implemented here. The correct erased implementation resolves the
-# aggregate from the runtime dtype, which is exactly what `DynAgg` does; but
-# `DynAgg.input` is still typed `TagValue`. Retyping it to `DynValue` is Phase 4
-# work, and this conformance follows it.
 struct DynValue(
     BoolValue,
     Copyable,
     Movable,
     NumericValue,
     StringValue,
+    TemporalValue,
     Writable,
 ):
     """Type-erased expression handle — the boundary the relational engine
@@ -2747,6 +2733,36 @@ struct DynValue(
 
     def is_deterministic(self) -> Bool:
         return self._is_deterministic_fn(self._boxed)
+
+    # --- aggregates: resolved from the runtime dtype ------------------------
+    #
+    # `min`/`max`/`count` are defaulted in `NumericValue`, `StringValue` and
+    # `TemporalValue` with genuinely different bodies — each names a different
+    # `Aggregation` (`Min` vs `StringMinMax` vs `TemporalMinMax`). Conforming to
+    # all three makes them ambiguous, and unlike `count_distinct` they cannot be
+    # hoisted to `Value` because there is no single answer.
+    #
+    # For an erased value there is no comptime answer either: which aggregate
+    # `min` means depends on the column's dtype. `DynAgg` is exactly that — it
+    # names the aggregate and resolves it against the input dtype when the plan
+    # is built — so the box returns one instead of an `AggExpr`.
+    def aggregate(self, var func: String) -> DynAgg:
+        return DynAgg(func^, self.copy())
+
+    def min(self) -> DynAgg:
+        return self.aggregate("min")
+
+    def max(self) -> DynAgg:
+        return self.aggregate("max")
+
+    def count(self) -> DynAgg:
+        return self.aggregate("count")
+
+    def sum(self) -> DynAgg:
+        return self.aggregate("sum")
+
+    def mean(self) -> DynAgg:
+        return self.aggregate("mean")
 
     def resolve_names(self, schema: Schema) raises -> DynValue:
         """Bind name references against `schema`, keeping the same node type."""
