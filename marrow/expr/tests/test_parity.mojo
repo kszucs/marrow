@@ -662,3 +662,54 @@ def test_shared_add_node_concatenates_erased_strings() raises:
     var got = joined.execute(batch)
     var want: DynArray = array(["ab", "cd", "ef"])
     assert_true(got == want)
+
+
+def test_shared_nodes_cover_the_regular_operators() raises:
+    """Every regular operator over erased operands goes through the shared node
+    and agrees with the fused tree: arithmetic, division, unary, comparison and
+    boolean logic.
+
+    One case per node type — `NumericBinary`, `FloatBinary`, `NumericUnary`,
+    `NumericCompare`, `BoolBinary`, `BoolUnary` — since each gained its erased
+    arm independently and a missing `IsErased` propagation in any of them is a
+    build failure rather than a wrong answer.
+    """
+    var batch = _ab_batch()
+
+    var a: DynValue = dcol(0)
+    var b: DynValue = dcol(1)
+
+    # NumericBinary
+    assert_parity(fcol("a", int64) - fcol("b", int64), a - b, batch)
+    assert_parity(fcol("a", int64) * fcol("b", int64), a * b, batch)
+    # FloatBinary (true division promotes to float64)
+    assert_parity(fcol("a", int64) / fcol("b", int64), a / b, batch)
+    # NumericUnary
+    assert_parity(-fcol("a", int64), -a, batch)
+    # NumericCompare
+    assert_parity(fcol("a", int64) > fcol("b", int64), a > b, batch)
+    assert_parity(fcol("a", int64) == fcol("b", int64), a == b, batch)
+    # BoolBinary / BoolUnary over the compare results
+    assert_parity(
+        (fcol("a", int64) > fcol("b", int64))
+        & (fcol("a", int64) < fcol("b", int64)),
+        (a > b) & (a < b),
+        batch,
+    )
+    assert_parity(~(fcol("a", int64) > fcol("b", int64)), ~(a > b), batch)
+
+
+def test_shared_compare_node_compares_erased_strings() raises:
+    """`<` on erased string operands takes the string kernel, not the numeric
+    one — the node carries both and the runtime dtype picks."""
+    var x = array(["a", "d", "c"])
+    var y = array(["b", "b", "c"])
+    var batch = record_batch([x^, y^], names=["x", "y"])
+
+    var lhs: DynValue = dcol(0)
+    var rhs: DynValue = dcol(1)
+    var lt: DynValue = lhs < rhs
+
+    var got = lt.execute(batch)
+    var want: DynArray = array([True, False, False])
+    assert_true(got == want)

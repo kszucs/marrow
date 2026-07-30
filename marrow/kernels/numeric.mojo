@@ -68,6 +68,20 @@ trait BinaryKernel(Kernel):
         ...
 
     @staticmethod
+    def dispatch(
+        left: DynArray,
+        right: DynArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> DynArray:
+        """Erased entry point. Declared here rather than only on the sub-traits
+        so a node generic over `BinaryKernel` can reach it — `FloatBinary` takes
+        `DivKernel` (a `BinaryNumericKernel`) and `PowKernel` (a
+        `BinaryFloatKernel`), which have no common sub-trait. Both sub-traits
+        already default it, and no struct conforms to `BinaryKernel` directly.
+        """
+        ...
+
+    @staticmethod
     def apply[
         T: PrimitiveType
     ](

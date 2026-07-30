@@ -78,6 +78,7 @@ from ..kernels.numeric import (
     BinaryKernel,
     BinaryNumericKernel,
     UnaryKernel,
+    UnaryNumericKernel,
     AddKernel,
     SubKernel,
     MulKernel,
@@ -174,6 +175,7 @@ from .pruning import PruneStats, PruneBound
 from .dynamic import TagValue, DynAgg, _promote_operands
 from .aggregates import AggFunc
 from ..kernels.cast import (
+    cast as cast_array,
     NumericCast as NumericCastKernel,
     NumToBool as NumToBoolKernel,
     BoolToNum as BoolToNumKernel,
@@ -685,15 +687,22 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
 
 @fieldwise_init
-struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
+struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
     """Fused unary op preserving the operand dtype — `neg`, `abs`, …."""
 
     comptime OutType = Self.A.OutType
     comptime OutShape = Self.A.OutShape
+    comptime IsErased = Self.A.IsErased
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # Erased lane: `K` names the operation, so this is one arm, not
+            # one switch case per operator.
+            var n = batch.num_rows()
+            return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
+        else:
+            return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -760,11 +769,29 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = Float64Type
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
+    comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # Erased lane: `K` names the operation, so this is one arm, not
+            # one switch case per operator.
+            #
+            # Cast to float64 *first*, matching the fused `vectorwise` below.
+            # `_promote_operands` is not enough here: it widens the narrower
+            # operand to the wider one, so two int64 columns stay int64 and
+            # `5 / 2` floor-divides to 2 where the fused lane says 2.5.
+            var n = batch.num_rows()
+            var l = cast_array(
+                into_array(self.l.execute(batch), n), DynType(Float64Type())
+            )
+            var r = cast_array(
+                into_array(self.r.execute(batch), n), DynType(Float64Type())
+            )
+            return Datum(Self.K.dispatch(l, r))
+        else:
+            return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -906,9 +933,23 @@ trait BoolValue(Value):
 
 @fieldwise_init
 struct NumericCompare[
-    K: NumericCompareKernel, L: NumericValue, R: NumericValue
+    K: NumericCompareKernel,
+    S: StringPredicateKernel,
+    L: NumericValue,
+    R: NumericValue,
 ](BoolValue):
-    """Fused numeric comparison → a bit-packed `BoolArray`."""
+    """Fused numeric comparison → a bit-packed `BoolArray`.
+
+    Carries **both** kernels of the operator: `K` for fixed-width lanes and `S`
+    for strings. `NumericCompareKernel`'s own docstring is explicit that this
+    pairing belongs here — "which family `a < b` means is a question about the
+    operands, and it belongs to whoever is interpreting the operator, not to the
+    SIMD kernel" — which is why the kernel's former `comptime StringKernel` was
+    removed.
+
+    The fused lane only ever uses `K`: its operands are `NumericValue`, so `S` is
+    named but never instantiated. It exists for the erased arm, where the dtype
+    is not known until the operands materialize."""
 
     comptime OutType = BoolType
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
@@ -916,11 +957,23 @@ struct NumericCompare[
     # `NumericBinary`, so `a > b` and `a + b` never disagree about widening.
     comptime ArgType = promote[Self.L.OutType, Self.R.OutType]
     comptime NativeType = wider[Self.L.OutType.native, Self.R.OutType.native]
+    comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # The operator names a pair; the runtime dtype picks one. Same rule
+            # as the erased `+`, and the same one `TagValue._compare` applies.
+            var n = batch.num_rows()
+            var l = into_array(self.l.execute(batch), n)
+            var r = into_array(self.r.execute(batch), n)
+            if l.dtype().is_string_like():
+                return Datum(Self.S.dispatch(l, r))
+            _promote_operands(l, r)
+            return Datum(Self.K.dispatch(l, r))
+        else:
+            return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -951,12 +1004,12 @@ struct NumericCompare[
         self.r.prepare(batch, ctx)
 
 
-comptime Lt = NumericCompare[LtKernel, _, _]
-comptime Le = NumericCompare[LeKernel, _, _]
-comptime Gt = NumericCompare[GtKernel, _, _]
-comptime Ge = NumericCompare[GeKernel, _, _]
-comptime Eq = NumericCompare[EqKernel, _, _]
-comptime Ne = NumericCompare[NeKernel, _, _]
+comptime Lt = NumericCompare[LtKernel, StringLtKernel, _, _]
+comptime Le = NumericCompare[LeKernel, StringLeKernel, _, _]
+comptime Gt = NumericCompare[GtKernel, StringGtKernel, _, _]
+comptime Ge = NumericCompare[GeKernel, StringGeKernel, _, _]
+comptime Eq = NumericCompare[EqKernel, StringEqKernel, _, _]
+comptime Ne = NumericCompare[NeKernel, StringNeKernel, _, _]
 
 
 # ---------------------------------------------------------------------------
@@ -974,11 +1027,20 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     # breaker) must not shrink W below what a wider sibling's load (int64) needs, or
     # `SIMD[int64, W]` overflows the register.
     comptime NativeType = wider[Self.L.NativeType, Self.R.NativeType]
+    comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # Erased lane: `K` names the operation, so this is one arm, not
+            # one switch case per operator.
+            var n = batch.num_rows()
+            var l = into_array(self.l.execute(batch), n)
+            var r = into_array(self.r.execute(batch), n)
+            return Datum(Self.K.dispatch(l, r))
+        else:
+            return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1030,10 +1092,17 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     comptime OutType = BoolType
     comptime OutShape = Self.A.OutShape
     comptime NativeType = Self.A.NativeType
+    comptime IsErased = Self.A.IsErased
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # Erased lane: `K` names the operation, so this is one arm, not
+            # one switch case per operator.
+            var n = batch.num_rows()
+            return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
+        else:
+            return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2514,6 +2583,27 @@ struct DynValue(
     # specific, so it wins.
     def __add__(self, o: DynValue) -> Add[DynValue, DynValue]:
         return Add(self.copy(), o.copy())
+
+    def __truediv__(self, o: DynValue) -> Div[DynValue, DynValue]:
+        return Div(self.copy(), o.copy())
+
+    def __lt__(self, o: DynValue) -> Lt[DynValue, DynValue]:
+        return Lt(self.copy(), o.copy())
+
+    def __le__(self, o: DynValue) -> Le[DynValue, DynValue]:
+        return Le(self.copy(), o.copy())
+
+    def __gt__(self, o: DynValue) -> Gt[DynValue, DynValue]:
+        return Gt(self.copy(), o.copy())
+
+    def __ge__(self, o: DynValue) -> Ge[DynValue, DynValue]:
+        return Ge(self.copy(), o.copy())
+
+    def __eq__(self, o: DynValue) -> Eq[DynValue, DynValue]:
+        return Eq(self.copy(), o.copy())
+
+    def __ne__(self, o: DynValue) -> Ne[DynValue, DynValue]:
+        return Ne(self.copy(), o.copy())
 
     def __sub__(self, o: DynValue) -> Sub[DynValue, DynValue]:
         return Sub(self.copy(), o.copy())
