@@ -226,6 +226,38 @@ rather than impressions.
 |---|---:|---:|---|
 | baseline (`a7524a7`) | 5,237,876 | 5,238,004 | 1000 passed |
 | Phase 1 (`DynType` conformances) | 5,236,148 | 5,236,276 | 1288 passed |
+| Phase 2 (rename + `Value`) | not yet measured | not yet measured | 315 passed |
+
+### Phase 2 blocker — the family conformances need `materialize` renamed first
+
+`DynValue` conforms to `Value`. It does **not** yet conform to `NumericValue` /
+`BoolValue` / `StringValue`, and the compiler gives both halves of the reason:
+
+```
+without an override:  trait method requirement 'materialize' has conflicting
+                      default implementations in 'BoolValue' and 'StringValue';
+                      you must implement it manually
+with an override:     attempt to resolve a recursive reference to declaration
+                      'DynValue.materialize'
+```
+
+Each family *defaults* `materialize` to drive its own fused loop, so one struct
+conforming to all three inherits three conflicting defaults — and implementing it
+manually hits the re-defaulted-method recursion `CLAUDE.md` documents.
+
+The prescribed fix from that same note: keep the base method abstract, give each
+family a differently-named helper (`_numeric_fused` / `_bool_fused` /
+`_string_fused`), and have each node override `materialize` with a one-liner
+delegating to it. **Cost: 37 family-conforming structs, 4 already define
+`materialize`, so 33 need a new one-line override.**
+
+The alternative is to leave `DynValue` on `Value` alone and relax the fused
+nodes' bounds from their family trait to `Value`, dispatching on
+`conforms_to(Self.L, NumericValue)`. That avoids 33 boilerplate overrides but
+changes the signature of every fused node, and weakens the bound that currently
+makes a mis-typed operand a compile error. **Recommendation: take the 33
+overrides** — it keeps the bounds honest and follows the codebase's own
+documented workaround.
 
 ### Phase 0 result (2026-07-30)
 
