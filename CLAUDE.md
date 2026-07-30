@@ -485,6 +485,15 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 - **`.as_<type>()` returns a reference** (`ref self` + `-> ref[self._data[]] T`) — zero-cost borrow tied to the heap allocation inside the `ArcPointer`, with no ownership transfer. Callers use `ref x = val.as_type()` to borrow or `.copy()` to take ownership explicitly.
 - **`.to_<type>()` transfers ownership** — use this name for methods that convert a value to a new type or allocate a new representation (e.g. `.to_python_object()`, `.to_device()`, `.to_host()`).
 - **Keep the `marrow.aot`/`marrow.expr` layers small-binary** — preserve the closed-erasure/DCE property (no open dispatchers, fused-only value boxes, closed per-dtype kernels) and gate changes on `benchmarks/binary_size/` (`pixi run binary_size`).
+- **The box is the erasure boundary — a node never needs an erased variant.** In
+  `marrow.expr`, `DynValue` erases; the nodes do not. Before adding a `Dyn*`
+  node, check the existing one: either its type is known where it is constructed
+  (a literal, a cast target — resolve a runtime dtype with `dispatch_*` and box
+  each arm), or it does not depend on the type at all (a column read by name).
+  `DynColumn`/`DynLiteral`/`DynCast` were all added and all removed for this
+  reason. `DynValue` conforms to every value family, so the fused nodes take it
+  as an operand with no bound relaxed; a node keys off `comptime IsErased`
+  (propagated, not defaulted) to pick dispatch over fusion.
 - Try to use existing building blocks instead of reimplementing them from scratch. Like do not have a handwritten loop to bitwise and/or bitmaps when bitmaps do support bitwise operations using idiomatic API.
 
 ### Prior Art — Consult C++ and Rust Implementations First
