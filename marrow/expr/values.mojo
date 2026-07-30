@@ -2507,6 +2507,21 @@ struct DynValue(
     var _write_fn: def(ArcPointer[NoneType]) thin -> String
     var _referenced_columns_fn: def(ArcPointer[NoneType]) thin -> List[String]
     var _is_deterministic_fn: def(ArcPointer[NoneType]) thin -> Bool
+    var _resolve_names_fn: def(
+        ArcPointer[NoneType], Schema
+    ) thin raises -> ArcPointer[NoneType]
+    """Bind `col("x")` references to positions against a schema.
+
+    Returns the **erased pointer**, not a `DynValue`: a field whose function type
+    mentions `DynValue` makes this struct recursive (`struct has recursive
+    reference to itself`) — the same failure `Relation.with_predicate` hits, and
+    the same fix. `resolve_names` below keeps its own trampolines and swaps only
+    the pointer, which is sound because resolving names never changes the node's
+    *type*.
+
+    Only the runtime lane has anything to bind — a fused column leaf looks its
+    name up in `materialize`, so it is already position-independent and its
+    trampoline hands back the pointer unchanged."""
 
     # --- comptime fused `Value` box ----------------------------------------
     @staticmethod
@@ -2544,6 +2559,13 @@ struct DynValue(
     def _is_deterministic_tramp[V: Value](ptr: ArcPointer[NoneType]) -> Bool:
         return rebind[ArcPointer[V]](ptr)[].is_deterministic()
 
+    @staticmethod
+    def _resolve_names_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> ArcPointer[NoneType]:
+        # Fused leaves resolve by name at execute time — nothing to bind.
+        return ptr.copy()
+
     @implicit
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
@@ -2554,6 +2576,7 @@ struct DynValue(
         self._write_fn = Self._write_tramp[V]
         self._referenced_columns_fn = Self._referenced_columns_tramp[V]
         self._is_deterministic_fn = Self._is_deterministic_tramp[V]
+        self._resolve_names_fn = Self._resolve_names_tramp[V]
 
     # --- runtime `TagValue` box --------------------------------------------
     @staticmethod
@@ -2585,6 +2608,13 @@ struct DynValue(
         return rebind[ArcPointer[TagValue]](ptr)[].referenced_columns()
 
     @staticmethod
+    def _resolve_names_tramp_dyn(
+        ptr: ArcPointer[NoneType], schema: Schema
+    ) raises -> ArcPointer[NoneType]:
+        var bound = rebind[ArcPointer[TagValue]](ptr)[].resolve_names(schema)
+        return rebind[ArcPointer[NoneType]](ArcPointer[TagValue](bound^))
+
+    @staticmethod
     def _is_deterministic_tramp_dyn(ptr: ArcPointer[NoneType]) -> Bool:
         return rebind[ArcPointer[TagValue]](ptr)[].is_deterministic()
 
@@ -2598,6 +2628,7 @@ struct DynValue(
         self._write_fn = Self._write_tramp_dyn
         self._referenced_columns_fn = Self._referenced_columns_tramp_dyn
         self._is_deterministic_fn = Self._is_deterministic_tramp_dyn
+        self._resolve_names_fn = Self._resolve_names_tramp_dyn
 
     @always_inline
     def vectorwise[
@@ -2717,6 +2748,12 @@ struct DynValue(
     def is_deterministic(self) -> Bool:
         return self._is_deterministic_fn(self._boxed)
 
+    def resolve_names(self, schema: Schema) raises -> DynValue:
+        """Bind name references against `schema`, keeping the same node type."""
+        var out = self.copy()
+        out._boxed = self._resolve_names_fn(self._boxed, schema)
+        return out^
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write_fn(self._boxed))
 
@@ -2800,7 +2837,7 @@ struct AggExpr(Copyable, Movable, Writable):
     """The output column name — the aggregate's own name unless aliased."""
 
     var input: DynValue
-    var _unresolved: Optional[TagValue]
+    var _unresolved: Optional[DynValue]
     var _func: String
     var _of: Optional[def(DynType) thin raises -> AggFunc]
 

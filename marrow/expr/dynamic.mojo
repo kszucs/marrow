@@ -42,6 +42,7 @@ from ..scalars import DynScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
+from .values import DynValue
 from ..kernels.numeric import (
     AddKernel,
     SubKernel,
@@ -974,13 +975,13 @@ struct DynAgg(Copyable, Movable, Writable):
     name is used."""
 
     var func: String
-    var input: TagValue
+    var input: DynValue
     var out_name: String
 
     def __init__(
         out self,
         var func: String,
-        var input: TagValue,
+        var input: DynValue,
         var out_name: String = String(),
     ):
         self.func = func^
