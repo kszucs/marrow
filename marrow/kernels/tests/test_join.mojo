@@ -3,7 +3,7 @@
 from std.testing import assert_equal, assert_true, assert_false
 
 from ...arrays import (
-    AnyArray,
+    DynArray,
     PrimitiveArray,
     StringArray,
     StructArray,
@@ -57,9 +57,9 @@ def _int32_struct(col0: List[Int], col1: List[Int]) raises -> StructArray:
         a.append(Scalar[int32.native](v))
     for v in col1:
         b.append(Scalar[int32.native](v))
-    var cols = List[AnyArray]()
-    cols.append(a.finish().to_any())
-    cols.append(b.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(a.finish().to_dyn())
+    cols.append(b.finish().to_dyn())
     return record_batch(cols^, names=["k", "v"]).to_struct_array()
 
 
@@ -82,7 +82,7 @@ def _right_on() -> List[Int]:
 
 def test_take_primitive_basic() raises:
     """Gather elements from a primitive array at given indices."""
-    var a: AnyArray = array([10, 20, 30, 40], int32)
+    var a: DynArray = array([10, 20, 30, 40], int32)
     var result = take(a.copy(), array([2, 0, 3], int32))
     ref r = result.as_int32()
     assert_equal(r[0].value(), Scalar[int32.native](30))
@@ -92,7 +92,7 @@ def test_take_primitive_basic() raises:
 
 def test_take_null_index_produces_null() raises:
     """Null index in take produces a null output element."""
-    var a: AnyArray = array([10, 20, 30], int32)
+    var a: DynArray = array([10, 20, 30], int32)
     var idx = Int32Builder(capacity=2)
     idx.append_null()
     idx.append(Scalar[int32.native](1))
@@ -449,9 +449,9 @@ def test_inner_join_string_keys() raises:
     lv_b.append(Scalar[int32.native](1))
     lv_b.append(Scalar[int32.native](2))
     lv_b.append(Scalar[int32.native](3))
-    var lcols = List[AnyArray]()
-    lcols.append(lb.finish().to_any())
-    lcols.append(lv_b.finish().to_any())
+    var lcols = List[DynArray]()
+    lcols.append(lb.finish().to_dyn())
+    lcols.append(lv_b.finish().to_dyn())
     var left = record_batch(lcols^, names=["k", "v"]).to_struct_array()
 
     var rb = StringBuilder(2)
@@ -460,9 +460,9 @@ def test_inner_join_string_keys() raises:
     var rv_b = Int32Builder(capacity=2)
     rv_b.append(Scalar[int32.native](20))
     rv_b.append(Scalar[int32.native](30))
-    var rcols = List[AnyArray]()
-    rcols.append(rb.finish().to_any())
-    rcols.append(rv_b.finish().to_any())
+    var rcols = List[DynArray]()
+    rcols.append(rb.finish().to_dyn())
+    rcols.append(rv_b.finish().to_dyn())
     var right = record_batch(rcols^, names=["k", "v"]).to_struct_array()
 
     var result = hash_join(left, right, _left_on(), _right_on())
@@ -491,10 +491,10 @@ def test_inner_join_multi_key() raises:
     lv2.append(Scalar[int32.native](100))
     lv2.append(Scalar[int32.native](200))
     lv2.append(Scalar[int32.native](300))
-    var lcols = List[AnyArray]()
-    lcols.append(la.finish().to_any())
-    lcols.append(lb2.finish().to_any())
-    lcols.append(lv2.finish().to_any())
+    var lcols = List[DynArray]()
+    lcols.append(la.finish().to_dyn())
+    lcols.append(lb2.finish().to_dyn())
+    lcols.append(lv2.finish().to_dyn())
     var left = record_batch(lcols^, names=["a", "b", "v"]).to_struct_array()
 
     var ra = Int32Builder(capacity=2)
@@ -506,10 +506,10 @@ def test_inner_join_multi_key() raises:
     var rv2 = Int32Builder(capacity=2)
     rv2.append(Scalar[int32.native](1000))
     rv2.append(Scalar[int32.native](2000))
-    var rcols = List[AnyArray]()
-    rcols.append(ra.finish().to_any())
-    rcols.append(rb2.finish().to_any())
-    rcols.append(rv2.finish().to_any())
+    var rcols = List[DynArray]()
+    rcols.append(ra.finish().to_dyn())
+    rcols.append(rb2.finish().to_dyn())
+    rcols.append(rv2.finish().to_dyn())
     var right = record_batch(rcols^, names=["a", "b", "v"]).to_struct_array()
 
     var left_on = List[Int]()
@@ -648,9 +648,9 @@ def _dense_struct(n: Int) raises -> StructArray:
     for i in range(n):
         kb.append(Scalar[int32.native](i))
         vb.append(Scalar[int32.native](i * 10))
-    var cols = List[AnyArray]()
-    cols.append(kb.finish().to_any())
-    cols.append(vb.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
     return record_batch(cols^, names=["k", "v"]).to_struct_array()
 
 
@@ -696,9 +696,9 @@ def test_parallel_inner_no_matches() raises:
     for i in range(n):
         kb.append(Scalar[int32.native](n + i))
         vb.append(Scalar[int32.native](i * 10))
-    var cols = List[AnyArray]()
-    cols.append(kb.finish().to_any())
-    cols.append(vb.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
     var right = record_batch(cols^, names=["k", "v"]).to_struct_array()
 
     var parallel = _run_inner(left, right, 4)
@@ -715,9 +715,9 @@ def test_parallel_partial_match() raises:
     for i in range(n):
         kb.append(Scalar[int32.native](n // 2 + i))
         vb.append(Scalar[int32.native](i * 10))
-    var cols = List[AnyArray]()
-    cols.append(kb.finish().to_any())
-    cols.append(vb.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
     var right = record_batch(cols^, names=["k", "v"]).to_struct_array()
 
     var serial = _run_inner(left, right, 1)

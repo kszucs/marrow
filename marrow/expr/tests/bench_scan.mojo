@@ -16,7 +16,7 @@ from std.python import Python
 from ...testing import Benchmark
 from ...dtypes import Field, int64, field
 from ...schema import Schema, schema
-from ...expr.relations import ParquetScan, AnyRelation
+from ...expr.relations import ParquetScan, DynRelation
 
 
 def _prepare(
@@ -61,7 +61,7 @@ def _bench_scan(
     @parameter
     def call() raises:
         keep(
-            AnyRelation(
+            DynRelation(
                 ParquetScan(path=path, schema=Schema(copy=sch))
             ).execute()
         )

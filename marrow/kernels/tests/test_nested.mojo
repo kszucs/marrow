@@ -5,9 +5,9 @@ Expected patterns match PyArrow's `pc.list_value_length`.
 
 from std.testing import assert_equal, assert_true, assert_false
 
-from ...arrays import ListArray, Int32Array
-from ...builders import ListBuilder, Int64Builder, array
-from ...dtypes import int32
+from ...arrays import ListArray, Int32Array, MapArray
+from ...builders import ListBuilder, Int64Builder, MapBuilder, array
+from ...dtypes import int32, int64, string, map_, DynType
 
 from ...kernels.nested import ArrayLengthKernel
 
@@ -73,3 +73,42 @@ def test_array_length_sliced_with_nulls() raises:
     assert_false(r.is_valid(0))
     assert_true(r.is_valid(1))
     assert_equal(r[1].value(), 3)
+
+
+def _maps() raises -> MapArray:
+    """[{"a": 1}, {}, {"b": 2, "c": 3}]."""
+    var b = MapBuilder(map_(DynType(string), DynType(int64)))
+    var entries_any = b.entries()
+    ref entries = entries_any.as_struct()
+    var keys_any = entries.field_builder(0)
+    var values_any = entries.field_builder(1)
+    ref keys = keys_any.as_string()
+    ref values = values_any.as_int64()
+
+    keys.append("a")
+    values.append(1)
+    entries.append_valid()
+    b.append_valid()  # {"a": 1}
+
+    b.append_valid()  # {}
+
+    keys.append("b")
+    values.append(2)
+    entries.append_valid()
+    keys.append("c")
+    values.append(3)
+    entries.append_valid()
+    b.append_valid()  # {"b": 2, "c": 3}
+
+    return b.finish()
+
+
+def test_array_length_of_map() raises:
+    # A map is physically a list of (key, value) entries, so its length is its
+    # entry count. This dispatches only because `is_list_like()` admits map,
+    # matching `ListLikeType`, which `MapType` conforms to.
+    var r = ArrayLengthKernel.apply(_maps())
+    assert_equal(r.null_count(), 0)
+    assert_equal(r[0].value(), 1)
+    assert_equal(r[1].value(), 0)
+    assert_equal(r[2].value(), 2)

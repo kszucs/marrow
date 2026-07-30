@@ -22,8 +22,8 @@ list, fixed_size_list, struct, dictionary.
 
 from std.math import ceildiv
 from std.pathlib import Path
-from std.sys import size_of
-from .arrays import AnyArray, ArrayData, DictionaryArray, NullArray
+
+from .arrays import DynArray, ArrayData, DictionaryArray, NullArray
 from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
@@ -115,9 +115,9 @@ struct _DictPair(Copyable, Movable):
     """A (dict_id, values) pair collected from an ArrayData tree."""
 
     var dict_id: Int
-    var values: AnyArray
+    var values: DynArray
 
-    def __init__(out self, dict_id: Int, var values: AnyArray):
+    def __init__(out self, dict_id: Int, var values: DynArray):
         self.dict_id = dict_id
         self.values = values^
 
@@ -129,12 +129,12 @@ struct _DictPair(Copyable, Movable):
 struct _DictLookup(Movable):
     """Result of searching a (_dtype, _FieldIpcInfo) tree for a dict_id."""
 
-    var value_type: dt.AnyDataType
+    var value_type: dt.DynType
     var value_ipc_info: _FieldIpcInfo
 
     def __init__(
         out self,
-        var value_type: dt.AnyDataType,
+        var value_type: dt.DynType,
         var value_ipc_info: _FieldIpcInfo,
     ):
         self.value_type = value_type^
@@ -174,7 +174,7 @@ struct _FieldIpcInfo(Copyable, Movable):
 
     @staticmethod
     def find(
-        dtype: dt.AnyDataType, ipc_info: _FieldIpcInfo, target_id: Int
+        dtype: dt.DynType, ipc_info: _FieldIpcInfo, target_id: Int
     ) raises -> Optional[_DictLookup]:
         """Search the (dtype, ipc_info) shadow tree for dict_id == target_id.
 
@@ -782,7 +782,7 @@ struct _IpcEncoder(Movable):
             )
         return self._fb.create_vector_structs(data, n, 24, 8)
 
-    def _type_code(self, dtype: dt.AnyDataType) raises -> UInt8:
+    def _type_code(self, dtype: dt.DynType) raises -> UInt8:
         if dtype.is_null():
             return _TYPE_NULL
         elif dtype.is_bool():
@@ -827,7 +827,7 @@ struct _IpcEncoder(Movable):
         else:
             raise Error("_IpcEncoder: unsupported dtype: " + String(dtype))
 
-    def _write_type_table(mut self, dtype: dt.AnyDataType) raises -> UInt32:
+    def _write_type_table(mut self, dtype: dt.DynType) raises -> UInt32:
         if (
             dtype.is_null()
             or dtype.is_bool()
@@ -1008,7 +1008,7 @@ struct _IpcEncoder(Movable):
             )
 
     def _write_dictionary_encoding_table(
-        mut self, dict_id: Int64, index_dtype: dt.AnyDataType, ordered: Bool
+        mut self, dict_id: Int64, index_dtype: dt.DynType, ordered: Bool
     ) raises -> UInt32:
         var idx_type_pos = self._write_type_table(index_dtype)
         var ts = self._fb.offset()
@@ -1261,11 +1261,11 @@ struct _IpcDecoder(Movable):
 
     def decode_dict_batch(
         mut self,
-        value_dtype: dt.AnyDataType,
+        value_dtype: dt.DynType,
         values_ipc_info: _FieldIpcInfo,
         var body: List[UInt8],
-        dict_values: List[AnyArray] = List[AnyArray](),
-    ) raises -> AnyArray:
+        dict_values: List[DynArray] = List[DynArray](),
+    ) raises -> DynArray:
         var msg_tp = self._r.root()
         var db_pos = self._r.read_table(msg_tp, 2)
         var rb_pos = self._r.read_table(db_pos, 1)
@@ -1280,7 +1280,7 @@ struct _IpcDecoder(Movable):
         schema: Schema,
         ipc_infos: List[_FieldIpcInfo],
         var body: List[UInt8],
-        dict_values: List[AnyArray] = List[AnyArray](),
+        dict_values: List[DynArray] = List[DynArray](),
     ) raises -> RecordBatch:
         var msg_tp = self._r.root()
         var hdr_type = self._r.read_u8(msg_tp, 1, 0)
@@ -1294,7 +1294,7 @@ struct _IpcDecoder(Movable):
         var bufs = List[_BodyBuffer]()
         var _l = self._read_record_batch_meta(rb_pos, nodes, bufs)
         var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^, dict_values)
-        var columns = List[AnyArray]()
+        var columns = List[DynArray]()
         for i in range(len(schema.fields)):
             var ipc = (
                 ipc_infos[i].copy() if i < len(ipc_infos) else _FieldIpcInfo()
@@ -1407,7 +1407,7 @@ struct _IpcDecoder(Movable):
         except:
             pass
 
-        var dtype: dt.AnyDataType
+        var dtype: dt.DynType
         if type_type == _TYPE_NULL:
             dtype = dt.null
         elif type_type == _TYPE_BOOL:
@@ -1469,21 +1469,21 @@ struct _IpcDecoder(Movable):
                 raise Error("list Field must have 1 child, got 0")
             # Preserve the child Field as-is (its name may not be the default
             # "item" — e.g. arrow-rs uses "inner_list" for nested lists).
-            dtype = dt.ListType(children[0].copy()).to_any()
+            dtype = dt.ListType(children[0].copy()).to_dyn()
         elif type_type == _TYPE_LARGE_LIST:
             if len(children) == 0:
                 raise Error("large_list Field must have 1 child, got 0")
-            dtype = dt.LargeListType(children[0].copy()).to_any()
+            dtype = dt.LargeListType(children[0].copy()).to_dyn()
         elif type_type == _TYPE_FIXED_SIZE_LIST:
             var tp = self._r.read_table(fp, 3)
             var list_size = Int(self._r.read_i32(tp, 0, 0))
             if len(children) == 0:
                 raise Error("fixed_size_list Field must have 1 child, got 0")
-            dtype = dt.FixedSizeListType(children[0].copy(), list_size).to_any()
+            dtype = dt.FixedSizeListType(children[0].copy(), list_size).to_dyn()
         elif type_type == _TYPE_FIXED_SIZE_BINARY:
             var tp = self._r.read_table(fp, 3)
             var byte_width = Int(self._r.read_i32(tp, 0, 0))
-            dtype = dt.FixedSizeBinaryType(byte_width).to_any()
+            dtype = dt.FixedSizeBinaryType(byte_width).to_dyn()
         elif type_type == _TYPE_DATE:
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _DATE_UNIT_MILLISECOND)
@@ -1506,20 +1506,20 @@ struct _IpcDecoder(Movable):
             var tz = self._r.read_string(tp, 1)
             dtype = dt.timestamp(
                 _IpcDecoder._wire_to_time_unit(unit_v), tz
-            ).to_any()
+            ).to_dyn()
         elif type_type == _TYPE_DURATION:
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_MILLISECOND)
-            dtype = dt.duration(_IpcDecoder._wire_to_time_unit(unit_v)).to_any()
+            dtype = dt.duration(_IpcDecoder._wire_to_time_unit(unit_v)).to_dyn()
         elif type_type == _TYPE_INTERVAL:
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _INTERVAL_UNIT_YEAR_MONTH)
             if unit_v == _INTERVAL_UNIT_DAY_TIME:
-                dtype = dt.day_time_interval().to_any()
+                dtype = dt.day_time_interval().to_dyn()
             elif unit_v == _INTERVAL_UNIT_MONTH_DAY_NANO:
-                dtype = dt.month_day_nano_interval().to_any()
+                dtype = dt.month_day_nano_interval().to_dyn()
             else:
-                dtype = dt.year_month_interval().to_any()
+                dtype = dt.year_month_interval().to_dyn()
         elif type_type == _TYPE_STRUCT:
             dtype = dt.struct_(children^)
         else:
@@ -1537,7 +1537,7 @@ struct _IpcDecoder(Movable):
             var idx_bw = Int(self._r.read_i32(idx_tp, 0, 32))
             var idx_signed = self._r.read_bool(idx_tp, 1, False)
             var ordered = self._r.read_bool(de_pos, 2, False)
-            var index_dtype: dt.AnyDataType
+            var index_dtype: dt.DynType
             if idx_signed:
                 if idx_bw == 8:
                     index_dtype = dt.int8
@@ -1556,7 +1556,7 @@ struct _IpcDecoder(Movable):
                     index_dtype = dt.uint32
                 else:
                     index_dtype = dt.uint64
-            dtype = dt.dictionary(index_dtype^, dtype.copy(), ordered).to_any()
+            dtype = dt.dictionary(index_dtype^, dtype.copy(), ordered).to_dyn()
         except:
             pass  # no DictionaryEncoding at slot 4
 
@@ -1717,7 +1717,7 @@ struct _BatchEncoder(Movable):
         if data.dtype.is_dictionary():
             _BatchEncoder.collect_dict_pairs(data.children[0], pairs, next_id)
             pairs.append(
-                _DictPair(next_id, AnyArray.from_data(data.children[0]))
+                _DictPair(next_id, DynArray.from_data(data.children[0]))
             )
             next_id += 1
         elif data.dtype.is_list():
@@ -1762,7 +1762,7 @@ struct _BatchEncoder(Movable):
 
     @staticmethod
     def encode_dict_message(
-        dict_id: Int64, values: AnyArray
+        dict_id: Int64, values: DynArray
     ) raises -> _EncodedBatch:
         """Encode a dictionary values array as a DictionaryBatch IPC message."""
         var benc = _BatchEncoder()
@@ -1798,12 +1798,12 @@ struct _BatchEncoder(Movable):
 
 
 # ---------------------------------------------------------------------------
-# Batch body decoder: reconstructs AnyArray from raw bytes + cursor state
+# Batch body decoder: reconstructs DynArray from raw bytes + cursor state
 # ---------------------------------------------------------------------------
 
 
 struct _BatchDecoder(Movable):
-    """Reconstructs AnyArray values from a record batch body using node/buffer cursors.
+    """Reconstructs DynArray values from a record batch body using node/buffer cursors.
     """
 
     var body: List[UInt8]
@@ -1812,7 +1812,7 @@ struct _BatchDecoder(Movable):
     var bufs: List[_BodyBuffer]
     var node_idx: Int
     var buf_idx: Int
-    var dict_values: List[AnyArray]
+    var dict_values: List[DynArray]
 
     def __init__(
         out self,
@@ -1820,7 +1820,7 @@ struct _BatchDecoder(Movable):
         body_offset: Int,
         var nodes: List[_FieldNode],
         var bufs: List[_BodyBuffer],
-        dict_values: List[AnyArray] = List[AnyArray](),
+        dict_values: List[DynArray] = List[DynArray](),
     ):
         self.body = body^
         self.body_offset = body_offset
@@ -1831,8 +1831,8 @@ struct _BatchDecoder(Movable):
         self.dict_values = dict_values.copy()
 
     def read_array(
-        mut self, dtype: dt.AnyDataType, ipc_info: _FieldIpcInfo
-    ) raises -> AnyArray:
+        mut self, dtype: dt.DynType, ipc_info: _FieldIpcInfo
+    ) raises -> DynArray:
         var node = self.nodes[self.node_idx]
         self.node_idx += 1
 
@@ -1874,7 +1874,7 @@ struct _BatchDecoder(Movable):
             var values = self.dict_values[dict_id].copy()
             return DictionaryArray.from_arrays(
                 indices^, values^, d.ordered
-            ).to_any()
+            ).to_dyn()
 
         if (
             dtype.is_string()
@@ -1943,7 +1943,7 @@ struct _BatchDecoder(Movable):
             buffers=data_buffers^,
             children=children^,
         )
-        return AnyArray.from_data(ad)
+        return DynArray.from_data(ad)
 
     def _slice_body(self, off: Int, n_bytes: Int) -> Buffer[mut=False]:
         var buf = Buffer.alloc_uninit[DType.uint8](n_bytes)
@@ -1964,16 +1964,16 @@ struct _BatchDecoder(Movable):
 
     def _consume_primitive_array(
         mut self,
-        dtype: dt.AnyDataType,
+        dtype: dt.DynType,
         length: Int,
         nulls: Int,
         var bitmap: Optional[Bitmap[mut=False]],
-    ) raises -> AnyArray:
-        """Read the next body buffer and build a primitive AnyArray of the given dtype.
+    ) raises -> DynArray:
+        """Read the next body buffer and build a primitive DynArray of the given dtype.
         """
         var bufs = List[Buffer[mut=False]]()
         self._consume_buffer(bufs)
-        return AnyArray.from_data(
+        return DynArray.from_data(
             ArrayData(
                 dtype=dtype.copy(),
                 length=length,
@@ -2131,7 +2131,7 @@ struct RecordBatchFileReader(Movable):
     var _ipc_infos: List[_FieldIpcInfo]
     var _blocks: List[_Block]
     var _msg_reader: _MessageReader
-    var _dict_values: List[AnyArray]
+    var _dict_values: List[DynArray]
 
     def __init__(out self, path: String) raises:
         # Memory-mapped, not read in: an IPC file used to be copied whole into a
@@ -2165,7 +2165,7 @@ struct RecordBatchFileReader(Movable):
         self._ipc_infos = ipc_infos^
         self._blocks = blocks^
         self._msg_reader = _MessageReader(buf, n)
-        self._dict_values = List[AnyArray]()
+        self._dict_values = List[DynArray]()
 
         # Load dictionary values from their footer-registered blocks.
         # dict_values is indexed by dict_id; pass partial list to decode_dict_batch
@@ -2237,7 +2237,7 @@ struct RecordBatchStreamReader(Movable):
         self._msg_reader = msg_reader^
 
     def read_all(mut self) raises -> List[RecordBatch]:
-        var dict_values = List[AnyArray]()
+        var dict_values = List[DynArray]()
         var batches = List[RecordBatch]()
         while True:
             var meta = List[UInt8]()

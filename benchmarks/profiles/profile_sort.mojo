@@ -20,7 +20,7 @@ from std.benchmark import keep
 from std.os.env import getenv
 from std.time import perf_counter_ns
 
-from marrow.arrays import AnyArray, Int64Array, Float64Array, PrimitiveArray
+from marrow.arrays import DynArray, Int64Array, Float64Array, PrimitiveArray
 from marrow.builders import Int64Builder, Float64Builder
 from marrow.dtypes import int64, float64, Int64Type, Float64Type, PrimitiveType
 from marrow.kernels.sort import sort_indices
@@ -95,7 +95,7 @@ def _bench_sort_indices[
     T: PrimitiveType
 ](data: PrimitiveArray[T], iters: Int) raises:
     var n = len(data)
-    var arr: AnyArray = data.copy()
+    var arr: DynArray = data.copy()
 
     # warmup (not counted)
     keep(sort_indices(arr))
@@ -124,7 +124,7 @@ def _bench_sort_indices[
 def _bench_sort[T: PrimitiveType](data: PrimitiveArray[T], iters: Int) raises:
     """sort_indices + take — the full sort pipeline."""
     var n = len(data)
-    var arr: AnyArray = data.copy()
+    var arr: DynArray = data.copy()
 
     # warmup
     var wi = sort_indices(arr)
@@ -157,7 +157,7 @@ def _bench_sort_indices_desc[
     T: PrimitiveType
 ](data: PrimitiveArray[T], iters: Int) raises:
     var n = len(data)
-    var arr: AnyArray = data.copy()
+    var arr: DynArray = data.copy()
 
     keep(sort_indices(arr, ascending=False))
 

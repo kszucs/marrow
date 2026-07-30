@@ -6,12 +6,12 @@ length-1 arrays.
 Typed scalars:
   PrimitiveScalar[T]  — holds Scalar[T.native] (built-in) + Bool validity
   StringScalar        — holds String value + Bool validity
-  ListScalar          — holds AnyArray (child values) + Bool validity
-  StructScalar        — holds List[AnyScalar] (one per field) + DataType + Bool validity
-  DictionaryScalar    — holds integer index + decoded AnyScalar value + DataType + Bool validity
+  ListScalar          — holds DynArray (child values) + Bool validity
+  StructScalar        — holds List[DynScalar] (one per field) + DataType + Bool validity
+  DictionaryScalar    — holds integer index + decoded DynScalar value + DataType + Bool validity
 
 Type-erased container:
-  AnyScalar          — wraps any typed scalar via @implicit conversion;
+  DynScalar          — wraps any typed scalar via @implicit conversion;
                        backed by an inline Variant, dispatched at runtime.
 
 ArrowScalar trait:
@@ -22,8 +22,8 @@ ArrowScalar trait:
 """
 
 from std.utils import Variant
-from std.os import abort
-from std.python import PythonObject
+
+from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleToPython
 from std.builtin.rebind import downcast
 from std.memory import OwnedPointer
@@ -32,15 +32,14 @@ from .arrays import (
     BoolArray,
     PrimitiveArray,
     StringArray,
-    ListArray,
-    FixedSizeListArray,
-    StructArray,
-    AnyArray,
+    DynArray,
 )
 from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
 from .utils import variant_dispatch
 from .dtypes import (
-    AnyDataType,
+    DynType,
+    PrimitiveType,
+    StringLikeType,
     Date32Type,
     Date64Type,
     DayTimeIntervalType,
@@ -70,20 +69,9 @@ from .dtypes import (
     YearMonthIntervalType,
     bool_,
     field,
-    float16,
-    float32,
-    float64,
-    int16,
-    int32,
-    int64,
-    int8,
     list_,
     null,
     string,
-    uint16,
-    uint32,
-    uint64,
-    uint8,
 )
 
 # ---------------------------------------------------------------------------
@@ -94,7 +82,7 @@ from .dtypes import (
 trait ArrowScalar(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         ...
 
     def is_valid(self) -> Bool:
@@ -103,8 +91,8 @@ trait ArrowScalar(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     def is_null(self) -> Bool:
         return not self.is_valid()
 
-    def to_any(deinit self) -> AnyScalar:
-        return AnyScalar(self^)
+    def to_dyn(deinit self) -> DynScalar:
+        return DynScalar(self^)
 
 
 struct NullScalar(ArrowScalar):
@@ -117,7 +105,7 @@ struct NullScalar(ArrowScalar):
     def null() -> Self:
         return Self()
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return null
 
     def is_valid(self) -> Bool:
@@ -160,7 +148,7 @@ struct BoolScalar(ArrowScalar):
                 builder.append_null()
         return builder.finish()
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return bool_
 
     def is_valid(self) -> Bool:
@@ -218,8 +206,8 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
             self._is_valid = False
         self._dtype = dtype.copy()
 
-    def type(self) -> AnyDataType:
-        return self._dtype.copy().to_any()
+    def type(self) -> DynType:
+        return self._dtype.copy().to_dyn()
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -306,11 +294,26 @@ struct StringScalar(ArrowScalar):
     def null() -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return string
 
     def is_valid(self) -> Bool:
         return self._is_valid
+
+    def repeat(self, times: Int) raises -> StringArray:
+        """Broadcast this scalar into an array of length `times`.
+
+        The numeric and bool scalars have had this; string did not, so
+        `DynScalar.repeat` could not support it and the erased `like` path — which
+        materialises its constant pattern per morsel — failed at run time."""
+        var builder = StringBuilder(capacity=times)
+        if self._is_valid:
+            for _ in range(times):
+                builder.append(self._value)
+        else:
+            for _ in range(times):
+                builder.append_null()
+        return builder.finish()
 
     def to_string(self) -> String:
         """Get the value as an owned String."""
@@ -358,8 +361,8 @@ struct FixedSizeBinaryScalar(ArrowScalar):
     def null(byte_width: Int) -> Self:
         return Self(byte_width=byte_width, is_valid=False)
 
-    def type(self) -> AnyDataType:
-        return FixedSizeBinaryType(self._byte_width).to_any()
+    def type(self) -> DynType:
+        return FixedSizeBinaryType(self._byte_width).to_dyn()
 
     def value(ref self) -> ref[self._value] List[UInt8]:
         """The `byte_width` value bytes (empty for a null scalar)."""
@@ -387,13 +390,13 @@ struct FixedSizeBinaryScalar(ArrowScalar):
 
 
 struct ListScalar(ArrowScalar):
-    """A single list value: holds an AnyArray of child elements + validity flag.
+    """A single list value: holds an DynArray of child elements + validity flag.
     """
 
-    var _value: OwnedPointer[AnyArray]
+    var _value: OwnedPointer[DynArray]
     var _is_valid: Bool
 
-    def __init__(out self, *, var value: AnyArray, is_valid: Bool):
+    def __init__(out self, *, var value: DynArray, is_valid: Bool):
         self._value = OwnedPointer(value^)
         self._is_valid = is_valid
 
@@ -401,13 +404,13 @@ struct ListScalar(ArrowScalar):
         self._value = OwnedPointer(copy._value[].copy())
         self._is_valid = copy._is_valid
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return list_(self._value[].dtype())
 
     def is_valid(self) -> Bool:
         return self._is_valid
 
-    def value(self) -> AnyArray:
+    def value(self) -> DynArray:
         """Get the child elements array."""
         return self._value[].copy()
 
@@ -433,17 +436,17 @@ struct ListScalar(ArrowScalar):
 
 
 struct StructScalar(ArrowScalar):
-    """A single struct value: holds one AnyScalar per field + validity flag."""
+    """A single struct value: holds one DynScalar per field + validity flag."""
 
-    var _dtype: AnyDataType
-    var _value: List[AnyScalar]
+    var _dtype: DynType
+    var _value: List[DynScalar]
     var _is_valid: Bool
 
     def __init__(
         out self,
         *,
-        dtype: AnyDataType,
-        var value: List[AnyScalar],
+        dtype: DynType,
+        var value: List[DynScalar],
         is_valid: Bool,
     ):
         self._dtype = dtype.copy()
@@ -451,10 +454,10 @@ struct StructScalar(ArrowScalar):
         self._is_valid = is_valid
 
     @staticmethod
-    def null(dtype: AnyDataType) -> Self:
-        return Self(dtype=dtype, value=List[AnyScalar](), is_valid=False)
+    def null(dtype: DynType) -> Self:
+        return Self(dtype=dtype, value=List[DynScalar](), is_valid=False)
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return self._dtype.copy()
 
     def is_valid(self) -> Bool:
@@ -463,8 +466,8 @@ struct StructScalar(ArrowScalar):
     def num_fields(self) -> Int:
         return len(self._value)
 
-    def field(self, index: Int) -> AnyScalar:
-        """Return the i-th field as an AnyScalar."""
+    def field(self, index: Int) -> DynScalar:
+        """Return the i-th field as an DynScalar."""
         debug_assert(
             index >= 0 and index < len(self._value), "field index out of bounds"
         )
@@ -496,18 +499,18 @@ struct DictionaryScalar(ArrowScalar):
     Equivalent to PyArrow's ``pyarrow.DictionaryScalar``.
     """
 
-    var _dtype: AnyDataType
+    var _dtype: DynType
     var _index: Int  # integer index into the dictionary; -1 when null
     var _decoded: OwnedPointer[
-        AnyScalar
+        DynScalar
     ]  # decoded (looked-up) value; NullScalar when invalid
 
     def __init__(
         out self,
         *,
-        dtype: AnyDataType,
+        dtype: DynType,
         index: Int,
-        var decoded: AnyScalar,
+        var decoded: DynScalar,
     ):
         self._dtype = dtype.copy()
         self._index = index
@@ -519,10 +522,10 @@ struct DictionaryScalar(ArrowScalar):
         self._decoded = OwnedPointer(copy._decoded[].copy())
 
     @staticmethod
-    def null(dtype: AnyDataType) -> Self:
+    def null(dtype: DynType) -> Self:
         return Self(dtype=dtype, index=-1, decoded=NullScalar())
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return self._dtype.copy()
 
     def is_valid(self) -> Bool:
@@ -532,7 +535,7 @@ struct DictionaryScalar(ArrowScalar):
         """The integer index into the dictionary. -1 when null."""
         return self._index
 
-    def value(self) -> AnyScalar:
+    def value(self) -> DynScalar:
         """The decoded dictionary value. Matches PyArrow's DictionaryScalar.as_py().
         """
         return self._decoded[].copy()
@@ -552,15 +555,23 @@ struct DictionaryScalar(ArrowScalar):
 
 
 # ---------------------------------------------------------------------------
-# AnyScalar — type-erased scalar container
+# DynScalar — type-erased scalar container
 # ---------------------------------------------------------------------------
 
 
-struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
+struct DynScalar(
+    ArrowScalar, ConvertibleToPython, Copyable, Equatable, Movable, Writable
+):
     """Type-erased scalar container backed by a Variant.
 
     Wraps any typed scalar inline in a discriminated union.
     Runtime dispatch goes through the `_dispatch` helper.
+
+    **Conforms to `ArrowScalar` itself.** The erased scalar is a *peer* of the
+    typed ones rather than something above them, so generic code bound on
+    `ArrowScalar` accepts either and there is no separate erased overload set to
+    keep in step. `DynArray.ScalarType` is this, which is what lets `DynArray`
+    conform to `Array` in turn.
     """
 
     comptime VariantType = Variant[
@@ -609,16 +620,16 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         self._v = Self.VariantType(copy=copy._v)
 
     # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
-    # the `StructScalar -> List[AnyScalar] -> AnyScalar` reference cycle; the
+    # the `StructScalar -> List[DynScalar] -> DynScalar` reference cycle; the
     # variant field is still destroyed automatically after the body runs.
     def __del__(deinit self):
         pass
 
     # --- dispatch-based methods ---
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         @parameter
-        def f[T: ArrowScalar](t: T) -> AnyDataType:
+        def f[T: ArrowScalar](t: T) -> DynType:
             return t.type()
 
         return variant_dispatch[ArrowScalar, func=f](self._v)
@@ -630,36 +641,55 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
         return variant_dispatch[ArrowScalar, func=f](self._v)
 
-    def repeat(self, times: Int) raises -> AnyArray:
-        """Broadcast this scalar into an array of length `times`."""
-        if self.type() == int8:
-            return self.as_int8().repeat(times).to_any()
-        elif self.type() == int16:
-            return self.as_int16().repeat(times).to_any()
-        elif self.type() == int32:
-            return self.as_int32().repeat(times).to_any()
-        elif self.type() == int64:
-            return self.as_int64().repeat(times).to_any()
-        elif self.type() == uint8:
-            return self.as_uint8().repeat(times).to_any()
-        elif self.type() == uint16:
-            return self.as_uint16().repeat(times).to_any()
-        elif self.type() == uint32:
-            return self.as_uint32().repeat(times).to_any()
-        elif self.type() == uint64:
-            return self.as_uint64().repeat(times).to_any()
-        elif self.type() == float16:
-            return self.as_float16().repeat(times).to_any()
-        elif self.type() == float32:
-            return self.as_float32().repeat(times).to_any()
-        elif self.type() == float64:
-            return self.as_float64().repeat(times).to_any()
-        elif self.type() == bool_:
-            return self.as_bool().repeat(times).to_any()
-        raise Error(t"AnyScalar.repeat: unsupported dtype {self.type()}")
+    def repeat(self, times: Int) raises -> DynArray:
+        """Broadcast this scalar into an array of length `times`.
+
+        A twelve-arm dtype ladder before, which is why it silently lacked string
+        — the erased `like` path materialises its pattern through here and hit
+        "unsupported dtype string".
+
+        Dispatches over **numeric**, not `PrimitiveType`, and that is a measured
+        choice rather than a timid one: `repeat` builds a whole array per
+        instantiation, so widening it to every primitive type (adding temporal,
+        interval and the four decimals) cost **34,052 bytes** on
+        `query_streaming` — 83% of that commit's growth — to support scalars
+        nothing repeats today. The families that are covered are enumerated by
+        `dispatch_*`, so none of *them* can be silently dropped; a temporal or
+        decimal scalar raises, which is the same answer the ladder gave and is
+        loud rather than wrong."""
+        var dt = self.type()
+        if dt == bool_:
+            return self.as_bool().repeat(times).to_dyn()
+        elif dt.is_string_like():
+
+            @parameter
+            def stringlike[T: StringLikeType](d: T) raises -> DynArray:
+                return self.as_string().repeat(times).to_dyn()
+
+            return dt.dispatch_stringlike[stringlike]()
+        elif dt.is_numeric():
+
+            @parameter
+            def numeric[T: NumericType](d: T) raises -> DynArray:
+                return self.as_primitive[T]().repeat(times).to_dyn()
+
+            return dt.dispatch_numeric[numeric]()
+        else:
+            raise Error(t"DynScalar.repeat: unsupported dtype {dt}")
 
     def is_null(self) -> Bool:
         return not self.is_valid()
+
+    def to_dyn(deinit self) -> DynScalar:
+        """Already erased — hand back `self`.
+
+        Overriding this is not a convenience, it is required. The trait's
+        default body is `DynScalar(self^)`, which for `Self = DynScalar` would
+        ask the variant to hold a `DynScalar`; it deliberately does not list
+        itself, so the default would fail to instantiate. `DynType` and
+        `DynArray` override it for exactly the same reason.
+        """
+        return self^
 
     # --- typed downcasts ---
 
@@ -805,6 +835,45 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
         return PythonObject(alloc=self^)
+
+    def as_py(self) raises -> PythonObject:
+        """This scalar as a native Python value — `int`, `float`, `bool`, `str`,
+        `list`, `dict`, or `None`. Matches `pyarrow.Scalar.as_py`.
+
+        Lived in `python/bindings/scalars.mojo` as a 50-line `_as_py` ladder over
+        every dtype. Converting a *core* type to a Python value is core work: the
+        bindings should say `scalar.as_py()`, not re-derive the dtype mapping.
+
+        Dispatches rather than laddering, so a new numeric or string-like dtype
+        cannot be silently omitted — which the ladder had no protection against.
+        """
+        if self.is_null():
+            return PythonObject(None)
+        var dt = self.type()
+        if dt.is_bool():
+            return PythonObject(self.as_bool().value())
+        elif dt.is_numeric() or dt.is_interval():
+
+            @parameter
+            def numeric[T: PrimitiveType](d: T) raises -> PythonObject:
+                return PythonObject(self.as_primitive[T]().value())
+
+            return dt.dispatch_primitive[numeric]()
+        elif dt.is_string_like():
+            return PythonObject(self.as_string().to_string())
+        elif dt.is_list():
+            return self.as_list().value().to_python_object()
+        elif dt.is_fixed_size_list():
+            return self.as_fixed_size_list().value().to_python_object()
+        elif dt.is_struct():
+            ref st = self.as_struct()
+            var builtins = Python.import_module("builtins")
+            var d = builtins.dict()
+            for i in range(st.num_fields()):
+                d[dt.as_struct().fields[i].name] = st.field(i).as_py()
+            return d
+        else:
+            raise Error(t"as_py: unsupported dtype {dt}")
 
 
 # ---------------------------------------------------------------------------

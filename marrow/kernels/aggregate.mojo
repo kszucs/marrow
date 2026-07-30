@@ -30,19 +30,19 @@ from ..arrays import (
     BoolArray,
     BinaryLikeArray,
     PrimitiveArray,
-    AnyArray,
+    DynArray,
     Int32Array,
     Int64Array,
 )
 from ..builders import (
     PrimitiveBuilder,
-    AnyBuilder,
+    DynBuilder,
     Int64Builder,
     Int32Builder,
     BinaryLikeBuilder,
 )
 from ..dtypes import (
-    AnyDataType,
+    DynType,
     Float64Type,
     Int32Type,
     Int64Type,
@@ -57,10 +57,9 @@ from ..dtypes import (
 )
 from ..scalars import (
     PrimitiveScalar,
-    AnyScalar,
+    DynScalar,
     Int64Scalar,
     Float64Scalar,
-    StringScalar,
 )
 from ..views import reduce
 from .core import Kernel
@@ -91,8 +90,8 @@ trait AggKernel(Kernel):
     whole-array `reduce`.
 
     Everything here is typed: `reduce` / `apply` take a `PrimitiveArray[V]` and
-    return a `PrimitiveScalar`, so a kernel never sees an `AnyArray` or an
-    `AnyDataType`. Binding a kernel to a *runtime* dtype (and routing the
+    return a `PrimitiveScalar`, so a kernel never sees an `DynArray` or an
+    `DynType`. Binding a kernel to a *runtime* dtype (and routing the
     non-numeric input types it can also serve) is `Aggregation`'s job, below.
 
     Grouped state + driver live in the fully typed `AggState[K, V]`. The default
@@ -152,7 +151,7 @@ trait AggKernel(Kernel):
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         """Whole-array reduce — the single-(full-)group case. The input dtype is
         known at comptime, so the result is `PrimitiveScalar[Self.AccType[V]]`
-        directly (no erased `AnyScalar`, no downcast).
+        directly (no erased `DynScalar`, no downcast).
 
         This general default works for *any* kernel — it drives one
         `AggState[Self, V]` with every row in group 0 — so `mean`/`count` reduce
@@ -196,12 +195,10 @@ trait AggKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-trait WideningOp:
+trait WideningOp(Kernel):
     """The two things that distinguish `sum` from `product`: the fold's identity
     element and its lane-wise operator. Both widen integers to int64 and floats
     to float64, which is why they share one shell."""
-
-    comptime name: String
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
@@ -294,11 +291,10 @@ comptime SumKernel = Widening[SumOp]
 comptime ProductKernel = Widening[ProductOp]
 
 
-trait MinMaxOp:
+trait MinMaxOp(Kernel):
     """The two things that distinguish `min` from `max`: which SIMD lane-wise
     extremum to take, and which sentinel is the fold's identity."""
 
-    comptime name: String
     comptime is_min: Bool
 
     @staticmethod
@@ -457,7 +453,7 @@ struct MeanKernel(AggKernel):
 #
 # Not `AggKernel`s: they fold bit-packed masks (not the numeric
 # accumulator/identity/combine/finalize algebra), so each is its own struct
-# exposing a `reduce(BoolArray) -> Bool` (plus an `AnyArray` overload), matching
+# exposing a `reduce(BoolArray) -> Bool` (plus an `DynArray` overload), matching
 # the struct-per-kernel shape of the rest of the module.
 # ---------------------------------------------------------------------------
 
@@ -476,9 +472,9 @@ trait BoolReduceKernel(Kernel):
 
     @staticmethod
     def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> Bool:
-        """Runtime-dtype entry: fold a boolean `AnyArray` to a `Bool`."""
+        """Runtime-dtype entry: fold a boolean `DynArray` to a `Bool`."""
         return Self.reduce(array.as_bool(), ctx)
 
 
@@ -515,7 +511,7 @@ struct AnyKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> Bool:
         return Self.reduce(array.as_bool(), ctx)
 
@@ -549,7 +545,7 @@ struct AllKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> Bool:
         return Self.reduce(array.as_bool(), ctx)
 
@@ -574,7 +570,7 @@ struct AllKernel(BoolReduceKernel):
 #
 # `acc` is a real `PrimitiveBuilder[K.AccType[V]]` (not erased), so `update` /
 # `finish` carry no dtype dispatch at all — the runtime dtype was resolved once
-# at the boundary by `AnyDataType.dispatch_numeric`. The count column drives NULL output for
+# at the boundary by `DynType.dispatch_numeric`. The count column drives NULL output for
 # empty/all-null groups and the `mean` divisor. A richer aggregate (variance,
 # distinct, ...) pairs its kernel with a different state struct of this shape.
 #
@@ -587,9 +583,9 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
 
     Everything is typed: the accumulator is a `PrimitiveBuilder[Acc]`
     (`Acc = K.AccType[V]`), `update` takes a `PrimitiveArray[V]`, and `finish`
-    returns a `PrimitiveArray[Acc]` — no `AnyBuilder`/`AnyArray`/`AnyScalar`
+    returns a `PrimitiveArray[Acc]` — no `DynBuilder`/`DynArray`/`DynScalar`
     anywhere, so the hot loops are fully monomorphized. The runtime dtype was
-    resolved once at the boundary (`AnyDataType.dispatch_numeric`) before this type existed.
+    resolved once at the boundary (`DynType.dispatch_numeric`) before this type existed.
     A richer aggregate (variance, distinct, ...) pairs its kernel with a
     different state struct of this shape."""
 
@@ -752,12 +748,12 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
 # reinterpret, the validity-only count, the distinct sketches) is *which
 # `Aggregation` type was chosen*.
 #
-# `from_any` / `to_any` are the only erasure points, both O(1) handle copies —
+# `from_any` / `to_dyn` are the only erasure points, both O(1) handle copies —
 # a typed column enters, a typed column leaves.
 # ---------------------------------------------------------------------------
 
 
-trait Aggregation:
+trait Aggregation(Kernel):
     """One aggregate over one input type — the fully resolved, monomorphized
     unit of aggregation.
 
@@ -766,11 +762,8 @@ trait Aggregation:
     `DistinctAgg[exact]`. Which one a runtime dtype maps to is decided once, by
     `AggFunction.resolve`."""
 
-    comptime name: String
-    """The aggregate's name — output-column naming only, never dispatch."""
-
     comptime InArray: Copyable & ImplicitlyDeletable
-    """The typed input column this aggregation consumes. `AnyArray` for the two
+    """The typed input column this aggregation consumes. `DynArray` for the two
     aggregations whose work *is* dtype-generic (validity scan, row hashing) —
     there is nothing to monomorphize on."""
 
@@ -782,18 +775,18 @@ trait Aggregation:
     can run as thread-local partial folds plus a merge."""
 
     @staticmethod
-    def from_any(value: AnyArray) raises -> Self.InArray:
+    def from_any(value: DynArray) raises -> Self.InArray:
         """Narrow an erased column to this aggregation's input type (O(1))."""
         ...
 
     @staticmethod
-    def to_any(values: Self.InArray) raises -> AnyArray:
+    def to_dyn(values: Self.InArray) raises -> DynArray:
         """Widen back to an erased column — for the row-shuffling machinery
         (`take` / `slice` / `concat`), which is dtype-generic by nature."""
         ...
 
     @staticmethod
-    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+    def out_dtype(in_dtype: DynType) raises -> DynType:
         """This aggregation's output dtype. Takes the *runtime* input dtype
         because an order-preserving aggregate carries its parameters through
         (a timestamp's unit and timezone, a decimal's precision and scale)."""
@@ -821,7 +814,7 @@ trait Aggregation:
         aggregation decides its own parallelism: the SIMD fold reductions are
         serial (threads only pay off well above the sizes where the reduce is
         the bottleneck), while the distinct sketches self-gate on size."""
-        var n = len(Self.to_any(values))
+        var n = len(Self.to_dyn(values))
         var zeros = Int32Builder(n)
         for _ in range(n):
             zeros.append(Int32(0))
@@ -850,7 +843,7 @@ trait Aggregation:
         )
 
 
-trait AggFunction:
+trait AggFunction(Kernel):
     """An aggregate *function*: a name plus the input dtypes it supports.
 
     The contract for resolving an aggregate against a runtime dtype — `resolve`
@@ -859,12 +852,10 @@ trait AggFunction:
     (`Sum`, `Min`, `Count`, …) and their implementations live in
     `marrow.expr.aggregates`; this layer only executes what it is given."""
 
-    comptime name: String
-
     @staticmethod
     def resolve[
         job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: AnyDataType) raises:
+    ](value_dtype: DynType) raises:
         """Run `job[A]` with the `Aggregation` implementing this function over a
         `value_dtype` column. Raises if the aggregate is not defined for it."""
         ...
@@ -883,16 +874,16 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
     comptime is_mergeable = True
 
     @staticmethod
-    def from_any(value: AnyArray) raises -> Self.InArray:
+    def from_any(value: DynArray) raises -> Self.InArray:
         return value.as_primitive[Self.V]().copy()
 
     @staticmethod
-    def to_any(values: Self.InArray) raises -> AnyArray:
-        return values.copy().to_any()
+    def to_dyn(values: Self.InArray) raises -> DynArray:
+        return values.copy().to_dyn()
 
     @staticmethod
-    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
-        return AnyDataType(Self.K.AccType[Self.V]())
+    def out_dtype(in_dtype: DynType) raises -> DynType:
+        return DynType(Self.K.AccType[Self.V]())
 
     @staticmethod
     def grouped(
@@ -950,29 +941,29 @@ struct TemporalMinMax[Op: MinMaxOp, T: TemporalType](Aggregation):
     comptime is_mergeable = False
 
     @staticmethod
-    def from_any(value: AnyArray) raises -> Self.InArray:
+    def from_any(value: DynArray) raises -> Self.InArray:
         return value.as_primitive[Self.T]().copy()
 
     @staticmethod
-    def to_any(values: Self.InArray) raises -> AnyArray:
-        return values.copy().to_any()
+    def to_dyn(values: Self.InArray) raises -> DynArray:
+        return values.copy().to_dyn()
 
     @staticmethod
-    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+    def out_dtype(in_dtype: DynType) raises -> DynType:
         return in_dtype.copy()
 
     @staticmethod
     def _as_backing(
         values: Self.InArray,
     ) raises -> PrimitiveArray[Self.Backing]:
-        var backing = values.copy().to_any().view(AnyDataType(Self.Backing()))
+        var backing = values.copy().to_dyn().view(DynType(Self.Backing()))
         return backing.as_primitive[Self.Backing]().copy()
 
     @staticmethod
     def _as_temporal(
-        var folded: PrimitiveArray[Self.Backing], dtype: AnyDataType
+        var folded: PrimitiveArray[Self.Backing], dtype: DynType
     ) raises -> Self.OutArray:
-        var relabelled = folded^.to_any().view(dtype.copy())
+        var relabelled = folded^.to_dyn().view(dtype.copy())
         return relabelled.as_primitive[Self.T]().copy()
 
     @staticmethod
@@ -998,15 +989,15 @@ struct StringMinMax[Op: MinMaxOp, T: StringLikeType](Aggregation):
     comptime is_mergeable = False
 
     @staticmethod
-    def from_any(value: AnyArray) raises -> Self.InArray:
+    def from_any(value: DynArray) raises -> Self.InArray:
         return value.as_binary_like[Self.T]().copy()
 
     @staticmethod
-    def to_any(values: Self.InArray) raises -> AnyArray:
-        return values.copy().to_any()
+    def to_dyn(values: Self.InArray) raises -> DynArray:
+        return values.copy().to_dyn()
 
     @staticmethod
-    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
+    def out_dtype(in_dtype: DynType) raises -> DynType:
         return in_dtype.copy()
 
     @staticmethod
@@ -1054,21 +1045,21 @@ struct CountAgg(Aggregation):
     with the count as the accumulator."""
 
     comptime name = CountKernel.name
-    comptime InArray = AnyArray
+    comptime InArray = DynArray
     comptime OutArray = Int64Array
     comptime is_mergeable = True
 
     @staticmethod
-    def from_any(value: AnyArray) raises -> Self.InArray:
+    def from_any(value: DynArray) raises -> Self.InArray:
         return value.copy()
 
     @staticmethod
-    def to_any(values: Self.InArray) raises -> AnyArray:
+    def to_dyn(values: Self.InArray) raises -> DynArray:
         return values.copy()
 
     @staticmethod
-    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
-        return AnyDataType(int64)
+    def out_dtype(in_dtype: DynType) raises -> DynType:
+        return DynType(int64)
 
     @staticmethod
     def grouped(
@@ -1130,21 +1121,21 @@ struct DistinctAgg[exact: Bool](Aggregation):
     row hashing, which is dtype-generic, so the input stays erased."""
 
     comptime name = "count_distinct" if Self.exact else "approx_count_distinct"
-    comptime InArray = AnyArray
+    comptime InArray = DynArray
     comptime OutArray = Int64Array
     comptime is_mergeable = False
 
     @staticmethod
-    def from_any(value: AnyArray) raises -> Self.InArray:
+    def from_any(value: DynArray) raises -> Self.InArray:
         return value.copy()
 
     @staticmethod
-    def to_any(values: Self.InArray) raises -> AnyArray:
+    def to_dyn(values: Self.InArray) raises -> DynArray:
         return values.copy()
 
     @staticmethod
-    def out_dtype(in_dtype: AnyDataType) raises -> AnyDataType:
-        return AnyDataType(int64)
+    def out_dtype(in_dtype: DynType) raises -> DynType:
+        return DynType(int64)
 
     @staticmethod
     def grouped(

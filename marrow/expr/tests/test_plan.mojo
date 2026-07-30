@@ -13,11 +13,12 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import array
 from ...dtypes import field, int64, float64, Int64Type
+from ...parquet import LeafSet
 from ...schema import schema
 from ...tabular import record_batch
 from ...expr import col, lit, in_memory_table
 from ...expr.relations import (
-    AnyRelation,
+    DynRelation,
     Filter,
     Project,
     Sort,
@@ -27,7 +28,7 @@ from ...expr.relations import (
 )
 
 
-def _scan() raises -> AnyRelation:
+def _scan() raises -> DynRelation:
     """The two-column source every structural test builds on."""
     return parquet_scan("t", schema([field("x", int64), field("y", float64)]))
 
@@ -51,8 +52,8 @@ def test_parquet_scan_write_to() raises:
 
 
 def test_parquet_scan_downcast() raises:
-    """AnyRelation wrapping a ParquetScan can be downcast to access path."""
-    assert_equal(_scan().downcast[ParquetScan]()[].path, "t")
+    """DynRelation wrapping a ParquetScan can be downcast to access path."""
+    assert_equal(_scan().downcast[ParquetScan[LeafSet.all()]]()[].path, "t")
 
 
 def test_in_memory_table_schema() raises:
@@ -159,9 +160,10 @@ def test_project_write_to() raises:
 
 
 def test_select_write_to() raises:
-    """`select` resolves names to positions itself, so it renders positionally —
-    `y` is index 1, which an unresolved reference could not report."""
-    assert_equal(String(_scan().select("y")), "Project([y=input(1)])")
+    """`select` renders by name. It used to resolve to a position first and print
+    `input(1)`; positional references were an interpreter artefact and the lane
+    now resolves names at execution, like the fused one always has."""
+    assert_equal(String(_scan().select("y")), "Project([y=y])")
 
 
 # ---------------------------------------------------------------------------
@@ -210,12 +212,12 @@ def test_sort_limit_offset_does_not_fold() raises:
 
 
 # ---------------------------------------------------------------------------
-# AnyRelation type erasure
+# DynRelation type erasure
 # ---------------------------------------------------------------------------
 
 
 def test_anyrelation_o1_copy() raises:
-    """AnyRelation copies share the same underlying allocation (O(1))."""
+    """DynRelation copies share the same underlying allocation (O(1))."""
     var src = _scan()
     var copy = src  # O(1) ref-count bump
     assert_equal(copy.schema().fields[0].name, "x")

@@ -16,7 +16,7 @@ from std.algorithm.backend.vectorize import vectorize
 from std.utils.index import IndexList
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     ListLikeArray,
     Int32Array,
     BoolArray,
@@ -24,10 +24,11 @@ from ..arrays import (
 )
 from ..buffers import Buffer, Bitmap
 from ..dtypes import ListLikeType, NumericType, DType
+from .core import Kernel
 from .execution import ExecutionContext
 
 
-struct ArrayLengthKernel:
+struct ArrayLengthKernel(Kernel):
     """Per-element element count of a list array → `Int32Array` (matches
     pyarrow's `list_value_length`).
 
@@ -75,18 +76,19 @@ struct ArrayLengthKernel:
         )
 
     @staticmethod
-    def dispatch(array: AnyArray) raises -> AnyArray:
-        if array.dtype().is_list():
-            return Self.apply(array.as_list()).to_any()
-        elif array.dtype().is_large_list():
-            return Self.apply(array.as_large_list()).to_any()
-        else:
-            raise Error(
-                t"array_length: expected a list array, got {array.dtype()}"
-            )
+    def dispatch(array: DynArray) raises -> DynArray:
+        var dt = array.dtype()
+        if not dt.is_list_like():
+            raise Self.error(t"expected a list array, got {dt}")
+
+        @parameter
+        def leaf[T: ListLikeType](d: T) raises -> DynArray:
+            return Self.apply(array.as_list_like[T]()).to_dyn()
+
+        return dt.dispatch_listlike[leaf]()
 
 
-struct ArrayContainsKernel:
+struct ArrayContainsKernel(Kernel):
     """Element-wise list membership: `result[i]` is True iff the search value
     `elem[i]` appears among the (valid) elements of the sublist `list[i]`. Result
     is null exactly where the list row is null; a null / absent search value gives
@@ -138,23 +140,24 @@ struct ArrayContainsKernel:
 
     @staticmethod
     def dispatch(
-        list: AnyArray,
-        elem: AnyArray,
+        list: DynArray,
+        elem: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
+        var list_dt = list.dtype()
+        if not list_dt.is_list_like():
+            raise Self.error(t"expected a list array, got {list_dt}")
+
         @parameter
-        def leaf[V: NumericType](d: V) raises -> AnyArray:
-            if list.dtype().is_list():
+        def leaf[V: NumericType](d: V) raises -> DynArray:
+            # Two nested family walks: the element type picks `V`, the list
+            # offset width picks `T`. Neither is a hand-written arm.
+            @parameter
+            def outer[T: ListLikeType](o: T) raises -> DynArray:
                 return Self.apply(
-                    list.as_list(), elem.as_primitive[V](), ctx
-                ).to_any()
-            elif list.dtype().is_large_list():
-                return Self.apply(
-                    list.as_large_list(), elem.as_primitive[V](), ctx
-                ).to_any()
-            else:
-                raise Error(
-                    t"array_contains: expected a list array, got {list.dtype()}"
-                )
+                    list.as_list_like[T](), elem.as_primitive[V](), ctx
+                ).to_dyn()
+
+            return list_dt.dispatch_listlike[outer]()
 
         return elem.dtype().dispatch_numeric[leaf]()

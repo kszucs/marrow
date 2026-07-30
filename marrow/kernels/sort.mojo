@@ -8,7 +8,7 @@ delegators.
   - BoolArray: O(N) counting sort.
   - BinaryLikeArray[T]: stdlib comparison sort (bytewise lexicographic).
 
-`SortIndices.dispatch` resolves a runtime dtype through the `AnyDataType.dispatch_*`
+`SortIndices.dispatch` resolves a runtime dtype through the `DynType.dispatch_*`
 family. Temporal, interval, and decimal32/64 columns sort through their
 typed leaf (bound on `PrimitiveType`); dictionary columns sort by their
 decoded values. `SortIndices.multi` composes single-column permutations into a
@@ -27,7 +27,7 @@ Serial cost breakdown at N=10M (from macOS `sample`, 50 iters, 8-bit baseline):
   hist    × passes   29.0%   ~76 ms  — sequential reads, 8 passes
   take (gather)       2.6%    ~7 ms  — parallel SIMD gather
   assemble            0.9%    ~2 ms  — memcpy-style null placement
-  dispatch/encode     2.7%    ~7 ms  — AnyArray dispatch + encode loop
+  dispatch/encode     2.7%    ~7 ms  — DynArray dispatch + encode loop
 """
 
 from std.builtin.sort import sort as _sort_impl
@@ -39,18 +39,18 @@ from ..arrays import (
     BoolArray,
     PrimitiveArray,
     StructArray,
-    AnyArray,
+    DynArray,
     Int32Array,
 )
 from ..buffers import Buffer
 from ..dtypes import (
     BinaryLikeType,
-    NumericType,
     PrimitiveType,
     bool_ as bool_dt,
     Int32Type,
 )
 from .cast import cast
+from .core import Kernel
 from .execution import ExecutionContext
 from .filter import Take
 from .partition import radix_histogram
@@ -341,11 +341,11 @@ def _radix_sort_indices[
     return idx_buf^.to_immutable()
 
 
-struct SortIndices:
+struct SortIndices(Kernel):
     """Sort-permutation kernel — the indices that would sort a column.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``AnyDataType.dispatch_*`` family
+    runtime-typed array to the matching leaf via the ``DynType.dispatch_*`` family
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. ``multi`` composes single-column permutations
     into a multi-key ordering.
@@ -361,7 +361,7 @@ struct SortIndices:
 
     @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         ascending: Bool = True,
         nulls_first: Bool = True,
         stable: Bool = False,
@@ -390,15 +390,6 @@ struct SortIndices:
             result = SortIndices.apply(
                 array.as_bool(), ascending, nulls_first, ctx
             )
-        elif dt.is_numeric():
-
-            @parameter
-            def numeric[T: NumericType](d: T) raises -> Int32Array:
-                return SortIndices.apply(
-                    array.as_primitive[T](), ascending, nulls_first, stable, ctx
-                )
-
-            result = dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
@@ -423,19 +414,16 @@ struct SortIndices:
                 None,
                 ctx,
             )
-        elif dt.is_decimal128():
-            result = SortIndices.apply(
-                array.as_decimal128(), ascending, nulls_first, stable, ctx
-            )
-        elif dt.is_decimal256():
-            result = SortIndices.apply(
-                array.as_decimal256(), ascending, nulls_first, stable, ctx
-            )
         elif dt.is_primitive():
-            # `apply` is bound on `PrimitiveType`, so temporal, interval and
-            # decimal32/64 columns sort through the typed leaf directly — the
-            # sort only ever reads `T.native` and validity, never the logical
-            # dtype. No reinterpret to an integer backing is needed.
+            # One arm for every fixed-width type. `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and *all four*
+            # decimal widths sort through the typed leaf directly — the sort
+            # only ever reads `T.native` and validity, never the logical dtype.
+            # No reinterpret to an integer backing is needed.
+            #
+            # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
+            # separate numeric/decimal128/decimal256 arms this replaces were
+            # three more spellings of this one call.
             @parameter
             def primitive[T: PrimitiveType](d: T) raises -> Int32Array:
                 return SortIndices.apply(
@@ -444,7 +432,7 @@ struct SortIndices:
 
             result = dt.dispatch_primitive[primitive]()
         else:
-            raise Error(t"sort_indices: unsupported dtype {dt}")
+            raise Self.error(t"unsupported dtype {dt}")
 
         if limit:
             var k = min(limit.value(), len(result))
@@ -486,10 +474,10 @@ struct SortIndices:
             ctx: Execution context.
         """
         if len(key_indices) == 0:
-            raise Error("sort: key_indices must not be empty")
+            raise Self.error("key_indices must not be empty")
         if len(key_indices) != len(ascending):
-            raise Error(
-                "sort: key_indices and ascending must have the same length"
+            raise Self.error(
+                "key_indices and ascending must have the same length"
             )
 
         if len(key_indices) == 1:
@@ -759,13 +747,17 @@ struct SortIndices:
 
 
 # ---------------------------------------------------------------------------
-# Public API — thin free delegators to the SortIndices kernel
-# (``pc.sort_indices`` / ``Table.sort_by``).
+# Public API — the two `pc.*`-style entry points (``pc.sort_indices`` /
+# ``Table.sort_by``). Three typed `sort_indices` overloads used to sit beside
+# them forwarding to `SortIndices.apply`, which is itself typed — so they saved
+# no copy and only gave the kernel a second place to be taught a new array type.
+# They had already drifted: the `BoolArray` one silently dropped `stable` and
+# `limit` from its signature. Call `SortIndices.apply` for a typed array.
 # ---------------------------------------------------------------------------
 
 
 def sort_indices(
-    array: AnyArray,
+    array: DynArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
     stable: Bool = False,
@@ -776,39 +768,6 @@ def sort_indices(
     return SortIndices.dispatch(
         array, ascending, nulls_first, stable, limit, ctx
     )
-
-
-def sort_indices[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    stable: Bool = False,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    return SortIndices.apply(array, ascending, nulls_first, stable, ctx)
-
-
-def sort_indices(
-    array: BoolArray,
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    return SortIndices.apply(array, ascending, nulls_first, ctx)
-
-
-def sort_indices[
-    T: BinaryLikeType
-](
-    array: BinaryLikeArray[T],
-    ascending: Bool = True,
-    nulls_first: Bool = True,
-    stable: Bool = False,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> Int32Array:
-    return SortIndices.apply(array, ascending, nulls_first, stable, ctx)
 
 
 def sort(

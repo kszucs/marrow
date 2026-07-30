@@ -1,16 +1,16 @@
 """Statistics-based predicate pruning (marrow.expr.pruning). A predicate is
 evaluated against per-column [min,max] bounds and must return maybe_true=False
 only when it provably cannot match. Covers both the runtime DynValue interpreter
-and the fused static nodes, plus the AnyValue box the scan uses."""
+and the fused static nodes, plus the DynValue box the scan uses."""
 
 from std.testing import assert_true, assert_false
 from ... import dtypes as dt
 from ...dtypes import int64, Int64Type, Field
 from ...schema import Schema
-from ...scalars import AnyScalar, Int64Scalar
+from ...scalars import DynScalar, Int64Scalar
 from ...expr.pruning import PruneStats
-from ...expr.values import AnyValue
-from ...expr.dynamic import col, lit
+from ...expr.values import DynValue
+from ...expr.values import col, lit
 
 # NOTE: comptime-node pruning is PARKED in the new `marrow.expr.values` (the
 # per-node `prune` overrides were not ported from the old fused algebra; the
@@ -24,12 +24,12 @@ def _stats(xmin: Int, xmax: Int, ymin: Int, ymax: Int) raises -> PruneStats:
     var fields = List[Field]()
     fields.append(Field("x", int64))
     fields.append(Field("y", int64))
-    var mins = List[Optional[AnyScalar]]()
-    var maxs = List[Optional[AnyScalar]]()
-    mins.append(Optional[AnyScalar](Int64Scalar(Int64(xmin))))
-    maxs.append(Optional[AnyScalar](Int64Scalar(Int64(xmax))))
-    mins.append(Optional[AnyScalar](Int64Scalar(Int64(ymin))))
-    maxs.append(Optional[AnyScalar](Int64Scalar(Int64(ymax))))
+    var mins = List[Optional[DynScalar]]()
+    var maxs = List[Optional[DynScalar]]()
+    mins.append(Optional[DynScalar](Int64Scalar(Int64(xmin))))
+    maxs.append(Optional[DynScalar](Int64Scalar(Int64(xmax))))
+    mins.append(Optional[DynScalar](Int64Scalar(Int64(ymin))))
+    maxs.append(Optional[DynScalar](Int64Scalar(Int64(ymax))))
     return PruneStats(Schema(fields=fields^), mins^, maxs^)
 
 
@@ -84,12 +84,12 @@ def test_dyn_or() raises:
 
 
 # ---------------------------------------------------------------------------
-# Through the AnyValue box (what the scan holds)
+# Through the DynValue box (what the scan holds)
 # ---------------------------------------------------------------------------
 
 
 def test_boxed_dyn() raises:
-    var boxed_dyn = AnyValue(col("x") > lit[Int64Type](Int64(100)))
+    var boxed_dyn = DynValue(col("x") > lit[Int64Type](Int64(100)))
     assert_false(boxed_dyn.prune(_stats(0, 50, 0, 0)).maybe_true)
     assert_true(boxed_dyn.prune(_stats(0, 200, 0, 0)).maybe_true)
 
@@ -98,8 +98,8 @@ def test_unknown_stats_keeps() raises:
     # a column with no stats (None bounds) must never be pruned
     var fields = List[Field]()
     fields.append(Field("x", int64))
-    var mins = List[Optional[AnyScalar]]()
-    var maxs = List[Optional[AnyScalar]]()
+    var mins = List[Optional[DynScalar]]()
+    var maxs = List[Optional[DynScalar]]()
     mins.append(None)
     maxs.append(None)
     var stats = PruneStats(Schema(fields=fields^), mins^, maxs^)

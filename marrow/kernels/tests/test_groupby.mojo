@@ -1,7 +1,7 @@
 from std.testing import assert_equal, assert_true, assert_false
 
 from ...arrays import (
-    AnyArray,
+    DynArray,
     PrimitiveArray,
     StringArray,
     StructArray,
@@ -32,7 +32,7 @@ from ...dtypes import (
     UInt8Type,
     UInt32Type,
     Float64Type,
-    AnyDataType,
+    DynType,
 )
 from ...arrays import Int32Array
 from ...kernels.execution import ExecutionContext
@@ -76,8 +76,8 @@ from ...kernels.distinct import count_distinct_grouped
 
 def test_groupby_sum_basic() raises:
     """Sum aggregation: [1,2,1,3,2] keys, [10,20,30,40,50] values."""
-    var keys: AnyArray = array([1, 2, 1, 3, 2], int32)
-    var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
+    var keys: DynArray = array([1, 2, 1, 3, 2], int32)
+    var vals: DynArray = array([10, 20, 30, 40, 50], int32)
     var result = GroupBy(keys).apply[Sum](vals)
 
     # 3 groups: key=1 (sum=40), key=2 (sum=70), key=3 (sum=40)
@@ -97,8 +97,8 @@ def test_groupby_sum_basic() raises:
 
 
 def test_groupby_sum_all_same_key() raises:
-    var keys: AnyArray = array([5, 5, 5], int32)
-    var vals: AnyArray = array([1, 2, 3], int32)
+    var keys: DynArray = array([5, 5, 5], int32)
+    var vals: DynArray = array([1, 2, 3], int32)
     var result = GroupBy(keys).apply[Sum](vals)
     assert_equal(result.num_rows(), 1)
     ref s = result.aggregates[0].as_int64()
@@ -111,8 +111,8 @@ def test_groupby_sum_all_same_key() raises:
 
 
 def test_groupby_min() raises:
-    var keys: AnyArray = array([1, 2, 1, 2], int32)
-    var vals: AnyArray = array([30, 10, 20, 40], int32)
+    var keys: DynArray = array([1, 2, 1, 2], int32)
+    var vals: DynArray = array([30, 10, 20, 40], int32)
     var result = GroupBy(keys).apply[Min](vals)
     # min preserves the input dtype (PyArrow-correct), so int32 in -> int32 out.
     ref m = result.aggregates[0].as_int32()
@@ -121,8 +121,8 @@ def test_groupby_min() raises:
 
 
 def test_groupby_max() raises:
-    var keys: AnyArray = array([1, 2, 1, 2], int32)
-    var vals: AnyArray = array([30, 10, 20, 40], int32)
+    var keys: DynArray = array([1, 2, 1, 2], int32)
+    var vals: DynArray = array([30, 10, 20, 40], int32)
     var result = GroupBy(keys).apply[Max](vals)
     # max preserves the input dtype (PyArrow-correct), so int32 in -> int32 out.
     ref m = result.aggregates[0].as_int32()
@@ -132,8 +132,8 @@ def test_groupby_max() raises:
 
 def test_groupby_sum_int64_precision() raises:
     """Sum of int64 values above 2**53 must not lose precision via float64."""
-    var keys: AnyArray = array([1, 1], int32)
-    var vals: AnyArray = array([9_007_199_254_740_993, 1], int64)
+    var keys: DynArray = array([1, 1], int32)
+    var vals: DynArray = array([9_007_199_254_740_993, 1], int64)
     var result = GroupBy(keys).apply[Sum](vals)
     assert_equal(result.num_rows(), 1)
     ref s = result.aggregates[0].as_int64()
@@ -142,8 +142,8 @@ def test_groupby_sum_int64_precision() raises:
 
 def test_groupby_min_int64_precision() raises:
     """Min over int64 values above 2**53 must stay exact."""
-    var keys: AnyArray = array([1, 1], int32)
-    var vals: AnyArray = array(
+    var keys: DynArray = array([1, 1], int32)
+    var vals: DynArray = array(
         [9_007_199_254_740_993, 9_007_199_254_740_995], int64
     )
     var result = GroupBy(keys).apply[Min](vals)
@@ -153,8 +153,8 @@ def test_groupby_min_int64_precision() raises:
 
 def test_groupby_max_int64_precision() raises:
     """Max over int64 values above 2**53 must stay exact."""
-    var keys: AnyArray = array([1, 1], int32)
-    var vals: AnyArray = array(
+    var keys: DynArray = array([1, 1], int32)
+    var vals: DynArray = array(
         [9_007_199_254_740_993, 9_007_199_254_740_995], int64
     )
     var result = GroupBy(keys).apply[Max](vals)
@@ -165,8 +165,8 @@ def test_groupby_max_int64_precision() raises:
 def test_groupby_sum_uint8_widens_to_int64() raises:
     """Integer sum widens to an int64 accumulator (no overflow for small ints).
     """
-    var keys: AnyArray = array([1, 1], int32)
-    var vals: AnyArray = array([100, 50], uint8)
+    var keys: DynArray = array([1, 1], int32)
+    var vals: DynArray = array([100, 50], uint8)
     var result = GroupBy(keys).apply[Sum](vals)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 150)
@@ -178,8 +178,8 @@ def test_groupby_sum_uint8_widens_to_int64() raises:
 
 
 def test_groupby_count() raises:
-    var keys: AnyArray = array([1, 2, 1, 3, 2], int32)
-    var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
+    var keys: DynArray = array([1, 2, 1, 3, 2], int32)
+    var vals: DynArray = array([10, 20, 30, 40, 50], int32)
     var result = GroupBy(keys).apply[Count](vals)
     ref c = result.aggregates[0].as_int64()
     assert_equal(c[0].value(), 2)  # key=1: 2 rows
@@ -193,8 +193,8 @@ def test_groupby_count() raises:
 
 
 def test_groupby_mean() raises:
-    var keys: AnyArray = array([1, 2, 1, 2], int32)
-    var vals: AnyArray = array([10, 20, 30, 40], int32)
+    var keys: DynArray = array([1, 2, 1, 2], int32)
+    var vals: DynArray = array([10, 20, 30, 40], int32)
     var result = GroupBy(keys).apply[Mean](vals)
     ref m = result.aggregates[0].as_float64()
     assert_equal(m[0].value(), 20.0)  # (10+30)/2
@@ -204,8 +204,8 @@ def test_groupby_mean() raises:
 def test_groupby_sum_float64_preserved() raises:
     """Float64 input to sum still produces a float64 result (regression guard).
     """
-    var keys: AnyArray = array([1, 1], int32)
-    var vals: AnyArray = array([1.5, 2.5], float64)
+    var keys: DynArray = array([1, 1], int32)
+    var vals: DynArray = array([1.5, 2.5], float64)
     var result = GroupBy(keys).apply[Sum](vals)
     ref s = result.aggregates[0].as_float64()
     assert_equal(s[0].value(), 4.0)
@@ -218,8 +218,8 @@ def test_groupby_sum_float64_preserved() raises:
 
 def test_groupby_null_keys() raises:
     """Null keys form their own group."""
-    var keys: AnyArray = array([1, None, 2, None, 1], int32)
-    var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
+    var keys: DynArray = array([1, None, 2, None, 1], int32)
+    var vals: DynArray = array([10, 20, 30, 40, 50], int32)
     var result = GroupBy(keys).apply[Sum](vals)
     assert_equal(result.num_rows(), 3)
     # Group order: 1, null, 2
@@ -231,8 +231,8 @@ def test_groupby_null_keys() raises:
 
 def test_groupby_null_values_skipped() raises:
     """Null values are skipped in aggregation."""
-    var keys: AnyArray = array([1, 1, 1], int32)
-    var vals: AnyArray = array([10, None, 30], int32)
+    var keys: DynArray = array([1, 1, 1], int32)
+    var vals: DynArray = array([10, None, 30], int32)
     var result = GroupBy(keys).apply[Sum](vals)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 40)  # 10 + 30 (null skipped)
@@ -240,8 +240,8 @@ def test_groupby_null_values_skipped() raises:
 
 def test_groupby_count_skips_nulls() raises:
     """Count only counts non-null values."""
-    var keys: AnyArray = array([1, 1, 1], int32)
-    var vals: AnyArray = array([10, None, 30], int32)
+    var keys: DynArray = array([1, 1, 1], int32)
+    var vals: DynArray = array([10, None, 30], int32)
     var result = GroupBy(keys).apply[Count](vals)
     ref c = result.aggregates[0].as_int64()
     assert_equal(c[0].value(), 2)  # 2 non-null values
@@ -258,8 +258,8 @@ def test_groupby_string_key() raises:
     b.append("b")
     b.append("a")
     b.append("b")
-    var keys: AnyArray = b.finish()
-    var vals: AnyArray = array([10, 20, 30, 40], int32)
+    var keys: DynArray = b.finish()
+    var vals: DynArray = array([10, 20, 30, 40], int32)
     var result = GroupBy(keys).apply[Sum](vals)
     assert_equal(result.num_rows(), 2)
     ref s = result.aggregates[0].as_int64()
@@ -273,9 +273,9 @@ def test_groupby_string_key() raises:
 
 
 def test_groupby_multikey() raises:
-    var a: AnyArray = array([1, 1, 2, 2], int32)
-    var b: AnyArray = array([10, 20, 10, 20], int32)
-    var children = List[AnyArray]()
+    var a: DynArray = array([1, 1, 2, 2], int32)
+    var b: DynArray = array([10, 20, 10, 20], int32)
+    var children = List[DynArray]()
     children.append(a.copy())
     children.append(b.copy())
     var keys = StructArray(
@@ -288,7 +288,7 @@ def test_groupby_multikey() raises:
         bitmap=None,
         children=children^,
     )
-    var vals: AnyArray = array([1, 2, 3, 4], int32)
+    var vals: DynArray = array([1, 2, 3, 4], int32)
     var result = GroupBy(keys).apply[Sum](vals)
     assert_equal(result.num_rows(), 4)  # 4 unique combos
 
@@ -299,8 +299,8 @@ def test_groupby_multikey() raises:
 
 
 def test_groupby_empty() raises:
-    var keys: AnyArray = array(int32)
-    var vals: AnyArray = array(int32)
+    var keys: DynArray = array(int32)
+    var vals: DynArray = array(int32)
     var result = GroupBy(keys).apply[Sum](vals)
     assert_equal(result.num_rows(), 0)
 
@@ -311,8 +311,8 @@ def test_groupby_empty() raises:
 
 
 def test_groupby_bool_key() raises:
-    var keys: AnyArray = array([True, False, True, False, True])
-    var vals: AnyArray = array([1, 2, 3, 4, 5], int32)
+    var keys: DynArray = array([True, False, True, False, True])
+    var vals: DynArray = array([1, 2, 3, 4, 5], int32)
     var result = GroupBy(keys).apply[Sum](vals)
     assert_equal(result.num_rows(), 2)
     ref s = result.aggregates[0].as_int64()
@@ -329,8 +329,8 @@ def test_groupby_sum_and_count_share_keys() raises:
     """Two typed aggregates over the same keys agree on group order/count —
     the building block the expression layer composes for multi-aggregate GROUP
     BY."""
-    var keys: AnyArray = array([1, 2, 1, 2], int32)
-    var vals: AnyArray = array([10, 20, 30, 40], int32)
+    var keys: DynArray = array([1, 2, 1, 2], int32)
+    var vals: DynArray = array([10, 20, 30, 40], int32)
 
     var sums = GroupBy(keys).apply[Sum](vals)
     var counts = GroupBy(keys).apply[Count](vals)
@@ -375,10 +375,10 @@ def test_groupby_parallel_matches_serial() raises:
     for i in range(3000):
         kb.append(Scalar[int32.native](i % 50))
         vb.append(Scalar[int32.native](i))
-    var keys: AnyArray = kb.finish()
-    var vals: AnyArray = vb.finish()
+    var keys: DynArray = kb.finish()
+    var vals: DynArray = vb.finish()
 
-    var children = List[AnyArray]()
+    var children = List[DynArray]()
     children.append(keys.copy())
     var kd = keys.to_data()
     var sa = StructArray(
@@ -430,10 +430,10 @@ def test_groupby_thread_local_mean_nulls_match_serial() raises:
             vb.append_null()
         else:
             vb.append(Scalar[float64.native](Float64(i)))
-    var keys: AnyArray = kb.finish()
-    var vals: AnyArray = vb.finish()
+    var keys: DynArray = kb.finish()
+    var vals: DynArray = vb.finish()
 
-    var children = List[AnyArray]()
+    var children = List[DynArray]()
     children.append(keys.copy())
     var kd = keys.to_data()
     var sa = StructArray(
@@ -470,8 +470,8 @@ def test_groupby_thread_local_mean_nulls_match_serial() raises:
 
 def test_groupby_count_distinct_basic() raises:
     # key=1 sees values {10, 10, 20} -> 2 distinct; key=2 sees {30, 30} -> 1.
-    var keys: AnyArray = array([1, 1, 1, 2, 2], int32)
-    var vals: AnyArray = array([10, 10, 20, 30, 30], int32)
+    var keys: DynArray = array([1, 1, 1, 2, 2], int32)
+    var vals: DynArray = array([10, 10, 20, 30, 30], int32)
     var result = GroupBy(keys).apply[CountDistinct](vals)
     assert_equal(result.num_rows(), 2)
     var k = result.keys[0].as_int32().copy()
@@ -483,7 +483,7 @@ def test_groupby_count_distinct_basic() raises:
 
 
 def test_groupby_count_distinct_excludes_nulls() raises:
-    var keys: AnyArray = array([1, 1, 1, 1], int32)
+    var keys: DynArray = array([1, 1, 1, 1], int32)
     var vb = Int32Builder(4)
     vb.append(5)
     vb.append_null()
@@ -496,7 +496,7 @@ def test_groupby_count_distinct_excludes_nulls() raises:
 
 
 def test_groupby_count_distinct_all_null_group() raises:
-    var keys: AnyArray = array([7, 7], int32)
+    var keys: DynArray = array([7, 7], int32)
     var vb = Int32Builder(2)
     vb.append_null()
     vb.append_null()
@@ -512,8 +512,8 @@ def test_groupby_approx_count_distinct_matches_exact_small() raises:
     for i in range(3000):
         kb.append(Int32(i % 3))  # 3 groups
         vb.append(Int32(i % 300))  # up to 100 distinct per group
-    var keys: AnyArray = kb.finish()
-    var vals: AnyArray = vb.finish()
+    var keys: DynArray = kb.finish()
+    var vals: DynArray = vb.finish()
     var result = GroupBy(keys).apply[ApproxCountDistinct](vals)
     assert_equal(result.num_rows(), 3)
     ref c = result.aggregates[0].as_int64()
@@ -541,10 +541,10 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     for i in range(3000):
         kb.append(Scalar[int32.native](i % 10))
         vb.append(Scalar[int32.native](i % 100))
-    var keys: AnyArray = kb.finish()
-    var vals: AnyArray = vb.finish()
+    var keys: DynArray = kb.finish()
+    var vals: DynArray = vb.finish()
 
-    var children = List[AnyArray]()
+    var children = List[DynArray]()
     children.append(keys.copy())
     var kd = keys.to_data()
     var sa = StructArray(
@@ -555,13 +555,13 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
         bitmap=kd.bitmap,
         children=children^,
     )
-    var values = List[AnyArray]()
+    var values = List[DynArray]()
     values.append(vals.copy())
 
     @parameter
     def exact(
-        _j: Int, gids: Int32Array, col: AnyArray, ng: Int
-    ) raises -> AnyArray:
+        _j: Int, gids: Int32Array, col: DynArray, ng: Int
+    ) raises -> DynArray:
         return count_distinct_grouped(gids, col, ng)
 
     var ctx = ExecutionContext.parallel(4)
@@ -580,13 +580,13 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
 
 def test_groupby_min_max_string() raises:
     # group 1: {"b", "c"} -> min "b", max "c"; group 2: {"a", "z"} -> "a"/"z".
-    var keys: AnyArray = array([1, 2, 1, 2], int32)
+    var keys: DynArray = array([1, 2, 1, 2], int32)
     var sb = StringBuilder(4)
     sb.append("b")
     sb.append("a")
     sb.append("c")
     sb.append("z")
-    var vals: AnyArray = sb.finish()
+    var vals: DynArray = sb.finish()
 
     var mn = GroupBy(keys).apply[Min](vals)
     assert_equal(mn.num_rows(), 2)
@@ -601,7 +601,7 @@ def test_groupby_min_max_string() raises:
 
 
 def test_groupby_min_string_skips_nulls() raises:
-    var keys: AnyArray = array([1, 1, 1], int32)
+    var keys: DynArray = array([1, 1, 1], int32)
     var sb = StringBuilder(3)
     sb.append("m")
     sb.append_null()
@@ -612,7 +612,7 @@ def test_groupby_min_string_skips_nulls() raises:
 
 
 def test_groupby_min_string_all_null_group() raises:
-    var keys: AnyArray = array([9, 9], int32)
+    var keys: DynArray = array([9, 9], int32)
     var sb = StringBuilder(2)
     sb.append_null()
     sb.append_null()
@@ -622,12 +622,12 @@ def test_groupby_min_string_all_null_group() raises:
 
 def test_groupby_min_max_date32() raises:
     # group 1: {19000, 18500} -> min 18500 / max 19000; group 2: {18800}.
-    var keys: AnyArray = array([1, 1, 2], int32)
+    var keys: DynArray = array([1, 1, 2], int32)
     var b = Date32Builder(date32(), 3)
     b.append(Scalar[int32.native](19000))
     b.append(Scalar[int32.native](18500))
     b.append(Scalar[int32.native](18800))
-    var vals: AnyArray = b.finish()
+    var vals: DynArray = b.finish()
 
     var mn = GroupBy(keys).apply[Min](vals)
     ref dmn = mn.aggregates[0].as_date32()
@@ -641,7 +641,7 @@ def test_groupby_min_max_date32() raises:
 
 
 def test_groupby_min_date32_all_null_group() raises:
-    var keys: AnyArray = array([1, 1], int32)
+    var keys: DynArray = array([1, 1], int32)
     var b = Date32Builder(date32(), 2)
     b.append_null()
     b.append_null()
@@ -656,7 +656,7 @@ def test_groupby_min_date32_all_null_group() raises:
 
 def test_groupby_count_distinct_string() raises:
     # group 1: {"x"} -> 1 distinct; group 2: {"y", "z"} -> 2 distinct.
-    var keys: AnyArray = array([1, 1, 2, 2], int32)
+    var keys: DynArray = array([1, 1, 2, 2], int32)
     var sb = StringBuilder(4)
     sb.append("x")
     sb.append("x")

@@ -12,11 +12,12 @@ page-index readers reuse the same footer decode without touching column data.
 
 from std.algorithm.functional import sync_parallelize
 from std.memory import ArcPointer
+from std.builtin.rebind import downcast
 from std.sys import size_of
 from std.sys.info import num_physical_cores
 from std.memory import unsafe_memcpy
 
-from ..arrays import AnyArray, ArrayData
+from ..arrays import DynArray, ArrayData
 from ..buffers import Buffer, Bitmap
 from ..builders import (
     BinaryLikeBuilder,
@@ -26,15 +27,24 @@ from ..builders import (
 )
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
-from ..scalars import AnyScalar
+from ..scalars import DynScalar
 from .. import dtypes as dt
+from ..dtypes import (
+    BinaryLikeType,
+    DataType,
+    DecimalType,
+    NumericType,
+    PrimitiveType,
+    StringLikeType,
+    TemporalType,
+)
 
 from .utils import CompressionLibs
 from .codecs import Encoding, Rle, Plain, Dictionary, Compression
 from ..utils import LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .source import ByteSource, MappedFile
-from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
+from .schema import SchemaMapping, DecodedLeaf, LeafColumn
 from .statistics import Statistics
 from .format import (
     FileMetaData,
@@ -105,6 +115,29 @@ struct Page[o: Origin[mut=False]](Movable):
 
     def all_present(self) -> Bool:
         return self.num_present == self.num_values
+
+    def scatter[
+        body: def(Bool, Bool, Int) raises capturing[_] -> None,
+    ](self, max_def: Int, mask: Optional[List[Bool]]) raises:
+        """Walk this page's `num_values` output slots — the flat skeleton every
+        `LeafBuilder` shares.
+
+        For each row `body(present, selected, vi)` fires with whether the slot
+        holds a present value (`present_at`), whether the selection mask keeps
+        it, and the running index into the page's decoded present values
+        (advanced on every present slot, regardless of the mask). Only the
+        per-slot placement differs across leaves, and that lives in `body`.
+
+        A free `_walk_slots(page, ...)` before this; walking a page's slots is
+        the page's own business, and it already needed nothing but `self`.
+        """
+        var vi = 0
+        for row in range(self.num_values):
+            var present_here = self.present_at(row, max_def)
+            var selected = not mask or mask.value()[row]
+            body(present_here, selected, vi)
+            if present_here:
+                vi += 1
 
     def present_at(self, row: Int, max_def: Int) -> Bool:
         """Whether output `row` holds a present value: the whole page is present,
@@ -380,33 +413,14 @@ struct PageReader[o: Origin[mut=False]](Movable):
 # ---------------------------------------------------------------------------
 
 
-def _walk_slots[
-    body: def(Bool, Bool, Int) raises capturing[_] -> None,
-](page: Page, max_def: Int, mask: Optional[List[Bool]]) raises:
-    """Walk a data page's `num_values` output slots — the flat scatter skeleton
-    every `LeafBuilder` shares. For each row `body(present, selected, vi)` fires
-    with whether the slot holds a present value (`page.present_at`), whether the
-    selection mask keeps it, and the running index into the page's decoded
-    present values (advanced on every present slot, regardless of the mask). Only
-    the per-slot placement differs across leaves; it lives entirely in `body`.
-    """
-    var vi = 0
-    for row in range(page.num_values):
-        var present_here = page.present_at(row, max_def)
-        var selected = not mask or mask.value()[row]
-        body(present_here, selected, vi)
-        if present_here:
-            vi += 1
-
-
 def _finish_primitive(
     var values: Buffer[mut=True],
     var bitmap: Bitmap[mut=True],
     wpos: Int,
     null_count: Int,
-    var dtype: dt.AnyDataType,
-) raises -> AnyArray:
-    """Freeze a fixed-width builder's storage into an `AnyArray` — the shared
+    var dtype: dt.DynType,
+) raises -> DynArray:
+    """Freeze a fixed-width builder's storage into an `DynArray` — the shared
     tail of every primitive-backed leaf (numeric, temporal, decimal): one values
     buffer, a validity bitmap only when a null occurred, length `wpos`."""
     var buffers = List[Buffer[mut=False]]()
@@ -414,7 +428,7 @@ def _finish_primitive(
     var bm: Optional[Bitmap[mut=False]] = None
     if null_count > 0:
         bm = bitmap^.to_immutable(length=wpos)
-    return AnyArray.from_data(
+    return DynArray.from_data(
         ArrayData(
             dtype=dtype^,
             length=wpos,
@@ -444,13 +458,6 @@ def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
     )
 
 
-def _retag(var arr: AnyArray, var dtype: dt.AnyDataType) raises -> AnyArray:
-    """Reinterpret `arr`'s buffers under a logical `dtype` of the same layout.
-    Used to give a leveled temporal column its Arrow type (the growing builder
-    produces the int32/int64 storage type)."""
-    return arr.view(dtype^)
-
-
 trait LeafBuilder(ImplicitlyDeletable, Movable):
     """Accumulates the values of a column chunk, page by page, into an array."""
 
@@ -463,7 +470,7 @@ trait LeafBuilder(ImplicitlyDeletable, Movable):
         """
         ...
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         ...
 
 
@@ -480,7 +487,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
 
     comptime SAME = Self.store_dt == Self.phys_dt
 
-    var dtype: dt.AnyDataType
+    var dtype: dt.DynType
     var max_def: Int
     var num_rows: Int
     var values: Buffer[mut=True]
@@ -546,7 +553,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                     self.null_count += 1
                 self.wpos += 1
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
@@ -602,7 +609,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         )
         self._scatter(page, present.unsafe_ptr(), mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         return _finish_primitive(
             self.values^,
             self.bitmap^,
@@ -612,7 +619,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         )
 
 
-struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
+struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
     """Variable-length byte values (string/binary, 32- or 64-bit offsets). Bytes
     are appended verbatim, so the same builder serves UTF-8 and dt.binary."""
 
@@ -650,7 +657,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def _place_plain(
         mut self,
@@ -675,7 +682,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
             elif selected:
                 self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -716,9 +723,9 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
             )
             self._scatter_values(page, values, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         var b = self.builder^
-        var out: AnyArray = b.finish()
+        var out: DynArray = b.finish()
         return out^
 
 
@@ -762,7 +769,7 @@ struct _FixedWidthAcc[native: DType](Movable):
         self.null_count += 1
         self.wpos += 1
 
-    def finish(deinit self, var dtype: dt.AnyDataType) raises -> AnyArray:
+    def finish(deinit self, var dtype: dt.DynType) raises -> DynArray:
         return _finish_primitive(
             self.values^, self.bitmap^, self.wpos, self.null_count, dtype^
         )
@@ -778,7 +785,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
 
     comptime FULL = size_of[Scalar[Self.native]]()
 
-    var dtype: dt.AnyDataType
+    var dtype: dt.DynType
     var max_def: Int
     var width: Int
     var acc: _FixedWidthAcc[Self.native]
@@ -828,7 +835,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
                 else:
                     self.acc.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -841,7 +848,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         self._place(page, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         return self.acc^.finish(self.dtype^)
 
 
@@ -851,7 +858,7 @@ struct Int96LeafBuilder(LeafBuilder):
     decoding each fixed-width value with `_int96_nanos` instead of big-endian.
     """
 
-    var dtype: dt.AnyDataType  # timestamp(ns)
+    var dtype: dt.DynType  # timestamp(ns)
     var max_def: Int
     var acc: _FixedWidthAcc[DType.int64]
     var dict: List[Int64]
@@ -882,7 +889,7 @@ struct Int96LeafBuilder(LeafBuilder):
                 else:
                     self.acc.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -895,7 +902,7 @@ struct Int96LeafBuilder(LeafBuilder):
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         self._place(page, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         return self.acc^.finish(self.dtype^)
 
 
@@ -948,7 +955,7 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -960,9 +967,9 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         self._place(page, mask.copy())
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         var b = self.builder^
-        var out: AnyArray = b.finish()
+        var out: DynArray = b.finish()
         return out^
 
 
@@ -996,7 +1003,7 @@ struct BoolLeafBuilder(LeafBuilder):
             elif selected:
                 self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def _place_values(
         mut self,
@@ -1015,7 +1022,7 @@ struct BoolLeafBuilder(LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -1038,10 +1045,167 @@ struct BoolLeafBuilder(LeafBuilder):
                 mask.copy(),
             )
 
-    def finish(deinit self) raises -> AnyArray:
+    def finish(deinit self) raises -> DynArray:
         var b = self.builder^
-        var out: AnyArray = b.finish()
+        var out: DynArray = b.finish()
         return out^
+
+
+# ---------------------------------------------------------------------------
+# LeafSet — which leaf kinds a decode path is compiled for
+# ---------------------------------------------------------------------------
+
+
+struct LeafSet(ImplicitlyCopyable, Movable):
+    """The set of Arrow leaf kinds a `ColumnReader` is compiled to decode.
+
+    `ColumnReader._dispatch` is a ladder of ~20 arms, each instantiating its own
+    `LeafBuilder` and decode loop, and it is instantiated twice (flat and
+    leveled). Because the leaf's dtype is a *runtime* value, every arm is
+    reachable — so a scan that only ever reads `int64` and `string` still links
+    the builders for bool, binary, every other integer width, both float widths,
+    the temporal types and all four decimals. Measured on the `query_scan` gate:
+    24 `PrimitiveLeafBuilder` instantiations for a two-type schema, and a
+    Parquet scan roughly doubling a minimal AOT binary (Q4.6).
+
+    An AOT query knows its schema when it is compiled. `LeafSet` is how it says
+    so: each bit enables one arm, and `comptime if` drops the rest before they
+    are ever instantiated. `all()` is the default and compiles the full ladder,
+    so the dynamic lane is unchanged.
+
+    A file containing a leaf the set excludes raises at decode time rather than
+    decoding it wrongly — the error names the missing kind and the parameter.
+    """
+
+    var mask: UInt32
+
+    def __init__(out self, mask: UInt32):
+        self.mask = mask
+
+    def __or__(self, other: Self) -> Self:
+        return Self(self.mask | other.mask)
+
+    def has(self, other: Self) -> Bool:
+        """Whether every kind in `other` is enabled here."""
+        return (self.mask & other.mask) == other.mask
+
+    @staticmethod
+    def all() -> Self:
+        return Self(0xFFFFFFFF)
+
+
+# One bit per `_dispatch` arm. Narrow ints share INT32 storage in Parquet but
+# each is its own arm (and its own `PrimitiveLeafBuilder`), so each gets a bit.
+comptime LEAF_INT8 = LeafSet(1 << 0)
+comptime LEAF_INT16 = LeafSet(1 << 1)
+comptime LEAF_INT32 = LeafSet(1 << 2)
+comptime LEAF_INT64 = LeafSet(1 << 3)
+comptime LEAF_UINT8 = LeafSet(1 << 4)
+comptime LEAF_UINT16 = LeafSet(1 << 5)
+comptime LEAF_UINT32 = LeafSet(1 << 6)
+comptime LEAF_UINT64 = LeafSet(1 << 7)
+comptime LEAF_FLOAT16 = LeafSet(1 << 8)
+comptime LEAF_FLOAT32 = LeafSet(1 << 9)
+comptime LEAF_FLOAT64 = LeafSet(1 << 10)
+comptime LEAF_BOOL = LeafSet(1 << 11)
+comptime LEAF_STRING = LeafSet(1 << 12)
+comptime LEAF_LARGE_STRING = LeafSet(1 << 13)
+comptime LEAF_BINARY = LeafSet(1 << 14)
+comptime LEAF_LARGE_BINARY = LeafSet(1 << 15)
+comptime LEAF_TEMPORAL32 = LeafSet(1 << 16)
+comptime LEAF_TEMPORAL64 = LeafSet(1 << 17)
+comptime LEAF_DECIMAL32 = LeafSet(1 << 18)
+comptime LEAF_DECIMAL64 = LeafSet(1 << 19)
+comptime LEAF_DECIMAL128 = LeafSet(1 << 20)
+comptime LEAF_DECIMAL256 = LeafSet(1 << 21)
+comptime LEAF_FIXED_SIZE_BINARY = LeafSet(1 << 22)
+comptime LEAF_INT96 = LeafSet(1 << 23)
+
+
+def leaf_of[T: DataType]() -> LeafSet:
+    """The bit for `T` — say which **types** a read will see, not which bits.
+
+    `LeafSet.all()` is the runtime-dispatching default; this is how a caller
+    that knows its schema at compile time narrows it without hand-picking
+    constants:
+
+        read_table[leaf_of[Int64Type]() | leaf_of[StringType]()](path)
+
+    The dtype is already a comptime parameter throughout the fused lane —
+    `col("a", int64)` is a `NumericColumn[Int64Type]` — so this is the move the
+    kernels already make: resolve the type at elaboration and let the branches
+    that cannot be reached fold away.
+
+    One generic, not one overload per family. `downcast[T, Trait]` is a comptime
+    **type alias**, so `downcast[T, Trait].native` reads the member with no
+    bound on `Trait` at all; only `downcast[T, Trait]()`, which *constructs* a
+    value, needs `Defaultable`. `TemporalType`/`DecimalType` are not
+    `Defaultable`, which is why an earlier version of this split into four
+    overloads — that reason was wrong.
+
+    Order matters: temporal and decimal are `PrimitiveType` but not
+    `NumericType`, and `StringLikeType` refines `BinaryLikeType`, so the
+    narrower family has to be tested first in each pair.
+    """
+    comptime if conforms_to(T, TemporalType):
+        comptime if downcast[T, TemporalType].native == DType.int32:
+            return LEAF_TEMPORAL32
+        else:
+            return LEAF_TEMPORAL64
+    elif conforms_to(T, DecimalType):
+        comptime native = downcast[T, DecimalType].native
+        comptime if native == DType.int32:
+            return LEAF_DECIMAL32
+        elif native == DType.int64:
+            return LEAF_DECIMAL64
+        elif native == DType.int128:
+            return LEAF_DECIMAL128
+        else:
+            return LEAF_DECIMAL256
+    elif conforms_to(T, StringLikeType):
+        comptime if downcast[T, StringLikeType].offset == DType.int32:
+            return LEAF_STRING
+        else:
+            return LEAF_LARGE_STRING
+    elif conforms_to(T, BinaryLikeType):
+        comptime if downcast[T, BinaryLikeType].offset == DType.int32:
+            return LEAF_BINARY
+        else:
+            return LEAF_LARGE_BINARY
+    elif conforms_to(T, NumericType):
+        comptime native = downcast[T, NumericType].native
+        comptime if native == DType.bool:
+            return LEAF_BOOL
+        elif native == DType.int8:
+            return LEAF_INT8
+        elif native == DType.int16:
+            return LEAF_INT16
+        elif native == DType.int32:
+            return LEAF_INT32
+        elif native == DType.int64:
+            return LEAF_INT64
+        elif native == DType.uint8:
+            return LEAF_UINT8
+        elif native == DType.uint16:
+            return LEAF_UINT16
+        elif native == DType.uint32:
+            return LEAF_UINT32
+        elif native == DType.uint64:
+            return LEAF_UINT64
+        elif native == DType.float16:
+            return LEAF_FLOAT16
+        elif native == DType.float32:
+            return LEAF_FLOAT32
+        else:
+            return LEAF_FLOAT64
+    elif conforms_to(T, PrimitiveType):
+        # bool and fixed-size binary: primitives outside the numeric family
+        comptime if downcast[T, PrimitiveType].native == DType.bool:
+            return LEAF_BOOL
+        else:
+            return LEAF_FIXED_SIZE_BINARY
+    else:
+        return LEAF_FIXED_SIZE_BINARY
 
 
 # ---------------------------------------------------------------------------
@@ -1049,7 +1213,9 @@ struct BoolLeafBuilder(LeafBuilder):
 # ---------------------------------------------------------------------------
 
 
-struct ColumnReader[o: Origin[mut=False]](Movable):
+struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
+    Movable
+):
     """Decode one column chunk. `decode` picks the path from the leaf's max
     repetition: a flat leaf (`max_rep == 0`) fills a fixed-size `LeafBuilder`
     with the PLAIN-unsafe_memcpy / fused-gather fast paths; a repeated (list-element)
@@ -1137,11 +1303,11 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
 
     def _build[
         B: LeafBuilder
-    ](mut self, var builder: B, mut codecs: CompressionLibs) raises -> AnyArray:
+    ](mut self, var builder: B, mut codecs: CompressionLibs) raises -> DynArray:
         self._run(builder, codecs)
         return builder^.finish()
 
-    def _flat_leaf(mut self, var arr: AnyArray) raises -> DecodedLeaf:
+    def _flat_leaf(mut self, var arr: DynArray) raises -> DecodedLeaf:
         """Wrap a flat-path array with the carry-def levels accumulated during
         the build (empty unless the leaf is under a nullable struct)."""
         var defs = self.def_out^
@@ -1196,13 +1362,13 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                     place_null()
 
     def _drive_primitive[
-        T: dt.NumericType, phys: DType
+        T: NumericType, phys: DType
     ](
         mut self,
         mut codecs: CompressionLibs,
         floor: Int,
         max_def: Int,
-        var retag_to: Optional[dt.AnyDataType] = None,
+        var retag_to: Optional[dt.DynType] = None,
     ) raises -> DecodedLeaf:
         """Leveled primitive decode. `retag_to`, when set, reinterprets the
         int32/int64 storage array under a temporal Arrow type (the leaf's dtype).
@@ -1237,13 +1403,13 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         self._drive_leveled[
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
-        var arr: AnyArray = builder.finish()
+        var arr: DynArray = builder.finish()
         if retag_to:
-            arr = _retag(arr^, retag_to.take())
+            arr = arr^.view(retag_to.take())
         return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_bytes[
-        BT: dt.BinaryLikeType
+        BT: BinaryLikeType
     ](
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
@@ -1316,7 +1482,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_decimal[
-        T: dt.PrimitiveType
+        T: PrimitiveType
     ](
         mut self,
         dtype_inst: T,
@@ -1445,7 +1611,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     # -----------------------------------------------------------------------
 
     def _emit_numeric[
-        T: dt.NumericType, phys: DType, leveled: Bool
+        T: NumericType, phys: DType, leveled: Bool
     ](
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
@@ -1461,7 +1627,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             return self._flat_leaf(arr^)
 
     def _emit_bytes[
-        BT: dt.BinaryLikeType, leveled: Bool
+        BT: BinaryLikeType, leveled: Bool
     ](
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
@@ -1487,7 +1653,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             return self._flat_leaf(arr^)
 
     def _emit_temporal[
-        T: dt.NumericType, phys: DType, leveled: Bool
+        T: NumericType, phys: DType, leveled: Bool
     ](
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
@@ -1509,7 +1675,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             return self._flat_leaf(arr^)
 
     def _emit_decimal[
-        T: dt.PrimitiveType, leveled: Bool
+        T: PrimitiveType, leveled: Bool
     ](
         mut self,
         dtype_inst: T,
@@ -1581,9 +1747,9 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         self._drive_leveled[
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
-        var arr: AnyArray = builder.finish()
+        var arr: DynArray = builder.finish()
         return DecodedLeaf(
-            _retag(arr^, self.pages.leaf.dtype.copy()), rep_out^, def_out^
+            arr^.view(self.pages.leaf.dtype.copy()), rep_out^, def_out^
         )
 
     def _emit_int96[
@@ -1602,6 +1768,17 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     def _dispatch[
         leveled: Bool
     ](mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
+        """Resolve the leaf's runtime dtype to its decode arm.
+
+        Each arm sits behind `comptime if Self.leaves.has(...)`, so a reader
+        compiled for a narrow `LeafSet` never instantiates the builders for the
+        kinds it excludes — that gating is the whole point of the parameter
+        (Q4.6). With the default `LeafSet.all()` every arm compiles and this is
+        the ladder it has always been.
+
+        Written as guarded blocks with early returns rather than one `elif`
+        chain because an `elif` clause cannot be `comptime if`-gated.
+        """
         ref leaf = self.pages.leaf
         ref vt = leaf.dtype
         # leveled: a value slot exists at/above the leaf's repetition floor (the
@@ -1609,101 +1786,155 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         # ignores these (the emit helper's flat branch drops them).
         var f = leaf.slot_def
         var md = leaf.max_def
-        # INT96 is a 12-byte timestamp; its Arrow dtype is timestamp(ns), so it is
-        # distinguished from an INT64 timestamp by the physical type.
-        if leaf.physical == PhysicalType.INT96:
-            return self._emit_int96[leveled](codecs, f, md)
-        elif vt == dt.int32:
-            return self._emit_numeric[dt.Int32Type, DType.int32, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.int64:
-            return self._emit_numeric[dt.Int64Type, DType.int64, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.uint32:
-            return self._emit_numeric[dt.UInt32Type, DType.uint32, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.uint64:
-            return self._emit_numeric[dt.UInt64Type, DType.uint64, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.float32:
-            return self._emit_numeric[dt.Float32Type, DType.float32, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.float64:
-            return self._emit_numeric[dt.Float64Type, DType.float64, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.float16:
-            # FLOAT16 is physically FIXED_LEN_BYTE_ARRAY(2), but the 2 bytes are
-            # exactly the little-endian half-float — the primitive path reads it.
-            return self._emit_numeric[dt.Float16Type, DType.float16, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.int8:
-            return self._emit_numeric[dt.Int8Type, DType.int32, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.int16:
-            return self._emit_numeric[dt.Int16Type, DType.int32, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.uint8:
-            return self._emit_numeric[dt.UInt8Type, DType.int32, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.uint16:
-            return self._emit_numeric[dt.UInt16Type, DType.int32, leveled](
-                codecs, f, md
-            )
-        elif vt == dt.bool_:
-            return self._emit_bool[leveled](codecs, f, md)
-        elif vt.is_string():
-            return self._emit_bytes[dt.StringType, leveled](codecs, f, md)
-        elif vt.is_large_string():
-            return self._emit_bytes[dt.LargeStringType, leveled](codecs, f, md)
-        elif vt.is_binary():
-            return self._emit_bytes[dt.BinaryType, leveled](codecs, f, md)
-        elif vt.is_large_binary():
-            return self._emit_bytes[dt.LargeBinaryType, leveled](codecs, f, md)
 
-        # temporal / decimal / fixed-size-binary — physically int32/int64 or
-        # FIXED_LEN_BYTE_ARRAY. These work on both the flat and leveled (list/map
-        # element) paths; the leveled drives grow a builder and, for temporal and
-        # decimal, retag the storage array to the leaf's Arrow type.
-        elif vt.is_date32() or vt.is_time32():
-            return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
-                codecs, f, md
-            )
-        elif vt.is_timestamp() or vt.is_time64():
-            return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
-                codecs, f, md
-            )
-        elif vt.is_decimal32():
-            # DECIMAL backed by INT32 — read as int32 storage, tagged decimal32.
-            return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
-                codecs, f, md
-            )
-        elif vt.is_decimal64():
-            # DECIMAL backed by INT64 — read as int64 storage, tagged decimal64.
-            return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
-                codecs, f, md
-            )
-        elif vt.is_decimal128():
-            return self._emit_decimal[dt.Decimal128Type, leveled](
-                vt.as_decimal128().copy(), codecs, f, md
-            )
-        elif vt.is_decimal256():
-            return self._emit_decimal[dt.Decimal256Type, leveled](
-                vt.as_decimal256().copy(), codecs, f, md
-            )
-        elif vt.is_fixed_size_binary():
-            return self._emit_fsb[leveled](codecs, f, md)
-        else:
-            raise Error("parquet: unsupported column type " + String(vt))
+        # INT96 is a 12-byte timestamp whose Arrow dtype is timestamp(ns), so
+        # only the *physical* type distinguishes it from an INT64 timestamp.
+        # This test is unconditional on purpose: gating it would let an INT96
+        # column fall through to the temporal arm and be decoded as INT64.
+        if leaf.physical == PhysicalType.INT96:
+            comptime if Self.leaves.has(LEAF_INT96):
+                return self._emit_int96[leveled](codecs, f, md)
+            else:
+                raise Error(
+                    "parquet: this reader was not compiled to decode INT96 --"
+                    " add LEAF_INT96 to its LeafSet"
+                )
+
+        comptime if Self.leaves.has(LEAF_INT32):
+            if vt == dt.int32:
+                return self._emit_numeric[dt.Int32Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_INT64):
+            if vt == dt.int64:
+                return self._emit_numeric[dt.Int64Type, DType.int64, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT32):
+            if vt == dt.uint32:
+                return self._emit_numeric[dt.UInt32Type, DType.uint32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT64):
+            if vt == dt.uint64:
+                return self._emit_numeric[dt.UInt64Type, DType.uint64, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_FLOAT32):
+            if vt == dt.float32:
+                return self._emit_numeric[
+                    dt.Float32Type, DType.float32, leveled
+                ](codecs, f, md)
+
+        comptime if Self.leaves.has(LEAF_FLOAT64):
+            if vt == dt.float64:
+                return self._emit_numeric[
+                    dt.Float64Type, DType.float64, leveled
+                ](codecs, f, md)
+
+        comptime if Self.leaves.has(LEAF_FLOAT16):
+            if vt == dt.float16:
+                return self._emit_numeric[
+                    dt.Float16Type, DType.float16, leveled
+                ](codecs, f, md)
+
+        comptime if Self.leaves.has(LEAF_INT8):
+            if vt == dt.int8:
+                return self._emit_numeric[dt.Int8Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_INT16):
+            if vt == dt.int16:
+                return self._emit_numeric[dt.Int16Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT8):
+            if vt == dt.uint8:
+                return self._emit_numeric[dt.UInt8Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_UINT16):
+            if vt == dt.uint16:
+                return self._emit_numeric[dt.UInt16Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_BOOL):
+            if vt == dt.bool_:
+                return self._emit_bool[leveled](codecs, f, md)
+
+        comptime if Self.leaves.has(LEAF_STRING):
+            if vt.is_string():
+                return self._emit_bytes[dt.StringType, leveled](codecs, f, md)
+
+        comptime if Self.leaves.has(LEAF_LARGE_STRING):
+            if vt.is_large_string():
+                return self._emit_bytes[dt.LargeStringType, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_BINARY):
+            if vt.is_binary():
+                return self._emit_bytes[dt.BinaryType, leveled](codecs, f, md)
+
+        comptime if Self.leaves.has(LEAF_LARGE_BINARY):
+            if vt.is_large_binary():
+                return self._emit_bytes[dt.LargeBinaryType, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_TEMPORAL32):
+            if vt.is_date32() or vt.is_time32():
+                return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_TEMPORAL64):
+            if vt.is_timestamp() or vt.is_time64():
+                return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL32):
+            if vt.is_decimal32():
+                return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL64):
+            if vt.is_decimal64():
+                return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
+                    codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL128):
+            if vt.is_decimal128():
+                return self._emit_decimal[dt.Decimal128Type, leveled](
+                    vt.as_decimal128().copy(), codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_DECIMAL256):
+            if vt.is_decimal256():
+                return self._emit_decimal[dt.Decimal256Type, leveled](
+                    vt.as_decimal256().copy(), codecs, f, md
+                )
+
+        comptime if Self.leaves.has(LEAF_FIXED_SIZE_BINARY):
+            if vt.is_fixed_size_binary():
+                return self._emit_fsb[leveled](codecs, f, md)
+
+        raise Error(
+            "parquet: this reader was not compiled to decode ",
+            String(vt),
+            " -- widen the LeafSet parameter, or use the default LeafSet.all()",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1716,7 +1947,9 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
 comptime _PARALLEL_MIN_ROWS = 4096
 
 
-struct ParquetFile[S: ByteSource = MappedFile](Movable):
+struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
+    Movable
+):
     """A Parquet file opened for reading — mirrors PyArrow's `ParquetFile`.
 
     Owns a `ByteSource` (the file's bytes), the footer metadata, and the
@@ -1727,7 +1960,12 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
 
     The source defaults to a local `MappedFile` — `ParquetFile(path)` opens a
     memory map — but any `ByteSource` (streaming, remote object store, …) can be
-    passed instead; the whole decode path reads only through `S.read_at`."""
+    passed instead; the whole decode path reads only through `S.read_at`.
+
+    `leaves` narrows which leaf kinds the decoder is compiled for. The default
+    compiles all of them and is what the dynamic lane uses; an AOT query that
+    knows its schema can pass a narrower set and not link the builders for
+    types it will never see (see `LeafSet`)."""
 
     var _source: Self.S
     var _meta: FileMetaData
@@ -1735,7 +1973,9 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
     var _codecs: ArcPointer[List[CompressionLibs]]
     """Reusable per-worker codec handles — see the pool comment in `read`."""
 
-    def __init__(out self: ParquetFile[MappedFile], path: String) raises:
+    def __init__(
+        out self: ParquetFile[MappedFile, Self.leaves], path: String
+    ) raises:
         # Convenience: open the local file as a memory map (S == MappedFile).
         self._source = MappedFile(path)
         self._meta = FileMetaData.read_footer(
@@ -1890,7 +2130,7 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
                 # leaf's max repetition, so one call serves every column shape.
                 # Each worker fetches only its own chunk's bytes.
                 var start, length = rg.columns[orig].meta_data.byte_range()
-                var reader = ColumnReader(
+                var reader = ColumnReader[leaves=Self.leaves](
                     self._read_at(start, length),
                     rg.columns[orig].meta_data.copy(),
                     self._mapping.leaves[orig].copy(),
@@ -1908,7 +2148,7 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
             var decoded = List[DecodedLeaf]()
             for ci in range(num_leaves):
                 decoded.append(grid[i * num_leaves + ci].take())
-            var cols = List[AnyArray]()
+            var cols = List[DynArray]()
             for ref node in plan.nodes:
                 cols.append(node.assemble(decoded))
             batches.append(
@@ -2013,8 +2253,8 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
                             oi.page_locations[p + 1].first_row_index if p + 1
                             < np else rg.num_rows
                         )
-                        var mn: Optional[AnyScalar] = None
-                        var mx: Optional[AnyScalar] = None
+                        var mn: Optional[DynScalar] = None
+                        var mx: Optional[DynScalar] = None
                         # an all-null page (or a missing bound) prunes nothing
                         if not (p < len(cix.null_pages) and cix.null_pages[p]):
                             if p < len(cix.min_values):
@@ -2027,15 +2267,22 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         return out^
 
 
-def read_table(
+def read_table[
+    leaves: LeafSet = LeafSet.all()
+](
     path: String,
     columns: Optional[List[String]] = None,
     row_groups: Optional[List[Int]] = None,
     row_selections: Optional[List[RowSelection]] = None,
 ) raises -> Table:
     """Read a Parquet file into a Marrow `Table` — a convenience wrapper over
-    `ParquetFile(path).read(...)` (mirrors `pyarrow.parquet.read_table`)."""
-    return ParquetFile(path).read(columns, row_groups, row_selections)
+    `ParquetFile(path).read(...)` (mirrors `pyarrow.parquet.read_table`).
+
+    `leaves` narrows which leaf kinds the decoder is compiled for; the default
+    compiles all of them. An AOT program that knows its schema can cut the
+    decode ladder it links — see `LeafSet`."""
+    var pf = ParquetFile[MappedFile, leaves](path)
+    return pf.read(columns, row_groups, row_selections)
 
 
 # ---------------------------------------------------------------------------
@@ -2163,14 +2410,14 @@ struct PageBounds(Copyable, Movable):
     (each `None` when the page is all-null or carried no bound)."""
 
     var num_rows: Int
-    var min: Optional[AnyScalar]
-    var max: Optional[AnyScalar]
+    var min: Optional[DynScalar]
+    var max: Optional[DynScalar]
 
     def __init__(
         out self,
         num_rows: Int,
-        var min: Optional[AnyScalar],
-        var max: Optional[AnyScalar],
+        var min: Optional[DynScalar],
+        var max: Optional[DynScalar],
     ):
         self.num_rows = num_rows
         self.min = min^
@@ -2183,8 +2430,8 @@ struct ColumnStatistics(Copyable, Movable):
     usable bound, so absence is in the type rather than a separate flag)."""
 
     var null_count: Int
-    var min: Optional[AnyScalar]
-    var max: Optional[AnyScalar]
+    var min: Optional[DynScalar]
+    var max: Optional[DynScalar]
 
     def __init__(out self):
         self.null_count = -1
@@ -2192,7 +2439,7 @@ struct ColumnStatistics(Copyable, Movable):
         self.max = None
 
     @staticmethod
-    def from_metadata(dtype: dt.AnyDataType, cm: ColumnMetaData) raises -> Self:
+    def from_metadata(dtype: dt.DynType, cm: ColumnMetaData) raises -> Self:
         """Decode a column chunk's `ColumnMetaData` statistics: `null_count` plus
         the min/max bounds as typed scalars (kept only when both decode)."""
         var cs = Self()

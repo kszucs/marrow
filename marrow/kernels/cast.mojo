@@ -26,17 +26,16 @@ from std.collections.string._utf8 import _is_valid_utf8
 from std.sys import bit_width_of
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     ArrayData,
     BinaryLikeArray,
     BoolArray,
-    DictionaryArray,
     FixedSizeBinaryArray,
     PrimitiveArray,
 )
 from ..buffers import Buffer, Bitmap
 from ..builders import (
-    AnyBuilder,
+    DynBuilder,
     BinaryLikeBuilder,
     BoolBuilder,
     FixedSizeBinaryBuilder,
@@ -44,15 +43,16 @@ from ..builders import (
 )
 from ..views import apply, apply_checked
 from ..dtypes import (
-    AnyDataType,
+    DynType,
     BinaryLikeType,
     DType,
-    FixedSizeBinaryType,
     NumericType,
+    DecimalType,
     StringLikeType,
     TimeUnit,
     int32,
 )
+from .core import Kernel
 from .execution import ExecutionContext
 from .filter import take
 from ..utils import GPU_ENABLED
@@ -63,7 +63,7 @@ from ..utils import GPU_ENABLED
 # ---------------------------------------------------------------------------
 
 
-struct NumericCast:
+struct NumericCast(Kernel):
     """Numeric ↔ numeric cast: one ``pop.cast`` per SIMD lane."""
 
     comptime name = "numeric_cast"
@@ -158,20 +158,20 @@ struct NumericCast:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, to: AnyDataType, safe: Bool, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+    ) raises -> DynArray:
         """Runtime numeric → numeric: resolve source and target over the numeric
         dtypes, branching ``safe`` into the checked / unchecked ``apply``."""
 
         @parameter
-        def on_source[From: NumericType](s: From) raises -> AnyArray:
+        def on_source[From: NumericType](s: From) raises -> DynArray:
             var typed = array.as_primitive[From]().copy()
 
             @parameter
-            def on_target[To: NumericType](d: To) raises -> AnyArray:
+            def on_target[To: NumericType](d: To) raises -> DynArray:
                 if safe:
-                    return Self.apply[From, To, True](typed, ctx).to_any()
-                return Self.apply[From, To, False](typed, ctx).to_any()
+                    return Self.apply[From, To, True](typed, ctx).to_dyn()
+                return Self.apply[From, To, False](typed, ctx).to_dyn()
 
             return to.dispatch_numeric[on_target]()
 
@@ -183,7 +183,7 @@ struct NumericCast:
 # ---------------------------------------------------------------------------
 
 
-struct NumToBool:
+struct NumToBool(Kernel):
     """Numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
 
     comptime name = "num_to_bool"
@@ -194,12 +194,12 @@ struct NumToBool:
         return a.ne(0)
 
     @staticmethod
-    def dispatch(array: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
+    def dispatch(array: DynArray, ctx: ExecutionContext) raises -> DynArray:
         """Runtime numeric → bool over the numeric source dtypes."""
 
         @parameter
-        def from_num[From: NumericType](s: From) raises -> AnyArray:
-            return Self.apply(array.as_primitive[From](), ctx).to_any()
+        def from_num[From: NumericType](s: From) raises -> DynArray:
+            return Self.apply(array.as_primitive[From](), ctx).to_dyn()
 
         return array.dtype().dispatch_numeric[from_num]()
 
@@ -227,7 +227,7 @@ struct NumToBool:
         )
 
 
-struct BoolToNum:
+struct BoolToNum(Kernel):
     """Bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
 
     comptime name = "bool_to_num"
@@ -239,14 +239,14 @@ struct BoolToNum:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, to: DynType, ctx: ExecutionContext
+    ) raises -> DynArray:
         """Runtime bool → numeric over the numeric target dtypes."""
         var b = array.as_bool().copy()
 
         @parameter
-        def to_num[To: NumericType](d: To) raises -> AnyArray:
-            return Self.apply[To](b, ctx).to_any()
+        def to_num[To: NumericType](d: To) raises -> DynArray:
+            return Self.apply[To](b, ctx).to_dyn()
 
         return to.dispatch_numeric[to_num]()
 
@@ -281,7 +281,7 @@ struct BoolToNum:
 # ---------------------------------------------------------------------------
 
 
-struct TemporalCast:
+struct TemporalCast(Kernel):
     """Cast temporal ↔ integer / temporal ↔ temporal. Same physical width and
     resolution → a zero-copy relabel (``_reinterpret``); a differing unit → scale
     the underlying integers by the unit ratio (``_scale``)."""
@@ -290,8 +290,8 @@ struct TemporalCast:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, to: DynType, ctx: ExecutionContext
+    ) raises -> DynArray:
         var src = array.dtype()
         var data = array.to_data()
         var same_width = src.byte_width() == to.byte_width()
@@ -309,6 +309,17 @@ struct TemporalCast:
         # otherwise scale the underlying integers by the unit ratio.
         var up = ns_from > ns_to
         var factor = (ns_from // ns_to) if up else (ns_to // ns_from)
+        # Every temporal type Arrow defines is int32- or int64-backed, so this
+        # is unreachable today. Checked rather than assumed because the branches
+        # below treat "not 4" as "8": a wider temporal type would be scaled
+        # through the wrong lane width with no error anywhere.
+        var sw = src.byte_width()
+        var tw = to.byte_width()
+        if (sw != 4 and sw != 8) or (tw != 4 and tw != 8):
+            raise Error(
+                t"cast: cannot scale {src} ({sw}B) to {to} ({tw}B): ",
+                "temporal storage must be 4 or 8 bytes",
+            )
         if src.byte_width() == 4:
             if to.byte_width() == 4:
                 return Self._scale[DType.int32, DType.int32](
@@ -339,7 +350,7 @@ struct TemporalCast:
             return 1  # nanosecond
 
     @staticmethod
-    def ns_per_tick(dt: AnyDataType) raises -> Int64:
+    def ns_per_tick(dt: DynType) raises -> Int64:
         """Nanoseconds represented by one tick of a temporal dtype — drives the
         reinterpret-vs-scale choice and the scale factor."""
         if dt.is_date32():
@@ -358,9 +369,9 @@ struct TemporalCast:
 
     # TODO: remove this
     @staticmethod
-    def _reinterpret(data: ArrayData, to: AnyDataType) raises -> AnyArray:
+    def _reinterpret(data: ArrayData, to: DynType) raises -> DynArray:
         """Relabel an integer/temporal buffer as ``to`` without moving data."""
-        return AnyArray.from_data(
+        return DynArray.from_data(
             ArrayData(
                 dtype=to.copy(),
                 length=data.length,
@@ -377,11 +388,11 @@ struct TemporalCast:
         SrcN: DType, DstN: DType
     ](
         data: ArrayData,
-        to: AnyDataType,
+        to: DynType,
         factor: Int64,
         up: Bool,
         ctx: ExecutionContext,
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Scale the underlying integers by ``factor`` (multiply if ``up``, else
         integer-divide), computing in int64 to avoid overflow, then narrow to
         ``DstN`` and relabel as ``to``."""
@@ -396,7 +407,7 @@ struct TemporalCast:
             return ((x * factor) if up else (x // factor)).cast[DstN]()
 
         apply[SrcN, DstN, scale](src, buf.view[DstN](0, length), ctx)
-        return AnyArray.from_data(
+        return DynArray.from_data(
             ArrayData(
                 dtype=to.copy(),
                 length=length,
@@ -414,7 +425,7 @@ struct TemporalCast:
 # ---------------------------------------------------------------------------
 
 
-struct StringToNum:
+struct StringToNum(Kernel):
     """Parse strings to a numeric type. ``safe`` is comptime: safe=True raises on
     an unparseable value, safe=False nulls it — the dead branch is elided."""
 
@@ -422,20 +433,20 @@ struct StringToNum:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, to: AnyDataType, safe: Bool, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+    ) raises -> DynArray:
         """Runtime string-like → numeric: resolve source string kind and numeric
         target, branching ``safe`` into the raising / nulling ``apply``."""
 
         @parameter
-        def on_str[From: StringLikeType](s: From) raises -> AnyArray:
+        def on_str[From: StringLikeType](s: From) raises -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
 
             @parameter
-            def to_num[To: NumericType](d: To) raises -> AnyArray:
+            def to_num[To: NumericType](d: To) raises -> DynArray:
                 if safe:
-                    return Self.apply[From, To, True](a).to_any()
-                return Self.apply[From, To, False](a).to_any()
+                    return Self.apply[From, To, True](a).to_dyn()
+                return Self.apply[From, To, False](a).to_dyn()
 
             return to.dispatch_numeric[to_num]()
 
@@ -462,15 +473,13 @@ struct StringToNum:
                 b.append(Self._parse[To.native](s))
             except:
                 comptime if safe:
-                    raise Error(
-                        t"cast: cannot parse '{s}' as {AnyDataType(To())}"
-                    )
+                    raise Error(t"cast: cannot parse '{s}' as {DynType(To())}")
                 else:
                     b.append_null()
         return b.finish()
 
 
-struct StringToBool:
+struct StringToBool(Kernel):
     """Parse ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive) to bool.
     ``safe`` comptime: raise vs null on an unrecognized value."""
 
@@ -478,16 +487,16 @@ struct StringToBool:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, safe: Bool, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, safe: Bool, ctx: ExecutionContext
+    ) raises -> DynArray:
         """Runtime string-like → bool over the source string kinds."""
 
         @parameter
-        def on_str[From: StringLikeType](s: From) raises -> AnyArray:
+        def on_str[From: StringLikeType](s: From) raises -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
             if safe:
-                return Self.apply[From, True](a).to_any()
-            return Self.apply[From, False](a).to_any()
+                return Self.apply[From, True](a).to_dyn()
+            return Self.apply[From, False](a).to_dyn()
 
         return array.dtype().dispatch_stringlike[on_str]()
 
@@ -513,21 +522,21 @@ struct StringToBool:
         return b.finish()
 
 
-struct NumToString:
+struct NumToString(Kernel):
     """Format a numeric array to strings (per-element ``String(value)``)."""
 
     comptime name = "num_to_string"
 
     @staticmethod
-    def dispatch(array: AnyArray, to: AnyDataType) raises -> AnyArray:
+    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
         """Runtime numeric → string-like: resolve target string kind and numeric
         source."""
 
         @parameter
-        def on_target[To: StringLikeType](d: To) raises -> AnyArray:
+        def on_target[To: StringLikeType](d: To) raises -> DynArray:
             @parameter
-            def from_num[From: NumericType](s: From) raises -> AnyArray:
-                return Self.apply[From, To](array.as_primitive[From]()).to_any()
+            def from_num[From: NumericType](s: From) raises -> DynArray:
+                return Self.apply[From, To](array.as_primitive[From]()).to_dyn()
 
             return array.dtype().dispatch_numeric[from_num]()
 
@@ -546,19 +555,19 @@ struct NumToString:
         return b.finish()
 
 
-struct BoolToString:
+struct BoolToString(Kernel):
     """Format a bool array to ``"true"``/``"false"`` strings."""
 
     comptime name = "bool_to_string"
 
     @staticmethod
-    def dispatch(array: AnyArray, to: AnyDataType) raises -> AnyArray:
+    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
         """Runtime bool → string-like over the target string kinds."""
         var b = array.as_bool().copy()
 
         @parameter
-        def on_target[To: StringLikeType](d: To) raises -> AnyArray:
-            return Self.apply[To](b).to_any()
+        def on_target[To: StringLikeType](d: To) raises -> DynArray:
+            return Self.apply[To](b).to_dyn()
 
         return to.dispatch_stringlike[on_target]()
 
@@ -580,7 +589,7 @@ struct BoolToString:
 # ---------------------------------------------------------------------------
 
 
-struct BinaryLikeCast:
+struct BinaryLikeCast(Kernel):
     """Cast between the binary-like containers (binary, large_binary, utf8,
     large_utf8). Equal physical offset width → a zero-copy relabel that shares
     the offset and value buffers; differing width (32↔64-bit offsets) → a rebuild
@@ -590,21 +599,19 @@ struct BinaryLikeCast:
     comptime name = "binary_like_cast"
 
     @staticmethod
-    def dispatch(
-        array: AnyArray, to: AnyDataType, safe: Bool
-    ) raises -> AnyArray:
+    def dispatch(array: DynArray, to: DynType, safe: Bool) raises -> DynArray:
         """Runtime bytes ↔ bytes: resolve the source and target binary-like kinds,
         branching ``safe`` into the UTF-8-validating / trusting ``apply``."""
 
         @parameter
-        def on_src[From: BinaryLikeType](s: From) raises -> AnyArray:
+        def on_src[From: BinaryLikeType](s: From) raises -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
 
             @parameter
-            def on_to[To: BinaryLikeType](d: To) raises -> AnyArray:
+            def on_to[To: BinaryLikeType](d: To) raises -> DynArray:
                 if safe:
-                    return Self.apply[From, To, True](a).to_any()
-                return Self.apply[From, To, False](a).to_any()
+                    return Self.apply[From, To, True](a).to_dyn()
+                return Self.apply[From, To, False](a).to_dyn()
 
             return to.dispatch_binarylike[on_to]()
 
@@ -652,7 +659,7 @@ struct BinaryLikeCast:
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryCast:
+struct FixedSizeBinaryCast(Kernel):
     """Cast fixed-size-binary ↔ variable-length binary. ``to_binary`` derives the
     offset buffer from the fixed width and shares the data bytes; ``from_binary``
     packs each element into a fixed cell, raising when a length ≠ the width."""
@@ -660,24 +667,24 @@ struct FixedSizeBinaryCast:
     comptime name = "fixed_size_binary_cast"
 
     @staticmethod
-    def dispatch(array: AnyArray, to: AnyDataType) raises -> AnyArray:
+    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
         """Runtime fixed_size_binary ↔ binary, in whichever direction applies.
         """
         if array.dtype().is_fixed_size_binary():  # fsb → binary
             var fsb = array.as_fixed_size_binary().copy()
 
             @parameter
-            def to_bin[To: BinaryLikeType](d: To) raises -> AnyArray:
-                return Self.to_binary[To](fsb).to_any()
+            def to_bin[To: BinaryLikeType](d: To) raises -> DynArray:
+                return Self.to_binary[To](fsb).to_dyn()
 
             return to.dispatch_binarylike[to_bin]()
         else:  # binary → fsb
             var width = to.as_fixed_size_binary().byte_width
 
             @parameter
-            def from_bin[From: BinaryLikeType](s: From) raises -> AnyArray:
+            def from_bin[From: BinaryLikeType](s: From) raises -> DynArray:
                 var a = BinaryLikeArray[From](array.to_data())
-                return Self.from_binary[From](a, width).to_any()
+                return Self.from_binary[From](a, width).to_dyn()
 
             return array.dtype().dispatch_binarylike[from_bin]()
 
@@ -726,15 +733,15 @@ struct FixedSizeBinaryCast:
 # ---------------------------------------------------------------------------
 
 
-struct NullCast:
+struct NullCast(Kernel):
     """Cast a null array to any target type: an all-null array of that type."""
 
     comptime name = "null_cast"
 
     @staticmethod
-    def dispatch(array: AnyArray, to: AnyDataType) raises -> AnyArray:
+    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
         var n = len(array)
-        var b = AnyBuilder(to.copy(), capacity=n)
+        var b = DynBuilder(to.copy(), capacity=n)
         for _ in range(n):
             b.append_null()
         return b.finish()
@@ -745,7 +752,7 @@ struct NullCast:
 # ---------------------------------------------------------------------------
 
 
-struct DecimalCast:
+struct DecimalCast(Kernel):
     """Cast decimal ↔ decimal (rescale) and decimal ↔ numeric.
 
     Both sides resolve uniformly to a scalar native and a scale — a decimal to its
@@ -760,15 +767,15 @@ struct DecimalCast:
     comptime name = "decimal_cast"
 
     @staticmethod
-    def dispatch(array: AnyArray, to: AnyDataType) raises -> AnyArray:
+    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
         var data = array.to_data()
         var from_scale = Self._scale(array.dtype())
         var to_scale = Self._scale(to)
 
         @parameter
-        def on_from[FromN: DType]() raises -> AnyArray:
+        def on_from[FromN: DType]() raises -> DynArray:
             @parameter
-            def on_to[ToN: DType]() raises -> AnyArray:
+            def on_to[ToN: DType]() raises -> DynArray:
                 return Self._convert[FromN, ToN](data, from_scale, to_scale, to)
 
             return Self._on_native[on_to](to)
@@ -776,9 +783,18 @@ struct DecimalCast:
         return Self._on_native[on_from](array.dtype())
 
     @staticmethod
-    def _scale(dt: AnyDataType) -> Int:
-        """The decimal scale, or 0 for a plain integer/numeric."""
-        if dt.is_decimal32():
+    def _scale(dt: DynType) raises -> Int:
+        """The decimal scale, or 0 for a plain integer/numeric.
+
+        A `DynType` ladder rather than `dispatch_decimal` because it reads a
+        *field*, and traits cannot require fields. It is guarded by
+        `is_decimal()` so a decimal width the ladder does not know raises
+        instead of silently reporting scale 0 — an unscaled decimal would be
+        off by a factor of 10^scale, with no error anywhere.
+        """
+        if not dt.is_decimal():
+            return 0
+        elif dt.is_decimal32():
             return dt.as_decimal32().scale
         elif dt.is_decimal64():
             return dt.as_decimal64().scale
@@ -786,26 +802,26 @@ struct DecimalCast:
             return dt.as_decimal128().scale
         elif dt.is_decimal256():
             return dt.as_decimal256().scale
-        return 0
+        else:
+            raise Self.error(t"no scale known for decimal type {dt}")
 
     @staticmethod
     def _on_native[
-        func: def[N: DType]() raises capturing[_] -> AnyArray
-    ](dt: AnyDataType) raises -> AnyArray:
+        func: def[N: DType]() raises capturing[_] -> DynArray
+    ](dt: DynType) raises -> DynArray:
         """Resolve a decimal to its backing integer, or a numeric to its own
         native, then run ``func`` with that scalar ``DType``."""
-        if dt.is_decimal32():
-            return func[DType.int32]()
-        elif dt.is_decimal64():
-            return func[DType.int64]()
-        elif dt.is_decimal128():
-            return func[DType.int128]()
-        elif dt.is_decimal256():
-            return func[DType.int256]()
+        if dt.is_decimal():
+
+            @parameter
+            def by_dec[T: DecimalType](x: T) raises -> DynArray:
+                return func[T.native]()
+
+            return dt.dispatch_decimal[by_dec]()
         else:
 
             @parameter
-            def by_num[T: NumericType](x: T) raises -> AnyArray:
+            def by_num[T: NumericType](x: T) raises -> DynArray:
                 return func[T.native]()
 
             return dt.dispatch_numeric[by_num]()
@@ -814,8 +830,8 @@ struct DecimalCast:
     def _convert[
         FromN: DType, ToN: DType
     ](
-        data: ArrayData, from_scale: Int, to_scale: Int, to: AnyDataType
-    ) raises -> AnyArray:
+        data: ArrayData, from_scale: Int, to_scale: Int, to: DynType
+    ) raises -> DynArray:
         """Per-element conversion for the resolved native pair."""
         comptime if FromN.is_floating_point():  # float → decimal
             var f = Self._pow10[DType.float64](to_scale)
@@ -864,7 +880,7 @@ struct DecimalCast:
         FromN: DType,
         ToN: DType,
         op: def(Scalar[FromN]) capturing[_] -> Scalar[ToN],
-    ](data: ArrayData, to: AnyDataType) raises -> AnyArray:
+    ](data: ArrayData, to: DynType) raises -> DynArray:
         """Apply ``op`` to each element, writing a fresh ``ToN`` buffer relabelled
         as ``to``. Scalar (int128/256 aren't reliably SIMD-vectorizable)."""
         var n = data.length
@@ -873,7 +889,7 @@ struct DecimalCast:
         var dst = out.view[ToN]()
         for i in range(n):
             dst.store[1](i, op(src.load[1](i)))
-        return AnyArray.from_data(
+        return DynArray.from_data(
             ArrayData(
                 dtype=to.copy(),
                 length=n,
@@ -891,7 +907,7 @@ struct DecimalCast:
 # ---------------------------------------------------------------------------
 
 
-struct ListCast:
+struct ListCast(Kernel):
     """Cast a list-like array (list / large_list) to another of the same kind by
     recursively casting its child values to the target's value type; the offset
     buffer and validity are shared unchanged."""
@@ -900,10 +916,10 @@ struct ListCast:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, to: AnyDataType, safe: Bool, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+    ) raises -> DynArray:
         var data = array.to_data()
-        var child = AnyArray.from_data(data.children[0].copy())
+        var child = DynArray.from_data(data.children[0].copy())
         var target = (
             to.as_large_list()
             .value_type()
@@ -912,7 +928,7 @@ struct ListCast:
             .copy()
         )
         var new_child = cast(child, target, safe, ctx)
-        return AnyArray.from_data(
+        return DynArray.from_data(
             ArrayData(
                 dtype=to.copy(),
                 length=data.length,
@@ -925,7 +941,7 @@ struct ListCast:
         )
 
 
-struct StructCast:
+struct StructCast(Kernel):
     """Cast struct → struct by recursively casting each field to the target
     field's type (matched by position); the field counts must match."""
 
@@ -933,8 +949,8 @@ struct StructCast:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, to: AnyDataType, safe: Bool, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+    ) raises -> DynArray:
         var data = array.to_data()
         ref fields = to.as_struct().fields
         if len(fields) != len(data.children):
@@ -943,10 +959,10 @@ struct StructCast:
             )
         var children = List[ArrayData]()
         for i in range(len(data.children)):
-            var field_arr = AnyArray.from_data(data.children[i].copy())
+            var field_arr = DynArray.from_data(data.children[i].copy())
             var casted = cast(field_arr, fields[i].dtype, safe, ctx)
             children.append(casted.to_data())
-        return AnyArray.from_data(
+        return DynArray.from_data(
             ArrayData(
                 dtype=to.copy(),
                 length=data.length,
@@ -959,7 +975,7 @@ struct StructCast:
         )
 
 
-struct DictionaryCast:
+struct DictionaryCast(Kernel):
     """Decode a dictionary array — gather its values by index (``take``) — then
     cast the decoded values to the target type when it differs."""
 
@@ -967,8 +983,8 @@ struct DictionaryCast:
 
     @staticmethod
     def dispatch(
-        array: AnyArray, to: AnyDataType, safe: Bool, ctx: ExecutionContext
-    ) raises -> AnyArray:
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+    ) raises -> DynArray:
         ref d = array.as_dictionary()
         var indices = cast(d.indices(), int32, False, ctx).as_int32().copy()
         var decoded = take(d.dictionary().copy(), indices, ctx)
@@ -983,11 +999,11 @@ struct DictionaryCast:
 
 
 def cast(
-    array: AnyArray,
-    to: AnyDataType,
+    array: DynArray,
+    to: DynType,
     safe: Bool = True,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Cast ``array`` to dtype ``to``: pick the target family and delegate to the
     matching kernel's ``dispatch``. ``safe`` is a runtime flag each kernel resolves
     at its leaf ``apply`` call (raise vs. null/truncate)."""

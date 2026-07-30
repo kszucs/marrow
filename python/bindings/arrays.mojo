@@ -21,7 +21,7 @@ from std.os import abort
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.kernels.execution import ExecutionContext
 from marrow.arrays import (
-    AnyArray,
+    DynArray,
     ArrayData,
     ChunkedArray,
     ListArray,
@@ -33,7 +33,7 @@ from marrow.arrays import (
 )
 from marrow.buffers import Buffer, Bitmap
 from marrow.builders import (
-    AnyBuilder,
+    DynBuilder,
     BoolBuilder,
     BinaryBuilder,
     Int32Builder,
@@ -42,7 +42,7 @@ from marrow.builders import (
     ListBuilder,
     StructBuilder,
 )
-from marrow.scalars import AnyScalar
+from marrow.scalars import DynScalar
 import marrow.dtypes as dt
 
 from helpers import pymethod
@@ -236,20 +236,20 @@ struct PyHelpers(Copyable, Movable):
 
 
 # ---------------------------------------------------------------------------
-# AnyArray helpers for Python __getitem__ and Arrow C Data Interface
+# DynArray helpers for Python __getitem__ and Arrow C Data Interface
 # ---------------------------------------------------------------------------
 
 
-def _any_to_array(arr: AnyArray) -> AnyArray:
+def _any_to_array(arr: DynArray) -> DynArray:
     return arr.copy()
 
 
-def _any_dtype(arr: AnyArray) -> dt.AnyDataType:
+def _any_dtype(arr: DynArray) -> dt.DynType:
     return arr.dtype()
 
 
 def _any_array_getitem(
-    array: AnyArray,
+    array: DynArray,
     index: Int,
 ) raises -> PythonObject:
     var n = array.length()
@@ -262,7 +262,7 @@ def _any_array_getitem_py(
     py_self: PythonObject,
     index: PythonObject,
 ) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[AnyArray]()
+    var ptr = py_self.downcast_value_ptr[DynArray]()
     return _any_array_getitem(ptr[], Int(py=index))
 
 
@@ -418,7 +418,7 @@ struct PyInferrer(Copyable, Movable):
             + self.struct_count
         )
 
-    def _get_type(self) raises -> dt.AnyDataType:
+    def _get_type(self) raises -> dt.DynType:
         if self.bytes_count > 0:
             if self.bytes_count + self.none_count != self._total_count():
                 raise Error("cannot mix bytes and non-bytes values")
@@ -457,7 +457,7 @@ struct PyInferrer(Copyable, Movable):
             return dt.string
         return dt.null  # empty sequence or all-None
 
-    def infer(mut self, obj: PythonObject) raises -> dt.AnyDataType:
+    def infer(mut self, obj: PythonObject) raises -> dt.DynType:
         """Visit elements until type is locked, then scan remaining elements for nulls.
         """
         var list_ptr = obj._obj_ptr
@@ -501,7 +501,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
     """Type-erased converter using Variant + comptime-for dispatch.
 
     Holds `ArcPointer[VariantType]` so copying is O(1) (ref-count bump),
-    mirroring `AnyBuilder._ptr: ArcPointer[AnyBuilder.VariantType]`.
+    mirroring `DynBuilder._ptr: ArcPointer[DynBuilder.VariantType]`.
     """
 
     comptime VariantType = Variant[
@@ -541,8 +541,8 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 
     def __init__(
         out self,
-        builder: AnyBuilder,
-        dtype: dt.AnyDataType,
+        builder: DynBuilder,
+        dtype: dt.DynType,
         has_nulls: Bool = True,
     ) raises:
         if dtype == dt.bool_:
@@ -609,11 +609,11 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 
 
 struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
-    var _builder: AnyBuilder
+    var _builder: DynBuilder
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
+    def __init__(out self, builder: DynBuilder, has_nulls: Bool = True):
         self._builder = builder
         self._has_nulls = has_nulls
         self.py = PyHelpers()
@@ -658,11 +658,11 @@ struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
 
 
 struct PyBoolConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: DynBuilder
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
+    def __init__(out self, builder: DynBuilder, has_nulls: Bool = True):
         self._builder = builder
         self._has_nulls = has_nulls
         self.py = PyHelpers()
@@ -705,11 +705,11 @@ struct PyBoolConverter(PyConverter):
 
 
 struct PyStringConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: DynBuilder
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
+    def __init__(out self, builder: DynBuilder, has_nulls: Bool = True):
         self._builder = builder
         self._has_nulls = has_nulls
         self.py = PyHelpers()
@@ -764,11 +764,11 @@ struct PyStringConverter(PyConverter):
 
 
 struct PyBinaryConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: DynBuilder
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
+    def __init__(out self, builder: DynBuilder, has_nulls: Bool = True):
         self._builder = builder
         self._has_nulls = has_nulls
         self.py = PyHelpers()
@@ -820,12 +820,12 @@ struct PyBinaryConverter(PyConverter):
 
 
 struct PyListConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: DynBuilder
     var _child: PyAnyConverter
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
+    def __init__(out self, builder: DynBuilder, has_nulls: Bool = True) raises:
         self._builder = builder
         var child_builder = builder.as_list().values()
         var child_dtype = (
@@ -872,13 +872,13 @@ struct PyListConverter(PyConverter):
 
 
 struct PyFixedSizeListConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: DynBuilder
     var _child: PyAnyConverter
     var _has_nulls: Bool
     var _list_size: Int
     var py: PyHelpers
 
-    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
+    def __init__(out self, builder: DynBuilder, has_nulls: Bool = True) raises:
         self._builder = builder
         ref fsl = builder.as_fixed_size_list().dtype().as_fixed_size_list()
         var child_builder = builder.as_fixed_size_list().values()
@@ -924,7 +924,7 @@ struct PyFixedSizeListConverter(PyConverter):
 
 
 struct PyStructConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: DynBuilder
     var _children: List[PyAnyConverter]
     var _field_keys: List[PythonObject]
     var py: PyHelpers
@@ -935,7 +935,7 @@ struct PyStructConverter(PyConverter):
     def __del__(deinit self):
         pass
 
-    def __init__(out self, builder: AnyBuilder) raises:
+    def __init__(out self, builder: DynBuilder) raises:
         self._builder = builder
         var dtype = builder.as_struct().dtype()
         ref st = dtype.as_struct()
@@ -997,7 +997,7 @@ struct PyStructConverter(PyConverter):
 
 
 def arrow_c_array[
-    T: ImplicitlyDeletable, //, to_array_fn: def(T) thin -> AnyArray
+    T: ImplicitlyDeletable, //, to_array_fn: def(T) thin -> DynArray
 ](py_self: PythonObject, requested_schema: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[T]()
     var arr = to_array_fn(ptr[])
@@ -1007,7 +1007,7 @@ def arrow_c_array[
 
 
 def arrow_c_schema[
-    T: ImplicitlyDeletable, //, type_fn: def(T) thin -> dt.AnyDataType
+    T: ImplicitlyDeletable, //, type_fn: def(T) thin -> dt.DynType
 ](py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[T]()
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
@@ -1028,14 +1028,14 @@ def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
     var type_given = not type.__is__(builtins.None)
     if not type_given:
         try:
-            return AnyArray(py=obj).to_python_object()
+            return DynArray(py=obj).to_python_object()
         except:
             pass
 
-    var dtype: dt.AnyDataType
+    var dtype: dt.DynType
     var has_nulls = True
     if type_given:
-        dtype = type.downcast_value_ptr[dt.AnyDataType]()[].copy()
+        dtype = type.downcast_value_ptr[dt.DynType]()[].copy()
     else:
         var inferrer = PyInferrer()
         dtype = inferrer.infer(obj)
@@ -1043,13 +1043,13 @@ def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
 
     if dtype.is_null():
         if type_given:
-            return NullArray(length=len(obj)).to_any().to_python_object()
+            return NullArray(length=len(obj)).to_dyn().to_python_object()
         raise Error(
             "cannot build array: sequence is empty or all-None"
             " (provide type= explicitly)"
         )
 
-    var builder = AnyBuilder(dtype, len(obj))
+    var builder = DynBuilder(dtype, len(obj))
     var converter = PyAnyConverter(builder, dtype, has_nulls)
     converter.extend(obj._obj_ptr)
     return builder.finish().to_python_object()
@@ -1084,12 +1084,12 @@ def list_array_from_arrays(
     offsets: PythonObject, values: PythonObject, mask: PythonObject
 ) raises -> PythonObject:
     var offsets_arr = _build_offsets_array(offsets)
-    var child = AnyArray(py=values)
+    var child = DynArray(py=values)
     var n = offsets_arr.length - 1
     var mask_opt = _build_mask_array(mask, n)
     return (
         ListArray.from_arrays(offsets_arr, child^, mask_opt^)
-        .to_any()
+        .to_dyn()
         .to_python_object()
     )
 
@@ -1097,14 +1097,14 @@ def list_array_from_arrays(
 def fixed_size_list_array_from_arrays(
     values: PythonObject, type: PythonObject, mask: PythonObject
 ) raises -> PythonObject:
-    var child = AnyArray(py=values)
-    var dtype = type.downcast_value_ptr[dt.AnyDataType]()[].copy()
+    var child = DynArray(py=values)
+    var dtype = type.downcast_value_ptr[dt.DynType]()[].copy()
     var list_size = dtype.as_fixed_size_list().size
     var n = child.length() // list_size if list_size > 0 else 0
     var mask_opt = _build_mask_array(mask, n)
     return (
         FixedSizeListArray.from_arrays(child^, list_size, mask_opt^)
-        .to_any()
+        .to_dyn()
         .to_python_object()
     )
 
@@ -1113,11 +1113,11 @@ def struct_array_from_arrays(
     arrays: PythonObject, fields: PythonObject, mask: PythonObject
 ) raises -> PythonObject:
     var n_fields = Int(py=arrays.__len__())
-    var children = List[AnyArray]()
+    var children = List[DynArray]()
     var fields_list = List[dt.Field]()
     var n = 0
     for i in range(n_fields):
-        var arr = AnyArray(py=arrays[i])
+        var arr = DynArray(py=arrays[i])
         if i == 0:
             n = arr.length()
         children.append(arr^)
@@ -1125,36 +1125,36 @@ def struct_array_from_arrays(
     var mask_opt = _build_mask_array(mask, n)
     return (
         StructArray.from_arrays(children^, fields_list^, mask_opt^)
-        .to_any()
+        .to_dyn()
         .to_python_object()
     )
 
 
 def _any_array_str(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[AnyArray]()
+    var ptr = py_self.downcast_value_ptr[DynArray]()
     return PythonObject(String.write(ptr[]))
 
 
-def _array_to_device(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
+def _array_to_device(self: DynArray, ctx: ExecutionContext) raises -> DynArray:
     return self.to_device(ctx.device.value())
 
 
-def _array_to_cpu(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
+def _array_to_cpu(self: DynArray, ctx: ExecutionContext) raises -> DynArray:
     return self.to_cpu(ctx.device.value())
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add array types and constructors to the Python API."""
 
-    # --- Array (type-erased AnyArray) ---
-    ref array_py = mb.add_type[AnyArray]("Array")
+    # --- Array (type-erased DynArray) ---
+    ref array_py = mb.add_type[DynArray]("Array")
     _ = (
-        array_py.def_method[pymethod[AnyArray.__len__]()]("__len__")
+        array_py.def_method[pymethod[DynArray.__len__]()]("__len__")
         .def_method[_any_array_getitem_py]("__getitem__")
-        .def_method[pymethod[AnyArray.null_count]()]("null_count")
-        .def_method[pymethod[AnyArray.dtype]()]("type")
-        .def_method[pymethod[AnyArray.is_valid]()]("is_valid")
-        .def_method[pymethod[AnyArray.slice]()]("slice")
+        .def_method[pymethod[DynArray.null_count]()]("null_count")
+        .def_method[pymethod[DynArray.dtype]()]("type")
+        .def_method[pymethod[DynArray.is_valid]()]("is_valid")
+        .def_method[pymethod[DynArray.slice]()]("slice")
         .def_method[pymethod[_array_to_device]()]("to_device")
         .def_method[pymethod[_array_to_cpu]()]("to_cpu")
         .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
@@ -1163,8 +1163,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = array_py.def_method[_any_array_str]("__str__").def_method[
         _any_array_str
     ]("__repr__")
-    # var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
-    # _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
+    # var array_sp = SequenceProtocolBuilder[DynArray](array_py)
+    # _ = array_sp.def_len[DynArray.__len__]().def_getitem[_any_array_getitem]()
 
     mb.def_function[infer_type]("infer_type")
     mb.def_function[array]("array")

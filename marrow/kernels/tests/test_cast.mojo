@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_raises
 
-from ...arrays import AnyArray, NullArray, DictionaryArray
+from ...arrays import DynArray, NullArray, DictionaryArray
 from ...builders import (
     array,
     FixedSizeBinaryBuilder,
@@ -147,26 +147,26 @@ def test_unsafe_overflow_ok() raises:
 
 
 # ---------------------------------------------------------------------------
-# Runtime (AnyArray) dispatch
+# Runtime (DynArray) dispatch
 # ---------------------------------------------------------------------------
 
 
 def test_anyarray_dispatch() raises:
-    var a: AnyArray = array([1, 2, 3], int32)
+    var a: DynArray = array([1, 2, 3], int32)
     var r = cast(a, float64)
     assert_true(r.dtype() == float64)
     assert_true(r.as_float64() == array([1.0, 2.0, 3.0], float64))
 
 
 def test_identity_zero_copy() raises:
-    var a: AnyArray = array([1, 2, 3], int32)
+    var a: DynArray = array([1, 2, 3], int32)
     var r = cast(a, int32)
     assert_true(r.dtype() == int32)
     assert_true(r.as_int32() == array([1, 2, 3], int32))
 
 
 def test_anyarray_every_target() raises:
-    var src: AnyArray = array([1, 2, 3], int32)
+    var src: DynArray = array([1, 2, 3], int32)
     assert_true(cast(src, int8).dtype() == int8)
     assert_true(cast(src, uint16).dtype() == uint16)
     assert_true(cast(src, float32).dtype() == float32)
@@ -180,27 +180,27 @@ def test_anyarray_every_target() raises:
 
 
 def test_numeric_to_bool() raises:
-    var a: AnyArray = array([0, 5, 0, -3], int32)
+    var a: DynArray = array([0, 5, 0, -3], int32)
     var r = cast(a, bool_)
     assert_true(r.dtype() == bool_)
     assert_true(r.as_bool() == array([False, True, False, True]))
 
 
 def test_bool_to_numeric() raises:
-    var a: AnyArray = array([True, False, True])
+    var a: DynArray = array([True, False, True])
     var r = cast(a, int8)
     assert_true(r.dtype() == int8)
     assert_true(r.as_int8() == array([1, 0, 1], int8))
 
 
 def test_bool_to_float() raises:
-    var a: AnyArray = array([True, False, True])
+    var a: DynArray = array([True, False, True])
     var r = cast(a, float64)
     assert_true(r.as_float64() == array([1.0, 0.0, 1.0], float64))
 
 
 def test_bool_cast_nulls_preserved() raises:
-    var a: AnyArray = array([1, None, 0], int32)
+    var a: DynArray = array([1, None, 0], int32)
     var r = cast(a, bool_)
     ref rb = r.as_bool()
     assert_equal(rb.nulls, 1)
@@ -208,7 +208,7 @@ def test_bool_cast_nulls_preserved() raises:
 
 
 def test_bool_identity() raises:
-    var a: AnyArray = array([True, False, True])
+    var a: DynArray = array([True, False, True])
     var r = cast(a, bool_)
     assert_true(r.dtype() == bool_)
 
@@ -219,50 +219,50 @@ def test_bool_identity() raises:
 
 
 def test_temporal_int_reinterpret() raises:
-    var i: AnyArray = array([10, 20, 30], int64)
+    var i: DynArray = array([10, 20, 30], int64)
     var ts = cast(i, timestamp(microsecond))
-    assert_true(ts.dtype() == timestamp(microsecond).to_any())
+    assert_true(ts.dtype() == timestamp(microsecond).to_dyn())
     var back = cast(ts, int64)
     assert_true(back.as_int64() == array([10, 20, 30], int64))
 
 
 def test_timestamp_unit_upscale() raises:
-    var i: AnyArray = array([1, 2, 3], int64)
+    var i: DynArray = array([1, 2, 3], int64)
     var ts_s = cast(i, timestamp(second))
     var ts_ms = cast(ts_s, timestamp(millisecond))  # * 1000
-    assert_true(ts_ms.dtype() == timestamp(millisecond).to_any())
+    assert_true(ts_ms.dtype() == timestamp(millisecond).to_dyn())
     assert_true(
         cast(ts_ms, int64).as_int64() == array([1000, 2000, 3000], int64)
     )
 
 
 def test_timestamp_unit_downscale() raises:
-    var i: AnyArray = array([1500, 2500], int64)
+    var i: DynArray = array([1500, 2500], int64)
     var ts_ms = cast(i, timestamp(millisecond))
     var ts_s = cast(ts_ms, timestamp(second))  # // 1000 truncates
     assert_true(cast(ts_s, int64).as_int64() == array([1, 2], int64))
 
 
 def test_date32_to_date64() raises:
-    var i: AnyArray = array([1, 2], int32)
+    var i: DynArray = array([1, 2], int32)
     var d32 = cast(i, date32())  # days, int32
     var d64 = cast(d32, date64())  # * 86_400_000, widen to int64
-    assert_true(d64.dtype() == date64().to_any())
+    assert_true(d64.dtype() == date64().to_dyn())
     assert_true(
         cast(d64, int64).as_int64() == array([86_400_000, 172_800_000], int64)
     )
 
 
 def test_timestamp_tz_relabel() raises:
-    var i: AnyArray = array([5], int64)
+    var i: DynArray = array([5], int64)
     var naive = cast(i, timestamp(second))
     var aware = cast(naive, timestamp(second, "UTC"))  # metadata only
-    assert_true(aware.dtype() == timestamp(second, "UTC").to_any())
+    assert_true(aware.dtype() == timestamp(second, "UTC").to_dyn())
     assert_true(cast(aware, int64).as_int64() == array([5], int64))
 
 
 def test_temporal_nulls_preserved() raises:
-    var i: AnyArray = array([1, None, 3], int64)
+    var i: DynArray = array([1, None, 3], int64)
     var ts = cast(i, timestamp(second))
     var ms = cast(ts, timestamp(millisecond))
     assert_equal(ms.null_count(), 1)
@@ -275,7 +275,7 @@ def test_temporal_nulls_preserved() raises:
 
 
 def test_numeric_to_string() raises:
-    var a: AnyArray = array([1, 2, 3], int32)
+    var a: DynArray = array([1, 2, 3], int32)
     var r = cast(a, string)
     assert_true(r.dtype() == string)
     assert_equal(String(r.as_string()[0]), "1")
@@ -283,26 +283,26 @@ def test_numeric_to_string() raises:
 
 
 def test_string_to_int() raises:
-    var a: AnyArray = array(["1", "22", "-3"])
+    var a: DynArray = array(["1", "22", "-3"])
     var r = cast(a, int32)
     assert_true(r.dtype() == int32)
     assert_true(r.as_int32() == array([1, 22, -3], int32))
 
 
 def test_string_to_float() raises:
-    var a: AnyArray = array(["1.5", "-2.25", "3.0"])
+    var a: DynArray = array(["1.5", "-2.25", "3.0"])
     var r = cast(a, float64)
     assert_true(r.as_float64() == array([1.5, -2.25, 3.0], float64))
 
 
 def test_string_to_int_parse_error_safe_raises() raises:
-    var a: AnyArray = array(["1", "oops", "3"])
+    var a: DynArray = array(["1", "oops", "3"])
     with assert_raises():
         _ = cast(a, int32, safe=True)
 
 
 def test_string_to_int_parse_error_unsafe_nulls() raises:
-    var a: AnyArray = array(["1", "oops", "3"])
+    var a: DynArray = array(["1", "oops", "3"])
     var r = cast(a, int32, safe=False)
     assert_equal(r.null_count(), 1)
     assert_true(not r.is_valid(1))
@@ -310,7 +310,7 @@ def test_string_to_int_parse_error_unsafe_nulls() raises:
 
 
 def test_string_roundtrip_nulls() raises:
-    var a: AnyArray = array([1, None, 3], int32)
+    var a: DynArray = array([1, None, 3], int32)
     var s = cast(a, string)
     assert_equal(s.null_count(), 1)
     var back = cast(s, int32)
@@ -318,14 +318,14 @@ def test_string_roundtrip_nulls() raises:
 
 
 def test_bool_to_string() raises:
-    var a: AnyArray = array([True, False, True])
+    var a: DynArray = array([True, False, True])
     var r = cast(a, string)
     assert_equal(String(r.as_string()[0]), "true")
     assert_equal(String(r.as_string()[1]), "false")
 
 
 def test_string_to_bool() raises:
-    var a: AnyArray = array(["true", "False", "1", "0"])
+    var a: DynArray = array(["true", "False", "1", "0"])
     var r = cast(a, bool_)
     assert_true(r.as_bool() == array([True, False, True, False]))
 
@@ -336,7 +336,7 @@ def test_string_to_bool() raises:
 
 
 def test_null_to_numeric() raises:
-    var a: AnyArray = NullArray(length=3)
+    var a: DynArray = NullArray(length=3)
     var r = cast(a, int64)
     assert_true(r.dtype() == int64)
     assert_equal(len(r), 3)
@@ -344,7 +344,7 @@ def test_null_to_numeric() raises:
 
 
 def test_null_to_string() raises:
-    var a: AnyArray = NullArray(length=2)
+    var a: DynArray = NullArray(length=2)
     var r = cast(a, string)
     assert_true(r.dtype() == string)
     assert_equal(r.null_count(), 2)
@@ -356,7 +356,7 @@ def test_null_to_string() raises:
 
 
 def test_string_to_binary_roundtrip() raises:
-    var s: AnyArray = array(["ab", "cd", "e"])
+    var s: DynArray = array(["ab", "cd", "e"])
     var b = cast(s, binary)  # relabel, same 32-bit offsets
     assert_true(b.dtype() == binary)
     var back = cast(b, string)  # validates UTF-8, relabel
@@ -364,7 +364,7 @@ def test_string_to_binary_roundtrip() raises:
 
 
 def test_string_to_large_string_widen_narrow() raises:
-    var s: AnyArray = array(["ab", "cd", "e"])
+    var s: DynArray = array(["ab", "cd", "e"])
     var ls = cast(s, large_string)  # 32 → 64-bit offsets
     assert_true(ls.dtype() == large_string)
     var back = cast(ls, string)  # 64 → 32-bit offsets
@@ -402,9 +402,9 @@ def test_bool_to_large_string() raises:
 
 
 def test_fixed_size_binary_roundtrip() raises:
-    var s: AnyArray = array(["ab", "cd", "ef"])
+    var s: DynArray = array(["ab", "cd", "ef"])
     var fsb = cast(s, fixed_size_binary_(2))
-    assert_true(fsb.dtype() == fixed_size_binary_(2).to_any())
+    assert_true(fsb.dtype() == fixed_size_binary_(2).to_dyn())
     var back = cast(fsb, string)
     assert_true(back.as_string() == array(["ab", "cd", "ef"]))
 
@@ -421,7 +421,7 @@ def test_binary_to_string_invalid_utf8_raises() raises:
     raw.append(0xFF)
     var fb = FixedSizeBinaryBuilder(1)
     fb.append(Span(raw))
-    var bad: AnyArray = cast(fb.finish(), binary)
+    var bad: DynArray = cast(fb.finish(), binary)
     with assert_raises():
         _ = cast(bad, string, safe=True)
 
@@ -433,7 +433,7 @@ def test_binary_to_string_invalid_utf8_raises() raises:
 
 def test_int_to_decimal_roundtrip() raises:
     var d = cast(array([1, 2, 3], int64), decimal128(10, 2))  # × 100
-    assert_true(d.dtype() == decimal128(10, 2).to_any())
+    assert_true(d.dtype() == decimal128(10, 2).to_dyn())
     assert_true(cast(d, int64).as_int64() == array([1, 2, 3], int64))
 
 
@@ -443,7 +443,7 @@ def test_decimal_to_float() raises:
 
 
 def test_float_to_decimal_roundtrip() raises:
-    var f: AnyArray = array([1.5, 2.25, -0.5], float64)
+    var f: DynArray = array([1.5, 2.25, -0.5], float64)
     var d = cast(f, decimal128(10, 2))  # round(×100): 150, 225, -50
     assert_true(
         cast(d, float64).as_float64() == array([1.5, 2.25, -0.5], float64)
@@ -453,7 +453,7 @@ def test_float_to_decimal_roundtrip() raises:
 def test_decimal_rescale_widen() raises:
     var d = cast(array([1, 2], int64), decimal64(10, 1))  # scale 1: 10, 20
     var d2 = cast(d, decimal128(20, 3))  # scale 1 → 3: × 100
-    assert_true(d2.dtype() == decimal128(20, 3).to_any())
+    assert_true(d2.dtype() == decimal128(20, 3).to_dyn())
     assert_true(cast(d2, int64).as_int64() == array([1, 2], int64))
 
 
@@ -475,9 +475,9 @@ def test_list_to_list_cast() raises:
     ib.append(3)
     var lb = ListBuilder(ib^)
     lb.append_valid()  # one list [1, 2, 3]
-    var lst: AnyArray = lb.finish()
+    var lst: DynArray = lb.finish()
     var casted = cast(lst, list_(int64))  # list<int32> → list<int64>
-    assert_true(casted.dtype() == list_(int64).to_any())
+    assert_true(casted.dtype() == list_(int64).to_dyn())
     ref child = casted.as_list().values()
     assert_true(child.as_int64() == array([1, 2, 3], int64))
 
@@ -490,7 +490,7 @@ def test_struct_to_struct_cast() raises:
     sb.field_builder(1).as_int32().append(20)
     sb.append_valid()
     sb.append_valid()
-    var st: AnyArray = sb.finish()
+    var st: DynArray = sb.finish()
     var casted = cast(st, struct_([field("a", int64), field("b", float64)]))
     assert_true(casted.dtype().is_struct())
     assert_true(casted.as_struct().field(0).as_int64() == array([1, 2], int64))
@@ -500,10 +500,10 @@ def test_struct_to_struct_cast() raises:
 
 
 def test_dictionary_decode() raises:
-    var values: AnyArray = array(["a", "b", "c"])
-    var indices: AnyArray = array([0, 2, 1, 0], int32)
-    var d: AnyArray = DictionaryArray(
-        dtype=dictionary(int32, string).to_any(),
+    var values: DynArray = array(["a", "b", "c"])
+    var indices: DynArray = array([0, 2, 1, 0], int32)
+    var d: DynArray = DictionaryArray(
+        dtype=dictionary(int32, string).to_dyn(),
         length=4,
         nulls=0,
         offset=0,
@@ -514,10 +514,10 @@ def test_dictionary_decode() raises:
 
 
 def test_dictionary_decode_then_cast() raises:
-    var values: AnyArray = array([10, 20, 30], int32)
-    var indices: AnyArray = array([0, 1, 2, 1], int32)
-    var d: AnyArray = DictionaryArray(
-        dtype=dictionary(int32, int32).to_any(),
+    var values: DynArray = array([10, 20, 30], int32)
+    var indices: DynArray = array([0, 1, 2, 1], int32)
+    var d: DynArray = DictionaryArray(
+        dtype=dictionary(int32, int32).to_dyn(),
         length=4,
         nulls=0,
         offset=0,

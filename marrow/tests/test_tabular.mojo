@@ -1,7 +1,7 @@
 """Tests for RecordBatch and Table abstractions."""
 from std.testing import assert_equal, assert_true
 from ..tabular import RecordBatch, Table
-from ..arrays import AnyArray
+from ..arrays import DynArray
 from ..schema import Schema
 from ..dtypes import (
     int32,
@@ -18,13 +18,13 @@ from ..builders import array, PrimitiveBuilder, Float64Builder
 def test_record_batch_construction() raises:
     """Test basic RecordBatch construction and property accessors."""
     var schema = Schema(fields=[Field("x", int32), Field("y", float64)])
-    var col_x: AnyArray = array([1, 2, 3], int32)
+    var col_x: DynArray = array([1, 2, 3], int32)
     var by = Float64Builder(3)
     by.append(1.0)
     by.append(2.0)
     by.append(3.0)
-    var col_y: AnyArray = by.finish()
-    var columns = List[AnyArray]()
+    var col_y: DynArray = by.finish()
+    var columns = List[DynArray]()
     columns.append(col_x^)
     columns.append(col_y^)
     var batch = RecordBatch(schema=schema, columns=columns^)
@@ -36,9 +36,9 @@ def test_record_batch_construction() raises:
 def test_record_batch_column_access_by_index() raises:
     """Test column access by index."""
     var schema = Schema(fields=[Field("a", int32), Field("b", int64)])
-    var col_a: AnyArray = array([10, 20, 30], int32)
-    var col_b: AnyArray = array([100, 200, 300], int64)
-    var columns = List[AnyArray]()
+    var col_a: DynArray = array([10, 20, 30], int32)
+    var col_b: DynArray = array([100, 200, 300], int64)
+    var columns = List[DynArray]()
     columns.append(col_a^)
     columns.append(col_b^)
     var batch = RecordBatch(schema=schema, columns=columns^)
@@ -51,9 +51,9 @@ def test_record_batch_column_access_by_index() raises:
 def test_record_batch_column_access_by_name() raises:
     """Test column access by name."""
     var schema = Schema(fields=[Field("a", int32), Field("b", int64)])
-    var col_a: AnyArray = array([7, 8, 9], int32)
-    var col_b: AnyArray = array([70, 80, 90], int64)
-    var columns = List[AnyArray]()
+    var col_a: DynArray = array([7, 8, 9], int32)
+    var col_b: DynArray = array([70, 80, 90], int64)
+    var columns = List[DynArray]()
     columns.append(col_a^)
     columns.append(col_b^)
     var batch = RecordBatch(schema=schema, columns=columns^)
@@ -64,8 +64,8 @@ def test_record_batch_column_access_by_name() raises:
 def test_record_batch_slice() raises:
     """Test zero-copy RecordBatch slice."""
     var schema = Schema(fields=[Field("v", int32)])
-    var col: AnyArray = array([10, 20, 30, 40, 50], int32)
-    var columns = List[AnyArray]()
+    var col: DynArray = array([10, 20, 30, 40, 50], int32)
+    var columns = List[DynArray]()
     columns.append(col^)
     var batch = RecordBatch(schema=schema, columns=columns^)
 
@@ -82,10 +82,10 @@ def test_record_batch_slice() raises:
 def test_table_from_batches() raises:
     """Test Table.from_batches with multiple record batches."""
     var schema = Schema(fields=[Field("v", int32)])
-    var cols1 = List[AnyArray]()
+    var cols1 = List[DynArray]()
     cols1.append(array([1, 2, 3], int32))
     var b1 = RecordBatch(schema=schema, columns=cols1^)
-    var cols2 = List[AnyArray]()
+    var cols2 = List[DynArray]()
     cols2.append(array([4, 5], int32))
     var b2 = RecordBatch(schema=schema, columns=cols2^)
     var batches = List[RecordBatch]()
@@ -104,7 +104,7 @@ def test_table_column_access() raises:
     var bf = Float64Builder(2)
     bf.append(3.0)
     bf.append(4.0)
-    var columns = List[AnyArray]()
+    var columns = List[DynArray]()
     columns.append(array([1, 2], int32))
     columns.append(bf.finish())
     var b = RecordBatch(schema=schema, columns=columns^)
@@ -121,15 +121,15 @@ def test_record_batch_eq() raises:
     var a = RecordBatch(
         schema,
         [
-            array([1, 2, 3], int32).to_any(),
-            array([4, 5, 6], int32).to_any(),
+            array([1, 2, 3], int32).to_dyn(),
+            array([4, 5, 6], int32).to_dyn(),
         ],
     )
     var b = RecordBatch(
         schema,
         [
-            array([1, 2, 3], int32).to_any(),
-            array([4, 5, 6], int32).to_any(),
+            array([1, 2, 3], int32).to_dyn(),
+            array([4, 5, 6], int32).to_dyn(),
         ],
     )
     assert_true(a == b)
@@ -138,8 +138,8 @@ def test_record_batch_eq() raises:
 def test_record_batch_eq_unequal() raises:
     """RecordBatches with different column values are not equal."""
     var schema = Schema(fields=[Field("x", int32)])
-    var a = RecordBatch(schema, [array([1, 2, 3], int32).to_any()])
-    var b = RecordBatch(schema, [array([1, 2, 99], int32).to_any()])
+    var a = RecordBatch(schema, [array([1, 2, 3], int32).to_dyn()])
+    var b = RecordBatch(schema, [array([1, 2, 99], int32).to_dyn()])
     assert_true(not (a == b))
 
 

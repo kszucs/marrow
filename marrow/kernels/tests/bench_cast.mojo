@@ -9,7 +9,7 @@ against PyArrow/Polars in ``python/marrow/tests/bench_cast.py``.
 
 from std.benchmark import BenchMetric, keep
 
-from ...arrays import AnyArray
+from ...arrays import DynArray
 from ...builders import arange
 from ...dtypes import (
     Int32Type,
@@ -92,7 +92,7 @@ def bench_int64_to_int32_unsafe_1m(mut b: Benchmark) raises:
 
 
 def _bench_dispatch_int64_to_float64(mut b: Benchmark, n: Int) raises:
-    var src: AnyArray = arange[Int64Type](0, n)
+    var src: DynArray = arange[Int64Type](0, n)
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
@@ -118,7 +118,7 @@ def bench_dispatch_int64_to_float64_1m(mut b: Benchmark) raises:
 
 
 def _bench_timestamp_upscale(mut b: Benchmark, n: Int) raises:
-    var src = cast(AnyArray(arange[Int64Type](0, n)), timestamp(second))
+    var src = cast(DynArray(arange[Int64Type](0, n)), timestamp(second))
     b.throughput(BenchMetric.elements, n)
 
     @always_inline

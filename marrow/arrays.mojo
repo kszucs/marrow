@@ -9,11 +9,11 @@ from `marrow.builders` and call `finish()`.
 Array — the trait
 -----------------
 `Array` is the trait that all typed arrays implement.  It provides the common
-read-only interface: `type()`, `null_count()`, `is_valid()`, and `to_any()`.
+read-only interface: `type()`, `null_count()`, `is_valid()`, and `to_dyn()`.
 
-AnyArray — the type-erased handle
+DynArray — the type-erased handle
 ----------------------------------
-`AnyArray` is the type-erased, immutable handle backed by an inline `Variant`.
+`DynArray` is the type-erased, immutable handle backed by an inline `Variant`.
 Copies are O(1) — all typed arrays hold their data behind ref-counted `Buffer` /
 `Bitmap` handles, so copying the variant is just a few ref-count bumps.
 
@@ -29,22 +29,22 @@ ArrayData — generic flat layout
 ---------------------------------
 `ArrayData` is a plain @fieldwise_init struct produced on demand by `to_data()`.
 It is used for the C Data Interface, building nested arrays, and other interop
-paths.  It is NOT stored inside AnyArray.
+paths.  It is NOT stored inside DynArray.
 """
 
-from std.bit import pop_count
-from std.memory import memcpy, ArcPointer, OwnedPointer
-from std.sys import size_of
+
+from std.memory import OwnedPointer
+
 from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.utils import Variant
-from std.os import abort
+
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
-    AnyDataType,
+    DynType,
     BinaryLikeType,
     BinaryType,
     Date32Type,
@@ -103,9 +103,9 @@ from .dtypes import (
     uint64,
     uint8,
 )
-from .builders import AnyBuilder, PrimitiveBuilder, BinaryLikeBuilder
+from .builders import DynBuilder, PrimitiveBuilder, BinaryLikeBuilder
 from .scalars import (
-    AnyScalar,
+    DynScalar,
     NullScalar,
     BoolScalar,
     FixedSizeBinaryScalar,
@@ -129,7 +129,7 @@ trait Array(
     """Common interface for all typed Arrow arrays.
 
     All concrete array types (PrimitiveArray, BinaryArray, ListArray,
-    FixedSizeListArray, StructArray) implement this trait.  AnyArray is
+    FixedSizeListArray, StructArray) implement this trait.  DynArray is
     the type-erased handle that wraps any Array-conforming type.
     """
 
@@ -138,7 +138,7 @@ trait Array(
     def __init__(out self, data: ArrayData) raises:
         ...
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         ...
 
     def null_count(self) -> Int:
@@ -150,8 +150,8 @@ trait Array(
     def is_null(self, index: Int) -> Bool:
         return not self.is_valid(index)
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
+    def to_dyn(deinit self) -> DynArray:
+        return DynArray(self^)
 
     def to_device(self, ctx: DeviceContext) raises -> Self:
         raise Error("to_device: not supported for this array type")
@@ -162,7 +162,15 @@ trait Array(
     def to_data(self) raises -> ArrayData:
         ...
 
-    def slice(self, offset: Int, length: Int) -> Self:
+    def slice(self, offset: Int, length: Int) raises -> Self:
+        """A zero-copy slice.
+
+        `raises` because the erased implementation can fail: `DynArray.slice`
+        dispatches over its variant, and an uncovered member falls through. Every
+        *typed* implementation is non-raising and stays that way -- Mojo accepts
+        a non-raising body against a raising requirement, so typed call sites are
+        unaffected. Only generic code holding `[T: Array]` has to propagate.
+        """
         ...
 
     def __getitem__(self, index: Int) raises -> Self.ScalarType:
@@ -176,14 +184,14 @@ trait Array(
 
 @fieldwise_init
 struct ArrayData(Copyable, Movable):
-    """Generic array layout — the old AnyArray wire format, now a pure DTO.
+    """Generic array layout — the old DynArray wire format, now a pure DTO.
 
     Produced by `typed_array.to_data()` or `any_array.to_data()` for use
     in the C Data Interface, construction helpers, and other interop paths.
-    Not stored inside AnyArray itself.
+    Not stored inside DynArray itself.
     """
 
-    var dtype: AnyDataType
+    var dtype: DynType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -246,7 +254,7 @@ struct NullArray(Array):
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return null
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -328,7 +336,7 @@ struct BoolArray(Array):
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return bool_
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -553,8 +561,8 @@ struct PrimitiveArray[T: PrimitiveType](Array):
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> AnyDataType:
-        return self.dtype.copy().to_any()
+    def type(self) -> DynType:
+        return self.dtype.copy().to_dyn()
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array.
@@ -687,7 +695,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
     def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
-            dtype=self.dtype.copy().to_any(),
+            dtype=self.dtype.copy().to_dyn(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -781,8 +789,8 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> AnyDataType:
-        return Self.T().to_any()
+    def type(self) -> DynType:
+        return Self.T().to_dyn()
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array.
@@ -800,7 +808,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        var dtype = Self.T().to_any()
+        var dtype = Self.T().to_dyn()
         if dtype.is_string():
             writer.write("StringArray([")
         elif dtype.is_large_string():
@@ -876,7 +884,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
     def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
-            dtype=Self.T().to_any(),
+            dtype=Self.T().to_dyn(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -903,13 +911,13 @@ struct ListLikeArray[T: ListLikeType](Array):
 
     comptime ScalarType = ListScalar
 
-    var dtype: AnyDataType
+    var dtype: DynType
     var length: Int
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var offsets: Buffer[mut=False]
-    var child: OwnedPointer[AnyArray]
+    var child: OwnedPointer[DynArray]
 
     def validity(
         ref self,
@@ -922,13 +930,13 @@ struct ListLikeArray[T: ListLikeType](Array):
     def __init__(
         out self,
         *,
-        dtype: AnyDataType,
+        dtype: DynType,
         length: Int,
         nulls: Int,
         offset: Int,
         bitmap: Optional[Bitmap[mut=False]],
         offsets: Buffer[mut=False],
-        var values: AnyArray,
+        var values: DynArray,
     ):
         self.dtype = dtype.copy()
         self.length = length
@@ -959,10 +967,10 @@ struct ListLikeArray[T: ListLikeType](Array):
             offset=data.offset,
             bitmap=data.bitmap,
             offsets=data.buffers[0],
-            values=AnyArray.from_data(data.children[0]),
+            values=DynArray.from_data(data.children[0]),
         )
 
-    def values(ref self) -> ref[self.child[]] AnyArray:
+    def values(ref self) -> ref[self.child[]] DynArray:
         """The child array containing the list elements."""
         return self.child[]
 
@@ -975,7 +983,7 @@ struct ListLikeArray[T: ListLikeType](Array):
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1019,7 +1027,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         )
         return (start, end)
 
-    def unsafe_get(self, index: Int) raises -> AnyArray:
+    def unsafe_get(self, index: Int) raises -> DynArray:
         """Return a view of the child array for the list at the given index."""
         var start, end = self.child_range(index)
         return self.values().slice(start, end - start)
@@ -1044,7 +1052,7 @@ struct ListLikeArray[T: ListLikeType](Array):
             values=self.child[].copy(),
         )
 
-    def flatten(self) -> AnyArray:
+    def flatten(self) -> DynArray:
         """Unnest this ListArray, returning the flat child values."""
         return self.child[].copy()
 
@@ -1055,7 +1063,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         entries field (its key/value field names are preserved). `keys_sorted` is
         caller-supplied (Parquet carries no such flag). The single point where a
         list becomes a map — inverse of `MapArray.to_list`."""
-        var map_dtype: AnyDataType = MapType(
+        var map_dtype: DynType = MapType(
             field("entries", self.values().dtype(), nullable=False), keys_sorted
         )
         return MapArray(
@@ -1128,7 +1136,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         O: IntegerType
     ](
         offsets: PrimitiveArray[O],
-        var values: AnyArray,
+        var values: DynArray,
         var mask: Optional[BoolArray] = None,
     ) -> Self:
         """Construct a ListArray from offsets, values, and optional null mask.
@@ -1147,7 +1155,7 @@ struct ListLikeArray[T: ListLikeType](Array):
                 else:
                     bm.set(i)
             bitmap = bm^.to_immutable(length=n)
-        var list_dtype: AnyDataType
+        var list_dtype: DynType
         comptime if Self.T.offset == DType.int32:
             list_dtype = list_(values.dtype())
         else:
@@ -1165,8 +1173,8 @@ struct ListLikeArray[T: ListLikeType](Array):
     @staticmethod
     def from_arrays(
         offsets: Int32Array,
-        var keys: AnyArray,
-        var items: AnyArray,
+        var keys: DynArray,
+        var items: DynArray,
         keys_sorted: Bool = False,
         var mask: Optional[BoolArray] = None,
     ) raises -> MapArray:
@@ -1180,7 +1188,7 @@ struct ListLikeArray[T: ListLikeType](Array):
             field("key", keys.dtype(), nullable=False),
             field("value", items.dtype(), nullable=True),
         ]
-        var entries: AnyArray = StructArray.from_arrays(
+        var entries: DynArray = StructArray.from_arrays(
             [keys^, items^], entry_fields, None
         )
         return ListArray.from_arrays(offsets, entries^, mask^).to_map(
@@ -1216,12 +1224,12 @@ struct FixedSizeListArray(Array):
 
     comptime ScalarType = ListScalar
 
-    var dtype: AnyDataType
+    var dtype: DynType
     var length: Int
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
-    var child: OwnedPointer[AnyArray]
+    var child: OwnedPointer[DynArray]
 
     def validity(
         ref self,
@@ -1234,12 +1242,12 @@ struct FixedSizeListArray(Array):
     def __init__(
         out self,
         *,
-        dtype: AnyDataType,
+        dtype: DynType,
         length: Int,
         nulls: Int,
         offset: Int,
         bitmap: Optional[Bitmap[mut=False]],
-        var values: AnyArray,
+        var values: DynArray,
     ):
         self.dtype = dtype.copy()
         self.length = length
@@ -1265,10 +1273,10 @@ struct FixedSizeListArray(Array):
             nulls=data.nulls,
             offset=data.offset,
             bitmap=data.bitmap,
-            values=AnyArray.from_data(data.children[0]),
+            values=DynArray.from_data(data.children[0]),
         )
 
-    def values(ref self) -> ref[self.child[]] AnyArray:
+    def values(ref self) -> ref[self.child[]] DynArray:
         """The child array containing all list elements (length * list_size elements).
         """
         return self.child[]
@@ -1282,7 +1290,7 @@ struct FixedSizeListArray(Array):
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1310,7 +1318,7 @@ struct FixedSizeListArray(Array):
             return True
         return self.bitmap.value().test(self.offset + index)
 
-    def unsafe_get(self, index: Int, out array_data: AnyArray) raises:
+    def unsafe_get(self, index: Int, out array_data: DynArray) raises:
         var list_size = self.dtype.as_fixed_size_list().size
         var start = (self.offset + index) * list_size
         return self.values().slice(start, list_size)
@@ -1334,7 +1342,7 @@ struct FixedSizeListArray(Array):
             values=self.child[].copy(),
         )
 
-    def flatten(self) -> AnyArray:
+    def flatten(self) -> DynArray:
         """Unnest this FixedSizeListArray, returning the flat child values."""
         return self.child[].copy()
 
@@ -1347,7 +1355,7 @@ struct FixedSizeListArray(Array):
         var child_bm: Optional[Bitmap[]] = None
         if child_data.bitmap:
             child_bm = child_data.bitmap.value().to_device(ctx)
-        var new_child = AnyArray.from_data(
+        var new_child = DynArray.from_data(
             ArrayData(
                 dtype=child_data.dtype.copy(),
                 length=child_data.length,
@@ -1395,7 +1403,7 @@ struct FixedSizeListArray(Array):
 
     @staticmethod
     def from_arrays(
-        var values: AnyArray,
+        var values: DynArray,
         list_size: Int,
         var mask: Optional[BoolArray] = None,
     ) -> Self:
@@ -1488,8 +1496,8 @@ struct FixedSizeBinaryArray(Array):
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> AnyDataType:
-        return FixedSizeBinaryType(self.byte_width).to_any()
+    def type(self) -> DynType:
+        return FixedSizeBinaryType(self.byte_width).to_dyn()
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array."""
@@ -1541,7 +1549,7 @@ struct FixedSizeBinaryArray(Array):
 
     def to_data(self) raises -> ArrayData:
         return ArrayData(
-            dtype=FixedSizeBinaryType(self.byte_width).to_any(),
+            dtype=FixedSizeBinaryType(self.byte_width).to_dyn(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -1603,12 +1611,12 @@ struct StructArray(Array):
 
     comptime ScalarType = StructScalar
 
-    var dtype: AnyDataType
+    var dtype: DynType
     var length: Int
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
-    var children: List[AnyArray]
+    var children: List[DynArray]
 
     def validity(
         ref self,
@@ -1619,9 +1627,9 @@ struct StructArray(Array):
         return self.bitmap.value().view(self.offset, self.length)
 
     def __init__(out self, data: ArrayData) raises:
-        var children = List[AnyArray]()
+        var children = List[DynArray]()
         for c in data.children:
-            children.append(AnyArray.from_data(c))
+            children.append(DynArray.from_data(c))
         self = Self(
             dtype=data.dtype.copy(),
             length=data.length,
@@ -1640,7 +1648,7 @@ struct StructArray(Array):
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1675,11 +1683,11 @@ struct StructArray(Array):
 
     def unsafe_get(
         self, name: StringSlice
-    ) raises -> ref[self.children[0]] AnyArray:
+    ) raises -> ref[self.children[0]] DynArray:
         """Access the field with the given name in the struct."""
         return self.children[self._index_for_field_name(name)]
 
-    def field(self, index: Int) raises -> AnyArray:
+    def field(self, index: Int) raises -> DynArray:
         """Access a child array by field index.
 
         Matches PyArrow's StructArray.field(index) API.
@@ -1691,7 +1699,7 @@ struct StructArray(Array):
             )
         return self.children[index].copy()
 
-    def field(self, name: StringSlice) raises -> AnyArray:
+    def field(self, name: StringSlice) raises -> DynArray:
         """Access a child array by field name.
 
         Matches PyArrow's StructArray.field(name) API.
@@ -1703,10 +1711,10 @@ struct StructArray(Array):
             raise Error(t"index {index} out of bounds for length {self.length}")
         if not self.is_valid(index):
             return StructScalar.null(self.dtype.copy())
-        # Pre-allocate to avoid reallocation: when List[AnyScalar] grows it
+        # Pre-allocate to avoid reallocation: when List[DynScalar] grows it
         # moves existing elements, and Mojo's Variant __moveinit__ resets the
         # discriminant to 0 (the first type), corrupting already-stored scalars.
-        var fields = List[AnyScalar](capacity=len(self.children))
+        var fields = List[DynScalar](capacity=len(self.children))
         for i in range(len(self.children)):
             fields.append(self.children[i][self.offset + index])
         return StructScalar(
@@ -1720,7 +1728,7 @@ struct StructArray(Array):
         Matches RecordBatch.select(indices) API.
         """
         var fields = List[Field]()
-        var children = List[AnyArray]()
+        var children = List[DynArray]()
         ref st = self.dtype.as_struct()
         for idx in indices:
             fields.append(st.fields[idx].copy())
@@ -1734,8 +1742,8 @@ struct StructArray(Array):
             children=children^,
         )
 
-    def flatten(self) -> List[AnyArray]:
-        """Return one AnyArray per field.
+    def flatten(self) -> List[DynArray]:
+        """Return one DynArray per field.
 
         Matches PyArrow's StructArray.flatten() API.
         """
@@ -1776,7 +1784,7 @@ struct StructArray(Array):
 
     @staticmethod
     def from_arrays(
-        var children: List[AnyArray],
+        var children: List[DynArray],
         fields: List[Field],
         var mask: Optional[BoolArray] = None,
     ) -> Self:
@@ -1839,22 +1847,22 @@ struct DictionaryArray(Array):
 
     comptime ScalarType = DictionaryScalar
 
-    var _dtype: AnyDataType
+    var _dtype: DynType
     var _length: Int
     var _nulls: Int
     var _offset: Int  # extra logical offset into _indices (on top of _indices' own offset)
-    var _indices: OwnedPointer[AnyArray]
-    var _values: OwnedPointer[AnyArray]
+    var _indices: OwnedPointer[DynArray]
+    var _values: OwnedPointer[DynArray]
 
     def __init__(
         out self,
         *,
-        dtype: AnyDataType,
+        dtype: DynType,
         length: Int,
         nulls: Int,
         offset: Int,
-        var indices: AnyArray,
-        var values: AnyArray,
+        var indices: DynArray,
+        var values: DynArray,
     ):
         self._dtype = dtype.copy()
         self._length = length
@@ -1886,12 +1894,12 @@ struct DictionaryArray(Array):
         self._length = data.length
         self._nulls = data.nulls
         self._offset = 0  # offset is now embedded in the reconstructed _indices
-        self._indices = OwnedPointer(AnyArray.from_data(indices_data))
-        self._values = OwnedPointer(AnyArray.from_data(data.children[0]))
+        self._indices = OwnedPointer(DynArray.from_data(indices_data))
+        self._values = OwnedPointer(DynArray.from_data(data.children[0]))
 
     @staticmethod
     def from_arrays(
-        var indices: AnyArray, var values: AnyArray, ordered: Bool = False
+        var indices: DynArray, var values: DynArray, ordered: Bool = False
     ) raises -> Self:
         """Construct from existing indices and dictionary arrays.
 
@@ -1918,7 +1926,7 @@ struct DictionaryArray(Array):
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> AnyDataType:
+    def type(self) -> DynType:
         return self._dtype.copy()
 
     def null_count(self) -> Int:
@@ -1927,12 +1935,12 @@ struct DictionaryArray(Array):
     def is_valid(self, index: Int) -> Bool:
         return self._indices[].is_valid(self._offset + index)
 
-    def indices(self) raises -> AnyArray:
+    def indices(self) raises -> DynArray:
         """The logical index array (the dictionary's `_offset` applied). Matches
         PyArrow's DictionaryArray.indices."""
         return self._indices[].slice(self._offset, self._length)
 
-    def dictionary(self) -> AnyArray:
+    def dictionary(self) -> DynArray:
         """Return the dictionary (values) array. Matches PyArrow's DictionaryArray.dictionary.
         """
         return self._values[].copy()
@@ -1983,8 +1991,8 @@ struct DictionaryArray(Array):
             values=self._values[].copy(),
         )
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
+    def to_dyn(deinit self) -> DynArray:
+        return DynArray(self^)
 
     def to_data(self) raises -> ArrayData:
         """Extract generic ArrayData layout for C Data Interface interop.
@@ -2035,9 +2043,9 @@ struct ChunkedArray(Copyable, Movable, Writable):
     [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.ChunkedArray.html#pyarrow-chunkedarray).
     """
 
-    var dtype: AnyDataType
+    var dtype: DynType
     var length: Int
-    var chunks: List[AnyArray]
+    var chunks: List[DynArray]
 
     def _compute_length(mut self) -> None:
         """Update the length of the array from the length of its chunks."""
@@ -2046,7 +2054,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
             total_length += chunk.length()
         self.length = total_length
 
-    def __init__(out self, dtype: AnyDataType, var chunks: List[AnyArray]):
+    def __init__(out self, dtype: DynType, var chunks: List[DynArray]):
         self.dtype = dtype.copy()
         self.chunks = chunks^
         self.length = 0
@@ -2060,7 +2068,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
             self.chunks[i].write_to(writer)
         writer.write("])")
 
-    def chunk(self, index: Int) -> ref[self.chunks[index]] AnyArray:
+    def chunk(self, index: Int) -> ref[self.chunks[index]] DynArray:
         """Returns the chunk at the given index.
 
         Args:
@@ -2071,16 +2079,16 @@ struct ChunkedArray(Copyable, Movable, Writable):
         """
         return self.chunks[index]
 
-    def combine_chunks(var self) raises -> AnyArray:
+    def combine_chunks(var self) raises -> DynArray:
         """Combines all chunks into a single array."""
         from .kernels.concat import concat
-        from .builders import AnyBuilder
+        from .builders import DynBuilder
 
         if len(self.chunks) == 0:
             # An empty ArrayData with no buffers is not a valid array for most
             # dtypes (a primitive needs its data buffer, a string its offsets,
             # etc.), so build a properly-structured empty array of the dtype.
-            var builder = AnyBuilder(self.dtype)
+            var builder = DynBuilder(self.dtype)
             return builder.finish()
         if len(self.chunks) == 1:
             return self.chunks[0].copy()
@@ -2088,11 +2096,12 @@ struct ChunkedArray(Copyable, Movable, Writable):
 
 
 # ---------------------------------------------------------------------------
-# AnyArray — Variant-based type-erased array handle
+# DynArray — Variant-based type-erased array handle
 # ---------------------------------------------------------------------------
 
 
-struct AnyArray(
+struct DynArray(
+    Array,
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
@@ -2164,11 +2173,21 @@ struct AnyArray(
     def __init__[T: Array](out self, var array: T):
         self._v = Self.VariantType(array^)
 
+    def __init__(out self, data: ArrayData) raises:
+        """`Array`'s constructor-from-`ArrayData`, delegating to `from_data`.
+
+        The static factory stays the implementation and the primary spelling;
+        this exists so the trait is satisfied without moving 30-odd call sites.
+        No ambiguity with the `@implicit [T: Array]` constructor above:
+        `ArrayData` is only `Copyable, Movable` and does not conform to `Array`.
+        """
+        self = DynArray.from_data(data)
+
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
     # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
-    # the `StructArray -> List[AnyArray] -> AnyArray` reference cycle; the
+    # the `StructArray -> List[DynArray] -> DynArray` reference cycle; the
     # variant field is still destroyed automatically after the body runs.
     def __del__(deinit self):
         pass
@@ -2176,9 +2195,9 @@ struct AnyArray(
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
 
-        # Fast path: marrow arrays are now exposed as a single AnyArray Python type.
+        # Fast path: marrow arrays are now exposed as a single DynArray Python type.
         try:
-            self = py.downcast_value_ptr[AnyArray]()[].copy()
+            self = py.downcast_value_ptr[DynArray]()[].copy()
             return
         except:
             pass
@@ -2191,7 +2210,7 @@ struct AnyArray(
         except:
             raise Error(
                 "cannot convert Python object of type",
-                t" '{py.__class__.__name__}' to AnyArray",
+                t" '{py.__class__.__name__}' to DynArray",
             )
 
     # --- dispatch-based methods ---
@@ -2203,9 +2222,24 @@ struct AnyArray(
 
         return variant_dispatch[Array, func=f](self._v)
 
-    def dtype(self) -> AnyDataType:
+    comptime ScalarType = DynScalar
+    """`Array`'s companion-scalar member. `DynScalar` conforms to `ArrowScalar`,
+    which is what lets this conform to `Array` in turn — the two erasures line
+    up rather than each needing its own escape hatch."""
+
+    def type(self) -> DynType:
+        """`Array`'s spelling of `dtype()`.
+
+        Both names exist because both are load-bearing: `Array` requires
+        `type()`, while ~200 call sites and the `Builder` trait say `dtype()`.
+        Renaming either would be a large diff for no behaviour, so this is a
+        one-line forward and `dtype()` remains the one with the implementation.
+        """
+        return self.dtype()
+
+    def dtype(self) -> DynType:
         @parameter
-        def f[T: Array](a: T) -> AnyDataType:
+        def f[T: Array](a: T) -> DynType:
             return a.type()
 
         return variant_dispatch[Array, func=f](self._v)
@@ -2227,20 +2261,20 @@ struct AnyArray(
     def is_null(self, index: Int) -> Bool:
         return not self.is_valid(index)
 
-    def slice(self, offset: Int, length: Int = -1) raises -> AnyArray:
+    def slice(self, offset: Int, length: Int = -1) raises -> DynArray:
         """Returns a zero-copy slice starting at offset with the given length.
 
         Matches PyArrow's Array.slice(offset, length) API.
         """
 
         @parameter
-        def f[T: Array](a: T) -> AnyArray:
+        def f[T: Array](a: T) raises -> DynArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
 
-        return variant_dispatch[Array, func=f](self._v)
+        return variant_dispatch_raises[Array, func=f](self._v)
 
-    def view(self, var dtype: AnyDataType) raises -> AnyArray:
+    def view(self, var dtype: DynType) raises -> DynArray:
         """Reinterpret this array's buffers under a same-layout `dtype`.
 
         Zero-copy: only the logical type is replaced, the buffers are shared.
@@ -2254,7 +2288,7 @@ struct AnyArray(
         """
         var d = self.to_data()
         d.dtype = dtype^
-        return AnyArray.from_data(d^)
+        return DynArray.from_data(d^)
 
     def to_data(self) raises -> ArrayData:
         """Extract a generic ArrayData layout for interop (C Data Interface, etc.).
@@ -2268,26 +2302,26 @@ struct AnyArray(
 
         return variant_dispatch_raises[Array, func=f](self._v)
 
-    def to_device(self, ctx: DeviceContext) raises -> AnyArray:
+    def to_device(self, ctx: DeviceContext) raises -> DynArray:
         """Upload this array to the GPU device."""
 
         @parameter
-        def f[T: Array](a: T) raises -> AnyArray:
+        def f[T: Array](a: T) raises -> DynArray:
             return a.to_device(ctx)
 
         return variant_dispatch_raises[Array, func=f](self._v)
 
-    def to_cpu(self, ctx: DeviceContext) raises -> AnyArray:
+    def to_cpu(self, ctx: DeviceContext) raises -> DynArray:
         """Download this array from the GPU device to CPU memory."""
 
         @parameter
-        def f[T: Array](a: T) raises -> AnyArray:
+        def f[T: Array](a: T) raises -> DynArray:
             return a.to_cpu(ctx)
 
         return variant_dispatch_raises[Array, func=f](self._v)
 
-    def to_any(deinit self) -> AnyArray:
-        """Returns this array as AnyArray, transferring ownership."""
+    def to_dyn(deinit self) -> DynArray:
+        """Returns this array as DynArray, transferring ownership."""
         return self^
 
     def write_to[W: Writer](self, mut writer: W):
@@ -2300,7 +2334,7 @@ struct AnyArray(
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    def __eq__(self, other: AnyArray) -> Bool:
+    def __eq__(self, other: DynArray) -> Bool:
         return self._v == other._v
 
     def to_python_object(var self) raises -> PythonObject:
@@ -2310,16 +2344,16 @@ struct AnyArray(
     def __len__(self) -> Int:
         return self.length()
 
-    def __getitem__(self, index: Int) raises -> AnyScalar:
-        """Return the element at index as a type-erased AnyScalar."""
+    def __getitem__(self, index: Int) raises -> DynScalar:
+        """Return the element at index as a type-erased DynScalar."""
         if index < 0 or index >= self.length():
             raise Error(
                 t"index {index} out of bounds for length {self.length()}"
             )
 
         @parameter
-        def f[T: Array](a: T) raises -> AnyScalar:
-            return a[index].to_any()
+        def f[T: Array](a: T) raises -> DynScalar:
+            return a[index].to_dyn()
 
         return variant_dispatch_raises[Array, func=f](self._v)
 
@@ -2484,8 +2518,8 @@ struct AnyArray(
     # --- factory from generic layout ---
 
     @staticmethod
-    def from_data(data: ArrayData) raises -> AnyArray:
-        """Construct an AnyArray from a generic ArrayData by dispatching on dtype.
+    def from_data(data: ArrayData) raises -> DynArray:
+        """Construct an DynArray from a generic ArrayData by dispatching on dtype.
 
         Used by the C Data Interface and other interop paths where a flat
         7-field layout is the natural representation.

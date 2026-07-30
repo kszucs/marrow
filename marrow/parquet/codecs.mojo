@@ -25,9 +25,8 @@ from std.sys import size_of
 from std.memory import unsafe_memcpy
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     PrimitiveArray,
-    StringArray,
     BinaryLikeArray,
     BoolArray,
     FixedSizeBinaryArray,
@@ -642,8 +641,8 @@ struct Dictionary:
 
     @staticmethod
     def encode(
-        dtype: dt.AnyDataType,
-        col: AnyArray,
+        dtype: dt.DynType,
+        col: DynArray,
         mut dict_body: List[UInt8],
         mut indices: List[Int32],
     ) raises -> Int:

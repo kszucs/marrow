@@ -9,14 +9,14 @@ output:
   is one nested generic type; `.execute(batch)` compiles straight to column
   loads, a SIMD comparison, and a filter call. No tag dispatch, no vtables.
 - **`query_erased_aot.mojo`** — the "option 1" layer from `marrow.aot.erased`:
-  the relational operators are plain **runtime** structs over `List[AnyValue]`
+  the relational operators are plain **runtime** structs over `List[DynValue]`
   (a walkable, rewritable plan tree, *not* a `*Es` type pack), but each value is
-  a **fused-only** box (`AnyValue`) that trampolines into the concrete node's
+  a **fused-only** box (`DynValue`) that trampolines into the concrete node's
   own `execute()` — no `eval()` tag interpreter. The operators execute
   themselves single-shot (no `Planner`/`RelationProcessor`). Tests whether a
   runtime plan tree can keep the comptime binary size.
 - **`query_hybrid.mojo`** — relational *structure* stays runtime/type-erased
-  (`marrow.dyn`'s `AnyRelation`, `Planner.build()`, the pull-based
+  (`marrow.dyn`'s `DynRelation`, `Planner.build()`, the pull-based
   `RelationProcessor` pipeline — same as `query_runtime.mojo`), but the
   *predicate* is a comptime-typed `Gt(Column, Column)` node
   (`marrow.aot.values`) boxed into a runtime `Expr` via the `FUSED` tag
@@ -42,7 +42,63 @@ per-module symbol breakdown below. `benchmarks/binary_size/compare.py` is a
 plain Python script (no dependencies beyond `mojo`, `nm`, `size`, and `strip`
 on `$PATH`) — read it directly if you want to change what gets measured.
 
-## Result (osx-arm64, Mojo 1.0.0b3.dev2026070506)
+## ⚠️ Read this before quoting a number below
+
+**Sizes here must be the `__text` *section*, not the `__TEXT` segment and not the
+file size.** Both of the latter are padded up to a page boundary — 16 KB on
+Apple Silicon — so they move in 16,384-byte steps. Measured 2026-07-29: a change
+that added **1,728 bytes** of code moved the stripped file by 16,504 and the
+segment by exactly 16,384, while the symbol count went *down* by one.
+
+`compare.py` now reports and ratios on `__text`. Two consequences for what
+follows:
+
+- **The 2026-07-05 table below is in the old, page-quantized metric.** Every
+  `__TEXT` figure in it is an exact multiple of 16,384, which is the tell. Its
+  binaries (`query_comptime`, `query_erased_aot`, `query_hybrid`) also no longer
+  have `.mojo` sources, so they cannot be re-measured — treat the table as
+  historical and directional.
+- **"`query_hybrid` and `query_runtime` have the exact same `__TEXT`" does not
+  establish that fusing the predicate saved zero bytes.** Equal page counts are
+  compatible with any difference up to 16 KB. The live gates show exactly this:
+  `query_dynvalue` and `query_runtime` differ by 16 bytes of file and **384
+  bytes of `__text`**. The claim needs re-measuring before it is repeated.
+
+## Current baselines (osx-arm64, 2026-07-29) — `__text`, code only
+
+`query_streaming` is the floor: one `InMemoryTable -> Filter -> Project` with a
+column reference and a comparison. Every other gate is that shape plus one thing,
+so the delta column is what the thing costs in an AOT binary.
+
+| gate | `__text` | Δ vs floor | what it adds |
+|---|---:|---:|---|
+| `query_streaming` | 1,251,672 | — | the floor: `col`, `>` |
+| `query_arith` | 1,259,316 | +7,644 | fused `+ - *` |
+| `query_scan` | 2,285,232 | +1,033,560 | `ParquetScan` — the whole reader |
+| `query_sort` | 3,684,276 | +2,432,604 | `Sort` + top-K |
+| `query_streaming_agg_fused` | 3,776,820 | +2,525,148 | `Aggregate`, comptime aggs |
+| `query_join` | 3,819,060 | +2,567,388 | `Join` |
+| `query_exprs` | 3,892,916 | +2,641,244 | string, conditional, membership, cast, temporal |
+| `query_streaming_agg` | 4,150,836 | +2,899,164 | `Aggregate`, runtime-named aggs |
+| `query_dynvalue` | 5,266,164 | +4,014,492 | the erased lane (was the tag interpreter) |
+| `query_runtime` | 5,266,548 | +4,014,876 | interpreter + runtime plan |
+
+Re-measure one gate without paying for the sweep (ten `-O3` builds, ~20 min):
+
+```
+pixi run binary_size query_scan
+```
+
+`query_streaming` is always built, since it is the ratio baseline.
+
+### Why the metric had to be fixed first
+
+`query_arith` is the demonstration. Against the floor it is **+7,644 bytes of
+code** — and **16 bytes *smaller* by stripped file size** (1,324,168 vs
+1,324,184). The old metric would have reported fused arithmetic as free, or
+faintly negative. It is neither.
+
+## Result (osx-arm64, Mojo 1.0.0b3.dev2026070506) — historical, page-quantized
 
 | binary | unstripped | stripped | symbols | symbols (stripped) | `__TEXT` |
 |---|---:|---:|---:|---:|---:|
@@ -75,7 +131,7 @@ from erasing the *relational* layer (`marrow.dyn`), not the scalar/value
 layer.** `in_memory_table(batch).filter(predicate).select(...)` still walks
 through `Planner.build()`, which links in every `RelationProcessor` kind
 (`Scan`, `Filter`, `Project`, `Aggregate`, `Join`, `ParquetScan`, ...)
-regardless of which ones this query actually uses, plus the `AnyRelation`
+regardless of which ones this query actually uses, plus the `DynRelation`
 vtable/trampoline machinery. `Expr.eval()`'s own op branches (`ADD`, `SUB`,
 `MUL`, `DIV`, `EQ`, `NE`, `LT`, `LE`, `GT`, `GE`, `AND`, `OR`, `NEG`, `ABS`,
 `NOT`, `IS_NULL`, `IF_ELSE`, `CAST`, `LENGTH`) are a comparatively small slice
@@ -93,7 +149,7 @@ strip because there was never a branch to begin with.
 
 `query_erased_aot` is the interesting *positive* result. Its plan is a
 **runtime** object — `Project`/`Filter` are plain structs over
-`List[AnyValue]`, walkable and rewritable, not a `*Es` type pack — yet its
+`List[DynValue]`, walkable and rewritable, not a `*Es` type pack — yet its
 `__TEXT` is **229,376 B, byte-identical to `query_comptime`** (1.0x, versus
 30.9x for the runtime path). Making the plan a runtime, pushdown-friendly tree
 cost *zero* compiled code.
@@ -101,7 +157,7 @@ cost *zero* compiled code.
 Two properties, together, are what buy it — and the per-module table shows both
 holding:
 
-1. **The value box is fused-only.** `AnyValue` trampolines straight into each
+1. **The value box is fused-only.** `DynValue` trampolines straight into each
    node's own fused `execute()` and carries no `eval()` tag-switch, so
    `Expr.eval()` is never reachable. `kernels::arithmetic` (0, vs 371) and
    `kernels::compare` (0, vs 74) confirm the per-op/per-dtype interpreter is
@@ -155,9 +211,9 @@ Why the biggest buckets are so lopsided: `comptime_query` only ever
 instantiates the *exact* concrete types this one query needs —
 `Column[Orders,"a",Int64Type]`, `StringColumn[Orders,"name"]`, `Gt[...]` —
 nothing else exists at compile time, so nothing else gets generated.
-`query_hybrid`/`query_runtime` go through `AnyArray`, which erases the dtype
-to a runtime tag — any code operating on an `AnyArray` (`Expr.eval()`,
-`AnyRelation`'s processors, kernel dispatch functions) can't know at compile
+`query_hybrid`/`query_runtime` go through `DynArray`, which erases the dtype
+to a runtime tag — any code operating on an `DynArray` (`Expr.eval()`,
+`DynRelation`'s processors, kernel dispatch functions) can't know at compile
 time which dtype it'll see, so the compiler generates a full typed
 instantiation *per supported dtype*, "just in case." `kernels::execution`
 (667, the CPU/GPU dispatch layer under every kernel) and `kernels::arithmetic`

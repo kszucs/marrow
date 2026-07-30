@@ -11,7 +11,7 @@ only marrow can read.
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
 from std.os import remove
-from ...parquet import read_table, write_table, SplitBlockBloomFilter, xxh64
+from ...parquet import read_table, write_table, SplitBlockBloomFilter, XxHash64
 from ...parquet.reader import ParquetFile
 from ...tabular import Table
 from ...c_data import CArrowArrayStream
@@ -28,12 +28,12 @@ def _contains(bf: SplitBlockBloomFilter, s: String) -> Bool:
     return bf.might_contain(Span(b))
 
 
-def test_xxh64_vectors() raises:
+def test_xxhash64_vectors() raises:
     # canonical XXH64 (seed 0) test vectors
     var empty = List[UInt8]()
-    assert_equal(xxh64(Span(empty)), 0xEF46DB3751D8E999)
+    assert_equal(XxHash64.hash(Span(empty)), 0xEF46DB3751D8E999)
     var hello = List[UInt8](String("Hello").as_bytes())
-    assert_equal(xxh64(Span(hello)), 0x0A75A91375B27D44)
+    assert_equal(XxHash64.hash(Span(hello)), 0x0A75A91375B27D44)
 
 
 def test_bloom_reference_vector() raises:

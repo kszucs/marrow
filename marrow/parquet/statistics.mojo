@@ -11,10 +11,10 @@ from std.sys import size_of
 
 from .. import dtypes as dt
 from ..dtypes import PrimitiveType
-from ..arrays import AnyArray, PrimitiveArray, BinaryLikeArray
+from ..arrays import DynArray, PrimitiveArray, BinaryLikeArray
 from ..utils import LittleEndian
 from ..scalars import (
-    AnyScalar,
+    DynScalar,
     BoolScalar,
     StringScalar,
     Int8Scalar,
@@ -179,8 +179,8 @@ struct Statistics:
 
     @staticmethod
     def min_max(
-        dtype: dt.AnyDataType,
-        col: AnyArray,
+        dtype: dt.DynType,
+        col: DynArray,
         mut min_out: List[UInt8],
         mut max_out: List[UInt8],
     ) raises -> Bool:
@@ -288,9 +288,7 @@ struct Statistics:
             return False
 
     @staticmethod
-    def decode(
-        dtype: dt.AnyDataType, b: List[UInt8]
-    ) raises -> Optional[AnyScalar]:
+    def decode(dtype: dt.DynType, b: List[UInt8]) raises -> Optional[DynScalar]:
         """Decode one PLAIN-encoded min/max value to a typed scalar, mirroring the
         writer's encoding (`LittleEndian.fixed` reads `size_of[dt]` LE bytes and
         reinterprets — the inverse of the writer's byte emission). Returns None for
@@ -300,86 +298,86 @@ struct Statistics:
         if dtype == dt.int8:
             return Int8Scalar(
                 LittleEndian.fixed[DType.int32](s, 0).cast[DType.int8]()
-            ).to_any()
+            ).to_dyn()
         elif dtype == dt.int16:
             return Int16Scalar(
                 LittleEndian.fixed[DType.int32](s, 0).cast[DType.int16]()
-            ).to_any()
+            ).to_dyn()
         elif dtype == dt.int32:
-            return Int32Scalar(LittleEndian.fixed[DType.int32](s, 0)).to_any()
+            return Int32Scalar(LittleEndian.fixed[DType.int32](s, 0)).to_dyn()
         elif dtype == dt.uint8:
             return UInt8Scalar(
                 LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint8]()
-            ).to_any()
+            ).to_dyn()
         elif dtype == dt.uint16:
             return UInt16Scalar(
                 LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint16]()
-            ).to_any()
+            ).to_dyn()
         elif dtype == dt.uint32:
-            return UInt32Scalar(LittleEndian.fixed[DType.uint32](s, 0)).to_any()
+            return UInt32Scalar(LittleEndian.fixed[DType.uint32](s, 0)).to_dyn()
         elif dtype == dt.int64:
-            return Int64Scalar(LittleEndian.fixed[DType.int64](s, 0)).to_any()
+            return Int64Scalar(LittleEndian.fixed[DType.int64](s, 0)).to_dyn()
         elif dtype == dt.uint64:
-            return UInt64Scalar(LittleEndian.fixed[DType.uint64](s, 0)).to_any()
+            return UInt64Scalar(LittleEndian.fixed[DType.uint64](s, 0)).to_dyn()
         elif dtype == dt.float32:
             return Float32Scalar(
                 LittleEndian.fixed[DType.float32](s, 0)
-            ).to_any()
+            ).to_dyn()
         elif dtype == dt.float64:
             return Float64Scalar(
                 LittleEndian.fixed[DType.float64](s, 0)
-            ).to_any()
+            ).to_dyn()
         elif dtype == dt.float16:
             return Float16Scalar(
                 LittleEndian.fixed[DType.float16](s, 0)
-            ).to_any()
+            ).to_dyn()
         elif dtype == dt.bool_:
-            return BoolScalar(len(b) > 0 and b[0] != 0).to_any()
+            return BoolScalar(len(b) > 0 and b[0] != 0).to_dyn()
         elif dtype.is_string():
             return StringScalar(
                 String(StringSlice(unsafe_from_utf8=Span(b)))
-            ).to_any()
+            ).to_dyn()
         # Temporal / small-decimal: physical INT32 / INT64, carrying the leaf's
         # unit / precision-scale so the scalar retags to the Arrow type.
         elif dtype.is_date32():
             return Date32Scalar(
                 LittleEndian.fixed[DType.int32](s, 0), dt.date32()
-            ).to_any()
+            ).to_dyn()
         elif dtype.is_time32():
             return Time32Scalar(
                 LittleEndian.fixed[DType.int32](s, 0), dtype.as_time32()
-            ).to_any()
+            ).to_dyn()
         elif dtype.is_time64():
             return Time64Scalar(
                 LittleEndian.fixed[DType.int64](s, 0), dtype.as_time64()
-            ).to_any()
+            ).to_dyn()
         elif dtype.is_timestamp():
             return TimestampScalar(
                 LittleEndian.fixed[DType.int64](s, 0), dtype.as_timestamp()
-            ).to_any()
+            ).to_dyn()
         elif dtype.is_decimal32():
             return Decimal32Scalar(
                 LittleEndian.fixed[DType.int32](s, 0), dtype.as_decimal32()
-            ).to_any()
+            ).to_dyn()
         elif dtype.is_decimal64():
             return Decimal64Scalar(
                 LittleEndian.fixed[DType.int64](s, 0), dtype.as_decimal64()
-            ).to_any()
+            ).to_dyn()
         # decimal128/256: big-endian two's-complement FIXED_LEN_BYTE_ARRAY.
         elif dtype.is_decimal128():
             return Decimal128Scalar(
                 Plain.decode_be_flba[DType.int128](s, 0, len(b)),
                 dtype.as_decimal128(),
-            ).to_any()
+            ).to_dyn()
         elif dtype.is_decimal256():
             return Decimal256Scalar(
                 Plain.decode_be_flba[DType.int256](s, 0, len(b)),
                 dtype.as_decimal256(),
-            ).to_any()
+            ).to_dyn()
         elif dtype.is_fixed_size_binary():
             return FixedSizeBinaryScalar(
                 List[UInt8](s), dtype.as_fixed_size_binary().byte_width
-            ).to_any()
+            ).to_dyn()
         else:
             # binary / large_binary have no scalar type; the raw min/max bytes are
             # still available via `read_metadata`.

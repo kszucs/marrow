@@ -133,11 +133,6 @@ Consequences worth knowing:
   to a single case; a case that still cannot be built reports the crash as *its
   own* failure instead of failing everything selected alongside it. Ordinary
   `error:` output never splits, since it would be identical in every half.
-  **Known-crashing cases (pre-existing, unrelated to the harness): a test body
-  that filters with a comparison predicate** (`rel.filter(col("a") > …)`) under
-  `TestSuite` — the same code compiles fine in a plain `main()`. That is why five
-  cases in `test_plan.mojo` and one in `test_aggregates.mojo` fail; the rest of
-  each file runs.
 - **Peak memory scales with the unit**, so a full-suite run is a single very
   large compile. Narrow the selection if memory is tight.
 - **Optimization level follows the kind, not the session.** `bench_*.mojo` builds
@@ -260,8 +255,8 @@ Mojo lacks dynamic dispatch, so the codebase uses **type-erased containers** wit
 #### Arrays (`marrow/arrays.mojo`)
 
 - **`Array`** - Trait that all typed arrays implement. Provides the common read-only interface: `type()`, `null_count()`, `is_valid()`, `as_any()`. Also extends `Sized`, `Writable`, `Equatable`, `Copyable`, `Movable`.
-- **`AnyArray`** - Type-erased, immutable array container (analogous to `ArrayData` in C++ Arrow). Holds `dtype`, `length`, `nulls`, `bitmap`, `buffers`, `children`, `offset`. Copying is O(1) via `ArcPointer` ref-counting inside `Buffer`/`Bitmap`.
-- **Typed arrays** implement the `Array` trait and convert implicitly to/from `AnyArray`:
+- **`DynArray`** - Type-erased, immutable array container (analogous to `ArrayData` in C++ Arrow). Holds `dtype`, `length`, `nulls`, `bitmap`, `buffers`, `children`, `offset`. Copying is O(1) via `ArcPointer` ref-counting inside `Buffer`/`Bitmap`.
+- **Typed arrays** implement the `Array` trait and convert implicitly to/from `DynArray`:
   - `PrimitiveArray[T]` - numeric/boolean types
   - `StringArray` - UTF-8 strings
   - `ListArray` - variable-length nested lists
@@ -269,13 +264,13 @@ Mojo lacks dynamic dispatch, so the codebase uses **type-erased containers** wit
   - `StructArray` - nested structs
   - `ChunkedArray` - array split across multiple chunks (does NOT implement `Array` trait)
 
-Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[int64] = some_array` both work transparently.
+Usage: `var arr: DynArray = my_primitive_array` and `var prim: PrimitiveArray[int64] = some_array` both work transparently.
 
 #### Builders (`marrow/builders.mojo`)
 
 - **`Builder`** - Trait every typed builder implements.
-- **`AnyBuilder`** - Type-erased builder. Can be constructed from a `DataType` at runtime. `finish()` returns `AnyArray`.
-- **Typed builders** convert implicitly to `AnyBuilder` by cloning the `ArcPointer`, so the original typed builder remains usable after passing to a composite builder:
+- **`DynBuilder`** - Type-erased builder. Can be constructed from a `DataType` at runtime. `finish()` returns `DynArray`.
+- **Typed builders** convert implicitly to `DynBuilder` by cloning the `ArcPointer`, so the original typed builder remains usable after passing to a composite builder:
   - `PrimitiveBuilder[T]` → `PrimitiveArray[T]`
   - `StringBuilder` → `StringArray`
   - `ListBuilder` → `ListArray`
@@ -308,7 +303,7 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 - Uses `code` field for type identification and optional `native` field for DType mapping
 
 **Runtime → comptime dispatch** (`marrow/dtypes.mojo`, `marrow/utils.mojo`):
-- There is no visitor module. Runtime dtype dispatch is the `AnyDataType.dispatch_*` family —
+- There is no visitor module. Runtime dtype dispatch is the `DynType.dispatch_*` family —
   `dispatch_primitive` / `dispatch_numeric` / `dispatch_integer` / `dispatch_floating` /
   `dispatch_temporal` / `dispatch_stringlike` / `dispatch_binarylike` / `dispatch_listlike` —
   each resolving a runtime `DataType` to a comptime type parameter for a `capturing` job.
@@ -329,14 +324,14 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 
 ```
 marrow/
-├── dtypes.mojo           # Type system (DataType, Field, AnyDataType.dispatch_*)
+├── dtypes.mojo           # Type system (DataType, Field, DynType.dispatch_*)
 ├── buffers.mojo          # Memory management (Buffer[mut], Bitmap[mut], Allocation)
 ├── views.mojo            # BufferView, BitmapView — what kernels compute over
 ├── arrays.mojo           # Array, PrimitiveArray, StringArray, ListArray,
 │                         # FixedSizeListArray, StructArray, ChunkedArray
-├── builders.mojo         # Builder, AnyBuilder, PrimitiveBuilder, StringBuilder,
+├── builders.mojo         # Builder, DynBuilder, PrimitiveBuilder, StringBuilder,
 │                         # ListBuilder, FixedSizeListBuilder, StructBuilder
-├── scalars.mojo          # Scalar trait, AnyScalar, PrimitiveScalar
+├── scalars.mojo          # Scalar trait, DynScalar, PrimitiveScalar
 ├── utils.mojo            # variant_dispatch*, GPU_ENABLED
 ├── kernels/
 │   ├── arithmetic.mojo   # Element-wise add, subtract, multiply, divide, math
@@ -373,9 +368,9 @@ That works because they carry no `main()` — see "Writing Mojo Tests".
 ### Type Constraints
 
 Mojo lacks dynamic dispatch, so the codebase uses:
-- Type-erased containers (`AnyArray`, `AnyBuilder`) with implicit conversions to/from typed wrappers
+- Type-erased containers (`DynArray`, `DynBuilder`) with implicit conversions to/from typed wrappers
 - Compile-time parameterization (`PrimitiveArray[int64]`)
-- The `AnyDataType.dispatch_*` family for runtime dtype → comptime type dispatch
+- The `DynType.dispatch_*` family for runtime dtype → comptime type dispatch
 - Runtime type checking via `DataType.code` comparison
 
 ## GPU Compute
@@ -469,12 +464,12 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 - **Never use `alias` — always use `comptime` instead.** `alias` is deprecated in Mojo. Use `comptime var` or `comptime` parameters everywhere a compile-time value is needed.
 - **Never call `_underscore_prefixed` methods outside of the type/struct that defines them.** They are private implementation details. Use the public factory methods and APIs instead (e.g. use `Buffer.alloc_uninit[T](n)` directly rather than computing `Buffer._aligned_size[T](n)` and passing bytes manually).
 - **Do not use `PrimitiveArray[bool_]` or `as_primitive[bool_]()`.**  Boolean arrays are bit-packed and require `BoolArray` for correct values access. Use `BoolArray` and `as_bool()` directly everywhere booleans are handled. Likewise, use `BoolBuilder` instead of `PrimitiveBuilder[bool_]`.
-- **Prefer typed shorthand accessors over `.as_primitive[T]()`** when dispatching on a concrete type. `AnyArray`, `AnyScalar`, and `AnyBuilder` all expose `.as_int8()`, `.as_int16()`, `.as_int32()`, `.as_int64()`, `.as_uint8()`, `.as_uint16()`, `.as_uint32()`, `.as_uint64()`, `.as_float16()`, `.as_float32()`, `.as_float64()` — use these instead of `.as_primitive[Int32Type]()` etc. Mojo can then infer the type parameter on the kernel call too, so no explicit `kernel[Int32Type](arr.as_int32())` is needed — write `kernel(arr.as_int32())`. Exception: when the type is a generic parameter `T` (e.g. inside a parameterized function), `.as_primitive[T]()` is the only option.
+- **Prefer typed shorthand accessors over `.as_primitive[T]()`** when dispatching on a concrete type. `DynArray`, `DynScalar`, and `DynBuilder` all expose `.as_int8()`, `.as_int16()`, `.as_int32()`, `.as_int64()`, `.as_uint8()`, `.as_uint16()`, `.as_uint32()`, `.as_uint64()`, `.as_float16()`, `.as_float32()`, `.as_float64()` — use these instead of `.as_primitive[Int32Type]()` etc. Mojo can then infer the type parameter on the kernel call too, so no explicit `kernel[Int32Type](arr.as_int32())` is needed — write `kernel(arr.as_int32())`. Exception: when the type is a generic parameter `T` (e.g. inside a parameterized function), `.as_primitive[T]()` is the only option.
 - **Prefer typed array aliases over `PrimitiveArray[XxxType]`**. The aliases `Int8Array`, `Int16Array`, `Int32Array`, `Int64Array`, `UInt8Array`, `UInt16Array`, `UInt32Array`, `UInt64Array`, `Float16Array`, `Float32Array`, `Float64Array` are defined in `arrays.mojo` and exported. Use `UInt64Array` instead of `PrimitiveArray[UInt64Type]` everywhere a concrete type is known. Exception: when the type is a generic parameter `T`, `PrimitiveArray[T]` is the only option.
 - **Prefer typed builder aliases over `PrimitiveBuilder[XxxType]`**. The aliases `Int8Builder`, `Int16Builder`, `Int32Builder`, `Int64Builder`, `UInt8Builder`, `UInt16Builder`, `UInt32Builder`, `UInt64Builder`, `Float16Builder`, `Float32Builder`, `Float64Builder` are defined in `builders.mojo` and exported. Use `Int32Builder(n)` instead of `PrimitiveBuilder[Int32Type](n)` everywhere a concrete type is known. Exception: when the type is a generic parameter `T`, `PrimitiveBuilder[T]` is the only option.
 - **Prefer typed scalar aliases over `PrimitiveScalar[XxxType]`**. The aliases `Int8Scalar`, `Int16Scalar`, `Int32Scalar`, `Int64Scalar`, `UInt8Scalar`, `UInt16Scalar`, `UInt32Scalar`, `UInt64Scalar`, `Float16Scalar`, `Float32Scalar`, `Float64Scalar` are defined in `scalars.mojo` and exported. Use `Int32Scalar(42)` instead of `PrimitiveScalar[Int32Type](42)` everywhere a concrete type is known. Exception: when the type is a generic parameter `T`, `PrimitiveScalar[T]` is the only option.
-- **Do not wrap typed builders in explicit `AnyBuilder(...)` calls.** `AnyBuilder` has an `@implicit` conversion from any type implementing `Builder`, so passing a typed builder directly where `AnyBuilder` is expected works without explicit wrapping. Write `ListBuilder(Int32Builder())` not `ListBuilder(AnyBuilder(Int32Builder()))`. Exception: when constructing `AnyBuilder` from a runtime `DataType` (e.g. `AnyBuilder(dtype)`) or with explicit capacity, the explicit call is required.
-- **Do not wrap typed arrays or scalars in explicit `AnyArray(...)`/`AnyScalar(...)` calls.** Both have `@implicit` conversion from their respective `Array`/`Scalar` traits, so typed values can be passed or assigned directly. Write `var a: AnyArray = array([1, 2], int32)` not `var a = AnyArray(array([1, 2], int32))`, and pass typed arrays directly as function arguments where `AnyArray` is expected.
+- **Do not wrap typed builders in explicit `DynBuilder(...)` calls.** `DynBuilder` has an `@implicit` conversion from any type implementing `Builder`, so passing a typed builder directly where `DynBuilder` is expected works without explicit wrapping. Write `ListBuilder(Int32Builder())` not `ListBuilder(DynBuilder(Int32Builder()))`. Exception: when constructing `DynBuilder` from a runtime `DataType` (e.g. `DynBuilder(dtype)`) or with explicit capacity, the explicit call is required.
+- **Do not wrap typed arrays or scalars in explicit `DynArray(...)`/`DynScalar(...)` calls.** Both have `@implicit` conversion from their respective `Array`/`Scalar` traits, so typed values can be passed or assigned directly. Write `var a: DynArray = array([1, 2], int32)` not `var a = DynArray(array([1, 2], int32))`, and pass typed arrays directly as function arguments where `DynArray` is expected.
 - **Prefer `.values()` over `.buffer.view[native](array.offset)`.**  `PrimitiveArray[T].values()` and `BoolArray.values()` return a properly offset `BufferView` / `BitmapView` in one call. Call `.buffer.view[native]()` only inside `buffers.mojo` or when constructing a view with explicit parameters not covered by `.values()`.
 - Prefer explicit `if/else` over early-return `if + return` guard clauses. Keep the control flow flat and readable with `if/else` branches.
 - Prefer PyArrow's API naming everywhere — both in the Mojo core types and in the Python bindings. When in doubt, match PyArrow's method names and signatures.
@@ -485,6 +480,15 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 - **`.as_<type>()` returns a reference** (`ref self` + `-> ref[self._data[]] T`) — zero-cost borrow tied to the heap allocation inside the `ArcPointer`, with no ownership transfer. Callers use `ref x = val.as_type()` to borrow or `.copy()` to take ownership explicitly.
 - **`.to_<type>()` transfers ownership** — use this name for methods that convert a value to a new type or allocate a new representation (e.g. `.to_python_object()`, `.to_device()`, `.to_host()`).
 - **Keep the `marrow.aot`/`marrow.expr` layers small-binary** — preserve the closed-erasure/DCE property (no open dispatchers, fused-only value boxes, closed per-dtype kernels) and gate changes on `benchmarks/binary_size/` (`pixi run binary_size`).
+- **The box is the erasure boundary — a node never needs an erased variant.** In
+  `marrow.expr`, `DynValue` erases; the nodes do not. Before adding a `Dyn*`
+  node, check the existing one: either its type is known where it is constructed
+  (a literal, a cast target — resolve a runtime dtype with `dispatch_*` and box
+  each arm), or it does not depend on the type at all (a column read by name).
+  `DynColumn`/`DynLiteral`/`DynCast` were all added and all removed for this
+  reason. `DynValue` conforms to every value family, so the fused nodes take it
+  as an operand with no bound relaxed; a node keys off `comptime IsErased`
+  (propagated, not defaulted) to pick dispatch over fusion.
 - Try to use existing building blocks instead of reimplementing them from scratch. Like do not have a handwritten loop to bitwise and/or bitmaps when bitmaps do support bitwise operations using idiomatic API.
 
 ### Prior Art — Consult C++ and Rust Implementations First
@@ -501,16 +505,16 @@ This applies especially to: new kernels, array type behaviour, validity/null han
 When writing or modifying tests:
 
 - **Prefer `arr[i]` over `arr.unsafe_get(i)`** for indexed element access. Use `unsafe_get` only when the explicit point of the test is to exercise the unsafe API.
-- **Prefer typed shorthands** (`x.as_int32()`, `x.as_float64()`, etc.) over `x.as_primitive[Int32Type]()` when the concrete type is known — this applies to `AnyArray`, `AnyScalar`, and `AnyBuilder`. Fall back to `x.as_primitive[T]()` only when `T` is a generic parameter.
+- **Prefer typed shorthands** (`x.as_int32()`, `x.as_float64()`, etc.) over `x.as_primitive[Int32Type]()` when the concrete type is known — this applies to `DynArray`, `DynScalar`, and `DynBuilder`. Fall back to `x.as_primitive[T]()` only when `T` is a generic parameter.
 - **Prefer typed aliases** (`Int32Array`, `Int32Builder`, `Int32Scalar`) over the generic form (`PrimitiveArray[Int32Type]`, `PrimitiveBuilder[Int32Type]`, `PrimitiveScalar[Int32Type]`) when the concrete type is known at the call site.
 - **Prefer `assert_true(arr1 == arr2)`** over element-by-element loops when asserting that two typed arrays have equal contents. `PrimitiveArray[T].__eq__` returns `Bool` (structural equality), so a single `assert_true(result == expected)` replaces the whole loop.
 
 ### Kernel Implementation Pattern
 
-Kernels in `marrow/kernels/` are implemented as typed overloads first, with a type-erased `AnyArray` overload as a thin dispatch layer:
+Kernels in `marrow/kernels/` are implemented as typed overloads first, with a type-erased `DynArray` overload as a thin dispatch layer:
 
 1. **Typed overloads** — one per concrete array type (`PrimitiveArray[T]`, `StringArray`, `ListArray`, etc.). These contain all the actual logic.
-2. **Type-erased overload** — accepts `List[AnyArray]` (or `AnyArray` for unary/binary kernels), converts to the appropriate typed list/value, and delegates to the typed overload. This is the "blanket" implementation that makes kernels usable from runtime-typed code.
+2. **Type-erased overload** — accepts `List[DynArray]` (or `DynArray` for unary/binary kernels), converts to the appropriate typed list/value, and delegates to the typed overload. This is the "blanket" implementation that makes kernels usable from runtime-typed code.
 
 See `marrow/kernels/concat.mojo` and `marrow/kernels/filter.mojo` for examples.
 
@@ -567,12 +571,11 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
 - **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly. **But import explicitly, never `from .x import *`.** A wildcard re-exports whatever `x` itself imported, so a name resolves or not depending on which file you entered through — the signature of three separate incidents (a trait shadowing the builtin `Scalar`; `BoolArray` resolving along one path and not another; a "fix" that took errors 2 → 10). The remaining wildcards were replaced with explicit lists; keep it that way.
-- **Open bug:** `ArcPointer[DynValue]` (`expr/values.mojo:2299`) writes its
-  trailing `Variant` discriminant one byte past the allocation (`size_of` 416
-  vs ≥417 needed), silently corrupting the heap and causing every full-suite
-  failure — note that ASAN *hides* it (`test_reader` passes 35/35 under ASAN,
-  fails without) and that a Mojo build failure emits no ASAN output at all, so
-  verify fixes without ASAN and confirm tests actually ran.
+- **ASAN can *hide* a heap bug rather than reveal it.** A one-byte `Variant`
+  overflow (Q0.0, since fixed upstream) passed 35/35 under ASAN and failed
+  without it, and a Mojo *build* failure emits no ASAN output at all — so a
+  clean ASAN run is not evidence on its own. Verify without ASAN too, and
+  confirm the tests actually ran rather than the build having died.
 
 ### Associated-type & trait gotchas (learned the hard way)
 

@@ -1,7 +1,7 @@
 """Tests for the IR-node → operator execution in ``marrow.expr.relations``.
 
 Verifies the descriptive-plan / pull-based-operator design: ``execute`` opens a
-plan into operators over ``AnyValue`` values (fused or interpreter). Small morsel
+plan into operators over ``DynValue`` values (fused or interpreter). Small morsel
 sizes exercise the streaming boundary — the same query must produce the same
 result regardless of morsel size — and plans are reusable templates (opening
 never mutates them).
@@ -28,9 +28,9 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...expr.values import Gt, AnyValue, col
-from ...expr.relations import AnyRelation, Sort, in_memory_table
-from ...expr.dynamic import col as dyn_col, lit, case_when, if_else
+from ...expr.values import Gt, DynValue, col
+from ...expr.relations import DynRelation, Sort, in_memory_table
+from ...expr.values import col as dyn_col, lit, if_else, case_when
 
 
 def _batch() raises -> RecordBatch:
@@ -42,14 +42,14 @@ def _batch() raises -> RecordBatch:
     )
 
 
-def _fused_plan(morsel: Int) raises -> AnyRelation:
+def _fused_plan(morsel: Int) raises -> DynRelation:
     """SELECT a, name WHERE a > b, fused values, given a morsel size."""
     return (
         in_memory_table(_batch(), morsel_size=morsel)
-        .filter(AnyValue(Gt(col("a", int64), col("b", int64))))
+        .filter(DynValue(Gt(col("a", int64), col("b", int64))))
         .project(
             names=["a", "name"],
-            values=[AnyValue(col("a", int64)), AnyValue(col("name", string))],
+            values=[DynValue(col("a", int64)), DynValue(col("name", string))],
         )
     )
 
@@ -92,7 +92,7 @@ def test_streaming_interpreter_values() raises:
     produces the same result — fused and interpreted interchange."""
     var plan = (
         in_memory_table(_batch(), morsel_size=2)
-        .filter(AnyValue(dyn_col("a") > dyn_col("b")))
+        .filter(DynValue(dyn_col("a") > dyn_col("b")))
         .project(names=["a", "name"], values=[dyn_col("a"), dyn_col("name")])
     )
     var result = plan.execute()
@@ -512,8 +512,8 @@ def test_aggregate_min_max_string() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
-            dyn_col("s").min().alias("lo"),
-            dyn_col("s").max().alias("hi"),
+            dyn_col("s").aggregate("min").alias("lo"),
+            dyn_col("s").aggregate("max").alias("hi"),
         ],
     )
     assert_equal(plan.schema().fields[1].dtype, string)
@@ -532,8 +532,8 @@ def test_aggregate_min_max_date() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
-            dyn_col("d").min().alias("first_day"),
-            dyn_col("d").max().alias("last_day"),
+            dyn_col("d").aggregate("min").alias("first_day"),
+            dyn_col("d").aggregate("max").alias("last_day"),
         ],
     )
     assert_true(plan.schema().fields[1].dtype == date32())
@@ -552,7 +552,7 @@ def test_aggregate_count_over_string_column() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
-            dyn_col("s").count(),
+            dyn_col("s").aggregate("count"),
         ],
     )
     assert_equal(plan.schema().fields[1].dtype, int64)
@@ -566,9 +566,9 @@ def test_aggregate_out_dtypes() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
-            dyn_col("v").count().alias("c"),
-            dyn_col("v").mean().alias("m"),
-            dyn_col("v").min().alias("mn"),
+            dyn_col("v").aggregate("count").alias("c"),
+            dyn_col("v").aggregate("mean").alias("m"),
+            dyn_col("v").aggregate("min").alias("mn"),
             dyn_col("v").sum().alias("s"),
         ],
     )
@@ -614,7 +614,7 @@ def test_aggregate_computed_key_case_when() raises:
             )
         ],
         aggs=[
-            dyn_col("v").count().alias("n"),
+            dyn_col("v").aggregate("count").alias("n"),
         ],
     )
     var result = _sorted_by_key(plan.execute())
@@ -646,7 +646,7 @@ def test_aggregate_computed_key_year() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("d").year()],
         aggs=[
-            dyn_col("v").count().alias("n"),
+            dyn_col("v").aggregate("count").alias("n"),
         ],
     )
     assert_equal(plan.schema().fields[0].dtype, int32)
@@ -665,7 +665,7 @@ def test_aggregate_computed_key_date_trunc() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("t").date_trunc("hour")],
         aggs=[
-            dyn_col("v").count().alias("n"),
+            dyn_col("v").aggregate("count").alias("n"),
         ],
     )
     assert_true(plan.schema().fields[0].dtype == timestamp(second))
@@ -702,7 +702,7 @@ def test_aggregate_computed_value_length() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
-            dyn_col("s").length().mean().alias("avg_len"),
+            DynValue(dyn_col("s").length()).aggregate("mean").alias("avg_len"),
         ],
     )
     assert_equal(plan.schema().fields[1].dtype, float64)
@@ -721,8 +721,8 @@ def test_aggregate_names_disambiguate_outputs() raises:
     var plan = in_memory_table(_agg_batch()).aggregate(
         keys=[dyn_col("k")],
         aggs=[
-            dyn_col("v").mean().alias("avg_v"),
-            dyn_col("d").year().mean().alias("avg_year"),
+            dyn_col("v").aggregate("mean").alias("avg_v"),
+            DynValue(dyn_col("d").year()).aggregate("mean").alias("avg_year"),
         ],
     )
     assert_equal(plan.schema().fields[1].name, "avg_v")
@@ -751,10 +751,10 @@ def test_aggregate_having() raises:
         .aggregate(
             keys=[dyn_col("k")],
             aggs=[
-                dyn_col("v").count().alias("n"),
+                dyn_col("v").aggregate("count").alias("n"),
             ],
         )
-        .filter(AnyValue(dyn_col("n") > lit[Int64Type](1)))
+        .filter(DynValue(dyn_col("n") > lit[Int64Type](1)))
     )
     var result = _sorted_by_key(plan.execute())
     assert_equal(result.num_rows(), 2)
@@ -773,7 +773,7 @@ def test_aggregate_having_on_aliased_aggregate() raises:
                 dyn_col("v").sum().alias("total"),
             ],
         )
-        .filter(AnyValue(dyn_col("total") >= lit[Int64Type](50)))
+        .filter(DynValue(dyn_col("total") >= lit[Int64Type](50)))
         .sort(keys=[dyn_col("total")], ascending=[False])
         .limit(1)
     )
@@ -793,7 +793,7 @@ def test_aggregate_streams_across_morsels() raises:
         keys=[dyn_col("k")],
         aggs=[
             dyn_col("v").sum().alias("total"),
-            dyn_col("s").min().alias("lo"),
+            dyn_col("s").aggregate("min").alias("lo"),
             dyn_col("v").count_distinct().alias("nd"),
         ],
     )

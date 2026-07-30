@@ -11,6 +11,7 @@ from ...arrays import PrimitiveArray, UInt64Array
 from ...builders import PrimitiveBuilder, Int32Builder, Int64Builder
 from ...dtypes import int32, int64, uint64, Int32Type, Int64Type, UInt64Type
 from ...kernels.hashing import (
+    RapidHash,
     rapidhash,
     _rapidhash_fixed,
     NULL_HASH_SENTINEL,
@@ -51,7 +52,7 @@ def test_rapidhash_int32() raises:
     b.append(Scalar[int32.native](2147483647))
     b.append(Scalar[int32.native](-2147483648))
     var arr = b.finish()
-    var h = rapidhash[Int32Type](arr)
+    var h = RapidHash.apply(arr)
 
     _assert_hash_eq(h, 0, 0xBA8945AAEC02CEE2)
     _assert_hash_eq(h, 1, 0x2B281F986C8B17D6)
@@ -78,7 +79,7 @@ def test_rapidhash_int64() raises:
     b.append(Scalar[int64.native](9223372036854775807))
     b.append(Scalar[int64.native](-9223372036854775808))
     var arr = b.finish()
-    var h = rapidhash[Int64Type](arr)
+    var h = RapidHash.apply(arr)
 
     _assert_hash_eq(h, 0, 0x9EFC171AEBCEA1F3)
     _assert_hash_eq(h, 1, 0xBEC178309F44AFBC)
@@ -103,7 +104,7 @@ def test_scalar_matches_vectorized() raises:
     b.append(Scalar[int64.native](999999))
     b.append(Scalar[int64.native](123456789))
     var arr = b.finish()
-    var h = rapidhash[Int64Type](arr)
+    var h = RapidHash.apply(arr)
 
     for i in range(5):
         var scalar_h = _rapidhash_fixed[8](UInt64(arr.unsafe_get(i)))
@@ -124,7 +125,7 @@ def test_null_produces_sentinel() raises:
     b.append_null()
     b.append(Scalar[int64.native](7))
     var arr = b.finish()
-    var h = rapidhash[Int64Type](arr)
+    var h = RapidHash.apply(arr)
 
     assert_true(UInt64(h.unsafe_get(0)) != NULL_HASH_SENTINEL)
     assert_equal(UInt64(h.unsafe_get(1)), NULL_HASH_SENTINEL)

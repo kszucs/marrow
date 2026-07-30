@@ -9,6 +9,32 @@ oracle.
 """
 
 from .reader import (
+    LeafSet,
+    leaf_of,
+    LEAF_INT8,
+    LEAF_INT16,
+    LEAF_INT32,
+    LEAF_INT64,
+    LEAF_UINT8,
+    LEAF_UINT16,
+    LEAF_UINT32,
+    LEAF_UINT64,
+    LEAF_FLOAT16,
+    LEAF_FLOAT32,
+    LEAF_FLOAT64,
+    LEAF_BOOL,
+    LEAF_STRING,
+    LEAF_LARGE_STRING,
+    LEAF_BINARY,
+    LEAF_LARGE_BINARY,
+    LEAF_TEMPORAL32,
+    LEAF_TEMPORAL64,
+    LEAF_DECIMAL32,
+    LEAF_DECIMAL64,
+    LEAF_DECIMAL128,
+    LEAF_DECIMAL256,
+    LEAF_FIXED_SIZE_BINARY,
+    LEAF_INT96,
     ParquetFile,
     read_table,
     read_metadata,
@@ -20,4 +46,4 @@ from .reader import (
 )
 from .writer import write_table
 from .codecs import Compression
-from .bloom import SplitBlockBloomFilter, xxh64
+from .bloom import SplitBlockBloomFilter, XxHash64

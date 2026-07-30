@@ -151,4 +151,6 @@
 - A pytest harness that compiles one driver per test selection, selects
   CPU/GPU and Mojo/Python suites, and splits the unit when the compiler
   crashes so the offending case reports it.
+- A binary-size gate measuring the `__text` section across the operator
+  families, run by `pixi run binary_size`.
 - A Quarto documentation site with guides, tutorials and examples.

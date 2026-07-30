@@ -26,15 +26,15 @@ from ...dtypes import (
     Float32Type,
     UInt64Type,
 )
-from ...kernels.hashing import rapidhash, NULL_HASH_SENTINEL
+from ...kernels.hashing import RapidHash, rapidhash, NULL_HASH_SENTINEL
 
 
 def test_rapidhash_gpu_int32() raises:
     """GPU rapidhash on small int32 array matches CPU."""
     var ctx = DeviceContext()
     var arr = array([1, 2, 3, 4, 5], int32)
-    var cpu_hashes = rapidhash[Int32Type](arr)
-    var gpu_hashes = rapidhash[Int32Type](
+    var cpu_hashes = RapidHash.apply(arr)
+    var gpu_hashes = RapidHash.apply(
         arr.to_device(ctx), ExecutionContext.gpu(ctx)
     ).to_cpu(ctx)
     assert_equal(len(gpu_hashes), len(cpu_hashes))
@@ -45,8 +45,8 @@ def test_rapidhash_gpu_int64() raises:
     """GPU rapidhash on small int64 array matches CPU."""
     var ctx = DeviceContext()
     var arr = array([10, 20, 30, 40, 50], int64)
-    var cpu_hashes = rapidhash[Int64Type](arr)
-    var gpu_hashes = rapidhash[Int64Type](
+    var cpu_hashes = RapidHash.apply(arr)
+    var gpu_hashes = RapidHash.apply(
         arr.to_device(ctx), ExecutionContext.gpu(ctx)
     ).to_cpu(ctx)
     assert_equal(len(gpu_hashes), len(cpu_hashes))
@@ -57,8 +57,8 @@ def test_rapidhash_gpu_float32() raises:
     """GPU rapidhash on float32 array matches CPU."""
     var ctx = DeviceContext()
     var arr = array([1.0, 2.5, 3.14, 0.0, -1.0], float32)
-    var cpu_hashes = rapidhash[Float32Type](arr)
-    var gpu_hashes = rapidhash[Float32Type](
+    var cpu_hashes = RapidHash.apply(arr)
+    var gpu_hashes = RapidHash.apply(
         arr.to_device(ctx), ExecutionContext.gpu(ctx)
     ).to_cpu(ctx)
     assert_equal(len(gpu_hashes), len(cpu_hashes))
@@ -69,8 +69,8 @@ def test_rapidhash_gpu_large() raises:
     """GPU rapidhash on 10k int32 array, spot-check positions match CPU."""
     var ctx = DeviceContext()
     var arr = arange[Int32Type](0, 10000)
-    var cpu_hashes = rapidhash[Int32Type](arr)
-    var gpu_hashes = rapidhash[Int32Type](
+    var cpu_hashes = RapidHash.apply(arr)
+    var gpu_hashes = RapidHash.apply(
         arr.to_device(ctx), ExecutionContext.gpu(ctx)
     ).to_cpu(ctx)
     assert_equal(len(gpu_hashes), 10000)
@@ -89,8 +89,8 @@ def test_rapidhash_gpu_nulls() raises:
     b.append_null()
     b.append(Scalar[int32.native](5))
     var arr = b.finish()
-    var cpu_hashes = rapidhash[Int32Type](arr)
-    var gpu_hashes = rapidhash[Int32Type](
+    var cpu_hashes = RapidHash.apply(arr)
+    var gpu_hashes = RapidHash.apply(
         arr.to_device(ctx), ExecutionContext.gpu(ctx)
     ).to_cpu(ctx)
     assert_equal(len(gpu_hashes), 5)
@@ -114,8 +114,8 @@ def test_rapidhash_gpu_bool() raises:
     b.append(False)
     b.append(True)
     var arr = b.finish()
-    var cpu_hashes = rapidhash(arr)
-    var gpu_hashes = rapidhash(
+    var cpu_hashes = RapidHash.apply(arr)
+    var gpu_hashes = RapidHash.apply(
         arr.to_device(ctx), ExecutionContext.gpu(ctx)
     ).to_cpu(ctx)
     assert_equal(len(gpu_hashes), 6)
@@ -127,7 +127,7 @@ def test_rapidhash_gpu_device_resident() raises:
     """Verify GPU result is device-resident before to_cpu()."""
     var ctx = DeviceContext()
     var arr = array([1, 2, 3], int32).to_device(ctx)
-    var result = rapidhash[Int32Type](arr, ExecutionContext.gpu(ctx))
+    var result = RapidHash.apply(arr, ExecutionContext.gpu(ctx))
     assert_true(result.buffer.is_device())
     var on_cpu = result.to_cpu(ctx)
     assert_equal(len(on_cpu), 3)

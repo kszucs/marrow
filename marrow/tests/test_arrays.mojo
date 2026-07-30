@@ -41,7 +41,7 @@ def test_array_data_with_offset() raises:
     bitmap.set(4)
 
     # Create ArrayData with offset=2
-    var array_data = AnyArray.from_data(
+    var array_data = DynArray.from_data(
         ArrayData(
             dtype=int8,
             length=3,
@@ -67,7 +67,7 @@ def test_array_data_fieldwise_init() raises:
     var buffer = buffer_b.to_immutable()
 
     # Test creating ArrayData with all fields specified including offset
-    var array_data = AnyArray.from_data(
+    var array_data = DynArray.from_data(
         ArrayData(
             dtype=int8,
             length=5,
@@ -93,26 +93,26 @@ def test_array_from_string() raises:
     var s = StringBuilder()
     s.append("hello")
     s.append("world")
-    var a: AnyArray = s.finish()
+    var a: DynArray = s.finish()
     assert_equal(a.length(), 2)
 
 
 def test_array_from_list() raises:
     var ints_b = Int64Builder()
     var l = ListBuilder(ints_b^)
-    var a: AnyArray = l.finish()
+    var a: DynArray = l.finish()
     assert_true(a.dtype().is_list())
 
 
 def test_array_from_struct() raises:
     var s = StructBuilder([field("x", int32)], capacity=5)
-    var a: AnyArray = s.finish()
+    var a: DynArray = s.finish()
     assert_true(a.dtype().is_struct())
 
 
 def test_array_copy() raises:
     var _sb = Buffer.alloc_zeroed[int8.native](3)
-    var src = AnyArray.from_data(
+    var src = DynArray.from_data(
         ArrayData(
             dtype=int8,
             length=3,
@@ -131,7 +131,7 @@ def test_array_copy() raises:
 
 def test_array_move() raises:
     var _ab = Buffer.alloc_zeroed[int8.native](5)
-    var a = AnyArray.from_data(
+    var a = DynArray.from_data(
         ArrayData(
             dtype=int8,
             length=5,
@@ -527,7 +527,7 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
 # #     builder.append_valid()
 # #     builder.append_valid()
 # #     var fsl = builder.finish()
-# #     var s = String(AnyArray(fsl^))
+# #     var s = String(DynArray(fsl^))
 # #     assert_true("FixedSizeListArray" in s)
 
 
@@ -539,7 +539,7 @@ def test_struct_array() raises:
     assert_equal(len(struct_builder), 0)
     assert_equal(struct_builder._capacity, 10)
 
-    var data: AnyArray = struct_builder.finish()
+    var data: DynArray = struct_builder.finish()
     assert_equal(data.length(), 0)
     assert_true(data.dtype().is_struct())
     assert_equal(len(data.dtype().as_struct().fields), 3)
@@ -574,7 +574,7 @@ def test_struct_array_unsafe_get() raises:
 
 
 def test_chunked_array() raises:
-    var arrays: List[AnyArray] = [
+    var arrays: List[DynArray] = [
         array([0], uint8),
         array([0, 1], uint8),
     ]
@@ -591,7 +591,7 @@ def test_chunked_array() raises:
 
 
 def test_combine_chunked_array() raises:
-    var arrays: List[AnyArray] = [
+    var arrays: List[DynArray] = [
         array([0], uint8),
         array([0, 1], uint8),
     ]
@@ -1582,16 +1582,16 @@ def test_struct_array_eq_dtype_mismatch() raises:
 
 
 def test_array_eq_dtype_mismatch() raises:
-    # Type-erased AnyArray: int32 vs int64 → False
-    var a: AnyArray = array([1, 2, 3], int32)
-    var b: AnyArray = array([1, 2, 3], int64)
+    # Type-erased DynArray: int32 vs int64 → False
+    var a: DynArray = array([1, 2, 3], int32)
+    var b: DynArray = array([1, 2, 3], int64)
     assert_false(a == b)
 
 
 def test_array_eq_via_dispatch() raises:
-    # Equal arrays accessed as type-erased AnyArray verify dispatch works.
-    var a: AnyArray = array([10, 20, 30], int32)
-    var b: AnyArray = array([10, 20, 30], int32)
+    # Equal arrays accessed as type-erased DynArray verify dispatch works.
+    var a: DynArray = array([10, 20, 30], int32)
+    var b: DynArray = array([10, 20, 30], int32)
     assert_true(a == b)
     assert_true(a == b)
 
@@ -1631,7 +1631,7 @@ def test_primitive_array_list_literal_empty() raises:
 def test_temporal_array_date32() raises:
     var arr = Date32Array(
         ArrayData(
-            dtype=date32().to_any(),
+            dtype=date32().to_dyn(),
             length=3,
             nulls=0,
             offset=0,
@@ -1642,7 +1642,7 @@ def test_temporal_array_date32() raises:
     )
     assert_equal(len(arr), 3)
     assert_equal(arr.null_count(), 0)
-    assert_true(arr.type() == date32().to_any())
+    assert_true(arr.type() == date32().to_dyn())
     assert_true(arr.is_valid(0))
     assert_true(arr.is_valid(1))
     assert_true(arr.is_valid(2))
@@ -1656,7 +1656,7 @@ def test_temporal_array_timestamp_values() raises:
     buf.unsafe_set[DType.int64](3, 4_000_000)
     var arr = TimestampArray(
         ArrayData(
-            dtype=timestamp(second, "UTC").to_any(),
+            dtype=timestamp(second, "UTC").to_dyn(),
             length=4,
             nulls=0,
             offset=0,
@@ -1666,7 +1666,7 @@ def test_temporal_array_timestamp_values() raises:
         )
     )
     assert_equal(len(arr), 4)
-    assert_true(arr.type() == timestamp(second, "UTC").to_any())
+    assert_true(arr.type() == timestamp(second, "UTC").to_dyn())
     assert_equal(arr[0].value(), 1_000_000)
     assert_equal(arr[1].value(), 2_000_000)
     assert_equal(arr[2].value(), 3_000_000)
@@ -1683,7 +1683,7 @@ def test_temporal_array_with_nulls() raises:
     bm.set(2)
     var arr = Date32Array(
         ArrayData(
-            dtype=date32().to_any(),
+            dtype=date32().to_dyn(),
             length=3,
             nulls=1,
             offset=0,
@@ -1708,7 +1708,7 @@ def test_temporal_array_slice() raises:
         buf.unsafe_set[DType.int64](i, Int64(i * 1000))
     var arr = DurationArray(
         ArrayData(
-            dtype=duration(millisecond).to_any(),
+            dtype=duration(millisecond).to_dyn(),
             length=5,
             nulls=0,
             offset=0,
@@ -1733,7 +1733,7 @@ def test_temporal_array_equality() raises:
     buf2.unsafe_set[DType.int32](1, 200)
     var arr1 = Date32Array(
         ArrayData(
-            dtype=date32().to_any(),
+            dtype=date32().to_dyn(),
             length=2,
             nulls=0,
             offset=0,
@@ -1744,7 +1744,7 @@ def test_temporal_array_equality() raises:
     )
     var arr2 = Date32Array(
         ArrayData(
-            dtype=date32().to_any(),
+            dtype=date32().to_dyn(),
             length=2,
             nulls=0,
             offset=0,
@@ -1762,7 +1762,7 @@ def test_temporal_array_dtype_mismatch() raises:
     buf.unsafe_set[DType.int32](1, 2)
     var arr_date32 = Date32Array(
         ArrayData(
-            dtype=date32().to_any(),
+            dtype=date32().to_dyn(),
             length=2,
             nulls=0,
             offset=0,
@@ -1776,7 +1776,7 @@ def test_temporal_array_dtype_mismatch() raises:
     buf64.unsafe_set[DType.int64](1, 2)
     var arr_date64 = Date64Array(
         ArrayData(
-            dtype=date64().to_any(),
+            dtype=date64().to_dyn(),
             length=2,
             nulls=0,
             offset=0,
@@ -1785,7 +1785,7 @@ def test_temporal_array_dtype_mismatch() raises:
             children=[],
         )
     )
-    assert_false(arr_date32^.to_any() == arr_date64^.to_any())
+    assert_false(arr_date32^.to_dyn() == arr_date64^.to_dyn())
 
 
 def test_temporal_array_to_any_roundtrip() raises:
@@ -1794,7 +1794,7 @@ def test_temporal_array_to_any_roundtrip() raises:
     buf.unsafe_set[DType.int64](1, 1999)
     var arr = TimestampArray(
         ArrayData(
-            dtype=timestamp(nanosecond).to_any(),
+            dtype=timestamp(nanosecond).to_dyn(),
             length=2,
             nulls=0,
             offset=0,
@@ -1803,8 +1803,8 @@ def test_temporal_array_to_any_roundtrip() raises:
             children=[],
         )
     )
-    var any_arr = arr^.to_any()
-    assert_true(any_arr.dtype() == timestamp(nanosecond).to_any())
+    var any_arr = arr^.to_dyn()
+    assert_true(any_arr.dtype() == timestamp(nanosecond).to_dyn())
     assert_equal(any_arr.length(), 2)
     ref ta = any_arr.as_timestamp()
     assert_equal(ta[0].value(), 999)
@@ -1816,7 +1816,7 @@ def test_temporal_array_index_out_of_bounds() raises:
     buf.unsafe_set[DType.int32](0, 42)
     var arr = Date32Array(
         ArrayData(
-            dtype=date32().to_any(),
+            dtype=date32().to_dyn(),
             length=1,
             nulls=0,
             offset=0,
@@ -1840,7 +1840,7 @@ def test_year_month_interval_array() raises:
     buf.unsafe_set[DType.int32](2, Int32(36))
     var arr = YearMonthIntervalArray(
         ArrayData(
-            dtype=year_month_interval().to_any(),
+            dtype=year_month_interval().to_dyn(),
             length=3,
             nulls=0,
             offset=0,
@@ -1850,7 +1850,7 @@ def test_year_month_interval_array() raises:
         )
     )
     assert_equal(len(arr), 3)
-    assert_true(arr.type() == year_month_interval().to_any())
+    assert_true(arr.type() == year_month_interval().to_dyn())
     assert_equal(arr[0].value(), 12)
     assert_equal(arr[1].value(), 24)
     assert_equal(arr[2].value(), 36)
@@ -1863,7 +1863,7 @@ def test_day_time_interval_array() raises:
     buf.unsafe_set[DType.int64](2, Int64(259200000))
     var arr = DayTimeIntervalArray(
         ArrayData(
-            dtype=day_time_interval().to_any(),
+            dtype=day_time_interval().to_dyn(),
             length=3,
             nulls=0,
             offset=0,
@@ -1873,7 +1873,7 @@ def test_day_time_interval_array() raises:
         )
     )
     assert_equal(len(arr), 3)
-    assert_true(arr.type() == day_time_interval().to_any())
+    assert_true(arr.type() == day_time_interval().to_dyn())
     assert_equal(arr[0].value(), 86400000)
     assert_equal(arr[1].value(), 172800000)
     assert_equal(arr[2].value(), 259200000)
@@ -1885,7 +1885,7 @@ def test_month_day_nano_interval_array() raises:
     buf.unsafe_set[DType.int128](1, 2)
     var arr = MonthDayNanoIntervalArray(
         ArrayData(
-            dtype=month_day_nano_interval().to_any(),
+            dtype=month_day_nano_interval().to_dyn(),
             length=2,
             nulls=0,
             offset=0,
@@ -1895,7 +1895,7 @@ def test_month_day_nano_interval_array() raises:
         )
     )
     assert_equal(len(arr), 2)
-    assert_true(arr.type() == month_day_nano_interval().to_any())
+    assert_true(arr.type() == month_day_nano_interval().to_dyn())
     assert_equal(arr[0].value(), 1)
     assert_equal(arr[1].value(), 2)
 
@@ -1906,7 +1906,7 @@ def test_interval_array_to_any_roundtrip() raises:
     buf.unsafe_set[DType.int32](1, Int32(18))
     var arr = YearMonthIntervalArray(
         ArrayData(
-            dtype=year_month_interval().to_any(),
+            dtype=year_month_interval().to_dyn(),
             length=2,
             nulls=0,
             offset=0,
@@ -1915,8 +1915,8 @@ def test_interval_array_to_any_roundtrip() raises:
             children=[],
         )
     )
-    var any_arr = arr^.to_any()
-    assert_true(any_arr.dtype() == year_month_interval().to_any())
+    var any_arr = arr^.to_dyn()
+    assert_true(any_arr.dtype() == year_month_interval().to_dyn())
     assert_equal(any_arr.length(), 2)
     ref ia = any_arr.as_year_month_interval()
     assert_equal(ia[0].value(), 6)
@@ -1929,7 +1929,7 @@ def test_dictionary_array() raises:
     vb.append("cat")
     vb.append("dog")
     vb.append("fish")
-    var values: AnyArray = vb.finish()
+    var values: DynArray = vb.finish()
 
     # Build indices: [0, 1, 2, 0, 1]
     var ib = Int8Builder()
@@ -1938,7 +1938,7 @@ def test_dictionary_array() raises:
     ib.append(2)
     ib.append(0)
     ib.append(1)
-    var indices: AnyArray = ib.finish()
+    var indices: DynArray = ib.finish()
 
     var arr = DictionaryArray.from_arrays(indices^, values^)
     assert_equal(len(arr), 5)
@@ -1965,14 +1965,14 @@ def test_dictionary_array_null() raises:
     var vb = StringBuilder()
     vb.append("cat")
     vb.append("dog")
-    var values: AnyArray = vb.finish()
+    var values: DynArray = vb.finish()
 
     # indices: [0, null, 1]
     var ib = Int32Builder()
     ib.append(0)
     ib.append_null()
     ib.append(1)
-    var indices: AnyArray = ib.finish()
+    var indices: DynArray = ib.finish()
 
     var arr = DictionaryArray.from_arrays(indices^, values^)
     assert_equal(len(arr), 3)
@@ -1990,12 +1990,12 @@ def test_dictionary_array_slice() raises:
     vb.append("a")
     vb.append("b")
     vb.append("c")
-    var values: AnyArray = vb.finish()
+    var values: DynArray = vb.finish()
 
     var ib = Int32Builder()
     for i in range(3):
         ib.append(Int32(i))
-    var indices: AnyArray = ib.finish()
+    var indices: DynArray = ib.finish()
     var arr = DictionaryArray.from_arrays(indices^, values^)
 
     # Slice [1:3] -> ["b", "c"]
@@ -2020,8 +2020,8 @@ def test_dictionary_indices_offset() raises:
     var ib = Int32Builder()
     for i in range(3):
         ib.append(Int32(i))
-    var indices: AnyArray = ib.finish()
-    var values: AnyArray = vb.finish()
+    var indices: DynArray = ib.finish()
+    var values: DynArray = vb.finish()
     var arr = DictionaryArray.from_arrays(indices^, values^)
 
     var full_any = arr.indices()
@@ -2071,13 +2071,13 @@ def test_dictionary_array_data_roundtrip() raises:
     var vb = StringBuilder()
     vb.append("x")
     vb.append("y")
-    var values: AnyArray = vb.finish()
+    var values: DynArray = vb.finish()
 
     var ib = Int32Builder()
     ib.append(0)
     ib.append(1)
     ib.append(0)
-    var indices: AnyArray = ib.finish()
+    var indices: DynArray = ib.finish()
     var arr = DictionaryArray.from_arrays(indices^, values^)
 
     # to_data round-trip
@@ -2093,8 +2093,8 @@ def test_dictionary_array_data_roundtrip() raises:
     assert_equal(arr2[1].value().as_string().to_string(), "y")
     assert_equal(arr2[2].value().as_string().to_string(), "x")
 
-    # AnyArray.from_data dispatch
-    var any2 = AnyArray.from_data(data)
+    # DynArray.from_data dispatch
+    var any2 = DynArray.from_data(data)
     assert_true(any2.dtype().is_dictionary())
     ref da = any2.as_dictionary()
     assert_equal(da[0].value().as_string().to_string(), "x")
@@ -2105,7 +2105,7 @@ def test_dictionary_builder() raises:
     vb.append("red")
     vb.append("green")
     vb.append("blue")
-    var values: AnyArray = vb.finish()
+    var values: DynArray = vb.finish()
 
     var builder = DictionaryBuilder(Int8Builder(), values^)
     builder.append(0)  # "red"
@@ -2127,11 +2127,11 @@ def test_dictionary_builder() raises:
 def test_dictionary_out_of_bounds() raises:
     var vb = StringBuilder()
     vb.append("only")
-    var values: AnyArray = vb.finish()
+    var values: DynArray = vb.finish()
 
     var ib = Int32Builder()
     ib.append(0)
-    var indices: AnyArray = ib.finish()
+    var indices: DynArray = ib.finish()
     var arr = DictionaryArray.from_arrays(indices^, values^)
 
     var raised = False
@@ -2143,56 +2143,56 @@ def test_dictionary_out_of_bounds() raises:
 
 
 def test_empty_null() raises:
-    var arr = array(null.to_any())
+    var arr = array(null.to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_null())
 
 
 def test_empty_bool() raises:
-    var arr = array(bool_.to_any())
+    var arr = array(bool_.to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_bool())
 
 
 def test_empty_int32() raises:
-    var arr = array(int32.to_any())
+    var arr = array(int32.to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype() == int32)
 
 
 def test_empty_float64() raises:
-    var arr = array(float64.to_any())
+    var arr = array(float64.to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype() == float64)
 
 
 def test_empty_string() raises:
-    var arr = array(string.to_any())
+    var arr = array(string.to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_string())
 
 
 def test_empty_large_string() raises:
-    var arr = array(large_string.to_any())
+    var arr = array(large_string.to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_large_string())
 
 
 def test_empty_binary() raises:
-    var arr = array(binary.to_any())
+    var arr = array(binary.to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_binary())
 
 
 def test_empty_list() raises:
-    var arr = array(list_(int32).to_any())
+    var arr = array(list_(int32).to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_list())
@@ -2200,14 +2200,14 @@ def test_empty_list() raises:
 
 
 def test_empty_large_list() raises:
-    var arr = array(large_list_(float64).to_any())
+    var arr = array(large_list_(float64).to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_large_list())
 
 
 def test_empty_fixed_size_list() raises:
-    var arr = array(fixed_size_list_(int32, 4).to_any())
+    var arr = array(fixed_size_list_(int32, 4).to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_fixed_size_list())
@@ -2215,7 +2215,7 @@ def test_empty_fixed_size_list() raises:
 
 
 def test_empty_struct() raises:
-    var arr = array(struct_(Field("x", int32), Field("y", float64)).to_any())
+    var arr = array(struct_(Field("x", int32), Field("y", float64)).to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_struct())
@@ -2226,14 +2226,14 @@ def test_empty_struct() raises:
 
 
 def test_empty_dictionary() raises:
-    var arr = array(dictionary(int32, string).to_any())
+    var arr = array(dictionary(int32, string).to_dyn())
     assert_equal(len(arr), 0)
     assert_equal(arr.null_count(), 0)
     assert_true(arr.dtype().is_dictionary())
 
 
 def test_empty_nested_list() raises:
-    var arr = array(list_(list_(int32)).to_any())
+    var arr = array(list_(list_(int32)).to_dyn())
     assert_equal(len(arr), 0)
     assert_true(arr.dtype().is_list())
     assert_equal(len(arr.as_list().values()), 0)

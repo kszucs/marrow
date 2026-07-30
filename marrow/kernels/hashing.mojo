@@ -13,7 +13,7 @@ Public API — the ``RapidHash`` kernel:
     - StructArray: per-column hash with combining (multi-key)
     - ListLikeArray[T] / FixedSizeListArray: fold the child hashes per row
   - ``RapidHash.dispatch``: runtime-typed dispatch, routed through the
-    ``AnyDataType.dispatch_*`` family rather than a hand-written dtype ladder.
+    ``DynType.dispatch_*`` family rather than a hand-written dtype ladder.
     Temporal, interval, and decimal32/64 columns are hashed through their
     typed leaf (bound on ``PrimitiveType``); dictionary columns through their
     decoded values,
@@ -24,7 +24,7 @@ Public API — the ``RapidHash`` kernel:
 Rapidhash port follows the C reference at https://github.com/Nicoshev/rapidhash
 """
 
-from std.gpu.host import DeviceContext
+
 from std.hashlib import hash as _hash
 from std.sys import size_of
 
@@ -35,17 +35,17 @@ from ..arrays import (
     StructArray,
     ListLikeArray,
     FixedSizeListArray,
-    AnyArray,
+    DynArray,
     UInt64Array,
 )
 from ..builders import UInt64Builder
 from ..buffers import Buffer
 from ..views import apply
 from .cast import cast
+from .core import Kernel
 from .execution import ExecutionContext
 from ..dtypes import (
     BinaryLikeType,
-    NumericType,
     PrimitiveType,
     ListLikeType,
     bool_,
@@ -263,11 +263,11 @@ def _combine_hashes[
     return lo_hi[0] ^ lo_hi[1]
 
 
-struct RapidHash:
+struct RapidHash(Kernel):
     """Column hashing kernel — one ``UInt64`` per row.
 
     The typed leaves are the ``apply`` overloads; ``dispatch`` resolves a
-    runtime-typed array to the matching leaf via the ``AnyDataType.dispatch_*`` family
+    runtime-typed array to the matching leaf via the ``DynType.dispatch_*`` family
     rather than a per-dtype ladder, so adding a dtype to a family covers it
     without touching this file. Null elements hash to ``NULL_HASH_SENTINEL`` so
     that "null == null" holds for grouping and joining (Arrow's `hash_*`
@@ -281,20 +281,13 @@ struct RapidHash:
 
     @staticmethod
     def dispatch(
-        keys: AnyArray,
+        keys: DynArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> UInt64Array:
         """Resolve `keys`'s runtime dtype and hash it."""
         var dt = keys.dtype()
         if dt == bool_:
             return RapidHash.apply(keys.as_bool(), ctx)
-        elif dt.is_numeric():
-
-            @parameter
-            def numeric[T: NumericType](d: T) raises -> UInt64Array:
-                return RapidHash.apply(keys.as_primitive[T](), ctx)
-
-            return dt.dispatch_numeric[numeric]()
         elif dt.is_binary_like():
 
             @parameter
@@ -302,7 +295,7 @@ struct RapidHash:
                 return RapidHash.apply(keys.as_binary_like[T](), ctx)
 
             return dt.dispatch_binarylike[binarylike]()
-        elif dt.is_list_like() or dt.is_map():
+        elif dt.is_list_like():
 
             @parameter
             def listlike[T: ListLikeType](d: T) raises -> UInt64Array:
@@ -321,22 +314,23 @@ struct RapidHash:
                 cast(keys, dt.as_dictionary().value_type().copy(), False, ctx),
                 ctx,
             )
-        elif dt.is_decimal128():
-            return RapidHash.apply(keys.as_decimal128(), ctx)
-        elif dt.is_decimal256():
-            return RapidHash.apply(keys.as_decimal256(), ctx)
         elif dt.is_primitive():
-            # `apply` is bound on `PrimitiveType`, so temporal, interval and
-            # decimal32/64 columns hash through the typed leaf directly — the
-            # hash only reads the value bytes via `T.native`, never the logical
+            # One arm for every fixed-width type. `apply` is bound on
+            # `PrimitiveType`, so numeric, temporal, interval and *all four*
+            # decimal widths hash through the typed leaf directly — the hash
+            # only reads the value bytes via `T.native`, never the logical
             # dtype. No reinterpret to an integer backing is needed.
+            #
+            # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
+            # separate numeric/decimal128/decimal256 arms this replaces were
+            # three more spellings of this one call.
             @parameter
             def primitive[T: PrimitiveType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_primitive[T](), ctx)
 
             return dt.dispatch_primitive[primitive]()
         else:
-            raise Error("rapidhash: unsupported dtype ", dt)
+            raise Self.error(t"unsupported dtype {dt}")
 
     @staticmethod
     def apply(
@@ -504,7 +498,7 @@ struct RapidHash:
         var n = len(keys)
         var num_fields = len(keys.children)
         if num_fields == 0:
-            raise Error("rapidhash: empty struct array")
+            raise Self.error("empty struct array")
 
         var result = RapidHash.dispatch(
             keys.children[0].slice(keys.offset, n), ctx
@@ -592,14 +586,25 @@ struct RapidHash:
 # ---------------------------------------------------------------------------
 # Public API — thin free delegators to the RapidHash kernel.
 #
-# These exist because `SwissHashTable[hasher]` / `HashJoin[hasher]` bind the
-# hasher as a comptime *function value*, which needs a single unambiguous
-# symbol rather than an overload set.
+# Two entry points, each with a reason to exist:
+#
+# - `rapidhash(DynArray)` is the `pc.*`-style erased one.
+# - `rapidhash(StructArray)` is what `SwissHashTable[hasher]` / `HashJoin[hasher]`
+#   bind as a comptime *function value*; their `hasher` parameter is typed
+#   `def(StructArray, ExecutionContext) raises -> UInt64Array`, so this needs to
+#   be a free symbol with exactly that signature. A static method will not do.
+#
+# Three more used to sit here (`BoolArray`, `PrimitiveArray[T]`,
+# `BinaryLikeArray[T]`) forwarding to `RapidHash.apply`, which has seven typed
+# overloads — `ListLikeArray` and `FixedSizeListArray` had been taught to the
+# kernel and forgotten here, so the two lists had already drifted. They saved no
+# copy (`apply` is typed too), so callers now say `RapidHash.apply` and teaching
+# a new array type is one edit again.
 # ---------------------------------------------------------------------------
 
 
 def rapidhash(
-    keys: AnyArray,
+    keys: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> UInt64Array:
     """Hash `keys` element-wise; nulls hash to ``NULL_HASH_SENTINEL``."""
@@ -607,32 +612,9 @@ def rapidhash(
 
 
 def rapidhash(
-    keys: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> UInt64Array:
-    return RapidHash.apply(keys, ctx)
-
-
-def rapidhash[
-    T: PrimitiveType
-](
-    keys: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> UInt64Array:
-    return RapidHash.apply(keys, ctx)
-
-
-def rapidhash[
-    T: BinaryLikeType
-](
-    keys: BinaryLikeArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> UInt64Array:
-    return RapidHash.apply(keys, ctx)
-
-
-def rapidhash(
     keys: StructArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> UInt64Array:
+    """Row-wise hash of a struct's fields — the hasher `SwissHashTable` and
+    `HashJoin` bind. See the note above before removing this."""
     return RapidHash.apply(keys, ctx)

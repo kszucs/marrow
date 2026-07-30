@@ -26,11 +26,10 @@ Example usage::
         suite.run()
 """
 
-from std.collections import Set, Dict
-from std.benchmark import Bench, BenchConfig, Bencher, BenchId, BenchMetric
+from std.collections import Set
+from std.benchmark import Bench, BenchConfig, Bencher, BenchMetric
 from std.reflection import get_function_name, call_location, SourceLocation
 from std.sys import argv
-from std.time import perf_counter_ns
 
 
 struct CLIFlags:

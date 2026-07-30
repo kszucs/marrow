@@ -1,6 +1,6 @@
 """Array builders for constructing Arrow arrays incrementally.
 
-`Builder` is the trait that all typed builders implement.  `AnyBuilder` is
+`Builder` is the trait that all typed builders implement.  `DynBuilder` is
 the type-erased container that dispatches to the concrete builder at runtime
 via function-pointer trampolines.
 
@@ -8,9 +8,9 @@ Typed builders (`PrimitiveBuilder[T]`, `BinaryBuilder`, `ListBuilder`,
 `FixedSizeListBuilder`, `StructBuilder`) each own their data directly and
 conform to the `Builder` trait.
 
-`AnyBuilder` wraps any `Builder`-conforming type on the heap behind an
+`DynBuilder` wraps any `Builder`-conforming type on the heap behind an
 `ArcPointer`, so copies are O(1) ref-count bumps.  Composite builders
-(`ListBuilder`, `StructBuilder`) hold `AnyBuilder` children for nesting.
+(`ListBuilder`, `StructBuilder`) hold `DynBuilder` children for nesting.
 
 Example
 -------
@@ -19,19 +19,19 @@ Example
     b.append_null()
     var arr = b.finish()  # Int64Array
 
-    # Typed builders implicitly convert to AnyBuilder
+    # Typed builders implicitly convert to DynBuilder
     var child = Float32Builder(capacity=64)
     var list_b = ListBuilder(child^, capacity=10)
 """
 
 from std.memory import ArcPointer
 from std.utils import Variant
-from std.os import abort
+
 from .buffers import Buffer, Bitmap
-from .views import BitmapView, BufferView
+
 from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
-    AnyDataType,
+    DynType,
     BinaryLikeType,
     BinaryType,
     Date32Type,
@@ -90,27 +90,13 @@ from .dtypes import (
 )
 from .arrays import (
     Array,
-    AnyArray,
+    DynArray,
     NullArray,
     BoolArray,
     PrimitiveArray,
-    Date32Array,
-    Date64Array,
-    Time32Array,
-    Time64Array,
-    DurationArray,
-    TimestampArray,
-    Decimal32Array,
-    Decimal64Array,
-    Decimal128Array,
-    Decimal256Array,
     BinaryLikeArray,
-    BinaryArray,
-    LargeBinaryArray,
     StringArray,
-    LargeStringArray,
     ListLikeArray,
-    ListArray,
     MapArray,
     FixedSizeListArray,
     FixedSizeBinaryArray,
@@ -136,7 +122,7 @@ trait Builder(ImplicitlyDeletable, Movable, Sized):
     def null_count(self) -> Int:
         ...
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         ...
 
     def reserve(mut self, additional: Int) raises:
@@ -145,7 +131,7 @@ trait Builder(ImplicitlyDeletable, Movable, Sized):
     def append_null(mut self) raises:
         ...
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         ...
 
     def finish(
@@ -153,16 +139,24 @@ trait Builder(ImplicitlyDeletable, Movable, Sized):
     ) raises -> Self.ArrayType:
         ...
 
-    def reset(mut self):
+    def reset(mut self) raises:
+        """Discard accumulated state and start over.
+
+        `raises` for the same reason `Array.slice` does: the erased
+        implementation dispatches over a variant and an uncovered member falls
+        through. Typed builders stay non-raising, and Mojo accepts a
+        non-raising body against a raising requirement, so their call sites are
+        unaffected.
+        """
         ...
 
 
 # ---------------------------------------------------------------------------
-# AnyBuilder — type-erased builder with dynamic dispatch
+# DynBuilder — type-erased builder with dynamic dispatch
 # ---------------------------------------------------------------------------
 
 
-struct AnyBuilder(ImplicitlyCopyable, Movable):
+struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
     """Type-erased builder container.
 
     Wraps any `Builder`-conforming type in a Variant on the heap behind an
@@ -224,12 +218,12 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         self._ptr = copy._ptr.copy()
 
     # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
-    # the `StructBuilder -> List[AnyBuilder] -> AnyBuilder` reference cycle; the
+    # the `StructBuilder -> List[DynBuilder] -> DynBuilder` reference cycle; the
     # ArcPointer field is still destroyed automatically after the body runs.
     def __del__(deinit self):
         pass
 
-    def __init__(out self, dtype: AnyDataType, capacity: Int = 0) raises:
+    def __init__(out self, dtype: DynType, capacity: Int = 0) raises:
         if dtype.is_null():
             self = NullBuilder(capacity)
         elif dtype == bool_:
@@ -265,14 +259,14 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         elif dtype.is_large_binary():
             self = LargeBinaryBuilder(capacity)
         elif dtype.is_list():
-            var child = AnyBuilder(dtype.as_list().value_type())
+            var child = DynBuilder(dtype.as_list().value_type())
             self = ListBuilder(child^, capacity)
         elif dtype.is_large_list():
-            var child = AnyBuilder(dtype.as_large_list().value_type())
+            var child = DynBuilder(dtype.as_large_list().value_type())
             self = LargeListBuilder(child^, capacity)
         elif dtype.is_fixed_size_list():
             ref fsl = dtype.as_fixed_size_list()
-            var child = AnyBuilder(fsl.value_type())
+            var child = DynBuilder(fsl.value_type())
             self = FixedSizeListBuilder(child^, fsl.size, capacity)
         elif dtype.is_fixed_size_binary():
             self = FixedSizeBinaryBuilder(
@@ -312,7 +306,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             self = StructBuilder(dtype.as_struct().fields.copy(), capacity)
         elif dtype.is_dictionary():
             ref dt = dtype.as_dictionary()
-            var idx_builder = AnyBuilder(dt.index_type(), capacity)
+            var idx_builder = DynBuilder(dt.index_type(), capacity)
             self = DictionaryBuilder(
                 idx_builder^, array(dt.value_type()), dt.ordered
             )
@@ -333,9 +327,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
         return variant_dispatch[Builder, func=f](self._ptr[])
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         @parameter
-        def f[T: Builder](b: T) -> AnyDataType:
+        def f[T: Builder](b: T) -> DynType:
             return b.dtype()
 
         return variant_dispatch[Builder, func=f](self._ptr[])
@@ -354,17 +348,22 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
         variant_dispatch_raises[Builder, func=f](self._ptr[])
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         @parameter
         def f[T: Builder](mut b: T) raises:
             b.extend(arr)
 
         variant_dispatch_raises[Builder, func=f](self._ptr[])
 
-    def finish(mut self) raises -> AnyArray:
+    comptime ArrayType = DynArray
+    """`Builder`'s companion-array member. This is what `DynArray: Array`
+    unblocked: the trait requires `ArrayType: Array`, and until the erased array
+    conformed there was nothing for the erased builder to name."""
+
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
         @parameter
-        def f[T: Builder](mut b: T) raises -> AnyArray:
-            return b.finish().to_any()
+        def f[T: Builder](mut b: T) raises -> DynArray:
+            return b.finish(shrink_to_fit=shrink_to_fit).to_dyn()
 
         return variant_dispatch_raises[Builder, func=f](self._ptr[])
 
@@ -664,7 +663,7 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
             else:
                 self.append_null()
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         self.extend(arr.as_primitive[Self.T]())
 
     def extend(mut self, arr: PrimitiveArray[Self.T]) raises:
@@ -759,8 +758,8 @@ struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> AnyDataType:
-        return Self.T().to_any()
+    def dtype(self) -> DynType:
+        return Self.T().to_dyn()
 
     def append(mut self, value: String) raises:
         self.append(StringSlice(value))
@@ -786,7 +785,7 @@ struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
             else:
                 self.append_null()
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         comptime if Self.T.offset == DType.int32:
             self.extend(arr.as_string())
         else:
@@ -921,19 +920,19 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
 
     comptime ArrayType = ListLikeArray[Self.T]
 
-    var _dtype: AnyDataType
+    var _dtype: DynType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
     var _bitmap: Bitmap[mut=True]
     var _offsets: Buffer[mut=True]
-    var _child: AnyBuilder
+    var _child: DynBuilder
 
-    def __init__(out self, var child: AnyBuilder, capacity: Int = 0):
+    def __init__(out self, var child: DynBuilder, capacity: Int = 0):
         var offsets = Buffer.alloc_zeroed[Self.T.offset](capacity + 1)
         offsets.unsafe_set[Self.T.offset](0, 0)
         var child_dtype = child.dtype().copy()
-        var list_dtype: AnyDataType
+        var list_dtype: DynType
         comptime if Self.T.offset == DType.int32:
             list_dtype = list_(child_dtype^)
         else:
@@ -952,10 +951,10 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         return self._dtype.copy()
 
-    def values(self) -> AnyBuilder:
+    def values(self) -> DynBuilder:
         return self._child
 
     def append_null(mut self) raises:
@@ -987,7 +986,7 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
         )
         self._length += 1
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         comptime if Self.T.offset == DType.int32:
             self.extend(arr.as_list())
         else:
@@ -1088,7 +1087,7 @@ struct MapBuilder(Builder):
     comptime ArrayType = MapArray
 
     var _inner: ListBuilder
-    var _dtype: AnyDataType
+    var _dtype: DynType
 
     def __init__(out self, dtype: MapType, capacity: Int = 0) raises:
         var entries = StructBuilder(
@@ -1103,10 +1102,10 @@ struct MapBuilder(Builder):
     def null_count(self) -> Int:
         return self._inner.null_count()
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         return self._dtype.copy()
 
-    def entries(self) -> AnyBuilder:
+    def entries(self) -> DynBuilder:
         """The (key, value) entries struct builder — append map entries here,
         then call `append_valid`/`append_null` to close each map."""
         return self._inner.values()
@@ -1120,7 +1119,7 @@ struct MapBuilder(Builder):
     def append_valid(mut self) raises:
         self._inner.append_valid()
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         # Feed the map to the inner ListBuilder as a plain list of its entries.
         self._inner.extend(arr.as_map().to_list())
 
@@ -1141,20 +1140,20 @@ struct MapBuilder(Builder):
 struct FixedSizeListBuilder(Builder):
     """Builder for fixed-size list arrays.
 
-    _child — child element builder (AnyBuilder)
+    _child — child element builder (DynBuilder)
     """
 
     comptime ArrayType = FixedSizeListArray
 
-    var _dtype: AnyDataType
+    var _dtype: DynType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
     var _bitmap: Bitmap[mut=True]
-    var _child: AnyBuilder
+    var _child: DynBuilder
 
     def __init__(
-        out self, var child: AnyBuilder, list_size: Int, capacity: Int = 0
+        out self, var child: DynBuilder, list_size: Int, capacity: Int = 0
     ):
         var child_dtype = child.dtype().copy()
         self._dtype = fixed_size_list_(child_dtype^, list_size)
@@ -1170,10 +1169,10 @@ struct FixedSizeListBuilder(Builder):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         return self._dtype.copy()
 
-    def values(self) -> AnyBuilder:
+    def values(self) -> DynBuilder:
         return self._child
 
     def append_null(mut self) raises:
@@ -1197,7 +1196,7 @@ struct FixedSizeListBuilder(Builder):
         self._bitmap.set(self._length)
         self._length += 1
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         self.extend(arr.as_fixed_size_list())
 
     def extend(mut self, arr: FixedSizeListArray) raises:
@@ -1266,22 +1265,22 @@ struct FixedSizeListBuilder(Builder):
 struct StructBuilder(Builder):
     """Builder for struct arrays.
 
-    _children[i] — field builder for field i (AnyBuilder)
+    _children[i] — field builder for field i (DynBuilder)
     """
 
     comptime ArrayType = StructArray
 
-    var _dtype: AnyDataType
+    var _dtype: DynType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
     var _bitmap: Bitmap[mut=True]
-    var _children: List[AnyBuilder]
+    var _children: List[DynBuilder]
 
     def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
-        var children = List[AnyBuilder](capacity=len(fields))
+        var children = List[DynBuilder](capacity=len(fields))
         for i in range(len(fields)):
-            children.append(AnyBuilder(fields[i].dtype))
+            children.append(DynBuilder(fields[i].dtype))
         self._dtype = struct_(fields^)
         self._length = 0
         self._capacity = capacity
@@ -1289,8 +1288,8 @@ struct StructBuilder(Builder):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._children = children^
 
-    # Explicit (empty) destructor so this struct's `_children: List[AnyBuilder]`
-    # (which cycles back through AnyBuilder's variant) is ImplicitlyDeletable;
+    # Explicit (empty) destructor so this struct's `_children: List[DynBuilder]`
+    # (which cycles back through DynBuilder's variant) is ImplicitlyDeletable;
     # fields are still destroyed automatically after the body runs.
     def __del__(deinit self):
         pass
@@ -1301,12 +1300,12 @@ struct StructBuilder(Builder):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         return self._dtype.copy()
 
     def field_builder(
         ref self, index: Int
-    ) -> ref[self._children[index]] AnyBuilder:
+    ) -> ref[self._children[index]] DynBuilder:
         return self._children[index]
 
     def append_null(mut self) raises:
@@ -1337,7 +1336,7 @@ struct StructBuilder(Builder):
         self._length += 1
 
     # TODO
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         self.extend(arr.as_struct())
 
     def extend(mut self, arr: StructArray) raises:
@@ -1376,7 +1375,7 @@ struct StructBuilder(Builder):
             bm = self._bitmap^.to_immutable(length=self._length)
             self._bitmap = Bitmap.alloc_zeroed(0)
         # recursively finish each field builder into a frozen child array
-        var frozen_children = List[AnyArray](capacity=len(self._children))
+        var frozen_children = List[DynArray](capacity=len(self._children))
         for ref child in self._children:
             frozen_children.append(child.finish())
         # construct the immutable result array
@@ -1416,14 +1415,14 @@ struct DictionaryBuilder(Builder):
 
     comptime ArrayType = DictionaryArray
 
-    var _dtype: AnyDataType
-    var _indices: AnyBuilder
-    var _values: AnyArray
+    var _dtype: DynType
+    var _indices: DynBuilder
+    var _values: DynArray
 
     def __init__(
         out self,
-        var indices_builder: AnyBuilder,
-        var values: AnyArray,
+        var indices_builder: DynBuilder,
+        var values: DynArray,
         ordered: Bool = False,
     ) raises:
         self._dtype = dictionary(
@@ -1438,7 +1437,7 @@ struct DictionaryBuilder(Builder):
     def null_count(self) -> Int:
         return self._indices.null_count()
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         return self._dtype.copy()
 
     def reserve(mut self, additional: Int) raises:
@@ -1472,7 +1471,7 @@ struct DictionaryBuilder(Builder):
                 index_type,
             )
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         if not arr.dtype().is_dictionary():
             raise Error(
                 "DictionaryBuilder.extend: expected DictionaryArray, got: ",
@@ -1514,7 +1513,7 @@ struct NullBuilder(Builder):
     def null_count(self) -> Int:
         return self._length
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         return null
 
     def reserve(mut self, additional: Int) raises:
@@ -1523,7 +1522,7 @@ struct NullBuilder(Builder):
     def append_null(mut self) raises:
         self._length += 1
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         if not arr.dtype().is_null():
             raise Error("NullBuilder.extend: expected a null array")
         self._length += len(arr)
@@ -1563,8 +1562,8 @@ struct FixedSizeBinaryBuilder(Builder):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> AnyDataType:
-        return FixedSizeBinaryType(self._byte_width).to_any()
+    def dtype(self) -> DynType:
+        return FixedSizeBinaryType(self._byte_width).to_dyn()
 
     def reserve(mut self, additional: Int) raises:
         var needed = self._length + additional
@@ -1601,7 +1600,7 @@ struct FixedSizeBinaryBuilder(Builder):
         self._null_count += 1
         self._length += 1
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         if not arr.dtype().is_fixed_size_binary():
             raise Error(
                 "FixedSizeBinaryBuilder.extend: expected fixed_size_binary"
@@ -1689,7 +1688,7 @@ struct BoolBuilder(Builder):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> AnyDataType:
+    def dtype(self) -> DynType:
         return bool_
 
     def reserve(mut self, additional: Int) raises:
@@ -1716,7 +1715,7 @@ struct BoolBuilder(Builder):
         self._null_count += 1
         self._length += 1
 
-    def extend(mut self, arr: AnyArray) raises:
+    def extend(mut self, arr: DynArray) raises:
         self.extend(arr.as_bool())
 
     def extend(mut self, b: BoolArray) raises:
@@ -1906,7 +1905,7 @@ def arange[T: NumericType](start: Int, end: Int) raises -> PrimitiveArray[T]:
     return b.finish()
 
 
-def array(dtype: AnyDataType) raises -> AnyArray:
+def array(dtype: DynType) raises -> DynArray:
     """Create a zero-length empty array for the given dtype."""
-    var b = AnyBuilder(dtype)
+    var b = DynBuilder(dtype)
     return b.finish()

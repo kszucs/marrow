@@ -7,13 +7,26 @@ References:
 - https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html
 - https://arrow.apache.org/docs/python/generated/pyarrow.Table.html
 """
-from std.memory import ArcPointer
+
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from .arrays import AnyArray, ChunkedArray, StructArray
+from .arrays import DynArray, ChunkedArray, StructArray
 from .builders import array
 from .schema import Schema
 from .dtypes import struct_, Field
+from .kernels.join import (
+    hash_join,
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_FULL,
+    JOIN_SEMI,
+    JOIN_ANTI,
+)
+from .kernels.execution import ExecutionContext
+from .kernels.groupby import GroupBy
+from .expr.aggregates import FoldedAggregates
+from .kernels.sort import sort
 
 
 struct RecordBatch(
@@ -25,15 +38,15 @@ struct RecordBatch(
     """
 
     var schema: Schema
-    var columns: List[AnyArray]
+    var columns: List[DynArray]
 
-    def __init__(out self, schema: Schema, var columns: List[AnyArray]):
+    def __init__(out self, schema: Schema, var columns: List[DynArray]):
         self.schema = schema
         self.columns = columns^
 
     def __init__(out self, *, copy: Self):
         self.schema = Schema(copy=copy.schema)
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for col in copy.columns:
             cols.append(col.copy())
         self.columns = cols^
@@ -61,7 +74,7 @@ struct RecordBatch(
         var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(
             struct_(schema.fields.copy())
         )
-        var columns = List[AnyArray]()
+        var columns = List[DynArray]()
         for child in struct_arr.as_struct().children:
             columns.append(child.copy())
         self = RecordBatch(schema=schema, columns=columns^)
@@ -82,16 +95,16 @@ struct RecordBatch(
     @staticmethod
     def empty(schema: Schema) raises -> RecordBatch:
         """Create a 0-row RecordBatch for the given schema."""
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for f in schema.fields:
             cols.append(array(f.dtype))
         return RecordBatch(schema=schema, columns=cols^)
 
-    def column(self, index: Int) -> ref[self.columns[index]] AnyArray:
+    def column(self, index: Int) -> ref[self.columns[index]] DynArray:
         """Returns the column at the given index."""
         return self.columns[index]
 
-    def column(self, name: String) raises -> ref[self.columns[0]] AnyArray:
+    def column(self, name: String) raises -> ref[self.columns[0]] DynArray:
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:
@@ -120,7 +133,7 @@ struct RecordBatch(
 
     def slice(self, offset: Int, length: Int) raises -> RecordBatch:
         """Returns a zero-copy slice of this RecordBatch."""
-        var sliced = List[AnyArray]()
+        var sliced = List[DynArray]()
         for col in self.columns:
             sliced.append(col.slice(offset, length))
         return RecordBatch(schema=self.schema, columns=sliced^)
@@ -132,7 +145,7 @@ struct RecordBatch(
     def select(self, indices: List[Int]) -> RecordBatch:
         """Returns a new RecordBatch with only the columns at the given indices.
         """
-        var new_cols = List[AnyArray]()
+        var new_cols = List[DynArray]()
         var new_fields = List[Field]()
         for i in indices:
             new_cols.append(self.columns[i].copy())
@@ -141,7 +154,7 @@ struct RecordBatch(
 
     def select(self, names: List[String]) raises -> RecordBatch:
         """Returns a new RecordBatch with only the named columns."""
-        var new_cols = List[AnyArray]()
+        var new_cols = List[DynArray]()
         var new_fields = List[Field]()
         for name in names:
             var idx = self.schema.get_field_index(name)
@@ -165,15 +178,15 @@ struct RecordBatch(
             new_fields.append(
                 Field(name=names[i], dtype=f.dtype.copy(), nullable=f.nullable)
             )
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for col in self.columns:
             cols.append(col.copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=cols^)
 
-    def add_column(self, i: Int, field: Field, column: AnyArray) -> RecordBatch:
+    def add_column(self, i: Int, field: Field, column: DynArray) -> RecordBatch:
         """Returns a new RecordBatch with `column` inserted at position `i`."""
         var new_fields = List[Field]()
-        var new_cols = List[AnyArray]()
+        var new_cols = List[DynArray]()
         for j in range(i):
             new_fields.append(self.schema.fields[j].copy())
             new_cols.append(self.columns[j].copy())
@@ -184,24 +197,24 @@ struct RecordBatch(
             new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    def append_column(self, field: Field, column: AnyArray) -> RecordBatch:
+    def append_column(self, field: Field, column: DynArray) -> RecordBatch:
         """Returns a new RecordBatch with `column` appended at the end."""
         return self.add_column(len(self.columns), field, column)
 
     def remove_column(self, i: Int) -> RecordBatch:
         """Returns a new RecordBatch with the column at index `i` removed."""
         var new_fields = List[Field]()
-        var new_cols = List[AnyArray]()
+        var new_cols = List[DynArray]()
         for j in range(len(self.columns)):
             if j != i:
                 new_fields.append(self.schema.fields[j].copy())
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    def set_column(self, i: Int, field: Field, column: AnyArray) -> RecordBatch:
+    def set_column(self, i: Int, field: Field, column: DynArray) -> RecordBatch:
         """Returns a new RecordBatch with the column at index `i` replaced."""
         var new_fields = List[Field]()
-        var new_cols = List[AnyArray]()
+        var new_cols = List[DynArray]()
         for j in range(len(self.columns)):
             if j == i:
                 new_fields.append(field.copy())
@@ -211,10 +224,173 @@ struct RecordBatch(
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
+    def _key_indices(
+        self, names: List[String], side: String
+    ) raises -> List[Int]:
+        """Resolve key column names to positions, naming the side on failure."""
+        var out = List[Int](capacity=len(names))
+        for ref n in names:
+            var i = self.schema.get_field_index(n)
+            if i == -1:
+                raise Error(side, " key column '", n, "' not found")
+            out.append(i)
+        return out^
+
+    def join(
+        self,
+        right: RecordBatch,
+        keys: List[String],
+        right_keys: List[String],
+        how: String = "inner",
+        num_threads: Int = 0,
+    ) raises -> RecordBatch:
+        """Equi-join two batches on key column *names*.
+
+        `right_keys` empty means "same names as `keys`". `how` is PyArrow's
+        spelling — `inner`, `left outer`, `right outer`, `full outer`,
+        `left semi`, `left anti`, with the short forms also accepted.
+
+        This lived in `python/bindings/tabular.mojo`: name resolution, join-kind
+        parsing and result assembly existed **only** for Python callers, and the
+        binding imported `marrow.expr.relations` inside a function body to reach
+        the kind constants. Joining two batches is core behaviour, so it lives
+        with the type; the binding now just marshals Python values."""
+        var left_on = self._key_indices(keys, "Left")
+        var right_on = right._key_indices(
+            right_keys if right_keys else keys, "Right"
+        )
+
+        var kind = JOIN_INNER
+        if how == "left outer" or how == "left":
+            kind = JOIN_LEFT
+        elif how == "right outer" or how == "right":
+            kind = JOIN_RIGHT
+        elif how == "full outer" or how == "full":
+            kind = JOIN_FULL
+        elif how == "left semi" or how == "semi":
+            kind = JOIN_SEMI
+        elif how == "left anti" or how == "anti":
+            kind = JOIN_ANTI
+        elif how != "inner":
+            raise Error("join: unknown join type '", how, "'")
+
+        var joined = hash_join(
+            self.to_struct_array(),
+            right.to_struct_array(),
+            left_on,
+            right_on,
+            kind,
+            ctx=ExecutionContext.parallel(num_threads),
+        )
+        var fields = List[Field]()
+        for ref f in joined.dtype.as_struct().fields:
+            fields.append(f.copy())
+        return RecordBatch(
+            schema=Schema(fields=fields^), columns=joined.children.copy()
+        )
+
+    def _agg_columns(
+        self, values: List[String], funcs: List[String], who: String
+    ) raises -> Tuple[List[DynArray], FoldedAggregates, List[String]]:
+        """Resolve `(value column, aggregate)` pairs and their output names.
+
+        `<value>_<func>` matches PyArrow's naming. Shared by `group_by` and
+        `aggregate`, which differ only in whether a key grouping runs."""
+        var cols = List[DynArray]()
+        var aggs = FoldedAggregates()
+        var names = List[String]()
+        for j in range(len(funcs)):
+            var vname = values[j]
+            var vidx = self.schema.get_field_index(vname)
+            if vidx == -1:
+                raise Error(who, ": column '", vname, "' not found")
+            cols.append(self.column(vidx).copy())
+            aggs.append(funcs[j], self.column(vidx).dtype())
+            names.append(vname + "_" + funcs[j])
+        return (cols^, aggs^, names^)
+
+    def group_by(
+        self,
+        keys: List[String],
+        values: List[String],
+        funcs: List[String],
+        num_threads: Int = 0,
+    ) raises -> RecordBatch:
+        """`GROUP BY keys` with one output column per `(value, func)` pair.
+
+        The keys are grouped once and every aggregate rides that pass. Output is
+        the unique key columns followed by `<value>_<func>` columns."""
+        var key_indices = self._key_indices(keys, "group_by")
+        var key_struct = self.select(key_indices).to_struct_array()
+        var resolved = self._agg_columns(values, funcs, "group_by")
+
+        var gb = GroupBy(key_struct, ExecutionContext.parallel(num_threads))
+        var res = resolved[1].grouped(gb, resolved[0])
+
+        # `res` is [key columns..., aggregate columns...]; name the aggregates.
+        var n_keys = len(res.columns) - len(resolved[1])
+        var fields = List[Field]()
+        var columns = List[DynArray]()
+        for c in range(n_keys):
+            fields.append(res.schema.fields[c].copy())
+            columns.append(res.columns[c].copy())
+        for j in range(len(resolved[1])):
+            fields.append(
+                Field(
+                    resolved[2][j], res.schema.fields[n_keys + j].dtype.copy()
+                )
+            )
+            columns.append(res.columns[n_keys + j].copy())
+        return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
+
+    def aggregate(
+        self, values: List[String], funcs: List[String]
+    ) raises -> RecordBatch:
+        """Whole-table aggregation — one row, a `<value>_<func>` column each.
+
+        `count` of a non-null column is `COUNT(*)`."""
+        var resolved = self._agg_columns(values, funcs, "aggregate")
+        var res = resolved[1].whole(resolved[0])
+        var fields = List[Field]()
+        var columns = List[DynArray]()
+        for j in range(len(resolved[1])):
+            fields.append(
+                Field(resolved[2][j], res.schema.fields[j].dtype.copy())
+            )
+            columns.append(res.columns[j].copy())
+        return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
+
+    def sort_by(
+        self,
+        keys: List[String],
+        ascending: List[Bool],
+        nulls_first: Bool = True,
+        num_threads: Int = 0,
+    ) raises -> RecordBatch:
+        """Sort by one or more key columns, most-significant first.
+
+        `ascending` is parallel to `keys`. The Python binding accepts PyArrow's
+        `"name"` / `[(name, "descending"), ...]` spellings and flattens them to
+        these two lists."""
+        var indices = self._key_indices(keys, "sort_by")
+        var sorted_sa = sort(
+            self.to_struct_array(),
+            indices,
+            ascending,
+            nulls_first,
+            ctx=ExecutionContext.parallel(num_threads),
+        )
+        var fields = List[Field]()
+        for ref f in sorted_sa.dtype.as_struct().fields:
+            fields.append(f.copy())
+        return RecordBatch(
+            schema=Schema(fields=fields^), columns=sorted_sa.children.copy()
+        )
+
     def to_struct_array(self) -> StructArray:
         """Converts this RecordBatch to a StructArray (columns become fields).
         """
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for col in self.columns:
             cols.append(col.copy())
         return StructArray(
@@ -243,7 +419,7 @@ struct RecordBatch(
 
 
 def record_batch(
-    var columns: List[AnyArray], *, names: List[String]
+    var columns: List[DynArray], *, names: List[String]
 ) raises -> RecordBatch:
     """Construct a RecordBatch from a list of arrays and column names.
 
@@ -333,7 +509,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
 
     def combine_chunks(self) raises -> RecordBatch:
         """Combine all chunks in each column into a single RecordBatch."""
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for col in self.columns:
             var ca = ChunkedArray(dtype=col.dtype, chunks=List(col.chunks))
             cols.append(ca^.combine_chunks())
@@ -353,7 +529,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         var n_cols = schema.num_fields()
         var columns = List[ChunkedArray]()
         for col_idx in range(n_cols):
-            var chunks = List[AnyArray]()
+            var chunks = List[DynArray]()
             for batch in batches:
                 chunks.append(batch.columns[col_idx].copy())
             columns.append(
@@ -385,7 +561,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         if aligned and n_chunks > 0:
             var batches = List[RecordBatch]()
             for chunk_idx in range(n_chunks):
-                var cols = List[AnyArray]()
+                var cols = List[DynArray]()
                 for col in self.columns:
                     cols.append(col.chunks[chunk_idx].copy())
                 batches.append(RecordBatch(schema=self.schema, columns=cols^))
@@ -395,7 +571,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         # Fallback: combine chunks into a single batch.
         from .kernels.concat import concat
 
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for col in self.columns:
             if len(col.chunks) == 1:
                 cols.append(col.chunks[0].copy())

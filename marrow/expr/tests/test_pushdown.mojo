@@ -15,17 +15,17 @@ from std.python import Python
 from std.os import remove
 from ...dtypes import Int64Type, int64, string, field
 from ...schema import Schema, schema
-from ...scalars import AnyScalar
-from ...parquet import read_table, ParquetFile
+from ...scalars import DynScalar
+from ...parquet import read_table, ParquetFile, LeafSet
 from ...expr.relations import (
     ParquetScan,
     parquet_scan,
-    AnyRelation,
+    DynRelation,
     Filter,
     RELATION_PARQUET_SCAN,
 )
-from ...expr.dynamic import col, lit
-from ...expr.values import AnyValue
+from ...expr.values import col, lit
+from ...expr.values import DynValue
 from ...expr.pruning import PruneStats
 
 
@@ -82,12 +82,12 @@ def test_row_group_prune_decision() raises:
     _write_sorted(path, 3000, 1000)
     var stats = ParquetFile(path).statistics()
     assert_equal(len(stats), 3)
-    var pred = AnyValue(col("x") > lit[Int64Type](Int64(1500)))
+    var pred = DynValue(col("x") > lit[Int64Type](Int64(1500)))
     var sch = schema([field("x", int64)])
     var keep = List[Bool]()
     for rg in range(len(stats)):
-        var mins = List[Optional[AnyScalar]]()
-        var maxs = List[Optional[AnyScalar]]()
+        var mins = List[Optional[DynScalar]]()
+        var maxs = List[Optional[DynScalar]]()
         mins.append(stats[rg][0].min.copy())
         maxs.append(stats[rg][0].max.copy())
         var ps = PruneStats(Schema(copy=sch), mins^, maxs^)
@@ -106,7 +106,7 @@ def test_filter_pushes_predicate_into_scan() raises:
     )
     var f = plan.downcast[Filter]()
     assert_equal(f[].input.kind(), RELATION_PARQUET_SCAN)
-    var scan = f[].input.downcast[ParquetScan]()
+    var scan = f[].input.downcast[ParquetScan[LeafSet.all()]]()
     assert_true(Bool(scan[].predicate))  # predicate was pushed down
 
 

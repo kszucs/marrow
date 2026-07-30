@@ -1,7 +1,7 @@
 from std.testing import assert_equal, assert_true, assert_false
 
 from ..arrays import (
-    AnyArray,
+    DynArray,
     BoolArray,
     StringArray,
     FixedSizeListArray,
@@ -37,7 +37,7 @@ from ..dtypes import (
     nanosecond,
 )
 from ..scalars import (
-    AnyScalar,
+    DynScalar,
     BoolScalar,
     Int32Scalar,
     Int64Scalar,
@@ -149,7 +149,7 @@ def test_string_scalar_eq() raises:
 
 def test_scalar_from_primitive() raises:
     var typed = Int32Scalar(99)
-    var erased: AnyScalar = typed^
+    var erased: DynScalar = typed^
     assert_true(erased.is_valid())
     assert_equal(erased.type(), int32)
     ref back = erased.as_int32()
@@ -158,7 +158,7 @@ def test_scalar_from_primitive() raises:
 
 def test_scalar_from_string() raises:
     var typed = StringScalar("world")
-    var erased: AnyScalar = typed^
+    var erased: DynScalar = typed^
     assert_true(erased.is_valid())
     assert_true(erased.type().is_string())
     ref back = erased.as_string()
@@ -166,10 +166,10 @@ def test_scalar_from_string() raises:
 
 
 def test_scalar_eq() raises:
-    var a: AnyScalar = Int32Scalar(42)
-    var b: AnyScalar = Int32Scalar(42)
-    var c: AnyScalar = Int32Scalar(99)
-    var d: AnyScalar = StringScalar("hello")
+    var a: DynScalar = Int32Scalar(42)
+    var b: DynScalar = Int32Scalar(42)
+    var c: DynScalar = Int32Scalar(99)
+    var d: DynScalar = StringScalar("hello")
     assert_true(a == b)
     assert_false(a == c)
     assert_false(a == d)
@@ -177,7 +177,7 @@ def test_scalar_eq() raises:
 
 def test_scalar_null() raises:
     var typed = Int32Scalar(None)
-    var erased: AnyScalar = typed^
+    var erased: DynScalar = typed^
     assert_true(erased.is_null())
 
 
@@ -276,12 +276,12 @@ def test_struct_scalar_null_from_array() raises:
 
 
 # ---------------------------------------------------------------------------
-# AnyArray.__getitem__ -> AnyScalar
+# DynArray.__getitem__ -> DynScalar
 # ---------------------------------------------------------------------------
 
 
 def test_any_array_getitem_primitive() raises:
-    var arr: AnyArray = array([10, 20, 30], int64)
+    var arr: DynArray = array([10, 20, 30], int64)
     var s = arr[1]
     assert_true(s.is_valid())
     assert_equal(s.type(), int64)
@@ -293,7 +293,7 @@ def test_any_array_getitem_primitive_null() raises:
     b.append(1)
     b.append_null()
     b.append(3)
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     assert_true(arr[0].is_valid())
     assert_false(arr[1].is_valid())
 
@@ -302,7 +302,7 @@ def test_any_array_getitem_bool() raises:
     var b = BoolBuilder(2)
     b.append(True)
     b.append_null()
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     var s0 = arr[0]
     assert_true(s0.is_valid())
     assert_equal(s0.as_bool().value(), True)
@@ -313,7 +313,7 @@ def test_any_array_getitem_string() raises:
     var b = StringBuilder(2)
     b.append("hello")
     b.append_null()
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     var s0 = arr[0]
     assert_true(s0.is_valid())
     assert_equal(s0.as_string().to_string(), "hello")
@@ -326,7 +326,7 @@ def test_any_array_getitem_fixed_size_list() raises:
     fsl.values().as_int32().append(7)
     fsl.values().as_int32().append(8)
     fsl.append_valid()
-    var arr: AnyArray = fsl.finish()
+    var arr: DynArray = fsl.finish()
     var s = arr[0]
     assert_true(s.is_valid())
     var list_val = s.as_list().value()
@@ -346,7 +346,7 @@ def test_array_getitem_struct() raises:
 
 
 def test_any_array_getitem_out_of_bounds() raises:
-    var arr: AnyArray = array([1, 2, 3], int64)
+    var arr: DynArray = array([1, 2, 3], int64)
     var raised = False
     try:
         _ = arr[5]
@@ -360,8 +360,8 @@ def test_interval_scalar_year_month() raises:
     assert_true(s.is_valid())
     assert_false(s.is_null())
     assert_equal(s.value(), 12)
-    assert_true(s.type() == year_month_interval().to_any())
-    var erased: AnyScalar = s^
+    assert_true(s.type() == year_month_interval().to_dyn())
+    var erased: DynScalar = s^
     assert_true(erased.type().is_year_month_interval())
     assert_equal(erased.as_year_month_interval().value(), 12)
 
@@ -370,8 +370,8 @@ def test_interval_scalar_day_time() raises:
     var s = DayTimeIntervalScalar(Int64(86400000))
     assert_true(s.is_valid())
     assert_equal(s.value(), 86400000)
-    assert_true(s.type() == day_time_interval().to_any())
-    var erased: AnyScalar = s^
+    assert_true(s.type() == day_time_interval().to_dyn())
+    var erased: DynScalar = s^
     assert_true(erased.type().is_day_time_interval())
     assert_equal(erased.as_day_time_interval().value(), 86400000)
 
@@ -380,31 +380,31 @@ def test_interval_scalar_month_day_nano() raises:
     var s = MonthDayNanoIntervalScalar(SIMD[DType.int128, 1](42))
     assert_true(s.is_valid())
     assert_equal(s.value(), 42)
-    assert_true(s.type() == month_day_nano_interval().to_any())
-    var erased: AnyScalar = s^
+    assert_true(s.type() == month_day_nano_interval().to_dyn())
+    var erased: DynScalar = s^
     assert_true(erased.type().is_month_day_nano_interval())
     assert_equal(erased.as_month_day_nano_interval().value(), 42)
 
 
 # def test_temporal_scalar_valid() raises:
-#     var s = TemporalScalar(Int64(100), date32().to_any())
+#     var s = TemporalScalar(Int64(100), date32().to_dyn())
 #     assert_true(s.is_valid())
 #     assert_false(s.is_null())
 #     assert_equal(s.value(), 100)
-#     assert_true(s.type() == date32().to_any())
+#     assert_true(s.type() == date32().to_dyn())
 
 
 # def test_temporal_scalar_null() raises:
-#     var s = TemporalScalar.null(date32().to_any())
+#     var s = TemporalScalar.null(date32().to_dyn())
 #     assert_false(s.is_valid())
 #     assert_true(s.is_null())
-#     assert_true(s.type() == date32().to_any())
+#     assert_true(s.type() == date32().to_dyn())
 
 
 # def test_temporal_scalar_equality() raises:
-#     var a = TemporalScalar(Int64(42), date32().to_any())
-#     var b = TemporalScalar(Int64(42), date32().to_any())
-#     var c = TemporalScalar(Int64(99), date32().to_any())
+#     var a = TemporalScalar(Int64(42), date32().to_dyn())
+#     var b = TemporalScalar(Int64(42), date32().to_dyn())
+#     var c = TemporalScalar(Int64(99), date32().to_dyn())
 #     assert_true(a == b)
 #     assert_false(a == c)
 #     assert_false(a != b)
@@ -412,16 +412,16 @@ def test_interval_scalar_month_day_nano() raises:
 
 
 # def test_temporal_scalar_null_equality() raises:
-#     var n1 = TemporalScalar.null(date32().to_any())
-#     var n2 = TemporalScalar.null(date32().to_any())
-#     var v = TemporalScalar(Int64(1), date32().to_any())
+#     var n1 = TemporalScalar.null(date32().to_dyn())
+#     var n2 = TemporalScalar.null(date32().to_dyn())
+#     var v = TemporalScalar(Int64(1), date32().to_dyn())
 #     assert_true(n1 == n2)
 #     assert_false(n1 == v)
 #     assert_false(v == n1)
 
 
 # def test_temporal_scalar_timestamp() raises:
-#     var ts_dtype = timestamp(second, "UTC").to_any()
+#     var ts_dtype = timestamp(second, "UTC").to_dyn()
 #     var s = TemporalScalar(Int64(1_000_000), ts_dtype)
 #     assert_true(s.is_valid())
 #     assert_equal(s.value(), 1_000_000)
@@ -429,6 +429,6 @@ def test_interval_scalar_month_day_nano() raises:
 
 
 # def test_temporal_scalar_to_any() raises:
-#     var s = TemporalScalar(Int64(7), duration(nanosecond).to_any())
-#     var any_s = s^.to_any()
-#     assert_true(any_s.as_temporal() == TemporalScalar(Int64(7), duration(nanosecond).to_any()))
+#     var s = TemporalScalar(Int64(7), duration(nanosecond).to_dyn())
+#     var any_s = s^.to_dyn()
+#     assert_true(any_s.as_temporal() == TemporalScalar(Int64(7), duration(nanosecond).to_dyn()))

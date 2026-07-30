@@ -8,7 +8,7 @@ from std.testing import (
 )
 
 from ...arrays import (
-    AnyArray,
+    DynArray,
     Int32Array,
     Date32Array,
     Date64Array,
@@ -19,13 +19,15 @@ from ...arrays import (
 )
 from ...builders import PrimitiveBuilder, array
 from ...dtypes import (
+    DurationType,
+    duration,
     int32,
+    second,
     date32,
     date64,
     time32,
     time64,
     timestamp,
-    second,
     millisecond,
     microsecond,
     nanosecond,
@@ -45,16 +47,12 @@ from ...kernels.temporal import (
     QuarterKernel,
     DayOfYearKernel,
     DayOfWeekKernel,
-    year,
-    month,
-    day,
-    hour,
-    minute,
-    second as second_of,
-    quarter,
-    day_of_year,
-    day_of_week,
-    date_trunc,
+    DateTruncKernel,
+    CalendarUnit,
+    unit_second,
+    unit_minute,
+    unit_hour,
+    unit_day,
 )
 
 
@@ -156,9 +154,11 @@ def test_day_of_year() raises:
 def test_extract_date32() raises:
     # days since epoch: 0 = 1970-01-01, 17897 = 2019-01-01, 18628 = 2021-01-01
     var a = _d32([0, 17897, 18628])
-    assert_true(year(a.copy()) == array([1970, 2019, 2021], int32))
-    assert_true(month(a.copy()) == array([1, 1, 1], int32))
-    assert_true(day(a.copy()) == array([1, 1, 1], int32))
+    assert_true(
+        YearKernel.dispatch(a.copy()) == array([1970, 2019, 2021], int32)
+    )
+    assert_true(MonthKernel.dispatch(a.copy()) == array([1, 1, 1], int32))
+    assert_true(DayKernel.dispatch(a.copy()) == array([1, 1, 1], int32))
 
 
 # --- time64 (clock only) ---------------------------------------------------
@@ -177,7 +177,7 @@ def test_calendar_field_on_time_raises() raises:
     var micros = 1_000_000
     var a = _t64([micros], time64(microsecond))
     with assert_raises():
-        _ = year(a.copy().to_any())
+        _ = YearKernel.dispatch(a.copy().to_dyn())
 
 
 # --- null propagation ------------------------------------------------------
@@ -213,27 +213,35 @@ def test_pre_epoch_timestamp() raises:
 def test_date_trunc_minute() raises:
     # 2019-06-15 12:30:45 -> 2019-06-15 12:30:00 = 1560601800
     var a = _ts([1_560_601_845], timestamp(second))
-    var r = date_trunc(a.copy().to_any(), "minute")
-    assert_true(r.dtype() == timestamp(second).to_any())
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
+    assert_true(r.dtype() == timestamp(second).to_dyn())
     assert_equal(r.as_timestamp()[0].value(), 1_560_601_800)
 
 
 def test_date_trunc_units() raises:
     var a = _ts([1_560_601_845], timestamp(second))  # 2019-06-15 12:30:45
     assert_equal(
-        date_trunc(a.copy().to_any(), "second").as_timestamp()[0].value(),
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_second)
+        .as_timestamp()[0]
+        .value(),
         1_560_601_845,
     )
     assert_equal(
-        date_trunc(a.copy().to_any(), "minute").as_timestamp()[0].value(),
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
+        .as_timestamp()[0]
+        .value(),
         1_560_601_800,
     )
     assert_equal(
-        date_trunc(a.copy().to_any(), "hour").as_timestamp()[0].value(),
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_hour)
+        .as_timestamp()[0]
+        .value(),
         1_560_600_000,  # 2019-06-15 12:00:00
     )
     assert_equal(
-        date_trunc(a.copy().to_any(), "day").as_timestamp()[0].value(),
+        DateTruncKernel.apply(a.copy().to_dyn(), unit_day)
+        .as_timestamp()[0]
+        .value(),
         1_560_556_800,  # 2019-06-15 00:00:00
     )
 
@@ -241,12 +249,12 @@ def test_date_trunc_units() raises:
 def test_date_trunc_millisecond_unit() raises:
     # 2019-06-15 12:30:45.123 ms -> minute -> 2019-06-15 12:30:00.000
     var a = _ts([1_560_601_845_123], timestamp(millisecond))
-    var r = date_trunc(a.copy().to_any(), "minute")
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_minute)
     assert_equal(r.as_timestamp()[0].value(), 1_560_601_800_000)
 
 
 def test_date_trunc_preserves_nulls() raises:
-    var r = date_trunc(_ts_with_null().to_any(), "hour")
+    var r = DateTruncKernel.apply(_ts_with_null().to_dyn(), unit_hour)
     assert_equal(r.null_count(), 1)
     assert_false(r.is_valid(1))
     assert_equal(r.as_timestamp()[0].value(), 1_560_600_000)
@@ -323,9 +331,41 @@ def test_cross_check_date_trunc_pyarrow() raises:
     var pa_arr = pa.array(pylist, type=pa.timestamp("s"))
 
     for unit in ["second", "minute", "hour", "day"]:
-        var r = date_trunc(a.copy().to_any(), unit)
+        var r = DateTruncKernel.apply(
+            a.copy().to_dyn(), CalendarUnit.parse(unit)
+        )
         var pa_r = pc.floor_temporal(pa_arr, unit=unit)
         for i in range(len(raw)):
             assert_equal(
                 Int(r.as_timestamp()[i].value()), Int(py=pa_r[i].value)
             )
+
+
+def test_date_trunc_duration() raises:
+    """`date_trunc` accepts a duration, which the old five-arm ladder rejected.
+
+    `DurationType` is a `TemporalType`, and `_ticks_per_second` always handled
+    it -- only the hand-written ladder had forgotten it. Walking the family
+    closed that gap, so this pins the behaviour rather than leaving it an
+    untested side effect: 3661 seconds floored to the hour is 3600.
+    """
+    var b = PrimitiveBuilder[DurationType](duration(second), capacity=2)
+    b.append(Int64(3661))
+    b.append(Int64(59))
+    var d = b.finish()
+
+    var r = DateTruncKernel.apply(d.copy().to_dyn(), unit_hour)
+    assert_equal(Int(r.as_primitive[DurationType]()[0].value()), 3600)
+    assert_equal(Int(r.as_primitive[DurationType]()[1].value()), 0)
+
+
+def test_extract_rejects_duration_with_a_useful_message() raises:
+    """A duration reaches the extraction kernels now, and is refused by
+    `_extract` naming the real reason rather than by the dispatcher claiming it
+    is not temporal."""
+    var b = PrimitiveBuilder[DurationType](duration(second), capacity=1)
+    b.append(Int64(3661))
+    var d = b.finish()
+
+    with assert_raises(contains="requires a date or timestamp array"):
+        _ = YearKernel.dispatch(d.copy().to_dyn())

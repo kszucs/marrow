@@ -2,7 +2,7 @@
 
 from std.testing import assert_equal, assert_true
 
-from ...arrays import PrimitiveArray, AnyArray, StructArray
+from ...arrays import PrimitiveArray, DynArray, StructArray
 from ...buffers import Bitmap
 from ...builders import PrimitiveBuilder, UInt64Builder
 from ...dtypes import int32, uint64, struct_, Field, Int32Type, UInt64Type
@@ -20,8 +20,8 @@ def _keys(*values: Int) raises -> StructArray:
     var b = UInt64Builder(capacity=len(values))
     for i in range(len(values)):
         b.append(Scalar[uint64.native](values[i]))
-    var children = List[AnyArray]()
-    children.append(b.finish().to_any())
+    var children = List[DynArray]()
+    children.append(b.finish().to_dyn())
     return StructArray(
         dtype=struct_(Field("k", uint64)),
         length=len(values),
@@ -37,8 +37,8 @@ def _keys_range(n: Int, offset: Int = 0) raises -> StructArray:
     var b = UInt64Builder(capacity=n)
     for i in range(n):
         b.append(Scalar[uint64.native](i + offset))
-    var children = List[AnyArray]()
-    children.append(b.finish().to_any())
+    var children = List[DynArray]()
+    children.append(b.finish().to_dyn())
     return StructArray(
         dtype=struct_(Field("k", uint64)),
         length=n,

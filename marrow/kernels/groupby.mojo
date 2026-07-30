@@ -19,12 +19,12 @@ from std.algorithm.functional import sync_parallelize
 
 from ..arrays import (
     StructArray,
-    AnyArray,
+    DynArray,
     UInt64Array,
     Int32Array,
     Int64Array,
 )
-from ..builders import AnyBuilder, Int32Builder
+from ..builders import DynBuilder, Int32Builder
 from ..dtypes import Field, struct_
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
@@ -53,11 +53,11 @@ struct HashGrouper(Movable):
     """
 
     var _table: SwissHashTable[rapidhash]
-    var _key_builders: List[AnyBuilder]
+    var _key_builders: List[DynBuilder]
 
     def __init__(out self):
         self._table = SwissHashTable[rapidhash]()
-        self._key_builders = List[AnyBuilder]()
+        self._key_builders = List[DynBuilder]()
 
     def num_groups(self) -> Int:
         return self._table.num_keys()
@@ -127,13 +127,13 @@ struct HashGrouper(Movable):
             fields.append(Field(st.fields[k].name, st.fields[k].dtype.copy()))
         return fields^
 
-    def key_columns(mut self, key_fields: List[Field]) raises -> List[AnyArray]:
+    def key_columns(mut self, key_fields: List[Field]) raises -> List[DynArray]:
         """The unique group-key columns (empty arrays when no groups yet).
         Finishes the per-column key builders — call once, at emit time."""
-        var cols = List[AnyArray]()
+        var cols = List[DynArray]()
         for k in range(len(key_fields)):
             if len(self._key_builders) == 0:
-                var empty = AnyBuilder(key_fields[k].dtype)
+                var empty = DynBuilder(key_fields[k].dtype)
                 cols.append(empty.finish())
             else:
                 cols.append(self._key_builders[k].finish())
@@ -147,7 +147,7 @@ struct HashGrouper(Movable):
         column instead of a slice/extend per group."""
         if len(self._key_builders) == 0:
             for k in range(len(keys.children)):
-                self._key_builders.append(AnyBuilder(keys.children[k].dtype()))
+                self._key_builders.append(DynBuilder(keys.children[k].dtype()))
         var gathered = Take.apply(keys, rows)
         for k in range(len(keys.children)):
             self._key_builders[k].extend(gathered.children[k])
@@ -173,14 +173,14 @@ trait ColumnAggregator(Copyable, ImplicitlyDeletable, Movable):
         ...
 
     def grouped(
-        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
-    ) raises -> AnyArray:
+        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+    ) raises -> DynArray:
         """Aggregate one value column over precomputed group ids."""
         ...
 
     def partials(
-        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
-    ) raises -> Tuple[AnyArray, Int64Array]:
+        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+    ) raises -> Tuple[DynArray, Int64Array]:
         """One thread's raw per-group accumulator + valid counts."""
         ...
 
@@ -188,10 +188,10 @@ trait ColumnAggregator(Copyable, ImplicitlyDeletable, Movable):
         self,
         column: Int,
         remap: List[Int32Array],
-        accs: List[AnyArray],
+        accs: List[DynArray],
         cnts: List[Int64Array],
         num_groups: Int,
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Fold every thread's partials at remapped group ids and finalize."""
         ...
 
@@ -215,30 +215,30 @@ struct OneAggregation[A: Aggregation](ColumnAggregator):
         return Self.A.is_mergeable
 
     def grouped(
-        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
-    ) raises -> AnyArray:
+        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+    ) raises -> DynArray:
         return Self.A.grouped(
             gids, Self.A.from_any(values), num_groups
-        ).to_any()
+        ).to_dyn()
 
     def partials(
-        self, column: Int, gids: Int32Array, values: AnyArray, num_groups: Int
-    ) raises -> Tuple[AnyArray, Int64Array]:
+        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+    ) raises -> Tuple[DynArray, Int64Array]:
         var parts = Self.A.partials(gids, Self.A.from_any(values), num_groups)
-        return (parts[0].copy().to_any(), parts[1].copy())
+        return (parts[0].copy().to_dyn(), parts[1].copy())
 
     def merge(
         self,
         column: Int,
         remap: List[Int32Array],
-        accs: List[AnyArray],
+        accs: List[DynArray],
         cnts: List[Int64Array],
         num_groups: Int,
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         var typed = List[Self.A.OutArray]()
         for t in range(len(accs)):
             typed.append(Self.A.OutArray(accs[t].to_data()))
-        return Self.A.merge(remap, typed, cnts, num_groups).to_any()
+        return Self.A.merge(remap, typed, cnts, num_groups).to_dyn()
 
 
 struct ThreadPartials(Copyable, Movable):
@@ -247,13 +247,13 @@ struct ThreadPartials(Copyable, Movable):
     over those keys."""
 
     var keys: StructArray
-    var accs: List[AnyArray]
+    var accs: List[DynArray]
     var cnts: List[Int64Array]
 
     def __init__(
         out self,
         var keys: StructArray,
-        var accs: List[AnyArray],
+        var accs: List[DynArray],
         var cnts: List[Int64Array],
     ):
         self.keys = keys^
@@ -269,11 +269,11 @@ struct GroupedColumns(Copyable, Movable):
     caller's business, and the caller is the only one who knows what the
     aggregates were called."""
 
-    var keys: List[AnyArray]
-    var aggregates: List[AnyArray]
+    var keys: List[DynArray]
+    var aggregates: List[DynArray]
 
     def __init__(
-        out self, var keys: List[AnyArray], var aggregates: List[AnyArray]
+        out self, var keys: List[DynArray], var aggregates: List[DynArray]
     ):
         self.keys = keys^
         self.aggregates = aggregates^
@@ -378,12 +378,12 @@ struct GroupBy(Movable):
 
     def __init__(
         out self,
-        key: AnyArray,
+        key: DynArray,
         ctx: ExecutionContext = ExecutionContext.auto(),
         strategy: Optional[UInt8] = None,
     ) raises:
         """Group by a single key column."""
-        var children = List[AnyArray]()
+        var children = List[DynArray]()
         children.append(key.copy())
         var kd = key.to_data()
         self = Self(
@@ -433,11 +433,11 @@ struct GroupBy(Movable):
         kernel *and* the input type, so the fold itself is monomorphized; the
         strategy choice is the shared one (`aggregate_all`), because there is no
         reason for a single aggregate to pick differently from a set of them."""
-        var values = List[AnyArray]()
-        values.append(A.to_any(value))
+        var values = List[DynArray]()
+        values.append(A.to_dyn(value))
         return self.aggregate_all(OneAggregation[A](), values)
 
-    def apply[F: AggFunction](self, value: AnyArray) raises -> GroupedColumns:
+    def apply[F: AggFunction](self, value: DynArray) raises -> GroupedColumns:
         """Aggregate an erased ``value`` column with function ``F``: resolve the
         column's dtype to the ``Aggregation`` implementing ``F`` over it, then
         run the typed path above. The runtime-dtype entry point; the AOT path
@@ -473,7 +473,7 @@ struct GroupBy(Movable):
 
     def aggregate_all[
         C: ColumnAggregator
-    ](self, agg: C, values: List[AnyArray]) raises -> GroupedColumns:
+    ](self, agg: C, values: List[DynArray]) raises -> GroupedColumns:
         """Group the keys once and apply ``agg`` to every value column.
 
         The multi-aggregate entry point, and the only one that reaches all three
@@ -491,8 +491,8 @@ struct GroupBy(Movable):
 
         @parameter
         def by_column(
-            j: Int, gids: Int32Array, value: AnyArray, ng: Int
-        ) raises -> AnyArray:
+            j: Int, gids: Int32Array, value: DynArray, ng: Int
+        ) raises -> DynArray:
             return agg.grouped(j, gids, value, ng)
 
         return self.aggregate_columns[by_column](values)
@@ -501,7 +501,7 @@ struct GroupBy(Movable):
     def _thread_local_columns[
         C: ColumnAggregator
     ](
-        keys: StructArray, agg: C, values: List[AnyArray], num_threads: Int
+        keys: StructArray, agg: C, values: List[DynArray], num_threads: Int
     ) raises -> GroupedColumns:
         """Thread-local partial aggregation for N columns at once.
 
@@ -533,7 +533,7 @@ struct GroupBy(Movable):
             var ng = grouper.num_groups()
 
             var kcols = grouper.key_columns(grouper.key_fields(kchunk))
-            var accs = List[AnyArray]()
+            var accs = List[DynArray]()
             var cnts = List[Int64Array]()
             for j in range(na):
                 var parts = agg.partials(
@@ -575,9 +575,9 @@ struct GroupBy(Movable):
         var ngg = gg.num_groups()
 
         var key_cols = gg.key_columns(gg.key_fields(keys))
-        var agg_cols = List[AnyArray]()
+        var agg_cols = List[DynArray]()
         for j in range(na):
-            var accs = List[AnyArray]()
+            var accs = List[DynArray]()
             var cnts = List[Int64Array]()
             for i in range(len(live)):
                 ref part = partials[live[i]].value()
@@ -588,10 +588,10 @@ struct GroupBy(Movable):
         return GroupedColumns(key_cols^, agg_cols^)
 
     def aggregate_columns[
-        col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
+        col_agg: def(Int, Int32Array, DynArray, Int) raises capturing[
             _
-        ] -> AnyArray
-    ](self, values: List[AnyArray]) raises -> GroupedColumns:
+        ] -> DynArray
+    ](self, values: List[DynArray]) raises -> GroupedColumns:
         """Group the keys once, then emit ``col_agg(j, gids, values[j], ng)`` as
         output column ``j`` — the multi-aggregate driver.
 
@@ -608,12 +608,12 @@ struct GroupBy(Movable):
 
     @staticmethod
     def _by_partition[
-        col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
+        col_agg: def(Int, Int32Array, DynArray, Int) raises capturing[
             _
-        ] -> AnyArray,
+        ] -> DynArray,
     ](
         keys: StructArray,
-        values: List[AnyArray],
+        values: List[DynArray],
         num_threads: Int,
         partition: Bool,
     ) raises -> GroupedColumns:
@@ -648,7 +648,7 @@ struct GroupBy(Movable):
         @parameter
         def group_partition(
             rows: Int32Array, part_hashes: UInt64Array
-        ) raises -> Tuple[Int32Array, List[AnyArray]]:
+        ) raises -> Tuple[Int32Array, List[DynArray]]:
             var grouper = HashGrouper()
             var grouped = grouper.consume_hashes(
                 part_hashes, grow_adaptively=not partition
@@ -661,9 +661,9 @@ struct GroupBy(Movable):
             # numbers. Unpartitioned rows already are their own row numbers.
             var first = grouped[1].copy()
             if partition:
-                first = take(rows.copy().to_any(), first).as_int32().copy()
+                first = take(rows.copy().to_dyn(), first).as_int32().copy()
 
-            var agg_cols = List[AnyArray]()
+            var agg_cols = List[DynArray]()
             for j in range(na):
                 # Values in partition order, aligned with `gids`. A single
                 # partition *is* the whole input, already in order — no gather.
@@ -673,19 +673,19 @@ struct GroupBy(Movable):
                     agg_cols.append(col_agg(j, gids, values[j], ng))
             return (first^, agg_cols^)
 
-        var parts = List[Tuple[Int32Array, List[AnyArray]]]()
+        var parts = List[Tuple[Int32Array, List[DynArray]]]()
         if partition:
 
             @parameter
             def radix_partition(
                 _pi: Int, rows: Int32Array, part_hashes: UInt64Array
-            ) raises -> Tuple[Int32Array, List[AnyArray]]:
+            ) raises -> Tuple[Int32Array, List[DynArray]]:
                 return group_partition(rows, part_hashes)
 
             parts = RadixPartitioner(
                 num_bits=RADIX_BITS, ctx=ExecutionContext.parallel(num_threads)
             ).map_partitions[
-                Tuple[Int32Array, List[AnyArray]], radix_partition
+                Tuple[Int32Array, List[DynArray]], radix_partition
             ](
                 rapidhash(keys, ctx)
             )
@@ -697,13 +697,13 @@ struct GroupBy(Movable):
 
         # The global unique-key set is the union of the partitions': concatenate
         # their first-occurrence rows and gather the key columns once.
-        var first_chunks = List[AnyArray]()
+        var first_chunks = List[DynArray]()
         for i in range(len(parts)):
             first_chunks.append(parts[i][0].copy())
         var first_any = concat(first_chunks, ctx)
         ref first_rows = first_any.as_int32()
 
-        var key_cols = List[AnyArray]()
+        var key_cols = List[DynArray]()
         for k in range(len(keys.children)):
             key_cols.append(
                 take(
@@ -713,9 +713,9 @@ struct GroupBy(Movable):
                 )
             )
 
-        var agg_cols = List[AnyArray]()
+        var agg_cols = List[DynArray]()
         for j in range(na):
-            var chunks = List[AnyArray]()
+            var chunks = List[DynArray]()
             for i in range(len(parts)):
                 chunks.append(parts[i][1][j].copy())
             agg_cols.append(concat(chunks, ctx))

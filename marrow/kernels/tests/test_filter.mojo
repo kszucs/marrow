@@ -6,7 +6,7 @@ from std.testing import (
 )
 
 from ...arrays import (
-    AnyArray,
+    DynArray,
     PrimitiveArray,
     BoolArray,
 )
@@ -330,18 +330,18 @@ def test_filterstrings_length_mismatch_raises() raises:
 
 
 # ---------------------------------------------------------------------------
-# filter — runtime-typed AnyArray dispatch
+# filter — runtime-typed DynArray dispatch
 # ---------------------------------------------------------------------------
 
 
 def test_filterarray_dispatch_int32() raises:
-    var a: AnyArray = array([10, 20, 30], int32)
+    var a: DynArray = array([10, 20, 30], int32)
     var result = filter(a, (array([False, True, True])))
     assert_equal(result.length(), 2)
 
 
 def test_filterarray_dispatch_float32() raises:
-    var a: AnyArray = array([1, 2, 3], float32)
+    var a: DynArray = array([1, 2, 3], float32)
     var result = filter(a, (array([True, False, True])))
     assert_equal(result.length(), 2)
 
@@ -350,13 +350,13 @@ def test_filterarray_dispatch_string() raises:
     var s = StringBuilder()
     s.append("hello")
     s.append("world")
-    var a: AnyArray = s.finish()
+    var a: DynArray = s.finish()
     var result = filter(a, (array([True, False])))
     assert_equal(result.length(), 1)
 
 
 def test_filterarray_dispatch_length_mismatch_raises() raises:
-    var a: AnyArray = array([1, 2, 3], int32)
+    var a: DynArray = array([1, 2, 3], int32)
     with assert_raises():
         _ = filter(a, (array([True, False])))
 
@@ -399,7 +399,7 @@ def test_drop_null_empty() raises:
 
 def test_drop_null_untyped() raises:
     var result = drop_null(
-        array([None, 1, None, 3, None, 5, None, 7, None, 9], uint8).to_any()
+        array([None, 1, None, 3, None, 5, None, 7, None, 9], uint8).to_dyn()
     )
     assert_equal(result.length(), 5)
 
@@ -513,21 +513,21 @@ def test_drop_null_sliced() raises:
 # ---------------------------------------------------------------------------
 
 
-def _date32(var days: List[Int]) raises -> AnyArray:
+def _date32(var days: List[Int]) raises -> DynArray:
     var b = Date32Builder(date32(), len(days))
     for d in days:
         b.append(Scalar[int32.native](d))
     return b.finish()
 
 
-def _timestamp(var vals: List[Int]) raises -> AnyArray:
+def _timestamp(var vals: List[Int]) raises -> DynArray:
     var b = TimestampBuilder(timestamp(second, "UTC"), len(vals))
     for v in vals:
         b.append(Scalar[int64.native](v))
     return b.finish()
 
 
-def _duration(var vals: List[Int]) raises -> AnyArray:
+def _duration(var vals: List[Int]) raises -> DynArray:
     var b = DurationBuilder(duration(second), len(vals))
     for v in vals:
         b.append(Scalar[int64.native](v))
@@ -538,7 +538,7 @@ def test_filter_date32() raises:
     """Filter a date32 column — dtype preserved, values selected."""
     var a = _date32([19000, 18500, 19100, 18800])
     var result = filter(a, (array([True, False, True, True])))
-    assert_true(result.dtype() == date32().to_any())  # dtype preserved
+    assert_true(result.dtype() == date32().to_dyn())  # dtype preserved
     assert_equal(len(result), 3)
     ref r = result.as_date32()
     assert_equal(r[0].value(), Scalar[int32.native](19000))
@@ -550,7 +550,7 @@ def test_filter_timestamp_preserves_unit_tz() raises:
     """Filter a timestamp column — unit/tz preserved through the reinterpret."""
     var a = _timestamp([1000, 2000, 3000, 4000, 5000])
     var result = filter(a, (array([False, True, False, True, True])))
-    assert_true(result.dtype() == timestamp(second, "UTC").to_any())
+    assert_true(result.dtype() == timestamp(second, "UTC").to_dyn())
     assert_equal(len(result), 3)
     ref r = result.as_timestamp()
     assert_equal(r[0].value(), Scalar[int64.native](2000))
@@ -566,7 +566,7 @@ def test_filter_temporal_with_nulls() raises:
     b.append_null()
     b.append(Scalar[int64.native](3000))
     b.append_null()
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     var result = filter(a, (array([True, True, False, True])))
     assert_equal(len(result), 3)
     assert_equal(result.null_count(), 2)
@@ -580,7 +580,7 @@ def test_take_date32() raises:
     """Gather rows from a date32 column at arbitrary indices."""
     var a = _date32([19000, 18500, 19100, 18800])
     var result = take(a, array([2, 0, 3, 1], int32))
-    assert_true(result.dtype() == date32().to_any())
+    assert_true(result.dtype() == date32().to_dyn())
     assert_equal(len(result), 4)
     ref r = result.as_date32()
     assert_equal(r[0].value(), Scalar[int32.native](19100))
@@ -597,7 +597,7 @@ def test_take_duration_null_index() raises:
     idx.append_null()
     idx.append(Scalar[int32.native](0))
     var result = take(a, idx.finish())
-    assert_true(result.dtype() == duration(second).to_any())
+    assert_true(result.dtype() == duration(second).to_dyn())
     assert_equal(result.null_count(), 1)
     assert_true(result.is_valid(0))
     assert_false(result.is_valid(1))
@@ -615,9 +615,9 @@ def test_drop_null_temporal() raises:
     b.append(Scalar[int64.native](3000))
     b.append_null()
     b.append(Scalar[int64.native](5000))
-    var a: AnyArray = b.finish()
+    var a: DynArray = b.finish()
     var result = Filter.drop_null(a)
-    assert_true(result.dtype() == timestamp(second, "UTC").to_any())
+    assert_true(result.dtype() == timestamp(second, "UTC").to_dyn())
     assert_equal(len(result), 3)
     assert_equal(result.null_count(), 0)
     ref r = result.as_timestamp()

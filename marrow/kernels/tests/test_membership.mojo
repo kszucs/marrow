@@ -1,6 +1,6 @@
 from std.testing import assert_true, assert_raises
 
-from ...arrays import AnyArray
+from ...arrays import DynArray
 from ...builders import array
 from ...dtypes import int32, int64, uint32, float64
 from ...kernels.membership import is_in
@@ -96,7 +96,7 @@ def test_is_in_string_with_nulls() raises:
 
 
 def test_is_in_type_mismatch_raises() raises:
-    var values: AnyArray = array([1, 2, 3], int32)
-    var value_set: AnyArray = array([1, 2], int64)
+    var values: DynArray = array([1, 2, 3], int32)
+    var value_set: DynArray = array([1, 2], int64)
     with assert_raises():
         _ = is_in(values, value_set)

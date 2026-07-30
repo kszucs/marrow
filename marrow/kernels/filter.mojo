@@ -8,17 +8,15 @@ All functions support arrays with non-zero offsets (sliced arrays).
 """
 
 import std.math as math
-from std.bit import pop_count, count_trailing_zeros
+from std.bit import count_trailing_zeros
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
 from ..arrays import (
-    Array,
     BoolArray,
     PrimitiveArray,
-    StringArray,
     BinaryLikeArray,
-    AnyArray,
+    DynArray,
     StructArray,
     NullArray,
     FixedSizeBinaryArray,
@@ -31,45 +29,24 @@ from ..buffers import Buffer
 from ..buffers import Bitmap
 from ..builders import (
     BoolBuilder,
-    PrimitiveBuilder,
-    StringBuilder,
     BinaryLikeBuilder,
 )
 from ..dtypes import (
-    AnyDataType,
     PrimitiveType,
-    NumericType,
-    TemporalType,
     BinaryLikeType,
     ListLikeType,
-    Int8Type,
-    Int16Type,
     Int32Type,
-    Int64Type,
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    Float16Type,
-    Float32Type,
-    Float64Type,
     bool_,
-    int8,
-    int16,
     int32,
     int64,
     uint8,
-    uint16,
-    uint32,
     uint64,
-    float16,
-    float32,
-    float64,
     string,
 )
 from std.algorithm.functional import sync_parallelize
 
-from ..views import BitmapView, BufferView
+from ..views import BitmapView
+from .core import Kernel
 from .execution import ExecutionContext
 
 
@@ -84,7 +61,7 @@ from .execution import ExecutionContext
 # ---------------------------------------------------------------------------
 
 
-struct Filter:
+struct Filter(Kernel):
     """Selection kernel — keep elements where a boolean ``mask`` is True.
 
     The typed leaves are the ``apply`` overloads below; each operates directly on
@@ -96,24 +73,15 @@ struct Filter:
     comptime name = "filter"
 
     @staticmethod
-    def _require_len(array_len: Int, mask_len: Int) raises:
-        """Validate the mask covers the array exactly (guards the compaction
-        loops against out-of-bounds reads on a mismatched mask)."""
-        if array_len != mask_len:
-            raise Error(
-                t"filter: array length {array_len} != mask length {mask_len}"
-            )
-
-    @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and filter it by `mask`."""
         var dt = array.dtype()
         if dt == bool_:
-            return Filter.apply(array.as_bool(), mask, ctx).to_any()
+            return Filter.apply(array.as_bool(), mask, ctx).to_dyn()
         elif dt.is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
@@ -123,39 +91,40 @@ struct Filter:
             # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
-                return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
+            def primitive[T: PrimitiveType](d: T) raises -> DynArray:
+                return Filter.apply(array.as_primitive[T](), mask, ctx).to_dyn()
 
             return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
-            def binarylike[T: BinaryLikeType](d: T) raises -> AnyArray:
+            def binarylike[T: BinaryLikeType](d: T) raises -> DynArray:
                 return Filter.apply(
                     array.as_binary_like[T](), mask, ctx
-                ).to_any()
+                ).to_dyn()
 
             return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
-            return Filter.apply(array.as_null(), mask, ctx).to_any()
+            return Filter.apply(array.as_null(), mask, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
             return Filter.apply(
                 array.as_fixed_size_binary(), mask, ctx
-            ).to_any()
+            ).to_dyn()
         elif dt.is_struct():
-            return Filter.apply(array.as_struct(), mask, ctx).to_any()
-        elif dt.is_list():
-            return Filter.apply(array.as_list(), mask, ctx).to_any()
-        elif dt.is_large_list():
-            return Filter.apply(array.as_large_list(), mask, ctx).to_any()
-        elif dt.is_map():
-            return Filter.apply(array.as_map(), mask, ctx).to_any()
+            return Filter.apply(array.as_struct(), mask, ctx).to_dyn()
+        elif dt.is_list_like():
+
+            @parameter
+            def listlike[T: ListLikeType](d: T) raises -> DynArray:
+                return Filter.apply(array.as_list_like[T](), mask, ctx).to_dyn()
+
+            return dt.dispatch_listlike[listlike]()
         elif dt.is_fixed_size_list():
-            return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_any()
+            return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_dyn()
         elif dt.is_dictionary():
-            return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
+            return Filter.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
-            raise Error("filter: unsupported dtype ", dt)
+            raise Self.error(t"unsupported dtype {dt}")
 
     @staticmethod
     def drop_null[
@@ -171,11 +140,11 @@ struct Filter:
 
     @staticmethod
     def drop_null(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
+        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> DynArray:
         """Remove null elements: the validity bitmap is itself the keep-mask."""
         if array.dtype().is_null():
-            return NullArray(length=0).to_any()
+            return NullArray(length=0).to_dyn()
         var data = array.to_data()
         if not data.bitmap:
             return array.copy()
@@ -190,7 +159,7 @@ struct Filter:
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveArray[T]:
         """Filter a primitive array, keeping elements where ``mask`` is set."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
@@ -225,7 +194,7 @@ struct Filter:
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
         """Filter a bool array, keeping elements where ``mask`` is set."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
@@ -270,7 +239,7 @@ struct Filter:
         one memcpy (run-merge for dense masks). Validity is filtered in the same
         offset pass.
         """
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         comptime O = T.offset
         var n = len(array)
         var out_len = mask.count_set_bits()
@@ -388,7 +357,7 @@ struct Filter:
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> NullArray:
         """Filter a null array — the result is a shorter all-null array."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         return NullArray(length=mask.count_set_bits())
 
     @staticmethod
@@ -399,7 +368,7 @@ struct Filter:
     ) raises -> FixedSizeBinaryArray:
         """Filter a fixed-size-binary array by compacting the fixed-width byte
         blocks where ``mask`` is set."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var n = len(array)
         var bw = array.byte_width
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
@@ -456,7 +425,7 @@ struct Filter:
         row's contiguous child range and filter the child recursively, building
         the output offsets in the same pass — no index materialization, no take.
         """
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         comptime O = T.offset
         var n = len(array)
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
@@ -518,7 +487,7 @@ struct Filter:
     ) raises -> FixedSizeListArray:
         """Filter a fixed-size-list array column-wise: mark each selected row's
         `size` contiguous child slots and filter the child recursively."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var n = len(array)
         var size = array.dtype.as_fixed_size_list().size
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
@@ -567,7 +536,7 @@ struct Filter:
         """Filter a dictionary array by compacting its (logical) index codes with
         the fast sequential primitive path and sharing the values unchanged — far
         cheaper than a take (no index materialization, no random gather)."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var new_indices = Filter.dispatch(array.indices(), mask, ctx)
         return DictionaryArray(
             dtype=array.type(),
@@ -586,7 +555,7 @@ struct Filter:
     ) raises -> StructArray:
         """Filter a struct array column-wise: filter every child by the same mask
         and compact the struct-level validity."""
-        Filter._require_len(len(array), len(mask))
+        Self.expect_same_length(len(array), len(mask))
         var n = len(array)
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
@@ -616,7 +585,7 @@ struct Filter:
         )
 
 
-struct Take:
+struct Take(Kernel):
     """Gather kernel — collect elements at arbitrary indices (null index → null).
 
     The typed leaves are the ``apply`` overloads below; ``dispatch`` resolves a
@@ -627,14 +596,14 @@ struct Take:
 
     @staticmethod
     def dispatch(
-        array: AnyArray,
+        array: DynArray,
         indices: Int32Array,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and gather it at `indices`."""
         var dt = array.dtype()
         if dt == bool_:
-            return Take.apply(array.as_bool(), indices, ctx).to_any()
+            return Take.apply(array.as_bool(), indices, ctx).to_dyn()
         elif dt.is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
@@ -644,41 +613,44 @@ struct Take:
             # decimal columns raising `unsupported dtype`.
 
             @parameter
-            def primitive[T: PrimitiveType](d: T) raises -> AnyArray:
+            def primitive[T: PrimitiveType](d: T) raises -> DynArray:
                 return Take.apply(
                     array.as_primitive[T](), indices, ctx
-                ).to_any()
+                ).to_dyn()
 
             return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
             @parameter
-            def binarylike[T: BinaryLikeType](d: T) raises -> AnyArray:
+            def binarylike[T: BinaryLikeType](d: T) raises -> DynArray:
                 return Take.apply(
                     array.as_binary_like[T](), indices, ctx
-                ).to_any()
+                ).to_dyn()
 
             return dt.dispatch_binarylike[binarylike]()
         elif dt.is_null():
-            return Take.apply(array.as_null(), indices, ctx).to_any()
+            return Take.apply(array.as_null(), indices, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
             return Take.apply(
                 array.as_fixed_size_binary(), indices, ctx
-            ).to_any()
+            ).to_dyn()
         elif dt.is_struct():
-            return Take.apply(array.as_struct(), indices, ctx).to_any()
-        elif dt.is_list():
-            return Take.apply(array.as_list(), indices, ctx).to_any()
-        elif dt.is_large_list():
-            return Take.apply(array.as_large_list(), indices, ctx).to_any()
-        elif dt.is_map():
-            return Take.apply(array.as_map(), indices, ctx).to_any()
+            return Take.apply(array.as_struct(), indices, ctx).to_dyn()
+        elif dt.is_list_like():
+
+            @parameter
+            def listlike[T: ListLikeType](d: T) raises -> DynArray:
+                return Take.apply(
+                    array.as_list_like[T](), indices, ctx
+                ).to_dyn()
+
+            return dt.dispatch_listlike[listlike]()
         elif dt.is_fixed_size_list():
-            return Take.apply(array.as_fixed_size_list(), indices, ctx).to_any()
+            return Take.apply(array.as_fixed_size_list(), indices, ctx).to_dyn()
         elif dt.is_dictionary():
-            return Take.apply(array.as_dictionary(), indices, ctx).to_any()
+            return Take.apply(array.as_dictionary(), indices, ctx).to_dyn()
         else:
-            raise Error("take: unsupported dtype ", dt)
+            raise Self.error(t"unsupported dtype {dt}")
 
     @staticmethod
     def apply[
@@ -1092,7 +1064,7 @@ struct Take:
         """
         var n = len(array)
         var out_length = len(indices)
-        var children = List[AnyArray]()
+        var children = List[DynArray]()
         for c in range(len(array.children)):
             children.append(
                 Take.dispatch(
@@ -1132,26 +1104,26 @@ struct Take:
 
 
 def filter(
-    array: AnyArray,
-    mask: AnyArray,
+    array: DynArray,
+    mask: DynArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Filter `array`, keeping elements where boolean `mask` is True."""
     var m = mask.as_bool().copy()
     return Filter.dispatch(array, m.values(), ctx)
 
 
 def take(
-    array: AnyArray,
+    array: DynArray,
     indices: Int32Array,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Gather elements of `array` at `indices` (null index -> null element)."""
     return Take.dispatch(array, indices, ctx)
 
 
 def drop_null(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyArray:
+    array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> DynArray:
     """Remove null elements using the validity bitmap as the selection."""
     return Filter.drop_null(array, ctx)

@@ -16,7 +16,7 @@ iteration count with ``MARROW_PROFILE_ITERS`` (default 8).
 from std.benchmark import keep
 from std.os.env import getenv
 
-from marrow.arrays import PrimitiveArray, AnyArray, StructArray
+from marrow.arrays import PrimitiveArray, DynArray, StructArray
 from marrow.builders import PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, Int64Type, struct_, Field
 from marrow.kernels.join import JOIN_INNER, JOIN_ALL
@@ -30,9 +30,9 @@ def _make_struct(n: Int) raises -> StructArray:
     for i in range(n):
         kb.append(Scalar[int64.native](i))
         vb.append(Scalar[int64.native](i * 10))
-    var cols = List[AnyArray]()
-    cols.append(kb.finish().to_any())
-    cols.append(vb.finish().to_any())
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
     return StructArray(
         dtype=struct_(Field("k", int64), Field("v", int64)),
         length=n,

@@ -3,7 +3,7 @@ from std.python import Python
 from std.os import remove
 from ..parquet import read_table, write_table
 from ..tabular import Table, RecordBatch
-from ..arrays import AnyArray, PrimitiveArray, StringArray
+from ..arrays import DynArray, PrimitiveArray, StringArray
 from ..schema import Schema
 from ..dtypes import Field, int32, int64, float64, string
 

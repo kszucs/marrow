@@ -1,4 +1,4 @@
-"""AnyArray concatenation kernel.
+"""DynArray concatenation kernel.
 
 Combines a list of type-erased arrays into a single array by concatenating
 their contents. Matches the semantics of PyArrow's `pyarrow.concat_arrays()`
@@ -9,15 +9,15 @@ offset-awareness, bitmap concatenation, and recursive child concatenation
 for all supported array types.
 """
 
-from ..arrays import AnyArray
-from ..builders import AnyBuilder
+from ..arrays import DynArray
+from ..builders import DynBuilder
 from .execution import ExecutionContext
 
 
 def concat(
-    arrays: List[AnyArray],
+    arrays: List[DynArray],
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
+) raises -> DynArray:
     """Concatenate a list of arrays into a single array.
 
     All arrays must have the same dtype. Validity bitmaps and buffer contents
@@ -36,7 +36,7 @@ def concat(
     var total_length = 0
     for arr in arrays:
         total_length += arr.length()
-    var builder = AnyBuilder(arrays[0].dtype(), total_length)
+    var builder = DynBuilder(arrays[0].dtype(), total_length)
     for arr in arrays:
         builder.extend(arr)
     return builder.finish()

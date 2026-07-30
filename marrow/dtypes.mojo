@@ -15,7 +15,7 @@ Trait hierarchy:
         ├── IntervalType(PrimitiveType)
         └── DecimalType(PrimitiveType)
 
-`AnyDataType` is the type-erased runtime container backed by a `Variant` — no
+`DynType` is the type-erased runtime container backed by a `Variant` — no
 heap allocation, no vtable, direct member access.
 
 Concrete zero-size type structs (one per Arrow type):
@@ -37,13 +37,13 @@ Comptime singletons (same names as before):
 """
 
 from std.utils import Variant
-from std.builtin.rebind import downcast, trait_downcast
+
 from std.sys import size_of, bit_width_of
-from std.os import abort
-from std.memory import ArcPointer, OwnedPointer
+
+from std.memory import OwnedPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from std.sys.compile import codegen_unreachable
+
 
 from .utils import variant_dispatch, variant_dispatch_raises
 
@@ -54,13 +54,26 @@ from .utils import variant_dispatch, variant_dispatch_raises
 
 
 trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
-    """A concrete Arrow type. Each type names its companion `ScalarType` and
-    `ArrayType` (the inverse of `Array.ScalarType`), so generic code can map a
-    dtype to its typed scalar/array. Provided at the family traits
-    (`NumericType`/`StringLikeType`/…) and on the standalone concrete types."""
+    """A concrete Arrow type.
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self^)
+    Deliberately minimal: five inherited traits and one defaulted method, and
+    **no associated types**. It used to name companion `ScalarType`/`ArrayType`
+    members, which forced this module to import `arrays` and `scalars` — both of
+    which import it back. That cycle broke the build three times in one day and
+    the members were removed in `63b93aa`; nothing consumed them. A dtype's
+    companion types are reached from the *array* side instead.
+
+    Because the trait requires so little, `DynType` can satisfy it — the erased
+    dtype is a **peer** of the concrete ones, not a supertype, and generic code
+    bound on `DataType` accepts either."""
+
+    comptime IsErased: Bool = False
+    """Whether this dtype is the erased one. Lets a node parameterised on a
+    dtype (`NumericColumn[T]`, `NumericLiteral[T]`) know it is in the erased
+    lane without a separate erased node type existing."""
+
+    def to_dyn(deinit self) -> DynType:
+        return DynType(self^)
 
 
 trait PrimitiveType(DataType, ImplicitlyCopyable):
@@ -114,7 +127,7 @@ trait StringLikeType(BinaryLikeType):
 
 
 trait ListLikeType(DataType):
-    """Variable-length list types (list, large_list).
+    """Variable-length list types (list, large_list, map).
 
     Provides `comptime offset: DType` — the physical integer type of the
     offset buffer (int32 for standard list, int64 for large_list).
@@ -152,6 +165,9 @@ trait DecimalType(PrimitiveType):
     """Fixed-point decimal types backed by int32, int64, int128, or int256.
 
     Logical type carries precision and scale — runtime values in `array.dtype`.
+    Traits cannot require `var` fields, so reading `precision`/`scale` off an
+    erased dtype still needs a `DynType` ladder; `dispatch_decimal` covers the
+    cases that only need `T.native`.
     """
 
     pass
@@ -468,14 +484,14 @@ struct Field(
     Writable,
 ):
     var name: String
-    var dtype: AnyDataType
+    var dtype: DynType
     var nullable: Bool
     var metadata: Dict[String, String]
 
     def __init__(
         out self,
         name: String,
-        var dtype: AnyDataType,
+        var dtype: DynType,
         nullable: Bool = True,
         var metadata: Dict[String, String] = {},
     ):
@@ -530,7 +546,7 @@ struct ListType(DataType, ListLikeType):
     def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
-    def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
+    def value_type(ref self) -> ref[self.item[].dtype] DynType:
         return self.item[].dtype
 
     def write_to[W: Writer](self, mut writer: W):
@@ -554,7 +570,7 @@ struct LargeListType(DataType, ListLikeType):
     def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
-    def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
+    def value_type(ref self) -> ref[self.item[].dtype] DynType:
         return self.item[].dtype
 
     def write_to[W: Writer](self, mut writer: W):
@@ -579,7 +595,7 @@ struct FixedSizeListType(DataType):
     def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
-    def value_type(self) -> AnyDataType:
+    def value_type(self) -> DynType:
         return self.item[].dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -634,8 +650,8 @@ struct MapType(DataType, ListLikeType):
 
     def __init__(
         out self,
-        var key_type: AnyDataType,
-        var value_type: AnyDataType,
+        var key_type: DynType,
+        var value_type: DynType,
         value_nullable: Bool = True,
         keys_sorted: Bool = False,
     ):
@@ -674,10 +690,10 @@ struct MapType(DataType, ListLikeType):
     def item_field(self) -> Field:
         return self.entries[].dtype.as_struct().fields[1].copy()
 
-    def key_type(self) -> AnyDataType:
+    def key_type(self) -> DynType:
         return self.entries[].dtype.as_struct().fields[0].dtype.copy()
 
-    def item_type(self) -> AnyDataType:
+    def item_type(self) -> DynType:
         return self.entries[].dtype.as_struct().fields[1].dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -692,14 +708,14 @@ struct DictionaryType(DataType):
     The value type (the dictionary) can be any Arrow type.
     """
 
-    var _index_type: OwnedPointer[AnyDataType]
-    var _value_type: OwnedPointer[AnyDataType]
+    var _index_type: OwnedPointer[DynType]
+    var _value_type: OwnedPointer[DynType]
     var ordered: Bool
 
     def __init__(
         out self,
-        var index_type: AnyDataType,
-        var value_type: AnyDataType,
+        var index_type: DynType,
+        var value_type: DynType,
         ordered: Bool = False,
     ) raises:
         if not index_type.is_integer():
@@ -716,16 +732,16 @@ struct DictionaryType(DataType):
         self._value_type = OwnedPointer(copy._value_type[].copy())
         self.ordered = copy.ordered
 
-    # Explicit (empty) destructor: `OwnedPointer[AnyDataType]` is not implicitly
+    # Explicit (empty) destructor: `OwnedPointer[DynType]` is not implicitly
     # deletable, so the compiler cannot synthesize one. Fields are still
     # destroyed automatically after the body runs.
     def __del__(deinit self):
         pass
 
-    def index_type(ref self) -> ref[self._index_type[]] AnyDataType:
+    def index_type(ref self) -> ref[self._index_type[]] DynType:
         return self._index_type[]
 
-    def value_type(ref self) -> ref[self._value_type[]] AnyDataType:
+    def value_type(ref self) -> ref[self._value_type[]] DynType:
         return self._value_type[]
 
     def __eq__(self, other: Self) -> Bool:
@@ -748,21 +764,55 @@ struct DictionaryType(DataType):
 
 
 # ---------------------------------------------------------------------------
-# AnyDataType — Variant-based type-erased handle
+# DynType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
 
 
-struct AnyDataType(
+struct DynType(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
     DataType,
+    DecimalType,
     Equatable,
+    FloatingType,
+    IntegerType,
+    IntervalType,
+    ListLikeType,
     Movable,
+    NumericType,
+    StringLikeType,
+    TemporalType,
     Writable,
 ):
-    # Type-erased: no single companion. Placeholders satisfy the `DataType`
-    # requirement (a typed scalar/array of an `AnyDataType` is never built).
+    comptime IsErased = True
+
+    comptime offset = DType.int32
+    """Placeholder, never read — see `native`.
+
+    Required by `BinaryLikeType`/`ListLikeType`, which `StringValue.OutType` is
+    bound on. An erased dtype does not know its offset width; the erased arm
+    resolves it at run time via `dispatch_binarylike`/`dispatch_listlike`."""
+
+    comptime native = DType.bool
+    """Placeholder, never read.
+
+    `DynType` conforms to the family traits so that `DynValue` can conform to
+    `NumericValue`/`BoolValue`/`StringValue`, which is what lets the fused nodes
+    (`NumericBinary[K, L, R]`, ...) accept an erased operand with no change to
+    their bounds. Those nodes select the erased arm via `comptime IsErased`, so
+    a `SIMD[Self.native, W]` is never elaborated from this.
+
+    There is no `DType.invalid`. `bool` is the deliberate stand-in: it is the one
+    `DType` that is not a numeric lane, so a path that wrongly elaborated against
+    it produces visibly bool-shaped results rather than a plausible-but-wrong
+    integer width. `byte_width()` below overrides `PrimitiveType`'s default for
+    the same reason — it must keep resolving the *runtime* dtype."""
+
+    # `to_dyn` is overridden below rather than inherited, and that override is
+    # load-bearing: the trait's default body is `DynType(self^)`, which for
+    # `Self = DynType` would be `DynType(DynType)` — and `DynType` is
+    # deliberately not a member of its own variant.
 
     comptime VariantType = Variant[
         NullType,
@@ -865,6 +915,20 @@ struct AnyDataType(
         """
         return variant_dispatch_raises[TemporalType, func=func](self._v)
 
+    def dispatch_decimal[
+        R: AnyType,
+        //,
+        func: def[T: DecimalType](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        """Resolve a runtime decimal dtype to its comptime type and run `func`.
+
+        Only needed when the *logical* type matters (precision, scale) or when
+        the backing integer width drives the code — `T.native`. A kernel that
+        merely reads value bytes should go through `dispatch_primitive`, which
+        the decimal types satisfy.
+        """
+        return variant_dispatch_raises[DecimalType, func=func](self._v)
+
     def dispatch_stringlike[
         R: AnyType,
         //,
@@ -892,8 +956,17 @@ struct AnyDataType(
         `func`."""
         return variant_dispatch_raises[ListLikeType, func=func](self._v)
 
-    def to_any(deinit self) -> AnyDataType:
+    def to_dyn(deinit self) -> DynType:
         return self^
+
+    def __init__(out self):
+        """The Arrow `null` type — the identity `Defaultable` requires.
+
+        `NumericType` extends `Defaultable`, so conforming needs this. `null` is
+        the honest default for an erased dtype that has not been told what it
+        holds: it is a real Arrow type meaning "no value", not a numeric width
+        picked arbitrarily."""
+        self._v = Self.VariantType(NullType())
 
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
@@ -912,17 +985,31 @@ struct AnyDataType(
         try:
             capsule = py.__arrow_c_schema__()
         except:
-            raise Error("cannot convert Python object to AnyDataType")
+            raise Error("cannot convert Python object to DynType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    def byte_width(self) raises -> Int:
-        """Physical byte width per element. Defined for all PrimitiveType sub-types
-        (numeric, temporal, and decimal)."""
+    def byte_width(self) -> Int:
+        """Physical byte width per element, or **0** if this is not a fixed-width
+        type.
+
+        This *overrides* `PrimitiveType.byte_width`, and the override is
+        load-bearing: the inherited default is `size_of[Self.native]()`, and
+        `DynType.native` is the `bool` placeholder, so without this every erased
+        dtype would report width 1. It has to be **non-raising** to override at
+        all — a `raises` signature does not match the trait's, so the default
+        silently won instead and `DynType(int16).byte_width()` returned 1.
+        `test_byte_width` is what caught that.
+
+        Returning 0 rather than raising is the cost of the override. Every caller
+        already establishes the type first and treats an unexpected width as an
+        error — `TemporalCast.dispatch` and `DateTruncKernel.apply` both reject
+        anything that is not 4 or 8 — so a 0 surfaces loudly there rather than
+        being mistaken for a real width."""
         if not self.is_primitive():
-            raise Error("byte_width is only defined for primitive types")
+            return 0
 
         @parameter
         def f[T: PrimitiveType](t: T) -> Int:
@@ -1025,12 +1112,19 @@ struct AnyDataType(
     def is_large_binary(self) -> Bool:
         return self._v.isa[LargeBinaryType]()
 
+    def is_string_like(self) -> Bool:
+        """A UTF-8 string of either offset width.
+
+        The narrower half of `is_binary_like`: the kernels that require *text*
+        rather than any variable-width payload guard with this, so their
+        diagnostic can name the family before `dispatch_stringlike` reduces the
+        dtype to a comptime type.
+        """
+        return self.is_string() or self.is_large_string()
+
     def is_binary_like(self) -> Bool:
         return (
-            self.is_binary()
-            or self.is_large_binary()
-            or self.is_string()
-            or self.is_large_string()
+            self.is_binary() or self.is_large_binary() or self.is_string_like()
         )
 
     def is_list(self) -> Bool:
@@ -1040,7 +1134,10 @@ struct AnyDataType(
         return self._v.isa[LargeListType]()
 
     def is_list_like(self) -> Bool:
-        return self.is_list() or self.is_large_list()
+        # Map included: `MapType` conforms to `ListLikeType` and
+        # `dispatch_listlike` walks it, so a predicate that excluded it forced
+        # every caller to write `is_list_like() or is_map()` by hand.
+        return self.is_list() or self.is_large_list() or self.is_map()
 
     def is_fixed_size_list(self) -> Bool:
         return self._v.isa[FixedSizeListType]()
@@ -1229,25 +1326,23 @@ struct AnyDataType(
 # ---------------------------------------------------------------------------
 
 
-def field(name: String, var dtype: AnyDataType, nullable: Bool = True) -> Field:
+def field(name: String, var dtype: DynType, nullable: Bool = True) -> Field:
     """Construct a Field. Equivalent to PyArrow's ``pa.field()``."""
     return Field(name, dtype^, nullable)
 
 
-def list_(var value_type: AnyDataType) -> ListType:
+def list_(var value_type: DynType) -> ListType:
     """Construct a list type. Equivalent to PyArrow's ``pa.list_()``."""
     return ListType(field("item", value_type^))
 
 
-def large_list_(var value_type: AnyDataType) -> LargeListType:
+def large_list_(var value_type: DynType) -> LargeListType:
     """Construct a large_list type. Equivalent to PyArrow's ``pa.large_list()``.
     """
     return LargeListType(field("item", value_type^))
 
 
-def fixed_size_list_(
-    var value_type: AnyDataType, size: Int
-) -> FixedSizeListType:
+def fixed_size_list_(var value_type: DynType, size: Int) -> FixedSizeListType:
     """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size.
     """
     return FixedSizeListType(field("item", value_type^), size)
@@ -1315,8 +1410,8 @@ def struct_(var fields: List[Field]) -> StructType:
 
 
 def dictionary(
-    var index_type: AnyDataType,
-    var value_type: AnyDataType,
+    var index_type: DynType,
+    var value_type: DynType,
     ordered: Bool = False,
 ) raises -> DictionaryType:
     """Construct a dictionary type. Equivalent to PyArrow's ``pa.dictionary()``.
@@ -1335,8 +1430,8 @@ def struct_(var *fields: Field) -> StructType:
 
 
 def map_(
-    var key_type: AnyDataType,
-    var item_type: AnyDataType,
+    var key_type: DynType,
+    var item_type: DynType,
     keys_sorted: Bool = False,
 ) -> MapType:
     """Construct a map type. Equivalent to PyArrow's ``pa.map_(key_type,

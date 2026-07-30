@@ -6,7 +6,7 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from ...arrays import AnyArray
+from ...arrays import DynArray
 from ...builders import PrimitiveBuilder, Int32Builder, Float64Builder
 from ...dtypes import int32, float64, Int32Type, Float64Type
 from ...kernels.groupby import GroupBy
@@ -23,14 +23,14 @@ from ...kernels.aggregate import (
 from ...testing import Benchmark
 
 
-def _make_keys(n: Int, num_groups: Int) raises -> AnyArray:
+def _make_keys(n: Int, num_groups: Int) raises -> DynArray:
     var b = Int32Builder(n)
     for i in range(n):
         b.append(Scalar[int32.native](i % num_groups))
     return b.finish()
 
 
-def _make_vals(n: Int) raises -> AnyArray:
+def _make_vals(n: Int) raises -> DynArray:
     var b = Float64Builder(n)
     for i in range(n):
         b.append(Scalar[float64.native](Float64(i)))

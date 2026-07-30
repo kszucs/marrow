@@ -7,7 +7,7 @@ ibis/polars do:
         keys=[col("region")],
         aggs=[
             col("amount").sum().alias("total"),
-            col("amount").max().alias("biggest"),
+            col("amount").aggregate("max").alias("biggest"),
         ],
     )
     var out = plan.execute()                       # region | total | biggest
@@ -48,7 +48,7 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...dtypes import AnyDataType, Int32Type, StringType
+from ...dtypes import DynType, Int32Type, StringType
 from ...kernels.aggregate import (
     NumericAgg,
     StringMinMax,
@@ -57,9 +57,9 @@ from ...kernels.aggregate import (
     MaxKernel,
 )
 from ...expr.aggregates import AggFunc
-from ...expr.dynamic import DynValue, col, lit
-from ...expr.relations import AnyRelation, in_memory_table
-from ...expr.values import AnyValue, col as fused_col
+from ...expr.values import col, lit
+from ...expr.relations import DynRelation, in_memory_table
+from ...expr.values import DynValue, col as fused_col
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ def _orders() raises -> RecordBatch:
     for d in days:
         db.append(Int32(d))
     return record_batch(
-        [region.copy(), amount.copy(), quantity.copy(), db.finish().to_any()],
+        [region.copy(), amount.copy(), quantity.copy(), db.finish().to_dyn()],
         names=["region", "amount", "quantity", "day"],
     )
 
@@ -121,9 +121,9 @@ def test_group_by_several_aggregates_in_one_pass() raises:
         keys=[col("region")],
         aggs=[
             col("amount").sum().alias("total"),
-            col("amount").max().alias("biggest"),
-            col("quantity").count().alias("n"),
-            col("amount").mean().alias("avg"),
+            col("amount").aggregate("max").alias("biggest"),
+            col("quantity").aggregate("count").alias("n"),
+            col("amount").aggregate("mean").alias("avg"),
         ],
     )
     var out = plan.execute()
@@ -191,8 +191,8 @@ def test_whole_table_aggregate_without_keys() raises:
         keys=List[DynValue](),
         aggs=[
             col("amount").sum().alias("total"),
-            col("amount").min().alias("smallest"),
-            col("quantity").count().alias("n"),
+            col("amount").aggregate("min").alias("smallest"),
+            col("quantity").aggregate("count").alias("n"),
         ],
     )
     var out = plan.execute()
@@ -216,11 +216,17 @@ def test_output_dtypes_match_what_execution_produces() raises:
         keys=[col("region")],
         aggs=[
             col("quantity").sum().alias("s"),  # sum widens int32 -> int64
-            col("quantity").min().alias("mn"),  # min keeps int32
-            col("amount").mean().alias("avg"),  # mean is float64
-            col("region").count().alias("n"),  # count is int64, any dtype
-            col("region").min().alias("first_name"),  # string min keeps string
-            col("day").min().alias("earliest"),  # date min keeps date32
+            col("quantity").aggregate("min").alias("mn"),  # min keeps int32
+            col("amount").aggregate("mean").alias("avg"),  # mean is float64
+            col("region")
+            .aggregate("count")
+            .alias("n"),  # count is int64, any dtype
+            col("region")
+            .aggregate("min")
+            .alias("first_name"),  # string min keeps string
+            col("day")
+            .aggregate("min")
+            .alias("earliest"),  # date min keeps date32
         ],
     )
     var out = plan.execute()
@@ -243,13 +249,13 @@ def test_min_max_keep_timestamp_unit_and_timezone() raises:
     tb.append(Int64(1000))
     tb.append(Int64(2000))
     var batch = record_batch(
-        [array(["a", "a", "a"]).to_any(), tb.finish().to_any()],
+        [array(["a", "a", "a"]).to_dyn(), tb.finish().to_dyn()],
         names=["k", "ts"],
     )
     var plan = in_memory_table(batch).aggregate(
         keys=[col("k")],
         aggs=[
-            col("ts").min().alias("first_seen"),
+            col("ts").aggregate("min").alias("first_seen"),
         ],
     )
     var out = plan.execute()
@@ -266,16 +272,16 @@ def test_min_max_keep_timestamp_unit_and_timezone() raises:
 def test_min_max_over_strings_are_lexicographic() raises:
     var batch = record_batch(
         [
-            array(["a", "a", "a"]).to_any(),
-            array(["banana", "apple", "cherry"]).to_any(),
+            array(["a", "a", "a"]).to_dyn(),
+            array(["banana", "apple", "cherry"]).to_dyn(),
         ],
         names=["k", "fruit"],
     )
     var plan = in_memory_table(batch).aggregate(
         keys=[col("k")],
         aggs=[
-            col("fruit").min().alias("lo"),
-            col("fruit").max().alias("hi"),
+            col("fruit").aggregate("min").alias("lo"),
+            col("fruit").aggregate("max").alias("hi"),
         ],
     )
     var out = plan.execute()
@@ -307,14 +313,14 @@ def test_nulls_are_excluded_and_empty_groups_are_null() raises:
     vb.append_null()
     vb.append_null()
     var batch = record_batch(
-        [array(["a", "a", "a", "b", "b"]).to_any(), vb.finish().to_any()],
+        [array(["a", "a", "a", "b", "b"]).to_dyn(), vb.finish().to_dyn()],
         names=["k", "v"],
     )
     var plan = in_memory_table(batch).aggregate(
         keys=[col("k")],
         aggs=[
             col("v").sum().alias("total"),
-            col("v").count().alias("n"),
+            col("v").aggregate("count").alias("n"),
         ],
     )
     var out = plan.execute()
@@ -362,7 +368,7 @@ def test_aggregate_undefined_for_the_column_type_is_rejected() raises:
         _ = in_memory_table(_orders()).aggregate(
             keys=[col("region")],
             aggs=[
-                col("region").mean(),
+                col("region").aggregate("mean"),
             ],
         )
 
@@ -399,17 +405,17 @@ def test_the_same_plan_can_be_executed_repeatedly() raises:
 # ---------------------------------------------------------------------------
 
 
-def _fused_sum_max_by_region() raises -> AnyRelation:
+def _fused_sum_max_by_region() raises -> DynRelation:
     """``SELECT region, sum(amount), max(amount) GROUP BY region``, fused."""
     return in_memory_table(_orders()).aggregate(
-        keys=[AnyValue(fused_col("region", string))],
+        keys=[DynValue(fused_col("region", string))],
         inputs=[
-            AnyValue(fused_col("amount", int64)),
-            AnyValue(fused_col("amount", int64)),
+            DynValue(fused_col("amount", int64)),
+            DynValue(fused_col("amount", int64)),
         ],
         aggs=[
-            AggFunc.of[NumericAgg[SumKernel, Int64Type]](AnyDataType(int64)),
-            AggFunc.of[NumericAgg[MaxKernel, Int64Type]](AnyDataType(int64)),
+            AggFunc.of[NumericAgg[SumKernel, Int64Type]](DynType(int64)),
+            AggFunc.of[NumericAgg[MaxKernel, Int64Type]](DynType(int64)),
         ],
         names=["region", "total", "biggest"],
     )
@@ -425,7 +431,7 @@ def test_fused_aggregate_matches_the_dynamic_one() raises:
             keys=[col("region")],
             aggs=[
                 col("amount").sum().alias("total"),
-                col("amount").max().alias("biggest"),
+                col("amount").aggregate("max").alias("biggest"),
             ],
         )
         .execute()
@@ -457,9 +463,9 @@ def test_fused_non_numeric_aggregation() raises:
     """A fused plan is not limited to the numeric folds: a bytewise string
     min is just a different `Aggregation` named at compile time."""
     var plan = in_memory_table(_orders()).aggregate(
-        keys=[AnyValue(fused_col("region", string))],
-        inputs=[AnyValue(fused_col("region", string))],
-        aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](AnyDataType(string))],
+        keys=[DynValue(fused_col("region", string))],
+        inputs=[DynValue(fused_col("region", string))],
+        aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](DynType(string))],
         names=["region", "lo"],
     )
     var out = plan.execute()

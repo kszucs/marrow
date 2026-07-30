@@ -8,7 +8,7 @@ correctness in both directions.
 from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
 from ..dtypes import *
-from ..arrays import AnyArray, DictionaryArray
+from ..arrays import DynArray, DictionaryArray
 from ..builders import (
     array,
     BoolBuilder,
@@ -57,21 +57,21 @@ def _tmp_path(suffix: String = ".arrow") raises -> String:
 
 def _mk_batch() raises -> RecordBatch:
     """Two-column batch: int32 + float64."""
-    var a: AnyArray = array([1, 2, 3, 4, 5], int32)
-    var b: AnyArray = array([1.1, 2.2, 3.3, 4.4, 5.5], float64)
+    var a: DynArray = array([1, 2, 3, 4, 5], int32)
+    var b: DynArray = array([1.1, 2.2, 3.3, 4.4, 5.5], float64)
     var fields = List[Field]()
     fields.append(field("a", int32))
     fields.append(field("b", float64))
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     cols.append(a^)
     cols.append(b^)
     return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
 
 
-def _single_col_batch(arr: AnyArray, f: Field) raises -> RecordBatch:
+def _single_col_batch(arr: DynArray, f: Field) raises -> RecordBatch:
     var fields = List[Field]()
     fields.append(f.copy())
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     cols.append(arr.copy())
     return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
 
@@ -104,16 +104,16 @@ def _roundtrip_stream(batch: RecordBatch) raises -> RecordBatch:
 def test_primitives_file() raises:
     """All integer and float primitive types round-trip through the file format.
     """
-    var i8: AnyArray = array([-128, 0, 127], int8)
-    var i16: AnyArray = array([-32768, 0, 32767], int16)
-    var i32: AnyArray = array([-1, 0, 1], int32)
-    var i64: AnyArray = array([-9999999999, 0, 9999999999], int64)
-    var u8: AnyArray = array([0, 128, 255], uint8)
-    var u16: AnyArray = array([0, 1000, 65535], uint16)
-    var u32: AnyArray = array([0, 1, 4294967295], uint32)
-    var u64: AnyArray = array([0, 1, 18446744073709551615], uint64)
-    var f32: AnyArray = array([-1.5, 0.0, 1.5], float32)
-    var f64: AnyArray = array([-1.5, 0.0, 1.5], float64)
+    var i8: DynArray = array([-128, 0, 127], int8)
+    var i16: DynArray = array([-32768, 0, 32767], int16)
+    var i32: DynArray = array([-1, 0, 1], int32)
+    var i64: DynArray = array([-9999999999, 0, 9999999999], int64)
+    var u8: DynArray = array([0, 128, 255], uint8)
+    var u16: DynArray = array([0, 1000, 65535], uint16)
+    var u32: DynArray = array([0, 1, 4294967295], uint32)
+    var u64: DynArray = array([0, 1, 18446744073709551615], uint64)
+    var f32: DynArray = array([-1.5, 0.0, 1.5], float32)
+    var f64: DynArray = array([-1.5, 0.0, 1.5], float64)
 
     var fields = List[Field]()
     fields.append(field("i8", int8))
@@ -127,7 +127,7 @@ def test_primitives_file() raises:
     fields.append(field("f32", float32))
     fields.append(field("f64", float64))
 
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     cols.append(i8^)
     cols.append(i16^)
     cols.append(i32^)
@@ -151,7 +151,7 @@ def test_bool_file() raises:
     b.append(True)
     b.append(True)
     b.append(False)
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     var batch = _single_col_batch(arr^, field("flags", bool_))
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
@@ -162,7 +162,7 @@ def test_string_file() raises:
     b.append("hello")
     b.append("world")
     b.append("!")
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     var batch = _single_col_batch(arr^, field("s", string))
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
@@ -183,7 +183,7 @@ def test_list_file() raises:
     child.append(Int32(5))
     child.append(Int32(6))
     lb.append_valid()
-    var arr: AnyArray = lb.finish()
+    var arr: DynArray = lb.finish()
     var batch = _single_col_batch(arr^, field("items", list_(int32)))
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
@@ -203,7 +203,7 @@ def test_fixed_size_list_file() raises:
     child.append(Float32(5.0))
     child.append(Float32(6.0))
     fslb.append_valid()
-    var arr: AnyArray = fslb.finish()
+    var arr: DynArray = fslb.finish()
     var batch = _single_col_batch(
         arr^, field("vecs", fixed_size_list_(float32, 3))
     )
@@ -229,7 +229,7 @@ def test_struct_file() raises:
     sb.field_builder(0).as_float64().append(Float64(5.0))
     sb.field_builder(1).as_float64().append(Float64(6.0))
     sb.append_valid()
-    var arr: AnyArray = sb.finish()
+    var arr: DynArray = sb.finish()
     var point_field = field("point", struct_(child_flds^))
     var batch = _single_col_batch(arr^, point_field^)
     var result = _roundtrip_file(batch)
@@ -244,10 +244,10 @@ def test_nullable_file() raises:
     b.append_null()
     b.append(Int32(30))
     b.append_null()
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     var fields = List[Field]()
     fields.append(field("x", int32, nullable=True))
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     cols.append(arr^)
     var batch = RecordBatch(schema=Schema(fields=fields^), columns=cols^)
     var batches_in = List[RecordBatch]()
@@ -344,7 +344,7 @@ def test_bool_stream() raises:
     b.append(True)
     b.append(False)
     b.append(True)
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     var batch = _single_col_batch(arr^, field("flags", bool_))
     var result = _roundtrip_stream(batch)
     assert_true(batch == result)
@@ -443,17 +443,17 @@ def test_pyarrow_reads_bool_and_string() raises:
     bb.append(True)
     bb.append(False)
     bb.append(True)
-    var bools: AnyArray = bb.finish()
+    var bools: DynArray = bb.finish()
     var sb = StringBuilder(3)
     sb.append("a")
     sb.append("b")
     sb.append("c")
-    var strs: AnyArray = sb.finish()
+    var strs: DynArray = sb.finish()
 
     var fields = List[Field]()
     fields.append(field("b", bool_))
     fields.append(field("s", string))
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     cols.append(bools^)
     cols.append(strs^)
     var batch = RecordBatch(schema=Schema(fields=fields^), columns=cols^)
@@ -478,10 +478,10 @@ def test_pyarrow_reads_nullable() raises:
     b.append_null()
     b.append(Int32(30))
     b.append_null()
-    var arr: AnyArray = b.finish()
+    var arr: DynArray = b.finish()
     var fields = List[Field]()
     fields.append(field("x", int32, nullable=True))
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     cols.append(arr^)
     var batch = RecordBatch(schema=Schema(fields=fields^), columns=cols^)
     var batches_in = List[RecordBatch]()
@@ -647,16 +647,16 @@ def test_marrow_reads_pyarrow_nullable() raises:
 
 def _mk_dict_batch() raises -> RecordBatch:
     """Single-column batch: dictionary<int32, string> with 4 elements."""
-    var indices: AnyArray = array([0, 1, 0, 2], int32)
+    var indices: DynArray = array([0, 1, 0, 2], int32)
     var sb = StringBuilder(3)
     sb.append("cat")
     sb.append("dog")
     sb.append("fish")
-    var values: AnyArray = sb.finish()
-    var dict_arr: AnyArray = DictionaryArray.from_arrays(indices^, values^)
+    var values: DynArray = sb.finish()
+    var dict_arr: DynArray = DictionaryArray.from_arrays(indices^, values^)
     var fields = List[Field]()
     fields.append(field("d", dictionary(int32, string)))
-    var cols = List[AnyArray]()
+    var cols = List[DynArray]()
     cols.append(dict_arr^)
     return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
 

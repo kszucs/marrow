@@ -12,7 +12,7 @@ geometry (`non_null_def`, `child_def`) computed once during the parse walk so
 
 from .. import dtypes as dt
 from ..schema import Schema
-from ..arrays import AnyArray, StructArray, BoolArray, ListArray
+from ..arrays import DynArray, StructArray, BoolArray, ListArray
 from ..builders import BoolBuilder, PrimitiveBuilder
 from ..buffers import Bitmap
 from .format import (
@@ -96,7 +96,7 @@ struct SchemaNode(Copyable, Movable):
             return self.leaf_index
         return self.children[0].first_leaf_index()
 
-    def assemble(self, ref decoded: List[DecodedLeaf]) raises -> AnyArray:
+    def assemble(self, ref decoded: List[DecodedLeaf]) raises -> DynArray:
         """Reconstruct this node's Arrow array from the decoded leaf columns."""
         if self.kind == NODE_LEAF:
             return decoded[self.leaf_index].array.copy()
@@ -112,7 +112,7 @@ struct SchemaNode(Copyable, Movable):
                 element^, decoded[li].rep_levels, decoded[li].def_levels
             )
         elif self.kind == NODE_STRUCT:
-            var children = List[AnyArray]()
+            var children = List[DynArray]()
             var fields = List[dt.Field]()
             for ref c in self.children:
                 children.append(c.assemble(decoded))
@@ -141,7 +141,7 @@ struct SchemaNode(Copyable, Movable):
                             any_null = any_null or is_null
                     if any_null:
                         mask = mb.finish()
-            var out: AnyArray = StructArray.from_arrays(
+            var out: DynArray = StructArray.from_arrays(
                 children^, fields, mask^
             )
             return out^
@@ -150,10 +150,10 @@ struct SchemaNode(Copyable, Movable):
 
     def _fold_list_offsets(
         self,
-        var element: AnyArray,
+        var element: DynArray,
         rep_levels: List[Int32],
         def_levels: List[Int32],
-    ) raises -> AnyArray:
+    ) raises -> DynArray:
         """Fold a decoded element array + its Dremel levels into an Arrow
         `ListArray` for this (list) node, using only its own `geom`, to any
         nesting depth.
@@ -205,7 +205,7 @@ struct SchemaNode(Copyable, Movable):
         # the mask into a validity bitmap). A map is physically a list of its
         # (key, value) entries struct, so retag the result as a MapArray.
         var la = ListArray.from_arrays(offsets_arr, element^, mask_opt^)
-        var out: AnyArray
+        var out: DynArray
         if self.field.dtype.is_map():
             out = la.to_map(self.field.dtype.as_map().keys_sorted)
         else:
@@ -213,7 +213,7 @@ struct SchemaNode(Copyable, Movable):
         return out^
 
     def collect_leaf_arrays(
-        self, col: AnyArray, mut leaf_arrays: List[AnyArray]
+        self, col: DynArray, mut leaf_arrays: List[DynArray]
     ) raises:
         """Inverse of `assemble`: collect this node's leaf arrays in column order.
         """
@@ -274,7 +274,7 @@ struct SchemaNode(Copyable, Movable):
         return False
 
     @staticmethod
-    def _apply_null_mask(arr: AnyArray, sa: StructArray) raises -> AnyArray:
+    def _apply_null_mask(arr: DynArray, sa: StructArray) raises -> DynArray:
         """A copy of `arr` whose validity is `arr` AND `sa` — used to push a
         nullable struct's null bit into a child before shredding/encoding."""
         var n = arr.length()
@@ -288,7 +288,7 @@ struct SchemaNode(Copyable, Movable):
         var d = arr.to_data()
         d.bitmap = bm^.to_immutable(length=n)
         d.nulls = nulls
-        return AnyArray.from_data(d^)
+        return DynArray.from_data(d^)
 
     # -----------------------------------------------------------------------
     # Write-side Dremel striping (inverse of `assemble`): produce per-leaf
@@ -299,7 +299,7 @@ struct SchemaNode(Copyable, Movable):
 
     def shred_levels(
         self,
-        col: AnyArray,
+        col: DynArray,
         meta: List[LeafColumn],
         mut defs: List[List[Int32]],
         mut reps: List[List[Int32]],
@@ -309,7 +309,7 @@ struct SchemaNode(Copyable, Movable):
 
     def _shred_elem(
         self,
-        arr: AnyArray,
+        arr: DynArray,
         i: Int,
         rep: Int,
         meta: List[LeafColumn],
@@ -342,7 +342,7 @@ struct SchemaNode(Copyable, Movable):
             var valid: Bool
             var start: Int
             var end: Int
-            var child_arr: AnyArray
+            var child_arr: DynArray
             if self.kind == NODE_MAP:
                 ref la = arr.as_map()
                 valid = la.is_valid(i)
@@ -425,14 +425,14 @@ struct _LeafTypeRow(Copyable, Movable):
     The temporal types (date/time/timestamp) need unit + UTC disambiguation that
     does not invert cleanly and are special-cased outside this table."""
 
-    var arrow: dt.AnyDataType
+    var arrow: dt.DynType
     var physical: PhysicalType
     var converted: ConvertedType
     var logical: LogicalType
 
     def __init__(
         out self,
-        var arrow: dt.AnyDataType,
+        var arrow: dt.DynType,
         physical: PhysicalType,
         converted: ConvertedType,
         logical: LogicalType,
@@ -575,7 +575,7 @@ struct SchemaMapping(Movable):
         return rows^
 
     @staticmethod
-    def _leaf_dtype(el: SchemaElement) raises -> dt.AnyDataType:
+    def _leaf_dtype(el: SchemaElement) raises -> dt.DynType:
         """Arrow value type for a Parquet leaf `SchemaElement`."""
         var pt = el.type
         var ct = el.converted_type
@@ -679,7 +679,7 @@ struct SchemaMapping(Movable):
         """
         var children = List[SchemaNode]()
         children.append(elem^)
-        var item: dt.AnyDataType = dt.list_(children[0].field.dtype.copy())
+        var item: dt.DynType = dt.list_(children[0].field.dtype.copy())
         return SchemaNode(
             NODE_LIST,
             dt.Field(name, item^, nullable),
@@ -733,7 +733,7 @@ struct SchemaMapping(Movable):
                 slot_def=d + 1,
             ),
         )
-        var map_dtype: dt.AnyDataType = dt.MapType(
+        var map_dtype: dt.DynType = dt.MapType(
             key_type^, value_type^, value_nullable=value_nullable
         )
         var map_children = List[SchemaNode]()
@@ -895,7 +895,7 @@ struct SchemaMapping(Movable):
 
     @staticmethod
     def _physical(
-        dtype: dt.AnyDataType,
+        dtype: dt.DynType,
     ) raises -> Tuple[PhysicalType, ConvertedType, LogicalType]:
         """`(physical, converted, logical)` for an Arrow leaf; NONE = absent."""
         for ref row in Self._leaf_type_rows():
@@ -904,7 +904,7 @@ struct SchemaMapping(Movable):
         raise Error("parquet: cannot write Arrow type " + String(dtype))
 
     @staticmethod
-    def _set_leaf_physical(dtype: dt.AnyDataType, mut el: SchemaElement) raises:
+    def _set_leaf_physical(dtype: dt.DynType, mut el: SchemaElement) raises:
         """Populate a leaf `SchemaElement`'s physical fields (type, converted /
         logical annotation, time unit + UTC, decimal scale + precision, and FLBA
         length) from an Arrow value type — the inverse of `_leaf_dtype`. Temporal,
@@ -987,7 +987,7 @@ struct SchemaMapping(Movable):
             el.logical_type = logi
 
     @staticmethod
-    def _has_repeated(dtype: dt.AnyDataType) -> Bool:
+    def _has_repeated(dtype: dt.DynType) -> Bool:
         """Whether an Arrow type contains a repeated group (list/map/fixed-size
         list) anywhere — a nullable struct wrapping one stays REQUIRED on write.
         """
@@ -1215,7 +1215,7 @@ struct LeafColumn(Copyable, Movable):
     """A single Parquet leaf column and how it maps to an Arrow value type."""
 
     var name: String
-    var dtype: dt.AnyDataType  # Arrow value type of the leaf
+    var dtype: dt.DynType  # Arrow value type of the leaf
     var physical: PhysicalType
     var max_def: Int
     var max_rep: Int
@@ -1226,7 +1226,7 @@ struct LeafColumn(Copyable, Movable):
     def __init__(
         out self,
         var name: String,
-        var dtype: dt.AnyDataType,
+        var dtype: dt.DynType,
         physical: PhysicalType,
         max_def: Int,
         max_rep: Int,
@@ -1256,13 +1256,13 @@ struct DecodedLeaf(Movable):
     levels mean present/empty/null) lives on the schema node, so this stays a
     plain data record."""
 
-    var array: AnyArray  # flat column, or the list's element/child array
+    var array: DynArray  # flat column, or the list's element/child array
     var rep_levels: List[Int32]
     var def_levels: List[Int32]
 
     def __init__(
         out self,
-        var array: AnyArray,
+        var array: DynArray,
         var rep_levels: List[Int32],
         var def_levels: List[Int32],
     ):
