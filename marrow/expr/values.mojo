@@ -375,6 +375,19 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         return None
 
     # --- fluent surface available in every family (reads only validity) ------
+    #
+    # `count_distinct`/`approx_count_distinct` live here rather than once per
+    # family: `AggExpr.of` is bound on `Value`, so neither copy needed a family
+    # trait. They were byte-identical in `NumericValue` and `StringValue`, and
+    # that duplication was not inert — a struct conforming to both inherits two
+    # conflicting defaults and will not compile, which is how `DynValue` found
+    # them.
+    def count_distinct(self) -> AggExpr:
+        return AggExpr.of[DistinctAgg[True]](self.copy())
+
+    def approx_count_distinct(self) -> AggExpr:
+        return AggExpr.of[DistinctAgg[False]](self.copy())
+
     def isnull(self) -> IsNull[Self]:
         return IsNull(self.copy())
 
@@ -487,7 +500,9 @@ trait NumericValue(Value):
     def count(self) -> Count[Self]:
         return Count(self.copy())
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+    def _numeric_fused(
+        self, batch: RecordBatch, mut ctx: Context
+    ) raises -> Datum:
         self.prepare(batch, ctx)
         comptime native = Self.OutType.native
         comptime if Self.OutShape == 0:  # scalar → evaluate the lane once, then splat
@@ -525,12 +540,6 @@ trait NumericValue(Value):
     # `AggExpr`'s conversion — an aggregate in a `GROUP BY`. The distinct counts
     # have no fused form (their state is a hash set / HLL sketch, not a scalar
     # accumulator), so they go straight to an `AggExpr`.
-
-    def count_distinct(self) -> AggExpr:
-        return AggExpr.of[DistinctAgg[True]](self.copy())
-
-    def approx_count_distinct(self) -> AggExpr:
-        return AggExpr.of[DistinctAgg[False]](self.copy())
 
 
 struct NumericColumn[T: NumericType](NumericValue):
@@ -581,6 +590,9 @@ struct NumericLiteral[T: NumericType](NumericValue):
     comptime OutShape = 0
     var _value: Scalar[Self.OutType.native]
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return List[String]()
 
@@ -606,6 +618,9 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
     var l: Self.L
     var r: Self.R
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -644,6 +659,9 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
     comptime OutShape = Self.A.OutShape
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -674,6 +692,9 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
     comptime OutType = Self.To
     comptime OutShape = Self.A.OutShape
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -708,6 +729,9 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
     var l: Self.L
     var r: Self.R
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -745,6 +769,9 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
     comptime OutType = Float64Type
     comptime OutShape = Self.A.OutShape
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -822,7 +849,7 @@ trait BoolValue(Value):
     def all(self) -> All[Self]:
         return All(self.copy())
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+    def _bool_fused(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         self.prepare(batch, ctx)
         var length = batch.num_rows()
         var bm = Bitmap.alloc_uninit(length)
@@ -858,6 +885,9 @@ struct NumericCompare[
     comptime NativeType = wider[Self.L.OutType.native, Self.R.OutType.native]
     var l: Self.L
     var r: Self.R
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -914,6 +944,9 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     var l: Self.L
     var r: Self.R
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return _union_columns(
             self.l.referenced_columns(), self.r.referenced_columns()
@@ -966,6 +999,9 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     comptime NativeType = Self.A.NativeType
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1009,6 +1045,9 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
     comptime NativeType = DType.int32
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1048,6 +1087,9 @@ struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
     comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1080,6 +1122,9 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
     comptime IsBreaker = True
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1121,6 +1166,9 @@ struct NumToBool[A: NumericValue](BoolValue):
     comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1150,6 +1198,9 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
     comptime OutType = Self.To
     comptime OutShape = Self.A.OutShape
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1182,6 +1233,9 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1216,6 +1270,9 @@ struct StringToBool[A: StringValue](BoolValue):
     comptime IsBreaker = True
     comptime NativeType = DType.int32
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1314,7 +1371,9 @@ trait StringValue(Value):
     def ilike[Rhs: StringValue](self, o: Rhs) -> ILike[Self, Rhs]:
         return ILike(self.copy(), o.copy())
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+    def _string_fused(
+        self, batch: RecordBatch, mut ctx: Context
+    ) raises -> Datum:
         self.prepare(batch, ctx)
         comptime if Self.OutShape == 0:
             var slot = 0
@@ -1337,12 +1396,6 @@ trait StringValue(Value):
 
     def count(self) -> AggExpr:
         return AggExpr.of[CountAgg](self.copy())
-
-    def count_distinct(self) -> AggExpr:
-        return AggExpr.of[DistinctAgg[True]](self.copy())
-
-    def approx_count_distinct(self) -> AggExpr:
-        return AggExpr.of[DistinctAgg[False]](self.copy())
 
 
 struct StringColumn[T: StringLikeType](StringValue):
@@ -1388,6 +1441,9 @@ struct StringLiteral[T: StringLikeType](StringValue):
     comptime OutShape = 0
     var _value: String
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._string_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return List[String]()
 
@@ -1407,6 +1463,9 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
     var l: Self.L
     var r: Self.R
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._string_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1436,6 +1495,9 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     comptime OutType = Self.A.OutType
     comptime OutShape = Self.A.OutShape
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._string_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1475,6 +1537,9 @@ struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
     comptime IsBreaker = True
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._string_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1502,6 +1567,9 @@ struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
     comptime IsBreaker = True
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._string_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1528,6 +1596,9 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._string_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1563,6 +1634,9 @@ struct StringPredicate[
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var l: Self.L
     var r: Self.R
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1629,6 +1703,9 @@ struct IsIn[A: Value](BoolValue):
     var a: Self.A
     var _value_set: DynArray
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1665,6 +1742,9 @@ struct StringLength[A: StringValue](NumericValue):
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1707,6 +1787,9 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
     comptime OutShape = 0
     comptime IsBreaker = True
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1786,6 +1869,9 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
     var a: Self.A
     var spec: WindowSpec
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1854,6 +1940,9 @@ struct ConditionalBinary[
     var l: Self.L
     var r: Self.R
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return _union_columns(
             self.l.referenced_columns(), self.r.referenced_columns()
@@ -1900,6 +1989,9 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
     var cond: Self.C
     var then: Self.T
     var otherwise: Self.E
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1994,9 +2086,6 @@ trait TemporalValue(Value):
     def count(self) -> AggExpr:
         return AggExpr.of[CountAgg](self.copy())
 
-    def count_distinct(self) -> AggExpr:
-        return AggExpr.of[DistinctAgg[True]](self.copy())
-
 
 struct TemporalColumn[T: TemporalType](TemporalValue):
     """A temporal column, resolved by name. No fused lane — `materialize` hands
@@ -2035,6 +2124,9 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2145,6 +2237,9 @@ struct ListLength[A: ListValue](NumericValue):
     comptime IsBreaker = True
     var a: Self.A
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._numeric_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -2181,6 +2276,9 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
     var a: Self.A
     var elem: Self.E
 
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._bool_fused(batch, ctx)
+
     def referenced_columns(self) -> List[String]:
         return _union_columns(
             self.a.referenced_columns(), self.elem.referenced_columns()
@@ -2207,7 +2305,9 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 # DynValue — erase any node to a boxed handle. Because `execute` already returns
 # a concrete `Datum`, erasure is a plain fn-pointer trampoline.
 # ---------------------------------------------------------------------------
-struct DynValue(Copyable, Movable, Value, Writable):
+struct DynValue(
+    BoolValue, Copyable, Movable, NumericValue, StringValue, Writable
+):
     """Type-erased expression handle — the boundary the relational engine
     (`marrow.expr.execution`) holds.
 
@@ -2230,6 +2330,10 @@ struct DynValue(Copyable, Movable, Value, Writable):
 
     comptime OutShape = 1
     comptime IsErased = True
+
+    comptime NativeType = DType.bool
+    """Required by `BoolValue` to size a SIMD lane. Never read — see
+    `vectorwise`."""
 
     var _boxed: ArcPointer[NoneType]
     var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> DynArray
@@ -2331,6 +2435,33 @@ struct DynValue(Copyable, Movable, Value, Writable):
         self._write_fn = Self._write_tramp_dyn
         self._referenced_columns_fn = Self._referenced_columns_tramp_dyn
         self._is_deterministic_fn = Self._is_deterministic_tramp_dyn
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
+        """Unreachable. Present only to satisfy `NumericValue` and `BoolValue`.
+
+        A composite holding this box has `IsErased = True`, so its `materialize`
+        takes the dispatch arm and never calls a fused lane. If that propagation
+        is ever missed the enclosing node fails to *instantiate* — a build error,
+        not a wrong answer.
+
+        One body satisfies **both** families, and that is not a coincidence to
+        lean on twice: `NumericValue` wants `SIMD[Self.OutType.native, W]` and
+        `BoolValue` wants `SIMD[DType.bool, W]`. `DynType.native` *is* `bool`, so
+        the two signatures coincide here and nowhere else — any other placeholder
+        makes those traits mutually unimplementable on one struct."""
+        return SIMD[Self.OutType.native, W]()
+
+    @always_inline
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
+        """Unreachable — `StringValue`'s counterpart to `vectorwise` above."""
+        return String()
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         """`Value`'s abstract producer, satisfied by running the boxed node.
