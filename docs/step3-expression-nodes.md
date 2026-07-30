@@ -226,9 +226,10 @@ rather than impressions.
 |---|---:|---:|---|
 | baseline (`a7524a7`) | 5,237,876 | 5,238,004 | 1000 passed |
 | Phase 1 (`DynType` conformances) | 5,236,148 | 5,236,276 | 1288 passed |
-| Phase 2 (rename + `Value`) | not yet measured | not yet measured | 315 passed |
+| Phase 2a (rename + `Value`) | not measured | not measured | 315 passed |
+| Phase 2b (family traits) | 5,236,148 | 5,236,276 | 315 passed |
 
-### Phase 2 blocker — the family conformances need `materialize` renamed first
+### Phase 2 blocker — **RESOLVED** in `b56b886`
 
 `DynValue` conforms to `Value`. It does **not** yet conform to `NumericValue` /
 `BoolValue` / `StringValue`, and the compiler gives both halves of the reason:
@@ -255,9 +256,20 @@ The alternative is to leave `DynValue` on `Value` alone and relax the fused
 nodes' bounds from their family trait to `Value`, dispatching on
 `conforms_to(Self.L, NumericValue)`. That avoids 33 boilerplate overrides but
 changes the signature of every fused node, and weakens the bound that currently
-makes a mis-typed operand a compile error. **Recommendation: take the 33
-overrides** — it keeps the bounds honest and follows the codebase's own
-documented workaround.
+makes a mis-typed operand a compile error. **Took the overrides** — 32 in the end, not 33; the earlier count used a cruder
+body-slice. Binary size moved **+0 on all eleven gates**, confirming it is a
+compile-time reorganization only.
+
+Two further conflicts surfaced while doing it, both duplication rather than
+design: `count_distinct`/`approx_count_distinct` were defined **three** times
+(`NumericValue`, `StringValue`, and `TemporalValue` with different formatting,
+which is why a literal-block search found only two). `AggExpr.of` is bound on
+`Value`, so none needed a family trait; they are now defined once on `Value`.
+That duplication was never inert — it is exactly what makes a struct conforming
+to two families fail to compile, and `DynValue` is the first struct to try.
+
+Note there is a **fourth** family, `TemporalValue`, which the earlier survey
+missed. It has no `materialize` default, so it needed no helper rename.
 
 ### Phase 0 result (2026-07-30)
 
