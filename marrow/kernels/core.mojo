@@ -37,3 +37,6 @@ trait Kernel:
         """Raise unless both operands carry the same dtype."""
         if left != right:
             raise Self.error(t"dtype mismatch: {left} vs {right}")
+
+
+# TODO: have vectorwise and elementiwise kernels conform to a common trait

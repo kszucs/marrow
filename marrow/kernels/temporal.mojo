@@ -453,7 +453,14 @@ struct DateTruncKernel(Kernel):
         var ticks_per_unit = _ticks_per_second(dt) * unit.seconds()
         var data = array.to_data()
         var n = data.length
-        if dt.byte_width() == 4:  # time32
+        var width = dt.byte_width()
+        if width == 4:  # time32
             return _trunc[DType.int32](data, dt, ticks_per_unit, n)
-        else:  # date64 / timestamp / time64
+        elif width == 8:  # date64 / timestamp / time64
             return _trunc[DType.int64](data, dt, ticks_per_unit, n)
+        else:
+            # Every temporal type Arrow defines is int32- or int64-backed, so
+            # this is unreachable today. It is spelled out rather than folded
+            # into the int64 branch because a wider temporal type would
+            # otherwise be read through the wrong lane width, silently.
+            raise Self.error(t"{dt} is {width} bytes wide; expected 4 or 8")

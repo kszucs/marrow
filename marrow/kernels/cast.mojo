@@ -311,6 +311,17 @@ struct TemporalCast(Kernel):
         # otherwise scale the underlying integers by the unit ratio.
         var up = ns_from > ns_to
         var factor = (ns_from // ns_to) if up else (ns_to // ns_from)
+        # Every temporal type Arrow defines is int32- or int64-backed, so this
+        # is unreachable today. Checked rather than assumed because the branches
+        # below treat "not 4" as "8": a wider temporal type would be scaled
+        # through the wrong lane width with no error anywhere.
+        var sw = src.byte_width()
+        var tw = to.byte_width()
+        if (sw != 4 and sw != 8) or (tw != 4 and tw != 8):
+            raise Error(
+                t"cast: cannot scale {src} ({sw}B) to {to} ({tw}B): ",
+                "temporal storage must be 4 or 8 bytes",
+            )
         if src.byte_width() == 4:
             if to.byte_width() == 4:
                 return Self._scale[DType.int32, DType.int32](

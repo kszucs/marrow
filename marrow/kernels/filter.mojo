@@ -140,9 +140,7 @@ struct Filter(Kernel):
 
             @parameter
             def listlike[T: ListLikeType](d: T) raises -> DynArray:
-                return Filter.apply(
-                    array.as_list_like[T](), mask, ctx
-                ).to_dyn()
+                return Filter.apply(array.as_list_like[T](), mask, ctx).to_dyn()
 
             return dt.dispatch_listlike[listlike]()
         elif dt.is_fixed_size_list():
