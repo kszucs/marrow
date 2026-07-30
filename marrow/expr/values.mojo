@@ -142,8 +142,6 @@ from ..kernels.string import (
 )
 from ..kernels.membership import IsInKernel
 from ..kernels.conditional import (
-    coalesce,
-    nullif,
     case_when,
     BinaryConditionalKernel,
     CoalesceKernel,
