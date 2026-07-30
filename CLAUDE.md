@@ -133,11 +133,6 @@ Consequences worth knowing:
   to a single case; a case that still cannot be built reports the crash as *its
   own* failure instead of failing everything selected alongside it. Ordinary
   `error:` output never splits, since it would be identical in every half.
-  **Known-crashing cases (pre-existing, unrelated to the harness): a test body
-  that filters with a comparison predicate** (`rel.filter(col("a") > …)`) under
-  `TestSuite` — the same code compiles fine in a plain `main()`. That is why five
-  cases in `test_plan.mojo` and one in `test_aggregates.mojo` fail; the rest of
-  each file runs.
 - **Peak memory scales with the unit**, so a full-suite run is a single very
   large compile. Narrow the selection if memory is tight.
 - **Optimization level follows the kind, not the session.** `bench_*.mojo` builds
@@ -576,7 +571,11 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
 - **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly. **But import explicitly, never `from .x import *`.** A wildcard re-exports whatever `x` itself imported, so a name resolves or not depending on which file you entered through — the signature of three separate incidents (a trait shadowing the builtin `Scalar`; `BoolArray` resolving along one path and not another; a "fix" that took errors 2 → 10). The remaining wildcards were replaced with explicit lists; keep it that way.
-- **Open bug (`docs/code-quality-tasks.md` Q0.0):** `ArcPointer[DynValue]` (`expr/values.mojo:2299`) writes its trailing `Variant` discriminant one byte past the allocation (`size_of` 416 vs ≥417 needed), silently corrupting the heap and causing every full-suite failure — note that ASAN *hides* it (`test_reader` passes 35/35 under ASAN, fails without) and that a Mojo build failure emits no ASAN output at all, so verify fixes without ASAN and confirm tests actually ran.
+- **ASAN can *hide* a heap bug rather than reveal it.** A one-byte `Variant`
+  overflow (Q0.0, since fixed upstream) passed 35/35 under ASAN and failed
+  without it, and a Mojo *build* failure emits no ASAN output at all — so a
+  clean ASAN run is not evidence on its own. Verify without ASAN too, and
+  confirm the tests actually ran rather than the build having died.
 
 ### Associated-type & trait gotchas (learned the hard way)
 

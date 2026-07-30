@@ -24,7 +24,7 @@ from ...expr.relations import (
     Filter,
     RELATION_PARQUET_SCAN,
 )
-from ...expr.dynamic import col, lit
+from ...expr.values import col, lit
 from ...expr.values import DynValue
 from ...expr.pruning import PruneStats
 

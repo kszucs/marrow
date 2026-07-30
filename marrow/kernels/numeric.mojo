@@ -595,7 +595,7 @@ def equal_any(
     schema, and `nullif`, which is defined for any dtype with an equality. This
     names that once instead of open-coding the same two-line branch at each.
 
-    Not to be confused with `TagValue._compare`, which answers a different
+    Not to be confused with the erased arm in `NumericCompare`, which answers a different
     question — which kernel the *user's* `==` meant — and lives in the
     expression layer for that reason.
     """

@@ -33,40 +33,8 @@ Usage::
     var result = plan.execute()
 """
 
-from .dynamic import (
-    # Unified expression node
-    TagValue,
-    # Free-standing factory functions (return TagValue)
-    col,
-    lit,
-    if_else,
-    # Node kinds
-    LOAD,
-    LITERAL,
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-    EQ,
-    NE,
-    LT,
-    LE,
-    GT,
-    GE,
-    AND,
-    OR,
-    NEG,
-    ABS,
-    NOT,
-    IS_NULL,
-    NOT_NULL,
-    IF_ELSE,
-    LENGTH,
-    CAST,
-    MOD,
-    FLOORDIV,
-    XOR,
-)
+from .dynamic import DynAgg
+from .values import DynValue, col, lit, if_else
 from ..kernels.execution import ExecutionContext
 from .aggregates import AggFunc, FoldedAggregates
 from .execution import (

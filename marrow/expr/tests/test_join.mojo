@@ -7,7 +7,7 @@ from ...builders import array, PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, float64, Int64Type
 from ...tabular import record_batch, RecordBatch
 from ...expr import (
-    TagValue,
+    DynValue,
     col,
     lit,
     in_memory_table,
@@ -38,9 +38,9 @@ def _batch(k: List[Int], v: List[Int]) raises -> RecordBatch:
     return record_batch(cols^, names=["k", "v"])
 
 
-def _keys(v: List[Int]) -> List[TagValue]:
-    var r = List[TagValue]()
-    r.append(col(0))
+def _keys(v: List[Int]) -> List[DynValue]:
+    var r = List[DynValue]()
+    r.append(col("k"))
     return r^
 
 

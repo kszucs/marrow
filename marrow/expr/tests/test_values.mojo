@@ -5,7 +5,7 @@ Covers the four value families and the universal `DynValue` box:
   * bool    — bit-packed vectorized fusion (comparisons, `And`/`Or`/`Not`, any/all)
   * string  — elementwise fusion (`Concat`/`Upper`/…, predicates, parses)
   * list    — materialize-only columns feeding fixed-width breakers
-  * DynValue — erases any comptime node OR a runtime `TagValue` behind `execute()`
+  * DynValue — erases any comptime node OR a runtime `DynValue` behind `execute()`
 """
 
 from std.testing import assert_true, assert_equal
@@ -92,7 +92,7 @@ from ...expr.values import (
     DayOfWeek,
     DayOfYear,
 )
-from ...expr.dynamic import col as dyn_col
+from ...expr.values import col as dyn_col
 
 
 # instantiation is a COMPILE-TIME proof the operand is a fused `NumericValue` node
@@ -542,14 +542,14 @@ def test_list_contains() raises:
 
 
 # ===========================================================================
-# DynValue — the universal box over a comptime node OR a runtime TagValue
+# DynValue — the universal box over a comptime node OR a runtime DynValue
 # ===========================================================================
 
 
 def test_anyvalue_wraps_dynvalue() raises:
-    # the untyped runtime interpreter (TagValue), boxed in DynValue, runs via the
-    # tag dispatch — this is what the relational engine builds plans from
-    var boxed: DynValue = dyn_col(0) + dyn_col(1)
+    # the runtime lane: erased operands through the *same* nodes the fused lane
+    # builds — this is what the relational engine plans over
+    var boxed: DynValue = dyn_col("a") + dyn_col("b")
     var cv = boxed.execute(_batch())
     assert_true(cv == array([11, 22, 33, 44], int64).to_dyn())
 
@@ -586,7 +586,7 @@ def test_dynvalue_name_only_for_load() raises:
 
 
 def test_anyvalue_write_to_delegates() raises:
-    # write_to on a TagValue-boxed DynValue renders the boxed node's expression
+    # write_to on a DynValue-boxed DynValue renders the boxed node's expression
     # form (not just its column name)
     var boxed: DynValue = dyn_col("a") + dyn_col("b")
     assert_true(String(boxed).find("add") != -1)

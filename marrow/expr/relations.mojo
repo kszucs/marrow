@@ -37,7 +37,7 @@ expressions do not produce.
 ``DynRelation.execute()``                        — drain to a single RecordBatch.
 
 ``project`` and ``aggregate`` each have two overloads, one per expression lane:
-one taking interpreted ``TagValue``s (names resolved against the input schema
+one taking runtime ``DynValue``s (names resolved against the input schema
 here) and one taking already-bound ``DynValue``s, so a fused comptime plan uses
 the same API rather than assembling nodes by hand.
 
@@ -53,7 +53,7 @@ from ..dtypes import Field
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .values import DynValue, AggExpr
-from .dynamic import TagValue, col, LOAD
+from .values import col
 from ..kernels.execution import ExecutionContext
 from .aggregates import AggFunc
 from ..parquet import LeafSet
@@ -269,7 +269,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             if idx == -1:
                 raise Error("select: column '" + name + "' not found")
             col_names.append(name)
-            exprs.append(DynValue(col(idx)))
+            exprs.append(col(schema.fields[idx].name.copy()))
             fields.append(schema.fields[idx].copy())
         return DynRelation(
             Project(
@@ -298,7 +298,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         return DynRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
-        self, keys: List[TagValue], aggs: List[AggExpr]
+        self, keys: List[DynValue], aggs: List[AggExpr]
     ) raises -> DynRelation:
         """Grouped aggregation — ``GROUP BY keys`` with one output column per
         aggregate.
@@ -316,7 +316,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         ``col("ts").date_trunc("month")``, ``case_when(...)``).
 
         Both expression lanes are accepted, and they mix: ``col("x").sum()`` on
-        a ``TagValue`` carries the function's *name* until this call resolves it
+        a ``DynAgg`` carries the function's *name* until this call resolves it
         against the input's dtype, while the same call on a fused node
         (``col("x", int64).sum()``) already names its ``Aggregation`` and
         resolves nothing.
@@ -342,11 +342,16 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         var key_exprs = List[DynValue]()
         for i in range(len(keys)):
             var k = keys[i].resolve_names(input_schema)
+            # A bare column keeps its own name; anything computed gets a
+            # positional one. `bound_column` is the node answering for itself —
+            # this used to reach into the interpreter for `kind() == LOAD` and
+            # then its payload.
+            var pos = k.bound_column(input_schema)
             var name = input_schema.fields[
-                Int(k.kind_data())
-            ].name if k.kind() == LOAD else "key" + String(i)
+                pos
+            ].name if pos >= 0 else "key" + String(i)
             fields.append(Field(name, k.execute(probe).dtype()))
-            key_exprs.append(DynValue(k^))
+            key_exprs.append(k^)
 
         # Resolve each aggregate against the dtype its input turns out to have —
         # the only interpretation step on this path, and the last one: the output
@@ -424,8 +429,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     def join(
         self,
         right: DynRelation,
-        left_on: List[TagValue],
-        right_on: List[TagValue],
+        left_on: List[DynValue],
+        right_on: List[DynValue],
         how: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> DynRelation:
@@ -440,10 +445,22 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         # a bare column reference — column_index raises otherwise).
         var left_indices = List[Int]()
         for ref k in left_on:
-            left_indices.append(k.column_index(left_schema))
+            var i = k.bound_column(left_schema)
+            if i < 0:
+                raise Error(
+                    "join: key must be a column reference, got a computed"
+                    " expression"
+                )
+            left_indices.append(i)
         var right_indices = List[Int]()
         for ref k in right_on:
-            right_indices.append(k.column_index(right_schema))
+            var i = k.bound_column(right_schema)
+            if i < 0:
+                raise Error(
+                    "join: key must be a column reference, got a computed"
+                    " expression"
+                )
+            right_indices.append(i)
 
         # Output schema: left columns + (suffixed) right columns.
         var fields = List[Field]()
@@ -492,10 +509,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         unknown column still fails at plan-build time, because the dtype probe
         below executes the expression.
 
-        There is deliberately no ``List[TagValue]`` overload: ``DynValue``
-        converts implicitly from ``TagValue``, so a second overload would be
-        shadowed by this one at every call site that passes a list literal —
-        reachable only by spelling out the conversion, which is not an API."""
+        There is one list type now: ``DynValue`` is what a runtime frontend
+        builds, and the fused nodes convert into it implicitly."""
         if len(names) != len(values):
             raise Error("project: len(names) != len(values)")
 
@@ -520,7 +535,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
 
     def sort(
         self,
-        keys: List[TagValue],
+        keys: List[DynValue],
         ascending: List[Bool],
         nulls_first: Bool = True,
         stable: Bool = True,

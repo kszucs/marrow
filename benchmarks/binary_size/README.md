@@ -80,7 +80,7 @@ so the delta column is what the thing costs in an AOT binary.
 | `query_join` | 3,819,060 | +2,567,388 | `Join` |
 | `query_exprs` | 3,892,916 | +2,641,244 | string, conditional, membership, cast, temporal |
 | `query_streaming_agg` | 4,150,836 | +2,899,164 | `Aggregate`, runtime-named aggs |
-| `query_dynvalue` | 5,266,164 | +4,014,492 | the `TagValue` interpreter |
+| `query_dynvalue` | 5,266,164 | +4,014,492 | the erased lane (was the tag interpreter) |
 | `query_runtime` | 5,266,548 | +4,014,876 | interpreter + runtime plan |
 
 Re-measure one gate without paying for the sweep (ten `-O3` builds, ~20 min):

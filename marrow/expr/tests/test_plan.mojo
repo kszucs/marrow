@@ -160,9 +160,10 @@ def test_project_write_to() raises:
 
 
 def test_select_write_to() raises:
-    """`select` resolves names to positions itself, so it renders positionally —
-    `y` is index 1, which an unresolved reference could not report."""
-    assert_equal(String(_scan().select("y")), "Project([y=input(1)])")
+    """`select` renders by name. It used to resolve to a position first and print
+    `input(1)`; positional references were an interpreter artefact and the lane
+    now resolves names at execution, like the fused one always has."""
+    assert_equal(String(_scan().select("y")), "Project([y=y])")
 
 
 # ---------------------------------------------------------------------------

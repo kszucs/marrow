@@ -1,6 +1,6 @@
 """Statistics-based predicate pruning (marrow.expr.pruning). A predicate is
 evaluated against per-column [min,max] bounds and must return maybe_true=False
-only when it provably cannot match. Covers both the runtime TagValue interpreter
+only when it provably cannot match. Covers both the runtime DynValue interpreter
 and the fused static nodes, plus the DynValue box the scan uses."""
 
 from std.testing import assert_true, assert_false
@@ -10,11 +10,11 @@ from ...schema import Schema
 from ...scalars import DynScalar, Int64Scalar
 from ...expr.pruning import PruneStats
 from ...expr.values import DynValue
-from ...expr.dynamic import col, lit
+from ...expr.values import col, lit
 
 # NOTE: comptime-node pruning is PARKED in the new `marrow.expr.values` (the
 # per-node `prune` overrides were not ported from the old fused algebra; the
-# `Value.prune` default now returns "unknown"). Only the runtime `TagValue`
+# `Value.prune` default now returns "unknown"). Only the runtime `DynValue`
 # pruning path is exercised here; the fused column-vs-column pruning test and the
 # fused half of the boxed test were removed until comptime pruning is re-ported.
 
@@ -34,7 +34,7 @@ def _stats(xmin: Int, xmax: Int, ymin: Int, ymax: Int) raises -> PruneStats:
 
 
 # ---------------------------------------------------------------------------
-# TagValue predicates
+# DynValue predicates
 # ---------------------------------------------------------------------------
 
 

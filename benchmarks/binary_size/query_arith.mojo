@@ -6,7 +6,7 @@ arithmetic nodes (`Add`/`Sub`/`Mul` over `NumericBinary`) cost on top of a
 column reference and a comparison.
 
 **This gate exists because that cost was invisible.** Q0.4 rewrote all twelve of
-`TagValue.eval`'s binary arms and the fused gates came back byte-identical —
+the interpreter's binary arms and the fused gates came back byte-identical —
 true, and worthless: neither of them contains a single arithmetic expression.
 A change to the fused numeric algebra could regress arbitrarily without any gate
 noticing.

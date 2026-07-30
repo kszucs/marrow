@@ -41,6 +41,8 @@ from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
 from .utils import variant_dispatch
 from .dtypes import (
     DynType,
+    PrimitiveType,
+    StringLikeType,
     Date32Type,
     Date64Type,
     DayTimeIntervalType,
@@ -311,6 +313,21 @@ struct StringScalar(ArrowScalar):
 
     def is_valid(self) -> Bool:
         return self._is_valid
+
+    def repeat(self, times: Int) raises -> StringArray:
+        """Broadcast this scalar into an array of length `times`.
+
+        The numeric and bool scalars have had this; string did not, so
+        `DynScalar.repeat` could not support it and the erased `like` path — which
+        materialises its constant pattern per morsel — failed at run time."""
+        var builder = StringBuilder(capacity=times)
+        if self._is_valid:
+            for _ in range(times):
+                builder.append(self._value)
+        else:
+            for _ in range(times):
+                builder.append_null()
+        return builder.finish()
 
     def to_string(self) -> String:
         """Get the value as an owned String."""
@@ -639,32 +656,32 @@ struct DynScalar(
         return variant_dispatch[ArrowScalar, func=f](self._v)
 
     def repeat(self, times: Int) raises -> DynArray:
-        """Broadcast this scalar into an array of length `times`."""
-        if self.type() == int8:
-            return self.as_int8().repeat(times).to_dyn()
-        elif self.type() == int16:
-            return self.as_int16().repeat(times).to_dyn()
-        elif self.type() == int32:
-            return self.as_int32().repeat(times).to_dyn()
-        elif self.type() == int64:
-            return self.as_int64().repeat(times).to_dyn()
-        elif self.type() == uint8:
-            return self.as_uint8().repeat(times).to_dyn()
-        elif self.type() == uint16:
-            return self.as_uint16().repeat(times).to_dyn()
-        elif self.type() == uint32:
-            return self.as_uint32().repeat(times).to_dyn()
-        elif self.type() == uint64:
-            return self.as_uint64().repeat(times).to_dyn()
-        elif self.type() == float16:
-            return self.as_float16().repeat(times).to_dyn()
-        elif self.type() == float32:
-            return self.as_float32().repeat(times).to_dyn()
-        elif self.type() == float64:
-            return self.as_float64().repeat(times).to_dyn()
-        elif self.type() == bool_:
+        """Broadcast this scalar into an array of length `times`.
+
+        A twelve-arm dtype ladder before, which is why it silently lacked string
+        — the erased `like` path materialises its pattern through here and hit
+        "unsupported dtype string". `dispatch_primitive` enumerates its own pack,
+        so a new fixed-width dtype cannot be omitted; bool and the string-likes
+        keep explicit arms because their scalars are not `PrimitiveScalar`."""
+        var dt = self.type()
+        if dt == bool_:
             return self.as_bool().repeat(times).to_dyn()
-        raise Error(t"DynScalar.repeat: unsupported dtype {self.type()}")
+        elif dt.is_string_like():
+
+            @parameter
+            def stringlike[T: StringLikeType](d: T) raises -> DynArray:
+                return self.as_string().repeat(times).to_dyn()
+
+            return dt.dispatch_stringlike[stringlike]()
+        elif dt.is_primitive():
+
+            @parameter
+            def primitive[T: PrimitiveType](d: T) raises -> DynArray:
+                return self.as_primitive[T]().repeat(times).to_dyn()
+
+            return dt.dispatch_primitive[primitive]()
+        else:
+            raise Error(t"DynScalar.repeat: unsupported dtype {dt}")
 
     def is_null(self) -> Bool:
         return not self.is_valid()

@@ -3,7 +3,7 @@
 Same query as the other variants (`SELECT a, name FROM orders WHERE a > b`),
 built with `marrow.expr.relations` — the self-executing fat nodes (`InMemoryTable`
 /`Filter`/`Project`, `pull()`-based, no `Planner`) over fused `DynValue` values.
-Only fused comptime nodes (`col`/`>`) are boxed, so the `TagValue` interpreter and
+Only fused comptime nodes (`col`/`>`) are boxed, so the erased lane and
 its per-dtype kernel fanout are dead-code-eliminated — this should land near the
 fused path, far below the runtime path. That delta is the unification's DCE proof.
 

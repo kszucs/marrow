@@ -142,7 +142,7 @@ from ..kernels.string import (
 )
 from ..kernels.membership import IsInKernel
 from ..kernels.conditional import (
-    case_when,
+    case_when as case_when_kernel,
     BinaryConditionalKernel,
     CoalesceKernel,
     NullifKernel,
@@ -177,7 +177,7 @@ from ..kernels.boolean import (
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from .pruning import PruneStats, PruneBound
-from .dynamic import TagValue, DynAgg, _promote_operands
+from .dynamic import DynAgg, _promote_operands
 from .aggregates import AggFunc
 from ..kernels.cast import (
     cast as cast_array,
@@ -372,6 +372,14 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         """
         return True
 
+    def render(self) -> String:
+        """How this node prints inside a plan.
+
+        The interpreter rendered a whole tree by switching on tags. A node
+        renders itself instead, so a new node cannot be missed by the printer —
+        it either says something or falls back to its name."""
+        return self.name()
+
     def bound_column(self, schema: Schema) raises -> Int:
         """This node's column position if it is a bare column reference, else
         `-1`.
@@ -424,6 +432,55 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
 
     def notnull(self) -> NotNull[Self]:
         return NotNull(self.copy())
+
+
+struct RuntimeCast[A: Value](Value):
+    """A cast whose *target* dtype is only known at run time.
+
+    The one node here with no fused counterpart, and it was checked rather than
+    assumed: `NumericCast[To, A]` is the only cast node, and `To` is bound on
+    `NumericType` because the node is a `NumericValue`. So it cannot express
+    `col("t").cast(timestamp(second))` — a temporal target is not a
+    `NumericType`, and dispatching the runtime dtype to a comptime one does not
+    help when no arm has a node to build.
+
+    `DynColumn`, `DynLiteral` and a first version of this were all added and
+    removed as redundant; this is the survivor. Reading a column by name needs no
+    dtype and a literal knows its own, but a cast target is genuinely a runtime
+    value that no existing node carries."""
+
+    comptime OutType = DynType
+    comptime OutShape = 1
+    comptime IsErased = True
+
+    var a: Self.A
+    var _to: DynType
+
+    def __init__(out self, var a: Self.A, var to: DynType):
+        self.a = a^
+        self._to = to^
+
+    def __init__(out self, *, copy: Self):
+        self.a = copy.a.copy()
+        self._to = copy._to.copy()
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        var col = into_array(self.a.execute(batch), batch.num_rows())
+        return Datum(cast_array(col, self._to.copy()))
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
+    def render(self) -> String:
+        return String("cast(", self.a.render(), ")")
+
+    def dtype(self) -> DynType:
+        return self._to.copy()
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
 
 
 # ---------------------------------------------------------------------------
@@ -608,16 +665,31 @@ struct NumericColumn[T: NumericType](NumericValue):
     ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
         Self.OutType.native, W
     ]:
-        return (
-            batch.columns[batch.schema.get_field_index(self._name)]
-            .as_primitive[Self.T]()
-            .values()
-            .load[W](idx)
-        )
+        comptime if Self.IsErased:
+            # Unreachable: an erased leaf is only ever reached through
+            # `materialize`, because every composite holding it propagates
+            # `IsErased` and takes its dispatch arm. It must still not
+            # *elaborate* — `as_primitive[DynType]().values()` trips the
+            # "use values() for bool arrays" guard, since the erased dtype's
+            # placeholder `native` is `bool`.
+            return SIMD[Self.OutType.native, W]()
+        else:
+            return (
+                batch.columns[batch.schema.get_field_index(self._name)]
+                .as_primitive[Self.T]()
+                .values()
+                .load[W](idx)
+            )
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # a leaf column returns as-is (keeps validity; the fused loop drops nulls)
-        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+        var i = batch.schema.get_field_index(self._name)
+        if i == -1:
+            # `get_field_index` answers -1, which used to index the column list
+            # and trip a bounds assert deep in the engine. The interpreter
+            # raised here by name; so does the leaf that replaced it.
+            raise Error("column '", self._name, "' not found")
+        return batch.columns[i].copy()
 
     def validity(
         self, batch: RecordBatch
@@ -635,6 +707,9 @@ struct NumericLiteral[T: NumericType](NumericValue):
     comptime OutType = Self.T
     comptime OutShape = 0
     comptime IsErased = Self.T.IsErased
+
+    def render(self) -> String:
+        return String("literal(", self._value, ")")
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
         var v = PrimitiveScalar[Self.T](self._value).to_dyn()
@@ -692,7 +767,7 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
                 # schema is applied, so `DynValue.dtype()` is `None` for exactly
                 # the common case (`col(0) + col(1)`).
                 #
-                # This is the shape `TagValue._compare` already uses: an operator
+                # An operator
                 # names a *pair* of kernels and the dtype picks one. The
                 # `comptime if` keeps it honest — only `+` links the string
                 # counterpart, so a `-` or `*` node does not carry a concat path
@@ -705,6 +780,11 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
             return Datum(Self.K.dispatch(l, r))
         else:
             return self._numeric_fused(batch, ctx)
+
+    def render(self) -> String:
+        return String(
+            Self.K.name, "(", self.l.render(), ", ", self.r.render(), ")"
+        )
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -752,6 +832,9 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
             return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
         else:
             return self._numeric_fused(batch, ctx)
+
+    def render(self) -> String:
+        return String(Self.K.name, "(", self.a.render(), ")")
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -849,6 +932,11 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
             return Datum(Self.K.dispatch(l, r))
         else:
             return self._numeric_fused(batch, ctx)
+
+    def render(self) -> String:
+        return String(
+            Self.K.name, "(", self.l.render(), ", ", self.r.render(), ")"
+        )
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1021,7 +1109,7 @@ struct NumericCompare[
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         comptime if Self.IsErased:
             # The operator names a pair; the runtime dtype picks one. Same rule
-            # as the erased `+`, and the same one `TagValue._compare` applies.
+            # as the erased `+`.
             var n = batch.num_rows()
             var l = into_array(self.l.execute(batch), n)
             var r = into_array(self.r.execute(batch), n)
@@ -1050,6 +1138,11 @@ struct NumericCompare[
             return PruneBound.boolean(l.maybe_ge(r))
         else:  # not_equal carries no usable interval rule
             return PruneBound.unknown()
+
+    def render(self) -> String:
+        return String(
+            Self.K.name, "(", self.l.render(), ", ", self.r.render(), ")"
+        )
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1129,6 +1222,11 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
         else:  # xor tells us nothing about the row group
             return PruneBound.unknown()
 
+    def render(self) -> String:
+        return String(
+            Self.K.name, "(", self.l.render(), ", ", self.r.render(), ")"
+        )
+
     def referenced_columns(self) -> List[String]:
         return _union_columns(
             self.l.referenced_columns(), self.r.referenced_columns()
@@ -1190,6 +1288,9 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
             return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
         else:
             return self._bool_fused(batch, ctx)
+
+    def render(self) -> String:
+        return String(Self.K.name, "(", self.a.render(), ")")
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2001,11 +2102,43 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
 
     comptime OutType = Self.K.AccType[Self.A.OutType]
     comptime OutShape = 0
-    comptime IsBreaker = True
+    comptime IsErased = Self.A.IsErased
+    # Breaker only when fused — see `StringLength`.
+    comptime IsBreaker = not Self.IsErased
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
+        comptime if Self.IsErased:
+            # `prepare` reduces at `A.OutType`, which is erased here, so the
+            # dtype is resolved from the column instead. Same kernel, same
+            # accumulator algebra — only the type comes from run time.
+            var arg = into_array(self.a.execute(batch), batch.num_rows())
+
+            @parameter
+            def leaf[T: NumericType](d: T) raises -> Datum:
+                return Datum(Self.K.reduce(arg.as_primitive[T]()).to_dyn())
+
+            return arg.dtype().dispatch_numeric[leaf]()
+        else:
+            return self._numeric_fused(batch, ctx)
+
+    def alias(self, var name: String) -> AggExpr:
+        """Name this reduction's output column, making it a GROUP BY aggregate.
+
+        `x.sum()` is a `Reduction` in both lanes — a whole-array fold — and
+        `.alias(...)` is what turns it into an aggregate expression. Putting it
+        here rather than on the box is what keeps one spelling: the box cannot
+        override `sum` (it is defaulted in exactly one family, so a second
+        candidate is ambiguous rather than an override), and it does not need
+        to."""
+        comptime if Self.IsErased:
+            # The input dtype is unknown, so name the aggregate and let
+            # `AggExpr` resolve it against the column at plan-build time.
+            return AggExpr(DynAgg(Self.K.name, DynValue(self.a.copy()), name^))
+        else:
+            return AggExpr.of[NumericAgg[Self.K, Self.A.OutType]](
+                self.a.copy()
+            ).alias(name^)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2223,7 +2356,7 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
         var else_ = Optional[DynArray](
             into_array(self.otherwise.execute(batch), n)
         )
-        return case_when(conditions, values, else_^)
+        return case_when_kernel(conditions, values, else_^)
 
     def validity(
         self, batch: RecordBatch
@@ -2534,17 +2667,17 @@ struct DynValue(
     """Type-erased expression handle — the boundary the relational engine
     (`marrow.expr.execution`) holds.
 
-    Boxes either:
+    It boxes **one** thing: a `Value`. There is no second representation. It
+    used to glue a fused node *or* a 41-tag interpreter, and had to carry the
+    union of both their behaviours; the interpreter is gone, so a runtime-built
+    tree is made of the same nodes a fused one is — `col("a") + col("b")` is an
+    `Add[DynValue, DynValue]` — and the box simply erases which node types those
+    are.
 
-      * a comptime fused `Value` node — `execute` runs the fused engine against a
-        fresh context and returns a column (`DynArray`); `prune` is the conservative
-        `unknown()` (the comptime lane has no statistics pruning — always sound,
-        since a caller only skips data it has proven cannot match).
-      * a runtime `TagValue` interpreter (`marrow.expr.dynamic`) — `execute` is
-        already an `DynArray`, and `prune` carries the *real* min/max rule.
-
-    This is the same dual-box design as `values.DynValue`, so the relational plan
-    (built from untyped `TagValue`) runs unchanged, while typed subtrees fuse.
+    Being a `Value` itself is what makes that work in both directions: the fused
+    nodes accept it as an operand (it conforms to every value family), and it can
+    hold a tree that contains itself. `DynArray` erases the data lane; this
+    erases the plan shape, and the two are independent.
     """
 
     comptime OutType = DynType
@@ -2605,10 +2738,7 @@ struct DynValue(
 
     @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-        # comptime nodes are not `Writable`; fall back to the column name. The
-        # relational engine only boxes `TagValue` for display, so this branch is
-        # never the one printed in a plan.
-        return rebind[ArcPointer[V]](ptr)[].name()
+        return rebind[ArcPointer[V]](ptr)[].render()
 
     @staticmethod
     def _referenced_columns_tramp[
@@ -2646,67 +2776,6 @@ struct DynValue(
         self._bound_column_fn = Self._bound_column_tramp[V]
         self._resolve_names_fn = Self._resolve_names_tramp[V]
 
-    # --- runtime `TagValue` box --------------------------------------------
-    @staticmethod
-    def _exec_tramp_dyn(
-        ptr: ArcPointer[NoneType], batch: RecordBatch
-    ) raises -> DynArray:
-        return rebind[ArcPointer[TagValue]](ptr)[].execute(batch)
-
-    @staticmethod
-    def _prune_tramp_dyn(
-        ptr: ArcPointer[NoneType], stats: PruneStats
-    ) raises -> PruneBound:
-        return rebind[ArcPointer[TagValue]](ptr)[].prune(stats)
-
-    @staticmethod
-    def _name_tramp_dyn(ptr: ArcPointer[NoneType]) -> String:
-        return rebind[ArcPointer[TagValue]](ptr)[].name()
-
-    @staticmethod
-    def _write_tramp_dyn(ptr: ArcPointer[NoneType]) -> String:
-        var s = String()
-        rebind[ArcPointer[TagValue]](ptr)[].write_to(s)
-        return s^
-
-    @staticmethod
-    def _referenced_columns_tramp_dyn(
-        ptr: ArcPointer[NoneType],
-    ) -> List[String]:
-        return rebind[ArcPointer[TagValue]](ptr)[].referenced_columns()
-
-    @staticmethod
-    def _bound_column_tramp_dyn(
-        ptr: ArcPointer[NoneType], schema: Schema
-    ) raises -> Int:
-        var v = rebind[ArcPointer[TagValue]](ptr)[]
-        var resolved = v.resolve_names(schema)
-        return Int(resolved.kind_data()) if resolved.kind() == 0 else -1
-
-    @staticmethod
-    def _resolve_names_tramp_dyn(
-        ptr: ArcPointer[NoneType], schema: Schema
-    ) raises -> ArcPointer[NoneType]:
-        var bound = rebind[ArcPointer[TagValue]](ptr)[].resolve_names(schema)
-        return rebind[ArcPointer[NoneType]](ArcPointer[TagValue](bound^))
-
-    @staticmethod
-    def _is_deterministic_tramp_dyn(ptr: ArcPointer[NoneType]) -> Bool:
-        return rebind[ArcPointer[TagValue]](ptr)[].is_deterministic()
-
-    @implicit
-    def __init__(out self, var dyn: TagValue):
-        var ptr = ArcPointer[TagValue](dyn^)
-        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._execute = Self._exec_tramp_dyn
-        self._prune_fn = Self._prune_tramp_dyn
-        self._name_fn = Self._name_tramp_dyn
-        self._write_fn = Self._write_tramp_dyn
-        self._referenced_columns_fn = Self._referenced_columns_tramp_dyn
-        self._is_deterministic_fn = Self._is_deterministic_tramp_dyn
-        self._bound_column_fn = Self._bound_column_tramp_dyn
-        self._resolve_names_fn = Self._resolve_names_tramp_dyn
-
     @always_inline
     def vectorwise[
         W: Int
@@ -2723,8 +2792,7 @@ struct DynValue(
         One body satisfies **both** families, and that is not a coincidence to
         lean on twice: `NumericValue` wants `SIMD[Self.OutType.native, W]` and
         `BoolValue` wants `SIMD[DType.bool, W]`. `DynType.native` *is* `bool`, so
-        the two signatures coincide here and nowhere else — any other placeholder
-        makes those traits mutually unimplementable on one struct."""
+        the two signatures coincide here and nowhere else."""
         return SIMD[Self.OutType.native, W]()
 
     @always_inline
@@ -2734,83 +2802,17 @@ struct DynValue(
         """Unreachable — `StringValue`'s counterpart to `vectorwise` above."""
         return String()
 
-    # --- operators: disambiguated, and building the *shared* nodes ----------
-    #
-    # Conforming to several families means inheriting several fluent surfaces,
-    # and they collide: `NumericValue.__add__` yields `Add` while
-    # `StringValue.__add__` yields `Concat`, so `a + b` on two erased operands is
-    # an ambiguous call. The box has to choose, and numeric is what the runtime
-    # interpreter's `ADD` has always meant — string concatenation stays an
-    # explicit `.concat(...)`.
-    #
-    # Each returns the same node the fused lane builds. There is no erased node
-    # type; `Add[DynValue, DynValue]` *is* `Add`.
-    # A *non-generic* overload for the erased-on-erased case. The generic forms
-    # below are not enough on their own: `DynValue` satisfies both
-    # `Rhs: NumericValue` and `Rhs: StringValue`, so `dyn + dyn` matches every
-    # generic candidate equally and the call stays ambiguous. This one is more
-    # specific, so it wins.
-    def __add__(self, o: DynValue) -> Add[DynValue, DynValue]:
-        return Add(self.copy(), o.copy())
-
-    def __truediv__(self, o: DynValue) -> Div[DynValue, DynValue]:
-        return Div(self.copy(), o.copy())
-
-    def __lt__(self, o: DynValue) -> Lt[DynValue, DynValue]:
-        return Lt(self.copy(), o.copy())
-
-    def __le__(self, o: DynValue) -> Le[DynValue, DynValue]:
-        return Le(self.copy(), o.copy())
-
-    def __gt__(self, o: DynValue) -> Gt[DynValue, DynValue]:
-        return Gt(self.copy(), o.copy())
-
-    def __ge__(self, o: DynValue) -> Ge[DynValue, DynValue]:
-        return Ge(self.copy(), o.copy())
-
-    def __eq__(self, o: DynValue) -> Eq[DynValue, DynValue]:
-        return Eq(self.copy(), o.copy())
-
-    def __ne__(self, o: DynValue) -> Ne[DynValue, DynValue]:
-        return Ne(self.copy(), o.copy())
-
-    def __sub__(self, o: DynValue) -> Sub[DynValue, DynValue]:
-        return Sub(self.copy(), o.copy())
-
-    def __mul__(self, o: DynValue) -> Mul[DynValue, DynValue]:
-        return Mul(self.copy(), o.copy())
-
-    def __mod__(self, o: DynValue) -> Mod[DynValue, DynValue]:
-        return Mod(self.copy(), o.copy())
-
-    def __floordiv__(self, o: DynValue) -> Floordiv[DynValue, DynValue]:
-        return Floordiv(self.copy(), o.copy())
-
-    def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
-        return Add(self.copy(), o.copy())
-
-    def __sub__[Rhs: NumericValue](self, o: Rhs) -> Sub[Self, Rhs]:
-        return Sub(self.copy(), o.copy())
-
-    def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
-        return Mul(self.copy(), o.copy())
-
-    def __mod__[Rhs: NumericValue](self, o: Rhs) -> Mod[Self, Rhs]:
-        return Mod(self.copy(), o.copy())
-
-    def __floordiv__[Rhs: NumericValue](self, o: Rhs) -> Floordiv[Self, Rhs]:
-        return Floordiv(self.copy(), o.copy())
-
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         """`Value`'s abstract producer, satisfied by running the boxed node.
 
         The box is never fused into, so it ignores `ctx` and hands back a whole
         column: whatever it holds has already resolved its own types by the time
-        the trampoline returns. This is the erased arm of every composite that
-        takes `DynValue` as an operand."""
+        the trampoline returns."""
         return Datum(self._execute(self._boxed, batch))
 
     def execute(self, batch: RecordBatch) raises -> DynArray:
+        """The column this expression produces — the relational engine's entry
+        point, called once per morsel."""
         return self._execute(self._boxed, batch)
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
@@ -2819,27 +2821,114 @@ struct DynValue(
     def name(self) -> String:
         return self._name_fn(self._boxed)
 
+    def render(self) -> String:
+        return self._write_fn(self._boxed)
+
     def referenced_columns(self) -> List[String]:
         return self._referenced_columns_fn(self._boxed)
 
     def is_deterministic(self) -> Bool:
         return self._is_deterministic_fn(self._boxed)
 
+    # --- operators, disambiguated, building the *shared* nodes --------------
+    #
+    # Each dunder delegates to a differently-named sibling. That is not style:
+    # re-defining a method the family traits already default triggers `attempt to
+    # resolve a recursive reference to declaration 'DynValue.__gt__'` when the
+    # node it returns holds a `DynValue`. `CLAUDE.md` records the shape and the
+    # workaround — a differently named sibling with the same body does not
+    # recurse.
+    #
+    # Conforming to several families means inheriting several fluent surfaces,
+    # and they collide: `NumericValue.__add__` yields `Add` while
+    # `StringValue.__add__` yields `Concat`, so `a + b` on two erased operands
+    # matches every generic candidate equally and is an ambiguous call. A
+    # *non-generic* overload is more specific, so it wins.
+    #
+    # Numeric is the right default — it is what the interpreter's `ADD` tag
+    # always meant. `+` still concatenates when the operands turn out to be
+    # strings; that decision is made in `NumericBinary`'s erased arm, against
+    # the runtime dtype, because a column's dtype is not known here.
+    def _add(self, o: DynValue) -> Add[DynValue, DynValue]:
+        return Add(self.copy(), o.copy())
+
+    def __add__(self, o: DynValue) -> Add[DynValue, DynValue]:
+        return self._add(o)
+
+    def _sub(self, o: DynValue) -> Sub[DynValue, DynValue]:
+        return Sub(self.copy(), o.copy())
+
+    def __sub__(self, o: DynValue) -> Sub[DynValue, DynValue]:
+        return self._sub(o)
+
+    def _mul(self, o: DynValue) -> Mul[DynValue, DynValue]:
+        return Mul(self.copy(), o.copy())
+
+    def __mul__(self, o: DynValue) -> Mul[DynValue, DynValue]:
+        return self._mul(o)
+
+    def _mod(self, o: DynValue) -> Mod[DynValue, DynValue]:
+        return Mod(self.copy(), o.copy())
+
+    def __mod__(self, o: DynValue) -> Mod[DynValue, DynValue]:
+        return self._mod(o)
+
+    def _floordiv(self, o: DynValue) -> Floordiv[DynValue, DynValue]:
+        return Floordiv(self.copy(), o.copy())
+
+    def __floordiv__(self, o: DynValue) -> Floordiv[DynValue, DynValue]:
+        return self._floordiv(o)
+
+    def _truediv(self, o: DynValue) -> Div[DynValue, DynValue]:
+        return Div(self.copy(), o.copy())
+
+    def __truediv__(self, o: DynValue) -> Div[DynValue, DynValue]:
+        return self._truediv(o)
+
+    def _lt(self, o: DynValue) -> Lt[DynValue, DynValue]:
+        return Lt(self.copy(), o.copy())
+
+    def __lt__(self, o: DynValue) -> Lt[DynValue, DynValue]:
+        return self._lt(o)
+
+    def _le(self, o: DynValue) -> Le[DynValue, DynValue]:
+        return Le(self.copy(), o.copy())
+
+    def __le__(self, o: DynValue) -> Le[DynValue, DynValue]:
+        return self._le(o)
+
+    def _gt(self, o: DynValue) -> Gt[DynValue, DynValue]:
+        return Gt(self.copy(), o.copy())
+
+    def __gt__(self, o: DynValue) -> Gt[DynValue, DynValue]:
+        return self._gt(o)
+
+    def _ge(self, o: DynValue) -> Ge[DynValue, DynValue]:
+        return Ge(self.copy(), o.copy())
+
+    def __ge__(self, o: DynValue) -> Ge[DynValue, DynValue]:
+        return self._ge(o)
+
+    def _eq(self, o: DynValue) -> Eq[DynValue, DynValue]:
+        return Eq(self.copy(), o.copy())
+
+    def __eq__(self, o: DynValue) -> Eq[DynValue, DynValue]:
+        return self._eq(o)
+
+    def _ne(self, o: DynValue) -> Ne[DynValue, DynValue]:
+        return Ne(self.copy(), o.copy())
+
+    def __ne__(self, o: DynValue) -> Ne[DynValue, DynValue]:
+        return self._ne(o)
+
     # --- ops whose payload is a runtime value -------------------------------
-    def cast(self, to: DynType) raises -> DynValue:
+    def cast(self, to: DynType) -> DynValue:
         """Cast to a dtype known only at run time.
 
-        `NumericCast[To, A]` fixes its target at compile time, which a runtime
-        dtype does not have — but `dispatch_numeric` resolves the runtime dtype
-        to a comptime one, and every arm boxes into `DynValue`, so the arms unify
-        even though their node types differ. No erased cast node is needed."""
-        var me = self.copy()
-
-        @parameter
-        def leaf[T: NumericType](d: T) raises -> DynValue:
-            return DynValue(NumericCast[T](me.copy()))
-
-        return to.dispatch_numeric[leaf]()
+        Uses `RuntimeCast` rather than resolving `to` to a comptime type and
+        building `NumericCast[To]`: that works only for numeric targets, and
+        `cast(timestamp(second))` is not one."""
+        return DynValue(RuntimeCast(self.copy(), to.copy()))
 
     def like(self, var pattern: String) -> DynValue:
         """SQL `LIKE`. The pattern is a string constant, so it becomes a
@@ -2849,8 +2938,8 @@ struct DynValue(
     def ilike(self, var pattern: String) -> DynValue:
         return DynValue(ILike(self.copy(), StringLiteral[StringType](pattern^)))
 
-    def isin(self, var value_set: DynArray) -> DynValue:
-        return DynValue(IsIn(self.copy(), value_set^))
+    def isin(self, value_set: DynArray) -> DynValue:
+        return DynValue(IsIn(self.copy(), value_set.copy()))
 
     def nullif(self, o: DynValue) -> DynValue:
         return DynValue(Nullif(self.copy(), o.copy()))
@@ -2878,12 +2967,6 @@ struct DynValue(
 
     def count(self) -> DynAgg:
         return self.aggregate("count")
-
-    def sum(self) -> DynAgg:
-        return self.aggregate("sum")
-
-    def mean(self) -> DynAgg:
-        return self.aggregate("mean")
 
     def bound_column(self, schema: Schema) raises -> Int:
         """This expression's column position, or -1 if it is not a bare column.
@@ -2989,9 +3072,19 @@ struct AggExpr(Copyable, Movable, Writable):
     ](out self, var reduction: Reduction[K, In]):
         """From a fused reduction: ``col("amount", int64).sum()`` is a scalar
         `Reduction` inside an expression and this aggregate in a `GROUP BY` —
-        the same node, read two ways. The kernel and the operand's `OutType`
-        name the `Aggregation` outright, so nothing is resolved later."""
-        self = AggExpr.of[K.Grouped[In.OutType]](reduction.a.copy())
+        the same node, read two ways.
+
+        When the operand is typed, the kernel and its `OutType` name the
+        `Aggregation` outright and nothing is resolved later. When it is erased
+        there is no `OutType` to name one with, so the aggregate is carried by
+        name and resolved against the column's dtype at plan build — the same
+        split as `Reduction.alias`."""
+        comptime if In.IsErased:
+            self = AggExpr(
+                DynAgg(K.name, DynValue(reduction.a.copy()), String())
+            )
+        else:
+            self = AggExpr.of[K.Grouped[In.OutType]](reduction.a.copy())
 
     @implicit
     def __init__(out self, var agg: DynAgg):
@@ -3054,25 +3147,72 @@ struct AggExpr(Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 # Runtime factories — the entry points a frontend without comptime types uses.
 #
-# These used to build `TagValue` interpreter nodes. They now build the same
-# nodes the fused lane builds, boxed into `DynValue`: `dyncol(0) + dyncol(1)` is
-# an `Add[DynValue, DynValue]`, not a tag.
+# **Overloads of the fused factories, not separate spellings.** `col("a")` and
+# `col("a", int64)` differ only in whether the caller knows the dtype; both build
+# a `NumericColumn`, one with `DynType`. These used to build `TagValue`
+# interpreter nodes, so `col(0) + col(1)` was a tag tree; it is now an
+# `Add[DynValue, DynValue]`.
 # ---------------------------------------------------------------------------
 
 
-def dyncol(var name: String) -> DynValue:
-    """Reference to a named column — `NumericColumn[DynType]`, the existing
-    fused leaf instantiated with the erased dtype."""
+def col(var name: String) -> DynValue:
+    """Reference a column whose dtype is not known here — `col("a")`.
+
+    The node is `NumericColumn[DynType]`, the same leaf the fused lane uses.
+    Reading a column by name never needed a dtype."""
     return DynValue(NumericColumn[DynType](name^))
 
 
-def dynlit[T: NumericType](value: Scalar[T.native]) -> DynValue:
-    """A scalar constant. A literal always knows its own type at construction,
-    so this is the ordinary `NumericLiteral[T]` with the *box* doing the
-    erasing."""
+def lit[T: NumericType](value: Scalar[T.native]) -> DynValue:
+    """A scalar constant for the runtime lane — `lit[Int64Type](3)`.
+
+    A literal always knows its type where it is written, so this is the ordinary
+    `NumericLiteral[T]`; the *box* does the erasing."""
     return DynValue(NumericLiteral[T](value))
 
 
-def dyn_if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
+def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
     """Element-wise conditional — the single-branch `CaseWhen`."""
     return DynValue(CaseWhen(cond.copy(), then_.copy(), else_.copy()))
+
+
+def coalesce(values: List[DynValue]) raises -> DynValue:
+    """First non-null across N expressions.
+
+    Folds the binary `Coalesce` node rather than introducing an n-ary one:
+    `coalesce(a, b, c)` is `Coalesce(Coalesce(a, b), c)`, which is the same
+    result because the operation is associative and null-propagating."""
+    if len(values) == 0:
+        raise Error("coalesce: needs at least one value")
+    var acc = values[0].copy()
+    for k in range(1, len(values)):
+        acc = DynValue(Coalesce(acc.copy(), values[k].copy()))
+    return acc^
+
+
+def case_when(
+    conditions: List[DynValue],
+    values: List[DynValue],
+    var else_: Optional[DynValue] = None,
+) raises -> DynValue:
+    """Multi-branch `CASE WHEN`, built by nesting the single-branch `CaseWhen`.
+
+    `conditions[k]` selects `values[k]` for the first branch that is
+    valid-and-true. Nesting right-to-left gives first-match-wins, which is what
+    the interpreter's interleaved-args form computed."""
+    if len(conditions) != len(values):
+        raise Error("case_when: len(conditions) != len(values)")
+    if len(conditions) == 0:
+        raise Error("case_when: needs at least one branch")
+    # No `else_` means "null where nothing matched". `CaseWhen` always has a
+    # third operand, so the null is built from an existing node rather than a new
+    # one: `Nullif(v, v)` is `v` with every element equal to itself removed — an
+    # all-null column of the right dtype.
+    var acc = else_.value().copy() if else_ else DynValue(
+        Nullif(values[0].copy(), values[0].copy())
+    )
+    for k in range(len(conditions) - 1, -1, -1):
+        acc = DynValue(
+            CaseWhen(conditions[k].copy(), values[k].copy(), acc.copy())
+        )
+    return acc^
