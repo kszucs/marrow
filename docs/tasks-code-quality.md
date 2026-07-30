@@ -1191,27 +1191,29 @@ Highlights: `_walk_slots` → `Page.scatter` (highest fan-in in the package); `_
 namespace next to `Crc32`; `_retag` → `DynArray.view(dtype)` (that is `pyarrow.Array.view`);
 delete the 6 redundant `read_ipc_*`/`write_ipc_*` wrappers (each is one constructor call).
 
-**Q3.4 — Python layer (65 delete, 19 relocate)** · Depends: — · Owns: `python/marrow/*.py`,
-`python/bindings/*.mojo` · **Independent of all Mojo-core tasks — can run any time, and is the
-best effort-to-value ratio in the plan.**
+**Q3.4 — Python layer** · Depends: — · Owns: `python/marrow/*.py`,
+`python/bindings/*.mojo` · **Mostly done; re-scoped 2026-07-30 after checking.**
 
-> **Target abstraction.** One home per function, PyArrow's home. The current state is not "some
-> duplication" — it is *three* definitions of `filter`/`take`/`sort_indices` (top level,
-> `compute.py`, and as `Array` methods) shipping **contradictory** `null_placement` defaults, so
-> the same call means different things depending on which you reach for. Deleting the top-level
-> copies is not cosmetic; it removes a live correctness hazard. While there: any kwarg that is
-> accepted and ignored (`skip_nulls`, `mode`, `boundscheck`, `sort_keys`) must raise
-> `NotImplementedError` — silently returning the wrong answer is worse than not offering the
-> option. Highest
-value in the whole plan for effort: delete the **24 duplicated compute functions** in
-`python/marrow/__init__.py` (they ship *contradictory* `null_placement` defaults vs `compute.py`;
-`filter`/`take`/`drop_null`/`sort`/`sort_indices` each exist **three** times — top-level,
-`compute.py`, *and* as `Array` methods; `min`/`max`/`sum`/`any`/`all`/`filter` shadow builtins).
-Then: `_as_py` → `DynScalar.as_py()` (58 lines of core type dispatch stranded in bindings);
-`_record_batch_join`/`group_by`/`aggregate`/`sort_by` (~265 lines of real semantics) → methods on
-`RecordBatch` — they currently exist *only* for Python callers and import `marrow.expr.relations`
-inside a function body, inverting CLAUDE.md's mandated split. Raise `NotImplementedError` on the
-kwargs currently accepted and silently ignored (`skip_nulls`, `mode`, `boundscheck`, `sort_keys`).
+The headline ("delete the 24 duplicated compute functions in
+`python/marrow/__init__.py`") is **stale**: `__init__.py` and `compute.py` now
+share **zero** definitions and nothing shadows a builtin. The "three definitions
+of `filter`/`take`/`sort_indices`" is now two — a `compute.py` free function and
+an `Array` method — which is PyArrow's own shape (`pc.filter(arr)` and
+`arr.filter()`), not a defect.
+
+Silently-ignored kwargs are **done**: `skip_nulls`, `boundscheck` and multi-key
+`sort_keys` already raised; `count_distinct`'s `mode` was the last one and now
+raises too (an AST sweep for parameters never referenced in their own body finds
+none left).
+
+What remains is relocation, not deletion:
+
+- `_as_py` (`python/bindings/scalars.mojo:25`) → `DynScalar.as_py()` — 58 lines
+  of core type dispatch stranded in the bindings.
+- `_record_batch_join` (`tabular.mojo:388`) plus `group_by`/`aggregate`/`sort_by`
+  → methods on `RecordBatch`. ~265 lines of real semantics that exist *only* for
+  Python callers and import `marrow.expr.relations` inside a function body,
+  inverting CLAUDE.md's mandated split.
 
 **Q3.5 — Expr (~13 of 26)** · Depends: **T2.3b merged**, Q2.3 · Owns: `marrow/expr/values.mojo`,
 `marrow/expr/dynamic.mojo`, `marrow/expr/relations.mojo` · ⚠️ BINSIZE · `_column_validity` +

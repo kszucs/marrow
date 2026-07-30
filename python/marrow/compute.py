@@ -107,6 +107,10 @@ def count_distinct(array, *, mode="only_valid", memory_pool=None, ctx=None):
     Equivalent to ``pyarrow.compute.count_distinct`` with the default
     ``mode="only_valid"`` (nulls excluded).
     """
+    if mode != "only_valid":
+        # `mode="all"` and `"only_null"` change the answer, and returning the
+        # only-valid count for them is worse than not offering the option.
+        raise NotImplementedError(f"count_distinct mode={mode!r} is not implemented")
     return Scalar.wrap(_ma.count_distinct(array.unwrap(), (ctx or _serial())))
 
 
