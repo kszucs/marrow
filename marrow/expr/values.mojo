@@ -497,6 +497,28 @@ trait NumericValue(Value):
     ]:
         ...
 
+
+trait NumericOps(NumericValue):
+    """The fluent surface for *typed* numeric nodes — `a + b`, `a > b`, `a.abs()`.
+
+    Split out of `NumericValue` because `DynValue` must not inherit it. These
+    methods return nodes parameterised on `Self` (`Gt[Self, Rhs]`), so
+    elaborating them for `Self = DynValue` needs a `Gt` holding a `DynValue`,
+    which needs `DynValue`'s conformance, which needs the method:
+
+        error: attempt to resolve a recursive reference to declaration
+               'DynValue.__gt__'
+
+    It only bites when the package is compiled from *outside* — a standalone
+    program doing `col("a") > col("b")` failed while the same expression inside
+    `marrow/expr/tests` was fine, which is why it survived until a binary-size
+    gate was rebuilt.
+
+    Node bounds stay on `NumericValue`, so an operand can still be either lane;
+    only the operator surface is narrowed. `DynValue` defines its own operators,
+    returning the box rather than a node type.
+    """
+
     # --- fluent surface: arithmetic, comparison, unary, reductions -----------
     def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
         return Add(self.copy(), o.copy())
@@ -630,7 +652,7 @@ trait NumericValue(Value):
     # accumulator), so they go straight to an `AggExpr`.
 
 
-struct NumericColumn[T: NumericType](NumericValue):
+struct NumericColumn[T: NumericType](NumericOps):
     """A numeric column, resolved by name against `batch.schema` each pass.
     PERF: `get_field_index` runs per pass; resolve-once is a follow-up."""
 
@@ -701,7 +723,7 @@ struct NumericColumn[T: NumericType](NumericValue):
 
 
 @fieldwise_init
-struct NumericLiteral[T: NumericType](NumericValue):
+struct NumericLiteral[T: NumericType](NumericOps):
     """A numeric constant, broadcast into every lane."""
 
     comptime OutType = Self.T
@@ -734,7 +756,7 @@ struct NumericLiteral[T: NumericType](NumericValue):
 
 @fieldwise_init
 struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
-    NumericValue
+    NumericOps
 ):
     """Fused arithmetic over two operands, widening to the wider dtype. There is no
     "materialized" counterpart: a breaker operand is itself a fused leaf (it reads
@@ -816,7 +838,7 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
 
 @fieldwise_init
-struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
+struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericOps):
     """Fused unary op preserving the operand dtype — `neg`, `abs`, …."""
 
     comptime OutType = Self.A.OutType
@@ -859,7 +881,7 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
 
 
 @fieldwise_init
-struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
+struct NumericCast[To: NumericType, A: NumericValue](NumericOps):
     """Fused numeric → numeric cast — reinterprets the operand's SIMD lane at the
     target dtype, so `col.cast(int64) + other` stays a single fused pass."""
 
@@ -902,7 +924,7 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
 
 @fieldwise_init
 struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
-    NumericValue
+    NumericOps
 ):
     """Binary op whose result is always float64 — `Div` (true division), `Pow`.
     Operands cast up to float64 before the kernel, so `5 / 2 == 2.5`."""
@@ -968,7 +990,7 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
 
 @fieldwise_init
-struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
+struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericOps):
     """Unary op whose result is always float64 — `sqrt`, `exp`, `log`."""
 
     comptime OutType = Float64Type
@@ -1482,7 +1504,7 @@ struct NumToBool[A: NumericValue](BoolValue):
 
 
 @fieldwise_init
-struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
+struct BoolToNum[To: NumericType, A: BoolValue](NumericOps):
     """Fused bool -> numeric (`True->1, False->0`)."""
 
     comptime OutType = Self.To
@@ -1515,7 +1537,7 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
 
 
 @fieldwise_init
-struct StringToNum[To: NumericType, A: StringValue](NumericValue):
+struct StringToNum[To: NumericType, A: StringValue](NumericOps):
     """Parse string -> numeric (nulling on unparseable). No value lane, so a breaker:
     parse the whole column once via the kernel, then load per lane."""
 
@@ -2042,7 +2064,7 @@ struct IsIn[A: Value](BoolValue):
 # over the materialized lengths. Same shape as every other breaker.
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct StringLength[A: StringValue](NumericValue):
+struct StringLength[A: StringValue](NumericOps):
     """Byte length of a string value → int32. `prepare` materializes the string
     stage and folds it to the length column via `LengthKernel`; `vectorwise` loads
     that column per lane."""
@@ -2095,7 +2117,7 @@ struct StringLength[A: StringValue](NumericValue):
 # reads it back positionally via `slot`.
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
+struct Reduction[K: AggKernel, A: NumericValue](NumericOps):
     """Whole-array reduction → a scalar. Output dtype is the kernel's accumulator
     algebra `K.AccType[A.OutType]` (sum widens, mean → float64, min/max keep it).
     """
@@ -2208,7 +2230,7 @@ struct RowNumberKernel(WindowKernel):
 
 
 @fieldwise_init
-struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
+struct WindowFunction[Func: WindowKernel, A: Value](NumericOps):
     """`func.over(spec)` → a columnar breaker. `prepare` materializes the whole
     output column into `ctx`; `core` then loads it per lane like a column."""
 
@@ -2258,7 +2280,7 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 @fieldwise_init
 struct ConditionalBinary[
     K: BinaryConditionalKernel, L: NumericValue, R: NumericValue
-](NumericValue):
+](NumericOps):
     """`coalesce`/`nullif` over two same-dtype numeric operands; `K` picks the
     kernel. `prepare` materializes the result once; `vectorwise` loads it."""
 
@@ -2315,7 +2337,7 @@ comptime Nullif = ConditionalBinary[NullifKernel, _, _]
 
 
 @fieldwise_init
-struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
+struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericOps):
     """Single-branch `CASE WHEN cond THEN then ELSE otherwise` over numeric
     values — `then`/`otherwise` share a dtype. A null condition counts as false
     (Arrow semantics), so `otherwise` is chosen there."""
@@ -2458,9 +2480,7 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
 
 
 @fieldwise_init
-struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
-    NumericValue
-):
+struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](NumericOps):
     """Extract a calendar/clock field from a temporal value → int32. A breaker,
     same shape as `StringLength`."""
 
@@ -2579,7 +2599,7 @@ struct ListColumn[T: ListLikeType](ListValue):
 
 
 @fieldwise_init
-struct ListLength[A: ListValue](NumericValue):
+struct ListLength[A: ListValue](NumericOps):
     """List element count -> int32. A breaker, same shape as `StringLength`."""
 
     comptime OutType = Int32Type
@@ -2832,12 +2852,14 @@ struct DynValue(
 
     # --- operators, disambiguated, building the *shared* nodes --------------
     #
-    # Each dunder delegates to a differently-named sibling. That is not style:
-    # re-defining a method the family traits already default triggers `attempt to
-    # resolve a recursive reference to declaration 'DynValue.__gt__'` when the
-    # node it returns holds a `DynValue`. `CLAUDE.md` records the shape and the
-    # workaround — a differently named sibling with the same body does not
-    # recurse.
+    # Each returns `DynValue`, not the node type, and that is load-bearing.
+    # Returning `Gt[DynValue, DynValue]` names a type parameterised on this
+    # struct, so elaborating the trait's defaulted `__gt__` for `Self = DynValue`
+    # needs the struct, which needs the method: `attempt to resolve a recursive
+    # reference to declaration 'DynValue.__gt__'`. Boxing the node inside breaks
+    # the cycle — the signature no longer mentions it. Delegating to a
+    # differently-named sibling does *not* help here; the return type is what
+    # closes the loop.
     #
     # Conforming to several families means inheriting several fluent surfaces,
     # and they collide: `NumericValue.__add__` yields `Add` while
@@ -2849,77 +2871,56 @@ struct DynValue(
     # always meant. `+` still concatenates when the operands turn out to be
     # strings; that decision is made in `NumericBinary`'s erased arm, against
     # the runtime dtype, because a column's dtype is not known here.
-    def _add(self, o: DynValue) -> Add[DynValue, DynValue]:
-        return Add(self.copy(), o.copy())
+    def __add__(self, o: DynValue) -> DynValue:
+        return DynValue(Add(self.copy(), o.copy()))
 
-    def __add__(self, o: DynValue) -> Add[DynValue, DynValue]:
-        return self._add(o)
+    def __sub__(self, o: DynValue) -> DynValue:
+        return DynValue(Sub(self.copy(), o.copy()))
 
-    def _sub(self, o: DynValue) -> Sub[DynValue, DynValue]:
-        return Sub(self.copy(), o.copy())
+    def __mul__(self, o: DynValue) -> DynValue:
+        return DynValue(Mul(self.copy(), o.copy()))
 
-    def __sub__(self, o: DynValue) -> Sub[DynValue, DynValue]:
-        return self._sub(o)
+    def __mod__(self, o: DynValue) -> DynValue:
+        return DynValue(Mod(self.copy(), o.copy()))
 
-    def _mul(self, o: DynValue) -> Mul[DynValue, DynValue]:
-        return Mul(self.copy(), o.copy())
+    def __floordiv__(self, o: DynValue) -> DynValue:
+        return DynValue(Floordiv(self.copy(), o.copy()))
 
-    def __mul__(self, o: DynValue) -> Mul[DynValue, DynValue]:
-        return self._mul(o)
+    def __truediv__(self, o: DynValue) -> DynValue:
+        return DynValue(Div(self.copy(), o.copy()))
 
-    def _mod(self, o: DynValue) -> Mod[DynValue, DynValue]:
-        return Mod(self.copy(), o.copy())
+    def __lt__(self, o: DynValue) -> DynValue:
+        return DynValue(Lt(self.copy(), o.copy()))
 
-    def __mod__(self, o: DynValue) -> Mod[DynValue, DynValue]:
-        return self._mod(o)
+    def __le__(self, o: DynValue) -> DynValue:
+        return DynValue(Le(self.copy(), o.copy()))
 
-    def _floordiv(self, o: DynValue) -> Floordiv[DynValue, DynValue]:
-        return Floordiv(self.copy(), o.copy())
+    def __gt__(self, o: DynValue) -> DynValue:
+        return DynValue(Gt(self.copy(), o.copy()))
 
-    def __floordiv__(self, o: DynValue) -> Floordiv[DynValue, DynValue]:
-        return self._floordiv(o)
+    def __ge__(self, o: DynValue) -> DynValue:
+        return DynValue(Ge(self.copy(), o.copy()))
 
-    def _truediv(self, o: DynValue) -> Div[DynValue, DynValue]:
-        return Div(self.copy(), o.copy())
+    def __eq__(self, o: DynValue) -> DynValue:
+        return DynValue(Eq(self.copy(), o.copy()))
 
-    def __truediv__(self, o: DynValue) -> Div[DynValue, DynValue]:
-        return self._truediv(o)
+    def __ne__(self, o: DynValue) -> DynValue:
+        return DynValue(Ne(self.copy(), o.copy()))
 
-    def _lt(self, o: DynValue) -> Lt[DynValue, DynValue]:
-        return Lt(self.copy(), o.copy())
+    def __neg__(self) -> DynValue:
+        return DynValue(Neg(self.copy()))
 
-    def __lt__(self, o: DynValue) -> Lt[DynValue, DynValue]:
-        return self._lt(o)
+    def abs(self) -> DynValue:
+        return DynValue(Abs(self.copy()))
 
-    def _le(self, o: DynValue) -> Le[DynValue, DynValue]:
-        return Le(self.copy(), o.copy())
+    def __and__(self, o: DynValue) -> DynValue:
+        return DynValue(And(self.copy(), o.copy()))
 
-    def __le__(self, o: DynValue) -> Le[DynValue, DynValue]:
-        return self._le(o)
+    def __or__(self, o: DynValue) -> DynValue:
+        return DynValue(Or(self.copy(), o.copy()))
 
-    def _gt(self, o: DynValue) -> Gt[DynValue, DynValue]:
-        return Gt(self.copy(), o.copy())
-
-    def __gt__(self, o: DynValue) -> Gt[DynValue, DynValue]:
-        return self._gt(o)
-
-    def _ge(self, o: DynValue) -> Ge[DynValue, DynValue]:
-        return Ge(self.copy(), o.copy())
-
-    def __ge__(self, o: DynValue) -> Ge[DynValue, DynValue]:
-        return self._ge(o)
-
-    def _eq(self, o: DynValue) -> Eq[DynValue, DynValue]:
-        return Eq(self.copy(), o.copy())
-
-    def __eq__(self, o: DynValue) -> Eq[DynValue, DynValue]:
-        return self._eq(o)
-
-    def _ne(self, o: DynValue) -> Ne[DynValue, DynValue]:
-        return Ne(self.copy(), o.copy())
-
-    def __ne__(self, o: DynValue) -> Ne[DynValue, DynValue]:
-        return self._ne(o)
+    def __xor__(self, o: DynValue) -> DynValue:
+        return DynValue(Xor(self.copy(), o.copy()))
 
     # --- ops whose payload is a runtime value -------------------------------
     def cast(self, to: DynType) -> DynValue:
@@ -2958,6 +2959,15 @@ struct DynValue(
     # is built — so the box returns one instead of an `AggExpr`.
     def aggregate(self, var func: String) -> DynAgg:
         return DynAgg(func^, self.copy())
+
+    def sum(self) -> DynAgg:
+        return self.aggregate("sum")
+
+    def mean(self) -> DynAgg:
+        return self.aggregate("mean")
+
+    def product(self) -> DynAgg:
+        return self.aggregate("product")
 
     def min(self) -> DynAgg:
         return self.aggregate("min")

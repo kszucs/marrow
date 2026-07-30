@@ -356,7 +356,7 @@ def test_parity_and_kleene() raises:
     var dyn = (dcol("a") > dlit[Int64Type](0)) & (
         dcol("b") > dlit[Int64Type](0)
     )
-    assert_parity(fused, dyn, _nullable_ab_batch())
+    assert_parity(fused, dyn^, _nullable_ab_batch())
 
 
 def test_parity_or_kleene() raises:
@@ -366,7 +366,7 @@ def test_parity_or_kleene() raises:
     var dyn = (dcol("a") > dlit[Int64Type](0)) | (
         dcol("b") > dlit[Int64Type](0)
     )
-    assert_parity(fused, dyn, _nullable_ab_batch())
+    assert_parity(fused, dyn^, _nullable_ab_batch())
 
 
 # ---------------------------------------------------------------------------

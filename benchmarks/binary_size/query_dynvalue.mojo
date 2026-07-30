@@ -29,11 +29,11 @@ def main() raises:
     )
 
     var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
-        DynValue(col("a") > col("b"))
+        col("a") > col("b")
     )
     var values = List[DynValue]()
-    values.append(DynValue(col("a")))
-    values.append(DynValue(col("name")))
+    values.append(col("a"))
+    values.append(col("name"))
     var proj = Project(
         input=filtered,
         names=["a", "name"],
