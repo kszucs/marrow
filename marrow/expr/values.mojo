@@ -628,9 +628,7 @@ trait NumericOps(NumericValue):
     def count(self) -> Count[Self]:
         return Count(self.copy())
 
-    def _numeric_fused(
-        self, batch: RecordBatch, mut ctx: Context
-    ) raises -> Datum:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         comptime if Self.IsErased:
             return self._erased(batch, ctx)
 
@@ -760,9 +758,6 @@ struct NumericLiteral[T: NumericType](NumericOps):
 
     var _value: Scalar[Self.OutType.native]
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return List[String]()
 
@@ -793,9 +788,6 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
     var l: Self.L
     var r: Self.R
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # One arm for the erased lane. `K` already names the operation, so
@@ -867,9 +859,6 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericOps):
     comptime IsErased = Self.A.IsErased
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
-
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # Erased lane: `K` names the operation, so this is one arm, not
         # one switch case per operator.
@@ -910,9 +899,6 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericOps):
     comptime OutShape = Self.A.OutShape
     comptime IsErased = Self.A.IsErased
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # `To` is still a comptime type here — only the *operand* is erased —
@@ -955,9 +941,6 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # Erased lane: `K` names the operation, so this is one arm, not
@@ -1017,9 +1000,6 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericOps):
     comptime OutType = Float64Type
     comptime OutShape = Self.A.OutShape
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1097,7 +1077,7 @@ trait BoolValue(Value):
     def all(self) -> All[Self]:
         return All(self.copy())
 
-    def _bool_fused(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         comptime if Self.IsErased:
             return self._erased(batch, ctx)
 
@@ -1151,9 +1131,6 @@ struct NumericCompare[
     comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # The operator names a pair; the runtime dtype picks one. Same rule
@@ -1246,9 +1223,6 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     var l: Self.L
     var r: Self.R
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
-
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # Erased lane: `K` names the operation, so this is one arm, not
         # one switch case per operator.
@@ -1326,9 +1300,6 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     comptime IsErased = Self.A.IsErased
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
-
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # Erased lane: `K` names the operation, so this is one arm, not
         # one switch case per operator.
@@ -1381,9 +1352,6 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
     comptime NativeType = DType.int32
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1423,9 +1391,6 @@ struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
     comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1458,9 +1423,6 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
     comptime IsBreaker = True
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1502,9 +1464,6 @@ struct NumToBool[A: NumericValue](BoolValue):
     comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1534,9 +1493,6 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericOps):
     comptime OutType = Self.To
     comptime OutShape = Self.A.OutShape
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1569,9 +1525,6 @@ struct StringToNum[To: NumericType, A: StringValue](NumericOps):
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1606,9 +1559,6 @@ struct StringToBool[A: StringValue](BoolValue):
     comptime IsBreaker = True
     comptime NativeType = DType.int32
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1707,9 +1657,7 @@ trait StringValue(Value):
     def ilike[Rhs: StringValue](self, o: Rhs) -> ILike[Self, Rhs]:
         return ILike(self.copy(), o.copy())
 
-    def _string_fused(
-        self, batch: RecordBatch, mut ctx: Context
-    ) raises -> Datum:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         comptime if Self.IsErased:
             return self._erased(batch, ctx)
 
@@ -1780,9 +1728,6 @@ struct StringLiteral[T: StringLikeType](StringValue):
     comptime OutShape = 0
     var _value: String
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._string_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return List[String]()
 
@@ -1802,9 +1747,6 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
     var l: Self.L
     var r: Self.R
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._string_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1834,9 +1776,6 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     comptime OutType = Self.A.OutType
     comptime OutShape = Self.A.OutShape
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._string_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1876,9 +1815,6 @@ struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
     comptime IsBreaker = True
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._string_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1906,9 +1842,6 @@ struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
     comptime IsBreaker = True
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._string_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -1935,9 +1868,6 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._string_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -1977,9 +1907,6 @@ struct StringPredicate[
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var l: Self.L
     var r: Self.R
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var n = batch.num_rows()
@@ -2055,9 +1982,6 @@ struct IsIn[A: Value](BoolValue):
     var a: Self.A
     var _value_set: DynArray
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
-
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
         return Datum(IsInKernel.dispatch(arr, self._value_set.copy()).to_dyn())
@@ -2102,9 +2026,6 @@ struct StringLength[A: StringValue](NumericOps):
     # lives — would never run. An erased node has no fused loop to break.
     comptime IsBreaker = not Self.IsErased
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var col = into_array(self.a.execute(batch), batch.num_rows())
@@ -2153,9 +2074,6 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericOps):
     # Breaker only when fused — see `StringLength`.
     comptime IsBreaker = not Self.IsErased
     var a: Self.A
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # `prepare` reduces at `A.OutType`, which is erased here, so the
@@ -2265,9 +2183,6 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericOps):
     var a: Self.A
     var spec: WindowSpec
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -2318,9 +2233,6 @@ struct ConditionalBinary[
     comptime IsBreaker = not Self.IsErased
     var l: Self.L
     var r: Self.R
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # `combine` is already erased (`DynArray` in, `DynArray` out), so
@@ -2376,9 +2288,6 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericOps):
     var cond: Self.C
     var then: Self.T
     var otherwise: Self.E
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
 
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # `_result` already works in `DynArray`, so the erased arm is it.
@@ -2516,9 +2425,6 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](NumericOps):
     comptime IsBreaker = not Self.IsErased
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
-
     def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var col = into_array(self.a.execute(batch), batch.num_rows())
         return Datum(Self.K.dispatch(col).to_dyn())
@@ -2632,9 +2538,6 @@ struct ListLength[A: ListValue](NumericOps):
     comptime IsBreaker = True
     var a: Self.A
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._numeric_fused(batch, ctx)
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
@@ -2670,9 +2573,6 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
     comptime NativeType = DType.int32
     var a: Self.A
     var elem: Self.E
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._bool_fused(batch, ctx)
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
