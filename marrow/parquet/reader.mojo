@@ -116,6 +116,29 @@ struct Page[o: Origin[mut=False]](Movable):
     def all_present(self) -> Bool:
         return self.num_present == self.num_values
 
+    def scatter[
+        body: def(Bool, Bool, Int) raises capturing[_] -> None,
+    ](self, max_def: Int, mask: Optional[List[Bool]]) raises:
+        """Walk this page's `num_values` output slots — the flat skeleton every
+        `LeafBuilder` shares.
+
+        For each row `body(present, selected, vi)` fires with whether the slot
+        holds a present value (`present_at`), whether the selection mask keeps
+        it, and the running index into the page's decoded present values
+        (advanced on every present slot, regardless of the mask). Only the
+        per-slot placement differs across leaves, and that lives in `body`.
+
+        A free `_walk_slots(page, ...)` before this; walking a page's slots is
+        the page's own business, and it already needed nothing but `self`.
+        """
+        var vi = 0
+        for row in range(self.num_values):
+            var present_here = self.present_at(row, max_def)
+            var selected = not mask or mask.value()[row]
+            body(present_here, selected, vi)
+            if present_here:
+                vi += 1
+
     def present_at(self, row: Int, max_def: Int) -> Bool:
         """Whether output `row` holds a present value: the whole page is present,
         or its definition level reaches the leaf's max (a value slot, not a
@@ -390,25 +413,6 @@ struct PageReader[o: Origin[mut=False]](Movable):
 # ---------------------------------------------------------------------------
 
 
-def _walk_slots[
-    body: def(Bool, Bool, Int) raises capturing[_] -> None,
-](page: Page, max_def: Int, mask: Optional[List[Bool]]) raises:
-    """Walk a data page's `num_values` output slots — the flat scatter skeleton
-    every `LeafBuilder` shares. For each row `body(present, selected, vi)` fires
-    with whether the slot holds a present value (`page.present_at`), whether the
-    selection mask keeps it, and the running index into the page's decoded
-    present values (advanced on every present slot, regardless of the mask). Only
-    the per-slot placement differs across leaves; it lives entirely in `body`.
-    """
-    var vi = 0
-    for row in range(page.num_values):
-        var present_here = page.present_at(row, max_def)
-        var selected = not mask or mask.value()[row]
-        body(present_here, selected, vi)
-        if present_here:
-            vi += 1
-
-
 def _finish_primitive(
     var values: Buffer[mut=True],
     var bitmap: Bitmap[mut=True],
@@ -452,13 +456,6 @@ def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
         nanos_of_day
         + Int64(Int(julian_day) - _JULIAN_DAY_OF_EPOCH) * _NANOS_PER_DAY
     )
-
-
-def _retag(var arr: DynArray, var dtype: dt.DynType) raises -> DynArray:
-    """Reinterpret `arr`'s buffers under a logical `dtype` of the same layout.
-    Used to give a leveled temporal column its Arrow type (the growing builder
-    produces the int32/int64 storage type)."""
-    return arr.view(dtype^)
 
 
 trait LeafBuilder(ImplicitlyDeletable, Movable):
@@ -556,7 +553,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                     self.null_count += 1
                 self.wpos += 1
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
@@ -660,7 +657,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def _place_plain(
         mut self,
@@ -685,7 +682,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
             elif selected:
                 self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -838,7 +835,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
                 else:
                     self.acc.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -892,7 +889,7 @@ struct Int96LeafBuilder(LeafBuilder):
                 else:
                     self.acc.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -958,7 +955,7 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -1006,7 +1003,7 @@ struct BoolLeafBuilder(LeafBuilder):
             elif selected:
                 self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def _place_values(
         mut self,
@@ -1025,7 +1022,7 @@ struct BoolLeafBuilder(LeafBuilder):
                 else:
                     self.builder.append_null()
 
-        _walk_slots[place](page, self.max_def, mask)
+        page.scatter[place](self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -1408,7 +1405,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         ](codecs, floor, max_def, rep_out, def_out)
         var arr: DynArray = builder.finish()
         if retag_to:
-            arr = _retag(arr^, retag_to.take())
+            arr = arr^.view(retag_to.take())
         return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_bytes[
@@ -1752,7 +1749,7 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         ](codecs, floor, max_def, rep_out, def_out)
         var arr: DynArray = builder.finish()
         return DecodedLeaf(
-            _retag(arr^, self.pages.leaf.dtype.copy()), rep_out^, def_out^
+            arr^.view(self.pages.leaf.dtype.copy()), rep_out^, def_out^
         )
 
     def _emit_int96[

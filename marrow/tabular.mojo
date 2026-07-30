@@ -14,6 +14,19 @@ from .arrays import DynArray, ChunkedArray, StructArray
 from .builders import array
 from .schema import Schema
 from .dtypes import struct_, Field
+from .kernels.join import (
+    hash_join,
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_FULL,
+    JOIN_SEMI,
+    JOIN_ANTI,
+)
+from .kernels.execution import ExecutionContext
+from .kernels.groupby import GroupBy
+from .expr.aggregates import FoldedAggregates
+from .kernels.sort import sort
 
 
 struct RecordBatch(
@@ -210,6 +223,169 @@ struct RecordBatch(
                 new_fields.append(self.schema.fields[j].copy())
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
+
+    def _key_indices(
+        self, names: List[String], side: String
+    ) raises -> List[Int]:
+        """Resolve key column names to positions, naming the side on failure."""
+        var out = List[Int](capacity=len(names))
+        for ref n in names:
+            var i = self.schema.get_field_index(n)
+            if i == -1:
+                raise Error(side, " key column '", n, "' not found")
+            out.append(i)
+        return out^
+
+    def join(
+        self,
+        right: RecordBatch,
+        keys: List[String],
+        right_keys: List[String],
+        how: String = "inner",
+        num_threads: Int = 0,
+    ) raises -> RecordBatch:
+        """Equi-join two batches on key column *names*.
+
+        `right_keys` empty means "same names as `keys`". `how` is PyArrow's
+        spelling — `inner`, `left outer`, `right outer`, `full outer`,
+        `left semi`, `left anti`, with the short forms also accepted.
+
+        This lived in `python/bindings/tabular.mojo`: name resolution, join-kind
+        parsing and result assembly existed **only** for Python callers, and the
+        binding imported `marrow.expr.relations` inside a function body to reach
+        the kind constants. Joining two batches is core behaviour, so it lives
+        with the type; the binding now just marshals Python values."""
+        var left_on = self._key_indices(keys, "Left")
+        var right_on = right._key_indices(
+            right_keys if right_keys else keys, "Right"
+        )
+
+        var kind = JOIN_INNER
+        if how == "left outer" or how == "left":
+            kind = JOIN_LEFT
+        elif how == "right outer" or how == "right":
+            kind = JOIN_RIGHT
+        elif how == "full outer" or how == "full":
+            kind = JOIN_FULL
+        elif how == "left semi" or how == "semi":
+            kind = JOIN_SEMI
+        elif how == "left anti" or how == "anti":
+            kind = JOIN_ANTI
+        elif how != "inner":
+            raise Error("join: unknown join type '", how, "'")
+
+        var joined = hash_join(
+            self.to_struct_array(),
+            right.to_struct_array(),
+            left_on,
+            right_on,
+            kind,
+            ctx=ExecutionContext.parallel(num_threads),
+        )
+        var fields = List[Field]()
+        for ref f in joined.dtype.as_struct().fields:
+            fields.append(f.copy())
+        return RecordBatch(
+            schema=Schema(fields=fields^), columns=joined.children.copy()
+        )
+
+    def _agg_columns(
+        self, values: List[String], funcs: List[String], who: String
+    ) raises -> Tuple[List[DynArray], FoldedAggregates, List[String]]:
+        """Resolve `(value column, aggregate)` pairs and their output names.
+
+        `<value>_<func>` matches PyArrow's naming. Shared by `group_by` and
+        `aggregate`, which differ only in whether a key grouping runs."""
+        var cols = List[DynArray]()
+        var aggs = FoldedAggregates()
+        var names = List[String]()
+        for j in range(len(funcs)):
+            var vname = values[j]
+            var vidx = self.schema.get_field_index(vname)
+            if vidx == -1:
+                raise Error(who, ": column '", vname, "' not found")
+            cols.append(self.column(vidx).copy())
+            aggs.append(funcs[j], self.column(vidx).dtype())
+            names.append(vname + "_" + funcs[j])
+        return (cols^, aggs^, names^)
+
+    def group_by(
+        self,
+        keys: List[String],
+        values: List[String],
+        funcs: List[String],
+        num_threads: Int = 0,
+    ) raises -> RecordBatch:
+        """`GROUP BY keys` with one output column per `(value, func)` pair.
+
+        The keys are grouped once and every aggregate rides that pass. Output is
+        the unique key columns followed by `<value>_<func>` columns."""
+        var key_indices = self._key_indices(keys, "group_by")
+        var key_struct = self.select(key_indices).to_struct_array()
+        var resolved = self._agg_columns(values, funcs, "group_by")
+
+        var gb = GroupBy(key_struct, ExecutionContext.parallel(num_threads))
+        var res = resolved[1].grouped(gb, resolved[0])
+
+        # `res` is [key columns..., aggregate columns...]; name the aggregates.
+        var n_keys = len(res.columns) - len(resolved[1])
+        var fields = List[Field]()
+        var columns = List[DynArray]()
+        for c in range(n_keys):
+            fields.append(res.schema.fields[c].copy())
+            columns.append(res.columns[c].copy())
+        for j in range(len(resolved[1])):
+            fields.append(
+                Field(
+                    resolved[2][j], res.schema.fields[n_keys + j].dtype.copy()
+                )
+            )
+            columns.append(res.columns[n_keys + j].copy())
+        return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
+
+    def aggregate(
+        self, values: List[String], funcs: List[String]
+    ) raises -> RecordBatch:
+        """Whole-table aggregation — one row, a `<value>_<func>` column each.
+
+        `count` of a non-null column is `COUNT(*)`."""
+        var resolved = self._agg_columns(values, funcs, "aggregate")
+        var res = resolved[1].whole(resolved[0])
+        var fields = List[Field]()
+        var columns = List[DynArray]()
+        for j in range(len(resolved[1])):
+            fields.append(
+                Field(resolved[2][j], res.schema.fields[j].dtype.copy())
+            )
+            columns.append(res.columns[j].copy())
+        return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
+
+    def sort_by(
+        self,
+        keys: List[String],
+        ascending: List[Bool],
+        nulls_first: Bool = True,
+        num_threads: Int = 0,
+    ) raises -> RecordBatch:
+        """Sort by one or more key columns, most-significant first.
+
+        `ascending` is parallel to `keys`. The Python binding accepts PyArrow's
+        `"name"` / `[(name, "descending"), ...]` spellings and flattens them to
+        these two lists."""
+        var indices = self._key_indices(keys, "sort_by")
+        var sorted_sa = sort(
+            self.to_struct_array(),
+            indices,
+            ascending,
+            nulls_first,
+            ctx=ExecutionContext.parallel(num_threads),
+        )
+        var fields = List[Field]()
+        for ref f in sorted_sa.dtype.as_struct().fields:
+            fields.append(f.copy())
+        return RecordBatch(
+            schema=Schema(fields=fields^), columns=sorted_sa.children.copy()
+        )
 
     def to_struct_array(self) -> StructArray:
         """Converts this RecordBatch to a StructArray (columns become fields).

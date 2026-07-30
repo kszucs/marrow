@@ -23,7 +23,7 @@ ArrowScalar trait:
 
 from std.utils import Variant
 
-from std.python import PythonObject
+from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleToPython
 from std.builtin.rebind import downcast
 from std.memory import OwnedPointer
@@ -835,6 +835,45 @@ struct DynScalar(
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
         return PythonObject(alloc=self^)
+
+    def as_py(self) raises -> PythonObject:
+        """This scalar as a native Python value — `int`, `float`, `bool`, `str`,
+        `list`, `dict`, or `None`. Matches `pyarrow.Scalar.as_py`.
+
+        Lived in `python/bindings/scalars.mojo` as a 50-line `_as_py` ladder over
+        every dtype. Converting a *core* type to a Python value is core work: the
+        bindings should say `scalar.as_py()`, not re-derive the dtype mapping.
+
+        Dispatches rather than laddering, so a new numeric or string-like dtype
+        cannot be silently omitted — which the ladder had no protection against.
+        """
+        if self.is_null():
+            return PythonObject(None)
+        var dt = self.type()
+        if dt.is_bool():
+            return PythonObject(self.as_bool().value())
+        elif dt.is_numeric() or dt.is_interval():
+
+            @parameter
+            def numeric[T: PrimitiveType](d: T) raises -> PythonObject:
+                return PythonObject(self.as_primitive[T]().value())
+
+            return dt.dispatch_primitive[numeric]()
+        elif dt.is_string_like():
+            return PythonObject(self.as_string().to_string())
+        elif dt.is_list():
+            return self.as_list().value().to_python_object()
+        elif dt.is_fixed_size_list():
+            return self.as_fixed_size_list().value().to_python_object()
+        elif dt.is_struct():
+            ref st = self.as_struct()
+            var builtins = Python.import_module("builtins")
+            var d = builtins.dict()
+            for i in range(st.num_fields()):
+                d[dt.as_struct().fields[i].name] = st.field(i).as_py()
+            return d
+        else:
+            raise Error(t"as_py: unsupported dtype {dt}")
 
 
 # ---------------------------------------------------------------------------

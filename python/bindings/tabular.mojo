@@ -17,11 +17,6 @@ from marrow.dtypes import Field
 from std.memory import ArcPointer, UnsafePointer
 from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
-from marrow.kernels.join import hash_join
-from marrow.kernels.groupby import GroupBy
-from marrow.expr.aggregates import FoldedAggregates
-from marrow.kernels.execution import ExecutionContext
-from marrow.kernels.sort import sort as _sort_kernel
 from marrow.arrays import Int32Array
 from helpers import pymethod
 
@@ -393,93 +388,38 @@ def _record_batch_join(
     join_type: PythonObject,
     num_threads: PythonObject,
 ) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    """Join two RecordBatches on key column names.
+    """Marshal Python arguments and call `RecordBatch.join`.
 
-    Args:
-        right: Right-side RecordBatch.
-        keys: Python list of left key column names (strings).
-        right_keys: Python list of right key column names (strings), or None
-            to use the same names as ``keys``.
-        join_type: Join kind string ("inner", "left", "right", "full",
-            "semi", "anti").  Default: "inner".
-        num_threads: Worker count for the partition-parallel path.  ``0``
-            (default) picks ``num_physical_cores()``; ``1`` forces the
-            serial path; ``>=2`` opts into parallel execution.
+    The semantics — key resolution, join-kind parsing, result assembly — are on
+    the core type. This only converts Python values to Mojo ones.
     """
-    from marrow.expr.relations import (
-        JOIN_INNER,
-        JOIN_LEFT,
-        JOIN_RIGHT,
-        JOIN_FULL,
-        JOIN_SEMI,
-        JOIN_ANTI,
-    )
-
-    ref left = ptr[]
+    ref left = py_self.downcast_value_ptr[RecordBatch]()[]
     ref right_rb = right.downcast_value_ptr[RecordBatch]()[]
 
-    # Resolve left key indices from column names.
-    var n_keys = Int(keys.__len__())
-    var left_on = List[Int]()
-    for i in range(n_keys):
-        var name = String(py=keys[i])
-        var idx = left.schema.get_field_index(name)
-        if idx == -1:
-            raise Error("Left key column '{}' not found.".format(name))
-        left_on.append(idx)
+    var left_keys = List[String]()
+    for i in range(Int(keys.__len__())):
+        left_keys.append(String(py=keys[i]))
 
-    # Resolve right key indices.
-    var right_on = List[Int]()
-    var use_right_keys = Bool(right_keys is not PythonObject(None))
-    for i in range(n_keys):
-        if use_right_keys:
-            var name = String(py=right_keys[i])
-            var idx = right_rb.schema.get_field_index(name)
-            if idx == -1:
-                raise Error("Right key column '{}' not found.".format(name))
-            right_on.append(idx)
-        else:
-            var name = String(py=keys[i])
-            var idx = right_rb.schema.get_field_index(name)
-            if idx == -1:
-                raise Error("Right key column '{}' not found.".format(name))
-            right_on.append(idx)
+    var rkeys = List[String]()
+    if right_keys is not PythonObject(None):
+        for i in range(Int(right_keys.__len__())):
+            rkeys.append(String(py=right_keys[i]))
 
-    # Parse join type string.
-    var kind_str = String(py=join_type)
-    var kind = JOIN_INNER
-    if kind_str == "left outer" or kind_str == "left":
-        kind = JOIN_LEFT
-    elif kind_str == "right outer" or kind_str == "right":
-        kind = JOIN_RIGHT
-    elif kind_str == "full outer" or kind_str == "full":
-        kind = JOIN_FULL
-    elif kind_str == "left semi" or kind_str == "semi":
-        kind = JOIN_SEMI
-    elif kind_str == "left anti" or kind_str == "anti":
-        kind = JOIN_ANTI
-
-    var left_sa = left.to_struct_array()
-    var right_sa = right_rb.to_struct_array()
-    var nt = Int(py=num_threads)
-    var result_sa = hash_join(
-        left_sa,
-        right_sa,
-        left_on,
-        right_on,
-        kind,
-        ctx=ExecutionContext.parallel(nt),
-    )
-
-    # Build output schema and RecordBatch from StructArray result.
-    var out_fields = List[Field]()
-    for ref f in result_sa.dtype.as_struct().fields:
-        out_fields.append(f.copy())
-    return RecordBatch(
-        schema=Schema(fields=out_fields^),
-        columns=result_sa.children.copy(),
+    return left.join(
+        right_rb,
+        left_keys,
+        rkeys,
+        String(py=join_type),
+        Int(py=num_threads),
     ).to_python_object()
+
+
+def _pylist_str(obj: PythonObject) raises -> List[String]:
+    """A Python sequence of strings as a Mojo `List[String]`."""
+    var out = List[String]()
+    for i in range(Int(obj.__len__())):
+        out.append(String(py=obj[i]))
+    return out^
 
 
 def _record_batch_group_by(
@@ -489,62 +429,13 @@ def _record_batch_group_by(
     funcs: PythonObject,
     num_threads: PythonObject,
 ) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    """Grouped aggregation over one or more key columns.
-
-    Args:
-        keys: Python list of key column names to group by.
-        values: Python list of value column names, one per aggregate.
-        funcs: Python list of aggregate function names ("sum", "mean", "min",
-            "max", "count", "product"), parallel to ``values``.
-        num_threads: 0 (auto — all cores), 1 (serial), or >=2 (that many).
-
-    Returns a RecordBatch of the unique key columns followed by one aggregate
-    column per (value, func), named ``<value>_<func>`` to match PyArrow. The
-    keys are grouped once and every aggregate is computed in that pass.
-    """
-    ref rb = ptr[]
-
-    var key_indices = List[Int]()
-    for i in range(Int(keys.__len__())):
-        var name = String(py=keys[i])
-        var idx = rb.schema.get_field_index(name)
-        if idx == -1:
-            raise Error("group_by: key column '", name, "' not found")
-        key_indices.append(idx)
-    var key_struct = rb.select(key_indices).to_struct_array()
-
-    # Resolve the (value column, aggregate function) pairs and their output names.
-    var value_cols = List[DynArray]()
-    var aggs = FoldedAggregates()
-    var agg_names = List[String]()
-    for j in range(Int(funcs.__len__())):
-        var vname = String(py=values[j])
-        var vidx = rb.schema.get_field_index(vname)
-        if vidx == -1:
-            raise Error("group_by: value column '", vname, "' not found")
-        var func = String(py=funcs[j])
-        value_cols.append(rb.column(vidx).copy())
-        aggs.append(func, rb.column(vidx).dtype())
-        agg_names.append(vname + "_" + func)
-
-    var gb = GroupBy(key_struct, ExecutionContext.parallel(Int(py=num_threads)))
-    var res = aggs.grouped(gb, value_cols)
-
-    # `res` is [key columns..., aggregate columns...]; rename the aggregates.
-    var n_keys = len(res.columns) - len(aggs)
-    var out_fields = List[Field]()
-    var out_columns = List[DynArray]()
-    for c in range(n_keys):
-        out_fields.append(res.schema.fields[c].copy())
-        out_columns.append(res.columns[c].copy())
-    for j in range(len(aggs)):
-        out_fields.append(
-            Field(agg_names[j], res.schema.fields[n_keys + j].dtype.copy())
-        )
-        out_columns.append(res.columns[n_keys + j].copy())
-    return RecordBatch(
-        schema=Schema(fields=out_fields^), columns=out_columns^
+    """Marshal and call `RecordBatch.group_by`."""
+    ref rb = py_self.downcast_value_ptr[RecordBatch]()[]
+    return rb.group_by(
+        _pylist_str(keys),
+        _pylist_str(values),
+        _pylist_str(funcs),
+        Int(py=num_threads),
     ).to_python_object()
 
 
@@ -553,39 +444,10 @@ def _record_batch_aggregate(
     values: PythonObject,
     funcs: PythonObject,
 ) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    """Whole-table aggregation (no GROUP BY).
-
-    Args:
-        values: value column names, one per aggregate.
-        funcs: aggregate function names ("sum"/"mean"/"min"/"max"/"count"/
-            "product"), parallel to ``values``.
-
-    Returns a one-row RecordBatch with a ``<value>_<func>`` column per
-    aggregate. ``count`` of a non-null column gives ``COUNT(*)``.
-    """
-    ref rb = ptr[]
-    var value_cols = List[DynArray]()
-    var aggs = FoldedAggregates()
-    var names = List[String]()
-    for j in range(Int(funcs.__len__())):
-        var vname = String(py=values[j])
-        var vidx = rb.schema.get_field_index(vname)
-        if vidx == -1:
-            raise Error("aggregate: column '", vname, "' not found")
-        value_cols.append(rb.column(vidx).copy())
-        var func = String(py=funcs[j])
-        aggs.append(func, rb.column(vidx).dtype())
-        names.append(vname + "_" + func)
-
-    var res = aggs.whole(value_cols)
-    var out_fields = List[Field]()
-    var out_cols = List[DynArray]()
-    for j in range(len(aggs)):
-        out_fields.append(Field(names[j], res.schema.fields[j].dtype.copy()))
-        out_cols.append(res.columns[j].copy())
-    return RecordBatch(
-        schema=Schema(fields=out_fields^), columns=out_cols^
+    """Marshal and call `RecordBatch.aggregate`."""
+    ref rb = py_self.downcast_value_ptr[RecordBatch]()[]
+    return rb.aggregate(
+        _pylist_str(values), _pylist_str(funcs)
     ).to_python_object()
 
 
@@ -595,62 +457,35 @@ def _record_batch_sort_by(
     null_placement: PythonObject,
     num_threads: PythonObject,
 ) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    """Sort a RecordBatch by one or more columns.
+    """Flatten PyArrow's `by` spellings, then call `RecordBatch.sort_by`.
 
-    Args:
-        by: Column name (str), or list of (name, "ascending"/"descending")
-            tuples.  A bare string sorts ascending.
-        null_placement: ``"at_start"`` (default) or ``"at_end"``.
-        num_threads: 0 (auto — all cores), 1 (serial), or >=2 (that many).
+    `by` is a name, or a list whose entries are names or `(name, order)` pairs.
+    Unpacking that is genuinely Python-shaped, so it stays here; everything after
+    it is on the core type.
     """
+    ref rb = py_self.downcast_value_ptr[RecordBatch]()[]
     var nulls_first = True
     if not null_placement.__is__(PythonObject(None)):
         nulls_first = String(py=null_placement) != "at_end"
 
     var builtins = Python.import_module("builtins")
-    var key_indices = List[Int]()
+    var keys = List[String]()
     var ascending = List[Bool]()
-
     if builtins.isinstance(by, builtins.str):
-        var name = String(py=by)
-        var idx = ptr[].schema.get_field_index(name)
-        if idx == -1:
-            raise Error(t"sort_by: column '{name}' not found")
-        key_indices.append(idx)
+        keys.append(String(py=by))
         ascending.append(True)
     else:
         for i in range(Int(by.__len__())):
             var entry = by[i]
             if builtins.isinstance(entry, builtins.str):
-                var name = String(py=entry)
-                var idx = ptr[].schema.get_field_index(name)
-                if idx == -1:
-                    raise Error(t"sort_by: column '{name}' not found")
-                key_indices.append(idx)
+                keys.append(String(py=entry))
                 ascending.append(True)
             else:
-                var name = String(py=entry[0])
-                var asc = String(py=entry[1]) != "descending"
-                var idx = ptr[].schema.get_field_index(name)
-                if idx == -1:
-                    raise Error(t"sort_by: column '{name}' not found")
-                key_indices.append(idx)
-                ascending.append(asc)
+                keys.append(String(py=entry[0]))
+                ascending.append(String(py=entry[1]) != "descending")
 
-    var result_sa = _sort_kernel(
-        ptr[].to_struct_array(),
-        key_indices,
-        ascending,
-        nulls_first,
-        ctx=ExecutionContext.parallel(Int(py=num_threads)),
-    )
-    var out_fields = List[Field]()
-    for ref f in result_sa.dtype.as_struct().fields:
-        out_fields.append(f.copy())
-    return RecordBatch(
-        schema=Schema(fields=out_fields^),
-        columns=result_sa.children.copy(),
+    return rb.sort_by(
+        keys, ascending, nulls_first, Int(py=num_threads)
     ).to_python_object()
 
 

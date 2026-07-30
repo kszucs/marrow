@@ -18,70 +18,13 @@ from helpers import pymethod
 
 
 # ---------------------------------------------------------------------------
-# Helper: extract native Python value from an DynScalar
-# ---------------------------------------------------------------------------
-
-
-def _as_py(scalar: DynScalar) raises -> PythonObject:
-    """Convert a Mojo DynScalar to a native Python value (int, float, bool, str, None).
-    """
-    if scalar.is_null():
-        return PythonObject(None)
-    var dtype = scalar.type()
-    if dtype.is_bool():
-        return PythonObject(scalar.as_bool().value())
-    elif dtype.is_int8():
-        return PythonObject(scalar.as_int8().value())
-    elif dtype.is_int16():
-        return PythonObject(scalar.as_int16().value())
-    elif dtype.is_int32():
-        return PythonObject(scalar.as_int32().value())
-    elif dtype.is_int64():
-        return PythonObject(scalar.as_int64().value())
-    elif dtype.is_uint8():
-        return PythonObject(scalar.as_uint8().value())
-    elif dtype.is_uint16():
-        return PythonObject(scalar.as_uint16().value())
-    elif dtype.is_uint32():
-        return PythonObject(scalar.as_uint32().value())
-    elif dtype.is_uint64():
-        return PythonObject(scalar.as_uint64().value())
-    elif dtype.is_float16():
-        return PythonObject(scalar.as_float16().value())
-    elif dtype.is_float32():
-        return PythonObject(scalar.as_float32().value())
-    elif dtype.is_float64():
-        return PythonObject(scalar.as_float64().value())
-    elif dtype.is_year_month_interval():
-        return PythonObject(scalar.as_year_month_interval().value())
-    elif dtype.is_day_time_interval():
-        return PythonObject(scalar.as_day_time_interval().value())
-    elif dtype.is_month_day_nano_interval():
-        return PythonObject(scalar.as_month_day_nano_interval().value())
-    if dtype.is_string():
-        return PythonObject(scalar.as_string().to_string())
-    elif dtype.is_list():
-        return scalar.as_list().value().to_python_object()
-    elif dtype.is_fixed_size_list():
-        return scalar.as_fixed_size_list().value().to_python_object()
-    elif dtype.is_struct():
-        ref s = scalar.as_struct()
-        var builtins = Python.import_module("builtins")
-        var d = builtins.dict()
-        for i in range(s.num_fields()):
-            d[dtype.as_struct().fields[i].name] = _as_py(s.field(i))
-        return d
-    raise Error("as_py: unsupported dtype")
-
-
-# ---------------------------------------------------------------------------
 # Scalar methods exposed to Python
 # ---------------------------------------------------------------------------
 
 
 def _scalar_as_py(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynScalar]()
-    return _as_py(ptr[])
+    return ptr[].as_py()
 
 
 # `is_valid` / `is_null` / `type` are wrapped explicitly rather than through
@@ -123,7 +66,7 @@ def _scalar_bool(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynScalar]()
     """Support bool(scalar) — needed for truthiness checks like ``assert arr[0]``.
     """
-    var py_val = _as_py(ptr[])
+    var py_val = ptr[].as_py()
     return PythonObject(Bool(py=py_val))
 
 
@@ -137,7 +80,7 @@ def _scalar_bool(py_self: PythonObject) raises -> PythonObject:
 #     second: PythonObject,
 #     op: Int,
 # ) raises -> Bool:
-#     var py_val = _as_py(first)
+#     var py_val = first.as_py()
 #     var oper = Python.import_module("operator")
 #     if op == RichCompareOps.Py_EQ:
 #         return Bool(py=oper.eq(py_val, second))

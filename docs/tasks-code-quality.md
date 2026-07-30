@@ -1172,24 +1172,34 @@ Rule to apply (from review §7). A module-level function survives **only** if:
 Everything else becomes a method, static factory, private method of its one owning type, or a
 `Kernel` struct. Full per-function classification is in review §7.
 
-**Q3.2 — Core + memory (41 of 89)** · Depends: Q2.1, Q2.3 · Owns: `marrow/views.mojo`,
-`marrow/utils.mojo`, `marrow/builders.mojo`, `marrow/scalars.mojo`, `marrow/c_data.mojo` ·
-⚠️ BINSIZE · Key moves: `dispatch_over_*` → methods on `DynType` (**64 call sites**, removes
-the largest private-field reach-in); `_apply_dispatch`/`_reduce_dispatch` → `ExecutionContext`
-(their bodies read *only* `ctx` accessors); the two bitmap↔bitmap `apply` overloads → private
-methods on `BitmapView` (they read `_data`/`_offset`/`_length` from module scope); `nulls()` →
-`PrimitiveArray[T].nulls()`; `arange` → `PrimitiveArray[T].arange` (no `pa.arange` exists);
-delete `_invert/_and/_or/_xor/_and_not` (re-implement `SIMD` operators) and dead `scalar()` ×2.
-Name `_heap_move` and `is_released()`/`mark_released()` in `c_data.mojo` — the C-ABI double-free
-guard is currently open-coded **14 times**.
-The 13 `KEEP-FREE` here (C-ABI callbacks + `variant_dispatch*`) are genuinely forced — leave them.
+**Q3.2 — Core + memory** · **Re-scoped 2026-07-30 after checking.**
 
-**Q3.3 — Parquet + IPC (24 of 27)** · Depends: Q1.2, Q1.3 · Owns: `marrow/ipc.mojo`,
-`marrow/parquet/*` · Only 3 survive (`pq.read_table`, `pq.read_metadata`, `pq.write_table`).
-Highlights: `_walk_slots` → `Page.scatter` (highest fan-in in the package); `_read_le` →
-`LittleEndian.checked` (**28 call sites, 4 structs**); `xxh64` + 3 helpers → an `XxHash64`
-namespace next to `Crc32`; `_retag` → `DynArray.view(dtype)` (that is `pyarrow.Array.view`);
-delete the 6 redundant `read_ipc_*`/`write_ipc_*` wrappers (each is one constructor call).
+The headline is **done**: `dispatch_over_*` (the "64 call sites, largest
+private-field reach-in") no longer exists — it is `DynType.dispatch_*`.
+
+What is left is `_apply_dispatch` / `_reduce_dispatch` in `views.mojo`, and the
+task's premise for moving them is **wrong**. It says "their bodies read *only*
+`ctx` accessors"; they also need `vectorize`, `Coord`, `simd_byte_width()` and
+the GPU `elementwise` launch. Moving them onto `ExecutionContext` would drag SIMD
+vectorization and GPU launch into a type that currently owns *policy* — serial
+vs parallel vs GPU, worker count, `stripe`. They are module-private with only
+module-local callers, so they are not the layering defect this task is about.
+
+**Recommend closing.** If revisited, the question is whether `ExecutionContext`
+should own the dispatch at all, not whether these two functions should move.
+
+**Q3.3 — Parquet + IPC** · **Mostly done 2026-07-30.**
+
+Done: `_read_le` -> `LittleEndian` (the "28 call sites, 4 structs" item — one
+reference left), `_retag` -> deleted, since `DynArray.view(dtype)` now exists and
+it had become a one-line pass-through; `xxh64` + `_rotl`/`_round`/`_merge_round`
+-> `XxHash64`, a namespace like `Crc32`; `_walk_slots` -> `Page.scatter`
+(8 call sites — walking a page's slots is the page's own business, and the
+function already needed nothing but `self`).
+
+Left: `ipc.mojo` still has 11 free functions, and `_slice_body` still copies each
+column buffer byte-by-byte. A memcpy needs a new `Buffer` factory, because
+`unsafe_ptr()` is restricted to `buffers`/`views`/`c_data`.
 
 **Q3.4 — Python layer** · Depends: — · Owns: `python/marrow/*.py`,
 `python/bindings/*.mojo` · **Mostly done; re-scoped 2026-07-30 after checking.**
@@ -1215,18 +1225,11 @@ What remains is relocation, not deletion:
   Python callers and import `marrow.expr.relations` inside a function body,
   inverting CLAUDE.md's mandated split.
 
-**Q3.5 — Expr (~13 of 26)** · Depends: **T2.3b merged**, Q2.3 · Owns: `marrow/expr/values.mojo`,
-`marrow/expr/dynamic.mojo`, `marrow/expr/relations.mojo` · ⚠️ BINSIZE · `_column_validity` +
-`_result_validity` → one `ArrayData.owned_validity()`; `_view_to_owned` → `BitmapView.to_owned()`
-(add the offset-0 fast path — it currently allocates and does a full pass **per column per batch**);
-`_nulls_of` → `Bitmap.unset_count()`; `relations.execute` → `DynRelation.execute(ctx)` (the only
-plan verb that is not a method, and it collides with `Value.execute`); `slit` → a `lit` overload;
-fix `lit`'s `value: Int` (today `lit(3.5, float64)` is unrepresentable).
-**Measure before/after**: `_rank`/`promote` → `dtypes.mojo` and any `ColumnSet` type are the two
-DCE-sensitive items; leave `into_array` free (promoting `Datum` to a struct is the highest binary-
-size risk in the plan).
-
----
+**~~Q3.5 — Expr~~** · **Done, verified 2026-07-30.** Every item is gone:
+`_column_validity`, `_result_validity`, `_view_to_owned` and `_nulls_of` have
+zero references; `relations.execute` is a method; `slit` survives only inside a
+comment; and `lit` has both `(Int, dtype)` and `(Float64, dtype)` overloads, so
+`lit(3.5, float64)` — the example the task said was unrepresentable — works.
 
 ## Tier 4 — larger refactors (schedule deliberately)
 

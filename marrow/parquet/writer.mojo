@@ -34,7 +34,7 @@ from .codecs import (
 )
 from ..utils import LittleEndian, Crc32
 from .utils import CompressionLibs
-from .bloom import xxh64, SplitBlockBloomFilter, BloomFilterHeader
+from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, LeafColumn, SchemaNode
 from .statistics import Statistics
 from .format import (
@@ -177,7 +177,7 @@ struct ColumnWriter(Movable):
         for i in range(arr.length):
             if arr.is_valid(i):
                 var b = arr[i].value().cast[phys]().as_bytes[big_endian=False]()
-                hashes.append(xxh64(Span(b)))
+                hashes.append(XxHash64.hash(Span(b)))
 
     @staticmethod
     def _hash_flba[
@@ -189,7 +189,7 @@ struct ColumnWriter(Movable):
         for i in range(arr.length):
             if arr.is_valid(i):
                 var b = arr[i].value().as_bytes[big_endian=True]()
-                hashes.append(xxh64(Span(b)[0:width]))
+                hashes.append(XxHash64.hash(Span(b)[0:width]))
 
     @staticmethod
     def _hash_bytes[
@@ -197,7 +197,7 @@ struct ColumnWriter(Movable):
     ](arr: BinaryLikeArray[BT], mut hashes: List[UInt64]) raises:
         for i in range(arr.length):
             if arr.is_valid(i):
-                hashes.append(xxh64(arr.unsafe_get(UInt(i)).as_bytes()))
+                hashes.append(XxHash64.hash(arr.unsafe_get(UInt(i)).as_bytes()))
 
     def _hash_fixed_size_binary(
         self, col: DynArray, mut hashes: List[UInt64]
@@ -206,7 +206,7 @@ struct ColumnWriter(Movable):
         ref fsb = col.as_fixed_size_binary()
         for i in range(len(fsb)):
             if fsb.is_valid(i):
-                hashes.append(xxh64(Span(fsb[i].value())))
+                hashes.append(XxHash64.hash(Span(fsb[i].value())))
 
     def _bloom_hashes(
         self, col: DynArray, mut hashes: List[UInt64]

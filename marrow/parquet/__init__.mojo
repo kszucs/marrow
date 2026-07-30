@@ -46,4 +46,4 @@ from .reader import (
 )
 from .writer import write_table
 from .codecs import Compression
-from .bloom import SplitBlockBloomFilter, xxh64
+from .bloom import SplitBlockBloomFilter, XxHash64
