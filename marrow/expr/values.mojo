@@ -372,6 +372,24 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         """
         return True
 
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        """Produce this node's result when its operands are erased.
+
+        The family drivers (`_numeric_fused`/`_bool_fused`/`_string_fused`) call
+        this instead of running the fused loop whenever `IsErased` is set, so a
+        node supplies only the strategy and never the branch. That is the point:
+        the branch used to be a `comptime if` repeated in every node's
+        `materialize`, and a node that forgot it silently took the fused arm —
+        for a *breaker* that is dead code rather than a build error, which is the
+        one failure mode here a compile cannot catch.
+
+        The default raises: a node that has no erased arm can only be reached
+        with erased operands if `IsErased` was propagated wrongly."""
+        raise Error(
+            "no erased strategy for this node — `IsErased` is set but nothing"
+            " implements `_erased`"
+        )
+
     def render(self) -> String:
         """How this node prints inside a plan.
 
@@ -613,6 +631,9 @@ trait NumericOps(NumericValue):
     def _numeric_fused(
         self, batch: RecordBatch, mut ctx: Context
     ) raises -> Datum:
+        comptime if Self.IsErased:
+            return self._erased(batch, ctx)
+
         self.prepare(batch, ctx)
         comptime native = Self.OutType.native
         comptime if Self.OutShape == 0:  # scalar → evaluate the lane once, then splat
@@ -774,34 +795,34 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # One arm for the erased lane. `K` already names the operation, so
-            # this is the same node the fused lane builds — there is no separate
-            # interpreter tag and no switch to add an arm to.
-            var n = batch.num_rows()
-            var l = into_array(self.l.execute(batch), n)
-            var r = into_array(self.r.execute(batch), n)
+        return self._numeric_fused(batch, ctx)
 
-            comptime if Self.K.name == AddKernel.name:
-                # `+` over erased operands is a *runtime* decision: string-like
-                # means concatenate, otherwise add. It cannot be made when the
-                # tree is built — an erased column's dtype is only known once a
-                # schema is applied, so `DynValue.dtype()` is `None` for exactly
-                # the common case (`col(0) + col(1)`).
-                #
-                # An operator
-                # names a *pair* of kernels and the dtype picks one. The
-                # `comptime if` keeps it honest — only `+` links the string
-                # counterpart, so a `-` or `*` node does not carry a concat path
-                # it can never take. That property is why the equivalent
-                # `comptime StringKernel` was removed from the numeric kernels.
-                if l.dtype().is_string_like():
-                    return Datum(ConcatKernel.dispatch(l, r))
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # One arm for the erased lane. `K` already names the operation, so
+        # this is the same node the fused lane builds — there is no separate
+        # interpreter tag and no switch to add an arm to.
+        var n = batch.num_rows()
+        var l = into_array(self.l.execute(batch), n)
+        var r = into_array(self.r.execute(batch), n)
 
-            _promote_operands(l, r)
-            return Datum(Self.K.dispatch(l, r))
-        else:
-            return self._numeric_fused(batch, ctx)
+        comptime if Self.K.name == AddKernel.name:
+            # `+` over erased operands is a *runtime* decision: string-like
+            # means concatenate, otherwise add. It cannot be made when the
+            # tree is built — an erased column's dtype is only known once a
+            # schema is applied, so `DynValue.dtype()` is `None` for exactly
+            # the common case (`col(0) + col(1)`).
+            #
+            # An operator
+            # names a *pair* of kernels and the dtype picks one. The
+            # `comptime if` keeps it honest — only `+` links the string
+            # counterpart, so a `-` or `*` node does not carry a concat path
+            # it can never take. That property is why the equivalent
+            # `comptime StringKernel` was removed from the numeric kernels.
+            if l.dtype().is_string_like():
+                return Datum(ConcatKernel.dispatch(l, r))
+
+        _promote_operands(l, r)
+        return Datum(Self.K.dispatch(l, r))
 
     def render(self) -> String:
         return String(
@@ -847,13 +868,13 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericOps):
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # Erased lane: `K` names the operation, so this is one arm, not
-            # one switch case per operator.
-            var n = batch.num_rows()
-            return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
-        else:
-            return self._numeric_fused(batch, ctx)
+        return self._numeric_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # Erased lane: `K` names the operation, so this is one arm, not
+        # one switch case per operator.
+        var n = batch.num_rows()
+        return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
 
     def render(self) -> String:
         return String(Self.K.name, "(", self.a.render(), ")")
@@ -891,14 +912,14 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericOps):
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # `To` is still a comptime type here — only the *operand* is erased —
-            # so the target dtype is known and the runtime cast router does the
-            # rest. This is the one payload node whose payload survives erasure.
-            var col = into_array(self.a.execute(batch), batch.num_rows())
-            return Datum(cast_array(col, DynType(Self.To())))
-        else:
-            return self._numeric_fused(batch, ctx)
+        return self._numeric_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # `To` is still a comptime type here — only the *operand* is erased —
+        # so the target dtype is known and the runtime cast router does the
+        # rest. This is the one payload node whose payload survives erasure.
+        var col = into_array(self.a.execute(batch), batch.num_rows())
+        return Datum(cast_array(col, DynType(Self.To())))
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -936,24 +957,24 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # Erased lane: `K` names the operation, so this is one arm, not
-            # one switch case per operator.
-            #
-            # Cast to float64 *first*, matching the fused `vectorwise` below.
-            # `_promote_operands` is not enough here: it widens the narrower
-            # operand to the wider one, so two int64 columns stay int64 and
-            # `5 / 2` floor-divides to 2 where the fused lane says 2.5.
-            var n = batch.num_rows()
-            var l = cast_array(
-                into_array(self.l.execute(batch), n), DynType(Float64Type())
-            )
-            var r = cast_array(
-                into_array(self.r.execute(batch), n), DynType(Float64Type())
-            )
-            return Datum(Self.K.dispatch(l, r))
-        else:
-            return self._numeric_fused(batch, ctx)
+        return self._numeric_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # Erased lane: `K` names the operation, so this is one arm, not
+        # one switch case per operator.
+        #
+        # Cast to float64 *first*, matching the fused `vectorwise` below.
+        # `_promote_operands` is not enough here: it widens the narrower
+        # operand to the wider one, so two int64 columns stay int64 and
+        # `5 / 2` floor-divides to 2 where the fused lane says 2.5.
+        var n = batch.num_rows()
+        var l = cast_array(
+            into_array(self.l.execute(batch), n), DynType(Float64Type())
+        )
+        var r = cast_array(
+            into_array(self.r.execute(batch), n), DynType(Float64Type())
+        )
+        return Datum(Self.K.dispatch(l, r))
 
     def render(self) -> String:
         return String(
@@ -1077,6 +1098,9 @@ trait BoolValue(Value):
         return All(self.copy())
 
     def _bool_fused(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        comptime if Self.IsErased:
+            return self._erased(batch, ctx)
+
         self.prepare(batch, ctx)
         var length = batch.num_rows()
         var bm = Bitmap.alloc_uninit(length)
@@ -1129,18 +1153,18 @@ struct NumericCompare[
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # The operator names a pair; the runtime dtype picks one. Same rule
-            # as the erased `+`.
-            var n = batch.num_rows()
-            var l = into_array(self.l.execute(batch), n)
-            var r = into_array(self.r.execute(batch), n)
-            if l.dtype().is_string_like():
-                return Datum(Self.S.dispatch(l, r))
-            _promote_operands(l, r)
-            return Datum(Self.K.dispatch(l, r))
-        else:
-            return self._bool_fused(batch, ctx)
+        return self._bool_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # The operator names a pair; the runtime dtype picks one. Same rule
+        # as the erased `+`.
+        var n = batch.num_rows()
+        var l = into_array(self.l.execute(batch), n)
+        var r = into_array(self.r.execute(batch), n)
+        if l.dtype().is_string_like():
+            return Datum(Self.S.dispatch(l, r))
+        _promote_operands(l, r)
+        return Datum(Self.K.dispatch(l, r))
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
         # The interpreter had one switch arm per operator here. `K` names the
@@ -1223,15 +1247,15 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # Erased lane: `K` names the operation, so this is one arm, not
-            # one switch case per operator.
-            var n = batch.num_rows()
-            var l = into_array(self.l.execute(batch), n)
-            var r = into_array(self.r.execute(batch), n)
-            return Datum(Self.K.dispatch(l, r))
-        else:
-            return self._bool_fused(batch, ctx)
+        return self._bool_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # Erased lane: `K` names the operation, so this is one arm, not
+        # one switch case per operator.
+        var n = batch.num_rows()
+        var l = into_array(self.l.execute(batch), n)
+        var r = into_array(self.r.execute(batch), n)
+        return Datum(Self.K.dispatch(l, r))
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
         var l = self.l.prune(stats).maybe_true
@@ -1303,13 +1327,13 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # Erased lane: `K` names the operation, so this is one arm, not
-            # one switch case per operator.
-            var n = batch.num_rows()
-            return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
-        else:
-            return self._bool_fused(batch, ctx)
+        return self._bool_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # Erased lane: `K` names the operation, so this is one arm, not
+        # one switch case per operator.
+        var n = batch.num_rows()
+        return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
 
     def render(self) -> String:
         return String(Self.K.name, "(", self.a.render(), ")")
@@ -1686,6 +1710,9 @@ trait StringValue(Value):
     def _string_fused(
         self, batch: RecordBatch, mut ctx: Context
     ) raises -> Datum:
+        comptime if Self.IsErased:
+            return self._erased(batch, ctx)
+
         self.prepare(batch, ctx)
         comptime if Self.OutShape == 0:
             var slot = 0
@@ -1952,13 +1979,13 @@ struct StringPredicate[
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            var n = batch.num_rows()
-            var la = into_array(self.l.execute(batch), n)
-            var ra = into_array(self.r.execute(batch), n)
-            return Datum(Self.K.dispatch(la, ra))
-        else:
-            return self._bool_fused(batch, ctx)
+        return self._bool_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        var n = batch.num_rows()
+        var la = into_array(self.l.execute(batch), n)
+        var ra = into_array(self.r.execute(batch), n)
+        return Datum(Self.K.dispatch(la, ra))
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2029,13 +2056,11 @@ struct IsIn[A: Value](BoolValue):
     var _value_set: DynArray
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            var arr = into_array(self.a.execute(batch), batch.num_rows())
-            return Datum(
-                IsInKernel.dispatch(arr, self._value_set.copy()).to_dyn()
-            )
-        else:
-            return self._bool_fused(batch, ctx)
+        return self._bool_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        var arr = into_array(self.a.execute(batch), batch.num_rows())
+        return Datum(IsInKernel.dispatch(arr, self._value_set.copy()).to_dyn())
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2079,11 +2104,11 @@ struct StringLength[A: StringValue](NumericOps):
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            var col = into_array(self.a.execute(batch), batch.num_rows())
-            return Datum(LengthKernel.dispatch(col))
-        else:
-            return self._numeric_fused(batch, ctx)
+        return self._numeric_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        var col = into_array(self.a.execute(batch), batch.num_rows())
+        return Datum(LengthKernel.dispatch(col))
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2130,19 +2155,19 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericOps):
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # `prepare` reduces at `A.OutType`, which is erased here, so the
-            # dtype is resolved from the column instead. Same kernel, same
-            # accumulator algebra — only the type comes from run time.
-            var arg = into_array(self.a.execute(batch), batch.num_rows())
+        return self._numeric_fused(batch, ctx)
 
-            @parameter
-            def leaf[T: NumericType](d: T) raises -> Datum:
-                return Datum(Self.K.reduce(arg.as_primitive[T]()).to_dyn())
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # `prepare` reduces at `A.OutType`, which is erased here, so the
+        # dtype is resolved from the column instead. Same kernel, same
+        # accumulator algebra — only the type comes from run time.
+        var arg = into_array(self.a.execute(batch), batch.num_rows())
 
-            return arg.dtype().dispatch_numeric[leaf]()
-        else:
-            return self._numeric_fused(batch, ctx)
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> Datum:
+            return Datum(Self.K.reduce(arg.as_primitive[T]()).to_dyn())
+
+        return arg.dtype().dispatch_numeric[leaf]()
 
     def alias(self, var name: String) -> AggExpr:
         """Name this reduction's output column, making it a GROUP BY aggregate.
@@ -2295,12 +2320,12 @@ struct ConditionalBinary[
     var r: Self.R
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # `combine` is already erased (`DynArray` in, `DynArray` out), so
-            # the erased arm is `_result` with nothing around it.
-            return Datum(self._result(batch))
-        else:
-            return self._numeric_fused(batch, ctx)
+        return self._numeric_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # `combine` is already erased (`DynArray` in, `DynArray` out), so
+        # the erased arm is `_result` with nothing around it.
+        return Datum(self._result(batch))
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2353,11 +2378,11 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericOps):
     var otherwise: Self.E
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            # `_result` already works in `DynArray`, so the erased arm is it.
-            return Datum(self._result(batch))
-        else:
-            return self._numeric_fused(batch, ctx)
+        return self._numeric_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # `_result` already works in `DynArray`, so the erased arm is it.
+        return Datum(self._result(batch))
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2492,11 +2517,11 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](NumericOps):
     var a: Self.A
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            var col = into_array(self.a.execute(batch), batch.num_rows())
-            return Datum(Self.K.dispatch(col).to_dyn())
-        else:
-            return self._numeric_fused(batch, ctx)
+        return self._numeric_fused(batch, ctx)
+
+    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        var col = into_array(self.a.execute(batch), batch.num_rows())
+        return Datum(Self.K.dispatch(col).to_dyn())
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
