@@ -126,6 +126,18 @@ def test_byte_width() raises:
     assert_equal(DynType(Float64Type()).byte_width(), 8)
 
 
+def test_byte_width_zero_for_non_fixed_width() raises:
+    # 0, not an error: `byte_width` must be non-raising to *override*
+    # `PrimitiveType.byte_width`, whose default would otherwise report
+    # `size_of[DynType.native]` — the `bool` placeholder — as 1 for every dtype.
+    # The cases above are what proves the override took; these pin the contract
+    # the override costs, so a caller reading 0 as a real width is a test failure
+    # and not a silent mis-sized buffer.
+    assert_equal(DynType(StringType()).byte_width(), 0)
+    assert_equal(DynType(BinaryType()).byte_width(), 0)
+    assert_equal(DynType(NullType()).byte_width(), 0)
+
+
 def test_eq() raises:
     var a = DynType(UInt64Type())
     var b = DynType(UInt64Type())

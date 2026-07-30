@@ -769,9 +769,39 @@ struct DynType(
     Copyable,
     DataType,
     Equatable,
+    DecimalType,
+    FloatingType,
+    IntegerType,
+    IntervalType,
+    ListLikeType,
     Movable,
+    NumericType,
+    StringLikeType,
+    TemporalType,
     Writable,
 ):
+    comptime offset = DType.int32
+    """Placeholder, never read — see `native`.
+
+    Required by `BinaryLikeType`/`ListLikeType`, which `StringValue.OutType` is
+    bound on. An erased dtype does not know its offset width; the erased arm
+    resolves it at run time via `dispatch_binarylike`/`dispatch_listlike`."""
+
+    comptime native = DType.bool
+    """Placeholder, never read.
+
+    `DynType` conforms to the family traits so that `DynValue` can conform to
+    `NumericValue`/`BoolValue`/`StringValue`, which is what lets the fused nodes
+    (`NumericBinary[K, L, R]`, ...) accept an erased operand with no change to
+    their bounds. Those nodes select the erased arm via `comptime IsErased`, so
+    a `SIMD[Self.native, W]` is never elaborated from this.
+
+    There is no `DType.invalid`. `bool` is the deliberate stand-in: it is the one
+    `DType` that is not a numeric lane, so a path that wrongly elaborated against
+    it produces visibly bool-shaped results rather than a plausible-but-wrong
+    integer width. `byte_width()` below overrides `PrimitiveType`'s default for
+    the same reason — it must keep resolving the *runtime* dtype."""
+
     # `to_dyn` is overridden below rather than inherited, and that override is
     # load-bearing: the trait's default body is `DynType(self^)`, which for
     # `Self = DynType` would be `DynType(DynType)` — and `DynType` is
@@ -922,6 +952,15 @@ struct DynType(
     def to_dyn(deinit self) -> DynType:
         return self^
 
+    def __init__(out self):
+        """The Arrow `null` type — the identity `Defaultable` requires.
+
+        `NumericType` extends `Defaultable`, so conforming needs this. `null` is
+        the honest default for an erased dtype that has not been told what it
+        holds: it is a real Arrow type meaning "no value", not a numeric width
+        picked arbitrarily."""
+        self._v = Self.VariantType(NullType())
+
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
@@ -945,11 +984,25 @@ struct DynType(
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    def byte_width(self) raises -> Int:
-        """Physical byte width per element. Defined for all PrimitiveType sub-types
-        (numeric, temporal, and decimal)."""
+    def byte_width(self) -> Int:
+        """Physical byte width per element, or **0** if this is not a fixed-width
+        type.
+
+        This *overrides* `PrimitiveType.byte_width`, and the override is
+        load-bearing: the inherited default is `size_of[Self.native]()`, and
+        `DynType.native` is the `bool` placeholder, so without this every erased
+        dtype would report width 1. It has to be **non-raising** to override at
+        all — a `raises` signature does not match the trait's, so the default
+        silently won instead and `DynType(int16).byte_width()` returned 1.
+        `test_byte_width` is what caught that.
+
+        Returning 0 rather than raising is the cost of the override. Every caller
+        already establishes the type first and treats an unexpected width as an
+        error — `TemporalCast.dispatch` and `DateTruncKernel.apply` both reject
+        anything that is not 4 or 8 — so a 0 surfaces loudly there rather than
+        being mistaken for a real width."""
         if not self.is_primitive():
-            raise Error("byte_width is only defined for primitive types")
+            return 0
 
         @parameter
         def f[T: PrimitiveType](t: T) -> Int:

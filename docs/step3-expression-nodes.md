@@ -146,9 +146,16 @@ exist in `values.mojo`, instantiated with `DynValue` operands:
 | YEAR … DAY_OF_YEAR, DATE_TRUNC | the temporal nodes |
 | LOAD LITERAL | the column and literal leaves |
 
-The tags with no fused counterpart yet (LENGTH, LIKE, ILIKE, IS_IN, COALESCE,
-NULLIF, CASE_WHEN, IF_ELSE) need one adding — which is the same work as giving
-the fused lane those ops, and is why Phase 3 is the long one.
+**Every one of the 41 tags already has a fused counterpart** — checked
+mechanically, not by eye. An earlier draft of this plan claimed eight did not
+(LENGTH, LIKE, ILIKE, IS_IN, COALESCE, NULLIF, CASE_WHEN, IF_ELSE) and that was
+simply wrong: `StringLength`, `Like`, `ILike`, `IsIn`, `Coalesce`, `Nullif` and
+`CaseWhen` all exist in `values.mojo`, and `IF_ELSE` *is* `CaseWhen` — it is the
+single-branch form. (`test_parity.mojo`'s docstring still says "there is no fused
+`if_else` node"; that is stale and should go when Phase 3 touches it.)
+
+So Phase 3 adds no fused nodes. It rewires the operators onto the ones already
+there, which makes it substantially smaller than budgeted.
 
 `_op_name` does **not** disappear into `K.name`: the vocabularies deliberately
 differ (`sub` vs the kernel's `subtract`, `and` vs `and_`). It becomes a
@@ -218,6 +225,7 @@ rather than impressions.
 | phase | `query_dynvalue` `__text` | `query_runtime` `__text` | tests |
 |---|---:|---:|---|
 | baseline (`a7524a7`) | 5,237,876 | 5,238,004 | 1000 passed |
+| Phase 1 (`DynType` conformances) | 5,236,148 | 5,236,276 | 1288 passed |
 
 ### Phase 0 result (2026-07-30)
 
