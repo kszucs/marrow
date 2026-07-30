@@ -660,9 +660,17 @@ struct DynScalar(
 
         A twelve-arm dtype ladder before, which is why it silently lacked string
         — the erased `like` path materialises its pattern through here and hit
-        "unsupported dtype string". `dispatch_primitive` enumerates its own pack,
-        so a new fixed-width dtype cannot be omitted; bool and the string-likes
-        keep explicit arms because their scalars are not `PrimitiveScalar`."""
+        "unsupported dtype string".
+
+        Dispatches over **numeric**, not `PrimitiveType`, and that is a measured
+        choice rather than a timid one: `repeat` builds a whole array per
+        instantiation, so widening it to every primitive type (adding temporal,
+        interval and the four decimals) cost **34,052 bytes** on
+        `query_streaming` — 83% of that commit's growth — to support scalars
+        nothing repeats today. The families that are covered are enumerated by
+        `dispatch_*`, so none of *them* can be silently dropped; a temporal or
+        decimal scalar raises, which is the same answer the ladder gave and is
+        loud rather than wrong."""
         var dt = self.type()
         if dt == bool_:
             return self.as_bool().repeat(times).to_dyn()
@@ -673,13 +681,13 @@ struct DynScalar(
                 return self.as_string().repeat(times).to_dyn()
 
             return dt.dispatch_stringlike[stringlike]()
-        elif dt.is_primitive():
+        elif dt.is_numeric():
 
             @parameter
-            def primitive[T: PrimitiveType](d: T) raises -> DynArray:
+            def numeric[T: NumericType](d: T) raises -> DynArray:
                 return self.as_primitive[T]().repeat(times).to_dyn()
 
-            return dt.dispatch_primitive[primitive]()
+            return dt.dispatch_numeric[numeric]()
         else:
             raise Error(t"DynScalar.repeat: unsupported dtype {dt}")
 
