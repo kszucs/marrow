@@ -104,16 +104,6 @@ None — `t2.3b-aggregate` and `fu4-like-scalar` are both merged. Re-check befor
 > Q0.0 is closed (upstream fix), so the suite is trustworthy again and these are no longer
 > gated — Q0.2/Q0.3 can run in parallel with everything else.
 
-**Q0.2 — Fused expression correctness (D3 + D4)** · *Tier 0* · Depends: — ·
-Owns: `marrow/expr/values.mojo`, `marrow/kernels/boolean.mojo`, `marrow/expr/tests/test_values.mojo`,
-`marrow/expr/tests/test_parity.mojo` · ⚠️ BINSIZE · Done when:
-- `NumericCompare` uses `promote[L, R]` and casts **both** operands, matching `NumericBinary`
-  (`values.mojo:583`). Add a mixed-width parity case (`int32 > int64`) — none exists today.
-- `Any`/`All` bind to the null-correct kernels. Delete the duplicate pair in `boolean.mojo:288-303`
-  and re-point `values.mojo:138-153` at `..kernels.aggregate` (the pair `kernels/__init__.mojo`
-  already re-exports). Add a parity case with nulls whose data bits are set.
-- Both verified via `test_parity.mojo` (fused == dynamic).
-
 **Q0.5 — Schema derivation probes by execution, and it costs 16 KB** ·
 *measured 2026-07-27* · Depends: — · Owns: `marrow/expr/relations.mojo`,
 `marrow/expr/values.mojo` · ⚠️ BINSIZE ·
@@ -141,160 +131,6 @@ executing anything, and only the interpreted arm needs the probe. That reclaims 
 *and* lets the gates use the same API as every other caller — at which point this task and
 the gate exception close together.
 
-**Q0.6 — One `dispatch` for every binary numeric kernel** · *found 2026-07-27* ·
-Depends: — · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.mojo` ·
-
-`BinaryNumericKernel.dispatch` and `NumericCompareKernel.dispatch` are **byte-identical**
-— `expect_same_dtype`, a `leaf[T: NumericType]` closure calling
-`Self.apply(l.as_primitive[T](), r.as_primitive[T](), ctx).to_dyn()`, then
-`dispatch_numeric[leaf]()`. `BinaryFloatKernel.dispatch` is the same again with
-`dispatch_floating`.
-
-They cannot share a default today because they live in traits with no common ancestor below
-`Kernel`, and the thing that separates them is `apply`'s return type: `PrimitiveArray[T]`
-for arithmetic, `BoolArray` for comparison. That return type depends on the *method's* type
-parameter, not on `Self`, so it cannot be an associated type on a shared trait — which is
-why the duplication exists at all.
-
-**Closed as not worth doing — counted 2026-07-27, after Q0.7 put the bodies side by side.**
-
-The only mechanism available is a shared trait providing `dispatch` in terms of an abstract
-`_apply_any[T](left, right, ctx) -> DynArray`, which each family implements as a one-line
-`return Self.apply(l, r, c).to_dyn()` shim. (That erasure is required because `apply`'s
-return type — `PrimitiveArray[T]` vs `BoolArray` — depends on the *method's* type parameter
-and so cannot be an associated type.) Counting it:
-
-| | lines |
-|---|---|
-| today: three `dispatch` bodies | ~45 |
-| shared trait + `dispatch` | ~18 |
-| three `_apply_any` shims | ~15 |
-| `BinaryFloatKernel` keeps its own body (it needs `dispatch_floating`, not `dispatch_numeric`) | ~15 |
-| **after** | **~48** |
-
-It is a **net increase**, plus a new trait in the hierarchy and an extra indirection on
-every erased dispatch — for removing one duplicated body. Even assuming the float family
-could be folded in (it cannot without parameterising the dispatch family, which costs more
-than it saves), the best case is ~33 lines: twelve saved, one trait added.
-
-That fails this document's own bar — *"if a fix adds a parameter, a flag, or a second way to
-do something, it is the wrong fix; prefer the change that deletes code"*. The duplication is
-real but bounded and structural: there are exactly three binary dispatch bodies, one per
-family trait, and a new kernel conforms to an existing family rather than adding a fourth.
-
-**Reopen only if** a fourth binary family appears, or if `dispatch_numeric`/`dispatch_floating`
-become selectable as a comptime parameter — at which point all three collapse into one body
-and the arithmetic changes sign.
-
-**Q0.7 — Merge `arithmetic.mojo` + `compare.mojo` into `numeric.mojo`** ·
-*owner directive, 2026-07-27* · Depends: — (do **before** Q0.6, so that task's diff is the
-trait change alone) · Owns: `marrow/kernels/arithmetic.mojo`, `marrow/kernels/compare.mojo`,
-new `marrow/kernels/numeric.mojo`, `marrow/kernels/__init__.mojo`, every importer of the two
-(+ `marrow/kernels/tests/test_arithmetic.mojo`, `test_compare.mojo`) · ⚠️ BINSIZE ·
-
-The two modules are now the same kind of thing: both numeric-only, both three-tier
-(`core` / `apply` / `dispatch`), both dispatching through `DynType.dispatch_numeric`.
-What differs between an `AddKernel` and an `LtKernel` is the `core` functor and the output
-layout — not enough to justify two modules. Comparison stopped being "the string-aware one"
-when `NumericCompareKernel` dropped `comptime StringKernel` (`f5374e9`).
-
-**Do it knowing it is organisation, not deduplication.** The identical `dispatch` bodies in
-Q0.6 survive the move untouched; merging the files just puts them next to each other where
-the duplication is visible. Sequence it first anyway: doing Q0.6 across two modules means
-touching both, and doing the merge afterwards would re-touch everything Q0.6 changed.
-
-Done when: one `marrow/kernels/numeric.mojo` holds the binary/unary numeric traits, the
-comparison trait, and all their kernel structs; `kernels/__init__.mojo` re-exports the same
-public names so no caller outside `marrow/kernels` changes; the test files merge or stay
-split on purpose (say which); fused stripped size reported before/after — expected
-unchanged, since this moves no code across a DCE boundary.
-
-**Q0.8 — The AOT binary-size gate covers two shapes, and its silence reads as evidence** ·
-*Tier 0, found 2026-07-28* · Depends: — · Owns: `benchmarks/binary_size/*` ·
-
-CLAUDE.md makes it a hard constraint that the `marrow.aot`/`marrow.expr` layers stay
-small-binary and that changes are **gated on `benchmarks/binary_size/`**. The gate cannot
-carry that weight today. Five programs are built, but between them the *fused* lane is
-exercised in exactly **two shapes**:
-
-- `query_streaming` — `InMemoryTable -> Filter -> Project`, whose only fused nodes are
-  `col` and `>`.
-- `query_streaming_agg_fused` — `Aggregate` with `NumericAgg[SumKernel, Int64Type]` and
-  `[MinKernel, Int64Type]`.
-
-Everything else an AOT expression can be made of is **unmeasured**: `ParquetScan` (and with
-it the whole reader), `Sort`/`Limit`/`TopK`, `Join`, and every fused value node except
-`col`/`Gt` — arithmetic, `NumericCast`, boolean, string, conditional, membership, temporal —
-plus `Count`/`Mean`/`Max`/`CountDistinct`.
-
-**Two measurements from 2026-07-28 show this is not hypothetical, because in both cases the
-gate reported "no change" and the change was simply invisible to it:**
-
-- Q0.4 rewrote all twelve of `TagValue.eval`'s binary arms. The fused gates came back
-  byte-identical — true, and worthless: **neither fused gate contains a single arithmetic
-  expression.**
-- T2.4 rewrote the Parquet read path and the scan processor. It contributed **0 bytes to
-  every gate**, because no gate constructs a `ParquetScan`. The DCE property is real (that
-  is *why* it is zero), but it means the entire AOT Parquet surface has never been measured.
-
-**Item 2 — coverage — ✅ DONE 2026-07-29 (`3bee28b`).** Five gates added, each the
-`query_streaming` shape plus one thing so the delta is what the thing costs, and the three
-orphan binaries deleted. Measured in `__text`:
-
-| gate | Δ vs floor | what it adds |
-|---|---:|---|
-| `query_arith` | +7,644 | fused `+ - *` |
-| `query_scan` | +1,033,560 | `ParquetScan` — the whole reader |
-| `query_sort` | +2,432,604 | `Sort` + top-K |
-| `query_join` | +2,567,388 | `Join` |
-| `query_exprs` | +2,641,244 | string, conditional, membership, cast, temporal |
-
-`query_arith` is the sharpest vindication of fixing the metric first: **+7,644 bytes of
-code, and 16 bytes _smaller_ by stripped file size.** The old metric would have called
-fused arithmetic free.
-
-`query_exprs` covers five families in one program on purpose — the sweep is now ~20 minutes
-and a suite nobody runs measures nothing. It trades per-family attribution for regression
-detection; split one out when it needs its own number.
-
-> **Watch the cost of the gate itself.** Each program is a full `-O3` build: five currently
-> take ~10 min on an M-series laptop. Fifteen would take ~35 and nobody would run it. Keep
-> each gate to the minimum that links its family, and add a `--only` filter so a change can
-> re-measure the one gate it plausibly moved before the full sweep.
-
-**Item 1 — fix the metric — ✅ DONE 2026-07-29 (`fc5b15d`).** `compare.py` now reports and
-ratios on the `__text` section, and takes gate names so re-measuring one costs 2 builds
-instead of 5. New `__text` baselines are in `benchmarks/binary_size/README.md`, along with a
-correction: that README's headline claim (`query_hybrid` and `query_runtime` have the same
-`__TEXT`, therefore fusing the predicate saved zero bytes) does not follow from a
-page-quantized number, and cannot be re-checked because those gates have no `.mojo` source.
-
-The original finding, for the record: **stripped file size is quantized to 16 KB and this
-repository had been quoting it.** Apple Silicon uses 16 KB pages, so a `__TEXT` segment is padded up to a
-multiple of 16,384 and the stripped binary's *file size* moves in 16 KB steps. Measured on
-`query_dynvalue` for the Q3.1 `CalendarUnit` change (2026-07-29):
-
-| | `__text` (code) | `__TEXT` segment | stripped file |
-|---|---|---|---|
-| before | 5,264,436 | 5,373,952 | 5,438,920 |
-| after | 5,266,164 | 5,390,336 | 5,455,424 |
-| Δ | **+1,728** | +16,384 (one page) | +16,504 |
-
-So the gate as it stands **cannot see a change smaller than 16 KB, and reports a phantom
-16 KB jump when a small one crosses a page boundary**. Symbol counts confirmed it: 2,267 →
-2,266, i.e. one *fewer* symbol for a "+16,504-byte regression".
-
-Earlier figures in this document that came from stripped file size are page-quantized and
-should be read as directional only — including Q0.4's "+16,528" and the conditional
-refactor's "-16,528" (that these were the same number to the byte, in opposite directions,
-was the tell). `compare.py` already collected a `__TEXT` column; the ratio table and the recorded
-expectations moved to **`size -m <binary>` → `Section __text`**, the only figure here that
-tracks code.
-
-**What remains in Q0.8 is the coverage half** — the gate programs themselves, listed above.
-
----
-
 ### Accepted known defects (not scheduled)
 
 **D1** — `slice()` copies the parent's `nulls`, so a slice of an array with nulls reports the
@@ -314,60 +150,8 @@ owning bitmap+offset+length makes both unrepresentable.
 
 ## Tier 1 — unblocks M1 and T2.4
 
-**Q1.1 — Close the dtype dispatch ladders (D5 + RC4)** · *M1 blocker* · Depends: — ·
-Owns: `marrow/utils.mojo`, `marrow/dtypes.mojo`, `marrow/kernels/hashing.mojo`,
-`marrow/kernels/sort.mojo` + their tests · Done when:
-- `dispatch_over_integer`, `dispatch_over_primitive`, `dispatch_over_temporal`,
-  `dispatch_over_listlike` exist alongside the current four.
-- `rapidhash` and `sort_indices` route through them and accept **temporal, large_string, decimal,
-  dictionary**. This unblocks `GROUP BY date_trunc(...)` (Q19/35/36/40/43) and `ORDER BY` a
-  timestamp (Q8/24–27) — both on the M1 ClickBench list, both currently raising.
-- Tests covering group-by and sort on a date/timestamp/large_string column.
-- Supersedes **FU-1** (which tracked only the `large_string` half).
-
-> **Do the struct conversion in the same pass, not "if convenient".** `hashing.mojo` (17 free
-> functions) and `sort.mojo` (8) are the only two kernel modules with *no* `Kernel` struct, and
-> they are exactly the two with dtype-coverage gaps. That is not a coincidence: with no struct
-> there is no single `dispatch` to extend, so each new type had to be remembered in a hand-written
-> ladder — and wasn't. Converting them to `RapidHash` / `SortIndices` and routing through
-> `dispatch_over_*` makes the gap structurally impossible rather than currently-fixed. Adding a
-> dtype should then be a one-line change in one place; if it isn't, the abstraction is wrong.
-
-**Q1.4 — Finish the import hygiene** · *small, high leverage* · Depends: — ·
-Owns: `marrow/arrays.mojo`, `marrow/scalars.mojo`, `marrow/builders.mojo` · Done when the
-remaining `from .dtypes import *` wildcards are replaced by explicit import lists.
-
-> **Context — the cycle is already broken.** Removing `DataType.ScalarType`/`ArrayType` (they had
-> **zero consumers** tree-wide) let `dtypes.mojo` drop its imports of `arrays` and `scalars`, so
-> the dependency graph is now a DAG: `dtypes → utils`, with `arrays`/`scalars`/`builders` all
-> importing `dtypes` one-directionally. That alone removed a whole class of failure — three
-> separate incidents in a single day (a trait shadowing the builtin `Scalar`, `BoolArray` failing
-> to resolve along one import path but not another, and a "fix" that made errors go 2 → 10)
-> all had the same signature: **the same source compiling or failing depending on which file you
-> entered through**.
+> ### Findings kept from Q1.2 (done) — they still bound the IPC/mmap work
 >
-> The remaining wildcards are no longer a cycle, but they are still opaque — you cannot tell what
-> a module depends on by reading its head, and a name added to `dtypes` silently lands in three
-> other namespaces. Replacing them with explicit lists is mechanical and makes the next collision
-> impossible rather than merely unlikely.
->
-> Note this contradicts CLAUDE.md's standing advice ("Mojo resolves circular imports — do not
-> reorganize code to avoid them"). That was true and is now outdated; update it as part of this
-> task.
-
-**Q1.2 — `ByteSource.read_at` → `Buffer[mut=False]` (RC5)** · *T2.4 prerequisite* ·
-Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`,
-`marrow/parquet/tests/test_reader.mojo` · Done when: `read_at` returns a ref-counted
-`Buffer[mut=False]`; `MappedFile` wraps the mmap via `Buffer.from_foreign` (still zero-copy);
-`Page.body` / `PageReader.data` become `BufferView`; the `_untracked()` `rebind` helper
-(`reader.mojo:157`) is **deleted**.
-
-> **Do this before any other parquet streaming work.** The current contract —
-> "a borrowed non-owning span with `ImmUntrackedOrigin`" — is satisfiable *only* by a whole-file
-> mmap. A streaming source must own recycled buffers, and the untracked origin removes the
-> compiler's ability to catch the dangle. Doing `_span()` removal first would just move the
-> dangling problem into every page decode.
-
 > ### `read_at` cannot return a sub-`Buffer` — Arrow alignment
 >
 > The card says `read_at` returns a `Buffer[mut=False]`. For the **whole file** that works.
@@ -1283,38 +1067,6 @@ What did work, and is worth keeping in a retry:
 Run `precompile`, or at minimum `check marrow/expr/tests/test_streaming.mojo`, before believing a
 kernel-layer change is done.
 
-**Q2.6 — Delete `reinterpret_array`** · Depends: Q2.5 for the `groupby` half ·
-Owns: `marrow/kernels/{filter,sort,hashing,groupby,aggregate}.mojo` ·
-
-`reinterpret_array` (+ `DynType.storage_type()` and `temporal_backing_dtype`) exists because
-the *dispatch layer* routes temporal columns through the **numeric** branch — even though every
-typed leaf is already bound on `PrimitiveType`, which temporal satisfies. It is not needed for
-correctness anywhere:
-
-| kernel | leaf bound | reinterpret needed? |
-|---|---|---|
-| `Filter` / `Take` | `T: PrimitiveType` | no — and removing it is *more* correct: today it strips the dtype and relabels it back, versus returning `PrimitiveArray[T]` with the dtype preserved by construction |
-| `SortIndices` | `T: PrimitiveType` | no |
-| `RapidHash` | `T: PrimitiveType` | no |
-| `AggState` | `V: NumericType` | yes **until Q2.5** |
-
-**Measured, and the monomorphization argument does not survive it.** Reinterpreting funnels ~15
-logical primitive types into 4 integer widths, so removing it instantiates more kernel bodies —
-but that cost lands almost entirely on the *runtime* binary, which is not what the project
-optimises for:
-
-| | before | after | delta |
-|---|---|---|---|
-| **fused** `query_streaming` | 1,357,176 | **1,274,584** | **−82,592 (−6.1%)** |
-| runtime `query_dynvalue` | 15,859,016 | 16,684,776 | +825,760 (+5.2%) |
-| ratio | 11.7× | **13.1×** | improved |
-
-The fused binary *shrank*, because it no longer links `reinterpret_array` / `storage_type` at all.
-So the reinterpret was buying runtime-binary size — which is out of focus — at the fused binary's
-expense.
-
-
-
 **Q2.1 — Add the missing accessors (RC1)** · Depends: — · Owns: `marrow/dtypes.mojo`,
 `marrow/buffers.mojo`, `marrow/builders.mojo`, `marrow/utils.mojo`, `marrow/expr/values.mojo` ·
 ⚠️ BINSIZE · Done when no type reaches into another's `_`-prefixed fields:
@@ -1322,17 +1074,6 @@ expense.
 `Allocation` exposes `is_device()`/`is_host()` (kills `Buffer`'s `_host`/`_device` probing — and
 **fixes `Buffer.resize` mishandling DEVICE memory**); `PrimitiveBuilder.append_nulls(n)` replaces
 `b._null_count = size`; `Context.get[A]` goes through `DynArray._as[A]()`.
-
-**Q2.2 — One concept, one owner (RC2)** · Depends: Q0.2 · Owns: `marrow/kernels/compare.mojo`,
-`marrow/kernels/string.mojo`, `marrow/kernels/arithmetic.mojo`, `marrow/kernels/__init__.mojo`,
-`marrow/buffers.mojo` (+ tests) · ⚠️ conflicts with `fu4-like-scalar` — **wait for it** ·
-Done when: string comparison has one implementation (**this is FU-3**: add `StringLt/Le/Gt/Ge` to
-`string.mojo`, give `BinaryCompareKernel` a `StringKernel` associated type, delete
-`apply_string`/`str_predicate` and the legacy `equal` free functions); element-wise
-`MinKernel`/`MaxKernel` are renamed so they stop colliding with the reducing pair and become
-reachable through the package namespace; `Bitmap` forwards its bit operations to `self.view()`
-instead of re-implementing them against `_buffer._ptr` (which is how `Bitmap.__eq__` drifted to
-~64× slower than `BitmapView.__eq__`).
 
 **Q2.3 — Validity plumbing hygiene (RC3, layout-preserving)** · Depends: Q2.1 ·
 Owns: `marrow/buffers.mojo`, `marrow/views.mojo`, `marrow/kernels/helpers.mojo` ·
@@ -1347,19 +1088,6 @@ Owns: `marrow/buffers.mojo`, `marrow/views.mojo`, `marrow/kernels/helpers.mojo` 
 > Scope note: an earlier draft proposed a `Validity` value type owning bitmap+offset+length and
 > embedded it in every array. **Dropped** — array/scalar/builder layout is off-limits. Everything
 > above is call-site and helper-level only.
-
-**Q2.4 — `ExecutionContext` owns execution policy (RC6)** · Depends: **T2.3b merged** ·
-Owns: `marrow/kernels/execution.mojo`, `marrow/views.mojo`, `marrow/buffers.mojo`,
-`marrow/kernels/{filter,sort,partition,join,groupby,distinct}.mojo` · ⚠️ large, contended ·
-Done when: `ctx.stripe[worker](n, min_parallel_size)` replaces the **7 hand-rolled
-`sync_parallelize` chunk loops**; `Buffer.alloc_uninit[T](n, ctx)` replaces the **10-site**
-`if ctx.is_gpu(): alloc_device else alloc_uninit` branch; `ExecutionContext` is threaded whole
-rather than destructured to `num_threads: Int` and rebuilt (which currently **silently drops the
-GPU device** at five sites in `HashJoin`); `hash_join`'s dead `ctx` parameter is removed; the three
-incompatible parallel-gating idioms become one.
-
-> Consider splitting into Q2.4a (context API: `execution.mojo` + `buffers.mojo` + `views.mojo`)
-> and Q2.4b (migrate kernel call sites), so the API lands first and migration is mechanical.
 
 ### The stripe loops are **three** shapes, not one — surveyed 2026-07-27
 

@@ -11,15 +11,15 @@ Tier-A/B tasks were in fact complete. Checked by grep, not by trusting a header:
 
 | task | status | evidence |
 |---|---|---|
-| **L1** — move the aggregate catalog up | **done** | `NumericFold` (`expr/aggregates.mojo:84`), the `Sum`/… aliases (`:184`) and `resolve_agg` (`:194`) all live in `expr`; the `expr.aggregates → expr.dynamic` edge is gone |
-| **L4** — `GroupBy` stops speaking `RecordBatch` | **done** | `kernels/groupby.mojo` imports only `..arrays`/`..builders`/`..dtypes` — no `..schema`, no `..tabular`. `marrow/kernels` is free of the tabular layer |
-| **L5** — one owner for the grouping strategy | **done** | `GROUP_THREAD_LOCAL` no longer crosses into `marrow/expr`; the mergeability check is internal to `GroupBy` (`groupby.mojo:487`) |
-| **L9** — `bitmap_and` duplicate | **done** | no occurrences outside a comment |
-| **L2** — extract `DynValue` | **open** | still at `values.mojo:2194`; `values.mojo` still imports `.dynamic`. Blocks L6 |
+| ~~**L1**~~ | done | `NumericFold` (`expr/aggregates.mojo:84`), the `Sum`/… aliases (`:184`) and `resolve_agg` (`:194`) all live in `expr`; the `expr.aggregates → expr.dynamic` edge is gone |
+| ~~**L4**~~ | done | `kernels/groupby.mojo` imports only `..arrays`/`..builders`/`..dtypes` — no `..schema`, no `..tabular`. `marrow/kernels` is free of the tabular layer |
+| ~~**L5**~~ | done | `GROUP_THREAD_LOCAL` no longer crosses into `marrow/expr`; the mergeability check is internal to `GroupBy` (`groupby.mojo:487`) |
+| ~~**L9**~~ | done | no occurrences outside a comment |
+| **L2** — split `values.mojo` | **reduced** | the lane dependency is gone (interpreter deleted); only `DynAgg` + `_promote_operands` are imported from `.dynamic`. What remains is file size — 3,153 lines |
 | **L3** — `AggFunc`'s late binding | **open** | unchanged |
 | **L6** — a `Scan` abstraction | **open** | `RELATION_PARQUET_SCAN` still an IR discriminant (`relations.mojo:78`) |
-| **L7** — split or delete `Kernel` | **re-scope** | **the premise no longer holds.** `Kernel` now carries `error[M](message)` (`kernels/core.mojo:22-25`) plus `expect_same_length` / `expect_same_dtype` — a genuinely shared member across all 73 conformers, which is exactly what the task asked for. "Prefer the delete" is now the wrong advice; close it, or re-scope to the remaining question of whether one trait should serve both element-wise SIMD ops and whole-array algorithm namespaces |
-| **L8** — decompose `TagValue` | **open** | unchanged, and still the root cause of the Q0.0 class of bug |
+| ~~**L7**~~ | **closed 2026-07-30** | `Kernel` now carries `error`/`expect_same_length`/`expect_same_dtype` and every named kernel conforms — it is no longer a bare marker |
+| ~~**L8**~~ | **done 2026-07-30** | `TagValue` deleted; `dynamic.mojo` 1,087 -> 113 lines |
 
 > **L6/Q1.3's blocker was imaginary.** Both were held up by a "compiler crashes on
 > `rel.filter(col > lit)` under `TestSuite`" cap. That cap was caused by tests building plan
@@ -134,25 +134,17 @@ Two edges are backwards **conceptually** even though they are forwards structura
 
 Each finding gets a task in §4 with the matching id.
 
-**L1 — `resolve_agg` and the `AggFunction` catalog are both one layer from where the docs say
-they are.** `Sum`, `Product`, `Mean`, `Min`, `Max`, `Count`, `CountDistinct`,
-`ApproxCountDistinct` are defined at `marrow/kernels/aggregate.mojo:1096-1203`, but
-`kernels/aggregate.mojo`'s own header says they "live in `marrow.expr.aggregates`",
-`expr/aggregates.mojo`'s header lists them as its first layer, and
-`docs/aggregate-kernel-inversion.md` §8 claims `expr/aggregates.mojo` "holds the aggregations, the
-catalog, the erased boxes". Three documents describe the intended layering; none matches the code.
-Separately, `resolve_agg` (`expr/dynamic.mojo:914`) lives next to `TagValue`, whose 41 tags contain
-**no aggregate tags at all** — so `expr.aggregates` imports the runtime interpreter module
-(`expr/aggregates.mojo:53`) purely to reach one name ladder. That is the module the small-binary
-gate exists to keep out of fused builds.
+**L2 — `values.mojo` is three modules in one file.** *Reduced 2026-07-30, not closed.* The
+original finding was that `DynValue` unioned fused nodes with a `TagValue` interpreter, so the
+comptime lane had to import the runtime one. The interpreter is gone: `DynValue` boxes a single
+trait, and `values.mojo` now imports just `DynAgg` and `_promote_operands` from `dynamic.mojo`.
+The **file-size** half stands — 3,153 lines holding the `Value` hierarchy, ~45 nodes, the fusion
+runtime (`Datum`, `Context`, `promote`, `wider`) and the box.
 
-**L2 — `DynValue` inside `values.mojo` is why the comptime lane depends on the runtime lane.**
-`values.mojo` is three modules in one 2380-line file: the `Value` trait hierarchy + ~45 fused
-nodes; the fusion runtime (`Datum`, `Context`, `promote`, `wider`); and `DynValue`, the box that
-unions fused nodes with `TagValue`. Only the third needs `from .dynamic import TagValue`
-(`values.mojo:158`). `DynValue` belongs *above* both lanes, not inside one of them. Related
-asymmetry: `DynValue._prune_tramp[V]` (`values.mojo:2240`) returns `unknown()` unconditionally —
-the box advertises a `prune` capability that only one of its two arms implements.
+The prune asymmetry noted here is **fixed**: `_prune_tramp[V]` calls `V.prune(stats)`, so a fused
+predicate can skip row groups where the box previously answered `unknown()` for every fused node.
+That was Q4.5's core, delivered as a side effect — and it is **untested**, since every case in
+`test_pruning.mojo` builds an erased predicate.
 
 **L3 — `AggFunc.name` is documented as "never dispatch" but *is* dispatch.**
 `expr/aggregates.mojo:94` says the name is "the default output column name, never dispatch". Two
@@ -169,21 +161,6 @@ that trade is fine. What leaks is that the name-as-key half is undocumented, and
 thread-local path runs once per aggregate *per grouped call*, not once at plan build as the module
 header claims.
 
-**L4 — `GroupBy` is the only kernel that speaks `RecordBatch`.** `kernels/groupby.mojo:29-30` is
-the sole `..schema` / `..tabular` import in `marrow/kernels`. `aggregate_columns(values, names)`
-takes output *column names* and returns an assembled `RecordBatch`; table assembly and naming are
-relational concerns. Every other kernel returns arrays and lets the caller build the batch.
-
-**L5 — grouping strategy is chosen in `kernels`, but one of its three branches is implemented in
-`expr`.** `GroupBy` documents that it picks serial / thread-local / radix once at construction. It
-can only *execute* two of them: `expr/aggregates.mojo:347` does
-`if gb.strategy() == GROUP_THREAD_LOCAL and self.is_mergeable()` and then runs its own
-`Aggregates._thread_local`. A kernel-layer constant is imported upward for a caller-side
-comparison, and mergeability — a property the kernel layer cannot see — is an unstated
-precondition on a strategy the kernel layer has already committed to. This is also the most likely
-source of the unresolved regression in `docs/aggregate-kernel-inversion.md` §8: `aggregate[A]`
-now falls through to the shared `_by_partition` driver.
-
 **L6 — Parquet is hard-wired into both the IR and the operator layer.**
 `expr/execution.mojo:34-42` imports 8 symbols from `..parquet`; `expr/relations.mojo` carries
 `RELATION_PARQUET_SCAN` as an IR kind discriminant for pushdown. There is no `Source`/`Scan`
@@ -191,51 +168,17 @@ abstraction, so CSV or IPC means another processor, another import into the same
 another discriminant in the generic IR. `ParquetScanProcessor` itself does four things: file read,
 row-group pruning, page selection, morsel slicing.
 
-**L7 — `Kernel` is a non-abstraction.** It requires only `comptime name: String`, and it is worn
-by two unrelated kinds of thing: element-wise SIMD ops (`AddKernel`, `LtKernel`) and whole-array
-algorithm namespaces (`Filter`, `Take`, `SortIndices`, `RapidHash`, `NumericCast`). It names
-nothing about behaviour, so it cannot be used to constrain anything — every real constraint is
-carried by a sub-trait (`BinaryKernel`, `AggKernel`, `StringMapKernel`, …).
-
-**L8 — `TagValue` is a god-node.** 41 tags, 7 fields, four responsibilities (tag dispatch,
-statistics pruning, schema/dtype resolution, display). Two fields are explicitly overloaded:
-`_name` carries "column name **or** LIKE pattern **or** `date_trunc` unit" (its own docstring
-flags the hazard) and `_kind_data` carries "column index or op kind". The known Q0.0 heap
-corruption (`size_of` 416 vs ≥417 needed for `ArcPointer[TagValue]`) is a direct consequence of
-this width.
-
-**L9 — minor, batched.** `DynRelation` bundles erasure + the whole fluent plan-building API +
-`kind()` RTTI. `kernels/distinct.mojo` hosts `count_distinct_grouped` /
-`approx_count_distinct_grouped`, so "grouped aggregation" is split across `aggregate.mojo` and
-`distinct.mojo`. `bitmap_and` exists twice (`kernels/helpers` alias over `Bitmap.intersect`) and is
-the source of the (now removed) `check_lib` false positives.
-
----
+**~~L7 — `Kernel` is a non-abstraction.~~** **Resolved 2026-07-30, differently than proposed.**
+The finding was that `Kernel` required only `comptime name: String` and so constrained nothing.
+It now also provides `error`, `expect_same_length` and `expect_same_dtype`
+(`kernels/core.mojo`), and every named kernel conforms — 25 that carried a name without the
+conformance were fixed, which removed two drifted copies (`Filter._require_len`,
+`SortIndices` attributing errors to `sort:`). The trait is no longer a bare marker, so
+splitting or deleting it is moot.
 
 ## 4. Tasks
 
 ### Tier A — layering (do these first; they unblock the rest)
-
-**L1 — Move the aggregate catalog and name ladder up into `expr` (as documented)** ·
-*highest leverage, mechanical* · Depends: — · ⚠️ BINSIZE ·
-Owns: `marrow/kernels/aggregate.mojo`, `marrow/expr/aggregates.mojo`, `marrow/expr/dynamic.mojo`,
-`marrow/kernels/groupby.mojo`, `marrow/kernels/tests/test_aggregate.mojo`,
-`marrow/expr/tests/test_aggregates.mojo` · Done when:
-
-- `AggFunction` conformers (`NumericFold`, `OrderPreserving`, `CountValid`, `DistinctCount`) and
-  the `Sum`/`Product`/`Mean`/`Min`/`Max`/`Count`/`CountDistinct`/`ApproxCountDistinct` comptime
-  aliases live in `marrow/expr/aggregates.mojo`. The `AggFunction` *trait* may stay in
-  `kernels/aggregate.mojo` (it is the contract `GroupBy.apply[F]` is bound on) — the *catalog*
-  moves.
-- `resolve_agg` moves from `expr/dynamic.mojo` to `expr/aggregates.mojo`.
-- The import edge **`expr.aggregates → expr.dynamic` is gone** (verify with the cycle/edge script
-  in §1, or `grep -n "^from \." marrow/expr/aggregates.mojo`).
-- The three stale docstrings are now true: `kernels/aggregate.mojo`'s header,
-  `expr/aggregates.mojo`'s header, and `docs/aggregate-kernel-inversion.md` §8.
-
-> Do not "fix" the docstrings in place instead. The docs describe the layering that was actually
-> wanted; the code is what drifted. Moving the catalog is the same amount of work and removes the
-> edge as a side effect.
 
 **L2 — Extract `DynValue` out of `values.mojo`** · *unblocks fused-lane independence* ·
 Depends: — · ⚠️ BINSIZE · Owns: `marrow/expr/values.mojo`, new `marrow/expr/erased.mojo`,
@@ -255,20 +198,6 @@ Done when:
 > prune a row group. If that is intentional (it is sound, just pessimistic), say so on the trait
 > rather than only in the trampoline comment.
 
-**L4 — `GroupBy` stops speaking `RecordBatch`** · Depends: L1 · ⚠️ BINSIZE ·
-Owns: `marrow/kernels/groupby.mojo`, `marrow/expr/aggregates.mojo`,
-`marrow/kernels/tests/test_groupby.mojo`, `marrow/kernels/tests/bench_groupby.mojo` ·
-Done when:
-
-- `aggregate_columns` / `_by_partition` / `aggregate[A]` / `apply[F]` return key columns +
-  aggregate columns (e.g. `Tuple[List[DynArray], List[DynArray]]` or a small typed result struct),
-  not `RecordBatch`, and take no `names: List[String]`.
-- `marrow/kernels/groupby.mojo` no longer imports `..schema` or `..tabular` — making `marrow/kernels`
-  free of the tabular layer entirely (verify: `grep -rn "tabular\|schema" marrow/kernels/*.mojo`
-  returns nothing outside tests).
-- `Aggregates.grouped` / `Aggregates.whole` do the naming and the `RecordBatch` assembly, which is
-  where the output-schema knowledge already lives.
-
 ### Tier B — the aggregate boxes (depends on Tier A)
 
 **L3 — Make `AggFunc`'s late binding either honest or gone** · Depends: L1 · ⚠️ BINSIZE ·
@@ -287,49 +216,7 @@ Done when **one** of the following is true, whichever the measurement supports:
 > case, and neither is the docstring. The current state is the worst of both: it pays the ladder
 > repeatedly *and* documents that it doesn't.
 
-**L5 — One owner for the grouping strategy** · Depends: L3, L4 · ⚠️ BINSIZE · *perf-sensitive* ·
-Owns: `marrow/kernels/groupby.mojo`, `marrow/expr/aggregates.mojo`,
-`marrow/kernels/tests/test_groupby.mojo`, `marrow/kernels/tests/bench_groupby.mojo` ·
-Done when:
-
-- `GROUP_THREAD_LOCAL` is no longer imported by `marrow/expr` — the caller does not compare
-  strategy enums to decide which driver to call.
-- Either `GroupBy` executes all three strategies (taking a mergeable-fold callback so the
-  thread-local path can live where the strategy is chosen), or `GroupBy` is told up front whether
-  the aggregate set is mergeable and never picks a strategy it cannot run. One of the two — not a
-  third flag.
-- **Measure before merging.** Run `--competition` group-by **twice on an idle machine** and A/B
-  against the task's own base commit in the same session. The single-aggregate
-  `groupby_sum[1m_g100k]` row is the one under suspicion (see
-  `docs/aggregate-kernel-inversion.md` §8) — this task either fixes it or must show it did not
-  make it worse.
-
 ### Tier C — abstractions that name nothing
-
-**L7 — Split or delete the `Kernel` marker trait** · Depends: — ·
-Owns: `marrow/kernels/helpers.mojo` + every `struct X(Kernel)` declaration ·
-Done when either: `Kernel` gains a member that all conformers genuinely share (and the two
-categories are distinguished by sub-traits), **or** it is deleted and `comptime name: String` is
-declared on the sub-traits that actually constrain behaviour (`BinaryKernel`, `AggKernel`,
-`StringMapKernel`, `TemporalExtractKernel`, `BoolReduceKernel`, …). Prefer the delete: a trait
-that requires only a name cannot be used to constrain anything, and every call site is already
-bound on the sub-trait.
-
-> Fold in the duplicate `bitmap_and` while touching this file: `kernels/helpers.bitmap_and` is a
-> one-line alias for `Bitmap.intersect` and is the source of the documented `check_lib` false
-> positives. Point callers at `Bitmap.intersect` and delete it.
-
-**L8 — Decompose `TagValue`** · *large; schedule deliberately* · Depends: L1 (removes the
-aggregate ladder from this file first) · ⚠️ BINSIZE ·
-Owns: `marrow/expr/dynamic.mojo`, `marrow/expr/tests/*` · Done when the two overloaded fields are
-gone: `_name` no longer triples as column name / LIKE pattern / `date_trunc` unit, and
-`_kind_data` no longer doubles as column index / op kind. Prefer a payload variant per tag family
-over adding more `Optional` fields — the struct is already 416 bytes and its width is what causes
-the Q0.0 `ArcPointer[TagValue]` discriminant overflow.
-
-> Sequencing: this is the *fix* for Q0.0's root cause, not a duplicate of it. Do the narrow Q0.0
-> correctness fix first if it is still open; do this when the interpreter is otherwise stable,
-> because it touches every tag.
 
 ### Tier D — extensibility (not urgent, but blocks new sources)
 
@@ -346,18 +233,6 @@ generic "scan with pushdown support" discriminant rather than a format name in t
 >
 > Coordinate with **Q1.3** in `docs/tasks-code-quality.md` (one file handle per scan), which owns
 > the same two files.
-
-**L9 — Minor, batchable** · Depends: — · Owns: as listed per item:
-
-- `marrow/expr/relations.mojo` — separate `DynRelation`'s erasure mechanics from the fluent
-  plan-building API (`select`/`filter`/`aggregate`/`join`). The box should be a box; the builder
-  API can be free functions or a thin wrapper over it.
-- `marrow/kernels/distinct.mojo`, `marrow/kernels/aggregate.mojo` — `count_distinct_grouped` /
-  `approx_count_distinct_grouped` are grouped-aggregation implementations living below the
-  aggregate layer. Either move them behind `DistinctAgg` or state in `distinct.mojo`'s header why
-  the sketch algorithms are the exception.
-
----
 
 ## 5. Suggested order
 

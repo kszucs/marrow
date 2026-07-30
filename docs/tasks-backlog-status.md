@@ -1,30 +1,22 @@
-# Backlog status — quality + features
+# Backlog status — the index
 
-A cross-cutting snapshot of the two task backlogs, verified against the code rather
-than read off their own headers. **Last verified: 2026-07-29.**
+The one place that says what is actually open. Every entry was checked against
+the code, not read off a header. **Last verified: 2026-07-30.**
 
-- `docs/tasks-code-quality.md` — the Q/L tasks (dedup, layering, soundness)
-- `docs/tasks-execution-engine.md` — the T tasks (M1 = ClickBench)
+- `docs/tasks-code-quality.md` — Q tasks (dedup, layering, soundness)
+- `docs/tasks-execution-engine.md` — T tasks (M1 = ClickBench)
+- `docs/tasks-expr-kernels-layering.md` — L tasks (expr/kernels layering)
+- `docs/tasks-expr-simplification.md` — duplication inside `marrow/expr`
+- `docs/tasks-type-coverage.md` — V tasks (map, view layouts)
+- `docs/tasks-aggregate-followups.md` — group-by specifics
 
-> **Re-verify before trusting this.** Both backlogs' status lines have been wrong before —
-> on 2026-07-27 a sweep found six tasks marked open that were already done, and three
-> separate scope estimates in Q1.2 were wrong by an order of magnitude in the same
-> direction. Check with `grep`, not with the header.
+> **Re-verify before trusting this.** These status lines have been wrong before —
+> a 2026-07-27 sweep found six tasks marked open that were already done, and on
+> 2026-07-30 this index and `tasks-code-quality.md` disagreed about five tasks
+> (Q0.6, Q0.8, Q1.1, Q1.2, Q2.4) that the index had closed and the task file
+> still listed as open. Check with `grep`, not with a header.
 
----
-
-## Closed recently
-
-**Quality.** Q0.2, Q0.3, **Q0.4**, **Q0.8**, Q1.1, Q1.2, Q1.3, Q2.4, Q2.5 step 2,
-**Q3.1**, Q3.4's headline, Q0.7, part of Q3.3, and layering L1/L4/L5/L9. Q0.6 was *measured* and closed as a net
-increase (sharing the binary dispatch default costs more lines than it saves). L7's premise
-no longer holds — `Kernel` carries `error()` and the argument checks, so it is not a
-name-only marker.
-
-**Features.** Wave 0 and Wave 1 appear complete: the `ByteSource` seam (T0.2), Kleene
-logic, and the conditional / membership / string / temporal / aggregate kernels. Wave 2 is
-complete — T2.1–T2.3b (fused and dynamic wiring, Sort/Limit/TopK, Aggregate + HAVING) plus
-**T2.4** (per-row-group streaming scan, projection-into-scan, chunk-relative `PageReader`).
+Resolved tasks are **deleted, not struck through** — git history has them.
 
 ---
 
@@ -32,38 +24,60 @@ complete — T2.1–T2.3b (fused and dynamic wiring, Sort/Limit/TopK, Aggregate 
 
 | task | what is left |
 |---|---|
-| **Q4.5** | ⚠️ **Core delivered 2026-07-30, untested.** `Value.prune` exists and the box delegates to it, so a *fused* predicate can now skip row groups where the box previously answered `unknown()` for every fused node. But all seven cases in `test_pruning.mojo` build an **erased** predicate — nothing asserts the fused path. Write that test first. |
-| **Q0.5** | A fused value's `OutType` is statically known, so `project`/`aggregate` need not probe it by executing against a 0-row batch. Worth ~16 KB of *file size* on the fused gate — re-measure as `__text` first, see Q0.8 — and retires the hand-built `benchmarks/binary_size` exception. Also the residual half of Q0.4: the interpreted lane promotes at *execution*, so a `TagValue` tree's output dtype is still only knowable by running it. |
-| ~~**Q3.1**~~ | ✅ **Complete, verified 2026-07-29.** Items 1, 3, 6, 7 turned out to be done already (`filter.mojo` has exactly the 3 free functions the task says to keep; `is_null`/`select`/`equal`, `hash_identity`, `_drop_null_bool`, `reinterpret_array`, `temporal_backing_dtype` no longer exist). Item 4/5 **done 2026-07-29**: `membership.mojo` 5 free fns → 2 + `IsInKernel`; `conditional.mojo` → 5 kernel structs over a shared `Selection`; `temporal.mojo` 18 → 7, with `CalendarUnit` replacing the `String` unit and the ten one-line delegators deleted. Item 2 **done 2026-07-29** — but its premise was stale: `RapidHash`/`SortIndices` already existed, so only the redundant delegators went (`rapidhash` 5 overloads → 2, `sort_indices` 4 → 1). Kernel free functions now total **61**, down from the 122 the task counted. `distinct.mojo` (6) and `concat.mojo` (1) still have no struct, but neither has a per-type dispatch to drift — the defect that motivates a struct does not apply, so they are left alone. |
-| **Q3.3 tail** | `ipc.mojo` still has 12 free fns. `_slice_body` still copies each column buffer byte-by-byte; a memcpy needs a new `Buffer` factory, since `unsafe_ptr()` is restricted to `buffers`/`views`/`c_data`. |
+| **Q0.5** | `project`/`aggregate` derive output dtypes by executing against a 0-row batch (`relations.mojo:339`). A fused value's `OutType` is statically known, so it is unnecessary for that lane; ~16 KB, and it retires a hand-built `benchmarks/binary_size` exception. |
+| **Q2.1** | No type reaches into another's `_`-prefixed fields: expose `DynType`'s variant, add `Allocation.is_device()`/`is_host()`. |
+| **Q2.3** | Validity plumbing: `bitmap_and` should take `Optional[BitmapView]` — today's signature yields offset-misaligned validity for sliced inputs. Layout-preserving. |
+| **Q2.5** | Aggregates: kernels as the only representation. Large — do in a worktree, gated by Q6.1. |
+| **Q3.2 / Q3.3 / Q3.4 / Q3.5** | Free-function elimination: core+memory, Parquet+IPC (`ipc.mojo` still has 11, and `_slice_body` copies byte-by-byte), the Python layer, and expr. |
 | **Q4.1** | Missing value types: `Grouping`, `JoinKind` (its "emits right columns?" predicate is re-derived three times with different membership), `JoinIndex`, `BuildPartition`. |
-| **Q4.3, Q4.4, Q4.6** | Parquet leaf visitor (8 drifting type ladders), `ipc.mojo` → package, and **Q4.6** — a Parquet scan doubles a minimal AOT binary because the reader resolves leaf type at runtime. Q4.2 (op registry) was dropped. |
-| **L2 → L6** | L2 is nearly done as a side effect of L8: `values.mojo` imports only `DynAgg` and `_promote_operands` from `dynamic.mojo`, not a whole interpreter. **L6 (a `Scan` trait) is untouched — do it before adding CSV/IPC sources, not after.** |
-| ~~**L8**~~ | ✅ **Complete 2026-07-30.** `TagValue` deleted: `dynamic.mojo` 1,087 -> 113 lines, 41 tag constants and 99 switch arms gone. The runtime lane now builds the *same* nodes the fused lane does. `query_dynvalue` -1,279,552 bytes (-24.4%). |
-| **D1 / D2** | Accepted, not scheduled: both need array-internal changes, which the layout freeze forbids. |
+| **Q4.3 / Q4.4 / Q4.6** | Parquet leaf visitor (8 drifting type ladders), `ipc.mojo` → package, and Q4.6 — a Parquet scan still doubles a minimal AOT binary. |
+| **Q6.1** | Cross-engine aggregate benchmark with the AOT path measured. Gates every Q2.5 round. |
+| **L2** | Split `values.mojo` — 3,153 lines. The *lane dependency* it was named for is gone; only file size remains. |
+| **L3** | `AggFunc`'s late binding: make it honest or remove it. |
+| **L6** | A `Scan` trait above the file formats. **Do it before adding CSV/IPC sources, not after.** |
+| **V0–V6** | Map is half-shipped (no `MapScalar`, no IPC in either direction, no `cast` arm); the binary-view and list-view layouts are absent. |
+| **D1 / D2** | Accepted, not scheduled — both need array-internal changes the layout freeze forbids. |
+
+**Q4.5 needs a test, not work.** Its core landed 2026-07-30: `Value.prune`
+exists and the box delegates to it, so a *fused* predicate can skip row groups
+where the box previously answered `unknown()` for every fused node. But all
+seven cases in `test_pruning.mojo` build an **erased** predicate, so the fused
+path is unasserted. Cheapest item on this page.
 
 ---
 
 ## Open — features (M1 / ClickBench)
 
-This is the critical path, and it is almost entirely sequential.
+Almost entirely sequential, and now the whole critical path.
 
 | task | state |
 |---|---|
-| **T3.1** — optimizer v1 | **Not started.** No `optimizer.mojo` exists. The scan side is now ready for it: a `ParquetScan`'s schema *is* its projection, so projection pushdown is a schema rewrite, and the predicate it already carries drives row-group and page skipping. |
+| **T3.1** — optimizer v1 | **Not started.** No `optimizer.mojo`. The scan side is ready: a `ParquetScan`'s schema *is* its projection, so projection pushdown is a schema rewrite, and the predicate it carries drives row-group and page skipping. |
 | **T3.2** — Python lazy bindings | **Not started.** |
-| **T3.3** — ibis-flavoured `Table`/`Column` | **Not started.** `python/marrow/` has only `__init__.py`, `compute.py`, `parquet.py` — no lazy surface. |
-| **T3.5** — ClickBench through the lazy plan | The M1 acceptance gate; blocked on everything above. |
+| **T3.3** — ibis-flavoured `Table`/`Column` | **Not started.** `python/marrow/` has only `__init__.py`, `compute.py`, `parquet.py`. |
+| **T3.4 / T3.5** | ClickBench through the lazy plan — the M1 acceptance gate, blocked on everything above. |
 
 ---
 
-## Suggested order
+## Closed 2026-07-30 — the expression-layer refactor
 
-1. ~~**T2.4**~~ and ~~**Q0.4**~~ — both done 2026-07-28.
-2. **Wave 3 chain**: T3.1 → T3.2 → T3.3 → T3.5. Genuinely serial, and the bulk of M1 —
-   now the whole critical path.
-3. Dedup (Q3.1/Q3.3 tails, Q4.x) and layering (L2 → L6) as capacity allows — none of it
-   blocks M1.
+`TagValue`, the 41-tag interpreter, is deleted. `dynamic.mojo` 1,087 → 113
+lines. A runtime-built expression is now made of the *same* nodes the fused lane
+uses: `col("a") + col("b")` is an `Add[DynValue, DynValue]`.
+
+    query_dynvalue   5,236,148 -> 3,956,596   -1,279,552  -24.4%
+    query_streaming  1,266,040 -> 1,303,028      +36,988   +2.9%
+
+The fused gates grew ~37 KB, ~30 KB of which is `Value.prune` — the capability
+noted above. Perf vs `BASELINE.md`: 57/57 rows, nothing attributable.
+
+It closed **L8** outright, reduced **L2** to a file-size question, closed **L7**
+(`Kernel` now carries `error`/`expect_same_length`/`expect_same_dtype` and every
+named kernel conforms), and delivered **Q4.5**'s core. Full account in
+`docs/tasks-step3-expression-nodes.md`.
+
+Also closed and removed: Q0.0, Q0.2, Q0.3, Q0.4, Q0.6, Q0.7, Q0.8, Q1.1, Q1.2,
+Q1.3, Q1.4, Q2.2, Q2.6, Q2.4, Q3.1, Q4.2 (dropped), T0.7, T2.4, L1, L4, L5, L9.
 
 ---
 
