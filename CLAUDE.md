@@ -664,6 +664,17 @@ mostly bite generic trait hierarchies such as `marrow.expr.values`.
   reference to declaration 'execute'`. A *concrete* default with no `Self.X`
   reference (e.g. `= BoolArray`) does not recurse. Declare such members **per
   concrete struct** instead.
+- **But composing an associated type out of *type parameters'* associated types
+  is fine** — the hazard above is specifically a reference to a sibling of
+  `Self`. Verified 2026-08-03: on a struct `Bin[L: Value, R: Value]`,
+  `comptime State = Tuple[Self.L.State, Self.R.State]` together with
+  `def prepare(self, …) raises -> Self.State` compiles, reduces, and composes to
+  at least depth 4 with mixed shapes — including a node whose `State` is an
+  owning container, and one such node nested inside another. It also survives
+  capture by a `@parameter` closure. The one non-obvious requirement: because
+  `prepare` raises, the associated type needs `ImplicitlyDeletable`
+  (`comptime State: Copyable & ImplicitlyDeletable`), else every call site fails
+  with *"abandoned without being explicitly destroyed"* on the throw path.
 - **Re-defaulting a base trait's abstract method in a sub-trait recurses** if that
   method returns `Self.ArrayType` and a conforming node's `ArrayType` transitively
   references another trait-member child (the compiler loops elaborating the
