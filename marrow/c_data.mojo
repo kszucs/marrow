@@ -937,6 +937,18 @@ struct CArrowArray(Copyable, Movable):
                 UnsafePointer(to=self).unsafe_origin_cast[MutUntrackedOrigin]()
             )
 
+    def _need_buffers(self, n: Int, dtype: DynType) raises:
+        """Check the producer declared at least `n` buffers before indexing."""
+        if Int(self.n_buffers) < n:
+            raise Error(
+                "c_data: producer declared ",
+                Int(self.n_buffers),
+                " buffers for ",
+                String(dtype),
+                "; this layout needs ",
+                n,
+            )
+
     def to_data(
         self, dtype: DynType, owner: ArcPointer[Allocation]
     ) raises -> ArrayData:
@@ -953,9 +965,17 @@ struct CArrowArray(Copyable, Movable):
         # raw C buffers start at element 0 regardless of the logical array offset.
         var length = self.length + self.offset
 
+        # Each branch below indexes `self.buffers` by position, so the count
+        # the producer declared has to be checked first — otherwise a producer
+        # supplying fewer buffers than the layout implies is an out-of-bounds
+        # read of the pointer array rather than an error. The required count is
+        # asserted where it is used rather than in one table up front, so this
+        # does not become a second place that encodes layout.
         # Null arrays carry no buffers — `self.buffers` itself may be a null
         # pointer — so skip the validity read for them.
         var bitmap: Optional[Bitmap[]] = None
+        if not dtype.is_null():
+            self._need_buffers(1, dtype)
         if not dtype.is_null() and Int(self.buffers[0]) != 0:
             bitmap = Bitmap(
                 Buffer.from_foreign(
@@ -972,18 +992,21 @@ struct CArrowArray(Copyable, Movable):
         if dtype.is_null():
             pass  # no buffers, no children
         elif dtype.is_bool():
+            self._need_buffers(2, dtype)
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1], math.ceildiv(Int(length), 8), owner
                 )
             )
         elif dtype.is_primitive():
+            self._need_buffers(2, dtype)
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1], Int(length) * dtype.byte_width(), owner
                 )
             )
         elif dtype.is_string() or dtype.is_binary():
+            self._need_buffers(3, dtype)
             var offsets = Buffer.from_foreign(
                 self.buffers[1],
                 (Int(length) + 1) * size_of[DType.int32](),

@@ -1,4 +1,9 @@
-from std.testing import assert_equal, assert_true, assert_false
+from std.testing import (
+    assert_equal,
+    assert_true,
+    assert_false,
+    assert_raises,
+)
 from std.python import Python, PythonObject
 from std.memory import alloc
 from ..c_data import *
@@ -1201,3 +1206,19 @@ def test_stream_export_import_roundtrip() raises:
     var table = CArrowArrayStream.from_pycapsule(capsule).to_table()
     assert_equal(table.num_rows(), 3)
     assert_equal(table.num_columns(), 1)
+
+
+def test_import_rejects_too_few_buffers() raises:
+    """`to_data` must consult `n_buffers` before indexing them.
+
+    It indexed `buffers[0..2]` by dtype alone, so a producer supplying fewer
+    buffers than the layout implies caused an out-of-bounds read of the buffer
+    pointer array rather than a diagnostic.
+    """
+    var pa = Python.import_module("pyarrow")
+    var arr = c_array_from_pyobj(
+        pa.array(Python.list(1, 2, 3), type=pa.int32())
+    )
+    arr.n_buffers = 1  # a primitive array needs validity + values
+    with assert_raises(contains="buffers"):
+        _ = arr^.to_array(int32)
