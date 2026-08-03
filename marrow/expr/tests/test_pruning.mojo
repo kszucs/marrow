@@ -12,11 +12,11 @@ from ...expr.pruning import PruneStats
 from ...expr.relations import BoxedValue
 from ...expr.values import col, lit
 
-# NOTE: comptime-node pruning is PARKED in the new `marrow.expr.values` (the
-# per-node `prune` overrides were not ported from the old fused algebra; the
-# `Value.prune` default now returns "unknown"). Only the runtime `DynValue`
-# pruning path is exercised here; the fused column-vs-column pruning test and the
-# fused half of the boxed test were removed until comptime pruning is re-ported.
+# Both lanes are covered: the runtime `DynValue` cases first, the fused
+# `marrow.expr.values` cases below. A previous note here claimed fused pruning
+# was "PARKED" and the per-node overrides unported — that was false; they are at
+# `values.mojo` on `NumericColumn`, `NumericLiteral`, `NumericCompare` and
+# `BoolBinary`. Only the *tests* were missing.
 
 
 def _stats(xmin: Int, xmax: Int, ymin: Int, ymax: Int) raises -> PruneStats:
@@ -105,3 +105,53 @@ def test_unknown_stats_keeps() raises:
     var stats = PruneStats(Schema(fields=fields^), mins^, maxs^)
     var pred = col("x") > lit[Int64Type](Int64(100))
     assert_true(pred.prune(stats).maybe_true)
+
+
+# ---------------------------------------------------------------------------
+# Fused lane.
+#
+# The per-node `prune` overrides *are* present in `marrow.expr.values`
+# (`NumericColumn`, `NumericLiteral`, `NumericCompare`, `BoolBinary`), but every
+# case above builds a runtime `DynValue` predicate, so the fused path had no
+# coverage at all. A typo in `NumericCompare.prune`'s comptime switch on
+# `Self.K.name` falls through to `unknown()`, which is *sound* — it just stops
+# pruning silently, so nothing fails.
+# ---------------------------------------------------------------------------
+
+
+def test_fused_gt_literal() raises:
+    var pred = col("x", int64) > lit(100, int64)
+    assert_false(pred.prune(_stats(0, 50, 0, 0)).maybe_true)
+    assert_true(pred.prune(_stats(0, 200, 0, 0)).maybe_true)
+
+
+def test_fused_lt_literal() raises:
+    var pred = col("x", int64) < lit(10, int64)
+    assert_false(pred.prune(_stats(20, 30, 0, 0)).maybe_true)
+    assert_true(pred.prune(_stats(0, 30, 0, 0)).maybe_true)
+
+
+def test_fused_and_prunes_when_either_side_cannot_match() raises:
+    var pred = (col("x", int64) > lit(100, int64)) & (
+        col("y", int64) < lit(10, int64)
+    )
+    # x can never exceed 100 -> the conjunction cannot match
+    assert_false(pred.prune(_stats(0, 50, 0, 5)).maybe_true)
+    # both sides possible -> keep
+    assert_true(pred.prune(_stats(0, 200, 0, 5)).maybe_true)
+
+
+def test_fused_or_keeps_when_either_side_may_match() raises:
+    var pred = (col("x", int64) > lit(100, int64)) | (
+        col("y", int64) < lit(10, int64)
+    )
+    assert_true(pred.prune(_stats(0, 50, 0, 5)).maybe_true)
+    # neither side can match -> prune
+    assert_false(pred.prune(_stats(0, 50, 20, 30)).maybe_true)
+
+
+def test_boxed_fused_predicate_prunes() raises:
+    """The box must delegate `prune` to the fused node, not answer unknown."""
+    var boxed: BoxedValue = col("x", int64) > lit(100, int64)
+    assert_false(boxed.prune(_stats(0, 50, 0, 0)).maybe_true)
+    assert_true(boxed.prune(_stats(0, 200, 0, 0)).maybe_true)
