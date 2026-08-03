@@ -2312,3 +2312,74 @@ def test_sliced_bool_array_write_to() raises:
     var a = _bools([True, False, True, True, False])
     var s = a.slice(1, 3)
     assert_true(String(s) == "BoolArray([False, True, True])")
+
+
+# ---------------------------------------------------------------------------
+# Null count of a slice.
+#
+# `slice()` copied the parent's count verbatim, so a slice reported the wrong
+# number of nulls. That is not only a reporting bug: `PrimitiveBuilder.extend`
+# branches on it and accumulates it, so appending a slice corrupted the
+# builder's own count on the plain CPU path, and `to_data()` carried it across
+# the C ABI where PyArrow trusts it.
+# ---------------------------------------------------------------------------
+
+
+def _nullable_five() raises -> Int64Array:
+    # [10, null, 30, null, 50] — two nulls
+    var b = Int64Builder(capacity=5)
+    b.append(Int64(10))
+    b.append_null()
+    b.append(Int64(30))
+    b.append_null()
+    b.append(Int64(50))
+    return b.finish()
+
+
+def test_slice_reports_its_own_null_count() raises:
+    var full = _nullable_five()
+    assert_equal(full.null_count(), 2)
+    # [30, null, 50] — one null, where the parent has two
+    assert_equal(full.slice(2, 3).null_count(), 1)
+    # [10, null] — one null
+    assert_equal(full.slice(0, 2).null_count(), 1)
+    # [30] — none at all
+    assert_equal(full.slice(2, 1).null_count(), 0)
+
+
+def test_slice_of_null_free_array_has_no_nulls() raises:
+    var full = array([1, 2, 3, 4, 5], int64)
+    assert_equal(full.slice(1, 3).null_count(), 0)
+
+
+def test_slice_null_count_survives_to_data() raises:
+    """`to_data` must resolve the count — it crosses the C ABI."""
+    var s = _nullable_five().slice(2, 3)
+    assert_equal(s.to_data().nulls, 1)
+
+
+def test_extending_a_builder_with_a_slice_keeps_the_count_right() raises:
+    var s = _nullable_five().slice(2, 3)  # [30, null, 50]
+    var b = Int64Builder(capacity=3)
+    b.extend(s)
+    var out = b.finish()
+    assert_equal(len(out), 3)
+    assert_equal(out.null_count(), 1)
+    assert_true(out.is_valid(0))
+    assert_true(not out.is_valid(1))
+    assert_true(out.is_valid(2))
+
+
+def test_equal_slices_compare_equal() raises:
+    var a = _nullable_five().slice(2, 3)
+    var b = _nullable_five().slice(2, 3)
+    assert_true(a == b)
+
+
+def test_slice_of_all_null_array_is_all_null() raises:
+    var b = Int64Builder(capacity=4)
+    for _ in range(4):
+        b.append_null()
+    var full = b.finish()
+    assert_equal(full.null_count(), 4)
+    assert_equal(full.slice(1, 2).null_count(), 2)

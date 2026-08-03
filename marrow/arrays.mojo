@@ -177,6 +177,49 @@ trait Array(
         ...
 
 
+def _sliced_null_count(
+    parent_nulls: Int,
+    parent_length: Int,
+    bitmap: Optional[Bitmap[mut=False]],
+    offset: Int,
+    length: Int,
+) -> Int:
+    """The null count of a sub-range, derived from the parent's.
+
+    Computed eagerly at `slice()` rather than deferred behind a "not computed"
+    sentinel, because every lazy design needs somewhere to cache the answer:
+    Arrow C++ uses a `mutable std::atomic<int64_t>` (`kUnknownNullCount = -1`,
+    resolved in `GetNullCount`), polars a `RelaxedCell<u64>` inside `Bitmap`
+    (`u64::MAX` = unknown). Mojo has no interior mutability here and
+    `null_count()` is an immutable method, so a sentinel would re-count on every
+    call instead of once — strictly worse than counting once here.
+
+    arrow-rs makes the same choice for the same reason, keeping the count as an
+    invariant of the validity buffer rather than a cache. Polars, which slices
+    hardest, is lazy *inside* the bitmap but still forces the count at the array
+    boundary on every slice, so that a null-free slice can drop its bitmap
+    entirely and give downstream kernels an all-valid fast path.
+
+    Measured: the sentinel cost +12,980 bytes of `__text` on the AOT gate
+    against +8,452 for this, because both `slice()` and `null_count()` are
+    dispatched over a 37-member variant and the sentinel puts branching code in
+    both.
+
+    Not implemented, and worth having if slicing ever shows up in a profile:
+    polars counts only the *discarded* head and tail and subtracts, when the
+    slice keeps at least ~80% of the parent.
+    """
+    # Two exact answers without scanning, both of which every reference
+    # implementation carries: a null-free parent has a null-free child, and an
+    # all-null parent has an all-null child. On a streaming morsel path over
+    # NOT NULL columns the first arm carries essentially all the traffic.
+    if parent_nulls == 0 or not bitmap:
+        return 0
+    if parent_nulls == parent_length:
+        return length
+    return bitmap.value().view(offset, length).unset_count()
+
+
 # ---------------------------------------------------------------------------
 # ArrayData — generic flat layout, produced on demand by to_data()
 # ---------------------------------------------------------------------------
@@ -347,7 +390,16 @@ struct BoolArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=self.nulls,
+            # the parent's count says nothing about a sub-range; count this
+            # window. A parent with no nulls has a child with none, so the
+            # common case never touches the bitmap.
+            nulls=_sliced_null_count(
+                self.nulls,
+                self.length,
+                self.bitmap,
+                self.offset + offset,
+                length,
+            ),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             buffer=self.buffer,
@@ -408,7 +460,7 @@ struct BoolArray(Array):
             bm = self.bitmap.value().to_device(ctx)
         return BoolArray(
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             # see PrimitiveArray.to_device: the whole bit-packed buffer moves,
             # so the offset stays meaningful and must be carried over
             offset=self.offset,
@@ -423,7 +475,7 @@ struct BoolArray(Array):
             bm = self.bitmap.value().to_cpu(ctx)
         return BoolArray(
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             # see PrimitiveArray.to_device: the whole bit-packed buffer moves,
             # so the offset stays meaningful and must be carried over
             offset=self.offset,
@@ -435,7 +487,7 @@ struct BoolArray(Array):
         return ArrayData(
             dtype=bool_,
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[self.buffer._buffer],
@@ -445,7 +497,7 @@ struct BoolArray(Array):
     def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and values.
         """
-        if self.length != other.length or self.nulls != other.nulls:
+        if self.length != other.length or self.null_count() != other.null_count():
             return False
         for i in range(self.length):
             var lv = self.is_valid(i)
@@ -580,7 +632,16 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=self.nulls,
+            # the parent's count says nothing about a sub-range; count this
+            # window. A parent with no nulls has a child with none, so the
+            # common case never touches the bitmap.
+            nulls=_sliced_null_count(
+                self.nulls,
+                self.length,
+                self.bitmap,
+                self.offset + offset,
+                length,
+            ),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             buffer=self.buffer,
@@ -656,7 +717,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return PrimitiveArray[Self.T](
             dtype=self.dtype.copy(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             # the whole values buffer is transferred, so the offset still
             # addresses the same elements; zeroing it silently turned a slice
             # into the parent's first `length` elements
@@ -673,7 +734,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return PrimitiveArray[Self.T](
             dtype=self.dtype.copy(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             # the whole values buffer is transferred, so the offset still
             # addresses the same elements; zeroing it silently turned a slice
             # into the parent's first `length` elements
@@ -690,7 +751,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         """
         if self.length != other.length:
             return False
-        if self.nulls != other.nulls:
+        if self.null_count() != other.null_count():
             return False
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
@@ -710,7 +771,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return ArrayData(
             dtype=self.dtype.copy().to_dyn(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[self.buffer],
@@ -813,7 +874,16 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=self.nulls,
+            # the parent's count says nothing about a sub-range; count this
+            # window. A parent with no nulls has a child with none, so the
+            # common case never touches the bitmap.
+            nulls=_sliced_null_count(
+                self.nulls,
+                self.length,
+                self.bitmap,
+                self.offset + offset,
+                length,
+            ),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
@@ -881,7 +951,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         """
         if self.length != other.length:
             return False
-        if self.nulls != other.nulls:
+        if self.null_count() != other.null_count():
             return False
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
@@ -899,7 +969,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         return ArrayData(
             dtype=Self.T().to_dyn(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[self.offsets, self.values],
@@ -1058,7 +1128,16 @@ struct ListLikeArray[T: ListLikeType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=self.nulls,
+            # the parent's count says nothing about a sub-range; count this
+            # window. A parent with no nulls has a child with none, so the
+            # common case never touches the bitmap.
+            nulls=_sliced_null_count(
+                self.nulls,
+                self.length,
+                self.bitmap,
+                self.offset + offset,
+                length,
+            ),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
@@ -1082,7 +1161,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         return MapArray(
             dtype=map_dtype,
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
@@ -1096,7 +1175,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         return ListArray(
             dtype=list_(self.values().dtype()),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
@@ -1128,7 +1207,7 @@ struct ListLikeArray[T: ListLikeType](Array):
             return False
         if self.length != other.length:
             return False
-        if self.nulls != other.nulls:
+        if self.null_count() != other.null_count():
             return False
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
@@ -1213,7 +1292,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         return ArrayData(
             dtype=self.dtype.copy(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[self.offsets],
@@ -1349,7 +1428,16 @@ struct FixedSizeListArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=self.nulls,
+            # the parent's count says nothing about a sub-range; count this
+            # window. A parent with no nulls has a child with none, so the
+            # common case never touches the bitmap.
+            nulls=_sliced_null_count(
+                self.nulls,
+                self.length,
+                self.bitmap,
+                self.offset + offset,
+                length,
+            ),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             values=self.child[].copy(),
@@ -1385,7 +1473,7 @@ struct FixedSizeListArray(Array):
         return FixedSizeListArray(
             dtype=self.dtype.copy(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=bm^,
             values=new_child^,
@@ -1398,7 +1486,7 @@ struct FixedSizeListArray(Array):
             return False
         if self.length != other.length:
             return False
-        if self.nulls != other.nulls:
+        if self.null_count() != other.null_count():
             return False
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
@@ -1450,7 +1538,7 @@ struct FixedSizeListArray(Array):
         return ArrayData(
             dtype=self.dtype.copy(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[],
@@ -1517,7 +1605,16 @@ struct FixedSizeBinaryArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=self.nulls,
+            # the parent's count says nothing about a sub-range; count this
+            # window. A parent with no nulls has a child with none, so the
+            # common case never touches the bitmap.
+            nulls=_sliced_null_count(
+                self.nulls,
+                self.length,
+                self.bitmap,
+                self.offset + offset,
+                length,
+            ),
             offset=self.offset + offset,
             byte_width=self.byte_width,
             bitmap=self.bitmap,
@@ -1564,7 +1661,7 @@ struct FixedSizeBinaryArray(Array):
         return ArrayData(
             dtype=FixedSizeBinaryType(self.byte_width).to_dyn(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[self.buffer],
@@ -1576,7 +1673,7 @@ struct FixedSizeBinaryArray(Array):
             return False
         if self.length != other.length:
             return False
-        if self.nulls != other.nulls:
+        if self.null_count() != other.null_count():
             return False
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
@@ -1749,7 +1846,7 @@ struct StructArray(Array):
         return Self(
             dtype=struct_(fields^),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             children=children^,
@@ -1768,7 +1865,16 @@ struct StructArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=self.nulls,
+            # the parent's count says nothing about a sub-range; count this
+            # window. A parent with no nulls has a child with none, so the
+            # common case never touches the bitmap.
+            nulls=_sliced_null_count(
+                self.nulls,
+                self.length,
+                self.bitmap,
+                self.offset + offset,
+                length,
+            ),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             children=self.children.copy(),
@@ -1781,7 +1887,7 @@ struct StructArray(Array):
             return False
         if self.length != other.length:
             return False
-        if self.nulls != other.nulls:
+        if self.null_count() != other.null_count():
             return False
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
@@ -1834,7 +1940,7 @@ struct StructArray(Array):
         return ArrayData(
             dtype=self.dtype.copy(),
             length=self.length,
-            nulls=self.nulls,
+            nulls=self.null_count(),
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[],

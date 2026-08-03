@@ -670,10 +670,10 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
         """Bulk-append all elements from an existing PrimitiveArray."""
         var n = arr.length
         self.reserve(n)
-        if arr.nulls == 0:
+        if arr.null_count() == 0:
             self._bitmap.set_range(self._length, n, True)
         else:
-            self._null_count += arr.nulls
+            self._null_count += arr.null_count()
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
@@ -799,10 +799,10 @@ struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
         var chunk_bytes = chunk_end - chunk_start
         self.reserve(n)
         self.reserve_bytes(chunk_bytes)
-        if arr.nulls == 0:
+        if arr.null_count() == 0:
             self._bitmap.set_range(self._length, n, True)
         else:
-            self._null_count += arr.nulls
+            self._null_count += arr.null_count()
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
@@ -996,10 +996,10 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
         """Bulk-append all elements from an existing ListLikeArray."""
         var n = arr.length
         self.reserve(n)
-        if arr.nulls == 0:
+        if arr.null_count() == 0:
             self._bitmap.set_range(self._length, n, True)
         else:
-            self._null_count += arr.nulls
+            self._null_count += arr.null_count()
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
@@ -1203,10 +1203,10 @@ struct FixedSizeListBuilder(Builder):
         """Bulk-append all elements from an existing FixedSizeListArray."""
         var n = arr.length
         self.reserve(n)
-        if arr.nulls == 0:
+        if arr.null_count() == 0:
             self._bitmap.set_range(self._length, n, True)
         else:
-            self._null_count += arr.nulls
+            self._null_count += arr.null_count()
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
@@ -1344,10 +1344,10 @@ struct StructBuilder(Builder):
         source's logical offset for both validity and children)."""
         var n = arr.length
         self.reserve(n)
-        if arr.nulls == 0:
+        if arr.null_count() == 0:
             self._bitmap.set_range(self._length, n, True)
         else:
-            self._null_count += arr.nulls
+            self._null_count += arr.null_count()
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
@@ -1631,13 +1631,13 @@ struct FixedSizeBinaryBuilder(Builder):
             self._buffer.unsafe_set[DType.uint8](
                 dst_start + i, b.buffer.unsafe_get[DType.uint8](src_start + i)
             )
-        if b.nulls != 0:
+        if b.null_count() != 0:
             if b.bitmap:
                 var bm = b.bitmap.value()
                 self._bitmap.extend(
                     bm.view(b.offset, b.length), self._length, b.length
                 )
-            self._null_count += b.nulls
+            self._null_count += b.null_count()
         else:
             self._bitmap.set_range(self._length, b.length, True)
         self._length += b.length
@@ -1728,12 +1728,12 @@ struct BoolBuilder(Builder):
     def extend(mut self, b: BoolArray) raises:
         self.reserve(b.length)
         self._buffer.extend(b.values(), self._length, b.length)
-        if b.nulls != 0:
+        if b.null_count() != 0:
             if b.bitmap:
                 self._bitmap.extend(
                     b.validity().value(), self._length, b.length
                 )
-            self._null_count += b.nulls
+            self._null_count += b.null_count()
         else:
             self._bitmap.set_range(self._length, b.length, True)
         self._length += b.length
