@@ -280,3 +280,67 @@ def test_join_plan_is_reusable() raises:
     var r2 = plan.execute()
     assert_equal(r1.num_rows(), 2)
     assert_equal(r2.num_rows(), 2)
+
+
+# ---------------------------------------------------------------------------
+# Streaming probe side.
+#
+# `JoinProcessor` probes once per right-side morsel, and the kernel recomputed
+# which *build* rows had matched from that morsel's pairs alone. Build-side
+# emission (LEFT/FULL's unmatched tail, SEMI's matched set, ANTI's unmatched
+# set) is a property of the whole probe side, so it has to accumulate across
+# morsels — otherwise LEFT/FULL/ANTI over-produce and a build row matching in
+# two morsels is emitted twice by SEMI.
+#
+# `morsel_size` on the in-memory source is the seam that forces >1 morsel.
+# ---------------------------------------------------------------------------
+
+
+def test_left_join_over_multiple_probe_morsels() raises:
+    # left keys 1,2,3 ; right keys 1,3 arriving one per morsel.
+    # LEFT => 1 matched, 3 matched, 2 unmatched = 3 rows, each left key once.
+    var left_batch = _batch([1, 2, 3], [10, 20, 30])
+    var right_batch = _batch([1, 3], [100, 300])
+
+    var left_plan = in_memory_table(left_batch)
+    var right_plan = in_memory_table(right_batch, morsel_size=1)
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
+
+    var result = left_plan.join(
+        right_plan, keys_left, keys_right, how=JOIN_LEFT
+    ).execute()
+    assert_equal(result.num_rows(), 3)
+
+
+def test_anti_join_over_multiple_probe_morsels() raises:
+    # left 1,2,3 ; right 1,3 in two morsels. ANTI => only key 2.
+    var left_batch = _batch([1, 2, 3], [10, 20, 30])
+    var right_batch = _batch([1, 3], [100, 300])
+
+    var left_plan = in_memory_table(left_batch)
+    var right_plan = in_memory_table(right_batch, morsel_size=1)
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
+
+    var result = left_plan.join(
+        right_plan, keys_left, keys_right, how=JOIN_ANTI
+    ).execute()
+    assert_equal(result.num_rows(), 1)
+    assert_equal(Int(result.columns[0].as_int64()[0].value()), 2)
+
+
+def test_semi_join_emits_a_build_row_once_across_morsels() raises:
+    # left key 1 ; right has 1 twice, split across two morsels. SEMI => 1 row.
+    var left_batch = _batch([1], [10])
+    var right_batch = _batch([1, 1], [100, 101])
+
+    var left_plan = in_memory_table(left_batch)
+    var right_plan = in_memory_table(right_batch, morsel_size=1)
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
+
+    var result = left_plan.join(
+        right_plan, keys_left, keys_right, how=JOIN_SEMI
+    ).execute()
+    assert_equal(result.num_rows(), 1)

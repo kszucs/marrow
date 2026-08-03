@@ -31,7 +31,13 @@ from ..kernels.filter import filter
 from ..kernels.sort import sort as sort_by_keys
 from ..kernels.groupby import HashGrouper
 from .aggregates import AggFunc
-from ..kernels.join import HashJoin
+from ..kernels.join import (
+    HashJoin,
+    JOIN_ANTI,
+    JOIN_FULL,
+    JOIN_LEFT,
+    JOIN_SEMI,
+)
 from ..kernels.hashing import rapidhash
 from ..parquet.source import MappedFile
 from ..parquet import (
@@ -871,6 +877,27 @@ struct JoinProcessor(Processor):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
+    @staticmethod
+    def _blocks_on_probe_side(kind: UInt8) -> Bool:
+        """Whether this join kind's output depends on the *whole* probe side.
+
+        LEFT/FULL emit build rows that no probe row matched, SEMI emits the
+        build rows that some probe row matched, and ANTI emits the complement —
+        all three are properties of every probe row taken together, not of one
+        morsel. Probing morsel-by-morsel recomputes them per morsel, so LEFT,
+        FULL and ANTI re-emit their tail once per morsel and SEMI emits a build
+        row once per morsel that matches it.
+
+        RIGHT is not here: its extra rows are unmatched *probe* rows, and each
+        probe row belongs to exactly one morsel, so streaming is correct.
+        """
+        return (
+            kind == JOIN_LEFT
+            or kind == JOIN_FULL
+            or kind == JOIN_SEMI
+            or kind == JOIN_ANTI
+        )
+
     def pull(mut self) raises -> RecordBatch:
         if self._exhausted:
             raise Exhausted()
@@ -879,6 +906,24 @@ struct JoinProcessor(Processor):
             var index = HashJoin[rapidhash]()
             index.build(left_struct, self.left_key_indices)
             self._index = index^
+
+        if JoinProcessor._blocks_on_probe_side(self.join_kind):
+            # One probe over the whole probe side. The streaming alternative
+            # needs the kernel to accumulate build-side matches across probes
+            # and emit the tail on drain; until it does, this is the shape that
+            # is correct.
+            self._exhausted = True
+            var right_all = self.right.collect()
+            var blocked = self._index.value().probe(
+                right_all.to_struct_array(),
+                self.right_key_indices,
+                self.join_kind,
+                self.strictness,
+            )
+            return RecordBatch(
+                schema=self._schema.copy(), columns=blocked.children.copy()
+            )
+
         try:
             var right_morsel = self.right.pull()
             var result = self._index.value().probe(
