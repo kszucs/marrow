@@ -109,14 +109,17 @@ obvious. Read before planning anything.
 
 ## 1. Wave 1 — Correctness
 
-Defects that produce **wrong answers with no error**. None has a test. These
-come first because the M1 gate is "results cross-checked against DuckDB": a
-wrong multi-key sort or an unpruned date predicate corrupts exactly the thing
-the milestone measures.
+Defects that produce **wrong answers with no error**. These come first because
+the M1 gate is "results cross-checked against DuckDB": a wrong multi-key sort or
+an unpruned date predicate corrupts exactly the thing the milestone measures.
 
-**Every item opens with a failing test.** B9, B14 and B15 have been reproduced
-end-to-end; the rest were found by reading code paths and are unverified until
-that test exists.
+**Every item opens with a failing test.** The remaining entries were found by
+reading code paths and are unverified until that test exists — write it and
+watch it fail before touching production code, because at least one of these
+turned out to behave differently from how it read. (B20's missing-column `-1`
+did not silently return the wrong column, as recorded: it tripped a bounds
+assert that killed the whole test binary, which also masked B14 and B15 until
+it was fixed.)
 
 Two root causes account for most of this list, and fixing either collapses a
 group rather than a line:
@@ -139,13 +142,10 @@ group rather than a line:
 | **B9** | **The built wheel is unimportable.** `build.py` force-includes only `marrow/__init__.py` and the `.so`, but `__init__.py:492` does `from . import compute`. Neither `compute.py` nor `parquet.py` is packaged. Confirmed against the checked-in `python/dist/marrow-0.1.0-cp314-*.whl`. | `python/build.py:41-45` | XS |
 
 | **B12** | **`slice()` copies the parent's null count, and it corrupts data — not just reporting.** All eight `slice()` bodies do `nulls=self.nulls` (`arrays.mojo:350, 576, 803, 1048, 1339, 1507, 1758, 1988`). Three consequences: (a) **`PrimitiveBuilder.extend` corrupts fresh arrays on the pure-CPU path** — `builders.mojo:673` branches on `arr.nulls == 0`, `:676` does `self._null_count += arr.nulls`, while `:679` copies the *bits* correctly through `bm.view(arr.offset, n)`; same pattern at `builders.mojo:802, 999, 1206, 1347, 1627`; (b) it **crosses the C ABI** via `to_data()` → `CArrowArray.from_data` (`c_data.mojo:1162`), and PyArrow trusts the exported `null_count`; (c) `PrimitiveArray.__eq__` returns `False` for logically-equal arrays (`arrays.mojo:680`). **Not blocked by the layout freeze** — recomputing the count at slice changes a value, not a field. The spelling is already used in four kernels (`unset_count()`), but note there is **no `BitmapView.unset_count`**, so add that first: today there is no offset-correct spelling to reach for. | as cited | S |
-| **B14** | **The string lane drops validity entirely — verified by execution.** `StringValue.materialize` (`values.mojo:1393-1404`) is the only one of the three family drivers that never calls `self.validity(batch)`; compare `NumericValue.materialize:555` and `BoolValue.materialize:921`. `StringColumn.elementwise` reads through `unsafe_get`, which does not consult the bitmap. A bare `col("s", string)` keeps its nulls (that path returns the column as-is), which is why it hides — but **every string transformation loses them**: `upper`, `lower`, `strip`, `lstrip`, `rstrip`, `reverse`, `capitalize`, `concat`, and all three casts-to-string. Probe: `Upper(col("s", string))` over `["a", null, "c"]` returned **0 nulls**. | `values.mojo:1393-1404`, `:1493-1500` | S |
-| **B15** | **Parse failures silently become zero — verified by execution.** `StringToNum`/`StringToBool` do not override `validity`, so they inherit the all-valid default (`values.mojo:387-394`). Alone, `StringToNum[Int64Type](col("s"))` over `["1","x","3"]` correctly reports 1 null (the `Datum` comes straight from the kernel); `that + lit(1, int64)` reports **0**, because `NumericBinary.validity` (`:705-708`) intersects two `None`s. Shares a root cause with B14: `validity` is an opt-in override on 22 of 33 nodes and nothing distinguishes "no nulls by construction" from "nobody wrote this method". | `values.mojo:1316`, `:1349`, `:387-394` | S |
 | **B16** | **`to_device` silently truncates a sliced array.** `PrimitiveArray.to_device` (`arrays.mojo:644-656`) and `BoolArray.to_device`/`to_cpu` (`:401-426`) upload `self.buffer` whole — `Buffer.to_device` copies `_size` bytes from `_ptr` — then construct the result with `offset=0`, so a sliced array becomes its own first `length` elements. `FixedSizeListArray.to_device` (`:1349`) preserves `offset` and is correct, which shows the convention is not settled inside one file. | as cited | S |
 | **B17** | **IPC drops `offset` in both directions.** `_BatchEncoder.write_array` emits `_FieldNode(length, nulls)` with no offset while copying the whole buffer (`ipc.mojo:1678`); `_BatchDecoder.read_array` hardcodes `offset=0` (`:1941`). `arr.slice(2, 3)` written and read back yields elements 0, 1, 2. `test_ipc.mojo` has no slice test. | as cited | S |
 | **B18** | **C-Data export clobbers the flags it just set.** `CArrowSchema.from_field` (`c_data.mojo:536-538`) assigns `c_schema.flags = NULLABLE or 0` with `=`, not `\|=`, *after* `from_dtype` set `ARROW_FLAG_MAP_KEYS_SORTED` (`:474`) and `ARROW_FLAG_DICT_ORDERED` (`:507`). Since `from_schema` routes every field through `from_field` (`:561`), exporting a `dictionary(ordered=True)` or `map(keys_sorted=True)` column silently loses the flag. Existing round-trip tests call `from_dtype`/`to_dtype` directly and miss it. Related to B7 — same flag, lost on a second path. | as cited | XS |
 | **B19** | **`null_count == -1` is not handled on import.** `c_data.mojo:1059` does `nulls=Int(self.null_count)` unconditionally. The C Data Interface permits `-1` ("not computed") and **PyArrow emits it**; it lands in `ArrayData.nulls` and back out through `null_count()`. Also in the same path: `CArrowArray.to_data` indexes `buffers[0..2]` (`:943-1047`) **without consulting `n_buffers`** (`:891`), so a producer with fewer buffers causes an out-of-bounds read. | as cited | S |
-| **B20** | **Three of the four column leaves are missing the guard the fourth has.** `NumericColumn.materialize` (`values.mojo:616-624`) checks `if i == -1: raise`, with a comment recording the bug — *"`get_field_index` answers -1, which used to index the column list and trip a bounds assert deep in the engine."* `StringColumn` (`:1502`), `TemporalColumn` (`:2223`) and `ListColumn` (`:2334`) still index with the raw result. The regression is live in three of four. | as cited | XS |
 
 **Also small and worth clearing in this wave:**
 
@@ -182,7 +182,6 @@ runs. This wave is cheap and it is what makes every later wave believable.
 
 | ID | Item | Evidence | Size |
 |---|---|---|---|
-| **I1** | **The main test job cannot run.** `test.yml:29` and `:50` invoke `pixi run -e dev test_parallel --no-gpu`; that task was removed in `2aa1954` ("one compilation unit per selection") and `pixi run -e dev test_parallel` exits 127. Both the linux and macos jobs fail at that step, and `release.yml` gates on them. Fix: `test`. Note `test_mojo_asan_parallel` still exists, so the asan job is fine. | `.github/workflows/test.yml:29,50`; `pixi.toml:54-80` | XS |
 | **I2** | **The docs site does not build.** 7 of 10 executed pages raise. Root cause: `81fa29a` moved every compute function to `marrow.compute` and no page was updated, so `ma.add`, `ma.sum`, `ma.filter`, `ma.sort`, `ma.greater`, `ma.cast`, `ma.take`, `ma.sort_indices`, `ma.drop_null` are all gone. Two further breaks: `is_valid(1)` arity (see B10) and `sort(ascending=…)`, which is now `sort(input, sort_keys=(), *, null_placement=…)`. `_freeze` is gitignored so nothing masks it. | `docs.yml`; `guide/compute.qmd` (18 of 20 cells fail) | S |
 | **I3** | **The binary-size gate is not in CI at all** — zero hits for `binary_size` under `.github/`, despite it being the project's central architectural invariant. It is enforced only by hand. Add a job that runs `pixi run binary_size` and fails on a `__text` regression beyond a threshold. | `.github/` | S |
 | **I4** | **Re-baseline the binary-size numbers.** The recorded 7.6× / 7.8× / 12.8× table predates the interpreter deletion; a local sweep gives 2.83× / 3.12× / 3.01×. Using the written numbers as a gate would invent or hide a regression — the exact failure the docs warn about. Also: `BASELINE.md` is referenced three times and **does not exist**. | `benchmarks/binary_size/README.md:110,154` | S |
