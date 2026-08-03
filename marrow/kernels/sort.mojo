@@ -161,6 +161,7 @@ def _comparison_sort_indices[
     var idx_buf: Buffer[mut=True],
     n: Int,
     ascending: Bool,
+    stable: Bool,
 ) raises -> Buffer[]:
     """Sort idx_buf via Mojo stdlib PDQsort.
 
@@ -171,6 +172,13 @@ def _comparison_sort_indices[
     NaN → uint_max via bit-flip, sorts last (ascending) / first (descending).
     Direct float comparison is not used because `NaN < x` is always false in
     IEEE 754, which would corrupt PDQsort's invariants.
+
+    PDQsort is **not** stable, so `stable` breaks ties on the original row index
+    to make the comparator a total order. That costs one extra comparison per
+    equal pair and no extra pass — cheaper than sorting twice, and it is what
+    `SortIndices.multi` depends on: its column-wise LSD passes preserve a
+    less-significant key only if each pass is stable. The radix path below is
+    stable by construction and ignores this flag.
     """
     var values = src.values()
     var v = idx_buf.view[DType.int32](0, n)
@@ -180,19 +188,39 @@ def _comparison_sort_indices[
         for i in range(n):
             idx_list.append(v.unsafe_get(i))
         if ascending:
+            if stable:
 
-            @parameter
-            def cmp_asc(a: Int32, b: Int32) -> Bool:
-                return values.unsafe_get(Int(a)) < values.unsafe_get(Int(b))
+                @parameter
+                def cmp_asc_stable(a: Int32, b: Int32) -> Bool:
+                    var va = values.unsafe_get(Int(a))
+                    var vb = values.unsafe_get(Int(b))
+                    return va < vb or (va == vb and a < b)
 
-            _sort_impl[cmp_asc](idx_list)
+                _sort_impl[cmp_asc_stable](idx_list)
+            else:
+
+                @parameter
+                def cmp_asc(a: Int32, b: Int32) -> Bool:
+                    return values.unsafe_get(Int(a)) < values.unsafe_get(Int(b))
+
+                _sort_impl[cmp_asc](idx_list)
         else:
+            if stable:
 
-            @parameter
-            def cmp_desc(a: Int32, b: Int32) -> Bool:
-                return values.unsafe_get(Int(a)) > values.unsafe_get(Int(b))
+                @parameter
+                def cmp_desc_stable(a: Int32, b: Int32) -> Bool:
+                    var va = values.unsafe_get(Int(a))
+                    var vb = values.unsafe_get(Int(b))
+                    return va > vb or (va == vb and a < b)
 
-            _sort_impl[cmp_desc](idx_list)
+                _sort_impl[cmp_desc_stable](idx_list)
+            else:
+
+                @parameter
+                def cmp_desc(a: Int32, b: Int32) -> Bool:
+                    return values.unsafe_get(Int(a)) > values.unsafe_get(Int(b))
+
+                _sort_impl[cmp_desc](idx_list)
         for i in range(n):
             v.unsafe_set(i, idx_list[i])
     else:
@@ -208,11 +236,20 @@ def _comparison_sort_indices[
                 )
             )
 
-        @parameter
-        def cmp_pair(a: _SortPair, b: _SortPair) -> Bool:
-            return a.key < b.key
+        if stable:
 
-        _sort_impl[cmp_pair](pairs)
+            @parameter
+            def cmp_pair_stable(a: _SortPair, b: _SortPair) -> Bool:
+                return a.key < b.key or (a.key == b.key and a.idx < b.idx)
+
+            _sort_impl[cmp_pair_stable](pairs)
+        else:
+
+            @parameter
+            def cmp_pair(a: _SortPair, b: _SortPair) -> Bool:
+                return a.key < b.key
+
+            _sort_impl[cmp_pair](pairs)
         for i in range(n):
             v.unsafe_set(i, pairs[i].idx)
 
@@ -551,7 +588,7 @@ struct SortIndices(Kernel):
                 null_list.append(Int32(i))
 
         var sorted_valid = SortIndices._sort_valid[T](
-            arr, valid_buf^, n_valid, ascending, ctx
+            arr, valid_buf^, n_valid, ascending, stable, ctx
         )
         return SortIndices._assemble(
             sorted_valid, n_valid, null_list, n, nulls_first
@@ -565,16 +602,21 @@ struct SortIndices(Kernel):
         var valid_buf: Buffer[mut=True],
         n_valid: Int,
         ascending: Bool,
+        stable: Bool,
         ctx: ExecutionContext,
     ) raises -> Buffer[]:
-        """Order the `n_valid` non-null row indices held in `valid_buf`."""
+        """Order the `n_valid` non-null row indices held in `valid_buf`.
+
+        `stable` reaches only the comparison path; the radix path is stable by
+        construction.
+        """
         if n_valid <= 1:
             return valid_buf^.to_immutable()
 
         comptime if size_of[Scalar[T.native]]() <= 8:
             if n_valid < _RADIX_THRESHOLD:
                 return _comparison_sort_indices[T](
-                    arr, valid_buf^, n_valid, ascending
+                    arr, valid_buf^, n_valid, ascending, stable
                 )
             else:
                 return _radix_sort_indices[T](
@@ -585,7 +627,7 @@ struct SortIndices(Kernel):
             # comparison path — which compares the native values directly — is
             # the only correct one.
             return _comparison_sort_indices[T](
-                arr, valid_buf^, n_valid, ascending
+                arr, valid_buf^, n_valid, ascending, stable
             )
 
     @staticmethod

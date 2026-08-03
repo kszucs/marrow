@@ -53,7 +53,7 @@ from ...dtypes import (
     Field,
 )
 from ...tabular import record_batch
-from ...kernels.sort import sort_indices, sort
+from ...kernels.sort import sort_indices, sort, SortIndices
 from ...kernels.filter import take as _take
 from ...kernels.execution import ExecutionContext
 from std.utils.numerics import nan, inf, neg_inf
@@ -1051,3 +1051,70 @@ def test_sort_struct_timestamp_key() raises:
     ref vals = result.field(1).as_int32()
     assert_equal(vals[0].value(), 1)
     assert_equal(vals[2].value(), 3)
+
+
+# ---------------------------------------------------------------------------
+# Stability above the stdlib's insertion-sort cutoff.
+#
+# `SortIndices.apply[T: PrimitiveType]` accepted a `stable` flag and never
+# forwarded it, so any primitive column with fewer than `_RADIX_THRESHOLD`
+# (32,768) valid rows was ordered by an unstable PDQsort. Small inputs hid it:
+# the stdlib insertion-sorts below its own cutoff, which happens to be stable.
+#
+# `SortIndices.multi` is column-oriented LSD and passes `stable=True` on every
+# pass — its correctness argument *is* stability — so this surfaced as
+# multi-key sorts silently returning the wrong order.
+# ---------------------------------------------------------------------------
+
+comptime _N_ABOVE_CUTOFF = 1000
+
+
+def test_sort_indices_stable_int32_above_insertion_cutoff() raises:
+    # 1000 rows over 4 distinct keys: every key has a 250-row tie group, and
+    # within each group the original row order must be preserved.
+    var b = Int32Builder(capacity=_N_ABOVE_CUTOFF)
+    for i in range(_N_ABOVE_CUTOFF):
+        b.append(Scalar[int32.native](i % 4))
+    var a: DynArray = b.finish().to_dyn()
+
+    var idx = sort_indices(a, stable=True)
+    var prev_key = -1
+    var prev_row = -1
+    for p in range(_N_ABOVE_CUTOFF):
+        var row = _idx(idx, p)
+        var key = row % 4
+        if key == prev_key:
+            assert_true(
+                row > prev_row,
+                String("tie group reordered at position ", p),
+            )
+        prev_key = key
+        prev_row = row
+
+
+def test_sort_multi_key_ties_preserve_secondary_order() raises:
+    # k = i % 4 (four large tie groups), v = i. Sorting by k then v must yield
+    # ascending v inside each k. Column-wise LSD gets this only if each pass is
+    # stable.
+    var k = List[Int]()
+    var v = List[Int]()
+    for i in range(_N_ABOVE_CUTOFF):
+        k.append(i % 4)
+        v.append(i)
+    var sa = _make_struct(k, v)
+
+    var idx = SortIndices.multi(sa, [0, 1], [True, True])
+    var prev_k = -1
+    var prev_v = -1
+    for p in range(_N_ABOVE_CUTOFF):
+        var row = _idx(idx, p)
+        var kk = row % 4
+        var vv = row
+        if kk == prev_k:
+            assert_true(
+                vv > prev_v, String("secondary key out of order at ", p)
+            )
+        else:
+            assert_true(kk > prev_k, String("primary key out of order at ", p))
+        prev_k = kk
+        prev_v = vv

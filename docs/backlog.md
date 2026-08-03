@@ -131,7 +131,6 @@ group rather than a line:
 
 | ID | Defect | Evidence | Size |
 |---|---|---|---|
-| **B1** | **Multi-key sort can return a wrong order.** `SortIndices.apply[T: PrimitiveType]` accepts `stable` and never forwards it — `_sort_valid` has no such parameter, so below `_RADIX_THRESHOLD = 32_768` the unstable stdlib PDQsort runs. `SortIndices.multi` is a column-oriented LSD sort that passes `stable=True` and *depends* on that stability ("every pass is stable, so a less-significant key's order is preserved"). Ties in a more-significant key therefore scramble. Decimal128/256 take the comparison path at any size. Existing tests use N=5, inside the stdlib insertion-sort cutoff, and pass by accident. | `sort.mojo:529`, `:553`, `:561`, `:188`, `:499-513`, `:575` | S |
 | **B2** | **Compressed IPC decodes to garbage, silently.** `_read_record_batch_meta` reads FlatBuffer slots 0/1/2 only; `RecordBatch.compression` is slot 3 and is never inspected, so LZ4_FRAME/ZSTD bodies are read as raw buffers. Minimum fix: detect and raise. Full fix: implement both codecs (they are already `dlopen`ed for Parquet). | `ipc.mojo:1354-1384`, writer `:709-723` | S to raise, M to implement |
 | **B3** | **Delta dictionary batches truncate instead of append.** `isDelta` (DictionaryBatch slot 2) is never read and dictionaries are unconditionally overwritten. | `ipc.mojo:1269-1276`, `:2191`, `:2263` | S |
 | **B4** | **BIT_PACKED Parquet levels are mis-decoded.** `definition_level_encoding` / `repetition_level_encoding` are parsed then never consulted — `_data_page_v1` applies `Rle.decode` unconditionally. | `format.mojo:575-578` vs `reader.mojo:244-270` | S |
@@ -557,8 +556,10 @@ replaces.
   equal-range bookkeeping anywhere. *Why it stands:* one stable pass per key
   yields the same order without tracking ranges, and it reuses `Take` and the
   single-column sorters unchanged. *Its one cost is real*: the composition
-  depends on every pass being stable, which is exactly what **B1** shows is
-  currently broken, and it re-gathers each key column per pass (**FU-6**).
+  depends on every pass being stable — the `stable` flag was accepted and never
+  forwarded, so this silently returned wrong orders until B1 was fixed by making
+  the comparison path's comparator break ties on the original row index. It also
+  re-gathers each key column per pass (**FU-6**).
 - **8-bit radix passes / 256-bucket histograms were replaced by 11-bit passes /
   2048 buckets** (`_BITS_PER_PASS` `sort.mojo:76`; `bucket_count`, `:252`).
   *Why:* 6 passes instead of 8 for 64-bit keys with a histogram that still fits
