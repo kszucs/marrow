@@ -8,9 +8,15 @@ Covers the four value families and the `BoxedValue` erasure box:
   * BoxedValue — erases a fused node OR a runtime `DynValue` behind `execute()`
 """
 
-from std.testing import assert_true, assert_equal
+from std.testing import assert_true, assert_equal, assert_raises
 
-from ...builders import array, ListBuilder, Int64Builder, PrimitiveBuilder
+from ...builders import (
+    array,
+    ListBuilder,
+    Int64Builder,
+    PrimitiveBuilder,
+    StringBuilder,
+)
 from ...dtypes import (
     int64,
     int32,
@@ -998,3 +1004,67 @@ def test_date_trunc_fluent() raises:
     )
     # truncating to the hour zeroes minutes/seconds
     assert_true(into_array(h, 2) == array([0, 0], int32).to_dyn())
+
+
+# ---------------------------------------------------------------------------
+# Validity through the string lane, and missing-column diagnostics.
+#
+# `StringValue.materialize` is the only one of the three family drivers that
+# never consults `validity`, so every string *transformation* dropped nulls
+# while a bare column kept them (which is what hid it). And only
+# `NumericColumn` guarded the -1 that `get_field_index` answers for a missing
+# name; the other three leaves indexed with it, and a negative List index
+# wraps, so a typo silently read a different column.
+# ---------------------------------------------------------------------------
+
+
+def _str_batch_with_null() raises -> RecordBatch:
+    var b = StringBuilder()
+    b.append("a")
+    b.append_null()
+    b.append("c")
+    return record_batch([b.finish().to_dyn()], names=["s"])
+
+
+def test_string_map_preserves_nulls() raises:
+    # upper(["a", null, "c"]) keeps the null — the map applies to values only.
+    var cv = (Upper(col("s", string))).execute(_str_batch_with_null())
+    var got = into_array(cv, 3)
+    assert_equal(got.null_count(), 1)
+    assert_true(got.is_null(1))
+    assert_true(got.is_valid(0) and got.is_valid(2))
+
+
+def test_string_concat_preserves_nulls() raises:
+    # a null operand poisons the concatenation, as it does in the kernel.
+    var cv = (Concat(col("s", string), lit("!"))).execute(_str_batch_with_null())
+    var got = into_array(cv, 3)
+    assert_equal(got.null_count(), 1)
+    assert_true(got.is_null(1))
+
+
+def test_string_parse_failure_survives_a_fused_parent() raises:
+    # to_int(["1","x","3"]) is null at "x"; adding 1 must not resurrect it as 0.
+    var b = record_batch([array(["1", "x", "3"]).copy()], names=["s"])
+    var e = StringToNum[Int64Type](col("s", string)) + lit(1, int64)
+    var got = into_array(e.execute(b), 3)
+    assert_equal(got.null_count(), 1)
+    assert_true(got.is_null(1))
+
+
+def test_string_column_missing_name_raises() raises:
+    # `get_field_index` answers -1; without a guard that indexes the column list
+    # with -1 and trips a bounds assert, which aborts the whole runner rather
+    # than reporting a missing column. Only `NumericColumn` guarded it.
+    with assert_raises(contains="nope"):
+        _ = (col("nope", string)).execute(_str_batch2())
+
+
+def test_temporal_column_missing_name_raises() raises:
+    with assert_raises(contains="nope"):
+        _ = (col("nope", timestamp(second))).execute(_ts_batch())
+
+
+def test_list_column_missing_name_raises() raises:
+    with assert_raises(contains="nope"):
+        _ = (ListColumn[ListType]("nope")).execute(_list_batch())

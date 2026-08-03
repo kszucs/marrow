@@ -614,14 +614,12 @@ struct NumericColumn[T: NumericType](NumericValue):
         )
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # a leaf column returns as-is (keeps validity; the fused loop drops nulls)
-        var i = batch.schema.get_field_index(self._name)
-        if i == -1:
-            # `get_field_index` answers -1, which used to index the column list
-            # and trip a bounds assert deep in the engine. The interpreter
-            # raised here by name; so does the leaf that replaced it.
-            raise Error("column '", self._name, "' not found")
-        return batch.columns[i].copy()
+        # a leaf column returns as-is (keeps validity; the fused loop drops
+        # nulls). `RecordBatch.column(name)` owns the missing-name diagnostic —
+        # `get_field_index` answers -1, and indexing the column list with that
+        # trips a bounds assert that aborts the runner instead of reporting the
+        # name. Every column leaf goes through it for that reason.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
@@ -1334,6 +1332,29 @@ struct StringToNum[To: NumericType, A: StringValue](Breaker, NumericValue):
             StringToNumKernel.apply[StringType, Self.To, False](s).to_dyn()
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # A parse failure is a null the *input* does not have ("x" -> null), so
+        # validity comes from the parsed column, not from `a`. Inheriting the
+        # all-valid default made `to_int(s) + 1` yield 0 where it should be null.
+        #
+        # This re-runs the parse: `validity` has no access to the `Context` the
+        # stage result already sits in. That is the protocol defect
+        # `docs/design-expression-evaluation.md` removes by carrying validity in
+        # the node's state; correctness first, and the extra pass goes away with
+        # it.
+        var s = (
+            into_array(self.a.execute(batch), batch.num_rows())
+            .as_string()
+            .copy()
+        )
+        return (
+            StringToNumKernel.apply[StringType, Self.To, False](s)
+            .to_data()
+            .owned_validity()
+        )
+
     @always_inline
     def vectorwise[
         W: Int
@@ -1397,10 +1418,20 @@ trait StringValue(Value):
             return StringScalar(self.elementwise(batch, ctx, slot, 0)).to_dyn()
         else:
             var n = batch.num_rows()
+            # Validity is threaded here for the same reason the numeric and bool
+            # drivers thread it: `elementwise` reads values through `unsafe_get`,
+            # which does not consult the bitmap, so without this every string
+            # *transformation* returned an all-valid column. A bare column keeps
+            # its nulls (that path returns the column as-is), which is what hid
+            # this.
+            var v = self.validity(batch)
             var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
             for i in range(n):
                 var slot = 0
-                builder.append(self.elementwise(batch, ctx, slot, i))
+                if v and not v.value().test(i):
+                    builder.append_null()
+                else:
+                    builder.append(self.elementwise(batch, ctx, slot, i))
             return builder.finish().to_dyn()
 
     # --- fluent surface: maps, predicates, length, concat -------------------
@@ -1500,7 +1531,9 @@ struct StringColumn[T: StringLikeType](StringValue):
         )
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+        # `RecordBatch.column(name)` owns the missing-name diagnostic — see
+        # `NumericColumn.materialize`.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
@@ -1553,6 +1586,12 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
             self.r.elementwise(batch, ctx, slot, idx),
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # a null operand poisons the row, as it does in `ConcatKernel`
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
         self.r.prepare(batch, ctx)
@@ -1577,6 +1616,12 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     ) -> String:
         var s = self.a.elementwise(batch, ctx, slot, idx)
         return Self.K.transform(StringSlice(s))
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # a map transforms values, never validity — `upper(null)` is null
+        return self.a.validity(batch)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
@@ -2221,7 +2266,9 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
         self._name = name^
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+        # `RecordBatch.column(name)` owns the missing-name diagnostic — see
+        # `NumericColumn.materialize`.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
@@ -2332,7 +2379,9 @@ struct ListColumn[T: ListLikeType](ListValue):
         self._name = name^
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+        # `RecordBatch.column(name)` owns the missing-name diagnostic — see
+        # `NumericColumn.materialize`.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
