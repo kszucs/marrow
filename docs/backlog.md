@@ -130,8 +130,8 @@ group rather than a line:
 - **`nulls` is a cached count with a second owner** (B12). `null_count()`
   returns the stored field; the bitmap is the truth. They diverge at `slice()`.
 - **`offset` has two conventions** — views index logically from zero, owning
-  `Buffer`/`Bitmap` do not — and array code mixes them (B16, B17; B11/B13 were
-  this shape and are fixed).
+  `Buffer`/`Bitmap` do not — and array code mixes them (B16 remains; B11, B13
+  and B17 were this shape and are fixed).
 
 | ID | Defect | Evidence | Size |
 |---|---|---|---|
@@ -144,7 +144,6 @@ group rather than a line:
 
 | **B12** | **`slice()` copies the parent's null count, and it corrupts data — not just reporting.** All eight `slice()` bodies do `nulls=self.nulls` (`arrays.mojo:350, 576, 803, 1048, 1339, 1507, 1758, 1988`). Three consequences: (a) **`PrimitiveBuilder.extend` corrupts fresh arrays on the pure-CPU path** — `builders.mojo:673` branches on `arr.nulls == 0`, `:676` does `self._null_count += arr.nulls`, while `:679` copies the *bits* correctly through `bm.view(arr.offset, n)`; same pattern at `builders.mojo:802, 999, 1206, 1347, 1627`; (b) it **crosses the C ABI** via `to_data()` → `CArrowArray.from_data` (`c_data.mojo:1162`), and PyArrow trusts the exported `null_count`; (c) `PrimitiveArray.__eq__` returns `False` for logically-equal arrays (`arrays.mojo:680`). **Not blocked by the layout freeze** — recomputing the count at slice changes a value, not a field. The spelling is already used in four kernels (`unset_count()`), but note there is **no `BitmapView.unset_count`**, so add that first: today there is no offset-correct spelling to reach for. | as cited | S |
 | **B16** | **`to_device` silently truncates a sliced array.** `PrimitiveArray.to_device` (`arrays.mojo:644-656`) and `BoolArray.to_device`/`to_cpu` (`:401-426`) upload `self.buffer` whole — `Buffer.to_device` copies `_size` bytes from `_ptr` — then construct the result with `offset=0`, so a sliced array becomes its own first `length` elements. `FixedSizeListArray.to_device` (`:1349`) preserves `offset` and is correct, which shows the convention is not settled inside one file. | as cited | S |
-| **B17** | **IPC drops `offset` in both directions.** `_BatchEncoder.write_array` emits `_FieldNode(length, nulls)` with no offset while copying the whole buffer (`ipc.mojo:1678`); `_BatchDecoder.read_array` hardcodes `offset=0` (`:1941`). `arr.slice(2, 3)` written and read back yields elements 0, 1, 2. `test_ipc.mojo` has no slice test. | as cited | S |
 | **B19** | **`null_count == -1` is not handled on import.** `c_data.mojo:1059` does `nulls=Int(self.null_count)` unconditionally. The C Data Interface permits `-1` ("not computed") and **PyArrow emits it**; it lands in `ArrayData.nulls` and back out through `null_count()`. Also in the same path: `CArrowArray.to_data` indexes `buffers[0..2]` (`:943-1047`) **without consulting `n_buffers`** (`:891`), so a producer with fewer buffers causes an out-of-bounds read. | as cited | S |
 
 **Also small and worth clearing in this wave:**

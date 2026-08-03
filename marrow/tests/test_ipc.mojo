@@ -28,7 +28,7 @@ from ..builders import (
     StructBuilder,
 )
 from ..schema import Schema
-from ..tabular import RecordBatch
+from ..tabular import RecordBatch, record_batch
 from ..ipc import (
     read_ipc_file,
     read_ipc_stream,
@@ -718,3 +718,46 @@ def test_marrow_reads_pyarrow_dictionary() raises:
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 4)
     assert_true(batches[0].schema.fields[0].dtype.is_dictionary())
+
+
+# ---------------------------------------------------------------------------
+# Sliced columns.
+#
+# Arrow IPC bodies are written dense from index 0 — there is no offset field on
+# the wire. The encoder wrote the *whole* value buffer while declaring the
+# slice's length, and the decoder hardcodes `offset=0`, so a sliced column came
+# back as the array's first `length` elements instead of its own.
+# ---------------------------------------------------------------------------
+
+
+def test_file_roundtrip_sliced_column() raises:
+    var full = array([10, 20, 30, 40, 50], int64)
+    var batch = record_batch([full.slice(2, 3)], names=["a"])
+    var got = _roundtrip_file(batch^)
+    assert_equal(got.num_rows(), 3)
+    assert_true(got.columns[0] == array([30, 40, 50], int64).to_dyn())
+
+
+def test_file_roundtrip_sliced_column_with_nulls() raises:
+    var b = Int64Builder(capacity=5)
+    b.append(Int64(10))
+    b.append_null()
+    b.append(Int64(30))
+    b.append_null()
+    b.append(Int64(50))
+    var full: DynArray = b.finish().to_dyn()
+    var batch = record_batch([full.slice(1, 3)], names=["a"])
+    var got = _roundtrip_file(batch^)
+    assert_equal(got.num_rows(), 3)
+    assert_equal(got.columns[0].null_count(), 2)
+    assert_true(got.columns[0].is_null(0))
+    assert_true(got.columns[0].is_valid(1))
+    assert_true(got.columns[0].is_null(2))
+
+
+def test_file_roundtrip_sliced_string_column() raises:
+    var full = array(["a", "b", "c", "d"])
+    var batch = record_batch([full.slice(1, 2)], names=["s"])
+    var got = _roundtrip_file(batch^)
+    assert_equal(got.num_rows(), 2)
+    assert_true(got.columns[0] == array(["b", "c"]).to_dyn())

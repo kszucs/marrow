@@ -23,10 +23,12 @@ list, fixed_size_list, struct, dictionary.
 from std.math import ceildiv
 from std.pathlib import Path
 
-from .arrays import DynArray, ArrayData, DictionaryArray, NullArray
+from .arrays import DynArray, ArrayData, DictionaryArray, NullArray, Int32Array
 from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
+from .builders import Int32Builder
+from .kernels.filter import take as _take
 from .utils import LittleEndian
 from . import dtypes as dt
 
@@ -1669,6 +1671,25 @@ struct _BatchEncoder(Movable):
         self.nodes = List[_FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
 
+    @staticmethod
+    def dense(arr: DynArray) raises -> ArrayData:
+        """Rebase a sliced array to offset 0.
+
+        Arrow IPC bodies are written dense from index 0 — there is no offset
+        field on the wire. The encoder writes whole value buffers under the
+        slice's declared length and the decoder hardcodes `offset=0`, so a
+        sliced column would round-trip as the parent's *first* `length`
+        elements. Gathering `0..n` produces a dense copy for every layout,
+        nested children included, and is paid only when `offset != 0`.
+        """
+        var data = arr.to_data()
+        if data.offset == 0:
+            return data^
+        var idx = Int32Builder(capacity=len(arr))
+        for i in range(len(arr)):
+            idx.append(Int32(i))
+        return _take(arr, idx.finish()).to_data()
+
     def write_array(mut self, root: ArrayData) raises:
         var stack = List[ArrayData]()
         stack.append(root.copy())
@@ -1744,7 +1765,7 @@ struct _BatchEncoder(Movable):
 
     def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
         for col in batch.columns:
-            self.write_array(col.to_data())
+            self.write_array(_BatchEncoder.dense(col))
         var buf_meta = List[_BodyBuffer]()
         var body = List[UInt8]()
         self._build_body(buf_meta, body)
@@ -1766,7 +1787,7 @@ struct _BatchEncoder(Movable):
     ) raises -> _EncodedBatch:
         """Encode a dictionary values array as a DictionaryBatch IPC message."""
         var benc = _BatchEncoder()
-        benc.write_array(values.to_data())
+        benc.write_array(_BatchEncoder.dense(values))
         var buf_meta = List[_BodyBuffer]()
         var body = List[UInt8]()
         benc._build_body(buf_meta, body)
