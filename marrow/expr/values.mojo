@@ -1,5 +1,5 @@
 """Expression execution — staged, strategy-pluggable fusion (see
-`docs/lane-shape-window-design.md`).
+`docs/architecture.md`).
 
 Model
 -----

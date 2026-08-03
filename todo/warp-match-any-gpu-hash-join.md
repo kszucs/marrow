@@ -62,8 +62,7 @@ Not "add match_any to hashtable.mojo" — it's:
 1. Decide whether a GPU hash-join/group-by path is worth building at all
    for marrow's workloads before anything else. This is a much bigger
    design question than the language-feature note it started as — probably
-   deserves its own design doc (matching `docs/joins-design.md` /
-   `docs/groupby-design.md`) rather than a todo item, if the answer is yes.
+   deserves its own design doc rather than a todo item, if the answer is yes.
 2. If yes: prototype a minimal GPU probe kernel (even a toy one, independent
    of `SwissHashTable`) using `warp.match_any()` for intra-warp key dedup,
    and benchmark it against the existing CPU `SwissHashTable::probe_hashes`

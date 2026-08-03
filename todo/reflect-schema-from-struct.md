@@ -113,14 +113,13 @@ def from_struct[T: AnyType]() -> Schema:
 - A clear answer, even if "no," on whether nested structs and `Optional`
   fields are in scope for a first version.
 - If the spike works: a short design note (in `docs/`, matching the
-  existing `*-design.md` convention) before writing the real
-  implementation — this is exactly the kind of API-shape decision that
-  benefits from the same treatment as `groupby-design.md` /
-  `joins-design.md`.
+  existing design-doc convention) before writing the real implementation —
+  this is exactly the kind of API-shape decision that benefits from being
+  designed in the open first.
 
 ## Downstream
 
-This is the reflection foundation for `docs/aot-relations-design.md` — the
+This is the reflection foundation for `docs/late-binding.md` — the
 fully-monomorphized `Project[*Es]`/`Filter[Pred]` layer needs `field_at[i].T`
 (confirmed usable in generic type position) to type each column and
 `schema_of[T: Table]()` to produce leaf/output schemas. Worth building first

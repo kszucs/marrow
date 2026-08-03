@@ -218,7 +218,8 @@ def test_hash_dispatch_struct() raises:
 # hash_ — temporal, large_string, decimal, dictionary
 #
 # These dtypes used to fall off the end of the dispatch ladder and raise, which
-# broke `GROUP BY` on any temporal key (docs/code-quality-review.md D5).
+# broke `GROUP BY` on any temporal key. Fixed by dispatching on the widest
+# family the typed leaf accepts; see CLAUDE.md, "Dispatch on the widest family".
 # ---------------------------------------------------------------------------
 
 

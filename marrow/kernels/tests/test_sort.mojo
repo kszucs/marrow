@@ -950,7 +950,8 @@ def test_sort_indices_parallel_context() raises:
 # Temporal / large_string / decimal / dictionary
 #
 # These dtypes used to fall off the end of the dispatch ladder and raise, which
-# broke `ORDER BY` on any timestamp column (docs/code-quality-review.md D5).
+# broke `ORDER BY` on any timestamp column. Fixed by dispatching on the widest
+# family the typed leaf accepts; see CLAUDE.md, "Dispatch on the widest family".
 # The permutation is asserted directly — `_assert_sorted` only knows the
 # numeric/bool/string dtypes.
 # ---------------------------------------------------------------------------

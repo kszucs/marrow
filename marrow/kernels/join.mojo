@@ -102,8 +102,10 @@ expected payoff for the next round of optimization:
    Currently serial.  Doesn't affect INNER-join benchmarks but needed
    for full parallelism on outer-join workloads.
 
-See ``docs/joins-design.md`` for the high-level architecture and the
-``Phase 1b`` performance table.
+See ``docs/architecture.md`` for the layering this sits in, and
+``docs/backlog.md`` §8 for the designs this replaced — the original spec's
+``JoinHashTable`` with an intrusive ``_chain_next`` list was superseded by
+``SwissHashTable`` plus a CSR ``_offsets``/``_rows`` index.
 """
 
 

@@ -692,6 +692,58 @@ mostly bite generic trait hierarchies such as `marrow.expr.values`.
   known. This blocked the promote-at-construction design recorded in
   `docs/backlog.md`.
 
+### Reflection, packs, and comptime aliases
+
+Each confirmed by triggering the actual compiler error on the pinned toolchain.
+
+- **A reflected field type is opaque inside the generic function that reflects
+  it.** `reflect[T].field_at[i].T` reads as a type and works even when `T` is a
+  generic parameter, but a bare `FieldT()` call inside a `comptime for` over it
+  fails to resolve — during generic-mode checking the compiler sees only an
+  opaque type with no visible constructor. Route construction through a
+  *separately-instantiated* generic bound on the trait, so the zero-arg
+  constructor arrives via the trait witness: `def _construct_default[D:
+  Defaultable & DataType]() -> D: return D()` (`marrow/schema.mojo:12`). That
+  helper is what makes `Schema.from_struct[T]()` work.
+- **This is why `Table[T]` is deferred.** The `t.a` sugar needs a parametric
+  `comptime _dtype[name] = reflect[T].field[name].T`, which hits the same limit
+  (`marrow/expr/values.mojo:2416-2421`). `col("a", int64)` is the working API.
+- **The constraint solver refuses to evaluate a non-builtin function inside a
+  `where` clause.** `reflect[T].field_index[name]()` folds to a builtin KGEN
+  attribute and *can* be proven during overload selection; a recursive `def` over
+  a variadic pack cannot. This rules out pack-based schema surfaces that dispatch
+  numeric-versus-string columns. Returning a `comptime`-branched type from a
+  helper is likewise rejected ("dynamic type values not permitted yet").
+- **A `VariadicPack` captured by one function's `*args` cannot be forwarded to a
+  different function's variadic parameter** — `"assigning 1 operand to an
+  unresolvable variadic pack argument"`. `Tuple(a, b, c)` from fresh args is
+  fine; from an already-captured pack it is not. `Tuple`/`Variant`/`UnsafeUnion`
+  sidestep this by owning their pack storage with raw `__mlir_op` calls, which
+  this project restricts to `buffers.mojo`, `views.mojo` and `c_data.mojo`.
+  **Every "build a heterogeneous collection from variadic args and hand it to
+  another type" API here will hit this** — take the pre-built collection instead.
+- **A `comptime name: T` trait requirement does not resolve reliably when read as
+  `E.name` from a function generic over `E: SomeTrait`**, though `Self.name`
+  inside the concrete type's own method works. Expose the constant through a
+  method. Narrower than it sounds: `Self.K.name` on a *kernel parameter* does
+  resolve (`NumericCompare.prune`, `values.mojo:965`, branches on it at
+  elaboration). The failure is reading a trait-declared alias off an
+  externally-bound generic parameter.
+- **`comptime` is a reserved keyword and cannot be a module name** —
+  `import marrow.expr.comptime` fails to parse.
+- **A binding-compiler crash was once observed on mutually-recursive nested-type
+  static methods on a reflected kernel struct.** The construct was never pinned
+  down. The design avoids it by keeping recursive and nested ops *out* of kernel
+  structs — struct equality is a recursive `AND` over child comparisons and
+  belongs at the composition layer reusing `EqKernel.dispatch` for leaves, which
+  is what `equal_any` (`kernels/numeric.mojo`) is. Treat that as a layering rule
+  first and a crash workaround second.
+- There is **no runtime `__getattr__`** on ordinary structs. The compile-time
+  hook `__getattr_param__[name: StaticString]()` exists and its return type may
+  depend on the name, but a handle type is required (a real field shadows it — it
+  fires only for *missing* attributes) and `var` is mandatory on field
+  declarations.
+
 ## Releasing
 
 Marrow is published to prefix.dev as a conda package. A push of a `v*` tag fires

@@ -10,7 +10,7 @@
 > and since deleted — so **the reproduction command in "Benchmark Results"
 > cannot be run**, and the code sketches (`FilterExpr`, `GtExpr`, `Add`,
 > `Column`, `execute(expr, n)`) name types the tree no longer has. The current
-> node vocabulary is in `docs/lane-shape-window-design.md`.
+> node vocabulary is in `docs/architecture.md`.
 >
 > **The binary-size figures are superseded.** The 52 KB / 1.1 MB pair and the
 > **21×** ratio in "Binary Size: AOT vs. Full Engine" predate every later change
