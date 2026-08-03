@@ -241,6 +241,11 @@ def _release_exported_schema(
         ptr[].name.free()
     if Int(ptr[].metadata) != 0:
         ptr[].metadata.free()
+    # `from_dtype` heap-allocates the dictionary value schema for a dictionary
+    # dtype; freeing everything else but not this leaked one struct shell per
+    # exported dictionary field.
+    if Int(ptr[].dictionary) != 0:
+        ptr[].dictionary.free()
     ptr[].mark_released()
 
 
@@ -858,6 +863,10 @@ def _release_exported_array(
         ptr[].children.free()
     if Int(ptr[].buffers) != 0:
         ptr[].buffers.free()
+    # Same as the schema side: `from_data` heap-allocates the dictionary
+    # values array shell for a dictionary column.
+    if Int(ptr[].dictionary) != 0:
+        ptr[].dictionary.free()
     var data_ptr = ptr[].private_data.bitcast[ArrayData]()
     data_ptr.unsafe_deinit_pointee()
     data_ptr.free()
@@ -1442,7 +1451,7 @@ def _release_stream_capsule(capsule: PyObjectPtr) abi("C"):
 
 
 @fieldwise_init
-struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
+struct CArrowArrayStream(Movable):
     """Arrow C Stream Interface struct (ArrowArrayStream).
 
     Provides a streaming interface to exchange sequences of record batches.
@@ -1506,16 +1515,32 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         var src = cpy.PyCapsule_GetPointer(
             capsule._obj_ptr, "arrow_array_stream"
         ).bitcast[CArrowArrayStream]()
-        var stream = src[].copy()
+        # Take the struct out by field: the producer's copy is marked released
+        # immediately after, so exactly one owner remains.
+        var stream = CArrowArrayStream(
+            get_schema=src[].get_schema,
+            get_next=src[].get_next,
+            get_last_error=src[].get_last_error,
+            release=src[].release,
+            private_data=src[].private_data,
+        )
         src[].mark_released()
-        return stream
+        return stream^
 
-    def to_pycapsule(self) raises -> PythonObject:
-        """Wrap this stream in a Python "arrow_array_stream" PyCapsule."""
+    def to_pycapsule(deinit self) raises -> PythonObject:
+        """Wrap this stream in a Python "arrow_array_stream" PyCapsule.
+
+        Consumes the stream. It used to take `self` by borrow and copy the
+        struct onto the heap without marking the original released, so calling
+        this twice — or this and `to_table` — handed the same
+        `_StreamPrivateData` to two owners and double-freed it. `deinit self`
+        makes that a compile error, matching `CArrowSchema.to_pycapsule` and
+        `CArrowArray.to_pycapsule`.
+        """
         var py = Python()
         ref cpy = py.cpython()
         var ptr = alloc[CArrowArrayStream](1)
-        ptr.unsafe_write(self)
+        ptr.unsafe_write(self^)
         return PythonObject(
             from_owned=cpy.PyCapsule_New(
                 ptr.bitcast[NoneType](),
@@ -1524,13 +1549,14 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
             )
         )
 
-    def to_table(self) raises -> Table:
+    def to_table(deinit self) raises -> Table:
         """Consume the stream and build a Table.
 
         Calls get_schema once, then iterates get_next until end-of-stream.
+        Consuming — see `to_pycapsule` for why this is `deinit self`.
         """
         var heap = alloc[CArrowArrayStream](1)
-        heap.unsafe_write(self)
+        heap.unsafe_write(self^)
 
         # Get schema.
         var c_schema = alloc[CArrowSchema](1)

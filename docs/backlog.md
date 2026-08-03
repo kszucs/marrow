@@ -141,17 +141,10 @@ group rather than a line:
 
 | **B12** | **`slice()` copies the parent's null count, and it corrupts data — not just reporting.** All eight `slice()` bodies do `nulls=self.nulls` (`arrays.mojo:350, 576, 803, 1048, 1339, 1507, 1758, 1988`). Three consequences: (a) **`PrimitiveBuilder.extend` corrupts fresh arrays on the pure-CPU path** — `builders.mojo:673` branches on `arr.nulls == 0`, `:676` does `self._null_count += arr.nulls`, while `:679` copies the *bits* correctly through `bm.view(arr.offset, n)`; same pattern at `builders.mojo:802, 999, 1206, 1347, 1627`; (b) it **crosses the C ABI** via `to_data()` → `CArrowArray.from_data` (`c_data.mojo:1162`), and PyArrow trusts the exported `null_count`; (c) `PrimitiveArray.__eq__` returns `False` for logically-equal arrays (`arrays.mojo:680`). **Not blocked by the layout freeze** — recomputing the count at slice changes a value, not a field. The offset-correct spelling now exists — `BitmapView.unset_count` was added for B19 — so this no longer needs a prerequisite. | as cited | S |
 | **B16** | **`to_device` silently truncates a sliced array.** `PrimitiveArray.to_device` (`arrays.mojo:644-656`) and `BoolArray.to_device`/`to_cpu` (`:401-426`) upload `self.buffer` whole — `Buffer.to_device` copies `_size` bytes from `_ptr` — then construct the result with `offset=0`, so a sliced array becomes its own first `length` elements. `FixedSizeListArray.to_device` (`:1349`) preserves `offset` and is correct, which shows the convention is not settled inside one file. | as cited | S |
-| **B19** | **`CArrowArray.to_data` ignores `n_buffers`.** It indexes `buffers[0..2]` (`c_data.mojo:943-1047`) without consulting `n_buffers` (`:891`), so a producer supplying fewer buffers than the dtype implies causes an out-of-bounds read. (The `null_count == -1` half of this card is fixed — the sentinel is now resolved from the validity bitmap.) | as cited | S |
+| **B19** | **`CArrowArray.to_data` ignores `n_buffers`.** It indexes `buffers[0..2]` without consulting `n_buffers`, so a producer supplying fewer buffers than the dtype implies causes an out-of-bounds read. | `c_data.mojo` `to_data`, `n_buffers` field | S |
 
 **Also small and worth clearing in this wave:**
 
-- **B21** — `CArrowArrayStream` has **no `__del__`** (`c_data.mojo:1423-1449`),
-  and both `to_pycapsule` (`:1492`) and `to_table` (`:1506`) take `self` by
-  *borrow* and copy it without marking it released — unlike
-  `CArrowSchema.to_pycapsule(deinit self)` (`:597`). Calling two of them
-  double-frees `_StreamPrivateData`. Also, `_release_exported_schema` (`:234`)
-  and `_release_exported_array` (`:848`) never free `ptr[].dictionary`, which
-  `from_dtype` (`:504`) and `from_data` (`:1153`) heap-allocate. — S
 
 
 ---

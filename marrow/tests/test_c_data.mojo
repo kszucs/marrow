@@ -193,7 +193,7 @@ def test_arrow_array_stream() raises:
 
     var capsule = py_table.__arrow_c_stream__(Python.none())
     var stream = CArrowArrayStream.from_pycapsule(capsule)
-    var table = stream.to_table()
+    var table = stream^.to_table()
 
     assert_equal(table.num_columns(), 2)
     assert_equal(table.num_rows(), 5)
@@ -1183,3 +1183,21 @@ def test_import_all_valid_array_with_uncomputed_null_count() raises:
     arr.null_count = -1
     var out = arr^.to_array(int32)
     assert_equal(out.null_count(), 0)
+
+
+def test_stream_export_import_roundtrip() raises:
+    """A stream survives from_batches -> to_pycapsule -> from_pycapsule.
+
+    `to_pycapsule` and `to_table` are `deinit self`: they used to take `self` by
+    borrow and copy the struct onto the heap without marking the original
+    released, so consuming a stream twice handed the same `_StreamPrivateData`
+    to two owners and double-freed it — reproducibly, as a runtime crash.
+    Consuming makes a second use a compile error, so the guarantee is in the
+    type rather than in a runtime check.
+    """
+    var pa = Python.import_module("pyarrow")
+    var py_table = pa.table({"a": Python.list(1, 2, 3)})
+    var capsule = py_table.__arrow_c_stream__(Python.none())
+    var table = CArrowArrayStream.from_pycapsule(capsule).to_table()
+    assert_equal(table.num_rows(), 3)
+    assert_equal(table.num_columns(), 1)
