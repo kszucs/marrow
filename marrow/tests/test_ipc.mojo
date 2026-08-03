@@ -761,3 +761,66 @@ def test_file_roundtrip_sliced_string_column() raises:
     var got = _roundtrip_file(batch^)
     assert_equal(got.num_rows(), 2)
     assert_true(got.columns[0] == array(["b", "c"]).to_dyn())
+
+
+def test_compressed_ipc_file_is_rejected_not_misread() raises:
+    """A ZSTD-compressed body must fail loudly, not decode as raw bytes.
+
+    `RecordBatch.compression` is FlatBuffer slot 3 and was never read, so a
+    compressed file was decoded as if its buffers were uncompressed — garbage
+    values, no error. Reading the codec is the prerequisite for supporting it;
+    until then the only correct behaviour is to say so.
+    """
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var table = pa.table({"a": [1, 2, 3, 4]})
+    var opts = pa.ipc.IpcWriteOptions(compression="zstd")
+    var sink = pa.OSFile(path, "wb")
+    var writer = pa.ipc.new_file(sink, table.schema, options=opts)
+    _ = writer.write_table(table)
+    _ = writer.close()
+    _ = sink.close()
+
+    var raised = False
+    try:
+        _ = read_ipc_file(path)
+    except e:
+        raised = True
+        assert_true("compress" in String(e))
+    assert_true(raised, "expected a compressed body to be rejected")
+
+
+def test_delta_dictionary_batch_appends_not_replaces() raises:
+    """A delta DictionaryBatch extends the dictionary; it does not replace it.
+
+    `isDelta` is DictionaryBatch slot 2 and was never read, and the decoder
+    overwrote the stored dictionary unconditionally — so after a delta carrying
+    only the new values, every index in the following batch resolved against a
+    truncated dictionary.
+    """
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var opts = pa.ipc.IpcWriteOptions(emit_dictionary_deltas=True)
+    var dtype = pa.dictionary(pa.int32(), pa.string())
+    var schema = pa.schema([pa.field("d", dtype)])
+    var b1 = pa.record_batch(
+        [pa.array(["a", "b"]).dictionary_encode().cast(dtype)], schema=schema
+    )
+    var b2 = pa.record_batch(
+        [pa.array(["a", "b", "c"]).dictionary_encode().cast(dtype)],
+        schema=schema,
+    )
+    var sink = pa.OSFile(path, "wb")
+    var writer = pa.ipc.new_stream(sink, schema, options=opts)
+    _ = writer.write_batch(b1)
+    _ = writer.write_batch(b2)
+    _ = writer.close()
+    _ = sink.close()
+
+    var batches = read_ipc_stream(path)
+    assert_equal(len(batches), 2)
+    var d2 = DictionaryArray(batches[1].columns[0].to_data())
+    # the second batch spells "a", "b", "c" — resolvable only if the delta was
+    # appended to the dictionary the first batch established
+    assert_equal(len(d2), 3)
+    assert_equal(len(d2.dictionary().as_string()), 3)

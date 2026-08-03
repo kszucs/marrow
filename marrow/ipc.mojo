@@ -28,6 +28,7 @@ from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
 from .builders import Int32Builder
+from .kernels.concat import concat as _concat
 from .kernels.filter import take as _take
 from .utils import LittleEndian
 from . import dtypes as dt
@@ -566,6 +567,14 @@ struct _FlatbufReader(Movable):
         return UInt32(ref_pos) + LittleEndian.checked[DType.uint32](
             self._buf, ref_pos
         )
+
+    def has_field(self, tp: UInt32, slot: Int) raises -> Bool:
+        """Whether an optional table field is present.
+
+        FlatBuffers tables omit absent fields from the vtable, so a reader must
+        ask before reading — the typed readers raise on absence.
+        """
+        return self._field_voffset(tp, slot) != 0
 
     def read_table(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
@@ -1226,6 +1235,18 @@ struct _IpcDecoder(Movable):
         var db_pos = self._r.read_table(msg_tp, 2)
         return Int(self._r.read_i64(db_pos, 0, 0))
 
+    def peek_is_delta(self) raises -> Bool:
+        """`isDelta` from a DictionaryBatch header (slot 2).
+
+        A delta batch carries only the values appended since the last one. The
+        field is optional and defaults to false, so absence means "replace".
+        """
+        var msg_tp = self._r.root()
+        var db_pos = self._r.read_table(msg_tp, 2)
+        if not self._r.has_field(db_pos, 2):
+            return False
+        return self._r.read_bool(db_pos, 2, False)
+
     @staticmethod
     def _wire_to_time_unit(v: UInt16) -> dt.TimeUnit:
         if v == _TIME_UNIT_SECOND:
@@ -1360,6 +1381,16 @@ struct _IpcDecoder(Movable):
         mut bufs: List[_BodyBuffer],
     ) raises -> Int64:
         var length = self._r.read_i64(rb_pos, 0, 0)
+
+        # Slot 3 is `BodyCompression`. Ignoring it does not mean "uncompressed";
+        # it means the buffers below are read as if they were raw, which decodes
+        # a compressed body into garbage with no error. Refuse until the codecs
+        # are wired through (they are already available for Parquet).
+        if self._r.has_field(rb_pos, 3):
+            raise Error(
+                "ipc: record batch body is compressed; reading compressed IPC"
+                " bodies (LZ4_FRAME / ZSTD) is not supported"
+            )
 
         var nodes_vec = self._r.read_vector(rb_pos, 1)
         var nn = Int(self._r.vector_len(nodes_vec))
@@ -2270,6 +2301,7 @@ struct RecordBatchStreamReader(Movable):
             header_type = peek.peek_header()
             if Int(header_type) == Int(_HEADER_DICTIONARY_BATCH):
                 var dict_id = _IpcDecoder(meta.copy()).peek_dict_id()
+                var is_delta = _IpcDecoder(meta.copy()).peek_is_delta()
                 var lkup = _FieldIpcInfo.find_in_schema(
                     self.schema.fields, self._ipc_infos, dict_id
                 )
@@ -2283,7 +2315,14 @@ struct RecordBatchStreamReader(Movable):
                     )
                     while len(dict_values) <= dict_id:
                         dict_values.append(NullArray(0))
-                    dict_values[dict_id] = values^
+                    if is_delta and len(dict_values[dict_id]) > 0:
+                        # a delta carries only the newly-appended values
+                        var merged = List[DynArray]()
+                        merged.append(dict_values[dict_id].copy())
+                        merged.append(values^)
+                        dict_values[dict_id] = _concat(merged)
+                    else:
+                        dict_values[dict_id] = values^
             elif Int(header_type) == Int(_HEADER_RECORD_BATCH):
                 var dec = _IpcDecoder(meta^)
                 batches.append(
