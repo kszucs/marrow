@@ -607,20 +607,29 @@ struct SortIndices(Kernel):
     ) raises -> Buffer[]:
         """Order the `n_valid` non-null row indices held in `valid_buf`.
 
-        `stable` reaches only the comparison path; the radix path is stable by
-        construction.
+        A stable request routes to radix wherever a radix key exists, because
+        LSD radix is stable *by construction* and costs nothing to make so.
+        Teaching the comparison path stability instead means a tie-break on the
+        original index, which turns one compare into a compare-plus-branch that
+        the predictor cannot learn — measured at **+85%** on a 10k two-key sort
+        with a low-cardinality leading key (320 µs -> 594 µs), the exact shape a
+        multi-key ORDER BY produces. `_RADIX_THRESHOLD` is tuned for the
+        *unstable* comparison sort and does not apply here.
+
+        Only decimal128/256 still need the stable comparator: they exceed the
+        UInt64 radix key, so no radix path exists for them at any size.
         """
         if n_valid <= 1:
             return valid_buf^.to_immutable()
 
         comptime if size_of[Scalar[T.native]]() <= 8:
-            if n_valid < _RADIX_THRESHOLD:
-                return _comparison_sort_indices[T](
-                    arr, valid_buf^, n_valid, ascending, stable
-                )
-            else:
+            if stable or n_valid >= _RADIX_THRESHOLD:
                 return _radix_sort_indices[T](
                     arr, valid_buf^, n_valid, ascending, ctx
+                )
+            else:
+                return _comparison_sort_indices[T](
+                    arr, valid_buf^, n_valid, ascending, stable
                 )
         else:
             # decimal128 / decimal256 exceed the UInt64 radix key, so the
