@@ -45,7 +45,7 @@ obvious. Read before planning anything.
 
 - **Array, scalar and builder layout.** Adding methods and accessors is fine;
   adding, removing, reordering or re-typing fields is **out of scope, not
-  deferred**. This is why B8 and B9 are recorded as accepted defects.
+  deferred**. This is why B13 is recorded as an accepted defect.
 
 ### Measurement traps
 
@@ -138,7 +138,6 @@ group rather than a line:
 | **B6** | **`JOIN_MARK`'s declared schema disagrees with its columns.** The "emits right columns?" predicate is re-derived three times with different membership: `join.mojo:682` excludes MARK, `join.mojo:646` (`output_dtype`) and `relations.mojo:615` do not. A fourth copy parses strings at `tabular.mojo:265`. Fix by introducing the `JoinKind` value type (was Q4.1) rather than patching three sites. | `join.mojo:646`, `:682`, `relations.mojo:615` | S |
 | **B7** | **`DictionaryBuilder.finish()` silently drops `ordered`.** The builder stores the flag, then calls `from_arrays(indices, values)` whose `ordered` defaults to `False`. | `builders.mojo:1428`, `:1482-1486`, `arrays.mojo:1902` | XS |
 | **B8** | **`BoolType` is not a `PrimitiveType` while `is_primitive()` returns True for bool.** `DynType.byte_width()` guards on `is_primitive()` then calls `variant_dispatch[PrimitiveType]`, which **aborts** for bool. Latent — every current caller happens to branch on `dt == bool_` first, and `test_dtypes.mojo:116` skips bool. | `dtypes.mojo:184`, `:1062`, `:981-988` | S |
-| **B9** | **The built wheel is unimportable.** `build.py` force-includes only `marrow/__init__.py` and the `.so`, but `__init__.py:492` does `from . import compute`. Neither `compute.py` nor `parquet.py` is packaged. Confirmed against the checked-in `python/dist/marrow-0.1.0-cp314-*.whl`. | `python/build.py:41-45` | XS |
 
 | **B12** | **`slice()` copies the parent's null count, and it corrupts data — not just reporting.** All eight `slice()` bodies do `nulls=self.nulls` (`arrays.mojo:350, 576, 803, 1048, 1339, 1507, 1758, 1988`). Three consequences: (a) **`PrimitiveBuilder.extend` corrupts fresh arrays on the pure-CPU path** — `builders.mojo:673` branches on `arr.nulls == 0`, `:676` does `self._null_count += arr.nulls`, while `:679` copies the *bits* correctly through `bm.view(arr.offset, n)`; same pattern at `builders.mojo:802, 999, 1206, 1347, 1627`; (b) it **crosses the C ABI** via `to_data()` → `CArrowArray.from_data` (`c_data.mojo:1162`), and PyArrow trusts the exported `null_count`; (c) `PrimitiveArray.__eq__` returns `False` for logically-equal arrays (`arrays.mojo:680`). **Not blocked by the layout freeze** — recomputing the count at slice changes a value, not a field. The spelling is already used in four kernels (`unset_count()`), but note there is **no `BitmapView.unset_count`**, so add that first: today there is no offset-correct spelling to reach for. | as cited | S |
 | **B16** | **`to_device` silently truncates a sliced array.** `PrimitiveArray.to_device` (`arrays.mojo:644-656`) and `BoolArray.to_device`/`to_cpu` (`:401-426`) upload `self.buffer` whole — `Buffer.to_device` copies `_size` bytes from `_ptr` — then construct the result with `offset=0`, so a sliced array becomes its own first `length` elements. `FixedSizeListArray.to_device` (`:1349`) preserves `offset` and is correct, which shows the convention is not settled inside one file. | as cited | S |
@@ -148,11 +147,6 @@ group rather than a line:
 
 **Also small and worth clearing in this wave:**
 
-- **B10** — `Array.is_valid()` can never work: the Python wrapper calls
-  `self._binding.is_valid()` with no argument, but the binding wraps
-  `DynArray.is_valid(self, index: Int)`. It is also semantically wrong versus
-  PyArrow, where `is_valid()` returns a BooleanArray.
-  (`python/marrow/__init__.py:168`, `bindings/arrays.mojo:1156`) — XS
 - **B11** — `BoolArray.write_to` (`arrays.mojo:366`) double-applies the offset,
   the same bug as B13. Unlike B13 it needs no layout change. — XS
 - **B21** — `CArrowArrayStream` has **no `__del__`** (`c_data.mojo:1423-1449`),
@@ -181,7 +175,7 @@ runs. This wave is cheap and it is what makes every later wave believable.
 
 | ID | Item | Evidence | Size |
 |---|---|---|---|
-| **I2** | **The docs site does not build.** 7 of 10 executed pages raise. Root cause: `81fa29a` moved every compute function to `marrow.compute` and no page was updated, so `ma.add`, `ma.sum`, `ma.filter`, `ma.sort`, `ma.greater`, `ma.cast`, `ma.take`, `ma.sort_indices`, `ma.drop_null` are all gone. Two further breaks: `is_valid(1)` arity (see B10) and `sort(ascending=…)`, which is now `sort(input, sort_keys=(), *, null_placement=…)`. `_freeze` is gitignored so nothing masks it. | `docs.yml`; `guide/compute.qmd` (18 of 20 cells fail) | S |
+| **I2** | **The docs site does not build.** 7 of 10 executed pages raise. Root cause: `81fa29a` moved every compute function to `marrow.compute` and no page was updated, so `ma.add`, `ma.sum`, `ma.filter`, `ma.sort`, `ma.greater`, `ma.cast`, `ma.take`, `ma.sort_indices`, `ma.drop_null` are all gone. Two further breaks: the guide calls `is_valid(1)`, but `Array.is_valid()` is elementwise and takes no index (it now returns a BooleanArray, as in PyArrow), and `sort(ascending=…)`, which is now `sort(input, sort_keys=(), *, null_placement=…)`. `_freeze` is gitignored so nothing masks it. | `docs.yml`; `guide/compute.qmd` (18 of 20 cells fail) | S |
 | **I3** | **The binary-size gate is not in CI at all** — zero hits for `binary_size` under `.github/`, despite it being the project's central architectural invariant. It is enforced only by hand. Add a job that runs `pixi run binary_size` and fails on a `__text` regression beyond a threshold. | `.github/` | S |
 | **I4** | **Re-baseline the binary-size numbers.** The recorded 7.6× / 7.8× / 12.8× table predates the interpreter deletion; a local sweep gives 2.83× / 3.12× / 3.01×. Using the written numbers as a gate would invent or hide a regression — the exact failure the docs warn about. Also: `BASELINE.md` is referenced three times and **does not exist**. | `benchmarks/binary_size/README.md:110,154` | S |
 | **I5** | **`benchmarks/binary_size/README.md` is half-updated** — it documents `query_comptime.mojo`, `query_erased_aot.mojo` and `query_hybrid.mojo`, none of which exist, and references `marrow/aot/relations.mojo` and `Planner.build()`. The newer table at `:75-84` is current. | as cited | XS |

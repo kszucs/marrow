@@ -166,7 +166,16 @@ class Array(_Wrapper):
         return self._binding.type()
 
     def is_valid(self):
-        return self._binding.is_valid()
+        """Boolean array, True where the value is not null."""
+        from . import compute
+
+        return compute.is_valid(self)
+
+    def is_null(self, *, nan_is_null=False):
+        """Boolean array, True where the value is null."""
+        from . import compute
+
+        return compute.is_null(self, nan_is_null=nan_is_null)
 
     def slice(self, offset=0, length=None):
         if length is None:

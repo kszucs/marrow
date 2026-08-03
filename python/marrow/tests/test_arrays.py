@@ -452,3 +452,25 @@ def test_array_list_scalar_raises():
     # Scalar where a list element is expected should raise
     with pytest.raises(Exception):
         ma.array([1, 2, 3], type=ma.list_(ma.int64()))
+
+
+# ── validity predicates ─────────────────────────────────────────────────────
+#
+# `Array.is_valid()` called the binding with no argument while the binding
+# wraps `DynArray.is_valid(index)`, so it could never work. PyArrow returns a
+# BooleanArray from both of these, elementwise.
+
+
+def test_array_is_valid_returns_boolean_array():
+    a = ma.array([1, None, 3])
+    assert a.is_valid().to_pylist() == [True, False, True]
+
+
+def test_array_is_null_returns_boolean_array():
+    a = ma.array([1, None, 3])
+    assert a.is_null().to_pylist() == [False, True, False]
+
+
+def test_array_is_valid_all_valid():
+    a = ma.array([1, 2, 3])
+    assert a.is_valid().to_pylist() == [True, True, True]

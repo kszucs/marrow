@@ -13,6 +13,7 @@ import marrow.kernels as mk
 # ``mk.filter`` collides with the like-named submodule, so the package alias
 # resolves to the submodule rather than the function. Import it directly.
 from marrow.kernels.filter import filter as _filter_kernel
+from marrow.kernels.boolean import IsNullKernel, NotNullKernel
 from marrow.kernels.execution import ExecutionContext
 from marrow.expr.aggregates import (
     Sum,
@@ -136,6 +137,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[aggregate[Mean]]()]("mean")
     mb.def_function[pykernel[mk.AnyKernel.dispatch]()]("any")
     mb.def_function[pykernel[mk.AllKernel.dispatch]()]("all")
+    mb.def_function[pykernel[IsNullKernel.dispatch]()]("is_null")
+    mb.def_function[pykernel[NotNullKernel.dispatch]()]("is_valid")
     mb.def_function[pykernel[mk.drop_null]()]("drop_null")
     mb.def_function[pykernel[_filter_kernel]()]("filter")
     mb.def_function[pykernel[mk.EqKernel.dispatch]()]("equal")

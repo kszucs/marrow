@@ -211,6 +211,24 @@ def filter(input, selection_filter, memory_pool=None, ctx=None):
     )
 
 
+def is_null(input, *, nan_is_null=False, memory_pool=None, ctx=None):
+    """Return a boolean array marking null positions.
+
+    Equivalent to ``pyarrow.compute.is_null``.
+    """
+    if nan_is_null:
+        raise NotImplementedError("nan_is_null=True is not implemented")
+    return Array.wrap(_ma.is_null(input.unwrap(), (ctx or _serial())))
+
+
+def is_valid(input, memory_pool=None, ctx=None):
+    """Return a boolean array marking non-null positions.
+
+    Equivalent to ``pyarrow.compute.is_valid``.
+    """
+    return Array.wrap(_ma.is_valid(input.unwrap(), (ctx or _serial())))
+
+
 def drop_null(input, memory_pool=None, ctx=None):
     """Remove null values from an array.
 
