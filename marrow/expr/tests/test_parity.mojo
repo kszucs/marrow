@@ -2,17 +2,15 @@
 
 Every stable op is expressible two ways: as a fused comptime ``Value`` tree
 (``values.mojo``) and as a runtime tag-based ``DynValue`` tree (``dynamic.mojo``).
-Both box into the shared ``DynValue`` and expose ``execute(batch) -> DynArray``.
-This suite asserts the two drivers agree element-for-element on the same input,
-so the runtime interpreter can never silently diverge from the fused algebra it
-mirrors.
+The two lanes share **no node types** — that separation is what makes each one
+honest about its operands — so nothing but this suite holds them to the same
+arithmetic. A divergence here is the failure mode the split trades for.
 
 ``assert_parity`` is the reusable primitive: hand it a fused ``Value`` and an
-equivalent ``DynValue`` (each implicitly boxed into ``DynValue``) plus a
-``RecordBatch``; it runs both and asserts the resulting arrays are equal. The
-fused column leaves resolve by name (``col("a", int64)``) and the ``DynValue``
-leaves by position (``col(0)``), so a batch whose columns are named ``a``/``b``
-lets the two trees reference the same data.
+equivalent ``DynValue`` (each implicitly boxed into ``BoxedValue``, the one type
+both lanes erase into) plus a ``RecordBatch``; it runs both and asserts the
+resulting arrays are equal. Both lanes' column leaves resolve by name, so a batch
+whose columns are named ``a``/``b`` lets the two trees reference the same data.
 
 Seeded with STABLE ops that exist on both drivers: arithmetic
 (``+ - * mod floordiv``), numeric comparisons, ``cast``, and ``if_else``. There
@@ -56,7 +54,6 @@ from ...kernels.temporal import unit_day
 # Fused comptime algebra (values.mojo)
 from ...expr.values import (
     _rank,
-    DynValue,
     col as fcol,
     lit as flit,
     NumericCast,
@@ -81,9 +78,10 @@ from ...expr.values import (
     Hour,
 )
 
-from ...expr.dynamic import _numeric_rank
+from ...expr.dynamic import DynValue, _numeric_rank
+from ...expr.relations import BoxedValue
 
-# Same nodes, erased operands — the runtime lane
+# The runtime lane's own leaves — these build `DynValue` tag nodes
 from ...expr.values import (
     col as dcol,
     lit as dlit,
@@ -92,7 +90,7 @@ from ...expr.values import (
 
 
 def assert_fused(
-    var fused: DynValue, expected: DynArray, batch: RecordBatch
+    var fused: BoxedValue, expected: DynArray, batch: RecordBatch
 ) raises:
     """Assert a fused node matches an expected array. Used for ops the runtime
     ``DynValue`` interpreter does not yet expose — their cross-driver parity case
@@ -103,9 +101,14 @@ def assert_fused(
 
 
 def assert_parity(
-    var fused: DynValue, var dyn: DynValue, batch: RecordBatch
+    var fused: BoxedValue, var dyn: BoxedValue, batch: RecordBatch
 ) raises:
-    """Execute both drivers against *batch* and assert the arrays are equal."""
+    """Execute both lanes against *batch* and assert the arrays are equal.
+
+    ``BoxedValue`` is the one type both lanes erase into — a fused node from
+    ``values.mojo`` on the left, a ``DynValue`` tag tree on the right — so this
+    is where the two are held to the same answer. They share no node types, and
+    this suite is what stops them diverging."""
     var expected = fused.execute(batch)
     var actual = dyn.execute(batch)
     assert_true(expected == actual)
@@ -604,65 +607,64 @@ def test_numeric_rank_agrees_across_lanes() raises:
 
 
 # ---------------------------------------------------------------------------
-# One node set: the shared fused nodes, instantiated over erased operands
+# The runtime lane's own nodes, held against the fused tree
 # ---------------------------------------------------------------------------
 
 
-def test_shared_node_over_erased_operands() raises:
-    """`a + b` on two erased operands builds `Add[DynValue, DynValue]` — the
-    *same* `Add` the fused lane builds, not a runtime tag.
+def test_erased_binary_matches_the_fused_tree() raises:
+    """`a + b` on two erased operands builds a tag node, and it must compute
+    what the fused `Add` computes.
 
-    This is the whole point of Step 3. `DynValue` conforms to `NumericValue`, so
-    `NumericValue.__add__` applies to it unchanged and yields `Add[Self, Rhs]`
-    with both parameters erased. The node then takes its dispatch arm because
-    `IsErased` propagates from its operands.
-
-    Asserted against the fused tree over the same batch: one node type, two
-    lanes, same answer.
+    The two lanes stopped sharing node types when the box stopped claiming the
+    family traits: `DynValue` supplies `__add__` itself and yields another
+    `DynValue`, so nothing here is parameterised on an erased operand and no
+    node has to ask whether its operand has a lane. What used to be a *type*
+    guarantee of agreement is now this assertion.
     """
     var batch = _ab_batch()
 
     var lhs: DynValue = dcol("a")
     var rhs: DynValue = dcol("b")
-    var shared = lhs + rhs  # Add[DynValue, DynValue]
+    var dyn = lhs + rhs
 
-    assert_parity(fcol("a", int64) + fcol("b", int64), shared^, batch)
+    assert_parity(fcol("a", int64) + fcol("b", int64), dyn^, batch)
 
 
-def test_shared_node_nests_over_erased_operands() raises:
-    """`(a + b) * a` — the composite's own `IsErased` propagates, so an erased
-    subtree under another shared node still takes the dispatch arm rather than
-    trying to fuse a lane that does not exist.
+def test_erased_binary_nests() raises:
+    """`(a + b) * a` — an erased subtree under another erased node.
 
-    Phase 0 found this the hard way: without propagation the outer node fails to
-    *instantiate*, because its fused arm elaborates `SIMD[DynType.native, W]`.
+    Nesting used to be the hazard: a composite over erased operands had to
+    propagate `IsErased` by hand or its fused arm elaborated
+    `SIMD[DynType.native, W]` and failed to *instantiate*. A tag node has no
+    fused arm to elaborate, so the failure mode is gone; what remains to check
+    is only that the answer still matches.
     """
     var batch = _ab_batch()
 
     var lhs: DynValue = dcol("a")
     var rhs: DynValue = dcol("b")
     var again: DynValue = dcol("a")
-    var shared = (lhs + rhs) * again
+    var dyn = (lhs + rhs) * again
 
     assert_parity(
         (fcol("a", int64) + fcol("b", int64)) * fcol("a", int64),
-        shared^,
+        dyn^,
         batch,
     )
 
 
-def test_shared_add_node_concatenates_erased_strings() raises:
+def test_erased_add_concatenates_strings() raises:
     """`+` on two erased operands means *concatenate* when they turn out to be
     strings, and *add* when they turn out to be numbers.
 
     The choice cannot be made when the tree is built: an erased column's dtype
-    is only known once a schema is applied, so `col("x") + col("y")` has no dtype to
-    branch on at construction. It is made in the node's erased arm instead,
-    against the materialized operands — the same shape `DynValue._compare` uses,
-    where an operator names a pair of kernels and the dtype picks one.
+    is only known once a schema is applied, so `col("x") + col("y")` has no dtype
+    to branch on at construction. It is made in the `"add"` arm instead, against
+    the materialized operands — the same shape the comparison arms use, where a
+    tag names a pair of kernels and the runtime dtype picks one.
 
-    The numeric half of this is `test_shared_node_over_erased_operands`; both go
-    through the same `Add[DynValue, DynValue]`.
+    The numeric half of this is `test_erased_binary_matches_the_fused_tree`;
+    both go through the same tag.
     """
     var x = array(["a", "c", "e"])
     var y = array(["b", "d", "f"])
@@ -677,15 +679,14 @@ def test_shared_add_node_concatenates_erased_strings() raises:
     assert_true(got == want)
 
 
-def test_shared_nodes_cover_the_regular_operators() raises:
-    """Every regular operator over erased operands goes through the shared node
-    and agrees with the fused tree: arithmetic, division, unary, comparison and
-    boolean logic.
+def test_erased_lane_covers_the_regular_operators() raises:
+    """Every regular operator over erased operands agrees with the fused tree:
+    arithmetic, division, unary, comparison and boolean logic.
 
-    One case per node type — `NumericBinary`, `FloatBinary`, `NumericUnary`,
-    `NumericCompare`, `BoolBinary`, `BoolUnary` — since each gained its erased
-    arm independently and a missing `IsErased` propagation in any of them is a
-    build failure rather than a wrong answer.
+    One case per fused node family — `NumericBinary`, `FloatBinary`,
+    `NumericUnary`, `NumericCompare`, `BoolBinary`, `BoolUnary` — because each
+    has a separate tag arm on the other side, and a wrong kernel in any of them
+    is a wrong answer rather than a build failure.
     """
     var batch = _ab_batch()
 
@@ -712,9 +713,9 @@ def test_shared_nodes_cover_the_regular_operators() raises:
     assert_parity(~(fcol("a", int64) > fcol("b", int64)), ~(a > b), batch)
 
 
-def test_shared_compare_node_compares_erased_strings() raises:
+def test_erased_compare_compares_strings() raises:
     """`<` on erased string operands takes the string kernel, not the numeric
-    one — the node carries both and the runtime dtype picks."""
+    one — the tag arm carries both and the runtime dtype picks."""
     var x = array(["a", "d", "c"])
     var y = array(["b", "b", "c"])
     var batch = record_batch([x^, y^], names=["x", "y"])
@@ -728,16 +729,16 @@ def test_shared_compare_node_compares_erased_strings() raises:
     assert_true(got == want)
 
 
-def test_shared_payload_nodes_over_erased_operands() raises:
-    """The payload-carrying nodes also serve both lanes.
+def test_erased_payload_nodes() raises:
+    """The ops whose fused counterparts carry a payload beyond their children.
 
-    These are the ones the isolated gates' favourable assumption did not cover:
-    they are pipeline *breakers* when fused, so `Value.execute` routes them
-    through `prepare` and never calls `materialize` — which is where the erased
-    arm lives. Each therefore makes `IsBreaker` follow `IsErased`: an erased node
-    has no fused loop to break, it computes the column in one dispatch.
+    These are the ones whose fused twins are pipeline *breakers*: `Value.execute`
+    routes a breaker through `prepare` and never calls `materialize`. The erased
+    lane has no fused loop to break, so it computes each of these in a single
+    dispatch — a different mechanism reaching the same column, which is exactly
+    what wants asserting.
 
-    Covers `StringLength`, `StringPredicate` (like) and `ConditionalBinary`
+    Covers `StringLength`, the string comparison family, and `ConditionalBinary`
     (coalesce/nullif); `TemporalExtract` is covered by `test_parity_year`
     alongside its fused twin.
     """
@@ -762,49 +763,48 @@ def test_shared_payload_nodes_over_erased_operands() raises:
     var nbatch = _ab_batch()
     var a: DynValue = dcol("a")
     var b: DynValue = dcol("b")
-    var nl: DynValue = Nullif(a.copy(), b.copy())
+    var nl: DynValue = a.nullif(b)
     var got = nl.execute(nbatch)
     # a == b only at index 2 (3 == 3), which nullif turns into a null
     assert_true(got.null_count() == 1)
 
 
-def test_shared_cast_isin_casewhen_over_erased_operands() raises:
-    """The last three payload nodes: `cast`, `is_in` and `case_when`.
+def test_erased_cast_isin_casewhen() raises:
+    """The last three payload-carrying ops: `cast`, `is_in` and `case_when`.
 
-    `NumericCast` is the only node whose payload survives erasure — `To` stays a
-    comptime type because just the *operand* is erased, so the target dtype is
-    known and the runtime cast router does the rest. `IsIn` carries a value-set
-    array and `CaseWhen` three child values, and both already worked in
-    `DynArray` internally, so their erased arms are the existing helper.
+    Each carries something beyond its children — a target dtype, a value-set
+    array, a third branch — and the tag node holds all three in the same
+    `DynPayload` variant, so this is the one place that shape is exercised end
+    to end. The fused lane spells these `NumericCast[To]`, `IsIn` and
+    `CaseWhen`; here they are methods on the box.
     """
     var batch = _ab_batch()
     var a: DynValue = dcol("a")
     var b: DynValue = dcol("b")
 
-    # NumericCast — erased operand, comptime target dtype
-    var casted: DynValue = NumericCast[Float64Type](a.copy())
+    # cast — payload is the target dtype
+    var casted: DynValue = a.cast(DynType(Float64Type()))
     var got_cast = casted.execute(batch)
     assert_true(got_cast.dtype() == DynType(Float64Type()))
     assert_true(got_cast.length() == 6)
 
-    # IsIn — payload is a value-set array
-    var member: DynValue = IsIn(a.copy(), array([1, 3, 7], int64))
+    # is_in — payload is a value-set array
+    var member: DynValue = a.isin(array([1, 3, 7], int64))
     var want_in: DynArray = array([True, False, True, False, True, False])
     assert_true(member.execute(batch) == want_in)
 
-    # CaseWhen — three erased children
-    var picked: DynValue = CaseWhen(a > b, a.copy(), b.copy())
+    # if_else — three children, no payload
+    var picked: DynValue = if_else(a > b, a.copy(), b.copy())
     var want_pick: DynArray = array([9, 5, 3, 10, 7, 8], int64)
     assert_true(picked.execute(batch) == want_pick)
 
 
-def test_shared_temporal_extract_over_erased_operand() raises:
-    """`year()` on an erased column goes through `TemporalExtract` with an
-    erased operand.
+def test_erased_temporal_extract() raises:
+    """`year()` on an erased column.
 
-    This node's arm was written before it could be reached — its operand is
-    bound on `TemporalValue`, which `DynValue` could not conform to until
-    `DynAgg` took a `DynValue`. It is asserted here now that it can be.
+    The fused twin is `TemporalExtract`, whose operand is bound on
+    `TemporalValue` — a bound the box can no longer satisfy and no longer needs
+    to, since it extracts through its own tag arm.
     """
     var ts = array([0, 86_400, 31_536_000], int64)
     var batch = record_batch([ts^], names=["t"])
@@ -817,16 +817,17 @@ def test_shared_temporal_extract_over_erased_operand() raises:
 
 
 # ---------------------------------------------------------------------------
-# The runtime lane, built entirely from shared nodes
+# The runtime lane, entered through the untyped factories
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_factories_build_shared_nodes() raises:
-    """`fcol("a") + fcol("b")` is an `Add[DynValue, DynValue]` — the same node
-    the fused lane builds — with no tag anywhere in the tree.
+def test_runtime_factories_build_tag_nodes() raises:
+    """`col("a") + col("b")` — the one-argument `col`, with no dtype — builds a
+    tag tree, and it agrees with the fused tree built from the two-argument
+    `col("a", int64)`.
 
-    This is what Step 3 set out to do: the runtime frontend and the AOT frontend
-    now differ only in *which types they instantiate the same nodes with*.
+    The two frontends differ in what they *know*: one is handed a dtype, the
+    other finds it on the batch. That is the whole distinction between the lanes.
     """
     var batch = _ab_batch()
     var a = fcol("a")

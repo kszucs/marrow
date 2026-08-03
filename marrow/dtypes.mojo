@@ -67,11 +67,6 @@ trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     dtype is a **peer** of the concrete ones, not a supertype, and generic code
     bound on `DataType` accepts either."""
 
-    comptime IsErased: Bool = False
-    """Whether this dtype is the erased one. Lets a node parameterised on a
-    dtype (`NumericColumn[T]`, `NumericLiteral[T]`) know it is in the erased
-    lane without a separate erased node type existing."""
-
     def to_dyn(deinit self) -> DynType:
         return DynType(self^)
 
@@ -773,41 +768,16 @@ struct DynType(
     ConvertibleToPython,
     Copyable,
     DataType,
-    DecimalType,
     Equatable,
-    FloatingType,
-    IntegerType,
-    IntervalType,
-    ListLikeType,
     Movable,
-    NumericType,
-    StringLikeType,
-    TemporalType,
     Writable,
 ):
-    comptime IsErased = True
-
     comptime offset = DType.int32
     """Placeholder, never read — see `native`.
 
     Required by `BinaryLikeType`/`ListLikeType`, which `StringValue.OutType` is
     bound on. An erased dtype does not know its offset width; the erased arm
     resolves it at run time via `dispatch_binarylike`/`dispatch_listlike`."""
-
-    comptime native = DType.bool
-    """Placeholder, never read.
-
-    `DynType` conforms to the family traits so that `DynValue` can conform to
-    `NumericValue`/`BoolValue`/`StringValue`, which is what lets the fused nodes
-    (`NumericBinary[K, L, R]`, ...) accept an erased operand with no change to
-    their bounds. Those nodes select the erased arm via `comptime IsErased`, so
-    a `SIMD[Self.native, W]` is never elaborated from this.
-
-    There is no `DType.invalid`. `bool` is the deliberate stand-in: it is the one
-    `DType` that is not a numeric lane, so a path that wrongly elaborated against
-    it produces visibly bool-shaped results rather than a plausible-but-wrong
-    integer width. `byte_width()` below overrides `PrimitiveType`'s default for
-    the same reason — it must keep resolving the *runtime* dtype."""
 
     # `to_dyn` is overridden below rather than inherited, and that override is
     # load-bearing: the trait's default body is `DynType(self^)`, which for

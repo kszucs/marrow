@@ -59,7 +59,8 @@ from ...kernels.aggregate import (
 from ...expr.aggregates import AggFunc
 from ...expr.values import col, lit
 from ...expr.relations import DynRelation, in_memory_table
-from ...expr.values import DynValue, col as fused_col
+from ...expr.relations import BoxedValue
+from ...expr.values import col as fused_col
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +189,7 @@ def test_whole_table_aggregate_without_keys() raises:
     """``SELECT sum(amount), min(amount), count(quantity) FROM orders`` — no
     keys means one implicit group and a single output row."""
     var plan = in_memory_table(_orders()).aggregate(
-        keys=List[DynValue](),
+        keys=List[BoxedValue](),
         aggs=[
             col("amount").sum().alias("total"),
             col("amount").aggregate("min").alias("smallest"),
@@ -408,10 +409,10 @@ def test_the_same_plan_can_be_executed_repeatedly() raises:
 def _fused_sum_max_by_region() raises -> DynRelation:
     """``SELECT region, sum(amount), max(amount) GROUP BY region``, fused."""
     return in_memory_table(_orders()).aggregate(
-        keys=[DynValue(fused_col("region", string))],
+        keys=[BoxedValue(fused_col("region", string))],
         inputs=[
-            DynValue(fused_col("amount", int64)),
-            DynValue(fused_col("amount", int64)),
+            BoxedValue(fused_col("amount", int64)),
+            BoxedValue(fused_col("amount", int64)),
         ],
         aggs=[
             AggFunc.of[NumericAgg[SumKernel, Int64Type]](DynType(int64)),
@@ -463,8 +464,8 @@ def test_fused_non_numeric_aggregation() raises:
     """A fused plan is not limited to the numeric folds: a bytewise string
     min is just a different `Aggregation` named at compile time."""
     var plan = in_memory_table(_orders()).aggregate(
-        keys=[DynValue(fused_col("region", string))],
-        inputs=[DynValue(fused_col("region", string))],
+        keys=[BoxedValue(fused_col("region", string))],
+        inputs=[BoxedValue(fused_col("region", string))],
         aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](DynType(string))],
         names=["region", "lo"],
     )

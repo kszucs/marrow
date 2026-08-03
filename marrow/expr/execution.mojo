@@ -42,7 +42,7 @@ from ..parquet import (
     PageBounds,
 )
 from ..scalars import DynScalar
-from .values import DynValue
+from .relations import BoxedValue
 from .pruning import PruneStats
 from ..kernels.execution import ExecutionContext
 
@@ -217,7 +217,7 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
     var path: String
     var _schema: Schema
     var morsel_size: Int
-    var _predicate: Optional[DynValue]
+    var _predicate: Optional[BoxedValue]
     var _file: Optional[ParquetFile[MappedFile, Self.leaves]]
     # The read plan, computed once when the file is opened: the row groups to
     # decode in order, and (only when page-level skipping applies) one row
@@ -238,7 +238,7 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
         var path: String,
         var schema: Schema,
         morsel_size: Int,
-        var predicate: Optional[DynValue] = None,
+        var predicate: Optional[BoxedValue] = None,
     ):
         self.path = path^
         self._schema = schema^
@@ -492,9 +492,11 @@ struct FilterProcessor(Processor):
     """Keeps rows where the predicate is True; skips empty morsels."""
 
     var input: DynProcessor
-    var predicate: DynValue
+    var predicate: BoxedValue
 
-    def __init__(out self, *, var input: DynProcessor, var predicate: DynValue):
+    def __init__(
+        out self, *, var input: DynProcessor, var predicate: BoxedValue
+    ):
         self.input = input^
         self.predicate = predicate^
 
@@ -518,14 +520,14 @@ struct ProjectProcessor(Processor):
     """Evaluates each projected value against every input morsel."""
 
     var input: DynProcessor
-    var values: List[DynValue]
+    var values: List[BoxedValue]
     var _schema: Schema
 
     def __init__(
         out self,
         *,
         var input: DynProcessor,
-        var values: List[DynValue],
+        var values: List[BoxedValue],
         var schema: Schema,
     ):
         self.input = input^
@@ -605,7 +607,7 @@ struct SortProcessor(Processor):
     permutation) runs instead of a full sort followed by a slice."""
 
     var input: DynProcessor
-    var keys: List[DynValue]
+    var keys: List[BoxedValue]
     var ascending: List[Bool]
     var nulls_first: Bool
     var stable: Bool
@@ -618,7 +620,7 @@ struct SortProcessor(Processor):
         out self,
         *,
         var input: DynProcessor,
-        var keys: List[DynValue],
+        var keys: List[BoxedValue],
         var ascending: List[Bool],
         nulls_first: Bool,
         stable: Bool,
@@ -713,8 +715,8 @@ struct AggregateProcessor(Processor):
     post-aggregate filter over the aggregate output schema."""
 
     var input: DynProcessor
-    var keys: List[DynValue]
-    var inputs: List[DynValue]
+    var keys: List[BoxedValue]
+    var inputs: List[BoxedValue]
     var aggs: List[AggFunc]
     var _schema: Schema
     var _grouper: HashGrouper
@@ -725,8 +727,8 @@ struct AggregateProcessor(Processor):
         out self,
         *,
         var input: DynProcessor,
-        var keys: List[DynValue],
-        var inputs: List[DynValue],
+        var keys: List[BoxedValue],
+        var inputs: List[BoxedValue],
         var aggs: List[AggFunc],
         var schema: Schema,
         var ctx: ExecutionContext,

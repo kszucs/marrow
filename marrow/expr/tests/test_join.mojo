@@ -7,7 +7,7 @@ from ...builders import array, PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, float64, Int64Type
 from ...tabular import record_batch, RecordBatch
 from ...expr import (
-    DynValue,
+    BoxedValue,
     col,
     lit,
     in_memory_table,
@@ -38,8 +38,8 @@ def _batch(k: List[Int], v: List[Int]) raises -> RecordBatch:
     return record_batch(cols^, names=["k", "v"])
 
 
-def _keys(v: List[Int]) -> List[DynValue]:
-    var r = List[DynValue]()
+def _keys(v: List[Int]) -> List[BoxedValue]:
+    var r = List[BoxedValue]()
     r.append(col("k"))
     return r^
 
@@ -74,8 +74,8 @@ def test_execute_inner_join_basic() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = [col("k")]
-    var keys_right = [col("k")]
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
 
     var result = left_plan.join(right_plan, keys_left, keys_right).execute()
     assert_equal(result.num_rows(), 2)
@@ -103,8 +103,8 @@ def test_execute_inner_join_no_matches() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = [col("k")]
-    var keys_right = [col("k")]
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
 
     var result = left_plan.join(right_plan, keys_left, keys_right).execute()
     assert_equal(result.num_rows(), 0)
@@ -136,8 +136,8 @@ def test_execute_left_join() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = [col("k")]
-    var keys_right = [col("k")]
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
 
     var result = (
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_LEFT)
@@ -174,8 +174,8 @@ def test_execute_semi_join() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = [col("k")]
-    var keys_right = [col("k")]
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
 
     var result = (
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_SEMI)
@@ -210,8 +210,8 @@ def test_execute_anti_join() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = [col("k")]
-    var keys_right = [col("k")]
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
 
     var result = (
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_ANTI)
@@ -256,8 +256,8 @@ def test_join_then_filter() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = [col("k")]
-    var keys_right = [col("k")]
+    var keys_left: List[BoxedValue] = [col("k")]
+    var keys_right: List[BoxedValue] = [col("k")]
 
     # After join: columns are k(0), v(1), k_right(2), v_right(3)
     var result = (

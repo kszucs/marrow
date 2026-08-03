@@ -1,19 +1,22 @@
-"""Unified expression + relational-plan system.
+"""Expression + relational-plan system, in two lanes.
 
-One value box, one interpreter, one relational layer. Which node you box
-decides the binary size: box the fused comptime nodes and the interpreter is
-dead-code-eliminated (~250 KB); box a ``TagValue`` and the runtime interpreter
-links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
+Expressions come in two forms and they share no node types. Which one you build
+decides the binary size: build fused comptime nodes and the runtime interpreter
+is dead-code-eliminated (~250 KB); build ``DynValue`` and it links (parsed SQL /
+Python-driven plans). Both erase into ``BoxedValue``, which is what the
+relational layer holds.
 
-``values.mojo`` — the fused comptime algebra (``Add``/``Greater``/``Length``…), the
-named column leaves (``NumericColumn``/``StringColumn``) with the ``Table[Tbl]()``
-and ``col(name, dtype)`` builders, and ``DynValue`` — the universal value box the
-relational layer holds (wraps a fused node *or* a ``TagValue``, exposing only
-``DynRelation.execute``).
+``values.mojo`` — the **AOT lane**: the fused comptime algebra
+(``Add``/``Greater``/``Length``…) and the named column leaves
+(``NumericColumn``/``StringColumn``) with the ``col(name, dtype)`` builder. Every
+operand is bound on its family trait, so a tree of these fuses into one SIMD
+loop and nothing in it is erased.
 
-``dynamic.mojo`` — ``TagValue``, the runtime tag-interpreter node the Python
-bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
-and operator overloads.
+``dynamic.mojo`` — the **runtime lane**: ``DynValue``, one struct holding a tag,
+its children and an optional payload, which evaluates by dispatching on the tag
+and the operands' runtime dtypes. Built by the untyped factories (``col(name)``,
+``lit()``, ``if_else()``) for expressions whose types are not known where they
+are written.
 
 ``relations.mojo`` — the **descriptive IR**: ``Relation`` nodes
 (``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``)
@@ -33,8 +36,8 @@ Usage::
     var result = plan.execute()
 """
 
-from .dynamic import DynAgg
-from .values import DynValue, col, lit, if_else
+from .dynamic import DynAgg, DynValue
+from .values import col, lit, if_else
 from ..kernels.execution import ExecutionContext
 from .aggregates import AggFunc, FoldedAggregates
 from .execution import (
@@ -44,6 +47,7 @@ from .execution import (
     Exhausted,
 )
 from .relations import (
+    BoxedValue,
     # Descriptive IR nodes
     Relation,
     DynRelation,

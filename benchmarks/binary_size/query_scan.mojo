@@ -18,6 +18,7 @@ not run them.
     pixi run binary_size query_scan
 """
 
+from marrow.expr.relations import BoxedValue
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.expr.values import col, DynValue
@@ -30,10 +31,10 @@ def main() raises:
     )
     var filtered = DynRelation(
         ParquetScan(path=String("orders.parquet"), schema=sch)
-    ).filter(DynValue(col("a", int64) > col("b", int64)))
+    ).filter(BoxedValue(col("a", int64) > col("b", int64)))
 
-    var values = List[DynValue]()
-    values.append(DynValue(col("a", int64)))
+    var values = List[BoxedValue]()
+    values.append(BoxedValue(col("a", int64)))
     var proj = Project(
         input=filtered,
         names=["a"],

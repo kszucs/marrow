@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **The expression layer is two lanes that share no node types.** A fused node used to
+  carry a second `_erased` body selected by a hand-propagated `comptime IsErased`, and
+  the value box claimed `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` so those
+  nodes would accept it as an operand. That conformance was **unsound** — those traits
+  promise a comptime `OutType: NumericType` and a `vectorwise` lane, and the box supplied
+  a placeholder `native = DType.bool` and a stub returning zero. The compiler reported it
+  as `attempt to resolve a recursive reference to declaration 'DynValue.__gt__'`, which is
+  what forced the fluent surface into a `NumericOps` sub-trait. Now: `marrow.expr.values`
+  is the AOT lane, every operand bound on its family trait; `marrow.expr.dynamic` is the
+  runtime lane, where `DynValue` is a tag, its children and an optional payload; and
+  `BoxedValue` (`marrow.expr.relations`) is the one box both erase into, so each
+  relational operator still compiles exactly once. `IsErased`, all 14 `_erased` methods,
+  and `NumericOps` are deleted, and `DynType` drops the 8 family-trait conformances that
+  told the same lie about `native`. `values.mojo` loses 595 lines.
+
+  **API change:** `marrow.expr.DynValue` now names the *runtime expression node*, not the
+  box. Plan APIs that took a `DynValue` — `filter`, `project`, `aggregate`, `sort`, `join`,
+  and the `Processor`s — take a `BoxedValue`; both a fused node and a `DynValue` convert
+  implicitly. `Value.is_deterministic` is removed (a default returning True, with no
+  caller).
+
+  **A runtime node's operation stays comptime.** `DynValue` carries a pointer to its
+  evaluator, so `__gt__` names `_compare[GtKernel, StringGtKernel]` and a binary links
+  exactly the kernels its expressions mention; the tag string that remains drives only
+  `render`/`prune`/`name`. Written first as one `_eval` switch over ~70 tags, it cost
+  **+1,807,168 bytes of `__text` (+45.7%)** on `query_dynvalue`, because every arm was
+  reachable from every node — the whole win from deleting the old 41-tag interpreter.
+  Binary size now, `__text` against HEAD rebuilt from source: `query_streaming` (AOT)
+  1,303,028 -> 1,302,900; `query_dynvalue` (runtime) 3,956,596 -> 3,984,756 (+0.71%).
+
+### Fixes
+
+- **`coalesce`, `nullif` and the string comparisons aborted instead of computing.**
+  `StringPredicate` and `ConditionalBinary` read a pipeline-breaker slot in `vectorwise`
+  but had lost their `Breaker` conformance, so nothing ever filled it and every such
+  expression tripped `index 0 is out of bounds` inside `Context.get`.
+
+- **Runtime-lane expressions now match the fused lane.** `+` over string columns
+  concatenates rather than raising; `/` and `**` are float64, so `5 / 2 == 2.5` and not
+  `2`; `sqrt`/`exp`/`ln` accept an integer column by casting up rather than raising out of
+  `dispatch_floating`; `length()` and `isin()` exist again; and `prune` evaluates columns,
+  literals, comparisons and `and`/`or` against statistics instead of answering "unknown",
+  which is what lets a Parquet scan skip row groups and pages for a predicate built at run
+  time.
+
 ### Features
 
 - **The Parquet scan streams row groups and projects into the read (T2.4).**
