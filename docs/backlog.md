@@ -45,7 +45,10 @@ obvious. Read before planning anything.
 
 - **Array, scalar and builder layout.** Adding methods and accessors is fine;
   adding, removing, reordering or re-typing fields is **out of scope, not
-  deferred**. This is why B13 is recorded as an accepted defect.
+  deferred**. Note this constraint has been read too broadly before: B13 (a
+  sliced `BoolArray` double-applying its offset) was filed as blocked by it,
+  when the fix was deleting a redundant `+ self.offset` and touched no field at
+  all. Check whether a fix actually needs a layout change before deferring it.
 
 ### Measurement traps
 
@@ -127,7 +130,8 @@ group rather than a line:
 - **`nulls` is a cached count with a second owner** (B12). `null_count()`
   returns the stored field; the bitmap is the truth. They diverge at `slice()`.
 - **`offset` has two conventions** — views index logically from zero, owning
-  `Buffer`/`Bitmap` do not — and array code mixes them (B11, B13, B16, B17).
+  `Buffer`/`Bitmap` do not — and array code mixes them (B16, B17; B11/B13 were
+  this shape and are fixed).
 
 | ID | Defect | Evidence | Size |
 |---|---|---|---|
@@ -136,19 +140,15 @@ group rather than a line:
 | **B4** | **BIT_PACKED Parquet levels are mis-decoded.** `definition_level_encoding` / `repetition_level_encoding` are parsed then never consulted — `_data_page_v1` applies `Rle.decode` unconditionally. | `format.mojo:575-578` vs `reader.mojo:244-270` | S |
 | **B5** | **Outer/semi/anti joins are wrong across multiple probe morsels.** `JoinProcessor.pull` calls `probe()` once per right-side morsel, and `_emit_unmatched` recomputes `matched_build` from *that morsel's* pairs alone. A build row matched only in morsel 2 is still emitted as unmatched by morsel 1: LEFT/FULL/ANTI over-produce, SEMI under-produces. Only single-morsel inputs are tested. Fix: hoist the matched bitmap into `JoinProcessor` and emit unmatched rows at exhaustion. | `execution.mojo:874-895`, `join.mojo:587-632` | M |
 | **B6** | **`JOIN_MARK`'s declared schema disagrees with its columns.** The "emits right columns?" predicate is re-derived three times with different membership: `join.mojo:682` excludes MARK, `join.mojo:646` (`output_dtype`) and `relations.mojo:615` do not. A fourth copy parses strings at `tabular.mojo:265`. Fix by introducing the `JoinKind` value type (was Q4.1) rather than patching three sites. | `join.mojo:646`, `:682`, `relations.mojo:615` | S |
-| **B7** | **`DictionaryBuilder.finish()` silently drops `ordered`.** The builder stores the flag, then calls `from_arrays(indices, values)` whose `ordered` defaults to `False`. | `builders.mojo:1428`, `:1482-1486`, `arrays.mojo:1902` | XS |
 | **B8** | **`BoolType` is not a `PrimitiveType` while `is_primitive()` returns True for bool.** `DynType.byte_width()` guards on `is_primitive()` then calls `variant_dispatch[PrimitiveType]`, which **aborts** for bool. Latent — every current caller happens to branch on `dt == bool_` first, and `test_dtypes.mojo:116` skips bool. | `dtypes.mojo:184`, `:1062`, `:981-988` | S |
 
 | **B12** | **`slice()` copies the parent's null count, and it corrupts data — not just reporting.** All eight `slice()` bodies do `nulls=self.nulls` (`arrays.mojo:350, 576, 803, 1048, 1339, 1507, 1758, 1988`). Three consequences: (a) **`PrimitiveBuilder.extend` corrupts fresh arrays on the pure-CPU path** — `builders.mojo:673` branches on `arr.nulls == 0`, `:676` does `self._null_count += arr.nulls`, while `:679` copies the *bits* correctly through `bm.view(arr.offset, n)`; same pattern at `builders.mojo:802, 999, 1206, 1347, 1627`; (b) it **crosses the C ABI** via `to_data()` → `CArrowArray.from_data` (`c_data.mojo:1162`), and PyArrow trusts the exported `null_count`; (c) `PrimitiveArray.__eq__` returns `False` for logically-equal arrays (`arrays.mojo:680`). **Not blocked by the layout freeze** — recomputing the count at slice changes a value, not a field. The spelling is already used in four kernels (`unset_count()`), but note there is **no `BitmapView.unset_count`**, so add that first: today there is no offset-correct spelling to reach for. | as cited | S |
 | **B16** | **`to_device` silently truncates a sliced array.** `PrimitiveArray.to_device` (`arrays.mojo:644-656`) and `BoolArray.to_device`/`to_cpu` (`:401-426`) upload `self.buffer` whole — `Buffer.to_device` copies `_size` bytes from `_ptr` — then construct the result with `offset=0`, so a sliced array becomes its own first `length` elements. `FixedSizeListArray.to_device` (`:1349`) preserves `offset` and is correct, which shows the convention is not settled inside one file. | as cited | S |
 | **B17** | **IPC drops `offset` in both directions.** `_BatchEncoder.write_array` emits `_FieldNode(length, nulls)` with no offset while copying the whole buffer (`ipc.mojo:1678`); `_BatchDecoder.read_array` hardcodes `offset=0` (`:1941`). `arr.slice(2, 3)` written and read back yields elements 0, 1, 2. `test_ipc.mojo` has no slice test. | as cited | S |
-| **B18** | **C-Data export clobbers the flags it just set.** `CArrowSchema.from_field` (`c_data.mojo:536-538`) assigns `c_schema.flags = NULLABLE or 0` with `=`, not `\|=`, *after* `from_dtype` set `ARROW_FLAG_MAP_KEYS_SORTED` (`:474`) and `ARROW_FLAG_DICT_ORDERED` (`:507`). Since `from_schema` routes every field through `from_field` (`:561`), exporting a `dictionary(ordered=True)` or `map(keys_sorted=True)` column silently loses the flag. Existing round-trip tests call `from_dtype`/`to_dtype` directly and miss it. Related to B7 — same flag, lost on a second path. | as cited | XS |
 | **B19** | **`null_count == -1` is not handled on import.** `c_data.mojo:1059` does `nulls=Int(self.null_count)` unconditionally. The C Data Interface permits `-1` ("not computed") and **PyArrow emits it**; it lands in `ArrayData.nulls` and back out through `null_count()`. Also in the same path: `CArrowArray.to_data` indexes `buffers[0..2]` (`:943-1047`) **without consulting `n_buffers`** (`:891`), so a producer with fewer buffers causes an out-of-bounds read. | as cited | S |
 
 **Also small and worth clearing in this wave:**
 
-- **B11** — `BoolArray.write_to` (`arrays.mojo:366`) double-applies the offset,
-  the same bug as B13. Unlike B13 it needs no layout change. — XS
 - **B21** — `CArrowArrayStream` has **no `__del__`** (`c_data.mojo:1423-1449`),
   and both `to_pycapsule` (`:1492`) and `to_table` (`:1506`) take `self` by
   *borrow* and copy it without marking it released — unlike
@@ -157,13 +157,6 @@ group rather than a line:
   and `_release_exported_array` (`:848`) never free `ptr[].dictionary`, which
   `from_dtype` (`:504`) and `from_data` (`:1153`) heap-allocate. — S
 
-**Accepted, blocked by the layout freeze** (documented, not scheduled):
-
-- **B13** — indexing a sliced `BoolArray` double-applies the offset:
-  `self.values().test(self.offset + index)` where `values()` already returns an
-  offset-applied view (`arrays.mojo:387`). The *real* fix is deleting one of the
-  two offset conventions, which is a layout question; B11's sibling fix at
-  `write_to` is not.
 
 ---
 

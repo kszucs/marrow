@@ -2238,3 +2238,77 @@ def test_empty_nested_list() raises:
     assert_true(arr.dtype().is_list())
     assert_equal(len(arr.as_list().values()), 0)
     assert_true(arr.as_list().values().dtype().is_list())
+
+
+def test_dictionary_builder_preserves_ordered() raises:
+    """`finish()` must not drop the `ordered` flag the builder was given.
+
+    It stored `ordered` in `_dtype` and then built the result with
+    `DictionaryArray.from_arrays(indices, values)`, whose `ordered` defaults to
+    False — so the flag survived construction and was lost on the way out.
+    """
+    var vb = StringBuilder()
+    vb.append("red")
+    vb.append("green")
+    var values: DynArray = vb.finish()
+
+    var builder = DictionaryBuilder(Int8Builder(), values^, ordered=True)
+    builder.append(0)
+    builder.append(1)
+
+    var arr = builder.finish()
+    assert_true(arr.type().as_dictionary().ordered)
+
+
+def test_dictionary_builder_defaults_to_unordered() raises:
+    var vb = StringBuilder()
+    vb.append("red")
+    var values: DynArray = vb.finish()
+    var builder = DictionaryBuilder(Int8Builder(), values^)
+    builder.append(0)
+    assert_true(not builder.finish().type().as_dictionary().ordered)
+
+
+# ---------------------------------------------------------------------------
+# Sliced BoolArray — `values()` is already offset-applied.
+#
+# `values()` returns `buffer.view(self.offset, self.length)` and
+# `BitmapView.test` adds its own `_offset`, so `values().test(self.offset + i)`
+# applied the offset twice. Every read of a sliced bool array was off by
+# `offset` bits. Recorded as blocked by the layout freeze, which was wrong:
+# dropping the redundant addition changes no field.
+# ---------------------------------------------------------------------------
+
+
+def _bools(values: List[Bool]) raises -> BoolArray:
+    var b = BoolBuilder(capacity=len(values))
+    for v in values:
+        b.append(v)
+    return b.finish()
+
+
+def test_sliced_bool_array_getitem() raises:
+    var a = _bools([True, False, True, True, False])
+    var s = a.slice(1, 3)  # [False, True, True]
+    assert_true(not s[0].value())
+    assert_true(s[1].value())
+    assert_true(s[2].value())
+
+
+def test_sliced_bool_array_getitem_crosses_byte_boundary() raises:
+    # offset 6, so the window straddles the first byte
+    var vals = List[Bool]()
+    for i in range(12):
+        vals.append(i % 3 == 0)  # T F F T F F T F F T F F
+    var a = _bools(vals)
+    var s = a.slice(6, 4)  # indices 6..9 -> T F F T
+    assert_true(s[0].value())
+    assert_true(not s[1].value())
+    assert_true(not s[2].value())
+    assert_true(s[3].value())
+
+
+def test_sliced_bool_array_write_to() raises:
+    var a = _bools([True, False, True, True, False])
+    var s = a.slice(1, 3)
+    assert_true(String(s) == "BoolArray([False, True, True])")

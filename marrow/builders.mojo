@@ -1483,7 +1483,14 @@ struct DictionaryBuilder(Builder):
         mut self, *, shrink_to_fit: Bool = True
     ) raises -> DictionaryArray:
         var indices = self._indices.finish()
-        return DictionaryArray.from_arrays(indices^, self._values.copy())
+        # `ordered` is carried on `_dtype`, not derivable from the arrays —
+        # `from_arrays` defaults it to False, which silently dropped the flag
+        # the builder was constructed with.
+        return DictionaryArray.from_arrays(
+            indices^,
+            self._values.copy(),
+            ordered=self._dtype.as_dictionary().ordered,
+        )
 
     def reset(mut self):
         try:

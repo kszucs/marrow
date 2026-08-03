@@ -1130,3 +1130,29 @@ def test_map_array_roundtrip() raises:
     assert_equal(keys[2].to_string(), "z")
     assert_equal(vals[0].value(), 10)
     assert_equal(vals[2].value(), 30)
+
+
+def test_dictionary_ordered_survives_field_export() raises:
+    """`from_field` must not clobber the flags `from_dtype` already set.
+
+    It assigned `flags = NULLABLE or 0` rather than OR-ing, so the dictionary
+    ordered bit — set by `from_dtype` — was dropped for every field. Exporting a
+    whole schema goes through `from_field` for every column, so this was the
+    path that actually mattered; the existing round-trip test calls `from_dtype`
+    directly and cannot see it.
+    """
+    var dt = dictionary(DynType(int8), DynType(int32), ordered=True).to_dyn()
+    var c_schema = CArrowSchema.from_field(Field("d", dt.copy(), nullable=True))
+    var rt = c_schema.to_field()
+    assert_true(rt.dtype.is_dictionary())
+    assert_true(rt.dtype.as_dictionary().ordered)
+    assert_true(rt.nullable)
+
+
+def test_map_keys_sorted_survives_field_export() raises:
+    """Same clobber, other flag: ARROW_FLAG_MAP_KEYS_SORTED."""
+    var dt = map_(DynType(int32), DynType(int32), keys_sorted=True).to_dyn()
+    var c_schema = CArrowSchema.from_field(Field("m", dt.copy(), nullable=True))
+    var rt = c_schema.to_field()
+    assert_true(rt.dtype.is_map())
+    assert_true(rt.dtype.as_map().keys_sorted)

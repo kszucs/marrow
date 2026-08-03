@@ -531,12 +531,19 @@ struct CArrowSchema(Copyable, Movable):
 
         Delegates to `from_dtype` and then sets the field name (heap-allocated
         as a raw C string) and nullability flag.
+
+        Nullability is OR-ed in, never assigned: `from_dtype` has already set
+        `ARROW_FLAG_DICT_ORDERED` or `ARROW_FLAG_MAP_KEYS_SORTED` where they
+        apply, and assigning here dropped them. Every field of an exported
+        schema goes through this, so a `dictionary(ordered=True)` or
+        `map(keys_sorted=True)` column lost its flag on the way out.
         """
         var c_schema = CArrowSchema.from_dtype(field.dtype)
         c_schema.name = _alloc_c_string(field.name)
-        c_schema.flags = Int64(
-            ARROW_FLAG_NULLABLE
-        ) if field.nullable else Int64(0)
+        if field.nullable:
+            c_schema.flags |= Int64(ARROW_FLAG_NULLABLE)
+        else:
+            c_schema.flags &= ~Int64(ARROW_FLAG_NULLABLE)
         c_schema.metadata = _encode_c_metadata(field.metadata)
         return c_schema^
 

@@ -362,9 +362,11 @@ struct BoolArray(Array):
                 writer.write("...")
                 break
             if self.is_valid(i):
-                writer.write(
-                    "True" if self.values().test(self.offset + i) else "False"
-                )
+                # `values()` is already offset-applied — adding `self.offset`
+                # again reads `2*offset + i`. `is_valid` above goes through the
+                # raw `bitmap`, which is *not* offset-applied, hence the
+                # asymmetry between these two lines.
+                writer.write("True" if self.values().test(i) else "False")
             else:
                 writer.write("NULL")
         writer.write("])")
@@ -384,7 +386,8 @@ struct BoolArray(Array):
         var valid = self.is_valid(index)
         if not valid:
             return BoolScalar(is_valid=False)
-        return BoolScalar(self.values().test(self.offset + index))
+        # `values()` is offset-applied; `self.bitmap` (used by `is_valid`) is not.
+        return BoolScalar(self.values().test(index))
 
     def values(self) -> BitmapView[origin_of(self.buffer)]:
         """Non-owning bit-level view of the values buffer."""
