@@ -409,7 +409,9 @@ struct BoolArray(Array):
         return BoolArray(
             length=self.length,
             nulls=self.nulls,
-            offset=0,
+            # see PrimitiveArray.to_device: the whole bit-packed buffer moves,
+            # so the offset stays meaningful and must be carried over
+            offset=self.offset,
             bitmap=bm^,
             buffer=self.buffer.to_device(ctx),
         )
@@ -422,7 +424,9 @@ struct BoolArray(Array):
         return BoolArray(
             length=self.length,
             nulls=self.nulls,
-            offset=0,
+            # see PrimitiveArray.to_device: the whole bit-packed buffer moves,
+            # so the offset stays meaningful and must be carried over
+            offset=self.offset,
             bitmap=bm^,
             buffer=self.buffer.to_cpu(ctx),
         )
@@ -653,7 +657,10 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
-            offset=0,
+            # the whole values buffer is transferred, so the offset still
+            # addresses the same elements; zeroing it silently turned a slice
+            # into the parent's first `length` elements
+            offset=self.offset,
             bitmap=bm^,
             buffer=self.buffer.to_device(ctx),
         )
@@ -667,7 +674,10 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
-            offset=0,
+            # the whole values buffer is transferred, so the offset still
+            # addresses the same elements; zeroing it silently turned a slice
+            # into the parent's first `length` elements
+            offset=self.offset,
             bitmap=bm^,
             buffer=self.buffer.to_cpu(ctx),
         )
