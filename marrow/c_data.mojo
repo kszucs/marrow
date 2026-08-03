@@ -1061,10 +1061,24 @@ struct CArrowArray(Copyable, Movable):
         else:
             raise Error("to_data: unsupported dtype: ", dtype)
 
+        # The C Data Interface allows -1 for "not computed", and PyArrow emits
+        # it. Passing it through makes `null_count()` answer -1; derive it from
+        # the validity bitmap instead. No bitmap means no nulls.
+        var nulls = Int(self.null_count)
+        if nulls < 0:
+            if bitmap:
+                nulls = (
+                    bitmap.value()
+                    .view(Int(self.offset), Int(self.length))
+                    .unset_count()
+                )
+            else:
+                nulls = 0
+
         return ArrayData(
             dtype=dtype.copy(),
             length=Int(self.length),
-            nulls=Int(self.null_count),
+            nulls=nulls,
             offset=Int(self.offset),
             bitmap=bitmap,
             buffers=buffers^,

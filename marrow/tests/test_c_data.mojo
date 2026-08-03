@@ -1156,3 +1156,30 @@ def test_map_keys_sorted_survives_field_export() raises:
     var rt = c_schema.to_field()
     assert_true(rt.dtype.is_map())
     assert_true(rt.dtype.as_map().keys_sorted)
+
+
+def test_import_array_with_uncomputed_null_count() raises:
+    """`null_count == -1` means "not computed", not "-1 nulls".
+
+    The C Data Interface permits a producer to leave the count uncomputed, and
+    PyArrow does emit it. `to_data` assigned it straight through, so the
+    sentinel propagated into `ArrayData.nulls` and back out of `null_count()`.
+    """
+    var pa = Python.import_module("pyarrow")
+    var arr = c_array_from_pyobj(
+        pa.array(Python.list(1, None, 3), type=pa.int32())
+    )
+    arr.null_count = -1
+    var out = arr^.to_array(int32)
+    assert_equal(out.null_count(), 1)
+    assert_true(out.is_null(1))
+
+
+def test_import_all_valid_array_with_uncomputed_null_count() raises:
+    var pa = Python.import_module("pyarrow")
+    var arr = c_array_from_pyobj(
+        pa.array(Python.list(1, 2, 3), type=pa.int32())
+    )
+    arr.null_count = -1
+    var out = arr^.to_array(int32)
+    assert_equal(out.null_count(), 0)

@@ -916,6 +916,15 @@ struct BitmapView[
         count, _, _ = self.count_set_bits_with_range()
         return count
 
+    def unset_count(self) -> Int:
+        """How many of these bits are 0 — the null count of a validity bitmap.
+
+        The offset-aware counterpart of `Bitmap.unset_count`, which counts over
+        the whole owning bitmap. Anything deriving a null count for a *slice*
+        needs this one.
+        """
+        return self._length - self.count_set_bits()
+
     # --- Equality ---
 
     def __eq__(self, other: BitmapView[_]) -> Bool:
