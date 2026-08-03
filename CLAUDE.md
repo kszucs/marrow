@@ -448,11 +448,20 @@ python/                   # Python package + bindings (python/marrow/libmarrow.s
 └── marrow/tests/         # Python test_*.py and bench_*.py
 benchmarks/               # standalone programs (they own a `main()`, so they
                           # cannot live inside the package) + binary_size gate
-docs/                     # Quarto site and design documents
+docs/                     # Quarto site, design documents, and backlog.md
 ```
 
 Tests and benchmarks sit **inside** the package, next to the code they cover.
 That works because they carry no `main()` — see "Writing Mojo tests".
+
+**`docs/backlog.md` is the only place that says what is open.** It replaced seven
+`docs/tasks-*.md` files on 2026-08-03. Its §0 carries the standing constraints and
+measurement traps — read them before planning anything, because each one
+invalidates an approach that looks obvious. Its status lines have been wrong
+before (an audit that day found 18 wrong statuses across the files it replaced),
+so **verify by `grep`, not by reading a header** — and exclude
+`.claude/worktrees/`, which holds stale pre-refactor code that produces false
+positives from the repo root.
 
 ## GPU Compute
 
@@ -680,8 +689,8 @@ mostly bite generic trait hierarchies such as `marrow.expr.values`.
   works — the difference is that it is only ever *used* as an annotation, never
   returned. Consequence: "wrap this operand only when it needs converting" is not
   expressible; either always wrap, or do the selection where the concrete type is
-  known. This blocked the promote-at-construction design in
-  `docs/code-quality-tasks.md`.
+  known. This blocked the promote-at-construction design recorded in
+  `docs/backlog.md`.
 
 ## Releasing
 
@@ -701,14 +710,25 @@ release with both artifacts attached.
 
 1. **Type system**: Variant elements must be copyable; references and lifetimes
    are still evolving.
-2. **C callbacks**: release callbacks in the C Data Interface are never invoked
-   (Mojo limitation).
-3. **Testing**: conformance testing leans on PyArrow until Mojo has a JSON
+2. **Testing**: conformance testing leans on PyArrow until Mojo has a JSON
    library.
-4. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
+3. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary,
    decimal (32/64/128/256) and temporal (date/time/timestamp/duration/interval)
-   are implemented; union, run-end-encoded and view layouts are not.
+   are implemented; union, run-end-encoded and view layouts are not. **`map` is
+   the exception to "implemented"** — it works in dtypes, arrays, builders, the C
+   Data Interface and Parquet, but **not through IPC in either direction** (type
+   code 17 is absent from `ipc.mojo`), it has no `MapScalar` (a scalar taken from
+   a `MapArray` reports `list<…>`), and `cast` has no arm for it.
+4. **Scalar fidelity**: six types have no dedicated scalar — `binary`,
+   `large_binary` and `large_string` collapse to `StringScalar`; `large_list`,
+   `map` and `fixed_size_list` collapse to `ListScalar`. `StringScalar.type()`
+   hard-returns `string` and `ListScalar.type()` hard-returns `list_(child)`.
+
+Release callbacks in the C Data Interface **are** implemented and invoked — this
+was listed here as a Mojo limitation long after it stopped being true. See
+`c_data.mojo`'s four release paths plus the three PyCapsule destructors; the
+double-free guard is the spec's null-release handshake.
 
 ## How to Identify Leaky Abstractions
 

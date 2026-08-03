@@ -222,10 +222,11 @@ instantiation *per supported dtype*, "just in case." `kernels::execution`
 regardless of whether this specific query ever hits them, so `add`/
 `subtract`/`multiply`/`divide` each get compiled for every numeric dtype.
 `kernels::join`/`groupby`/`hashing` (11/17/141, all zero for `query_comptime`)
-are the same story one level up: `Planner.build()`'s exhaustive per-node-kind
-dispatch makes `AggregateProcessor`/`JoinProcessor` reachable — and therefore
-compiled in — even though this query never aggregates or joins anything.
+are the same story one level up: an exhaustive per-node-kind dispatch makes
+`AggregateProcessor`/`JoinProcessor` reachable — and therefore compiled in —
+even though this query never aggregates or joins anything. (`Planner` itself is
+gone; `Relation.to_processor` replaced it, so each node now pulls in only its
+own processor.)
 
-See `marrow/aot/relations.mojo`'s module docstring for the "closed vs. open
-erasure boundary" framing this demonstrates, and
-`docs/aot-relations-design.md` for the full design.
+See `docs/architecture.md` for the "closed vs. open erasure boundary" framing
+this demonstrates.

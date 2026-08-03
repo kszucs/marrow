@@ -195,6 +195,9 @@ where per-aggregate output arrays stop fitting in cache.
 
 ## 6. Gates
 
+> **Three of these commands no longer exist — see the correction block in §8
+> before running anything here.**
+
 Run all; report real numbers; a negative result is valuable.
 
 1. `pixi run -e dev check_lib` — known false positives: `'main()' is not supported within
@@ -214,20 +217,57 @@ Run all; report real numbers; a negative result is valuable.
 
 ## 7. Sequencing after this
 
-1. **3b — this file.** Inversion + regression fix.
-2. **4 — `FusedAggregation`.** Single pass, AoS accumulator blob, comptime offsets per kernel,
-   zero dispatch. Validate at **g100k** first. This is the step that must show the win.
-3. **2b — `AggState` widening** (family-max accumulator). Independent; needs a new
-   `PrimitiveType`-bounded tier in the `Value` tower designed *up front*, not discovered mid-refactor.
-4. **Q1.1 — comptime key spec** for grouping. The only thing that moves the binary-size gate.
-5. Pluggable grouping strategies (`GroupStats` / `suitable` / `rank`) — after fusion, since fusion
-   changes the per-row costs the policy thresholds encode. Requires the bench harness to be able to
-   **force** a strategy, or "improve X without hurting Y" is unverifiable.
+1. **3b — this file.** Inversion + regression fix. **Done**, 2026-07-26 (§8).
 
+### Open
+
+Everything that followed 3b is tracked in **`docs/backlog.md`**, which is the
+single source of truth for status. Do not read the ordering below as live:
+
+- **Q2.5 step 4 — `FusedAggregation`** (single pass, AoS accumulator, comptime
+  offsets, zero dispatch) and **step 2b — `AggState` widening** to
+  `PrimitiveType` (so temporal reductions work natively) are both open, gated on
+  **Q6.1** (the cross-engine aggregate benchmark with the AOT path measured —
+  without it every table is one row and the differentiator is unmeasured).
+  **Step 3** — `count_distinct`/`approx_count_distinct` are still four free
+  functions — is open too. §5's "validate at g100k, never g10" still governs all
+  three.
+- **The hashing→cast binary-size item** (§5: `HashGrouper.consume_keys` →
+  `kernels/hashing.mojo:44`'s `from .cast import cast`, 797 `kernels::cast`
+  symbols, 20% of the fused binary) was carried here as "Q1.1 — comptime key
+  spec". That import is still there, but **Q1.1 has no entry in
+  `docs/backlog.md`** — it needs one before it can be scheduled.
+- Pluggable grouping strategies are listed under `docs/backlog.md` §7 (deferred):
+  `DirectMapGrouper`, `PackedKeyGrouper`, `RowEncodedGrouper`. The prerequisite
+  this file named — being able to **force** a strategy from the bench harness —
+  shipped with §8's `GroupBy(keys, ctx, strategy)`.
 
 ---
 
 ## 8. Outcome (2026-07-26)
+
+> **Corrections (verified at `b2e7dae`, 2026-08-03).** The rest of this file
+> stands; three facts in it have moved.
+>
+> 1. **`resolve_agg` is at `marrow/expr/aggregates.mojo:194`**, not
+>    `marrow/expr/dynamic.mojo` as the "Layering" bullet below says.
+> 2. **The `AggFunction` catalog is in `marrow/expr/aggregates.mojo:84-191`**
+>    (`NumericFold`, `OrderPreserving`, `CountValid`, `DistinctCount`, and the
+>    aliases `Sum`/`Product`/`Mean`/`Min`/`Max`/`Count`/`CountDistinct`/
+>    `ApproxCountDistinct`) — *not* in `marrow/kernels` as the same bullet
+>    claims. Only the **trait** `AggFunction` is in the kernels, at
+>    `marrow/kernels/aggregate.mojo:846`. The layering argument the bullet makes
+>    was therefore not what shipped.
+> 3. **§6's gate commands do not exist.** `pixi run -e dev check_lib`,
+>    `pixi run -e dev check <file>` and `pixi run test_parallel` were all
+>    removed. The workflow is `pixi run -e dev precompile` (compiles everything
+>    under `marrow/`, ~18 s, 0 errors and 0 warnings required) followed by
+>    `pixi run -e dev pytest <selection>`. See `CLAUDE.md`. The same substitution
+>    applies to the `check_lib` / per-file `check` row in the Gates table below.
+>
+> Also dead: the cross-references to `docs/tasks-expr-kernels-layering.md` and
+> `docs/tasks-aggregate-followups.md` below — both files were deleted, replaced
+> by `docs/backlog.md`.
 
 Implemented, plus two structural changes the owner asked for mid-flight.
 

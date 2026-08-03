@@ -1,5 +1,51 @@
 # Step 3 — replace `TagValue`'s tag interpreter with node structs
 
+> ## SUPERSEDED BY `7d57398` (2026-08-03) — historical record only
+>
+> **Phases 0–4 genuinely landed** — the 41-tag interpreter was deleted and
+> `dynamic.mojo` went 1,087 → 113 lines, exactly as planned. But the **design
+> rationale below was reversed four days later** by the two-lane split. Do not
+> build on it. The current model is `docs/lane-shape-window-design.md`; status
+> lives in `docs/backlog.md`.
+>
+> What this document asserts, and what is true at `b2e7dae`:
+>
+> 1. **"The two lanes *do* share one node set."** They do **not**. The lanes now
+>    share **no node types**: `marrow/expr/values.mojo` is the AOT lane, every
+>    operand bound on its family trait; `marrow/expr/dynamic.mojo` is the runtime
+>    lane, where `DynValue` is its children, an optional payload and a pointer to
+>    its evaluator. `a.add(b)` on two runtime operands does *not* build the fused
+>    `Add`.
+> 2. **"`TagValue` implements every family trait … that is what lets the node
+>    bounds stay exactly as they are."** That conformance was **unsound and is
+>    gone**. `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` promise a
+>    comptime `OutType: NumericType` and a `vectorwise` lane; the box supplied a
+>    placeholder `native = DType.bool` and a stub returning zero. The compiler
+>    reported it as `attempt to resolve a recursive reference to declaration
+>    'DynValue.__gt__'` — which is what forced the fluent surface into a
+>    `NumericOps` sub-trait (surprise 3 in the log below). §"The one thing that
+>    has to be made to work" is the part that did not survive.
+> 3. **"The bet is the erased instantiation never *reaches* `vectorwise`."** The
+>    bet lost. The 14 `_erased` method bodies and the hand-propagated
+>    `comptime IsErased` that selected them are **deleted**, along with
+>    `NumericOps`. `DynType` **dropped all 8 family-trait conformances** (Phase 1
+>    of this plan) — they told the same lie about `native`.
+> 4. **Naming has inverted.** `TagValue` no longer exists. Today `DynValue`
+>    (`dynamic.mojo:236`) names the runtime **node**, and the box both lanes
+>    erase into is **`BoxedValue`** (`relations.mojo:155`) — which is what keeps
+>    each relational operator compiling exactly once. Read every "`TagValue`" and
+>    every "the box" below with that substitution.
+> 5. **The final numbers are superseded.** `query_dynvalue` 3,956,596 →
+>    **3,984,756** (+0.71%) and `query_streaming` 1,303,028 → **1,302,900** at
+>    HEAD. The −24.4% this step delivered was kept; the two-lane split cost
+>    +0.71% on top of it to buy back soundness.
+>
+> What is still worth reading: the isolated-gate measurement (§"What changed
+> since the original sketch" item 3), the 41-tag → existing-node mapping table,
+> and the five surprises in the log — three of those (the `materialize`
+> catch-22, the triplicated aggregate sugar, "the box is the erasure boundary")
+> are still live constraints and are restated in `CLAUDE.md`.
+
 Status: **complete**, 2026-07-30. Supersedes the Step 3 sketch in
 `~/Workspace/dtype-proto/PLAN.md`, which three findings have overtaken.
 

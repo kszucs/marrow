@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Docs
+
+- **One backlog, `docs/backlog.md`, replacing seven task files.** A five-agent audit
+  verified every task ID against the code and found **18 wrong statuses**: eight marked
+  open that were done (Q2.1, L3, Q1.2/Q1.3, Q5.3, Q2.4, FU-1–FU-4, T2.4, Q3.4), four
+  marked done that were not (Q4.5's test, T3.4, T3.5, Q6.1's baseline), and six whose
+  premise the two-lane split had destroyed. A consolidation pass four days earlier had
+  not caught any of it, because nothing external was contradicting the claims — CI has
+  not run since 2026-05-11, and `test.yml` still invokes a `test_parallel` task deleted
+  in `2aa1954`.
+
+  The new file is sequenced as waves: nine silent-wrong-answer defects, then CI and the
+  docs build, then the ClickBench milestone, then M2/M3 enablers. Arrow-parity gaps are
+  listed once as deferred rather than scheduled. §0 collects the standing constraints
+  and measurement traps that were previously scattered across the files it replaces.
+
+  Deleted as superseded: the seven `tasks-*.md` files, plus `dynamic-dispatch-design.md`
+  (specifies fn-pointer vtables; the tree uses inline `Variant`), `aot-query-compilation.md`
+  (its central `comptime if op == ADD` construct is now a *measured* anti-pattern here),
+  `unified-plan-hierarchy.md` (its mechanism is what the two-lane split disproved),
+  `expr-unification-plan.md`, `ibis-fusion-design.md`, and `lane-shape-window-skeleton.mojo`
+  (401 lines prototyping three rejected designs — a runnable artifact of a rejected design
+  is a trap). `docs/architecture.md` is new and describes the shipped design.
+
+- **Corrected claims that had drifted into being false.** CLAUDE.md listed "release
+  callbacks in the C Data Interface are never invoked" as a Mojo limitation; they are
+  implemented and invoked on four paths plus three PyCapsule destructors. Its layout
+  coverage claimed `map` is implemented — true everywhere except IPC, where it round-trips
+  in neither direction. README.md claimed the runtime lane "is what the Python bindings
+  drive" (nothing in the expression layer is bound), that "all compute kernels" are exposed
+  to Python (26 of roughly 90 are), and described the AOT lane in terms of `Table`,
+  `Column[Tbl, name, T]` and `Project` — all deleted.
+
 ### Refactors
 
 - **The expression layer is two lanes that share no node types.** A fused node used to

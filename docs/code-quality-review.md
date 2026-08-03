@@ -1,5 +1,22 @@
 # Code quality review — leaky abstractions, encapsulation, and pattern inventory
 
+> **Historical record — verified stale 2026-08-03.** This is the discovery sweep
+> that produced the Q-task backlog. Most of it has since been fixed and its base
+> commit is 155 commits behind HEAD, so **its line citations no longer resolve**:
+> `kernels/arithmetic.mojo` + `kernels/compare.mojo` merged into `numeric.mojo`,
+> `kernels/helpers.mojo` was deleted, `kernels/core.mojo` was added, `expr/` split
+> into `values.mojo`/`dynamic.mojo`/`aggregates.mojo`, the `dispatch_over_*` free
+> functions became `DynType.dispatch_*` methods, and the erased containers were
+> renamed `Any*` → `Dyn*`.
+>
+> **Do not read this for status.** Of its findings, D3/D4/D5 are resolved, RC1/RC2/
+> RC4/RC5/RC6 are largely resolved, and RC9 was resolved by a route this document
+> argued against — its proposed comptime op registry was dropped, and the
+> interpreter was deleted instead. What still holds is carried forward, corrected,
+> in **`docs/backlog.md`**, which is the only authoritative list of open work.
+> The `docs/code-quality-tasks.md` and `docs/tasks-*.md` files it refers to were
+> deleted on 2026-08-03.
+
 **Date:** 2026-07-24 · **Base commit:** `80ebc10` (branch `complete`) · **Status:** discovery only — nothing fixed yet.
 
 Scope: six parallel read-only reviews covering the whole non-test tree (~39k lines) —

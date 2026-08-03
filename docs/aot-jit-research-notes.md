@@ -1,5 +1,44 @@
 # AOT Compiled Queries vs. JIT: Research Notes and Benchmark Results
 
+> **Dated record — read the measurements as history, the argument as current.**
+> Verified against `b2e7dae`, 2026-08-03.
+>
+> **The subject file no longer exists.** Everything below describes
+> `marrow/faszom.mojo`, which was renamed to `marrow/expr/lane.mojo` and then to
+> **`marrow/expr/values.mojo`** (`d70ad3e`). The benchmark file was
+> `marrow/bench_faszom.mojo`, renamed to `marrow/expr/tests/bench_fused.mojo`
+> and since deleted — so **the reproduction command in "Benchmark Results"
+> cannot be run**, and the code sketches (`FilterExpr`, `GtExpr`, `Add`,
+> `Column`, `execute(expr, n)`) name types the tree no longer has. The current
+> node vocabulary is in `docs/lane-shape-window-design.md`.
+>
+> **The binary-size figures are superseded.** The 52 KB / 1.1 MB pair and the
+> **21×** ratio in "Binary Size: AOT vs. Full Engine" predate every later change
+> to the expression layer, including the deletion of the tag interpreter. The
+> live gate is **`benchmarks/binary_size/`**, measured as `__text` (never
+> stripped file size — it is page-quantized to 16 KB on Apple Silicon). Its
+> current table gives `query_runtime` 5,266,548 against a `query_streaming`
+> floor of 1,251,672 — a ratio of about **4.2×**; with the floor re-measured at
+> HEAD (1,302,900, per the CHANGELOG) it is about **4.0×**. Either way the
+> order of magnitude the 21× implied is gone. Note `docs/backlog.md` **I4**
+> tracks re-baselining those numbers, so treat them as approximate. The
+> external comparisons (DuckDB 35 MB, Polars 188 MB, Spark 460 MB) were never
+> re-measured and are indicative only.
+>
+> **There is no runtime code generation anywhere in the tree.** No JIT, no
+> LLVM-at-runtime, no emitted machine code — the only "codegen" in the codebase
+> is Mojo's GPU codegen and Thrift's, neither of which is query compilation.
+> Everything in "Can We Add Runtime Specialization to AOT?" that is described as
+> *already present* still is (`compressed_store`'s popcount dispatch, literal
+> folding through comptime parameters, the null-free fast path); everything
+> described as a *proposal* remains unbuilt.
+>
+> **What is kept, and why.** The literature survey (Hyper / Umbra / Excalibur),
+> the AOT-vs-JIT comparison, and the "why you can't link just the part you need"
+> argument are the intellectual justification for marrow's two-lane
+> architecture — a monomorphized AOT lane beside a small erased runtime lane —
+> and they are recorded nowhere else in the repo.
+
 ## What We Built
 
 `marrow/faszom.mojo` implements compile-time kernel fusion using Mojo's
