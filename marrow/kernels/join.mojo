@@ -138,33 +138,158 @@ from .hashing import rapidhash
 # of this vocabulary, not its owner. marrow.expr.relations imports these.
 # ---------------------------------------------------------------------------
 
-comptime JOIN_INNER: UInt8 = 0
+
+struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
+    """Which rows a join emits — and therefore which *columns*.
+
+    A value type rather than a bare `UInt8` for two reasons, both of which had
+    already cost something:
+
+    1. **The column question had four answers.** "Does this kind emit the right
+       side's columns?" was re-derived inline at `output_dtype`, `_assemble`,
+       `relations.Join.schema` and `tabular.join`, and they did not agree — the
+       first two differed on MARK, so a MARK join built a `StructArray`
+       declaring the right side's fields while carrying only the left's. That is
+       a corrupt array, and nothing checked. It is one method now.
+    2. **`kind` and `strictness` were both `UInt8`.** Passing them swapped
+       compiled silently, and the numbering makes it plausible: `JOIN_ANTI` is
+       5, `JOIN_ASOF` is 2. Strictness stays `UInt8` for now, but the two are no
+       longer interchangeable at a call site.
+
+    Both references put these predicates on the type — polars has
+    `JoinType::is_semi_anti()` / `is_equi()`, ClickHouse a set of `constexpr
+    isLeft(kind)` free functions. Neither answers the question inline at a use
+    site. marrow follows polars' *flat* model, where SEMI and ANTI are kinds;
+    ClickHouse instead files them under strictness.
+    """
+
+    var code: UInt8
+    """The wire value. Stable — `expr.relations` and the Python bindings both
+    round-trip it."""
+
+    @implicit
+    def __init__(out self, code: UInt8):
+        self.code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.code == other.code
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.code != other.code
+
+    def emits_right_columns(self) -> Bool:
+        """Whether the output carries the right side's columns.
+
+        False only for the existence filters, which project the left side and
+        use the right purely as a predicate. **This is the single source for
+        the join's output width** — `output_dtype` and `_assemble` must agree or
+        the result `StructArray` is malformed.
+        """
+        return self != JOIN_SEMI and self != JOIN_ANTI
+
+    def emits_unmatched_left(self) -> Bool:
+        """Whether unmatched *build*-side rows appear, padded with nulls."""
+        return self == JOIN_LEFT or self == JOIN_FULL
+
+    def emits_unmatched_right(self) -> Bool:
+        """Whether unmatched *probe*-side rows appear, padded with nulls."""
+        return self == JOIN_RIGHT or self == JOIN_FULL
+
+    def is_supported(self) -> Bool:
+        """Whether a kernel actually implements this kind.
+
+        CROSS, MARK and SINGLE have constants and no implementation. They used
+        to fall through to the outer-join arm and silently produce wrong output;
+        `hash_join` now rejects them.
+        """
+        return (
+            self == JOIN_INNER
+            or self == JOIN_LEFT
+            or self == JOIN_RIGHT
+            or self == JOIN_FULL
+            or self == JOIN_SEMI
+            or self == JOIN_ANTI
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        """PyArrow's spelling, so error messages and `tabular.join`'s `how=`
+        argument use one vocabulary."""
+        if self == JOIN_INNER:
+            writer.write("inner")
+        elif self == JOIN_LEFT:
+            writer.write("left outer")
+        elif self == JOIN_RIGHT:
+            writer.write("right outer")
+        elif self == JOIN_FULL:
+            writer.write("full outer")
+        elif self == JOIN_SEMI:
+            writer.write("left semi")
+        elif self == JOIN_ANTI:
+            writer.write("left anti")
+        elif self == JOIN_CROSS:
+            writer.write("cross")
+        elif self == JOIN_MARK:
+            writer.write("mark")
+        elif self == JOIN_SINGLE:
+            writer.write("single")
+        else:
+            writer.write("join kind ", self.code)
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    @staticmethod
+    def parse(how: String) raises -> Self:
+        """PyArrow's `how=` spelling, with the short forms also accepted.
+
+        The inverse of `write_to`, and it lives here so the name-to-kind mapping
+        has one owner. `tabular.join` had its own copy — a fourth place that
+        knew which kinds exist, and the one that would silently disagree when a
+        kind was added."""
+        if how == "inner":
+            return JOIN_INNER
+        elif how == "left outer" or how == "left":
+            return JOIN_LEFT
+        elif how == "right outer" or how == "right":
+            return JOIN_RIGHT
+        elif how == "full outer" or how == "full":
+            return JOIN_FULL
+        elif how == "left semi" or how == "semi":
+            return JOIN_SEMI
+        elif how == "left anti" or how == "anti":
+            return JOIN_ANTI
+        else:
+            raise Error("join: unknown join type '", how, "'")
+
+
+comptime JOIN_INNER = JoinKind(0)
 """INNER JOIN: only rows with matching keys on both sides."""
 
-comptime JOIN_LEFT: UInt8 = 1
+comptime JOIN_LEFT = JoinKind(1)
 """LEFT JOIN: all left rows + matched right rows; NULLs for non-matches."""
 
-comptime JOIN_RIGHT: UInt8 = 2
+comptime JOIN_RIGHT = JoinKind(2)
 """RIGHT JOIN: all right rows + matched left rows; NULLs for non-matches."""
 
-comptime JOIN_FULL: UInt8 = 3
+comptime JOIN_FULL = JoinKind(3)
 """FULL OUTER JOIN: all rows from both sides; NULLs for non-matches."""
 
-comptime JOIN_SEMI: UInt8 = 4
+comptime JOIN_SEMI = JoinKind(4)
 """LEFT SEMI JOIN: left rows that have at least one match in right (left columns only)."""
 
-comptime JOIN_ANTI: UInt8 = 5
+comptime JOIN_ANTI = JoinKind(5)
 """LEFT ANTI JOIN: left rows with no match in right (left columns only)."""
 
-comptime JOIN_CROSS: UInt8 = 6
-"""CROSS JOIN: Cartesian product; no key columns required."""
+comptime JOIN_CROSS = JoinKind(6)
+"""CROSS JOIN: Cartesian product; no key columns required. **Not implemented** —
+`is_supported()` is False and `hash_join` rejects it."""
 
 # Internal join kinds — generated by the planner for subquery decorrelation.
-# Not intended for direct use.
-comptime JOIN_MARK: UInt8 = 10
+# Not intended for direct use. **Neither is implemented**; both are rejected.
+comptime JOIN_MARK = JoinKind(10)
 """MARK JOIN: adds a boolean marker column for EXISTS/IN subquery rewriting."""
 
-comptime JOIN_SINGLE: UInt8 = 11
+comptime JOIN_SINGLE = JoinKind(11)
 """SINGLE JOIN: at-most-1 right row per left row; for scalar subqueries."""
 
 # ---------------------------------------------------------------------------
@@ -268,7 +393,7 @@ trait Join(Movable):
         self,
         data: StructArray,
         key_indices: List[Int],
-        kind: UInt8,
+        kind: JoinKind,
         strictness: UInt8,
     ) raises -> StructArray:
         """Probe with right (probe) side data.  Return assembled output."""
@@ -394,7 +519,7 @@ struct HashJoin[
         self,
         right: StructArray,
         right_key_indices: List[Int],
-        kind: UInt8 = JOIN_INNER,
+        kind: JoinKind = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
         # Must reach the same verdict as `build` — `probe_parallel` reads the
@@ -422,7 +547,7 @@ struct HashJoin[
         self,
         right: StructArray,
         right_key_indices: List[Int],
-        kind: UInt8,
+        kind: JoinKind,
         strictness: UInt8,
     ) raises -> StructArray:
         var left_keys = self._left_data.value().select(self._left_key_indices)
@@ -503,7 +628,7 @@ struct HashJoin[
         self,
         right: StructArray,
         right_key_indices: List[Int],
-        kind: UInt8,
+        kind: JoinKind,
         strictness: UInt8,
     ) raises -> StructArray:
         """Radix-partitioned probe.
@@ -565,7 +690,7 @@ struct HashJoin[
         self,
         var pairs: IndexPairs,
         right_rows: Int,
-        kind: UInt8,
+        kind: JoinKind,
         strictness: UInt8,
     ) raises -> IndexPairs:
         """Phase 3: add unmatched rows for outer/semi/anti joins.
@@ -616,12 +741,12 @@ struct HashJoin[
         for i in range(n_pairs):
             lb.append(pairs[0].unsafe_get(i))
             rb.append(pairs[1].unsafe_get(i))
-        if kind == JOIN_LEFT or kind == JOIN_FULL:
+        if kind.emits_unmatched_left():
             for i in range(self._left_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
-        if kind == JOIN_RIGHT or kind == JOIN_FULL:
+        if kind.emits_unmatched_right():
             for i in range(right_rows):
                 if not matched_probe[i]:
                     lb.append_null()
@@ -634,13 +759,13 @@ struct HashJoin[
     def num_left_rows(self) -> Int:
         return self._left_rows
 
-    def output_dtype(self, probe: StructArray, kind: UInt8) -> DynType:
+    def output_dtype(self, probe: StructArray, kind: JoinKind) -> DynType:
         """Build the output struct DataType for a join result."""
         var fields = List[Field]()
         for ref f in self._left_dtype.as_struct().fields:
             fields.append(f.copy())
 
-        if kind != JOIN_SEMI and kind != JOIN_ANTI:
+        if kind.emits_right_columns():
             var left_names = List[String]()
             for ref f in self._left_dtype.as_struct().fields:
                 left_names.append(f.name)
@@ -658,7 +783,7 @@ struct HashJoin[
         return struct_(fields^)
 
     def _assemble(
-        self, right: StructArray, pairs: IndexPairs, kind: UInt8
+        self, right: StructArray, pairs: IndexPairs, kind: JoinKind
     ) raises -> StructArray:
         """Gather left + right columns using index pairs.
 
@@ -676,7 +801,7 @@ struct HashJoin[
         for c in range(len(left.children)):
             out_cols.append(take(left.children[c].copy(), pairs[0], ctx))
 
-        if kind != JOIN_SEMI and kind != JOIN_ANTI and kind != JOIN_MARK:
+        if kind.emits_right_columns():
             for c in range(len(right.children)):
                 out_cols.append(take(right.children[c].copy(), pairs[1], ctx))
 
@@ -716,7 +841,7 @@ def hash_join(
     right: StructArray,
     left_on: List[Int],
     right_on: List[Int],
-    kind: UInt8 = JOIN_INNER,
+    kind: JoinKind = JOIN_INNER,
     strictness: UInt8 = JOIN_ALL,
     ctx: ExecContext = ExecContext.auto(),
 ) raises -> StructArray:
@@ -747,6 +872,15 @@ def hash_join(
     """
     if len(left_on) != len(right_on):
         raise Error("hash_join: len(left_on) != len(right_on)")
+    if not kind.is_supported():
+        # CROSS, MARK and SINGLE have constants but no implementation. They used
+        # to fall through to the outer-join arm, and MARK additionally built a
+        # result whose declared schema had more fields than it had columns.
+        raise Error(
+            "hash_join: join kind '",
+            kind,
+            "' is not implemented",
+        )
 
     var join = HashJoin(ctx.copy())
     join.build(left, left_on)

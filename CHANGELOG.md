@@ -37,6 +37,23 @@
 
 ### Fixes
 
+- **A MARK join built a `StructArray` whose dtype declared more fields than it had
+  columns.** "Does this kind emit the right side's columns?" was answered inline at
+  four places with three different memberships: `output_dtype` said MARK does,
+  `_assemble` said it does not, `relations.Join.schema` agreed with the first, and
+  `tabular.join` re-parsed strings. The first two disagreeing is what made the
+  result malformed, and nothing checked.
+
+  `JoinKind` now answers it once, as `emits_right_columns()`, with
+  `emits_unmatched_left()`/`_right()` collapsing the LEFT/FULL and RIGHT/FULL pairs
+  and `JoinKind.parse` owning the `how=` spelling. Both references do it this way --
+  polars has `JoinType::is_semi_anti()`, ClickHouse a set of `constexpr isLeft(kind)`
+  free functions -- and neither answers it at a use site. marrow follows polars' flat
+  model where SEMI and ANTI are kinds; ClickHouse files them under strictness instead.
+
+  `CROSS`, `MARK` and `SINGLE` have constants and no implementation. They used to fall
+  through to the outer-join arm; `hash_join` now rejects them by name.
+
 - **A GPU context lost its device at six places, one of them reachable from Python.**
   `ma.compute.sum(arr, ctx)` and its siblings passed `ctx.resolved_num_threads()`
   into `Aggregation.whole`, so a Python-supplied GPU context arrived as a bare

@@ -17,6 +17,7 @@ from marrow.dtypes import int64, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr.relations import InMemoryTable, Join, DynRelation
+from marrow.kernels.join import JOIN_INNER
 
 
 def main() raises:
@@ -33,7 +34,7 @@ def main() raises:
         right=DynRelation(InMemoryTable(batch=right)),
         left_key_indices=[0],
         right_key_indices=[0],
-        join_kind=0,  # inner
+        join_kind=JOIN_INNER,
         strictness=0,
         schema=schema(
             [

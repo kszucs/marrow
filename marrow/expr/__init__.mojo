@@ -66,6 +66,7 @@ from .relations import (
     JOIN_FULL,
     JOIN_SEMI,
     JOIN_ANTI,
+    JoinKind,
     # Join strictness constants
     JOIN_ALL,
     JOIN_ANY,

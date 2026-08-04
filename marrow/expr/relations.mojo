@@ -85,6 +85,7 @@ from ..kernels.join import (
     JOIN_ANTI,
     JOIN_ALL,
     JOIN_ANY,
+    JoinKind,
 )
 
 
@@ -575,7 +576,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         right: DynRelation,
         left_on: List[BoxedValue],
         right_on: List[BoxedValue],
-        how: UInt8 = JOIN_INNER,
+        how: JoinKind = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> DynRelation:
         """Hash join on equijoin key expressions."""
@@ -610,7 +611,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         var fields = List[Field]()
         for ref f in left_schema.fields:
             fields.append(f.copy())
-        if how != JOIN_SEMI and how != JOIN_ANTI:
+        # One source for the output width — see `JoinKind`.
+        if how.emits_right_columns():
             var left_names = List[String]()
             for ref f in left_schema.fields:
                 left_names.append(f.name)
@@ -1083,7 +1085,7 @@ struct Join(Relation):
     var right: DynRelation
     var left_key_indices: List[Int]
     var right_key_indices: List[Int]
-    var join_kind: UInt8
+    var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
 
@@ -1094,7 +1096,7 @@ struct Join(Relation):
         var right: DynRelation,
         var left_key_indices: List[Int],
         var right_key_indices: List[Int],
-        join_kind: UInt8,
+        join_kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
     ):

@@ -37,6 +37,7 @@ from ..kernels.join import (
     JOIN_FULL,
     JOIN_LEFT,
     JOIN_SEMI,
+    JoinKind,
 )
 from ..kernels.hashing import rapidhash
 from ..parquet.source import MappedFile
@@ -847,7 +848,7 @@ struct JoinProcessor(Processor):
     var right: DynProcessor
     var left_key_indices: List[Int]
     var right_key_indices: List[Int]
-    var join_kind: UInt8
+    var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
     var _index: Optional[HashJoin[rapidhash]]
@@ -860,7 +861,7 @@ struct JoinProcessor(Processor):
         var right: DynProcessor,
         var left_key_indices: List[Int],
         var right_key_indices: List[Int],
-        join_kind: UInt8,
+        join_kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
     ):
@@ -878,7 +879,7 @@ struct JoinProcessor(Processor):
         return Schema(copy=self._schema)
 
     @staticmethod
-    def _blocks_on_probe_side(kind: UInt8) -> Bool:
+    def _blocks_on_probe_side(kind: JoinKind) -> Bool:
         """Whether this join kind's output depends on the *whole* probe side.
 
         LEFT/FULL emit build rows that no probe row matched, SEMI emits the

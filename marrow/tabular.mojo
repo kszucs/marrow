@@ -16,12 +16,7 @@ from .schema import Schema
 from .dtypes import struct_, Field
 from .kernels.join import (
     hash_join,
-    JOIN_INNER,
-    JOIN_LEFT,
-    JOIN_RIGHT,
-    JOIN_FULL,
-    JOIN_SEMI,
-    JOIN_ANTI,
+    JoinKind,
 )
 from .execution import ExecContext
 from .kernels.groupby import GroupBy
@@ -260,19 +255,7 @@ struct RecordBatch(
             right_keys if right_keys else keys, "Right"
         )
 
-        var kind = JOIN_INNER
-        if how == "left outer" or how == "left":
-            kind = JOIN_LEFT
-        elif how == "right outer" or how == "right":
-            kind = JOIN_RIGHT
-        elif how == "full outer" or how == "full":
-            kind = JOIN_FULL
-        elif how == "left semi" or how == "semi":
-            kind = JOIN_SEMI
-        elif how == "left anti" or how == "anti":
-            kind = JOIN_ANTI
-        elif how != "inner":
-            raise Error("join: unknown join type '", how, "'")
+        var kind = JoinKind.parse(how)
 
         var joined = hash_join(
             self.to_struct_array(),
