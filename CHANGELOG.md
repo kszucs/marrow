@@ -70,6 +70,16 @@
 
 ### Features
 
+- **`StringPredicateKernel.apply_scalar`**, a scalar-pattern entry point for the six
+  string predicate kernels (`StartsWith`/`EndsWith`/`Contains`/`StrEq`/`StrNe`/`Like`/
+  `ILike`/the ordering compares), and `StringPredicate.prepare` in the expression layer
+  now calls it whenever the right operand is a constant (`Self.R.OutShape == 0`).
+  Previously `s LIKE 'foo%'` materialized the literal into an n-row array and handed it
+  to the array x array kernel, which for LIKE/ILIKE recompiled the same `LikePattern`
+  on every row; now it evaluates the pattern once. `StrEq`/`StrNe`/ordering share the
+  same fix through the trait's defaulted `apply_scalar` body. The branch resolves at
+  elaboration off `OutShape`, so it adds no new node and no runtime check.
+
 - **`ExecContext.worth_parallel(n, min_parallel_size)`**, the predicate four kernels
   had each written by hand. It differs from `wants_parallel` on exactly one input,
   `parallel(N)` below the threshold, and that difference is the point: a forced

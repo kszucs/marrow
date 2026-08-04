@@ -1752,8 +1752,26 @@ struct StringPredicate[
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n).as_string().copy()
-        var ra = into_array(self.r.execute(batch), n).as_string().copy()
-        ctx.append(Self.K.apply(la, ra).to_dyn())
+        comptime if Self.R.OutShape == 0:
+            # A scalar right operand: evaluate it once. `into_array` would
+            # broadcast it into n copies of the same string, and the array x
+            # array kernel would then re-read — and for LIKE, recompile — that
+            # constant on every row.
+            #
+            # `apply_scalar`'s validity comes from the left operand alone
+            # (`Bitmap.intersect(l, None)` reduces to exactly that), which is
+            # only correct because no `OutShape == 0` string node can be null:
+            # `StringLiteral` holds a plain `String` with no validity flag. If
+            # a nullable string literal is ever added, this assumption breaks
+            # and needs revisiting here.
+            var rctx = Context()
+            self.r.prepare(batch, rctx)
+            var rslot = 0
+            var pat = self.r.elementwise(batch, rctx, rslot, 0)
+            ctx.append(Self.K.apply_scalar(la, pat).to_dyn())
+        else:
+            var ra = into_array(self.r.execute(batch), n).as_string().copy()
+            ctx.append(Self.K.apply(la, ra).to_dyn())
 
     @always_inline
     def vectorwise[
