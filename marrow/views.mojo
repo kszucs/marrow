@@ -35,7 +35,7 @@ from std.utils.coord import Coord
 from std.gpu.host import get_gpu_target
 
 from .buffers import Buffer, Bitmap
-from .kernels.execution import ExecutionContext
+from .execution import ExecContext
 
 
 def _packed_uint_dtype[W: Int]() -> DType:
@@ -1177,7 +1177,7 @@ def _apply_dispatch[
     Out: DType,
     gpu_ok: Bool,
     process: def[W: Int, alignment: Int = 1](Coord) capturing -> None,
-](length: Int, ctx: ExecutionContext) raises:
+](length: Int, ctx: ExecContext) raises:
     """Dispatch ``process`` to GPU or CPU (serial / parallel) based on ``ctx``.
 
     ``gpu_ok`` is the caller's ``has_accelerator_support[...]`` check, passed
@@ -1226,7 +1226,7 @@ def apply[
     op: def[W: Int](Int) capturing[_] -> SIMD[Out, W],
 ](
     dst: BufferView[mut=True, Out, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Fill ``dst[i] = op(i)`` element-wise via the shared CPU serial/parallel
     dispatch — a *source-less* producer variant for fused expression lanes that
@@ -1250,7 +1250,7 @@ def apply[
     op: def[W: Int](Int) capturing[_] -> SIMD[DType.bool, W],
 ](
     dst: BitmapView[mut=True, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Bit-pack ``dst[i] = op(i)`` from the index — the bitmap counterpart of the
     source-less producer above, for fused predicate/comparison lanes that produce
@@ -1283,7 +1283,7 @@ def apply[
 ](
     src: BufferView[In, _],
     dst: BufferView[mut=True, Out, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a type-mapping unary SIMD op element-wise over src into dst.
 
@@ -1310,7 +1310,7 @@ def apply[
 ](
     src: BufferView[In, _],
     dst: BufferView[mut=True, Out, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Like the type-mapping unary ``apply`` above, but ``op`` may *capture*
     runtime state (e.g. a scale factor). Same CPU serial/parallel + GPU dispatch
@@ -1336,7 +1336,7 @@ def apply[
     lhs: BufferView[In, _],
     rhs: BufferView[In, _],
     dst: BufferView[mut=True, Out, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a type-mapping binary SIMD op element-wise over lhs,rhs into dst.
     """
@@ -1360,7 +1360,7 @@ def apply[
     lhs: BufferView[In, _],
     rhs: BufferView[In, _],
     dst: BitmapView[mut=True, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a binary comparison and bit-pack results into a bitmap.
 
@@ -1415,7 +1415,7 @@ def apply[
 ](
     src: BufferView[In, _],
     dst: BitmapView[mut=True, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a unary predicate and bit-pack results into a bitmap.
 
@@ -1465,7 +1465,7 @@ def apply[
 ](
     src: BitmapView[_],
     dst: BufferView[mut=True, Out, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a bool-to-Out unary op from a BitmapView into a BufferView."""
     var length = len(dst)
@@ -1487,7 +1487,7 @@ def apply[
     src: BufferView[In, _],
     validity: BitmapView[_],
     dst: BufferView[mut=True, Out, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a masked SIMD op element-wise: op(values, validity) into dst."""
     var length = len(dst)
@@ -1510,7 +1510,7 @@ def apply[
     src: BitmapView[_],
     validity: BitmapView[_],
     dst: BufferView[mut=True, Out, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a masked bool-to-Out op: op(bits, validity) into dst."""
     var length = len(dst)
@@ -1529,7 +1529,7 @@ def apply[
 ](
     src: BitmapView[_],
     dst: BitmapView[mut=True, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a byte-level unary SIMD op from src into dst (pre-allocated, offset-0).
 
@@ -1595,7 +1595,7 @@ def apply[
     lhs: BitmapView[_],
     rhs: BitmapView[_],
     dst: BitmapView[mut=True, _],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Apply a byte-level binary SIMD op from lhs and rhs into dst (pre-allocated, offset-0).
 
@@ -1708,7 +1708,7 @@ def _reduce_dispatch[
         T, W
     ],
     combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
-](length: Int, identity: Scalar[T], ctx: ExecutionContext) raises -> Scalar[T]:
+](length: Int, identity: Scalar[T], ctx: ExecContext) raises -> Scalar[T]:
     """Dispatch a scalar reduction to GPU or CPU (serial / parallel) based on
     ``ctx``.
 
@@ -1846,7 +1846,7 @@ def reduce[
 ](
     src: BufferView[In, _],
     identity: Scalar[Acc],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> Scalar[Acc]:
     """Reduce ``src`` to a scalar with a SIMD ``combine``, accumulating in ``Acc``.
 
@@ -1879,7 +1879,7 @@ def reduce[
     src: BufferView[In, _],
     bitmap: BitmapView[_],
     identity: Scalar[Acc],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> Scalar[Acc]:
     """``reduce`` that skips nulls: lanes whose ``bitmap`` bit is False contribute
     ``identity`` (a no-op under ``combine``) rather than their value. Same

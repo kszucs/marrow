@@ -25,7 +25,7 @@ from ..arrays import DynArray, Int32Array, Int64Array, UInt64Array, StructArray
 from ..builders import Int64Builder
 from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .hashing import rapidhash
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
@@ -85,7 +85,7 @@ comptime _HLL_P_GROUPED = 11
 
 
 def count_distinct(
-    array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+    array: DynArray, ctx: ExecContext = ExecContext.serial()
 ) raises -> Int64Scalar:
     """Exact count of distinct non-null values.
 
@@ -131,7 +131,7 @@ def count_distinct(
 
 
 def approx_count_distinct(
-    array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+    array: DynArray, ctx: ExecContext = ExecContext.serial()
 ) raises -> Int64Scalar:
     """Approximate count of distinct non-null values via HyperLogLog.
 
@@ -168,7 +168,7 @@ def count_distinct_grouped(
     gids: Int32Array,
     value: DynArray,
     num_groups: Int,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int64Array:
     """Exact distinct count of ``value`` per group, over precomputed ``gids``.
 
@@ -215,7 +215,7 @@ def approx_count_distinct_grouped(
     gids: Int32Array,
     value: DynArray,
     num_groups: Int,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int64Array:
     """Approximate distinct count of ``value`` per group via one HyperLogLog
     sketch per group (2**11 registers each). Bounds memory at

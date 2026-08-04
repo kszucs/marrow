@@ -37,6 +37,16 @@
 
 ### Refactors
 
+- **`ExecutionContext` is now `ExecContext`, and lives in `marrow/execution.mojo`.**
+  It was filed under `kernels/`, which made it the tree's only `core -> kernels`
+  import edge — `views.apply` and `tabular` both need it, so core reached *up* into
+  a leaf package to get it. It imports nothing from marrow and is a pure
+  thread-count/device/`stripe` policy object, so the move is free: `query_streaming`
+  `__text` is byte-identical at 1,309,024, and all 1,942 tests are unchanged. The
+  new name matches `arrow::compute::ExecContext`, which is the same object in the
+  same position. `marrow.kernels` still re-exports it. Python-visible name changes
+  with it: `ma.ExecutionContext` -> `ma.ExecContext`.
+
 - **The expression layer is two lanes that share no node types.** A fused node used to
   carry a second `_erased` body selected by a hand-propagated `comptime IsErased`, and
   the value box claimed `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` so those

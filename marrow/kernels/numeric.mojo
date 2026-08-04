@@ -47,7 +47,7 @@ from ..dtypes import (
 from .core import Kernel
 from .boolean import AndKernel
 from .string import StringEqKernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from ..utils import GPU_ENABLED
 
 
@@ -71,7 +71,7 @@ trait BinaryKernel(Kernel):
     def dispatch(
         left: DynArray,
         right: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """Erased entry point. Declared here rather than only on the sub-traits
         so a node generic over `BinaryKernel` can reach it — `FloatBinary` takes
@@ -87,7 +87,7 @@ trait BinaryKernel(Kernel):
     ](
         left: PrimitiveArray[T],
         right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveArray[T]:
         Self.expect_same_length(len(left), len(right))
         comptime native = T.native
@@ -121,7 +121,7 @@ trait BinaryNumericKernel(BinaryKernel):
     def dispatch(
         left: DynArray,
         right: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
@@ -141,7 +141,7 @@ trait BinaryFloatKernel(BinaryKernel):
     def dispatch(
         left: DynArray,
         right: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
@@ -170,7 +170,7 @@ trait UnaryKernel(Kernel):
         T: PrimitiveType
     ](
         array: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveArray[T]:
         comptime native = T.native
         var length = len(array)
@@ -201,7 +201,7 @@ trait UnaryNumericKernel(UnaryKernel):
     @staticmethod
     def dispatch(
         array: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         @parameter
         def leaf[T: NumericType](d: T) raises -> DynArray:
@@ -216,7 +216,7 @@ trait UnaryFloatKernel(UnaryKernel):
     @staticmethod
     def dispatch(
         array: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         @parameter
         def leaf[T: FloatingType](d: T) raises -> DynArray:
@@ -494,7 +494,7 @@ def _binary_cmp[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> BoolArray:
     """Binary comparison kernel — compare + bit-pack via apply."""
     comptime native = T.native
@@ -553,7 +553,7 @@ trait NumericCompareKernel(Kernel):
     ](
         left: PrimitiveArray[T],
         right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         Self.expect_same_length(len(left), len(right))
         return _binary_cmp[T, func=Self.core[T.native, _]](left, right, ctx)
@@ -562,7 +562,7 @@ trait NumericCompareKernel(Kernel):
     def dispatch(
         left: DynArray,
         right: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
@@ -583,7 +583,7 @@ trait NumericCompareKernel(Kernel):
 def equal_any(
     left: DynArray,
     right: DynArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> BoolArray:
     """Equality over any comparable dtype, picking the kernel family.
 
@@ -619,7 +619,7 @@ struct EqKernel(NumericCompareKernel):
     def apply(
         left: StructArray,
         right: StructArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         """Row equality: element ``i`` is True iff every child column agrees.
 

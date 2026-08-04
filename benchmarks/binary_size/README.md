@@ -168,7 +168,7 @@ holding:
    `dyn::*` (0) never link.
 
 With *both* open surfaces gone, the big shared buckets that only collapse when
-neither is reachable (`kernels::execution` 9 vs 667, `views` 2 vs 455, `arrays`
+neither is reachable (`execution` 9 vs 667, `views` 2 vs 455, `arrays`
 39 vs 376) fall to their comptime levels. The entire cost of the runtime plan
 tree is the 17 symbols in `aot::erased`/`aot::relations`/`aot::values` (5/7/5) —
 the box, its trampolines, the two column types, and `Gt`. This is the empirical
@@ -186,7 +186,7 @@ type params — this is a proportional breakdown, not a strict partition):
 
 | module | `query_comptime` | `query_erased_aot` | `query_hybrid` | `query_runtime` |
 |---|---:|---:|---:|---:|
-| `kernels::execution` | 9 | 9 | 667 | 667 |
+| `execution` | 9 | 9 | 667 | 667 |
 | `dtypes` | 58 | 62 | 566 | 562 |
 | `views` | 2 | 2 | 455 | 455 |
 | `arrays` | 39 | 39 | 376 | 376 |
@@ -215,7 +215,7 @@ nothing else exists at compile time, so nothing else gets generated.
 to a runtime tag — any code operating on an `DynArray` (`Expr.eval()`,
 `DynRelation`'s processors, kernel dispatch functions) can't know at compile
 time which dtype it'll see, so the compiler generates a full typed
-instantiation *per supported dtype*, "just in case." `kernels::execution`
+instantiation *per supported dtype*, "just in case." `execution`
 (667, the CPU/GPU dispatch layer under every kernel) and `kernels::arithmetic`
 (371, even though this query does zero arithmetic) are the clearest examples:
 `Expr.eval()`'s `ADD`/`SUB`/`MUL`/`DIV` branches are reachable code

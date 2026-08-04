@@ -310,7 +310,7 @@ capabilities those two milestones require.
 | **M2.2** | **`unique` / `value_counts` / `dictionary_encode`.** `distinct.mojo` is cardinality-only and there is no `def unique` anywhere under `marrow/kernels/`. **marrow consumes dictionaries but can never produce one** — not from a kernel, and not from Parquet, whose reader materialises dictionary pages into plain arrays. | not started | M |
 | **M2.3** | **Real window functions.** Today: `row_number` only, **AOT lane only** (violating invariant 2), `WindowSpec` carries frame bounds but no PARTITION BY and no ORDER BY, `FrameBound.kind` is an untyped `UInt8` never read, `RowNumberKernel` ignores its `values` argument, and nothing outside `values.mojo` references any of it. Sequence: move to `marrow/kernels/window.mojo` → give `WindowSpec` `how`/`partition_by`/`order_by` → partition (reuse `groupby` hashing) + sort within partition (reuse `sort`) + scatter back → ranking family → navigation family (`Lag`/`Lead`/`NthValue`) → `RunningAgg[K: AggKernel]` → `.over()` on both lanes → wire through `relations.mojo`. `docs/window-functions.md` is the forward spec; this card owns the sequencing. | 2-node toy, `values.mojo:1975-2039` | L |
 | **M2.4** | **Statistical aggregates** — `variance`, `stddev`, `quantile`, `approximate_median`, `mode`, `first`, `last`. `resolve_agg` is a closed list of exactly 8 (`expr/aggregates.mojo:194-221`). TODOs already acknowledge the variance gap at `aggregate.mojo:563,574,589`. | not started | M |
-| **M2.5** | **Spill.** Zero occurrences of `spill` in the tree; no memory-budget tracking and no disk I/O anywhere. Required by H2O at 50 GB. Grace hash join, a spilling grouper, and a memory budget on `ExecutionContext` to trigger either. Note both blocking operators buffer unboundedly today: `AggregateProcessor` (`execution.mojo:699`) keeps every morsel's group ids and evaluated value columns, and `JoinProcessor` collects the whole left side. | not started | L |
+| **M2.5** | **Spill.** Zero occurrences of `spill` in the tree; no memory-budget tracking and no disk I/O anywhere. Required by H2O at 50 GB. Grace hash join, a spilling grouper, and a memory budget on `ExecContext` to trigger either. Note both blocking operators buffer unboundedly today: `AggregateProcessor` (`execution.mojo:699`) keeps every morsel's group ids and evaluated value columns, and `JoinProcessor` collects the whole left side. | not started | L |
 | **M2.6** | **String manipulation and regex — the single largest kernel hole.** There is no regex engine in the repo. Missing: `match_substring_regex`, `replace_substring(_regex)`, `extract_regex`, `split_pattern(_regex)`, `count_substring`, `find_substring`, `utf8_slice_codeunits`/substring, `lpad`/`rpad`, `binary_join`, the whole `utf8_is_*` classification family, trim-with-charset. Also: string kernels dispatch on `is_string_like()` only, so `binary`/`large_binary` are excluded from string comparison. | not started | L |
 | **M2.7** | **Temporal completeness** — `strftime`/`strptime` (and **string↔timestamp cast raises**, `cast.mojo:1028`), timezone-aware extraction (everything decomposes as UTC and a non-UTC `tz` is silently ignored, `temporal.mojo:36-39`), `week`/`iso_week`/`iso_year`, `millisecond`/`microsecond`/`nanosecond`, `is_leap_year`, `ceil_temporal`/`round_temporal`, and the `*_between` family. Temporal **arithmetic** belongs here too — date ± interval, `date_diff`, `now` — which H2O and TPC-H date logic both need and which nothing implements. | not started | M |
 | **M2.8** | **Multi-file / dataset scan.** `ParquetScan.path` is a single `String`. No glob, no dataset, no partition discovery, no fan-out. Also: **bloom filters are fully implemented in the reader and never consulted by the scan** (zero `bloom` hits in `marrow/expr/`) — cheapest remaining pruning tier, do it with this. Two known-safe-but-lossy behaviours ride along: predicate pruning switches *off* entirely for nested files rather than risk misaligning statistics with the projection, and Hive-style `col=val` directory discovery does not exist. | not started | M |
@@ -624,14 +624,16 @@ pairs; `Breaker` as marker-by-conformance; and `BoxedValue` as an erasure
 boundary that is also the fusion boundary. `marrow/kernels` is a **verified DAG
 with no up-edges into `expr` or `tabular`**.
 
-### The four highest-leverage fixes
+### The highest-leverage fixes
+
+A2 and A4 are done. A2 landed as B12 (eager recount at the slice boundary);
+A4 moved `ExecContext` to `marrow/execution.mojo`, so `marrow/kernels` no
+longer has an inbound edge from core.
 
 | ID | Fix | What it removes |
 |---|---|---|
 | **A1** | **Replace the positional `Context` with a typed `comptime State` per node**, returned by `prepare` and passed into `vectorwise`. **Design validated by spike 2026-08-03** — see `docs/design-expression-evaluation.md`, which carries the protocol, the spike results, the sequencing and the gates. | The `Context` correctness hazard below; six methods and the `Breaker` marker trait collapse to two methods; ~84 hand-written recursion bodies (17 shapes); the per-SIMD-chunk schema lookup in `NumericColumn.vectorwise`; the double kernel run in `ConditionalBinary`/`CaseWhen` and the subtree re-execution in `BoolBinary.validity`; and — once validity moves into the state — B14, B15 and the class B20 belongs to. **First gate is binary size**, not tests: convert three nodes, hold `query_streaming` `__text` at 1,302,900, stop if it regresses. |
-| **A2** | **Recompute `nulls` at the slice boundary** (`BitmapView.unset_count` now exists). | B12's whole class — the builder corruption, the C ABI export, and `__eq__`. |
 | **A3** | **Give `DataType` a `layout()` / `num_buffers()`.** | Layout is a fact no type owns, so every serializer re-derives it: **17 top-level dtype ladders across `c_data` + `ipc` alone**, with the integer-width fact restated five times — twice inside the same function, 100 lines apart. `arrays.mojo` already knows the answer and enforces it in each typed constructor (`PrimitiveArray` 1 buffer, `BinaryLikeArray` 2, `ListLikeArray` 1 + 1 child); it just never says it where a codec could ask. This is why `map` is in all four variants and still absent from IPC. |
-| **A4** | **Move `ExecutionContext` out of `kernels/` into core.** | The only `core → kernels` edge. `kernels/execution.mojo` imports nothing from marrow — it is a pure thread-count + optional-device + `stripe` policy object, i.e. a core concept filed under `kernels/`. Free. |
 
 ### The `Context` positional-slot invariant
 
@@ -728,25 +730,25 @@ to change. Listed with the competing responsibilities, most costly first.
 - **`Value`** (`values.mojo:304`) is the union of four consumers' protocols —
   executor, printer, optimizer, pruner — and all 37 nodes pay for all four.
 
-### `ExecutionContext`'s vocabulary is one concept short
+### `ExecContext`'s vocabulary is one concept short
 
 There is no "auto, with a threshold that still applies when the thread count is
 *forced*". So three call sites invented it independently — `distinct.mojo:106`,
 `join.mojo:388`, `groupby.mojo:405` — and none of the three short-circuits on
 `is_gpu()` the way `wants_parallel` does (`execution.mojo:153`). Consequence:
-`ExecutionContext.parallel(8)` on a 100k-row array goes serial in
+`ExecContext.parallel(8)` on a 100k-row array goes serial in
 `count_distinct` and parallel everywhere else.
 
 Worse, **two API boundaries destructure the context back to a bare `Int`** —
 `Aggregation.whole(values, num_threads: Int = 0)` (`aggregate.mojo:804`) and
 `GroupBy._num_threads` (`groupby.mojo:356`) — then rebuild it with
-`ExecutionContext.parallel(n)`, a factory that sets `device=None` and **silently
+`ExecContext.parallel(n)`, a factory that sets `device=None` and **silently
 drops the caller's GPU device**. This is the exact defect `HashJoin` already
 fixed and documented (`join.mojo:338-343`); the fix never reached the other two,
 and the `num_threads: Int` vocabulary has since propagated up into
 `expr/aggregates.mojo:403`.
 
-**A6 — add the missing predicate, and take `ExecutionContext` at both
+**A6 — add the missing predicate, and take `ExecContext` at both
 boundaries.** Small, and it closes a GPU-correctness hole.
 
 ### The three `marrow.expr` import cycles

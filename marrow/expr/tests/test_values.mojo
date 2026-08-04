@@ -1037,7 +1037,9 @@ def test_string_map_preserves_nulls() raises:
 
 def test_string_concat_preserves_nulls() raises:
     # a null operand poisons the concatenation, as it does in the kernel.
-    var cv = (Concat(col("s", string), lit("!"))).execute(_str_batch_with_null())
+    var cv = (Concat(col("s", string), lit("!"))).execute(
+        _str_batch_with_null()
+    )
     var got = into_array(cv, 3)
     assert_equal(got.null_count(), 1)
     assert_true(got.is_null(1))

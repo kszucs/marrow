@@ -497,7 +497,10 @@ struct BoolArray(Array):
     def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and values.
         """
-        if self.length != other.length or self.null_count() != other.null_count():
+        if (
+            self.length != other.length
+            or self.null_count() != other.null_count()
+        ):
             return False
         for i in range(self.length):
             var lv = self.is_valid(i)

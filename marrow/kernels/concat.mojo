@@ -11,12 +11,12 @@ for all supported array types.
 
 from ..arrays import DynArray
 from ..builders import DynBuilder
-from .execution import ExecutionContext
+from ..execution import ExecContext
 
 
 def concat(
     arrays: List[DynArray],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Concatenate a list of arrays into a single array.
 

@@ -47,7 +47,7 @@ from std.algorithm.functional import sync_parallelize
 
 from ..views import BitmapView
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ struct Filter(Kernel):
     def dispatch(
         array: DynArray,
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and filter it by `mask`."""
         var dt = array.dtype()
@@ -131,7 +131,7 @@ struct Filter(Kernel):
         T: PrimitiveType
     ](
         array: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveArray[T]:
         """The valid elements only, keeping the array's type."""
         if not array.bitmap:
@@ -140,7 +140,7 @@ struct Filter(Kernel):
 
     @staticmethod
     def drop_null(
-        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> DynArray:
         """Remove null elements: the validity bitmap is itself the keep-mask."""
         if array.dtype().is_null():
@@ -156,7 +156,7 @@ struct Filter(Kernel):
     ](
         array: PrimitiveArray[T],
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveArray[T]:
         """Filter a primitive array, keeping elements where ``mask`` is set."""
         Self.expect_same_length(len(array), len(mask))
@@ -191,7 +191,7 @@ struct Filter(Kernel):
     def apply(
         array: BoolArray,
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         """Filter a bool array, keeping elements where ``mask`` is set."""
         Self.expect_same_length(len(array), len(mask))
@@ -229,7 +229,7 @@ struct Filter(Kernel):
     ](
         array: BinaryLikeArray[T],
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BinaryLikeArray[T]:
         """Filter a binary-like array (string/binary, 32- or 64-bit offsets),
         keeping elements where ``mask`` is set.
@@ -354,7 +354,7 @@ struct Filter(Kernel):
     def apply(
         array: NullArray,
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> NullArray:
         """Filter a null array — the result is a shorter all-null array."""
         Self.expect_same_length(len(array), len(mask))
@@ -364,7 +364,7 @@ struct Filter(Kernel):
     def apply(
         array: FixedSizeBinaryArray,
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> FixedSizeBinaryArray:
         """Filter a fixed-size-binary array by compacting the fixed-width byte
         blocks where ``mask`` is set."""
@@ -419,7 +419,7 @@ struct Filter(Kernel):
     ](
         array: ListLikeArray[T],
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> ListLikeArray[T]:
         """Filter a list/large-list/map array column-wise: mark each selected
         row's contiguous child range and filter the child recursively, building
@@ -483,7 +483,7 @@ struct Filter(Kernel):
     def apply(
         array: FixedSizeListArray,
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> FixedSizeListArray:
         """Filter a fixed-size-list array column-wise: mark each selected row's
         `size` contiguous child slots and filter the child recursively."""
@@ -531,7 +531,7 @@ struct Filter(Kernel):
     def apply(
         array: DictionaryArray,
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DictionaryArray:
         """Filter a dictionary array by compacting its (logical) index codes with
         the fast sequential primitive path and sharing the values unchanged — far
@@ -551,7 +551,7 @@ struct Filter(Kernel):
     def apply(
         array: StructArray,
         mask: BitmapView[_],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> StructArray:
         """Filter a struct array column-wise: filter every child by the same mask
         and compact the struct-level validity."""
@@ -598,7 +598,7 @@ struct Take(Kernel):
     def dispatch(
         array: DynArray,
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """Resolve `array`'s runtime dtype and gather it at `indices`."""
         var dt = array.dtype()
@@ -658,7 +658,7 @@ struct Take(Kernel):
     ](
         array: PrimitiveArray[T],
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveArray[T]:
         """Gather elements from a primitive array at the given indices.
 
@@ -752,7 +752,7 @@ struct Take(Kernel):
     def apply(
         array: BoolArray,
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         """Gather elements from a bool array at the given indices.
 
@@ -788,7 +788,7 @@ struct Take(Kernel):
     ](
         array: BinaryLikeArray[T],
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BinaryLikeArray[T]:
         """Gather elements from a binary-like array at the given indices.
 
@@ -819,7 +819,7 @@ struct Take(Kernel):
     def apply(
         array: NullArray,
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> NullArray:
         """Gather from a null array — result is an all-null array of the index count.
         """
@@ -829,7 +829,7 @@ struct Take(Kernel):
     def apply(
         array: FixedSizeBinaryArray,
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> FixedSizeBinaryArray:
         """Gather fixed-width byte blocks from a fixed-size-binary array. Null index
         or null source row → null output block."""
@@ -879,7 +879,7 @@ struct Take(Kernel):
     ](
         array: ListLikeArray[T],
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> ListLikeArray[T]:
         """Gather rows from a list/large-list/map array: remap offsets and gather the
         referenced child sub-ranges via a single child `take`. Null index or null
@@ -953,7 +953,7 @@ struct Take(Kernel):
     def apply(
         array: FixedSizeListArray,
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> FixedSizeListArray:
         """Gather rows from a fixed-size-list array: expand each row index into its
         `list_size` contiguous child positions and gather the child in one `take`.
@@ -1036,7 +1036,7 @@ struct Take(Kernel):
     def apply(
         array: DictionaryArray,
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DictionaryArray:
         """Gather rows from a dictionary array: gather its (logical) index array
         with the fast primitive path and share the dictionary values unchanged.
@@ -1055,7 +1055,7 @@ struct Take(Kernel):
     def apply(
         array: StructArray,
         indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> StructArray:
         """Gather rows from a StructArray at the given indices, column-wise.
 
@@ -1106,7 +1106,7 @@ struct Take(Kernel):
 def filter(
     array: DynArray,
     mask: DynArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Filter `array`, keeping elements where boolean `mask` is True."""
     var m = mask.as_bool().copy()
@@ -1116,14 +1116,14 @@ def filter(
 def take(
     array: DynArray,
     indices: Int32Array,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Gather elements of `array` at `indices` (null index -> null element)."""
     return Take.dispatch(array, indices, ctx)
 
 
 def drop_null(
-    array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+    array: DynArray, ctx: ExecContext = ExecContext.serial()
 ) raises -> DynArray:
     """Remove null elements using the validity bitmap as the selection."""
     return Filter.drop_null(array, ctx)

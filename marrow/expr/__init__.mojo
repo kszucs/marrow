@@ -38,7 +38,7 @@ Usage::
 
 from .dynamic import DynAgg, DynValue
 from .values import col, lit, if_else
-from ..kernels.execution import ExecutionContext
+from ..execution import ExecContext
 from .aggregates import AggFunc, FoldedAggregates
 from .execution import (
     # Execution layer (processors built by Relation.to_processor)

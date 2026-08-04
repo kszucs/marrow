@@ -18,7 +18,7 @@ from std.testing import assert_equal, assert_true
 from ...arrays import UInt64Array
 from ...builders import UInt64Builder
 from ...dtypes import uint64
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 from ...kernels.partition import RadixPartitioner, Partition
 
 
@@ -69,7 +69,7 @@ def test_partition_serial_covers_every_row_once() raises:
     var n = 5_000
     var src = _hashes(n)
     var parts = RadixPartitioner(
-        num_bits=4, ctx=ExecutionContext.serial()
+        num_bits=4, ctx=ExecContext.serial()
     ).partition(src.copy())
     _assert_covers_every_row(parts, src, n)
 
@@ -82,7 +82,7 @@ def test_partition_parallel_covers_every_row_once() raises:
     var n = 100_000
     var src = _hashes(n)
     var parts = RadixPartitioner(
-        num_bits=4, ctx=ExecutionContext.parallel(4)
+        num_bits=4, ctx=ExecContext.parallel(4)
     ).partition(src.copy())
     _assert_covers_every_row(parts, src, n)
 
@@ -93,7 +93,7 @@ def test_partition_routes_by_top_bits() raises:
     var src = _hashes(n)
     var bits = 4
     var parts = RadixPartitioner(
-        num_bits=bits, ctx=ExecutionContext.serial()
+        num_bits=bits, ctx=ExecContext.serial()
     ).partition(src.copy())
     for p in range(len(parts)):
         ref part = parts[p]
@@ -107,10 +107,10 @@ def test_partition_serial_and_parallel_agree() raises:
     var n = 100_000
     var src = _hashes(n)
     var serial = RadixPartitioner(
-        num_bits=4, ctx=ExecutionContext.serial()
+        num_bits=4, ctx=ExecContext.serial()
     ).partition(src.copy())
     var parallel = RadixPartitioner(
-        num_bits=4, ctx=ExecutionContext.parallel(4)
+        num_bits=4, ctx=ExecContext.parallel(4)
     ).partition(src.copy())
     assert_equal(len(serial), len(parallel))
     for p in range(len(serial)):
@@ -121,7 +121,7 @@ def test_partition_empty_input() raises:
     """No rows still yields the full partition list, every one empty."""
     var src = _hashes(0)
     var parts = RadixPartitioner(
-        num_bits=3, ctx=ExecutionContext.parallel(4)
+        num_bits=3, ctx=ExecContext.parallel(4)
     ).partition(src.copy())
     assert_equal(len(parts), 8)
     var total = 0

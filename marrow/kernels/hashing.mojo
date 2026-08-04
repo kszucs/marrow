@@ -43,7 +43,7 @@ from ..buffers import Buffer
 from ..views import apply
 from .cast import cast
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from ..dtypes import (
     BinaryLikeType,
     PrimitiveType,
@@ -282,7 +282,7 @@ struct RapidHash(Kernel):
     @staticmethod
     def dispatch(
         keys: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Resolve `keys`'s runtime dtype and hash it."""
         var dt = keys.dtype()
@@ -335,7 +335,7 @@ struct RapidHash(Kernel):
     @staticmethod
     def apply(
         keys: BoolArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Vectorized rapidhash for bool arrays.
 
@@ -343,7 +343,7 @@ struct RapidHash(Kernel):
         bitmap-mask pattern, and uses ``SIMD.select()`` for branchless dispatch.
         Null elements are replaced with ``NULL_HASH_SENTINEL`` inline.
 
-        Parallelism is delegated to ``apply`` via the ``ExecutionContext`` —
+        Parallelism is delegated to ``apply`` via the ``ExecContext`` —
         no per-kernel stripe logic here.
         """
         var n = len(keys)
@@ -382,7 +382,7 @@ struct RapidHash(Kernel):
         T: PrimitiveType
     ](
         keys: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Vectorized rapidhash for primitive arrays.
 
@@ -390,7 +390,7 @@ struct RapidHash(Kernel):
         Null elements are replaced with ``NULL_HASH_SENTINEL`` inline.
 
         Parallelism is handled uniformly by ``apply`` using the
-        ``ExecutionContext`` — CPU vs GPU is picked from ``ctx.device``, and
+        ``ExecContext`` — CPU vs GPU is picked from ``ctx.device``, and
         CPU stripe-parallelism is driven by ``ctx.num_threads``.
 
         Values wider than a uint64 lane (decimal128/decimal256) have no SIMD
@@ -454,7 +454,7 @@ struct RapidHash(Kernel):
         T: BinaryLikeType
     ](
         keys: BinaryLikeArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Hash each element of a binary-like array (string, large_string,
         binary, large_binary).
@@ -482,13 +482,13 @@ struct RapidHash(Kernel):
     @staticmethod
     def apply(
         keys: StructArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Hash a struct array by combining per-field hashes column-wise.
 
         Each field is hashed independently via ``dispatch`` and the results are
         combined element-wise using ``_combine_hashes``. The
-        ``ExecutionContext`` is forwarded to per-field hashing and to the
+        ``ExecContext`` is forwarded to per-field hashing and to the
         combine pass — all stripe-parallelism is handled inside ``apply``.
 
         A struct's own offset/length are *not* propagated to its children by the
@@ -540,7 +540,7 @@ struct RapidHash(Kernel):
         T: ListLikeType
     ](
         keys: ListLikeArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Hash a list/large-list/map array row-wise: hash the whole child once,
         then fold the child hashes over each row's element range (column-wise,
@@ -562,7 +562,7 @@ struct RapidHash(Kernel):
     @staticmethod
     def apply(
         keys: FixedSizeListArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> UInt64Array:
         """Hash a fixed-size-list array row-wise: hash the child once, fold each
         row's ``list_size`` child hashes. Null rows hash to
@@ -591,7 +591,7 @@ struct RapidHash(Kernel):
 # - `rapidhash(DynArray)` is the `pc.*`-style erased one.
 # - `rapidhash(StructArray)` is what `SwissHashTable[hasher]` / `HashJoin[hasher]`
 #   bind as a comptime *function value*; their `hasher` parameter is typed
-#   `def(StructArray, ExecutionContext) raises -> UInt64Array`, so this needs to
+#   `def(StructArray, ExecContext) raises -> UInt64Array`, so this needs to
 #   be a free symbol with exactly that signature. A static method will not do.
 #
 # Three more used to sit here (`BoolArray`, `PrimitiveArray[T]`,
@@ -605,7 +605,7 @@ struct RapidHash(Kernel):
 
 def rapidhash(
     keys: DynArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> UInt64Array:
     """Hash `keys` element-wise; nulls hash to ``NULL_HASH_SENTINEL``."""
     return RapidHash.dispatch(keys, ctx)
@@ -613,7 +613,7 @@ def rapidhash(
 
 def rapidhash(
     keys: StructArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> UInt64Array:
     """Row-wise hash of a struct's fields — the hasher `SwissHashTable` and
     `HashJoin` bind. See the note above before removing this."""

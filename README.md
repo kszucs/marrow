@@ -339,15 +339,15 @@ pixi run -e bench pytest --benchmark --no-mojo python/marrow/tests/bench_join.py
 ## GPU Execution (experimental)
 
 A few element-wise kernels — arithmetic, comparisons, and hashing — can dispatch
-to the GPU (Metal on Apple Silicon, CUDA on NVIDIA) when an `ExecutionContext`
+to the GPU (Metal on Apple Silicon, CUDA on NVIDIA) when an `ExecContext`
 carries a `DeviceContext`. The GPU and CPU paths share the same kernel source.
 
 ```mojo
 from gpu.host import DeviceContext
-from marrow.kernels.execution import ExecutionContext
+from marrow.execution import ExecContext
 from marrow.kernels.arithmetic import add
 
-var result = add(a, b, ExecutionContext.gpu(DeviceContext()))
+var result = add(a, b, ExecContext.gpu(DeviceContext()))
 ```
 
 These kernels are all low arithmetic intensity (~1 op per element), so for most

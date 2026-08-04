@@ -410,6 +410,7 @@ marrow/
 ├── tabular.mojo          # RecordBatch, Table
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
+├── execution.mojo        # ExecutionContext — threads, device, `stripe`
 ├── utils.mojo            # variant_dispatch*, GPU_ENABLED, has_accelerator_support
 ├── kernels/
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
@@ -430,7 +431,6 @@ marrow/
 │   ├── temporal.mojo     # date/time field extraction, date_trunc
 │   ├── nested.mojo       # array_length, array_contains
 │   ├── concat.mojo       # concat
-│   ├── execution.mojo    # ExecutionContext
 │   └── tests/            # test_*.mojo + bench_*.mojo
 ├── expr/
 │   ├── values.mojo       # AOT lane: fused, comptime-typed value nodes

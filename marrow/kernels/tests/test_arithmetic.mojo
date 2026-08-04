@@ -51,7 +51,7 @@ from ...kernels.numeric import (
     SinKernel,
     CosKernel,
 )
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -616,11 +616,11 @@ def test_pow_runtime_typed() raises:
 
 
 # ---------------------------------------------------------------------------
-# ExecutionContext dispatch — serial / parallel / auto must agree
+# ExecContext dispatch — serial / parallel / auto must agree
 # ---------------------------------------------------------------------------
 
 
-def _assert_add_matches_reference(ctx: ExecutionContext) raises:
+def _assert_add_matches_reference(ctx: ExecContext) raises:
     """Run ``add`` over a 100k-element input with ``ctx`` and assert the
     output equals the analytic reference (a[i]+b[i] == 2*i)."""
     comptime N = 100_000
@@ -640,17 +640,17 @@ def _assert_add_matches_reference(ctx: ExecutionContext) raises:
 
 def test_add_dispatch_serial() raises:
     """Forced serial CPU dispatch produces correct results."""
-    _assert_add_matches_reference(ExecutionContext.serial())
+    _assert_add_matches_reference(ExecContext.serial())
 
 
 def test_add_dispatch_parallel_2() raises:
     """Forced 2-worker parallel CPU dispatch produces correct results."""
-    _assert_add_matches_reference(ExecutionContext.parallel(2))
+    _assert_add_matches_reference(ExecContext.parallel(2))
 
 
 def test_add_dispatch_parallel_4() raises:
     """Forced 4-worker parallel CPU dispatch produces correct results."""
-    _assert_add_matches_reference(ExecutionContext.parallel(4))
+    _assert_add_matches_reference(ExecContext.parallel(4))
 
 
 def test_add_dispatch_auto() raises:
@@ -659,7 +659,7 @@ def test_add_dispatch_auto() raises:
     With N=100_000 (>= the 32_768 default min_parallel_size) auto should
     pick the parallel path.
     """
-    _assert_add_matches_reference(ExecutionContext.auto())
+    _assert_add_matches_reference(ExecContext.auto())
 
 
 def test_add_dispatch_auto_small() raises:
@@ -670,7 +670,7 @@ def test_add_dispatch_auto_small() raises:
     """
     var a = arange[Int32Type](0, 100)
     var b = arange[Int32Type](0, 100)
-    var result = AddKernel.apply[Int32Type](a, b, ExecutionContext.auto())
+    var result = AddKernel.apply[Int32Type](a, b, ExecContext.auto())
     assert_equal(len(result), 100)
     assert_equal(result[0].value(), 0)
     assert_equal(result[50].value(), 100)
@@ -685,7 +685,7 @@ def test_add_dispatch_parallel_small() raises:
     """
     var a = arange[Int32Type](0, 100)
     var b = arange[Int32Type](0, 100)
-    var result = AddKernel.apply[Int32Type](a, b, ExecutionContext.parallel(8))
+    var result = AddKernel.apply[Int32Type](a, b, ExecContext.parallel(8))
     assert_equal(len(result), 100)
     assert_equal(result[0].value(), 0)
     assert_equal(result[50].value(), 100)

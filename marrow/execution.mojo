@@ -1,6 +1,12 @@
-"""Execution context for kernel dispatch.
+"""How work is dispatched: thread count, optional device, striping.
 
-Bundles the two axes of parallelism that kernels need to know about:
+This is a *core* module, not a kernel one. It imports nothing from marrow — it
+is a pure policy object — and it has three sets of consumers, only one of which
+is `kernels/`: `views.apply` takes one to pick the CPU/GPU path, `tabular` and
+`expr` thread one through execution, and the Python bindings expose it. Filing
+it under `kernels/` was the tree's only `core -> kernels` import edge.
+
+Bundles the two axes of parallelism a dispatch site needs to know about:
 
 - **Device** — an optional GPU ``DeviceContext``. When set, kernels run
   on the GPU; when ``None``, they run on the CPU. Mirrors today's
@@ -28,7 +34,7 @@ from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.info import num_physical_cores
 
 
-struct ExecutionContext(
+struct ExecContext(
     ConvertibleFromPython, ConvertibleToPython, Copyable, Movable, Writable
 ):
     """How a kernel should dispatch its work.
@@ -78,7 +84,7 @@ struct ExecutionContext(
         ``Optional[DeviceContext]`` (``None`` or ``Some(ctx)``) to keep
         working without source changes. Resulting context is
         ``num_threads=1`` — callers that want CPU parallelism build an
-        ``ExecutionContext`` explicitly.
+        ``ExecContext`` explicitly.
         """
         self.num_threads = 1
         self.device = device.copy() if device else None
@@ -261,9 +267,9 @@ struct ExecutionContext(
 
     def write_to[W: Writer](self, mut writer: W):
         if self.is_gpu():
-            writer.write("ExecutionContext(gpu)")
+            writer.write("ExecContext(gpu)")
         else:
-            writer.write("ExecutionContext(cpu)")
+            writer.write("ExecContext(cpu)")
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -271,7 +277,7 @@ struct ExecutionContext(
     # --- ConvertibleFromPython / ConvertibleToPython --------------------------
 
     def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[ExecutionContext]()[].copy()
+        self = py.downcast_value_ptr[ExecContext]()[].copy()
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

@@ -53,7 +53,7 @@ from ..dtypes import (
     int32,
 )
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .filter import take
 from ..utils import GPU_ENABLED
 
@@ -112,7 +112,7 @@ struct NumericCast(Kernel):
         From: NumericType, To: NumericType, safe: Bool = True
     ](
         array: PrimitiveArray[From],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveArray[To]:
         """Cast ``array`` to ``To``. ``safe`` is a **comptime** parameter so the
         checked / unchecked kernel is selected at instantiation — usable from
@@ -158,7 +158,7 @@ struct NumericCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
     ) raises -> DynArray:
         """Runtime numeric → numeric: resolve source and target over the numeric
         dtypes, branching ``safe`` into the checked / unchecked ``apply``."""
@@ -194,7 +194,7 @@ struct NumToBool(Kernel):
         return a.ne(0)
 
     @staticmethod
-    def dispatch(array: DynArray, ctx: ExecutionContext) raises -> DynArray:
+    def dispatch(array: DynArray, ctx: ExecContext) raises -> DynArray:
         """Runtime numeric → bool over the numeric source dtypes."""
 
         @parameter
@@ -206,7 +206,7 @@ struct NumToBool(Kernel):
     @staticmethod
     def apply[
         From: NumericType
-    ](array: PrimitiveArray[From], ctx: ExecutionContext) raises -> BoolArray:
+    ](array: PrimitiveArray[From], ctx: ExecContext) raises -> BoolArray:
         var length = len(array)
         var result: Bitmap[mut=True]
         comptime if GPU_ENABLED:
@@ -239,7 +239,7 @@ struct BoolToNum(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, ctx: ExecutionContext
+        array: DynArray, to: DynType, ctx: ExecContext
     ) raises -> DynArray:
         """Runtime bool → numeric over the numeric target dtypes."""
         var b = array.as_bool().copy()
@@ -253,7 +253,7 @@ struct BoolToNum(Kernel):
     @staticmethod
     def apply[
         To: NumericType
-    ](array: BoolArray, ctx: ExecutionContext) raises -> PrimitiveArray[To]:
+    ](array: BoolArray, ctx: ExecContext) raises -> PrimitiveArray[To]:
         comptime Out = To.native
         var length = len(array)
         var buf: Buffer[mut=True]
@@ -290,7 +290,7 @@ struct TemporalCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, ctx: ExecutionContext
+        array: DynArray, to: DynType, ctx: ExecContext
     ) raises -> DynArray:
         var src = array.dtype()
         var data = array.to_data()
@@ -391,7 +391,7 @@ struct TemporalCast(Kernel):
         to: DynType,
         factor: Int64,
         up: Bool,
-        ctx: ExecutionContext,
+        ctx: ExecContext,
     ) raises -> DynArray:
         """Scale the underlying integers by ``factor`` (multiply if ``up``, else
         integer-divide), computing in int64 to avoid overflow, then narrow to
@@ -433,7 +433,7 @@ struct StringToNum(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
     ) raises -> DynArray:
         """Runtime string-like → numeric: resolve source string kind and numeric
         target, branching ``safe`` into the raising / nulling ``apply``."""
@@ -487,7 +487,7 @@ struct StringToBool(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, safe: Bool, ctx: ExecutionContext
+        array: DynArray, safe: Bool, ctx: ExecContext
     ) raises -> DynArray:
         """Runtime string-like → bool over the source string kinds."""
 
@@ -916,7 +916,7 @@ struct ListCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
     ) raises -> DynArray:
         var data = array.to_data()
         var child = DynArray.from_data(data.children[0].copy())
@@ -949,7 +949,7 @@ struct StructCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
     ) raises -> DynArray:
         var data = array.to_data()
         ref fields = to.as_struct().fields
@@ -983,7 +983,7 @@ struct DictionaryCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecutionContext
+        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
     ) raises -> DynArray:
         ref d = array.as_dictionary()
         var indices = cast(d.indices(), int32, False, ctx).as_int32().copy()
@@ -1002,7 +1002,7 @@ def cast(
     array: DynArray,
     to: DynType,
     safe: Bool = True,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Cast ``array`` to dtype ``to``: pick the target family and delegate to the
     matching kernel's ``dispatch``. ``safe`` is a runtime flag each kernel resolves

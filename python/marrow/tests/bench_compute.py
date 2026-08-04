@@ -223,7 +223,7 @@ _filter_params = pytest.mark.parametrize(
 @_arith_params
 def test_marrow_add(benchmark, ma_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.compute.add, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial())
+    benchmark(ma.compute.add, ma_arrays[a], ma_arrays[b], ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="arithmetic")
@@ -240,7 +240,7 @@ def test_marrow_subtract(benchmark, ma_arrays, n):
         ma.subtract,
         ma_arrays["int64_a"],
         ma_arrays["int64_b"],
-        ma.ExecutionContext.serial(),
+        ma.ExecContext.serial(),
     )
 
 
@@ -257,7 +257,7 @@ def test_marrow_multiply(benchmark, ma_arrays, n):
         ma.multiply,
         ma_arrays["int64_a"],
         ma_arrays["int64_b"],
-        ma.ExecutionContext.serial(),
+        ma.ExecContext.serial(),
     )
 
 
@@ -274,7 +274,7 @@ def test_marrow_divide(benchmark, ma_arrays, n):
         ma.divide,
         ma_arrays["float64_a"],
         ma_arrays["float64_b"],
-        ma.ExecutionContext.serial(),
+        ma.ExecContext.serial(),
     )
 
 
@@ -291,7 +291,7 @@ def test_pyarrow_div(benchmark, pa_arrays, n):
 @_sum_params
 def test_marrow_sum(benchmark, ma_arrays, n, dtype, key):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.compute.sum, ma_arrays[key], ma.ExecutionContext.serial())
+    benchmark(ma.compute.sum, ma_arrays[key], ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -304,7 +304,7 @@ def test_pyarrow_sum(benchmark, pa_arrays, n, dtype, key):
 @pytest.mark.benchmark(group="aggregate")
 def test_marrow_product(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.compute.product, ma_arrays["int64_a"], ma.ExecutionContext.serial())
+    benchmark(ma.compute.product, ma_arrays["int64_a"], ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -317,7 +317,7 @@ def test_pyarrow_product(benchmark, pa_arrays, n):
 @_unary_num_params
 def test_marrow_min(benchmark, ma_arrays, n, dtype, key):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.compute.min, ma_arrays[key], ma.ExecutionContext.serial())
+    benchmark(ma.compute.min, ma_arrays[key], ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -330,7 +330,7 @@ def test_pyarrow_min(benchmark, pa_arrays, n, dtype, key):
 @pytest.mark.benchmark(group="aggregate")
 def test_marrow_max(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.compute.max, ma_arrays["int64_a"], ma.ExecutionContext.serial())
+    benchmark(ma.compute.max, ma_arrays["int64_a"], ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="aggregate")
@@ -445,9 +445,7 @@ def test_polars_drop_nulls(benchmark, pl_arrays, n, dtype, key):
 @_binary_num_params
 def test_marrow_equal(benchmark, ma_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(
-        ma.compute.equal, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial()
-    )
+    benchmark(ma.compute.equal, ma_arrays[a], ma_arrays[b], ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="comparison")
@@ -461,7 +459,7 @@ def test_pyarrow_equal(benchmark, pa_arrays, n, dtype, a, b):
 @_binary_num_params
 def test_marrow_less(benchmark, ma_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
-    benchmark(ma.compute.less, ma_arrays[a], ma_arrays[b], ma.ExecutionContext.serial())
+    benchmark(ma.compute.less, ma_arrays[a], ma_arrays[b], ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="comparison")

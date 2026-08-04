@@ -35,7 +35,7 @@ from ...dtypes import (
     DynType,
 )
 from ...arrays import Int32Array
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 from ...kernels.groupby import (
     GroupBy,
     GroupedColumns,
@@ -392,7 +392,7 @@ def test_groupby_parallel_matches_serial() raises:
 
     comptime SumInt32 = NumericAgg[SumKernel, Int32Type]
     ref typed = vals.as_int32()
-    var ctx = ExecutionContext.parallel(4)
+    var ctx = ExecContext.parallel(4)
     _assert_matches_expected(
         GroupBy(sa, ctx, GROUP_SERIAL).aggregate[SumInt32](typed)
     )
@@ -447,7 +447,7 @@ def test_groupby_thread_local_mean_nulls_match_serial() raises:
 
     comptime MeanFloat64 = NumericAgg[MeanKernel, Float64Type]
     ref typed = vals.as_float64()
-    var ctx = ExecutionContext.parallel(4)
+    var ctx = ExecContext.parallel(4)
     var serial = GroupBy(sa, ctx, GROUP_SERIAL).aggregate[MeanFloat64](typed)
     var threaded = GroupBy(sa, ctx, GROUP_THREAD_LOCAL).aggregate[MeanFloat64](
         typed
@@ -564,7 +564,7 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     ) raises -> DynArray:
         return count_distinct_grouped(gids, col, ng)
 
-    var ctx = ExecutionContext.parallel(4)
+    var ctx = ExecContext.parallel(4)
     _assert_all_distinct_10(
         GroupBy(sa, ctx, GROUP_SERIAL).aggregate_columns[exact](values)
     )

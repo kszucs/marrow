@@ -9,7 +9,7 @@ from ...arrays import (
     StructArray,
     UInt64Array,
 )
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 from ...builders import (
     array,
     PrimitiveBuilder,
@@ -557,7 +557,7 @@ def test_output_schema_column_name_collision() raises:
 
 def _constant_hash(
     keys: StructArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> UInt64Array:
     """Degenerate hash function: all keys map to the same hash.
 
@@ -664,7 +664,7 @@ def _run_inner(
         _right_on(),
         JOIN_INNER,
         JOIN_ALL,
-        ctx=ExecutionContext.parallel(num_threads),
+        ctx=ExecContext.parallel(num_threads),
     )
 
 
@@ -730,7 +730,7 @@ def test_parallel_partial_match() raises:
 # Execution context plumbing
 #
 # `HashJoin` used to store a bare worker count and rebuild
-# `ExecutionContext.parallel(n)` at five internal sites, each of which dropped
+# `ExecContext.parallel(n)` at five internal sites, each of which dropped
 # the caller's device. It now holds the context whole. These pin the observable
 # half of that: which path a given context selects, and that the default did not
 # silently change when `num_threads` was replaced by `ctx`.
@@ -753,7 +753,7 @@ def test_join_default_context_matches_explicit_auto() raises:
         right,
         _left_on(),
         _right_on(),
-        ctx=ExecutionContext.auto(),
+        ctx=ExecContext.auto(),
     )
     assert_equal(default_result.length, auto_result.length)
 
@@ -768,14 +768,14 @@ def test_join_serial_and_parallel_contexts_agree() raises:
         right,
         _left_on(),
         _right_on(),
-        ctx=ExecutionContext.serial(),
+        ctx=ExecContext.serial(),
     )
     var parallel = hash_join(
         left,
         right,
         _left_on(),
         _right_on(),
-        ctx=ExecutionContext.parallel(4),
+        ctx=ExecContext.parallel(4),
     )
     assert_equal(serial.length, parallel.length)
 
@@ -786,7 +786,7 @@ def test_hash_join_struct_default_is_serial() raises:
     `expr/execution.mojo` and `bench_join` both construct it that way, and its
     old `num_threads=1` default meant serial — unlike the free function's.
     """
-    var join = HashJoin(ExecutionContext())
+    var join = HashJoin(ExecContext())
     var left = _dense_struct(20_000)
     join.build(left, _left_on())
     var out = join.probe(

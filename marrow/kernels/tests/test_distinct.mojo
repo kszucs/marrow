@@ -4,7 +4,7 @@ from ...arrays import DynArray
 from ...builders import array, nulls, Int64Builder, StringBuilder
 from ...dtypes import int32, int64, string
 from ...kernels.distinct import count_distinct, approx_count_distinct
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 
 
 def test_count_distinct_basic() raises:
@@ -102,5 +102,5 @@ def test_count_distinct_parallel_matches_serial() raises:
         else:
             b.append(Int64(i % 5000))
     var a: DynArray = b.finish()
-    assert_equal(count_distinct(a, ExecutionContext.serial()).value(), 5000)
-    assert_equal(count_distinct(a, ExecutionContext.parallel(4)).value(), 5000)
+    assert_equal(count_distinct(a, ExecContext.serial()).value(), 5000)
+    assert_equal(count_distinct(a, ExecContext.parallel(4)).value(), 5000)

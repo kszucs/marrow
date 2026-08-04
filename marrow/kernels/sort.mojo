@@ -51,7 +51,7 @@ from ..dtypes import (
 )
 from .cast import cast
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .filter import Take
 from .partition import radix_histogram
 
@@ -268,7 +268,7 @@ def _radix_sort_indices[
     var idx_buf: Buffer[mut=True],
     n: Int,
     ascending: Bool,
-    ctx: ExecutionContext,
+    ctx: ExecContext,
 ) raises -> Buffer[]:
     """LSD radix sort over encoded UInt64 keys using _BITS_PER_PASS-bit passes.
 
@@ -403,7 +403,7 @@ struct SortIndices(Kernel):
         nulls_first: Bool = True,
         stable: Bool = False,
         limit: Optional[Int] = None,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
         """Return the indices that would sort ``array``.
 
@@ -490,7 +490,7 @@ struct SortIndices(Kernel):
         nulls_first: Bool = True,
         stable: Bool = False,
         limit: Optional[Int] = None,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
         """The permutation that orders a StructArray by several key columns.
 
@@ -565,7 +565,7 @@ struct SortIndices(Kernel):
         ascending: Bool = True,
         nulls_first: Bool = True,
         stable: Bool = False,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
         """Return the indices that would sort a typed primitive array."""
         var n = len(arr)
@@ -603,7 +603,7 @@ struct SortIndices(Kernel):
         n_valid: Int,
         ascending: Bool,
         stable: Bool,
-        ctx: ExecutionContext,
+        ctx: ExecContext,
     ) raises -> Buffer[]:
         """Order the `n_valid` non-null row indices held in `valid_buf`.
 
@@ -672,7 +672,7 @@ struct SortIndices(Kernel):
         arr: BoolArray,
         ascending: Bool = True,
         nulls_first: Bool = True,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
         """O(N) counting sort for bool arrays.
 
@@ -737,7 +737,7 @@ struct SortIndices(Kernel):
         ascending: Bool = True,
         nulls_first: Bool = True,
         stable: Bool = False,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> Int32Array:
         """Comparison sort for binary-like arrays (string, large_string, binary,
         large_binary) using the Mojo stdlib sort — bytewise lexicographic, which
@@ -813,7 +813,7 @@ def sort_indices(
     nulls_first: Bool = True,
     stable: Bool = False,
     limit: Optional[Int] = None,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int32Array:
     """Return the indices that would sort ``array``."""
     return SortIndices.dispatch(
@@ -828,7 +828,7 @@ def sort(
     nulls_first: Bool = True,
     stable: Bool = False,
     limit: Optional[Int] = None,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> StructArray:
     """Sort a StructArray by the specified key columns — ``take`` under the
     permutation from ``SortIndices.multi``."""

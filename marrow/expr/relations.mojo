@@ -59,7 +59,7 @@ from ..dtypes import Field
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .values import col
-from ..kernels.execution import ExecutionContext
+from ..execution import ExecContext
 from .aggregates import AggFunc
 from ..parquet import LeafSet
 from .execution import (
@@ -132,7 +132,7 @@ trait Relation(ImplicitlyDeletable, Movable):
     def schema(self) -> Schema:
         ...
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         """Build the physical operator for this node (opening its children)."""
         ...
 
@@ -300,7 +300,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     var _data: ArcPointer[NoneType]
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_to_processor: def(
-        ArcPointer[NoneType], ExecutionContext
+        ArcPointer[NoneType], ExecContext
     ) thin raises -> DynProcessor
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
@@ -328,7 +328,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     @staticmethod
     def _tramp_to_processor[
         T: Relation
-    ](ptr: ArcPointer[NoneType], ctx: ExecutionContext) raises -> DynProcessor:
+    ](ptr: ArcPointer[NoneType], ctx: ExecContext) raises -> DynProcessor:
         return rebind[ArcPointer[T]](ptr)[].to_processor(ctx)
 
     @staticmethod
@@ -385,14 +385,12 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     # --- execution ---
 
     def to_processor(
-        self, ctx: ExecutionContext = ExecutionContext()
+        self, ctx: ExecContext = ExecContext()
     ) raises -> DynProcessor:
         """Build the operator tree for this plan; the plan is left untouched."""
         return self._virt_to_processor(self._data, ctx)
 
-    def execute(
-        self, ctx: ExecutionContext = ExecutionContext()
-    ) raises -> RecordBatch:
+    def execute(self, ctx: ExecContext = ExecContext()) raises -> RecordBatch:
         """Open this plan into a fresh operator tree and drain it into one
         `RecordBatch`.
 
@@ -756,7 +754,7 @@ struct InMemoryTable(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return InMemoryTableProcessor(
             batch=RecordBatch(copy=self.batch),  # shares buffers (O(1))
             morsel_size=self.morsel_size,
@@ -831,7 +829,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     def kind(self) -> Int:
         return RELATION_PARQUET_SCAN
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return ParquetScanProcessor[Self.leaves](
             path=self.path.copy(),
             schema=Schema(copy=self._schema),
@@ -878,7 +876,7 @@ struct Filter(Relation):
     def schema(self) -> Schema:
         return self.input.schema()
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return FilterProcessor(
             input=self.input.to_processor(ctx), predicate=self.predicate.copy()
         )
@@ -913,7 +911,7 @@ struct Project(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return ProjectProcessor(
             input=self.input.to_processor(ctx),
             values=self.values.copy(),
@@ -946,7 +944,7 @@ struct Limit(Relation):
     def schema(self) -> Schema:
         return self.input.schema()
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return LimitProcessor(
             input=self.input.to_processor(ctx),
             offset=self.offset,
@@ -1003,7 +1001,7 @@ struct Sort(Relation):
     def kind(self) -> Int:
         return RELATION_SORT
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return SortProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
@@ -1059,7 +1057,7 @@ struct Aggregate(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return AggregateProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
@@ -1111,7 +1109,7 @@ struct Join(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return JoinProcessor(
             left=self.left.to_processor(ctx),
             right=self.right.to_processor(ctx),

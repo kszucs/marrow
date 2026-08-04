@@ -33,7 +33,7 @@ from std.sys import (
 # off, every device path is eliminated at elaboration time — device allocations
 # in the kernels, the accelerator arms of `_apply_dispatch`, and
 # `has_accelerator_support`, which answers False and so makes a GPU
-# `ExecutionContext` raise at the dispatch site rather than misbehave.  Applies
+# `ExecContext` raise at the dispatch site rather than misbehave.  Applies
 # to `mojo build` / `mojo run`; `mojo precompile` rejects `-D` outright.
 #
 # This is marrow's largest single compile-time lever.  Cold builds (fresh
@@ -243,7 +243,7 @@ def has_accelerator_support[*dtypes: DType]() -> Bool:
 
     GPU codegen is **opt-in**: this answers False unless the build passes
     `-D MARROW_GPU=true` (see `GPU_ENABLED`). Without it a GPU
-    `ExecutionContext` raises at the dispatch site rather than misbehaving.
+    `ExecContext` raises at the dispatch site rather than misbehaving.
     Applies to `mojo build`/`mojo run` only — `mojo precompile` rejects `-D`.
 
     Answering False here is one half of eliminating GPU codegen; the other half

@@ -32,7 +32,7 @@ if SERIAL:
     pa.set_cpu_count(1)
 
 _NT = 1 if SERIAL else 0  # marrow num_threads: 1 = serial, 0 = all cores
-_CTX = ma.ExecutionContext.serial() if SERIAL else ma.ExecutionContext.parallel(0)
+_CTX = ma.ExecContext.serial() if SERIAL else ma.ExecContext.parallel(0)
 _MODE = "1t" if SERIAL else "mt"
 
 SIZES = [1_000_000, 10_000_000]

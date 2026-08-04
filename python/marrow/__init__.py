@@ -59,14 +59,14 @@ class _Wrapper:
         return self._binding
 
 
-# ── ExecutionContext ───────────────────────────────────────────────────────────
+# ── ExecContext ───────────────────────────────────────────────────────────
 
 
-ExecutionContext = _ma.ExecutionContext
+ExecContext = _ma.ExecContext
 
 
 def _serial():
-    return _ma.ExecutionContext.serial()
+    return _ma.ExecContext.serial()
 
 
 # ── Scalar ─────────────────────────────────────────────────────────────────────

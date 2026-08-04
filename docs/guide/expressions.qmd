@@ -125,17 +125,17 @@ totals = source.aggregate(["dept"], ["salary"], ["sum"])
 
 `execute(plan)` opens the plan into a fresh pull-based processor tree, drains
 it, and returns a single `RecordBatch`. A plan is a pure description, so it can
-be executed repeatedly. An optional `ExecutionContext` selects the execution
+be executed repeatedly. An optional `ExecContext` selects the execution
 mode:
 
 ```python
-from marrow.expr import execute, ExecutionContext
+from marrow.expr import execute, ExecContext
 
 result = execute(plan)                       # serial by default
-result = execute(plan, ExecutionContext())   # explicit context
+result = execute(plan, ExecContext())   # explicit context
 ```
 
-`ExecutionContext` comes from `marrow.kernels.execution` and offers
+`ExecContext` comes from `marrow.execution` and offers
 `.serial()`, `.parallel()` and `.gpu(device)` constructors — see
 [GPU acceleration](gpu.qmd).
 

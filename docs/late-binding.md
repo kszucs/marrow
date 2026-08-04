@@ -43,7 +43,7 @@ struct Env:
     var params: Bindings   # name -> DynScalar    (late-bound scalar params)
 ```
 
-(Distinct from `ExecutionContext`, the GPU/threading handle, and from
+(Distinct from `ExecContext`, the GPU/threading handle, and from
 `values.Context`, the per-execute breaker-slot scratch. `Env` is the *data +
 parameter* environment.) The single-source `execute(batch)` survives as a
 one-line convenience wrapper (`execute(Env(Catalog(anon = batch)))`).

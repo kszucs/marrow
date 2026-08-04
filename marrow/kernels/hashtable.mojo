@@ -19,7 +19,7 @@ from ..buffers import Buffer
 from ..dtypes import int32, uint64
 
 from .numeric import EqKernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .filter import Take, Filter
 from .hashing import rapidhash
 
@@ -40,9 +40,7 @@ comptime _PIPE_DEPTH: Int = 16
 
 
 struct SwissHashTable[
-    hasher: def(
-        StructArray, ExecutionContext
-    ) thin raises -> UInt64Array = rapidhash
+    hasher: def(StructArray, ExecContext) thin raises -> UInt64Array = rapidhash
 ](Copyable, Movable):
     """Swiss Table hash table with SIMD group matching.
 
@@ -543,7 +541,7 @@ struct SwissHashTable[
     def insert(
         mut self,
         keys: StructArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
         grow_adaptively: Bool = False,
     ) raises -> Int32Array:
         """Hash keys and insert, returning a bucket ID per row.
@@ -565,7 +563,7 @@ struct SwissHashTable[
     def build(
         mut self,
         keys: StructArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises:
         """Hash keys, insert, and build a CSR row index for ``probe()``.
 
@@ -579,7 +577,7 @@ struct SwissHashTable[
         probe_keys: StructArray,
         num_build_rows: Int,
         single_match: Bool = False,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
         hashes: Optional[UInt64Array] = None,
     ) raises -> Tuple[Int32Array, Int32Array]:
         """Hash probe keys, look up matches, verify key equality.

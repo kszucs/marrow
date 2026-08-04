@@ -16,7 +16,7 @@ import marrow as ma
 def test_add_int64():
     a = ma.array([1, 2, 3])
     b = ma.array([10, 20, 30])
-    result = ma.compute.add(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -24,7 +24,7 @@ def test_add_int64():
 def test_add_float64():
     a = ma.array([1.0, 2.0, 3.0])
     b = ma.array([0.5, 1.5, 2.5])
-    result = ma.compute.add(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -32,7 +32,7 @@ def test_add_float64():
 def test_add_propagates_nulls():
     a = ma.array([1, None, 3])
     b = ma.array([10, 20, 30])
-    result = ma.compute.add(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 1
 
@@ -40,7 +40,7 @@ def test_add_propagates_nulls():
 def test_add_both_null():
     a = ma.array([None, 2, None])
     b = ma.array([10, None, 30])
-    result = ma.compute.add(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 3
 
@@ -49,29 +49,23 @@ def test_add_both_null():
 
 
 def test_sum_int64():
-    assert (
-        ma.compute.sum(ma.array([1, 2, 3, 4]), ctx=ma.ExecutionContext.serial()) == 10.0
-    )
+    assert ma.compute.sum(ma.array([1, 2, 3, 4]), ctx=ma.ExecContext.serial()) == 10.0
 
 
 def test_sum_float64():
-    assert (
-        ma.compute.sum(ma.array([1.5, 2.5, 3.0]), ctx=ma.ExecutionContext.serial())
-        == 7.0
-    )
+    assert ma.compute.sum(ma.array([1.5, 2.5, 3.0]), ctx=ma.ExecContext.serial()) == 7.0
 
 
 def test_sum_skips_nulls():
     assert (
-        ma.compute.sum(ma.array([1, None, 3, None]), ctx=ma.ExecutionContext.serial())
-        == 4.0
+        ma.compute.sum(ma.array([1, None, 3, None]), ctx=ma.ExecContext.serial()) == 4.0
     )
 
 
 def test_sum_all_nulls_returns_zero():
     assert (
         ma.compute.sum(
-            ma.array([1, 2, 3], type=ma.int64()), ctx=ma.ExecutionContext.serial()
+            ma.array([1, 2, 3], type=ma.int64()), ctx=ma.ExecContext.serial()
         )
         == 6.0
     )
@@ -82,23 +76,20 @@ def test_sum_all_nulls_returns_zero():
 
 def test_product_int64():
     assert (
-        ma.compute.product(ma.array([1, 2, 3, 4]), ctx=ma.ExecutionContext.serial())
-        == 24.0
+        ma.compute.product(ma.array([1, 2, 3, 4]), ctx=ma.ExecContext.serial()) == 24.0
     )
 
 
 def test_product_float64():
     assert (
-        ma.compute.product(ma.array([1.5, 2.0, 2.0]), ctx=ma.ExecutionContext.serial())
+        ma.compute.product(ma.array([1.5, 2.0, 2.0]), ctx=ma.ExecContext.serial())
         == 6.0
     )
 
 
 def test_product_skips_nulls():
     assert (
-        ma.compute.product(
-            ma.array([2, None, 3, None]), ctx=ma.ExecutionContext.serial()
-        )
+        ma.compute.product(ma.array([2, None, 3, None]), ctx=ma.ExecContext.serial())
         == 6.0
     )
 
@@ -107,23 +98,16 @@ def test_product_skips_nulls():
 
 
 def test_min_int64():
-    assert (
-        ma.compute.min(ma.array([3, 1, 4, 1, 5]), ctx=ma.ExecutionContext.serial())
-        == 1.0
-    )
+    assert ma.compute.min(ma.array([3, 1, 4, 1, 5]), ctx=ma.ExecContext.serial()) == 1.0
 
 
 def test_min_float64():
-    assert (
-        ma.compute.min(ma.array([3.5, 1.5, 2.0]), ctx=ma.ExecutionContext.serial())
-        == 1.5
-    )
+    assert ma.compute.min(ma.array([3.5, 1.5, 2.0]), ctx=ma.ExecContext.serial()) == 1.5
 
 
 def test_min_skips_nulls():
     assert (
-        ma.compute.min(ma.array([3, None, 1, None]), ctx=ma.ExecutionContext.serial())
-        == 1.0
+        ma.compute.min(ma.array([3, None, 1, None]), ctx=ma.ExecContext.serial()) == 1.0
     )
 
 
@@ -131,23 +115,16 @@ def test_min_skips_nulls():
 
 
 def test_max_int64():
-    assert (
-        ma.compute.max(ma.array([3, 1, 4, 1, 5]), ctx=ma.ExecutionContext.serial())
-        == 5.0
-    )
+    assert ma.compute.max(ma.array([3, 1, 4, 1, 5]), ctx=ma.ExecContext.serial()) == 5.0
 
 
 def test_max_float64():
-    assert (
-        ma.compute.max(ma.array([3.5, 1.5, 4.0]), ctx=ma.ExecutionContext.serial())
-        == 4.0
-    )
+    assert ma.compute.max(ma.array([3.5, 1.5, 4.0]), ctx=ma.ExecContext.serial()) == 4.0
 
 
 def test_max_skips_nulls():
     assert (
-        ma.compute.max(ma.array([3, None, 5, None]), ctx=ma.ExecutionContext.serial())
-        == 5.0
+        ma.compute.max(ma.array([3, None, 5, None]), ctx=ma.ExecContext.serial()) == 5.0
     )
 
 
@@ -247,7 +224,7 @@ def test_approx_count_distinct_within_tolerance():
 def test_sub_int64():
     a = ma.array([10, 20, 30])
     b = ma.array([1, 2, 3])
-    result = ma.compute.subtract(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.subtract(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -255,7 +232,7 @@ def test_sub_int64():
 def test_sub_float64():
     a = ma.array([5.0, 3.0, 1.0])
     b = ma.array([1.0, 1.0, 1.0])
-    result = ma.compute.subtract(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.subtract(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -263,7 +240,7 @@ def test_sub_float64():
 def test_sub_propagates_nulls():
     a = ma.array([10, None, 30])
     b = ma.array([1, 2, 3])
-    result = ma.compute.subtract(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.subtract(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 1
 
@@ -274,7 +251,7 @@ def test_sub_propagates_nulls():
 def test_mul_int64():
     a = ma.array([2, 3, 4])
     b = ma.array([5, 6, 7])
-    result = ma.compute.multiply(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.multiply(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -282,7 +259,7 @@ def test_mul_int64():
 def test_mul_float64():
     a = ma.array([1.5, 2.0, 3.0])
     b = ma.array([2.0, 2.0, 2.0])
-    result = ma.compute.multiply(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.multiply(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -290,7 +267,7 @@ def test_mul_float64():
 def test_mul_propagates_nulls():
     a = ma.array([2, None, 4])
     b = ma.array([5, 6, None])
-    result = ma.compute.multiply(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.multiply(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 2
 
@@ -301,7 +278,7 @@ def test_mul_propagates_nulls():
 def test_div_int64():
     a = ma.array([10, 20, 30])
     b = ma.array([2, 4, 5])
-    result = ma.compute.divide(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -309,7 +286,7 @@ def test_div_int64():
 def test_div_float64():
     a = ma.array([9.0, 6.0, 3.0])
     b = ma.array([3.0, 2.0, 1.0])
-    result = ma.compute.divide(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -317,7 +294,7 @@ def test_div_float64():
 def test_div_propagates_nulls():
     a = ma.array([10, None, 30])
     b = ma.array([2, 4, None])
-    result = ma.compute.divide(a, b, ctx=ma.ExecutionContext.serial())
+    result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
     assert result.null_count() == 2
 
@@ -400,13 +377,13 @@ def test_drop_nulls_float64():
 
 @pytest.mark.gpu
 def test_device_construct():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     assert device is not None
 
 
 @pytest.mark.gpu
 def test_array_to_device_and_back():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([1, 2, 3], type=ma.int32())
     a_gpu = a.to_device(device)
     a_cpu = a_gpu.to_cpu(device)
@@ -416,7 +393,7 @@ def test_array_to_device_and_back():
 
 @pytest.mark.gpu
 def test_add_gpu():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([1, 2, 3], type=ma.int32())
     b = ma.array([10, 20, 30], type=ma.int32())
     result = ma.compute.add(
@@ -428,7 +405,7 @@ def test_add_gpu():
 
 @pytest.mark.gpu
 def test_sub_gpu():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([10, 20, 30], type=ma.int32())
     b = ma.array([1, 2, 3], type=ma.int32())
     result = ma.compute.subtract(
@@ -440,7 +417,7 @@ def test_sub_gpu():
 
 @pytest.mark.gpu
 def test_mul_gpu():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([2, 3, 4], type=ma.int32())
     b = ma.array([5, 6, 7], type=ma.int32())
     result = ma.compute.multiply(
@@ -452,7 +429,7 @@ def test_mul_gpu():
 
 @pytest.mark.gpu
 def test_sum_gpu():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([1.0, 2.0, 3.0], type=ma.float32())
     result = ma.compute.sum(a.to_device(device), ctx=device)
     assert float(result) == 6.0
@@ -460,7 +437,7 @@ def test_sum_gpu():
 
 @pytest.mark.gpu
 def test_min_gpu():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([3, 1, 4, 1, 5], type=ma.int32())
     result = ma.compute.min(a.to_device(device), ctx=device)
     assert float(result) == 1.0
@@ -468,7 +445,7 @@ def test_min_gpu():
 
 @pytest.mark.gpu
 def test_max_gpu():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([3, 1, 4, 1, 5], type=ma.int32())
     result = ma.compute.max(a.to_device(device), ctx=device)
     assert float(result) == 5.0
@@ -476,7 +453,7 @@ def test_max_gpu():
 
 @pytest.mark.gpu
 def test_equal_gpu():
-    device = ma.ExecutionContext.parallel()
+    device = ma.ExecContext.parallel()
     a = ma.array([1, 2, 3], type=ma.int32())
     b = ma.array([1, 0, 3], type=ma.int32())
     result = ma.compute.equal(

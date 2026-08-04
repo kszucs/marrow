@@ -63,7 +63,7 @@ from ..scalars import (
 )
 from ..views import reduce
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .distinct import (
     count_distinct,
     approx_count_distinct,
@@ -147,7 +147,7 @@ trait AggKernel(Kernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         """Whole-array reduce — the single-(full-)group case. The input dtype is
         known at comptime, so the result is `PrimitiveScalar[Self.AccType[V]]`
@@ -171,7 +171,7 @@ trait AggKernel(Kernel):
         T: PrimitiveType
     ](
         array: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[T]:
         """SIMD-vectorized whole-array reduce to a same-type scalar via
         `views.reduce` — the fast path for same-type reductions (sum/min/max/
@@ -266,7 +266,7 @@ struct Widening[Op: WideningOp](AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         """Widened SIMD whole-array reduce: accumulate in `AccType[V]` so narrow
         integer inputs cannot overflow, matching the grouped path. The widening
@@ -364,7 +364,7 @@ struct MinMax[Op: MinMaxOp](AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         return Self.apply(array, ctx)  # AccType == V → same-type SIMD reduce
 
@@ -405,7 +405,7 @@ struct CountKernel(AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         # Valid count is metadata — no scan. `AccType` is always int64.
         return Int64Scalar(Int64(len(array) - array.null_count()))
@@ -438,7 +438,7 @@ struct MeanKernel(AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         # Vectorized widened sum divided by the valid count; null on empty.
         var cnt = len(array) - array.null_count()
@@ -466,13 +466,13 @@ trait BoolReduceKernel(Kernel):
 
     @staticmethod
     def reduce(
-        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: BoolArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         ...
 
     @staticmethod
     def dispatch(
-        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         """Runtime-dtype entry: fold a boolean `DynArray` to a `Bool`."""
         return Self.reduce(array.as_bool(), ctx)
@@ -485,7 +485,7 @@ struct AnyKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: BoolArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         var n = len(array)
         var data_bv = array.values()
@@ -511,7 +511,7 @@ struct AnyKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         return Self.reduce(array.as_bool(), ctx)
 
@@ -523,7 +523,7 @@ struct AllKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: BoolArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         var n = len(array)
         var data_bv = array.values()
@@ -545,7 +545,7 @@ struct AllKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         return Self.reduce(array.as_bool(), ctx)
 
@@ -810,7 +810,7 @@ trait Aggregation(Kernel):
         only where there is a genuinely different route: a vectorized reduce, an
         O(1) answer, a whole-array sketch.
 
-        Takes a worker budget rather than an `ExecutionContext` so each
+        Takes a worker budget rather than an `ExecContext` so each
         aggregation decides its own parallelism: the SIMD fold reductions are
         serial (threads only pay off well above the sizes where the reduce is
         the bottleneck), while the distinct sketches self-gate on size."""
@@ -900,7 +900,7 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
         # The vectorized whole-array reduce, broadcast to length 1. Serial: the
         # SIMD reduce only benefits from threads well above the sizes reached
         # here, and that gating belongs in the reduce primitive itself.
-        return Self.K.reduce(values, ExecutionContext.serial()).repeat(1)
+        return Self.K.reduce(values, ExecContext.serial()).repeat(1)
 
     @staticmethod
     def partials(
@@ -1152,7 +1152,7 @@ struct DistinctAgg[exact: Bool](Aggregation):
     ) raises -> Self.OutArray:
         # `count_distinct` self-gates on size, going radix-partition-parallel at
         # scale, so it gets the worker budget.
-        var ctx = ExecutionContext.parallel(num_threads)
+        var ctx = ExecContext.parallel(num_threads)
         comptime if Self.exact:
             return count_distinct(values, ctx).repeat(1)
         else:

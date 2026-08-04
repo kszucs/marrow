@@ -236,7 +236,7 @@ persistent work queue where you can produce morsels on one thread and consume
 them on a pool of worker threads concurrently.
 
 To reduce handle-creation overhead, store a persistent CPU `DeviceContext` in
-marrow's `ExecutionContext` and pass it through to `sync_parallelize`.
+marrow's `ExecContext` and pass it through to `sync_parallelize`.
 
 ---
 
@@ -290,7 +290,7 @@ Apple Silicon (~200 GB/s bandwidth) and NVIDIA H100 (~3.35 TB/s):
 
 **Do not split columns into 64K morsels before dispatching to GPU.** Process
 the entire column (or as much as fits in device memory) in one kernel launch.
-The `gpu_threshold = 1_000_000` field on the executor's `ExecutionContext` is
+The `gpu_threshold = 1_000_000` field on the executor's `ExecContext` is
 the right guard for this — columns below threshold go to CPU, columns above go
 to GPU. It is currently unused in the planner.
 
@@ -317,17 +317,17 @@ processes morsel N+1):
 
 ## Architecture gaps (as of May 2026)
 
-The kernel layer (`kernels/execution.mojo`) and view layer (`views.mojo`) are
+The kernel layer (`execution.mojo`) and view layer (`views.mojo`) are
 well-designed for heterogeneous dispatch. The gap is in the executor
 (`expr/executor.mojo`), which does not thread execution context through its
 processor tree.
 
-### Two disconnected `ExecutionContext` types
+### Two disconnected `ExecContext` types
 
-`kernels/execution.mojo` defines:
+`execution.mojo` defines:
 
 ```mojo
-struct ExecutionContext:
+struct ExecContext:
     var num_threads: Int    // serial / multi(N) / auto
     var device: Optional[DeviceContext]
 
@@ -342,7 +342,7 @@ All arithmetic, compare, and view kernels accept this type. It has `serial()`,
 `expr/executor.mojo` defines a separate type:
 
 ```mojo
-struct ExecutionContext:
+struct ExecContext:
     var device_ctx: Optional[DeviceContext]
     var num_cpu_workers: Int
     var morsel_size: Int      // default 65_536
@@ -360,7 +360,7 @@ trait ValueProcessor:
 ```
 
 Every `BinaryProcessor.eval()` calls `add(l, r)` with an implicit
-`ExecutionContext.serial()`. The GPU path that exists in all kernels is
+`ExecContext.serial()`. The GPU path that exists in all kernels is
 unreachable from the executor. The `DISPATCH_CPU / DISPATCH_GPU / DISPATCH_AUTO`
 constants defined on `Binary` expression nodes are imported by the executor but
 never read by the planner or processors.
@@ -434,7 +434,7 @@ Unmatched trees fall back to the interpreter, which remains correct.
 def scan_filter_sum[T: DType](
     col: BufferView[T, _],
     threshold: Scalar[T],
-    ctx: ExecutionContext,
+    ctx: ExecContext,
 ) raises -> Scalar[T]:
     @parameter
     @always_inline
@@ -552,7 +552,7 @@ or memory-constrained environments morsels remain necessary.
 Make morsel size configurable per device rather than hardcoding 64K:
 
 ```mojo
-struct ExecutionContext:
+struct ExecContext:
     var cpu_morsel_size: Int   // 256K–1M: large enough for sync_parallelize
     var gpu_morsel_size: Int   // full column or gpu_threshold rows
 ```
@@ -573,12 +573,12 @@ fixed 64K.
 
 ## Recommended implementation order
 
-1. **Thread kernel `ExecutionContext` through `ValueProcessor.eval`**
+1. **Thread kernel `ExecContext` through `ValueProcessor.eval`**
    Unlocks the GPU path that already exists in all kernels.
    Lowest effort, highest immediate impact.
 
 2. **Make morsel size configurable; increase it dramatically**
-   Add `cpu_morsel_size` and `gpu_morsel_size` to `ExecutionContext`.
+   Add `cpu_morsel_size` and `gpu_morsel_size` to `ExecContext`.
    Set CPU default to 256K–1M rows so `sync_parallelize` is justified.
    Set GPU default to the full column (or `gpu_threshold`) so kernel
    launch overhead is amortized. The 64K default is wrong for both devices.
@@ -587,7 +587,7 @@ fixed 64K.
    Route columns below threshold to CPU, above to GPU.
    Required before any heterogeneous execution is correct.
 
-4. **Persistent CPU `DeviceContext` in `ExecutionContext`**
+4. **Persistent CPU `DeviceContext` in `ExecContext`**
    Store at query start, reuse across all `sync_parallelize` calls.
    Avoids `AsyncRT_DeviceContext_create` overhead per morsel.
 

@@ -72,7 +72,7 @@ format:
     <span class="mr-ico">🎮</span>
     <h3>GPU-capable kernels</h3>
     <p>Element-wise arithmetic, comparison and hashing kernels can dispatch to
-    Metal or CUDA through an <code>ExecutionContext</code> — experimental, and
+    Metal or CUDA through an <code>ExecContext</code> — experimental, and
     sharing the exact CPU code path.</p>
   </div>
   <div class="mr-card">

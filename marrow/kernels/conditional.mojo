@@ -30,7 +30,7 @@ from ..scalars import DynScalar
 from ..builders import Int32Builder
 from ..dtypes import PrimitiveType
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .concat import concat
 from .filter import take
 from .numeric import equal_any
@@ -112,7 +112,7 @@ struct Selection:
         """Row is null — no candidate supplies it."""
         self._sel.append_null()
 
-    def gather(mut self, ctx: ExecutionContext) raises -> DynArray:
+    def gather(mut self, ctx: ExecContext) raises -> DynArray:
         """Resolve every recorded decision: one `concat`, one `take`."""
         var length = self._length
         var big = concat(self._candidates, ctx)
@@ -153,7 +153,7 @@ struct CaseWhenKernel(Kernel):
         conditions: List[BoolArray],
         values: List[DynArray],
         var else_: Optional[DynArray],
-        ctx: ExecutionContext,
+        ctx: ExecContext,
     ) raises -> DynArray:
         var m = len(conditions)
         if m == 0:
@@ -194,7 +194,7 @@ def case_when(
     conditions: List[BoolArray],
     values: List[DynArray],
     var else_: Optional[DynArray] = None,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Multi-branch ``CASE WHEN`` selection (PyArrow ``pc.case_when``).
 
@@ -220,7 +220,7 @@ def case_when[
     conditions: List[BoolArray],
     values: List[PrimitiveArray[T]],
     var else_: Optional[PrimitiveArray[T]] = None,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Typed ``case_when`` over primitive branches."""
     var e = Optional[DynArray](None)
@@ -264,10 +264,10 @@ struct CoalesceKernel(BinaryConditionalKernel):
         var candidates = List[DynArray](capacity=2)
         candidates.append(la.copy())
         candidates.append(ra.copy())
-        return Self.apply(candidates, ExecutionContext.serial())
+        return Self.apply(candidates, ExecContext.serial())
 
     @staticmethod
-    def apply(arrays: List[DynArray], ctx: ExecutionContext) raises -> DynArray:
+    def apply(arrays: List[DynArray], ctx: ExecContext) raises -> DynArray:
         var candidates = List[DynArray](capacity=len(arrays))
         for k in range(len(arrays)):
             candidates.append(arrays[k].copy())
@@ -289,7 +289,7 @@ struct CoalesceKernel(BinaryConditionalKernel):
 
 def coalesce(
     arrays: List[DynArray],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """First non-null value across `arrays`, elementwise (PyArrow
     ``pc.coalesce``). If every input is null in a row, the output is null."""
@@ -300,7 +300,7 @@ def coalesce[
     T: PrimitiveType
 ](
     arrays: List[PrimitiveArray[T]],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Typed ``coalesce`` over primitive arrays."""
     return CoalesceKernel.apply(_as_any(arrays), ctx).as_primitive[T]().copy()
@@ -318,12 +318,10 @@ struct NullifKernel(BinaryConditionalKernel):
 
     @staticmethod
     def combine(la: DynArray, ra: DynArray) raises -> DynArray:
-        return Self.apply(la, ra, ExecutionContext.serial())
+        return Self.apply(la, ra, ExecContext.serial())
 
     @staticmethod
-    def apply(
-        a: DynArray, b: DynArray, ctx: ExecutionContext
-    ) raises -> DynArray:
+    def apply(a: DynArray, b: DynArray, ctx: ExecContext) raises -> DynArray:
         Self.expect_same_dtype(a.dtype(), b.dtype())
         Self.expect_same_length(a.length(), b.length())
 
@@ -346,7 +344,7 @@ struct NullifKernel(BinaryConditionalKernel):
 def nullif(
     a: DynArray,
     b: DynArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """``nullif(a, b)`` — ``a`` with the elements equal to ``b`` set to null
     (SQL ``NULLIF``). A row is nulled only where both are valid and equal; where
@@ -360,7 +358,7 @@ def nullif[
 ](
     a: PrimitiveArray[T],
     b: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Typed ``nullif`` over primitive arrays."""
     return NullifKernel.apply(a.copy(), b.copy(), ctx).as_primitive[T]().copy()
@@ -377,9 +375,7 @@ struct FillNullKernel(Kernel):
     comptime name = "fill_null"
 
     @staticmethod
-    def apply(
-        a: DynArray, fill: DynArray, ctx: ExecutionContext
-    ) raises -> DynArray:
+    def apply(a: DynArray, fill: DynArray, ctx: ExecContext) raises -> DynArray:
         Self.expect_same_dtype(a.dtype(), fill.dtype())
         Self.expect_same_length(a.length(), fill.length())
 
@@ -396,7 +392,7 @@ struct FillNullKernel(Kernel):
 def fill_null(
     a: DynArray,
     fill: DynArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Replace the nulls of `a` with the corresponding elements of `fill`
     (PyArrow ``pc.fill_null`` with an array replacement). Where `a` is valid the
@@ -408,7 +404,7 @@ def fill_null(
 def fill_null(
     a: DynArray,
     fill: DynScalar,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Replace the nulls of `a` with a scalar (PyArrow ``pc.fill_null`` with a
     scalar replacement). The scalar is broadcast to `a`'s length via
@@ -421,7 +417,7 @@ def fill_null[
 ](
     a: PrimitiveArray[T],
     fill: Scalar[T.native],
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Typed ``fill_null`` replacing nulls of `a` with a primitive scalar."""
     from ..scalars import PrimitiveScalar

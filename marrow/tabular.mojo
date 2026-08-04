@@ -23,7 +23,7 @@ from .kernels.join import (
     JOIN_SEMI,
     JOIN_ANTI,
 )
-from .kernels.execution import ExecutionContext
+from .execution import ExecContext
 from .kernels.groupby import GroupBy
 from .expr.aggregates import FoldedAggregates
 from .kernels.sort import sort
@@ -280,7 +280,7 @@ struct RecordBatch(
             left_on,
             right_on,
             kind,
-            ctx=ExecutionContext.parallel(num_threads),
+            ctx=ExecContext.parallel(num_threads),
         )
         var fields = List[Field]()
         for ref f in joined.dtype.as_struct().fields:
@@ -324,7 +324,7 @@ struct RecordBatch(
         var key_struct = self.select(key_indices).to_struct_array()
         var resolved = self._agg_columns(values, funcs, "group_by")
 
-        var gb = GroupBy(key_struct, ExecutionContext.parallel(num_threads))
+        var gb = GroupBy(key_struct, ExecContext.parallel(num_threads))
         var res = resolved[1].grouped(gb, resolved[0])
 
         # `res` is [key columns..., aggregate columns...]; name the aggregates.
@@ -378,7 +378,7 @@ struct RecordBatch(
             indices,
             ascending,
             nulls_first,
-            ctx=ExecutionContext.parallel(num_threads),
+            ctx=ExecContext.parallel(num_threads),
         )
         var fields = List[Field]()
         for ref f in sorted_sa.dtype.as_struct().fields:

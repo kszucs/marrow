@@ -19,7 +19,7 @@ from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
 from marrow.c_data import CArrowSchema, CArrowArray
-from marrow.kernels.execution import ExecutionContext
+from marrow.execution import ExecContext
 from marrow.arrays import (
     DynArray,
     ArrayData,
@@ -1135,11 +1135,11 @@ def _any_array_str(py_self: PythonObject) raises -> PythonObject:
     return PythonObject(String.write(ptr[]))
 
 
-def _array_to_device(self: DynArray, ctx: ExecutionContext) raises -> DynArray:
+def _array_to_device(self: DynArray, ctx: ExecContext) raises -> DynArray:
     return self.to_device(ctx.device.value())
 
 
-def _array_to_cpu(self: DynArray, ctx: ExecutionContext) raises -> DynArray:
+def _array_to_cpu(self: DynArray, ctx: ExecContext) raises -> DynArray:
     return self.to_cpu(ctx.device.value())
 
 

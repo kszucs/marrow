@@ -50,7 +50,7 @@ from ..parquet import (
 from ..scalars import DynScalar
 from .relations import BoxedValue
 from .pruning import PruneStats
-from ..kernels.execution import ExecutionContext
+from ..execution import ExecContext
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536
@@ -619,7 +619,7 @@ struct SortProcessor(Processor):
     var stable: Bool
     var limit: Optional[Int]
     var _schema: Schema
-    var _ctx: ExecutionContext
+    var _ctx: ExecContext
     var _emitted: Bool
 
     def __init__(
@@ -632,7 +632,7 @@ struct SortProcessor(Processor):
         stable: Bool,
         var limit: Optional[Int],
         var schema: Schema,
-        var ctx: ExecutionContext,
+        var ctx: ExecContext,
     ):
         self.input = input^
         self.keys = keys^
@@ -726,7 +726,7 @@ struct AggregateProcessor(Processor):
     var aggs: List[AggFunc]
     var _schema: Schema
     var _grouper: HashGrouper
-    var _ctx: ExecutionContext
+    var _ctx: ExecContext
     var _emitted: Bool
 
     def __init__(
@@ -737,7 +737,7 @@ struct AggregateProcessor(Processor):
         var inputs: List[BoxedValue],
         var aggs: List[AggFunc],
         var schema: Schema,
-        var ctx: ExecutionContext,
+        var ctx: ExecContext,
     ) raises:
         self.input = input^
         self.keys = keys^

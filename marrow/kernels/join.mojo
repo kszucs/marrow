@@ -65,7 +65,7 @@ expected payoff for the next round of optimization:
    tcmalloc's page-heap spinlock.  The profile shows ~11% of worker
    time in nested semaphore waits that are largely this contention.
    A thread-local arena (bump allocator reset between joins) or a
-   small-object pool inside ``ExecutionContext`` would eliminate it.
+   small-object pool inside ``ExecContext`` would eliminate it.
    Expected saving: ~5–8 ms at 10M.
 
 3. **Software Write-Combine Buffers (SWWCB) in ``RadixPartitioner``**
@@ -124,7 +124,7 @@ from ..dtypes import (
     struct_,
     null,
 )
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .filter import Take, filter, take
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
@@ -309,9 +309,7 @@ and can be tuned per workload."""
 
 
 struct HashJoin[
-    hasher: def(
-        StructArray, ExecutionContext
-    ) thin raises -> UInt64Array = rapidhash
+    hasher: def(StructArray, ExecContext) thin raises -> UInt64Array = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 
@@ -337,10 +335,10 @@ struct HashJoin[
     """
 
     # Global state (shared by both paths)
-    var _ctx: ExecutionContext
+    var _ctx: ExecContext
     """How this join executes — held whole rather than destructured to a worker
     count. It used to be a bare `_num_threads: Int`, which five internal sites
-    then rebuilt into `ExecutionContext.parallel(n)`; every one of those
+    then rebuilt into `ExecContext.parallel(n)`; every one of those
     silently dropped the caller's GPU device, since that factory sets
     `device=None`."""
     var _left_key_indices: List[Int]
@@ -361,11 +359,11 @@ struct HashJoin[
     numbers back to the original build-side row index after probe."""
     var _radix_bits: Int
 
-    def __init__(out self, var ctx: ExecutionContext = ExecutionContext()):
+    def __init__(out self, var ctx: ExecContext = ExecContext()):
         """Create a HashJoin.
 
         Args:
-            ctx: How to execute. ``ExecutionContext.serial()`` forces the serial
+            ctx: How to execute. ``ExecContext.serial()`` forces the serial
                 single-table path; ``.parallel(n)`` runs radix-partitioned
                 parallel build + probe across ``n`` workers; ``.parallel()`` /
                 ``.auto()`` picks ``num_physical_cores()``. Builds smaller than
@@ -670,7 +668,7 @@ struct HashJoin[
         After ``sync_parallelize`` in ``probe_parallel`` has finished
         there's no outer parallel region, so each per-column ``take``
         can safely fan its SIMD gather loop across workers internally.
-        We pass an ``ExecutionContext.parallel(num_threads)`` through,
+        We pass an ``ExecContext.parallel(num_threads)`` through,
         and ``take`` decides per-column whether it's big enough to
         stripe (its own grain threshold inside ``apply``).
         """
@@ -723,7 +721,7 @@ def hash_join(
     right_on: List[Int],
     kind: UInt8 = JOIN_INNER,
     strictness: UInt8 = JOIN_ALL,
-    ctx: ExecutionContext = ExecutionContext.auto(),
+    ctx: ExecContext = ExecContext.auto(),
 ) raises -> StructArray:
     """Equijoin two StructArrays on positional key column indices.
 

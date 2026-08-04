@@ -29,7 +29,7 @@ from ..dtypes import Field, struct_
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .filter import Take, take
 from .concat import concat
 from .aggregate import Aggregation, AggFunction
@@ -359,7 +359,7 @@ struct GroupBy(Movable):
     def __init__(
         out self,
         keys: StructArray,
-        ctx: ExecutionContext = ExecutionContext.auto(),
+        ctx: ExecContext = ExecContext.auto(),
         strategy: Optional[UInt8] = None,
     ) raises:
         """Group by a struct of key columns (multi-key GROUP BY).
@@ -379,7 +379,7 @@ struct GroupBy(Movable):
     def __init__(
         out self,
         key: DynArray,
-        ctx: ExecutionContext = ExecutionContext.auto(),
+        ctx: ExecContext = ExecContext.auto(),
         strategy: Optional[UInt8] = None,
     ) raises:
         """Group by a single key column."""
@@ -558,7 +558,7 @@ struct GroupBy(Movable):
         # Hand-rolled rather than `ctx.stripe`, and it has to stay that way:
         # this worker **raises** (it hashes keys inside the stripe), and
         # `stripe`'s body is typed non-raising. Widening it was tried and
-        # reverted — see the note on `ExecutionContext.stripe`; the parameter
+        # reverted — see the note on `ExecContext.stripe`; the parameter
         # form of `sync_parallelize` that accepts a raising worker needs an
         # implicitly-capturing closure, which miscompiles there.
         sync_parallelize[worker](num_threads)
@@ -640,9 +640,9 @@ struct GroupBy(Movable):
         # One partition means one thread: gathering keys and concatenating a
         # single chunk under a parallel context would pay thread dispatch for a
         # `num_groups`-row `take`, which at small inputs is most of the query.
-        var ctx = ExecutionContext.parallel(
+        var ctx = ExecContext.parallel(
             num_threads
-        ) if partition else ExecutionContext.serial()
+        ) if partition else ExecContext.serial()
         var na = len(values)
 
         @parameter
@@ -683,7 +683,7 @@ struct GroupBy(Movable):
                 return group_partition(rows, part_hashes)
 
             parts = RadixPartitioner(
-                num_bits=RADIX_BITS, ctx=ExecutionContext.parallel(num_threads)
+                num_bits=RADIX_BITS, ctx=ExecContext.parallel(num_threads)
             ).map_partitions[
                 Tuple[Int32Array, List[DynArray]], radix_partition
             ](

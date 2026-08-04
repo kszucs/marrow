@@ -13,7 +13,7 @@ from std.testing import assert_equal, assert_false, assert_true
 from std.utils.coord import Coord
 
 from ..buffers import Bitmap, Buffer
-from ..kernels.execution import ExecutionContext
+from ..execution import ExecContext
 from ..views import apply, reduce, BitmapView, BufferView
 
 
@@ -281,7 +281,7 @@ def test_apply_unary_bufferview_gpu() raises:
     apply[DType.int32, DType.int32, _double_i32](
         dev_src.device_view[DType.int32](),
         dev_dst.view[DType.int32](),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -319,7 +319,7 @@ def test_apply_binary_bufferview_gpu() raises:
         dev_lhs.device_view[DType.int32](),
         dev_rhs.device_view[DType.int32](),
         dev_dst.view[DType.int32](),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -351,7 +351,7 @@ def test_apply_bitmap_to_buffer_gpu() raises:
     apply[DType.uint8, _bool_to_u8](
         dev_bm.view(),
         dev_dst.view[DType.uint8](),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -392,7 +392,7 @@ def test_apply_masked_bufferview_gpu() raises:
         dev_src.device_view[DType.int32](),
         dev_validity.view(),
         dev_dst.view[DType.int32](),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -433,7 +433,7 @@ def test_apply_masked_bitmapview_gpu() raises:
         dev_src_bm.view(),
         dev_val_bm.view(),
         dev_dst.view[DType.uint8](),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -492,7 +492,7 @@ def test_apply_comparison_to_bitmap_gpu() raises:
         dev_lhs.device_view[DType.int32](),
         dev_rhs.device_view[DType.int32](),
         dev_bm.view(),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
 
     var result_bm = dev_bm^.to_immutable().to_cpu(ctx)
@@ -534,7 +534,7 @@ def test_reduce_sum_int32_gpu() raises:
         cpu_buf.unsafe_set[DType.int32](i, Int32(i + 1))  # [1,2,3,4,5]
     var dev_buf = cpu_buf^.to_immutable().to_device(ctx)
     var result = reduce[DType.int32, _add_i32_gpu](
-        dev_buf.device_view[DType.int32](), Int32(0), ExecutionContext.gpu(ctx)
+        dev_buf.device_view[DType.int32](), Int32(0), ExecContext.gpu(ctx)
     )
     assert_equal(result, Int32(15))
 
@@ -551,7 +551,7 @@ def test_reduce_sum_float32_gpu() raises:
     var result = reduce[DType.float32, _add_f32_gpu](
         dev_buf.device_view[DType.float32](),
         Float32(0.0),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
     assert_equal(result, Float32(10.0))
 
@@ -581,6 +581,6 @@ def test_reduce_sum_with_bitmap_gpu() raises:
         dev_buf.device_view[DType.int32](),
         dev_bm.view(),
         Int32(0),
-        ExecutionContext.gpu(ctx),
+        ExecContext.gpu(ctx),
     )
     assert_equal(result, Int32(40))

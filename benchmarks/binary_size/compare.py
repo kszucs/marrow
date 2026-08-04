@@ -42,7 +42,7 @@ NAMES = [
 # more than one (mangled names embed nested generic type params), so these
 # are proportional buckets, not a strict partition.
 MODULE_BUCKETS = [
-    "marrow::kernels::execution",
+    "marrow::execution",
     "marrow::dtypes",
     "marrow::views",
     "marrow::arrays",
