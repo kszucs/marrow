@@ -51,6 +51,21 @@
 
 ### Fixes
 
+- **`DynType.is_fixed_size()` removed.** It answered `is_bool() or is_primitive()`,
+  so it covered neither `fixed_size_binary` nor `fixed_size_list` -- the two dtypes
+  its name promises -- and it had no production caller. Arrow C++ spells the real
+  predicate `is_fixed_width` = `is_primitive || is_dictionary ||
+  is_fixed_size_binary` (`type_traits.h:1400`), which marrow's matched in no
+  respect. Deleted rather than widened: both places that want it already write
+  `is_bool() or is_primitive()` inline. `dtypes.mojo` records Arrow's definition
+  for whoever needs it next.
+
+- **B22 was a test bug, not a device-transfer defect.** `Buffer.unsafe_set[T]`
+  infers `T` from its value, so a bare literal widens and the store strides by the
+  wider type, while `unsafe_get[T]` defaults to `uint8`. The write landed eight
+  bytes from the read. `to_device`/`to_cpu` are correct; `unsafe_set` now
+  documents the asymmetry.
+
 - **`is_primitive()` said bool, and `byte_width()` aborted on it.** `byte_width()`
   guards on `is_primitive()` then dispatches over `variant_dispatch[PrimitiveType]`;
   `BoolType` does not conform -- correctly, bool is bit-packed -- so bool aborted the
