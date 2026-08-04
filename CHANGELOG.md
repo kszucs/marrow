@@ -51,6 +51,16 @@
 
 ### Fixes
 
+- **A hung Mojo compile no longer blocks the test run forever.** `run_with_progress`
+  called `proc.communicate()` with no timeout, so a process that stops making
+  progress and never exits is indistinguishable from a slow compile -- and the
+  harness waits. `MojoRunner.collect` already recovers from a compiler *crash* by
+  splitting the selection, because a crash produces a signal; a hang produces
+  none. New `--mojo-timeout SECONDS` (default 1800, 0 disables) kills the process
+  and reports it as an ordinary failure, with a message pointing at `ps -o
+  etime,time` to distinguish a hang from slowness. Verified against the known
+  deadlock in `test_join.mojo`, which previously ran 7 hours on 10.4s of CPU.
+
 - **`DynType.is_fixed_size()` removed.** It answered `is_bool() or is_primitive()`,
   so it covered neither `fixed_size_binary` nor `fixed_size_list` -- the two dtypes
   its name promises -- and it had no production caller. Arrow C++ spells the real

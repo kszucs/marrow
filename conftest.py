@@ -105,15 +105,35 @@ def run_with_progress(config, cmd, cwd, label):
                 daemon=True,
             )
             ticker.start()
-        out, err = proc.communicate()
+        timeout = config.getoption("--mojo-timeout") if config else 0
+        timed_out = False
+        try:
+            out, err = proc.communicate(timeout=timeout or None)
+        except subprocess.TimeoutExpired:
+            # A hung Mojo process emits nothing and never exits, so it is
+            # indistinguishable from a slow compile until the deadline passes.
+            # Kill it and turn the hang into an ordinary failure -- otherwise
+            # this call blocks forever and takes CI with it (backlog B23).
+            timed_out = True
+            proc.kill()
+            out, err = proc.communicate()
+            err = (
+                (err or "")
+                + f"\n\nTIMEOUT: killed after {timeout}s with no exit.\n"
+                "A Mojo compile or run that produces no output for this long is "
+                "hung, not slow -- compare elapsed time against CPU time with "
+                "`ps -o etime,time <pid>` to confirm. Raise --mojo-timeout if "
+                "this selection is legitimately slower than the deadline.\n"
+            )
         stop.set()
         if ticker is not None:
             ticker.join()
 
         elapsed = time.monotonic() - started
-        mark = "✓" if proc.returncode == 0 else "✗"
+        mark = "✓" if proc.returncode == 0 and not timed_out else "✗"
         mem = f", peak {peak[0] / 1e9:.1f} GB" if peak[0] else ""
-        line = f"{mark} {label} — {elapsed:.0f}s{mem}"
+        suffix = " (TIMED OUT)" if timed_out else ""
+        line = f"{mark} {label} — {elapsed:.0f}s{mem}{suffix}"
         if interactive:
             # Overwrite the spinner, then leave the cursor at column 0 so pytest
             # resumes its progress line cleanly underneath.
@@ -122,7 +142,10 @@ def run_with_progress(config, cmd, cwd, label):
         else:
             print(line, flush=True)
 
-    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    # A killed process reports a signal returncode; force a plain non-zero so
+    # callers that only check `!= 0` treat a hang like any other failure.
+    code = 124 if timed_out else proc.returncode
+    return subprocess.CompletedProcess(cmd, code, out, err)
 
 
 class MojoRunner:
@@ -628,6 +651,19 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Run Mojo tests under AddressSanitizer (ASAN)",
+    )
+    parser.addoption(
+        "--mojo-timeout",
+        type=int,
+        default=1800,
+        metavar="SECONDS",
+        help=(
+            "Kill a Mojo compile/run that exceeds SECONDS and report it as a "
+            "failure (default: 1800). 0 disables the timeout. The harness "
+            "already recovers from a compiler *crash* by splitting the "
+            "selection, because a crash produces a signal; a hang produces "
+            "none, so without this the run blocks forever -- see backlog B23."
+        ),
     )
     parser.addoption(
         "--competition",
