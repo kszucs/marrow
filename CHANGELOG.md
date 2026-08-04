@@ -4,6 +4,20 @@
 
 ### Docs
 
+- **`CountAgg`'s docstring claimed to be the grouped `count` for numeric columns
+  too; it is not.** `CountValid.resolve` (`marrow/expr/aggregates.mojo`) hands
+  numeric columns `NumericAgg[CountKernel, V]`, the typed `AggState` fold —
+  `CountAgg` serves non-numeric columns on that lane, plus the AOT lane's
+  `K.Grouped`. Measured before deciding whether to converge them (1M rows,
+  g100k, both implementations in one binary): nullable input, `AggState`
+  1.7159 ms (sd 0.0702) vs `CountAgg` 8.3555 ms (sd 0.2331) — `CountAgg` pays an
+  erased `variant_dispatch` `is_valid` check per row; null-free input, `AggState`
+  1.4124 ms (sd 0.0098) vs `CountAgg` 1.3710 ms (sd 0.0117), where `CountAgg`'s
+  `has_null` guard skips validity entirely. The nullable gap is decisive, so the
+  split stays — the docstring now says so instead of claiming a unification
+  that never happened. A test pins the two implementations to agree on the same
+  input (`test_grouped_count_implementations_agree_on_nulls`).
+
 - **One backlog, `docs/backlog.md`, replacing seven task files.** A five-agent audit
   verified every task ID against the code and found **18 wrong statuses**: eight marked
   open that were done (Q2.1, L3, Q1.2/Q1.3, Q5.3, Q2.4, FU-1–FU-4, T2.4, Q3.4), four

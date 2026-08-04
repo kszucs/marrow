@@ -1041,11 +1041,28 @@ struct CountAgg(Aggregation):
     """`count` over a non-numeric column — a validity-only scan.
 
     `count` reads validity and nothing else, so it is defined for *every* dtype
-    and there is nothing to monomorphize on: the input stays erased. That makes
-    it the grouped form of `count` for numeric columns too (`CountKernel.Grouped`
-    names it), so there is one implementation rather than a fold for numbers and
-    a scan for everything else. An empty group counts 0 (never null), matching
-    SQL.
+    and there is nothing to monomorphize on: the input stays erased. It does
+    **not** serve numeric columns too — `CountValid.resolve`
+    (`marrow/expr/aggregates.mojo`) hands those `NumericAgg[CountKernel, V]`
+    instead, the typed `AggState` fold. This type serves non-numeric columns on
+    that runtime-dtype lane, plus the AOT lane's `K.Grouped` (`CountKernel.Grouped`
+    names it there, `values.mojo`), which has no separate numeric/non-numeric
+    split to begin with. The two lanes deliberately run different code for
+    numeric `count`, measured rather than assumed: `CountAgg.grouped` takes a
+    `DynArray` and calls `values.is_valid(i)` per row, which routes through
+    `variant_dispatch` — a linear `comptime for` over 36 variant arms, with
+    `Float64Array` at position 13 — paying roughly 13 sequential `isa[T]()`
+    checks plus an indirect call *per row*, inside an already cache-hostile
+    100k-group random-write loop. `AggState` pays one typed `bitmap.test()`
+    instead. At 1M rows, g100k, nullable input: `AggState` 1.7159 ms (sd 0.0702)
+    vs `CountAgg` 8.3555 ms (sd 0.2331) — roughly 4.9x, about 30x the stddev. On
+    a null-free column `CountAgg` skips validity entirely via its `has_null`
+    guard and never loads a value, which is why it edges ahead there instead:
+    `AggState` 1.4124 ms (sd 0.0098) vs `CountAgg` 1.3710 ms (sd 0.0117) — a ~3%
+    gap, only ~4x the stddev, and diluted by grouping overhead in the timed
+    region. Converging the two would mean paying the erased per-row cost on
+    every numeric `count`, so the split stays. An empty group counts 0 (never
+    null), matching SQL.
 
     Mergeable, because per-group counts merge by addition — which is exactly
     what the shared `(accumulator, valid count)` partial format already carries,
