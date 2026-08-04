@@ -95,7 +95,7 @@
 
 ### Features
 
-- **`StringPredicateKernel.apply_scalar`**, a scalar-pattern entry point for the six
+- **`StringPredicateKernel.apply_scalar`**, a scalar-pattern entry point for the eleven
   string predicate kernels (`StartsWith`/`EndsWith`/`Contains`/`StrEq`/`StrNe`/`Like`/
   `ILike`/the ordering compares), and `StringPredicate.prepare` in the expression layer
   now calls it whenever the right operand is a constant (`Self.R.OutShape == 0`).

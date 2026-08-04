@@ -1760,10 +1760,20 @@ struct StringPredicate[
             #
             # `apply_scalar`'s validity comes from the left operand alone
             # (`Bitmap.intersect(l, None)` reduces to exactly that), which is
-            # only correct because no `OutShape == 0` string node can be null:
-            # `StringLiteral` holds a plain `String` with no validity flag. If
-            # a nullable string literal is ever added, this assumption breaks
-            # and needs revisiting here.
+            # only correct because no `OutShape == 0` string node can be null.
+            # `StringLiteral` is the only leaf with `OutShape == 0`, and it
+            # holds a plain `String` with no validity flag. The two composites
+            # that could also reach `OutShape == 0` forward the property
+            # rather than break it: `Concat.OutShape` is
+            # `max(L.OutShape, R.OutShape)`, so it is 0 only when both operands
+            # are themselves all-literal, and its `validity` intersects theirs
+            # (both `None`); `StringUnary.OutShape` is `A.OutShape`, so it is 0
+            # only when its single operand is, and its `validity` just forwards
+            # `a.validity(batch)` unchanged. So reaching `OutShape == 0` at all,
+            # through any nesting of these three, forces every leaf to be a
+            # `StringLiteral`, and the intersection/forwarding chain reduces to
+            # `None` all the way up. If a nullable string literal is ever
+            # added, this assumption breaks and needs revisiting here.
             var rctx = Context()
             self.r.prepare(batch, rctx)
             var rslot = 0

@@ -1200,11 +1200,19 @@ struct DynType(
         )
 
     def is_fixed_size(self) -> Bool:
-        """True for every type with a fixed width, bool included.
+        """True for bool plus every type conforming to `PrimitiveType`:
+        numeric, temporal, interval, decimal.
 
-        This is the Arrow-spec notion, and it is *wider* than `is_primitive()`
-        by exactly bool: boolean is fixed-width at one bit, it just has no fixed
-        *byte* width.
+        Despite the name, this does **not** cover `fixed_size_binary` or
+        `fixed_size_list` — the two dtypes it would need to include to match
+        the Arrow-spec notion of fixed width, and the two whose names promise
+        it. It answers `is_bool() or is_primitive()`, unchanged by
+        `is_primitive()` narrowing to exclude bool: that narrowing moved bool
+        out of `is_primitive()` and into the explicit `is_bool() or` half of
+        this predicate, so the set of dtypes this answers True for is exactly
+        what it was before. See backlog item B24 for the open decision on
+        whether this should be widened to cover the fixed-size layouts or
+        deleted outright.
         """
         return self.is_bool() or self.is_primitive()
 

@@ -18,7 +18,6 @@ from ...dtypes import (
     uint8,
     uint64,
     float64,
-    bool_,
     date32,
     decimal128,
     microsecond,

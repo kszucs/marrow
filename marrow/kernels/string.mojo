@@ -790,7 +790,7 @@ struct LikeKernel(StringPredicateKernel):
     ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
         # Compile once, not once per row — which is the whole point of
         # `LikePattern`, and had no non-test caller before this.
-        return _match_pattern(array, LikePattern[False](pattern))
+        return Self.apply(array, pattern)
 
     @staticmethod
     def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
@@ -819,7 +819,7 @@ struct ILikeKernel(StringPredicateKernel):
     def apply_scalar[
         T: StringLikeType
     ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
-        return _match_pattern(array, LikePattern[True](pattern))
+        return Self.apply(array, pattern)
 
     @staticmethod
     def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
