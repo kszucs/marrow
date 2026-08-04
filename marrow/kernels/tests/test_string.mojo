@@ -23,6 +23,7 @@ from ...kernels.string import (
     StartsWithKernel,
     EndsWithKernel,
     ContainsKernel,
+    StringEqKernel,
     LikeKernel,
     ILikeKernel,
 )
@@ -351,3 +352,71 @@ def test_like_dispatch_rejects_non_string() raises:
     var s: DynArray = array([1, 2, 3], int32)
     with assert_raises(contains="expected a string array"):
         _ = LikeKernel.dispatch(s, "%a%")
+
+
+def test_apply_scalar_agrees_with_apply_for_like() raises:
+    """The scalar-pattern path must produce exactly what the array x array path
+    does when every row of the right operand is the same pattern.
+
+    This is the invariant that makes the expr-layer optimisation safe: it is a
+    pure performance change, so any disagreement here is a correctness bug.
+    """
+    var b = StringBuilder(capacity=5)
+    b.append("hello")
+    b.append("help")
+    b.append_null()
+    b.append("world")
+    b.append("")
+    var arr = b.finish()
+
+    var pb = StringBuilder(capacity=5)
+    for _ in range(5):
+        pb.append("hel%")
+    var pats = pb.finish()
+
+    var via_array = LikeKernel.apply(arr, pats)
+    var via_scalar = LikeKernel.apply_scalar(arr, "hel%")
+    assert_true(via_array == via_scalar)
+
+
+def test_apply_scalar_agrees_with_apply_for_equality() raises:
+    """The default `apply_scalar` body — the one every non-LIKE predicate
+    inherits — must match its array x array counterpart too."""
+    var b = StringBuilder(capacity=4)
+    b.append("x")
+    b.append_null()
+    b.append("y")
+    b.append("x")
+    var arr = b.finish()
+
+    var pb = StringBuilder(capacity=4)
+    for _ in range(4):
+        pb.append("x")
+    var pats = pb.finish()
+
+    assert_true(
+        StringEqKernel.apply(arr, pats) == StringEqKernel.apply_scalar(arr, "x")
+    )
+    assert_true(
+        StartsWithKernel.apply(arr, pats)
+        == StartsWithKernel.apply_scalar(arr, "x")
+    )
+
+
+def test_apply_scalar_empty_pattern_and_all_wildcards() raises:
+    """Two shapes `LikePattern` special-cases, pinned through the new entry."""
+    var b = StringBuilder(capacity=3)
+    b.append("")
+    b.append("a")
+    b.append_null()
+    var arr = b.finish()
+
+    var empty = LikeKernel.apply_scalar(arr, "")
+    assert_true(empty[0].value())
+    assert_true(not empty[1].value())
+    assert_true(empty.is_null(2))
+
+    var any = LikeKernel.apply_scalar(arr, "%")
+    assert_true(any[0].value())
+    assert_true(any[1].value())
+    assert_true(any.is_null(2))

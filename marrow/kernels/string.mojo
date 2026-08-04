@@ -328,6 +328,38 @@ trait StringPredicateKernel(Kernel):
         )
 
     @staticmethod
+    def apply_scalar[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        """`array × one constant pattern`, without materialising the constant.
+
+        The peer of `apply` for the case where the right operand is a scalar.
+        `apply` needs a `BinaryLikeArray` on both sides, so the expression layer
+        had to splat a literal into an n-row array first — n copies of the same
+        string, allocated per morsel.
+
+        The default body is the same loop as `apply` with the right operand
+        hoisted. `LikeKernel`/`ILikeKernel` override it to compile their pattern
+        once instead of per row.
+        """
+        var n = len(array)
+        var data = Bitmap.alloc_zeroed(n)
+        for i in range(n):
+            if array.is_valid(i) and Self.predicate(
+                array.unsafe_get(UInt(i)), pattern
+            ):
+                data.set(i)
+        # Validity is the left operand's: a constant right operand is never
+        # null, so `Bitmap.intersect(l, None)` reduces to `l`.
+        return BoolArray(
+            length=n,
+            nulls=array.null_count(),
+            offset=0,
+            bitmap=_passthrough_validity(array, n),
+            buffer=data.to_immutable(),
+        )
+
+    @staticmethod
     def dispatch(left: DynArray, right: DynArray) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
         var dt = left.dtype()
@@ -676,6 +708,17 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
             return _match_tokens(self.tokens, s)
 
 
+def _passthrough_validity[
+    T: StringLikeType
+](array: BinaryLikeArray[T], n: Int) raises -> Optional[Bitmap[mut=False]]:
+    """The left operand's validity, offset-applied — what a predicate against a
+    constant returns, since a constant operand is never null."""
+    if array.bitmap:
+        var v = array.bitmap.value().view(array.offset, n)
+        return v.union(v).to_immutable()
+    return None
+
+
 def _match_pattern[
     T: StringLikeType, ignore_case: Bool
 ](
@@ -693,15 +736,11 @@ def _match_pattern[
         if array.is_valid(i) and pattern.matches(array.unsafe_get(UInt(i))):
             data.set(i)
     # Null input yields a null output element.
-    var vbm: Optional[Bitmap[mut=False]] = None
-    if array.bitmap:
-        var v = array.bitmap.value().view(array.offset, n)
-        vbm = v.union(v).to_immutable()
     return BoolArray(
         length=n,
         nulls=array.null_count(),
         offset=0,
-        bitmap=vbm^,
+        bitmap=_passthrough_validity(array, n),
         buffer=data.to_immutable(),
     )
 
@@ -728,8 +767,8 @@ struct LikeKernel(StringPredicateKernel):
 
     Two shapes: the inherited array × array `apply`/`dispatch` (general case,
     one pattern per row) and the array × scalar-pattern `apply`/`dispatch`
-    below, which compiles the pattern once — use the latter whenever the
-    pattern is a constant, which is the dominant `col LIKE '%const%'` case."""
+    below, which compiles the pattern once — `apply_scalar` is what the
+    expression layer calls for a constant pattern."""
 
     comptime name = "match_like"
 
@@ -743,6 +782,14 @@ struct LikeKernel(StringPredicateKernel):
     def apply[
         T: StringLikeType
     ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        return _match_pattern(array, LikePattern[False](pattern))
+
+    @staticmethod
+    def apply_scalar[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        # Compile once, not once per row — which is the whole point of
+        # `LikePattern`, and had no non-test caller before this.
         return _match_pattern(array, LikePattern[False](pattern))
 
     @staticmethod
@@ -764,6 +811,12 @@ struct ILikeKernel(StringPredicateKernel):
 
     @staticmethod
     def apply[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        return _match_pattern(array, LikePattern[True](pattern))
+
+    @staticmethod
+    def apply_scalar[
         T: StringLikeType
     ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
         return _match_pattern(array, LikePattern[True](pattern))
