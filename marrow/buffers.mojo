@@ -771,6 +771,22 @@ struct Buffer[*, mut: Bool = False](
     def unsafe_set[
         T: DType = DType.uint8
     ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
+        """Write `value` at element `index`, striding by `size_of[T]()`.
+
+        **Always type the value.** `T` is inferred from `value`, so a bare
+        integer literal does *not* give you the `uint8` default — it widens, and
+        the write strides by the wider type. `unsafe_get` has no argument to
+        infer from, so it *does* default to `uint8`. The pair then silently
+        disagrees:
+
+            buf.unsafe_set(1, 13)          # 8-byte store at byte offset 8
+            buf.unsafe_get(1)              # reads byte 1 -> 0, not 13
+
+        Write `unsafe_set(1, UInt8(13))` or `unsafe_set[DType.uint8](1, 13)`.
+        This cost two GPU tests, which read back zeros and were filed as a
+        device-transfer data-loss bug (B22) until the writes turned out to be
+        landing eight bytes away from the reads.
+        """
         comptime output = Scalar[T]
         self._ptr.bitcast[output]()[index] = value
 
