@@ -13,7 +13,14 @@ def test_bool_type() raises:
     assert_false(t.is_integer())
     assert_false(t.is_floating_point())
     assert_false(t.is_numeric())
-    assert_true(t.is_primitive())
+    # marrow deliberately diverges from PyArrow and Arrow C++ here, both of
+    # which call bool primitive. marrow has something neither has: a
+    # `PrimitiveType` *trait* that generic code dispatches on, which `BoolType`
+    # cannot conform to because bool is bit-packed. `is_primitive()` exists to
+    # guard `variant_dispatch[PrimitiveType]`, so a True here is a trap — it
+    # aborted `byte_width()`. Do not "fix" this back.
+    assert_false(t.is_primitive())
+    assert_true(t.is_fixed_size())
     assert_false(t.is_string())
     assert_equal(String(t), "bool")
 
@@ -136,6 +143,19 @@ def test_byte_width_zero_for_non_fixed_width() raises:
     assert_equal(DynType(StringType()).byte_width(), 0)
     assert_equal(DynType(BinaryType()).byte_width(), 0)
     assert_equal(DynType(NullType()).byte_width(), 0)
+
+
+def test_bool_byte_width_is_zero_not_an_abort() raises:
+    """Bool has no byte width — it is one bit.
+
+    This used to abort the process: `is_primitive()` answered True, so
+    `byte_width()` fell through to `variant_dispatch[PrimitiveType]`, which
+    `BoolType` cannot enter. `c_data.mojo:1001` is one branch-ordering mistake
+    away from reaching it on the C Data import path.
+    """
+    assert_equal(DynType(dt.bool_).byte_width(), 0)
+    assert_true(DynType(dt.bool_).is_fixed_size())
+    assert_false(DynType(dt.bool_).is_primitive())
 
 
 def test_eq() raises:

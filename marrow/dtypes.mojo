@@ -1055,13 +1055,24 @@ struct DynType(
         return self.is_integer() or self.is_floating_point()
 
     def is_primitive(self) -> Bool:
-        """True for all fixed-width, buffer-backed types (numeric, temporal, interval, decimal).
+        """True for the fixed-**byte**-width, buffer-backed types: numeric,
+        temporal, interval, decimal.
 
-        Matches PyArrow's ``pa.types.is_primitive()`` semantics.
+        Exactly the set that conforms to the `PrimitiveType` trait, which is
+        what this predicate is for — every caller uses it to guard a
+        `variant_dispatch[PrimitiveType]`.
+
+        **Deliberately narrower than PyArrow and Arrow C++**, which both count
+        bool (`pa.types.is_primitive(pa.bool_())` is True; Arrow C++'s
+        `is_primitive` lists `Type::BOOL` first). Neither has a `PrimitiveType`
+        trait to stay consistent with; marrow does, and `BoolType` cannot
+        conform to it because bool is bit-packed rather than fixed-byte-width.
+        Answering True here made `byte_width()` abort. Use `is_fixed_size()` for
+        the Arrow-spec notion, or `is_bool() or is_primitive()` for PyArrow
+        parity — which is what `ipc.mojo` already writes.
         """
         return (
-            self.is_bool()
-            or self.is_numeric()
+            self.is_numeric()
             or self.is_temporal()
             or self.is_interval()
             or self.is_decimal()
@@ -1189,7 +1200,13 @@ struct DynType(
         )
 
     def is_fixed_size(self) -> Bool:
-        return self.is_primitive()
+        """True for every type with a fixed width, bool included.
+
+        This is the Arrow-spec notion, and it is *wider* than `is_primitive()`
+        by exactly bool: boolean is fixed-width at one bit, it just has no fixed
+        *byte* width.
+        """
+        return self.is_bool() or self.is_primitive()
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter

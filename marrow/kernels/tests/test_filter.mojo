@@ -20,6 +20,7 @@ from ...builders import (
     Date32Builder,
     TimestampBuilder,
     DurationBuilder,
+    BoolBuilder,
 )
 from ...dtypes import (
     int32,
@@ -605,6 +606,49 @@ def test_take_duration_null_index() raises:
     ref r = result.as_duration()
     assert_equal(r[0].value(), Scalar[int64.native](30))
     assert_equal(r[2].value(), Scalar[int64.native](10))
+
+
+def test_filter_bool_array_after_primitive_narrowing() raises:
+    """`Filter.dispatch` peels bool off before `is_primitive()`. Narrowing that
+    predicate must not disturb the bool arm."""
+    var bb = BoolBuilder(capacity=4)
+    bb.append(True)
+    bb.append(False)
+    bb.append_null()
+    bb.append(True)
+    var arr = bb.finish()
+
+    var mb = BoolBuilder(capacity=4)
+    mb.append(True)
+    mb.append(True)
+    mb.append(True)
+    mb.append(False)
+    var mask = mb.finish()
+
+    var out = filter(arr^.to_dyn(), mask^).as_bool().copy()
+    assert_equal(len(out), 3)
+    assert_true(out[0].value())
+    assert_true(not out[1].value())
+    assert_true(out.is_null(2))
+
+
+def test_take_bool_array_after_primitive_narrowing() raises:
+    """`Take.dispatch` peels bool off before `is_primitive()`. Narrowing that
+    predicate must not disturb the bool arm, and a null index still produces a
+    null output row."""
+    var a = array([True, False, True, False])
+    var idx = Int32Builder(capacity=4)
+    idx.append(Scalar[int32.native](2))
+    idx.append_null()
+    idx.append(Scalar[int32.native](0))
+    idx.append(Scalar[int32.native](3))
+    var result = take(a^, idx.finish())
+    assert_equal(len(result), 4)
+    ref r = result.as_bool()
+    assert_true(r[0].value())
+    assert_false(r.is_valid(1))
+    assert_true(r[2].value())
+    assert_false(r[3].value())
 
 
 def test_drop_null_temporal() raises:

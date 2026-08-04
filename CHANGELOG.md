@@ -51,6 +51,17 @@
 
 ### Fixes
 
+- **`is_primitive()` said bool, and `byte_width()` aborted on it.** `byte_width()`
+  guards on `is_primitive()` then dispatches over `variant_dispatch[PrimitiveType]`;
+  `BoolType` does not conform -- correctly, bool is bit-packed -- so bool aborted the
+  process rather than answering. All six callers already peeled bool off before
+  reaching `is_primitive()`, because it exists to guard exactly that dispatch, so the
+  predicate was the defect, not `byte_width()`. `is_primitive()` now narrows to the
+  set conforming to `PrimitiveType`; `is_fixed_size()` re-adds bool, which is the
+  Arrow-spec notion. This diverges from PyArrow and Arrow C++, which both count bool
+  as primitive -- deliberate, since neither has a `PrimitiveType` trait to stay
+  consistent with.
+
 - **A MARK join built a `StructArray` whose dtype declared more fields than it had
   columns.** "Does this kind emit the right side's columns?" was answered inline at
   four places with three different memberships: `output_dtype` said MARK does,
