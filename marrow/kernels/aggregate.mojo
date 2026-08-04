@@ -382,8 +382,13 @@ struct CountKernel(AggKernel):
     comptime AccType[V: NumericType] = Int64Type
     comptime empty_is_null = False
     comptime needs_count = True  # the answer *is* the count
-    # Grouped `count` is the validity scan, whatever the column's type: there is
-    # no accumulator to fold, and the scan is mergeable (counts add).
+    # `K.Grouped[V]` is the validity scan for every numeric `V` — there is no
+    # accumulator to fold, and the scan is mergeable (counts add). That is what
+    # the AOT lane uses (`values.mojo`'s `K.Grouped[In.OutType]`). The runtime
+    # lane picks differently: it resolves numeric columns to
+    # `NumericAgg[CountKernel, V]` instead (`CountValid.resolve`,
+    # `expr/aggregates.mojo`) and reaches `CountAgg` only for non-numeric
+    # columns. See `CountAgg`'s docstring for why the two lanes disagree here.
     comptime Grouped[V: NumericType] = CountAgg
 
     @staticmethod
@@ -1050,7 +1055,7 @@ struct CountAgg(Aggregation):
     split to begin with. The two lanes deliberately run different code for
     numeric `count`, measured rather than assumed: `CountAgg.grouped` takes a
     `DynArray` and calls `values.is_valid(i)` per row, which routes through
-    `variant_dispatch` — a linear `comptime for` over 36 variant arms, with
+    `variant_dispatch` — a linear `comptime for` over 37 variant arms, with
     `Float64Array` at position 13 — paying roughly 13 sequential `isa[T]()`
     checks plus an indirect call *per row*, inside an already cache-hostile
     100k-group random-write loop. `AggState` pays one typed `bitmap.test()`

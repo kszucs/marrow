@@ -682,20 +682,26 @@ def test_grouped_count_implementations_agree_on_nulls() raises:
 
     Q7.3 is a choice between them, so any disagreement here makes that choice a
     correctness question rather than a performance one. `count` excludes nulls
-    (SQL `COUNT(x)`), and an empty group counts 0, never null.
+    (SQL `COUNT(x)`), and group 2 -- all-null, so zero *valid* rows -- counts 0,
+    never null.
     """
-    var kb = Int32Builder(6)
+    var kb = Int32Builder(9)
     for i in range(6):
         kb.append(Scalar[int32.native](i % 2))
+    for _ in range(3):
+        kb.append(Scalar[int32.native](2))
     var keys: DynArray = kb.finish()
 
-    var vb = Float64Builder(6)
+    var vb = Float64Builder(9)
     vb.append(Scalar[float64.native](Float64(1)))
     vb.append_null()
     vb.append(Scalar[float64.native](Float64(3)))
     vb.append_null()
     vb.append(Scalar[float64.native](Float64(5)))
     vb.append(Scalar[float64.native](Float64(6)))
+    vb.append_null()
+    vb.append_null()
+    vb.append_null()
     var vals: DynArray = vb.finish()
 
     var via_state = GroupBy(keys).aggregate[
@@ -704,3 +710,10 @@ def test_grouped_count_implementations_agree_on_nulls() raises:
     var via_scan = GroupBy(keys).aggregate[CountAgg](CountAgg.from_any(vals))
     assert_true(via_state.keys[0] == via_scan.keys[0])
     assert_true(via_state.aggregates[0] == via_scan.aggregates[0])
+
+    ref gk = via_scan.keys[0].as_int32()
+    ref gc = via_scan.aggregates[0].as_int64()
+    for i in range(via_scan.num_rows()):
+        if Int(gk[i].value()) == 2:
+            assert_true(gc.is_valid(i))
+            assert_equal(gc[i].value(), Int64(0))
