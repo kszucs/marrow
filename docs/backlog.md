@@ -128,8 +128,9 @@ Two root causes account for most of this list, and fixing either collapses a
 group rather than a line:
 
 - **`offset` has two conventions** — views index logically from zero, owning
-  `Buffer`/`Bitmap` do not — and array code mixes them (B16 remains; B11, B13
-  and B17 were this shape and are fixed).
+  `Buffer`/`Bitmap` do not — and array code mixes them. **All of this group is
+  now fixed** (B11, B13, B16, B17); the convention split itself is not, so a new
+  array method that indexes a bitmap can still pick the wrong one.
 
 | ID | Defect | Evidence | Size |
 |---|---|---|---|
@@ -730,26 +731,17 @@ to change. Listed with the competing responsibilities, most costly first.
 - **`Value`** (`values.mojo:304`) is the union of four consumers' protocols —
   executor, printer, optimizer, pruner — and all 37 nodes pay for all four.
 
-### `ExecContext`'s vocabulary is one concept short
+### `ExecContext`'s vocabulary is one concept short — **A6, done**
 
-There is no "auto, with a threshold that still applies when the thread count is
-*forced*". So three call sites invented it independently — `distinct.mojo:106`,
-`join.mojo:388`, `groupby.mojo:405` — and none of the three short-circuits on
-`is_gpu()` the way `wants_parallel` does (`execution.mojo:153`). Consequence:
-`ExecContext.parallel(8)` on a 100k-row array goes serial in
-`count_distinct` and parallel everywhere else.
-
-Worse, **two API boundaries destructure the context back to a bare `Int`** —
-`Aggregation.whole(values, num_threads: Int = 0)` (`aggregate.mojo:804`) and
-`GroupBy._num_threads` (`groupby.mojo:356`) — then rebuild it with
-`ExecContext.parallel(n)`, a factory that sets `device=None` and **silently
-drops the caller's GPU device**. This is the exact defect `HashJoin` already
-fixed and documented (`join.mojo:338-343`); the fix never reached the other two,
-and the `num_threads: Int` vocabulary has since propagated up into
-`expr/aggregates.mojo:403`.
-
-**A6 — add the missing predicate, and take `ExecContext` at both
-boundaries.** Small, and it closes a GPU-correctness hole.
+Closed. `worth_parallel(n, min)` is the missing predicate and `with_threads(n)`
+the missing derivation; every hand-rolled copy and every `num_threads: Int`
+boundary is gone. Two counts in the original card were low: the predicate had
+**four** copies, not three (`HashJoin.probe` was the fourth, and it *must* agree
+with `build`), and **five** API boundaries destructured to `Int`, not two —
+`tabular.join`/`group_by`/`sort_by` as well as `Aggregation.whole` and
+`GroupBy`. The one live defect was in the bindings: `compute.mojo` had a
+Python-supplied `ExecContext` and passed `ctx.resolved_num_threads()`, so
+`ma.compute.sum` on a GPU context ran on the CPU.
 
 ### The three `marrow.expr` import cycles
 

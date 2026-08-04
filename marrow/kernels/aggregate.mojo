@@ -801,7 +801,7 @@ trait Aggregation(Kernel):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         """The whole-table aggregate (no GROUP BY) as a one-row column.
 
@@ -810,10 +810,15 @@ trait Aggregation(Kernel):
         only where there is a genuinely different route: a vectorized reduce, an
         O(1) answer, a whole-array sketch.
 
-        Takes a worker budget rather than an `ExecContext` so each
-        aggregation decides its own parallelism: the SIMD fold reductions are
-        serial (threads only pay off well above the sizes where the reduce is
-        the bottleneck), while the distinct sketches self-gate on size."""
+        Each aggregation still decides its own parallelism — the SIMD fold
+        reductions run serial (threads only pay off well above the sizes where
+        the reduce is the bottleneck), while the distinct sketches self-gate on
+        size. That freedom is why this used to take a bare worker budget, but it
+        never needed one: an implementation that wants serial says so with
+        `ctx.with_threads(1)`, and keeps the device it was handed. The `Int`
+        only ever discarded information — three of the four implementations
+        ignored it outright, and the fourth rebuilt `ExecContext.parallel(n)`,
+        dropping the caller's GPU device."""
         var n = len(Self.to_dyn(values))
         var zeros = Int32Builder(n)
         for _ in range(n):
@@ -895,12 +900,14 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         # The vectorized whole-array reduce, broadcast to length 1. Serial: the
         # SIMD reduce only benefits from threads well above the sizes reached
         # here, and that gating belongs in the reduce primitive itself.
-        return Self.K.reduce(values, ExecContext.serial()).repeat(1)
+        # `with_threads(1)` rather than `serial()` — forcing one worker must not
+        # also discard a device the reduce could run on.
+        return Self.K.reduce(values, ctx.with_threads(1)).repeat(1)
 
     @staticmethod
     def partials(
@@ -1079,7 +1086,7 @@ struct CountAgg(Aggregation):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         # Valid count is metadata — no scan.
         return Int64Scalar(Int64(len(values) - values.null_count())).repeat(1)
@@ -1148,11 +1155,12 @@ struct DistinctAgg[exact: Bool](Aggregation):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         # `count_distinct` self-gates on size, going radix-partition-parallel at
-        # scale, so it gets the worker budget.
-        var ctx = ExecContext.parallel(num_threads)
+        # scale, so the context passes straight through — this is the one
+        # implementation that ever used the worker budget, and rebuilding it as
+        # `ExecContext.parallel(n)` is what dropped the device.
         comptime if Self.exact:
             return count_distinct(values, ctx).repeat(1)
         else:

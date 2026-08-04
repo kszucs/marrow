@@ -317,11 +317,11 @@ struct HashJoin[
     Probe phase: hash right-side key columns, look up in hash table,
     emit index pairs, verify key equality (filter hash collisions).
 
-    Supports two execution paths, chosen by ``num_threads``:
+    Supports two execution paths, chosen by ``ctx.worth_parallel``:
 
     * **Serial** — a single ``SwissHashTable`` over the full build side.
-      Used when ``num_threads == 1`` or the build side is below
-      ``_PARALLEL_THRESHOLD``.
+      Used when the context resolves to one worker, targets a GPU, or the
+      build side is below ``_PARALLEL_THRESHOLD``.
     * **Partition-parallel** — rows are split by the top bits of their
       hash into ``2^radix_bits`` independent ``SwissHashTable`` instances,
       built and probed concurrently via ``sync_parallelize``. No atomics,
@@ -385,10 +385,7 @@ struct HashJoin[
     # ------------------------------------------------------------------
 
     def build(mut self, left: StructArray, left_key_indices: List[Int]) raises:
-        if (
-            self._ctx.resolved_num_threads() <= 1
-            or left.length < _PARALLEL_THRESHOLD
-        ):
+        if not self._ctx.worth_parallel(left.length, _PARALLEL_THRESHOLD):
             self.build_serial(left, left_key_indices)
         else:
             self.build_parallel(left, left_key_indices)
@@ -400,10 +397,10 @@ struct HashJoin[
         kind: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
-        if (
-            self._ctx.resolved_num_threads() <= 1
-            or self._left_rows < _PARALLEL_THRESHOLD
-        ):
+        # Must reach the same verdict as `build` — `probe_parallel` reads the
+        # per-partition tables that only `build_parallel` populates — so it asks
+        # the same predicate about the same row count.
+        if not self._ctx.worth_parallel(self._left_rows, _PARALLEL_THRESHOLD):
             return self.probe_serial(right, right_key_indices, kind, strictness)
         return self.probe_parallel(right, right_key_indices, kind, strictness)
 
@@ -668,9 +665,9 @@ struct HashJoin[
         After ``sync_parallelize`` in ``probe_parallel`` has finished
         there's no outer parallel region, so each per-column ``take``
         can safely fan its SIMD gather loop across workers internally.
-        We pass an ``ExecContext.parallel(num_threads)`` through,
-        and ``take`` decides per-column whether it's big enough to
-        stripe (its own grain threshold inside ``apply``).
+        We pass this join's own ``ExecContext`` through, and ``take``
+        decides per-column whether it's big enough to stripe (its own grain
+        threshold inside ``apply``).
         """
         ref left = self._left_data.value()
         var out_cols = List[DynArray]()

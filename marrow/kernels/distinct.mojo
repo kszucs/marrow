@@ -101,9 +101,8 @@ def count_distinct(
     whole-array analogue of the grouped radix path.
     """
     var hashes = rapidhash(array, ctx)
-    var nt = ctx.resolved_num_threads()
     var n: Int
-    if nt <= 1 or len(array) < _PARALLEL_DISTINCT_MIN_ROWS:
+    if not ctx.worth_parallel(len(array), _PARALLEL_DISTINCT_MIN_ROWS):
         var table = SwissHashTable[rapidhash]()
         _ = table.insert_hashes(hashes, grow_adaptively=True)
         n = table.num_keys()

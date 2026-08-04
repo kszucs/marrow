@@ -242,7 +242,7 @@ struct RecordBatch(
         keys: List[String],
         right_keys: List[String],
         how: String = "inner",
-        num_threads: Int = 0,
+        ctx: ExecContext = ExecContext.auto(),
     ) raises -> RecordBatch:
         """Equi-join two batches on key column *names*.
 
@@ -280,7 +280,7 @@ struct RecordBatch(
             left_on,
             right_on,
             kind,
-            ctx=ExecContext.parallel(num_threads),
+            ctx=ctx,
         )
         var fields = List[Field]()
         for ref f in joined.dtype.as_struct().fields:
@@ -314,7 +314,7 @@ struct RecordBatch(
         keys: List[String],
         values: List[String],
         funcs: List[String],
-        num_threads: Int = 0,
+        ctx: ExecContext = ExecContext.auto(),
     ) raises -> RecordBatch:
         """`GROUP BY keys` with one output column per `(value, func)` pair.
 
@@ -324,7 +324,7 @@ struct RecordBatch(
         var key_struct = self.select(key_indices).to_struct_array()
         var resolved = self._agg_columns(values, funcs, "group_by")
 
-        var gb = GroupBy(key_struct, ExecContext.parallel(num_threads))
+        var gb = GroupBy(key_struct, ctx)
         var res = resolved[1].grouped(gb, resolved[0])
 
         # `res` is [key columns..., aggregate columns...]; name the aggregates.
@@ -365,7 +365,7 @@ struct RecordBatch(
         keys: List[String],
         ascending: List[Bool],
         nulls_first: Bool = True,
-        num_threads: Int = 0,
+        ctx: ExecContext = ExecContext.auto(),
     ) raises -> RecordBatch:
         """Sort by one or more key columns, most-significant first.
 
@@ -378,7 +378,7 @@ struct RecordBatch(
             indices,
             ascending,
             nulls_first,
-            ctx=ExecContext.parallel(num_threads),
+            ctx=ctx,
         )
         var fields = List[Field]()
         for ref f in sorted_sa.dtype.as_struct().fields:

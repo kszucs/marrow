@@ -53,6 +53,73 @@ def test_context_default_is_serial() raises:
 
 
 # ---------------------------------------------------------------------------
+# worth_parallel — the size question, which a forced thread count does not
+# answer. `wants_parallel` and `worth_parallel` differ on exactly one input:
+# `parallel(n)` below the threshold.
+# ---------------------------------------------------------------------------
+
+
+def test_worth_parallel_keeps_the_threshold_when_threads_are_forced() raises:
+    """This is the whole reason the predicate exists.
+
+    `parallel(4)` tells `wants_parallel` to stripe a 1,000-row loop, and that is
+    correct for `stripe`: splitting a loop four ways costs a dispatch. It is
+    *not* correct for `HashJoin.build`, which would radix-partition the build
+    side and stand up four hash tables to serve 1,000 rows. A forced count is an
+    instruction to `stripe` and a budget to an algorithm chooser.
+    """
+    var ctx = ExecContext.parallel(4)
+    assert_true(ctx.wants_parallel(1_000, min_parallel_size=60_000))
+    assert_false(ctx.worth_parallel(1_000, 60_000))
+    assert_true(ctx.worth_parallel(100_000, 60_000))
+
+
+def test_worth_parallel_agrees_with_wants_parallel_elsewhere() raises:
+    """Below the forced case the two predicates must not drift apart."""
+    var serial = ExecContext.serial()
+    assert_false(serial.worth_parallel(1_000_000, 60_000))
+    assert_equal(
+        serial.worth_parallel(1_000_000, 60_000),
+        serial.wants_parallel(1_000_000, 60_000),
+    )
+
+    var auto = ExecContext.auto()
+    assert_false(auto.worth_parallel(100, 60_000))
+    assert_true(auto.worth_parallel(100_000, 60_000))
+    assert_equal(
+        auto.worth_parallel(100, 60_000), auto.wants_parallel(100, 60_000)
+    )
+    assert_equal(
+        auto.worth_parallel(100_000, 60_000),
+        auto.wants_parallel(100_000, 60_000),
+    )
+
+
+def test_worth_parallel_is_false_when_one_thread_is_forced() raises:
+    """A single forced worker means there is nothing to split, at any size."""
+    assert_false(ExecContext.parallel(1).worth_parallel(1_000_000, 60_000))
+
+
+# ---------------------------------------------------------------------------
+# with_threads — change the worker count, keep the device
+# ---------------------------------------------------------------------------
+
+
+def test_with_threads_changes_the_count() raises:
+    var ctx = ExecContext.parallel(8).with_threads(1)
+    assert_equal(ctx.resolved_num_threads(), 1)
+    assert_false(ctx.wants_parallel(1_000_000))
+
+
+def test_with_threads_preserves_a_cpu_context() raises:
+    """The CPU half of the device-preservation contract. The GPU half needs a
+    device and lives in `test_execution_gpu.mojo`."""
+    var ctx = ExecContext.auto().with_threads(4)
+    assert_equal(ctx.resolved_num_threads(), 4)
+    assert_false(ctx.is_gpu())
+
+
+# ---------------------------------------------------------------------------
 # stripe_workers — callers size per-worker scratch with this
 # ---------------------------------------------------------------------------
 

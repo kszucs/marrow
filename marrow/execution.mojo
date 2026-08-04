@@ -126,6 +126,24 @@ struct ExecContext(
         """GPU execution on the given device."""
         return Self(num_threads=1, device=Optional[DeviceContext](device))
 
+    # --- derivation ---------------------------------------------------
+
+    def with_threads(self, num_threads: Int) -> Self:
+        """This context with a different worker count and the **same device**.
+
+        Use this — never ``parallel(n)`` or ``serial()`` — whenever an internal
+        site needs to re-derive a context it was *given*. The factories build a
+        fresh CPU context, so calling one to change a thread count silently sets
+        ``device=None``: the work then runs on the CPU while the caller believes
+        it asked for the GPU, and no CPU test can observe it.
+
+        This has already happened three times. `HashJoin` destructured to a bare
+        `_num_threads` and rebuilt at five internal sites; `GroupBy` did the same
+        and rebuilt at two; `Aggregation.whole` took `num_threads: Int` across
+        its API boundary so the device was gone before it was ever called.
+        """
+        return Self(num_threads=num_threads, device=self.device.copy())
+
     # --- queries ------------------------------------------------------
 
     def is_gpu(self) -> Bool:
@@ -162,6 +180,38 @@ struct ExecContext(
             return False
         if self.num_threads >= 2:
             return True
+        return n >= min_parallel_size
+
+    def worth_parallel(self, n: Int, min_parallel_size: Int) -> Bool:
+        """Is a problem of size ``n`` big enough that a *parallel algorithm*
+        pays for itself?
+
+        The companion to ``wants_parallel``, and they differ on exactly one
+        input: ``parallel(N)`` below the threshold. That is the difference
+        between the two costs being weighed:
+
+        - ``wants_parallel`` guards ``stripe``, where going parallel costs one
+          dispatch. A forced count is an **instruction** — the caller asked for
+          N workers, so a 1,000-row loop is split N ways. Tests rely on this to
+          exercise the striped path on small inputs.
+        - ``worth_parallel`` guards a *choice of algorithm*, where going
+          parallel costs radix partitioning and N hash tables. A forced count is
+          a **budget**, not a demand to use it: ``parallel(4)`` on 1,000 rows
+          must still take the serial path, or the setup dwarfs the query.
+
+        ``min_parallel_size`` is deliberately required rather than defaulted.
+        There is no meaningful default — each of the three callers has measured
+        its own crossover (60k rows for group-by, 100k for join, 200k for
+        distinct) and they are not the same number, nor `stripe`'s 32768.
+
+        Like ``wants_parallel`` this answers False on a GPU context, which the
+        three hand-rolled copies of this test did not: they asked
+        ``resolved_num_threads()``, which knows nothing about the device.
+        """
+        if self.is_gpu():
+            return False
+        if self.resolved_num_threads() <= 1:
+            return False
         return n >= min_parallel_size
 
     # --- striped execution ------------------------------------------------

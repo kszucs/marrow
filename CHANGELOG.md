@@ -35,6 +35,41 @@
   to Python (26 of roughly 90 are), and described the AOT lane in terms of `Table`,
   `Column[Tbl, name, T]` and `Project` — all deleted.
 
+### Fixes
+
+- **A GPU context lost its device at six places, one of them reachable from Python.**
+  `ma.compute.sum(arr, ctx)` and its siblings passed `ctx.resolved_num_threads()`
+  into `Aggregation.whole`, so a Python-supplied GPU context arrived as a bare
+  worker count and the aggregate ran on the CPU. The same shape existed at five
+  internal sites that rebuilt `ExecContext.parallel(n)` -- a *factory*, which sets
+  `device=None`, used where a *modification* was meant. `HashJoin` had already
+  found and fixed this once; the fix had not reached `GroupBy`, `Aggregation.whole`,
+  or `RecordBatch.join`/`group_by`/`sort_by`.
+
+  `ExecContext.with_threads(n)` is the missing operation -- change the worker count,
+  keep the device -- and no internal site rebuilds a context any more. The three
+  Python bindings still construct one from an `Int`, which is correct there: an
+  `Int` really is all the information a Python caller sends.
+
+### Features
+
+- **`ExecContext.worth_parallel(n, min_parallel_size)`**, the predicate four kernels
+  had each written by hand. It differs from `wants_parallel` on exactly one input,
+  `parallel(N)` below the threshold, and that difference is the point: a forced
+  thread count is an *instruction* to `stripe`, where going parallel costs one
+  dispatch, but only a *budget* to a chooser between algorithms, where it costs
+  radix partitioning and N hash tables. `parallel(4)` on 1,000 rows must still take
+  the serial path. It also answers False on a GPU context, which none of the four
+  copies did -- they asked `resolved_num_threads()`, which knows nothing about the
+  device. The threshold is a required argument: the four callers measured different
+  crossovers (60k group-by, 100k join, 200k distinct) and none is `stripe`'s 32768.
+
+  One behaviour change, in the intended direction: `auto()` now stays auto down the
+  call chain instead of being resolved to a forced count and back. Previously
+  `whole()` destructured `auto()` into `parallel(num_physical_cores())`, which
+  bypasses every downstream size threshold; now a small input under `auto()` can
+  correctly choose a serial hash.
+
 ### Refactors
 
 - **`ExecutionContext` is now `ExecContext`, and lives in `marrow/execution.mojo`.**

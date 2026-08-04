@@ -80,7 +80,9 @@ def aggregate[
     @parameter
     def run[A: Aggregation]() raises:
         box.append(
-            A.whole(A.from_any(array), ctx.resolved_num_threads()).to_dyn()[0]
+            # `ctx` whole, not `ctx.resolved_num_threads()` — destructuring
+            # here dropped the device off a Python-supplied GPU context.
+            A.whole(A.from_any(array), ctx).to_dyn()[0]
         )
 
     F.resolve[run](array.dtype())
