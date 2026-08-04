@@ -6,19 +6,12 @@
 
 ## Context
 
-Twenty-four backlog items are closed on `backlog-wave1`. The re-evaluation that
-produced this spec surfaced one fact that is not on the backlog and that colours
-everything else:
+Twenty-four backlog items are closed on `backlog-wave1`. This spec covers the
+next block: continue closing correctness debt. Wave 2 (CI, docs build, size gate)
+comes after.
 
-> `main` is at 2026-07-09. This branch is **513 commits ahead**, and CI has not
-> run since 2026-05-11. Every "green" result on this branch was produced on one
-> developer machine and verified by nothing else.
-
-That argues for landing the branch and fixing CI (Wave 2) before adding more.
-The decision was taken to **continue closing correctness debt first** and merge
-afterwards. This spec covers that block. Wave 2 remains the next thing after it,
-and the divergence only grows meanwhile — that is an accepted, explicit cost, not
-an oversight.
+Verification is local — `pixi run -e dev pytest` and `pixi run binary_size` — so
+the per-item gates below are the whole safety net.
 
 Scope was chosen deliberately:
 
