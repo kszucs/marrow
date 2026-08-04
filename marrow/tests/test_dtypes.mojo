@@ -20,7 +20,6 @@ def test_bool_type() raises:
     # guard `variant_dispatch[PrimitiveType]`, so a True here is a trap — it
     # aborted `byte_width()`. Do not "fix" this back.
     assert_false(t.is_primitive())
-    assert_true(t.is_fixed_size())
     assert_false(t.is_string())
     assert_equal(String(t), "bool")
 
@@ -154,7 +153,6 @@ def test_bool_byte_width_is_zero_not_an_abort() raises:
     away from reaching it on the C Data import path.
     """
     assert_equal(DynType(dt.bool_).byte_width(), 0)
-    assert_true(DynType(dt.bool_).is_fixed_size())
     assert_false(DynType(dt.bool_).is_primitive())
 
 
@@ -294,15 +292,6 @@ def test_field() raises:
 
     var f3 = field("a", DynType(Int64Type()), nullable=False)
     assert_equal(String(f3), "a: int64")
-
-
-def test_is_fixed_size() raises:
-    assert_true(DynType(Int32Type()).is_fixed_size())
-    assert_true(DynType(Float64Type()).is_fixed_size())
-    assert_true(DynType(BoolType()).is_fixed_size())
-    assert_false(DynType(NullType()).is_fixed_size())
-    assert_false(DynType(StringType()).is_fixed_size())
-    assert_false(DynType(list_(DynType(Int32Type()))).is_fixed_size())
 
 
 def test_temporal_dtypes_predicates() raises:

@@ -1067,9 +1067,14 @@ struct DynType(
         `is_primitive` lists `Type::BOOL` first). Neither has a `PrimitiveType`
         trait to stay consistent with; marrow does, and `BoolType` cannot
         conform to it because bool is bit-packed rather than fixed-byte-width.
-        Answering True here made `byte_width()` abort. Use `is_fixed_size()` for
-        the Arrow-spec notion, or `is_bool() or is_primitive()` for PyArrow
-        parity — which is what `ipc.mojo` already writes.
+        Answering True here made `byte_width()` abort. For PyArrow parity write
+        `is_bool() or is_primitive()` — which is what `ipc.mojo` already does.
+        There is deliberately no general fixed-width predicate: the one that
+        existed (`is_fixed_size`) covered neither `fixed_size_binary` nor
+        `fixed_size_list`, had no production caller, and was removed rather
+        than left lying. Arrow C++ spells the real thing `is_fixed_width` =
+        `is_primitive || is_dictionary || is_fixed_size_binary`; add that,
+        against that definition, if something ever needs it.
         """
         return (
             self.is_numeric()
@@ -1199,22 +1204,6 @@ struct DynType(
             or self.is_decimal256()
         )
 
-    def is_fixed_size(self) -> Bool:
-        """True for bool plus every type conforming to `PrimitiveType`:
-        numeric, temporal, interval, decimal.
-
-        Despite the name, this does **not** cover `fixed_size_binary` or
-        `fixed_size_list` — the two dtypes it would need to include to match
-        the Arrow-spec notion of fixed width, and the two whose names promise
-        it. It answers `is_bool() or is_primitive()`, unchanged by
-        `is_primitive()` narrowing to exclude bool: that narrowing moved bool
-        out of `is_primitive()` and into the explicit `is_bool() or` half of
-        this predicate, so the set of dtypes this answers True for is exactly
-        what it was before. See backlog item B24 for the open decision on
-        whether this should be widened to cover the fixed-size layouts or
-        deleted outright.
-        """
-        return self.is_bool() or self.is_primitive()
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter
