@@ -1,13 +1,18 @@
 # Backlog
 
-The single source of truth for what is open. Everything here was verified
-against the code at **`b2e7dae` (2026-08-03)**, not read off a header.
+The single source of truth for what is open. Verified against the code at
+**`b2e7dae` (2026-08-03)**, then re-verified item by item through **2026-08-05**
+as each was worked — not read off a header.
 
 **Goal: marrow is a usable single-node columnar query engine.** Arrow-spec
 completeness is not the objective — layout and kernel gaps are scheduled only
 when a milestone query needs them. The deferred Arrow-parity list is §7.
 
 Resolved items are **deleted, not struck through** — git history has them.
+The exception is an item whose *diagnosis* turned out wrong: those are kept and
+marked `done`, because the correction is the part worth reading. B22 ("a core
+transfer defect, not a test bug" — it was a test bug), B24, Q7.5 and Q5.1 are all
+of that kind, and A3 has now been cut down the same way without being started.
 
 > **Re-verify before trusting any status line here.** This file replaces seven
 > task documents that had drifted so far apart that a 2026-07-30 consolidation
@@ -626,14 +631,18 @@ with no up-edges into `expr` or `tabular`**.
 
 ### The highest-leverage fixes
 
-A2 and A4 are done. A2 landed as B12 (eager recount at the slice boundary);
-A4 moved `ExecContext` to `marrow/execution.mojo`, so `marrow/kernels` no
-longer has an inbound edge from core.
+A2, A4 and A6 are done. A2 landed as B12 (eager recount at the slice
+boundary); A4 moved `ExecContext` to `marrow/execution.mojo`, so `marrow/kernels`
+no longer has an inbound edge from core; A6 added `worth_parallel`/`with_threads`
+and closed six sites where a GPU device was silently dropped.
+
+A1 and A3 remain, and they are not comparable. A1 is specced and spiked. A3 was
+researched on 2026-08-05 and came back **smaller than written** — see its row.
 
 | ID | Fix | What it removes |
 |---|---|---|
-| **A1** | **Replace the positional `Context` with a typed `comptime State` per node**, returned by `prepare` and passed into `vectorwise`. **Design validated by spike 2026-08-03** — see `docs/design-expression-evaluation.md`, which carries the protocol, the spike results, the sequencing and the gates. | The `Context` correctness hazard below; six methods and the `Breaker` marker trait collapse to two methods; ~84 hand-written recursion bodies (17 shapes); the per-SIMD-chunk schema lookup in `NumericColumn.vectorwise`; the double kernel run in `ConditionalBinary`/`CaseWhen` and the subtree re-execution in `BoolBinary.validity`; and — once validity moves into the state — B14, B15 and the class B20 belongs to. **First gate is binary size**, not tests: convert three nodes, hold `query_streaming` `__text` at 1,302,900, stop if it regresses. |
-| **A3** | **Give `DataType` a `layout()` / `num_buffers()`.** | Layout is a fact no type owns, so every serializer re-derives it: **17 top-level dtype ladders across `c_data` + `ipc` alone**, with the integer-width fact restated five times — twice inside the same function, 100 lines apart. `arrays.mojo` already knows the answer and enforces it in each typed constructor (`PrimitiveArray` 1 buffer, `BinaryLikeArray` 2, `ListLikeArray` 1 + 1 child); it just never says it where a codec could ask. This is why `map` is in all four variants and still absent from IPC. |
+| **A1** | **Replace the positional `Context` with a typed `comptime State` per node**, returned by `prepare` and passed into `vectorwise`. **Design validated by spike 2026-08-03** — see `docs/design-expression-evaluation.md`, which carries the protocol, the spike results, the sequencing and the gates. | The `Context` correctness hazard below; six methods and the `Breaker` marker trait collapse to two methods; ~84 hand-written recursion bodies (17 shapes); the per-SIMD-chunk schema lookup in `NumericColumn.vectorwise`; the double kernel run in `ConditionalBinary`/`CaseWhen` and the subtree re-execution in `BoolBinary.validity`; and — once validity moves into the state — B14, B15 and the class B20 belongs to. **First gate is binary size**, not tests: convert three nodes, hold `query_streaming` `__text` at **1,309,032** (live reading 2026-08-05; the 1,302,900 this used to quote predates B12), stop if it regresses. |
+| **A3** | **Give `DataType` a `layout()`.** **Researched against both references 2026-08-05, and it cuts the original claim down — read this before scheduling it.** Both have exactly this type. Arrow C++: `struct DataTypeLayout { vector<BufferSpec> buffers; bool has_dictionary; optional<BufferSpec> variadic_spec; }` with `BufferKind {FIXED_WIDTH, VARIABLE_WIDTH, BITMAP, ALWAYS_NULL}`, reached through a **pure virtual `layout()` on `DataType`** that each concrete type overrides (`type.h:93-178`); marked EXPERIMENTAL. arrow-rs: the same shape as a **free `fn layout(&DataType)`** — one `match` over the enum (`arrow-data/src/data.rs:1787`), explicitly ported from C++ with the source commit linked, plus an `alignment` field on `FixedWidth` that C++ lacks, and `Dictionary` delegating to its key type's layout. **The correction: neither reference drives its serializers from it.** `layout()` in Arrow C++ is consumed by `array/data.cc`, `array/validate.cc`, `compute/exec.cc` and `extension_type.*` — **zero hits under `ipc/` or `c/`**. In arrow-rs there is exactly one IPC use, and it is narrow: `get_or_truncate_buffer` reads `layout.buffers[0]` for an element width when slicing (`arrow-ipc/src/writer.rs:2346`); `ffi.rs` does not use it at all. So this card's "removes 17 dtype ladders across `c_data` + `ipc`" does **not** follow from the design both references chose, and the `map`-absent-from-IPC claim is overstated with it: IPC additionally needs type code 17 in its type-writing and type-reading switches, which a buffer-layout description does not supply. A codec needs more than buffer structure — which flatbuffer table to write, which child to recurse into, what parameters (precision/scale, list size, timezone) to emit. **What it does buy**, on both references' evidence: validation (does this `ArrayData` have the right buffer count, kinds and widths?) and the `ArrayData` round-trip — which is the *other* half of the audit finding, the 11 array types that are each their own `ArrayData` codec, 22 methods of duplicated layout knowledge. Schedule it for that, not for the ladders. marrow's shape suits either spelling: it has a `DataType` trait with concrete structs (C++'s form) *and* a `DynType` variant (arrow-rs's form). | S-M for validation + `ArrayData`; the ladder collapse is **not** on offer |
 
 ### The `Context` positional-slot invariant
 
@@ -726,7 +735,10 @@ to change. Listed with the competing responsibilities, most costly first.
   placement (with the policy re-inlined twice more at `:649-671` and `:730-738`),
   multi-key LSD composition, and top-K truncation.
 - **11 array types are also their own `ArrayData` codec** (`__init__(data)` +
-  `to_data()`), 22 methods of duplicated layout knowledge — which A3 removes.
+  `to_data()`), 22 methods of duplicated layout knowledge. **This — not the
+  codec ladders — is what A3 addresses**; both references use `layout()` for
+  `ArrayData` construction and validation, and neither drives IPC or the C ABI
+  from it.
 - **`Value`** (`values.mojo:304`) is the union of four consumers' protocols —
   executor, printer, optimizer, pruner — and all 37 nodes pay for all four.
 

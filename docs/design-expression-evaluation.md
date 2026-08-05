@@ -255,7 +255,7 @@ Q5 depth-4 mixed  : 28 32 36 40        C6 reuse expr     : 14 20 | 14 18
 - **Binary size. This is the first checkpoint and it can still kill the design.**
   `State` types are per-instantiation, and the standing invariant is the
   fused-binary DCE property. Convert `NumericBinary` + `NumericColumn` + one
-  breaker, build `query_streaming`, compare `__text` against **1,302,900**. Flat
+  breaker, build `query_streaming`, compare `__text` against **1,309,032 (live 2026-08-05; the 1,302,900 previously written here predates B12, which added 8,260 to this gate)**. Flat
   → proceed; a regression → stop and reconsider, because the rest is mechanical
   and will only compound it. Measure one binary directly
   (`mojo build -O3 -g0 -I . …`, ~2.5 min), not the full sweep.
@@ -294,7 +294,7 @@ tree of typed values, not a work queue. Deferred; not part of this design.
 Each step independently revertible and gate-checked.
 
 1. **Binary-size checkpoint.** Convert `NumericBinary`, `NumericColumn` and one
-   breaker only. Gate: `query_streaming` `__text` at 1,302,900. **Stop here if it
+   breaker only. Gate: `query_streaming` `__text` at 1,309,032 (live 2026-08-05; the 1,302,900 previously written here predates B12, which added 8,260 to this gate). **Stop here if it
    regresses.**
 2. **Convert the numeric family**, then bool, string, temporal, list. Gate per
    family: `pixi run -e dev pytest marrow/expr/tests` plus the size number.

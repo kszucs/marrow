@@ -453,7 +453,8 @@ required, and either one alone buys nothing:
 
 Consequently an AOT query links the kernels it mentions and nothing else, and the
 linker discards the rest. Measured at `b2e7dae`, `__text`: `query_streaming`
-(AOT) 1,302,900 versus `query_dynvalue` (runtime) 3,984,756.
+(AOT) 1,309,032 versus `query_dynvalue` (runtime) 3,984,756. Both readings
+are 2026-08-05; the AOT figure was 1,302,900 before B12.
 
 **Trust the gate, not the prose.** `benchmarks/binary_size/` is the live
 measurement and ratios quoted in any document go stale. `pixi run binary_size`
