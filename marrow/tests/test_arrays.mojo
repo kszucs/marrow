@@ -2383,3 +2383,78 @@ def test_slice_of_all_null_array_is_all_null() raises:
     var full = b.finish()
     assert_equal(full.null_count(), 4)
     assert_equal(full.slice(1, 2).null_count(), 2)
+
+
+# ---------------------------------------------------------------------------
+# B26 — equality is a question about values and null *positions*, not about
+# how the validity happens to be stored.
+#
+# `__eq__` compared the bitmaps themselves: presence against presence, then
+# whole bitmap against whole bitmap. So an all-valid array carrying a bitmap was
+# unequal to one carrying none, and two slices whose logical validity matched
+# were unequal whenever their offsets differed. Six array types shared the shape.
+#
+# This matters more than it looks: CLAUDE.md tells you to write
+# `assert_true(result == expected)` rather than an element loop, and every kernel
+# that intersects validity emits an array with a bitmap while `array([...])`
+# emits one without — so the recommended assertion was unreliable for exactly
+# the values a kernel test wants to check.
+# ---------------------------------------------------------------------------
+
+
+def test_eq_ignores_a_redundant_all_valid_bitmap() raises:
+    """`[1, 2, 3]` with an all-valid bitmap equals `[1, 2, 3]` with none."""
+    # A builder given no nulls produces no bitmap at all, so the bitmap has to
+    # come from a parent: slice past every null and the child keeps the parent's
+    # bitmap while its own null count is 0.
+    var b = Int32Builder(5)
+    b.append_null()
+    b.append_null()
+    b.append(Scalar[int32.native](1))
+    b.append(Scalar[int32.native](2))
+    b.append(Scalar[int32.native](3))
+    var with_bitmap = b.finish().slice(2, 3)
+    assert_true(with_bitmap.bitmap.__bool__())
+
+    var plain = array([1, 2, 3], int32)
+    assert_false(plain.bitmap.__bool__())
+    assert_equal(with_bitmap.null_count(), 0)
+    assert_equal(plain.null_count(), 0)
+    assert_true(with_bitmap == plain)
+    assert_true(plain == with_bitmap)
+
+
+def test_eq_compares_null_positions_not_bitmap_offsets() raises:
+    """Two slices with the same logical validity are equal, whatever offset
+    they were taken at."""
+    var b1 = Int32Builder(5)
+    b1.append_null()
+    b1.append_null()
+    b1.append(Scalar[int32.native](7))
+    b1.append_null()
+    b1.append(Scalar[int32.native](9))
+    var left = b1.finish().slice(2, 3)  # [7, null, 9]
+
+    var b2 = Int32Builder(3)
+    b2.append(Scalar[int32.native](7))
+    b2.append_null()
+    b2.append(Scalar[int32.native](9))
+    var right = b2.finish()  # [7, null, 9] at offset 0
+
+    assert_equal(left.null_count(), right.null_count())
+    assert_true(left == right)
+
+
+def test_eq_still_separates_different_null_positions() raises:
+    """The complement: same null *count*, different positions, still unequal."""
+    var b1 = Int32Builder(3)
+    b1.append_null()
+    b1.append(Scalar[int32.native](1))
+    b1.append(Scalar[int32.native](2))
+
+    var b2 = Int32Builder(3)
+    b2.append(Scalar[int32.native](1))
+    b2.append_null()
+    b2.append(Scalar[int32.native](2))
+
+    assert_false(b1.finish() == b2.finish())

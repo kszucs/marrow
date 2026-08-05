@@ -51,6 +51,23 @@
 
 ### Fixes
 
+- **`__eq__` called logically-equal arrays unequal (B26).** It compared the
+  bitmaps themselves -- presence against presence, then whole bitmap against
+  whole bitmap -- so an all-valid array carrying a bitmap was unequal to one
+  carrying none, and two slices whose logical validity matched were unequal
+  whenever their offsets differed. Six array types shared the shape.
+
+  Equality is a question about null *positions*, not about how the validity is
+  stored: a missing bitmap means all-valid, which is a value rather than a
+  distinguishing representation. New `_validity_equal` compares positions through
+  offset-applied views.
+
+  This reached further than equality. CLAUDE.md tells you to write
+  `assert_true(result == expected)` rather than an element loop, and every kernel
+  that intersects validity emits an array with a bitmap while `array([...])`
+  emits one without -- so the recommended assertion was unreliable for exactly
+  the outputs a kernel test wants to check.
+
 - **Kernels shifted a sliced input's nulls (Q2.3).** Arithmetic, comparison and the
   string predicates took their values from `left.values()` -- offset-applied --
   but built the output bitmap from the raw `left.bitmap`. The result is always

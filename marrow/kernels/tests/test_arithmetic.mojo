@@ -734,12 +734,11 @@ def test_add_on_sliced_input_does_not_inherit_parent_validity() raises:
     assert_equal(out.null_count(), 0)
     for i in range(3):
         assert_true(out.is_valid(i))
-    # Element-wise rather than `==`: `PrimitiveArray.__eq__` returns False when
-    # one side carries an all-valid bitmap and the other carries none, which is
-    # true here and is a separate defect (see backlog B26).
-    assert_equal(Int(out[0].value()), 12)
-    assert_equal(Int(out[1].value()), 23)
-    assert_equal(Int(out[2].value()), 34)
+    # `==` rather than an element loop, per CLAUDE.md. This assertion is only
+    # possible because B26 is fixed: `out` carries an all-valid bitmap (the
+    # kernel intersected validity) and the literal does not, and `__eq__` used
+    # to call those unequal.
+    assert_true(out == array([12, 23, 34], int32))
 
 
 def test_add_on_sliced_input_keeps_the_slice_s_own_nulls() raises:

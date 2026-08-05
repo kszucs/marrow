@@ -270,6 +270,41 @@ struct ArrayData(Copyable, Movable):
         pass
 
 
+def _validity_equal[
+    ao: Origin[mut=False], bo: Origin[mut=False]
+](
+    length: Int,
+    a: Optional[BitmapView[ao]],
+    b: Optional[BitmapView[bo]],
+) -> Bool:
+    """Do two arrays mark the same *positions* null?
+
+    Equality is a question about null positions, not about how the validity is
+    stored. Two arrays are validity-equal when neither is null at a position the
+    other holds valid — so an all-valid array carrying a bitmap equals one
+    carrying none, and two slices agree whenever their logical validity does,
+    whatever offsets they were taken at.
+
+    `__eq__` used to compare the bitmaps themselves — presence against presence,
+    then whole bitmap against whole bitmap — and got both of those wrong (B26).
+    A missing bitmap means all-valid, which is a *value*, not a distinguishing
+    representation; and a whole-bitmap comparison ignores the offset that says
+    which bits belong to this array.
+    """
+    if not a and not b:
+        return True
+    if not a:
+        return b.value().count_set_bits() == length
+    if not b:
+        return a.value().count_set_bits() == length
+    ref av = a.value()
+    ref bv = b.value()
+    for i in range(length):
+        if av.test(i) != bv.test(i):
+            return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # BoolArray
 # ---------------------------------------------------------------------------
@@ -756,11 +791,9 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             return False
         if self.null_count() != other.null_count():
             return False
-        if self.bitmap.__bool__() != other.bitmap.__bool__():
+        # Positions, not representation — see `_validity_equal` (B26).
+        if not _validity_equal(self.length, self.validity(), other.validity()):
             return False
-        if self.bitmap:
-            if not (self.bitmap.value() == other.bitmap.value()):
-                return False
         # Compare only the valid length elements (buffer may be over-allocated
         # in filtered output, so full Buffer.__eq__ would read uninitialized bytes).
         for i in range(self.length):
@@ -969,11 +1002,9 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
             return False
         if self.null_count() != other.null_count():
             return False
-        if self.bitmap.__bool__() != other.bitmap.__bool__():
+        # Positions, not representation — see `_validity_equal` (B26).
+        if not _validity_equal(self.length, self.validity(), other.validity()):
             return False
-        if self.bitmap:
-            if not (self.bitmap.value() == other.bitmap.value()):
-                return False
         for i in range(self.length):
             if self.is_valid(i):
                 if self.unsafe_get(UInt(i)) != other.unsafe_get(UInt(i)):
@@ -1225,11 +1256,9 @@ struct ListLikeArray[T: ListLikeType](Array):
             return False
         if self.null_count() != other.null_count():
             return False
-        if self.bitmap.__bool__() != other.bitmap.__bool__():
+        # Positions, not representation — see `_validity_equal` (B26).
+        if not _validity_equal(self.length, self.validity(), other.validity()):
             return False
-        if self.bitmap:
-            if not (self.bitmap.value() == other.bitmap.value()):
-                return False
         for i in range(self.length):
             if self.is_valid(i):
                 try:
@@ -1504,11 +1533,9 @@ struct FixedSizeListArray(Array):
             return False
         if self.null_count() != other.null_count():
             return False
-        if self.bitmap.__bool__() != other.bitmap.__bool__():
+        # Positions, not representation — see `_validity_equal` (B26).
+        if not _validity_equal(self.length, self.validity(), other.validity()):
             return False
-        if self.bitmap:
-            if not (self.bitmap.value() == other.bitmap.value()):
-                return False
         for i in range(self.length):
             if self.is_valid(i):
                 try:
@@ -1691,11 +1718,9 @@ struct FixedSizeBinaryArray(Array):
             return False
         if self.null_count() != other.null_count():
             return False
-        if self.bitmap.__bool__() != other.bitmap.__bool__():
+        # Positions, not representation — see `_validity_equal` (B26).
+        if not _validity_equal(self.length, self.validity(), other.validity()):
             return False
-        if self.bitmap:
-            if not (self.bitmap.value() == other.bitmap.value()):
-                return False
         for i in range(self.length):
             if self.is_valid(i):
                 var ls = (self.offset + i) * self.byte_width
@@ -1905,11 +1930,9 @@ struct StructArray(Array):
             return False
         if self.null_count() != other.null_count():
             return False
-        if self.bitmap.__bool__() != other.bitmap.__bool__():
+        # Positions, not representation — see `_validity_equal` (B26).
+        if not _validity_equal(self.length, self.validity(), other.validity()):
             return False
-        if self.bitmap:
-            if not (self.bitmap.value() == other.bitmap.value()):
-                return False
         if len(self.children) != len(other.children):
             return False
         for i in range(len(self.children)):
