@@ -690,3 +690,85 @@ def test_add_dispatch_parallel_small() raises:
     assert_equal(result[0].value(), 0)
     assert_equal(result[50].value(), 100)
     assert_equal(result[99].value(), 198)
+
+
+# ---------------------------------------------------------------------------
+# Q2.3 — validity must be offset-aware.
+#
+# `apply` takes its values from `left.values()` / `right.values()`, which are
+# offset-applied views, but built its output bitmap from the raw `left.bitmap` /
+# `right.bitmap`. The output array is `offset=0`, so on a sliced input the data
+# came from the slice while the validity came from the parent: every null in the
+# result sat `offset` positions away from where it belonged.
+#
+# Same shape as B11/B13/B16/B17 — views index logically from zero, owning
+# Bitmaps do not, and mixing the two conventions is this codebase's most
+# repeated bug.
+# ---------------------------------------------------------------------------
+
+
+def _nulls_at_front(n: Int, num_null: Int) raises -> PrimitiveArray[Int32Type]:
+    """`[null, ..., null, k, k+1, ...]` — nulls only in the leading positions,
+    so slicing past them must produce an all-valid array."""
+    var b = Int32Builder(n)
+    for i in range(n):
+        if i < num_null:
+            b.append_null()
+        else:
+            b.append(Scalar[int32.native](i))
+    return b.finish()
+
+
+def test_add_on_sliced_input_does_not_inherit_parent_validity() raises:
+    """Slicing past every null must give an all-valid result.
+
+    With the parent's raw bitmap, the result reported nulls at positions 0 and 1
+    — the parent's null positions — even though those rows hold valid data.
+    """
+    var parent = _nulls_at_front(5, 2)
+    var sliced = parent.slice(2, 3)  # [2, 3, 4], no nulls
+    var other = array([10, 20, 30], int32)
+
+    var out = AddKernel.apply(sliced, other)
+    assert_equal(len(out), 3)
+    assert_equal(out.null_count(), 0)
+    for i in range(3):
+        assert_true(out.is_valid(i))
+    # Element-wise rather than `==`: `PrimitiveArray.__eq__` returns False when
+    # one side carries an all-valid bitmap and the other carries none, which is
+    # true here and is a separate defect (see backlog B26).
+    assert_equal(Int(out[0].value()), 12)
+    assert_equal(Int(out[1].value()), 23)
+    assert_equal(Int(out[2].value()), 34)
+
+
+def test_add_on_sliced_input_keeps_the_slice_s_own_nulls() raises:
+    """The complement: a null inside the slice must land at its slice-relative
+    position, not its parent-relative one."""
+    var b = Int32Builder(5)
+    b.append(Scalar[int32.native](0))
+    b.append(Scalar[int32.native](1))
+    b.append(Scalar[int32.native](2))
+    b.append_null()  # parent index 3 -> slice index 1
+    b.append(Scalar[int32.native](4))
+    var sliced = b.finish().slice(2, 3)  # [2, null, 4]
+    var other = array([10, 20, 30], int32)
+
+    var out = AddKernel.apply(sliced, other)
+    assert_equal(out.null_count(), 1)
+    assert_true(out.is_valid(0))
+    assert_false(out.is_valid(1))
+    assert_true(out.is_valid(2))
+
+
+def test_add_sliced_when_only_one_side_has_a_bitmap() raises:
+    """`Bitmap.intersect` returns the *other* bitmap when one side is None, so
+    the single-sided path skipped offsetting entirely."""
+    var parent = _nulls_at_front(5, 2)
+    var sliced = parent.slice(2, 3)  # nullable but all-valid
+    var other = array([10, 20, 30], int32)  # no bitmap at all
+
+    var out = AddKernel.apply(sliced, other)
+    assert_equal(out.null_count(), 0)
+    for i in range(3):
+        assert_true(out.is_valid(i))

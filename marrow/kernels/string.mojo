@@ -311,7 +311,7 @@ trait StringPredicateKernel(Kernel):
     ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
         Self.expect_same_length(len(left), len(right))
         var n = len(left)
-        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
+        var bm = Bitmap.intersect_views(left.validity(), right.validity())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):
@@ -714,8 +714,7 @@ def _passthrough_validity[
     """The left operand's validity, offset-applied — what a predicate against a
     constant returns, since a constant operand is never null."""
     if array.bitmap:
-        var v = array.bitmap.value().view(array.offset, n)
-        return v.union(v).to_immutable()
+        return array.bitmap.value().view(array.offset, n).to_owned()
     return None
 
 

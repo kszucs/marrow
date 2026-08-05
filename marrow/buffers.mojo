@@ -1043,12 +1043,50 @@ struct Bitmap[*, mut: Bool = False](
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
+    @staticmethod
+    def intersect_views[
+        ao: Origin[mut=False], bo: Origin[mut=False]
+    ](
+        a: Optional[BitmapView[ao]], b: Optional[BitmapView[bo]]
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Bitwise AND of two optional validity **views**, offset applied.
+
+        **This is the one to use in a kernel.** Views index logically from zero,
+        owning `Bitmap`s do not, and a kernel's output is always `offset=0` — so
+        combining raw `array.bitmap` values and attaching the result to an
+        offset-0 array puts every null `offset` positions from where it belongs.
+        `array.validity()` hands you the offset-applied view; this combines two
+        of them.
+
+        The one-sided cases go through `to_owned()` rather than returning the
+        other operand directly, because a lone view still carries its parent's
+        offset — `Bitmap.intersect`'s pass-through is exactly the case that
+        looked safe and was not.
+
+        `None` means all-valid, so it is the identity: the result is `None` only
+        when both inputs are.
+        """
+        if not a and not b:
+            return None
+        if not a:
+            return b.value().to_owned()
+        if not b:
+            return a.value().to_owned()
+        return a.value().intersection(b.value()).to_immutable()
+
     # TODO: ensure that properly covered by tests
     @staticmethod
     def intersect(
         a: Optional[Bitmap[mut=False]], b: Optional[Bitmap[mut=False]]
     ) raises -> Optional[Bitmap[mut=False]]:
-        """Bitwise AND of two optional validity bitmaps.
+        """Bitwise AND of two optional validity bitmaps, **offset-unaware**.
+
+        Both operands are used whole. That is correct only when neither carries
+        an offset — i.e. neither array is a slice. A kernel building an
+        `offset=0` output from sliced inputs wants `intersect_views` instead;
+        this overload silently shifts the nulls. That was Q2.3, and it survived
+        because the expression layer recomputes validity itself and so masked
+        it from every expr-level test.
 
         `None` means all-valid, so it is the identity: the result is `None` only
         when both inputs are. Output bit i is set iff both inputs have it set.

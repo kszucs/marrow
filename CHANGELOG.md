@@ -51,6 +51,19 @@
 
 ### Fixes
 
+- **Kernels shifted a sliced input's nulls (Q2.3).** Arithmetic, comparison and the
+  string predicates took their values from `left.values()` -- offset-applied --
+  but built the output bitmap from the raw `left.bitmap`. The result is always
+  `offset=0`, so on a sliced input the data came from the slice and the validity
+  came from the parent: every null landed `offset` positions from where it
+  belonged. `Bitmap.intersect`'s one-sided path was worse, returning the lone
+  operand whole rather than offsetting it at all.
+
+  New `Bitmap.intersect_views` combines two `Optional[BitmapView]` and resolves
+  the one-sided cases through `to_owned()`; both overloads now say which is for
+  what. `BinaryLikeArray` gained the `validity()` accessor every other array type
+  already had -- its absence is why the string kernels reached for `.bitmap`.
+
 - **A hung Mojo compile no longer blocks the test run forever.** `run_with_progress`
   called `proc.communicate()` with no timeout, so a process that stops making
   progress and never exits is indistinguishable from a slow compile -- and the

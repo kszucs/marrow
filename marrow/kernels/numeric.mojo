@@ -92,7 +92,7 @@ trait BinaryKernel(Kernel):
         Self.expect_same_length(len(left), len(right))
         comptime native = T.native
         var length = len(left)
-        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
+        var bm = Bitmap.intersect_views(left.validity(), right.validity())
         var buf: Buffer[mut=True]
         comptime if GPU_ENABLED:
             if ctx.is_gpu():
@@ -499,9 +499,7 @@ def _binary_cmp[
     """Binary comparison kernel — compare + bit-pack via apply."""
     comptime native = T.native
     var length = len(left)
-    var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy()) if (
-        left.bitmap or right.bitmap
-    ) else Optional[Bitmap[]]()
+    var bm = Bitmap.intersect_views(left.validity(), right.validity())
 
     var result: Bitmap[mut=True]
     comptime if GPU_ENABLED:

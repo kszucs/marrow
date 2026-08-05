@@ -866,6 +866,19 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
     def null_count(self) -> Int:
         return self.nulls
 
+    def validity(
+        ref self,
+    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
+        """Validity bitmap view, or None if all values are valid.
+
+        Offset-applied, like every sibling's. This type was the one array
+        without it, which is why the string predicate kernels reached for the
+        raw `.bitmap` and shifted their nulls on sliced inputs (Q2.3).
+        """
+        if not self.bitmap:
+            return None
+        return self.bitmap.value().view(self.offset, self.length)
+
     def type(self) -> DynType:
         return Self.T().to_dyn()
 
