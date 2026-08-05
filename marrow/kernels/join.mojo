@@ -306,7 +306,32 @@ comptime JOIN_ANY: UInt8 = 1
 
 
 
-comptime IndexPairs = Tuple[Int32Array, Int32Array]
+@fieldwise_init
+struct JoinIndex(Copyable, Movable):
+    """Which build row pairs with which probe row, one entry per output row.
+
+    A named pair rather than `Tuple[Int32Array, Int32Array]`, which is what this
+    was. The tuple spelling means every consumer writes `pairs.build` and
+    `pairs.probe`, and nothing distinguishes them -- reading the build side as the
+    probe side is a silent wrong answer, and `_assemble` gathers the two sides
+    from different arrays, so getting them the wrong way round produces a
+    plausible-looking result with the columns crossed.
+
+    A null entry on either side means "no match": an outer join emits an
+    unmatched build row as `(row, null)` and an unmatched probe row as
+    `(null, row)`.
+    """
+
+    var build: Int32Array
+    """Row indices into the build (left) side."""
+    var probe: Int32Array
+    """Row indices into the probe (right) side."""
+
+    def __len__(self) -> Int:
+        return len(self.build)
+
+
+comptime IndexPairs = JoinIndex
 """Parallel (left_indices, right_indices) arrays from the probe phase."""
 
 
@@ -540,7 +565,11 @@ struct HashJoin[
             single_match=strictness == JOIN_ANY,
             ctx=self._ctx.copy(),
         )
-        var verified = (pairs[0].copy(), pairs[1].copy())
+        # `SwissHashTable.probe` still returns a bare tuple -- it cannot name
+        # `JoinIndex`, since `join` imports `hashtable` and not the other way
+        # round. Named at this boundary instead, which is where the two sides
+        # stop being interchangeable.
+        var verified = JoinIndex(pairs[0].copy(), pairs[1].copy())
         var final = self._emit_unmatched(
             verified^, len(right), kind, strictness
         )
@@ -641,7 +670,7 @@ struct HashJoin[
                 single_match=single,
                 hashes=part_hashes.copy(),
             )
-            return (
+            return JoinIndex(
                 Take.apply(self._left_partition_rows[i], pairs[0]),
                 Take.apply(rows, pairs[1]),
             )
@@ -658,11 +687,11 @@ struct HashJoin[
         var part_build_idx = List[Optional[Int32Array]](length=p, fill=None)
         var part_probe_idx = List[Optional[Int32Array]](length=p, fill=None)
         for i in range(p):
-            part_build_idx[i] = pairs_per_partition[i][0].copy()
-            part_probe_idx[i] = pairs_per_partition[i][1].copy()
+            part_build_idx[i] = pairs_per_partition[i].build.copy()
+            part_probe_idx[i] = pairs_per_partition[i].probe.copy()
         var combined_build = _concat_int32(part_build_idx^)
         var combined_probe = _concat_int32(part_probe_idx^)
-        var verified = (combined_build^, combined_probe^)
+        var verified = JoinIndex(combined_build^, combined_probe^)
 
         var final = self._emit_unmatched(verified^, right_n, kind, strictness)
         return self._assemble(right, final, kind)
@@ -689,10 +718,10 @@ struct HashJoin[
         # Compute which build/probe rows appear in the verified pairs.
         var matched_build = List[Bool](length=self._left_rows, fill=False)
         var matched_probe = List[Bool](length=right_rows, fill=False)
-        var n_pairs = len(pairs[0])
+        var n_pairs = len(pairs.build)
         for i in range(n_pairs):
-            var lid = Int(pairs[0].unsafe_get(i))
-            var rid = Int(pairs[1].unsafe_get(i))
+            var lid = Int(pairs.build.unsafe_get(i))
+            var rid = Int(pairs.probe.unsafe_get(i))
             if lid >= 0:
                 matched_build[lid] = True
             if rid >= 0:
@@ -705,7 +734,7 @@ struct HashJoin[
                 if matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
-            return (lb.finish(), rb.finish())
+            return JoinIndex(lb.finish(), rb.finish())
 
         if kind == JOIN_ANTI:
             var lb = Int32Builder(capacity=self._left_rows)
@@ -714,14 +743,14 @@ struct HashJoin[
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
-            return (lb.finish(), rb.finish())
+            return JoinIndex(lb.finish(), rb.finish())
 
         # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
         var lb = Int32Builder(capacity=n_pairs + self._left_rows)
         var rb = Int32Builder(capacity=n_pairs + right_rows)
         for i in range(n_pairs):
-            lb.append(pairs[0].unsafe_get(i))
-            rb.append(pairs[1].unsafe_get(i))
+            lb.append(pairs.build.unsafe_get(i))
+            rb.append(pairs.probe.unsafe_get(i))
         if kind.emits_unmatched_left():
             for i in range(self._left_rows):
                 if not matched_build[i]:
@@ -732,7 +761,7 @@ struct HashJoin[
                 if not matched_probe[i]:
                     lb.append_null()
                     rb.append(Scalar[int32.native](i))
-        return (lb.finish(), rb.finish())
+        return JoinIndex(lb.finish(), rb.finish())
 
     def build_dtype(self) -> DynType:
         return self._left_dtype.copy()
@@ -780,11 +809,11 @@ struct HashJoin[
         var ctx = self._ctx.copy()
 
         for c in range(len(left.children)):
-            out_cols.append(take(left.children[c].copy(), pairs[0], ctx))
+            out_cols.append(take(left.children[c].copy(), pairs.build, ctx))
 
         if kind.emits_right_columns():
             for c in range(len(right.children)):
-                out_cols.append(take(right.children[c].copy(), pairs[1], ctx))
+                out_cols.append(take(right.children[c].copy(), pairs.probe, ctx))
 
         var out_length = out_cols[0].length() if len(out_cols) > 0 else 0
         return StructArray(
