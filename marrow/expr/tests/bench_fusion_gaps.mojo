@@ -5,39 +5,14 @@ scales each benchmark independently, so one row reads `Name (time in ns)`, the
 next `(time in us)` and the next `(time in ms)`. Comparing the bare figures
 across rows reports a 25x speedup where there is a 40x slowdown -- which is
 exactly what happened when B27 was first filed, and the filed conclusion was the
-opposite of the truth. Strip the ANSI codes and read the header:
-
-    sed 's/\x1b\[[0-9;]*m//g' out.log | grep -E "Name \(time|^bench_"
-
-
-`StringLength` and `StringPredicate` are `Breaker`s: they materialise a full
-column in `prepare` and read it back per lane in `vectorwise`. So `s.len() + 1`
-is two passes over the data, not the one the fusion design claims, and
-`s1 == s2 and a > b` likewise.
-
-Q7.1 proposes fusing them. That means giving `StringValue` a way to expose its
-offsets vectorwise, which is a change to a trait the binary-size gate watches --
-so it should be paid for with a measurement, not with a plausible story. Q6.1 is
-the cautionary case: AOT-resolved aggregates *sound* faster than runtime-named
-ones and measure as identical, because the cost they remove is per-plan rather
-than per-row.
-
-The measurement here isolates the extra pass. Each pair differs by exactly one
-fused arithmetic step on an already-materialised column:
-
-    s.len()            materialise the length column, nothing else
-    s.len() + 1        the same, plus one pass over that column
-
-The delta between them is what fusing `StringLength` could recover -- an upper
-bound on it, in fact, since a fused version still has to read the offsets. If the
-delta is small against the total, Q7.1's payoff is small and the trait change is
-not worth its size.
+opposite of the truth. Strip the ANSI colour codes before reading the table, then compare only
+rows whose `Name (time in ...)` header shows the same unit.
 """
 
 from std.benchmark import BenchMetric, keep
 
 from ...testing import Benchmark
-from ...builders import StringBuilder
+from ...builders import StringBuilder, Int32Builder
 from ...dtypes import string, int32
 from ...tabular import record_batch, RecordBatch
 from ...expr.values import col, lit, into_array
@@ -179,6 +154,32 @@ def bench_b27_probe_raw_copy_1m(mut b: Benchmark) raises:
     @parameter
     def call() raises:
         keep(batch.columns[0].copy().length())
+
+    b.iter[call]()
+    keep(batch)
+
+
+def bench_b27_probe_plain_fused_add_1m(mut b: Benchmark) raises:
+    """`a + 1` over a plain int32 column — a fused pass with **no breaker**.
+
+    The reference Q7.1 needs. `s.len() + 1` pays a breaker slot read per SIMD
+    chunk on top of a fused pass; this is the same fused pass without one, so the
+    difference is what fusing `StringLength` could actually recover.
+    """
+    var ib = Int32Builder(1_000_000)
+    for i in range(1_000_000):
+        ib.append(Int32(i))
+    var batch = record_batch([ib.finish().to_dyn()], names=["a"])
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(
+            into_array(
+                (col("a", int32) + lit(1, int32)).execute(batch), 1_000_000
+            ).length()
+        )
 
     b.iter[call]()
     keep(batch)
