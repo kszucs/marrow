@@ -31,6 +31,8 @@ from ...builders import StringBuilder
 from ...dtypes import string, int32
 from ...tabular import record_batch, RecordBatch
 from ...expr.values import col, lit, into_array
+from ...kernels.string import LengthKernel
+from ...arrays import StringArray
 
 
 def _strings(n: Int) raises -> RecordBatch:
@@ -78,3 +80,58 @@ def bench_fusion_len_only_1m(mut b: Benchmark) raises:
 
 def bench_fusion_len_plus_one_1m(mut b: Benchmark) raises:
     _bench_len_plus_one(b, 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# B27 probes — split the 69 ms three ways.
+# ---------------------------------------------------------------------------
+
+
+def bench_b27_probe_bare_column_1m(mut b: Benchmark) raises:
+    """Just reading the column through the expression layer."""
+    var batch = _strings(1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(into_array(col("s", string).execute(batch), 1_000_000))
+
+    b.iter[call]()
+    keep(batch)
+
+
+def bench_b27_probe_kernel_only_1m(mut b: Benchmark) raises:
+    """`LengthKernel.dispatch` on the array directly, no expression layer."""
+    var batch = _strings(1_000_000)
+    var arr = batch.columns[0].copy()
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(LengthKernel.dispatch(arr))
+
+    b.iter[call]()
+    keep(arr)
+    keep(batch)
+
+
+def bench_b27_probe_kernel_typed_1m(mut b: Benchmark) raises:
+    """`LengthKernel.apply` on the *typed* array — no variant dispatch.
+
+    Against `..._kernel_only_1m` (which calls `dispatch`) this splits the cost
+    between the erasure and the loop body.
+    """
+    var batch = _strings(1_000_000)
+    var arr = batch.columns[0].as_string().copy()
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(LengthKernel.apply(arr))
+
+    b.iter[call]()
+    keep(arr)
+    keep(batch)

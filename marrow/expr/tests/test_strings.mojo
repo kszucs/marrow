@@ -2,10 +2,10 @@
 right operand through `StringPredicateKernel.apply_scalar` instead of
 splatting it into an n-row array first."""
 
-from std.testing import assert_true
+from std.testing import assert_true, assert_equal
 
 from ...builders import StringBuilder
-from ...dtypes import string
+from ...dtypes import string, int32
 from ...tabular import record_batch
 from ...expr.values import col, lit, into_array
 
@@ -77,3 +77,34 @@ def test_like_literal_preserves_null_rows() raises:
     assert_true(out[0].value())
     assert_true(out.is_null(1))
     assert_true(not out[2].value())
+
+
+def test_b27_string_length_agrees_fused_and_alone() raises:
+    """`s.len()` and `s.len() + 0` must agree.
+
+    B27: the fused form measured 25x faster than the bare one, which is only
+    possible if they are not doing the same work. If it is computing something
+    else, this catches it.
+    """
+    var sb = StringBuilder(4)
+    sb.append("a")
+    sb.append("bb")
+    sb.append("ccc")
+    sb.append("")
+    var batch = record_batch([sb.finish().to_dyn()], names=["s"])
+
+    var alone_arr = into_array(
+        col("s", string).length().execute(batch), 4
+    )
+    var fused_arr = into_array(
+        (col("s", string).length() + lit(0, int32)).execute(batch), 4
+    )
+    ref alone = alone_arr.as_int32()
+    ref fused = fused_arr.as_int32()
+
+    for i in range(4):
+        assert_equal(Int(alone[i].value()), Int(fused[i].value()))
+    assert_equal(Int(alone[0].value()), 1)
+    assert_equal(Int(alone[1].value()), 2)
+    assert_equal(Int(alone[2].value()), 3)
+    assert_equal(Int(alone[3].value()), 0)
