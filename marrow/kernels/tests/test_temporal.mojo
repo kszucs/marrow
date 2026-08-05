@@ -421,7 +421,7 @@ def test_date_trunc_quarter_boundaries() raises:
 
 
 def test_date_trunc_calendar_units_apply_to_date32() raises:
-    """date32 is day-granular, so sub-day units are a no-op — but month, quarter
+    """`date32` is day-granular, so sub-day units are a no-op — but month, quarter
     and year are *not*, and the early return that skipped them was wrong."""
     var db = PrimitiveBuilder[Date32Type](date32(), capacity=1)
     db.append(Int32(18_062))  # 2019-06-15
