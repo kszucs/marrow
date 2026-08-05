@@ -360,10 +360,26 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
             return Self(2)
         elif unit == "day":
             return Self(3)
+        elif unit == "month":
+            return Self(4)
+        elif unit == "quarter":
+            return Self(5)
+        elif unit == "year":
+            return Self(6)
         raise Error(
             t"date_trunc: unsupported unit '{unit}' (expected"
-            t" second/minute/hour/day)"
+            t" second/minute/hour/day/month/quarter/year)"
         )
+
+    def is_calendar(self) -> Bool:
+        """Whether this unit has no fixed length in seconds.
+
+        A month is 28-31 days and a year 365 or 366, so `seconds()` cannot
+        answer for these and flooring cannot be a division on the tick count --
+        they go through the civil calendar instead. Everything up to `day` is
+        fixed-length.
+        """
+        return self.value >= 4
 
     def seconds(self) -> Int:
         """How many seconds one of these spans."""
@@ -386,8 +402,14 @@ struct CalendarUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
             return "minute"
         elif self.value == 2:
             return "hour"
-        else:
+        elif self.value == 3:
             return "day"
+        elif self.value == 4:
+            return "month"
+        elif self.value == 5:
+            return "quarter"
+        else:
+            return "year"
 
     def __eq__(self, other: Self) -> Bool:
         return self.value == other.value
@@ -403,6 +425,9 @@ comptime unit_second = CalendarUnit(0)
 comptime unit_minute = CalendarUnit(1)
 comptime unit_hour = CalendarUnit(2)
 comptime unit_day = CalendarUnit(3)
+comptime unit_month = CalendarUnit(4)
+comptime unit_quarter = CalendarUnit(5)
+comptime unit_year = CalendarUnit(6)
 
 
 def _trunc[
@@ -436,6 +461,64 @@ def _trunc[
     )
 
 
+def _floor_civil(days: Int, unit: CalendarUnit) -> Int:
+    """Floor a day count to the start of its month, quarter or year.
+
+    Goes through the civil calendar because these units have no fixed length:
+    decompose to (y, m, d), zero the finer fields, recompose. `_civil_from_days`
+    and `_days_from_civil` are Hinnant's algorithms, already used by the
+    extraction kernels, so this adds no new date arithmetic.
+    """
+    var c = _civil_from_days(days)
+    var y = c[0]
+    var m = c[1]
+    if unit == unit_year:
+        m = 1
+    elif unit == unit_quarter:
+        # 1-3 -> 1, 4-6 -> 4, 7-9 -> 7, 10-12 -> 10.
+        m = ((m - 1) // 3) * 3 + 1
+    return _days_from_civil(y, m, 1)
+
+
+def _trunc_calendar[
+    N: DType
+](
+    data: ArrayData,
+    dt: DynType,
+    ticks_per_day: Int,
+    unit: CalendarUnit,
+    n: Int,
+) raises -> DynArray:
+    """Floor each tick count to a month/quarter/year boundary."""
+    var out = Buffer.alloc_uninit[N](n)
+    var dst = out.view[N](0, n)
+    var src = data.buffers[0].view[N](data.offset, n)
+    for i in range(n):
+        var raw = Int(src.unsafe_get(i))
+        # Floor-divide, so pre-epoch instants land on the day containing them
+        # rather than the day after -- the same reason `_trunc` uses `_fdiv`.
+        var days = _fdiv(raw, ticks_per_day)
+        dst.unsafe_set(
+            i, Scalar[N](_floor_civil(days, unit) * ticks_per_day)
+        )
+
+    var vbm: Optional[Bitmap[mut=False]] = None
+    if data.bitmap:
+        var v = data.bitmap.value().view(data.offset, n)
+        vbm = v.union(v).to_immutable()
+    return DynArray.from_data(
+        ArrayData(
+            dtype=dt.copy(),
+            length=n,
+            nulls=data.nulls,
+            offset=0,
+            bitmap=vbm^,
+            buffers=[out.to_immutable()],
+            children=[],
+        )
+    )
+
+
 struct DateTruncKernel(Kernel):
     """Floor a temporal array to a `CalendarUnit` boundary, keeping its type."""
 
@@ -444,16 +527,38 @@ struct DateTruncKernel(Kernel):
     @staticmethod
     def apply(array: DynArray, unit: CalendarUnit) raises -> DynArray:
         var dt = array.dtype()
-        if dt.is_date32():
-            # date32 is already day-granular: any unit <= day is a no-op.
+        if dt.is_date32() and not unit.is_calendar():
+            # date32 is already day-granular, so any *fixed-length* unit up to a
+            # day is a no-op. Month, quarter and year are not -- returning the
+            # input for those silently ignored the request, which is what this
+            # guard used to do for every unit.
             return array.copy()
         if not dt.is_temporal():
             raise Self.error(t"unsupported type {dt}")
 
-        var ticks_per_unit = _ticks_per_second(dt) * unit.seconds()
         var data = array.to_data()
         var n = data.length
         var width = dt.byte_width()
+
+        if unit.is_calendar():
+            # date32 counts days directly; everything else counts sub-day ticks.
+            var ticks_per_day = (
+                1 if dt.is_date32() else _ticks_per_second(dt) * 86400
+            )
+            if width == 4:
+                return _trunc_calendar[DType.int32](
+                    data, dt, ticks_per_day, unit, n
+                )
+            elif width == 8:
+                return _trunc_calendar[DType.int64](
+                    data, dt, ticks_per_day, unit, n
+                )
+            else:
+                raise Self.error(
+                    t"{dt} is {width} bytes wide; expected 4 or 8"
+                )
+
+        var ticks_per_unit = _ticks_per_second(dt) * unit.seconds()
         if width == 4:  # time32
             return _trunc[DType.int32](data, dt, ticks_per_unit, n)
         elif width == 8:  # date64 / timestamp / time64

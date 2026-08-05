@@ -280,12 +280,13 @@ bypass the expression layer entirely today (`tabular.mojo`) — route through
 `execute(plan)` or stay documented eager shortcuts. Two divergent paths is the
 outcome to avoid; picking either deliberately is fine.
 
-### M1.4 — Kernel gaps M1 actually needs — **M**
+### M1.4 — Kernel gaps M1 actually needs — **`date_trunc` DONE 2026-08-05**
 
-- `date_trunc` at **month, quarter, year** — only second/minute/hour/day exist
-  (`temporal.mojo:332-361`). Without these, ClickBench Q35/Q36 fail as queries
-  rather than as compile errors.
-- `regexp_replace` for Q29 — **or** formally defer Q29 to M2 and record it.
+`date_trunc` now supports **month, quarter and year** alongside second/minute/hour/day, so ClickBench Q35/Q36 are no longer blocked. These are *calendar* units with no fixed length, so they cannot floor by dividing the tick count the way the others do; they go through `_civil_from_days`/`_days_from_civil`, the Hinnant algorithms the extraction kernels already use, so no new date arithmetic was added.
+
+Fixed on the way: `DateTruncKernel` short-circuited **every** unit for `date32` on the grounds that date32 is day-granular. True for units up to a day; for month/quarter/year it silently returned the input unchanged. Both expression lanes route through `CalendarUnit.parse`, so they picked the new units up without change.
+
+Whatever else this card lists is unaffected and still open.
 
 ### M1.5 — ClickBench through the lazy plan — **M, the M1 sign-off**
 
