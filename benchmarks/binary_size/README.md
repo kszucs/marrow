@@ -1,33 +1,40 @@
-# Binary size: comptime (AOT) vs. erased-AOT vs. hybrid vs. runtime relational plans
+# Binary size: what each relational/expression feature costs an AOT binary
 
-Four files implement the exact same query — `SELECT a, name FROM orders
-WHERE a > b` — over the same 5-row in-memory batch, producing identical
-output:
+`query_streaming.mojo` is the floor: `SELECT a, name FROM orders WHERE a > b`
+over a 5-row in-memory batch, built from `marrow.expr.relations`'s
+self-executing nodes (`InMemoryTable`/`Filter`/`Project`, no central planner)
+with a fused comptime predicate (`col("a") > col("b")`, boxed via `BoxedValue`
+from `marrow.expr.values`). Every other gate in this directory is that same
+shape plus exactly one feature, so the `__text` delta against the floor is
+what that one feature costs:
 
-- **`query_comptime.mojo`** — the fully-monomorphized layer from
-  `marrow.aot.relations` (`Table`, `Column`, `Project`, `Filter`). The whole plan
-  is one nested generic type; `.execute(batch)` compiles straight to column
-  loads, a SIMD comparison, and a filter call. No tag dispatch, no vtables.
-- **`query_erased_aot.mojo`** — the "option 1" layer from `marrow.aot.erased`:
-  the relational operators are plain **runtime** structs over `List[DynValue]`
-  (a walkable, rewritable plan tree, *not* a `*Es` type pack), but each value is
-  a **fused-only** box (`DynValue`) that trampolines into the concrete node's
-  own `execute()` — no `eval()` tag interpreter. The operators execute
-  themselves single-shot (no `Planner`/`RelationProcessor`). Tests whether a
-  runtime plan tree can keep the comptime binary size.
-- **`query_hybrid.mojo`** — relational *structure* stays runtime/type-erased
-  (`marrow.dyn`'s `DynRelation`, `Planner.build()`, the pull-based
-  `RelationProcessor` pipeline — same as `query_runtime.mojo`), but the
-  *predicate* is a comptime-typed `Gt(Column, Column)` node
-  (`marrow.aot.values`) boxed into a runtime `Expr` via the `FUSED` tag
-  (`Expr(gt_node)`), so evaluating it is a direct call into the fused
-  vectorize loop rather than a walk through `Expr.eval()`'s tag interpreter.
-- **`query_runtime.mojo`** — the existing type-erased layer end to end:
-  `in_memory_table(batch).filter(...).select(...)` then `execute(plan)`,
-  predicate built from `col("a") > col("b")` and evaluated by `Expr.eval()`'s
-  tag interpreter.
+- **`query_arith.mojo`** — adds fused arithmetic (`Add`/`Sub`/`Mul`).
+- **`query_exprs.mojo`** — adds string (`Like`), conditional (`Coalesce`),
+  membership (`IsIn`), cast and temporal (`Year`) nodes.
+- **`query_sort.mojo`** — adds `Sort` + top-K `Limit`.
+- **`query_join.mojo`** — adds an equi-`Join` (`SwissHashTable`, `rapidhash`,
+  radix partitioning).
+- **`query_scan.mojo`** / **`query_scan_typed.mojo`** — the leaf is a
+  `ParquetScan` instead of an `InMemoryTable`; `_typed` additionally pins the
+  scan's column set at comptime (`leaf_of[Int64Type]() | leaf_of[StringType]()`).
+- **`query_streaming_agg_fused.mojo`** / **`query_streaming_agg.mojo`** — add
+  `Aggregate`, with the aggregate identity resolved at comptime
+  (`AggFunc.of[NumericAgg[K, V]]()`) versus by runtime name (`AggFunc("sum")`,
+  the shape the Python/ibis frontend uses).
+- **`query_dynvalue.mojo`** — the same fat relational nodes as
+  `query_streaming.mojo`, but the predicate is built the "runtime" way
+  (`col("a") > col("b")` via operators) and boxed into `DynValue`
+  (`marrow.expr.values`) instead of being constructed as a fused node directly.
+- **`query_runtime.mojo`** — the full type-erased entry point end to end:
+  `marrow.expr`'s `in_memory_table(batch).filter(...).select(...)` then
+  `plan.execute()`.
 
-All four are compiled with `-O3 -g0`, then `strip`ped, so the comparison is
+There is no comptime-only / fully type-erased pair of binaries left to
+contrast against these any more (see "Read this before quoting a number
+below") — the current set of gates instead brackets *individual features*
+against the one floor.
+
+All gates are compiled with `-O3 -g0`, then `strip`ped, so the comparison is
 release, no-debug-info code — the fairest apples-to-apples measurement of
 what actually ships.
 
@@ -37,10 +44,18 @@ what actually ships.
 pixi run binary_size
 ```
 
-Builds all four, strips them, and prints the size/symbol table plus the
-per-module symbol breakdown below. `benchmarks/binary_size/compare.py` is a
-plain Python script (no dependencies beyond `mojo`, `nm`, `size`, and `strip`
+Builds every gate above, strips them, and prints the size/symbol table plus a
+live per-module symbol-count breakdown (add gate names as arguments to build
+only those, e.g. `pixi run binary_size query_join`; `query_streaming` is
+always included as the ratio baseline). `benchmarks/binary_size/compare.py` is
+a plain Python script (no dependencies beyond `mojo`, `nm`, `size`, and `strip`
 on `$PATH`) — read it directly if you want to change what gets measured.
+
+`benchmarks/binary_size/check_gate.py` is the CI gate: it rebuilds the subset
+of gates recorded in `benchmarks/binary_size/baseline.json` and fails if any
+of them grew `__text` by more than the recorded threshold. That JSON file,
+not this document, is the enforced source of truth for regressions — see its
+`_comment` field and `.github/workflows/binary_size.yml`.
 
 ## ⚠️ Read this before quoting a number below
 
@@ -98,7 +113,18 @@ code** — and **16 bytes *smaller* by stripped file size** (1,324,168 vs
 1,324,184). The old metric would have reported fused arithmetic as free, or
 faintly negative. It is neither.
 
-## Result (osx-arm64, Mojo 1.0.0b3.dev2026070506) — historical, page-quantized
+## Historical note (osx-arm64, Mojo 1.0.0b3.dev2026070506) — page-quantized, not reproducible
+
+Before `marrow.aot` and `marrow.dyn` were folded into today's
+`marrow.expr.{values,relations,dynamic}`, this directory ran a four-way
+comparison to answer one question: does a runtime, rewritable plan tree have
+to pay for its type-erasure, or can it stay as small as a fully-monomorphized
+one? The four binaries were `query_comptime` (the monomorphized layer, no
+tag dispatch and no vtables at all), `query_erased_aot` (a runtime plan tree
+of fused-only value boxes, no interpreter and no central planner),
+`query_hybrid` (a runtime plan + runtime interpreter, but with the one
+predicate fused), and `query_runtime` (fully type-erased plan and
+interpreter, the ancestor of today's `query_runtime.mojo`).
 
 | binary | unstripped | stripped | symbols | symbols (stripped) | `__TEXT` |
 |---|---:|---:|---:|---:|---:|
@@ -107,126 +133,19 @@ faintly negative. It is neither.
 | `query_hybrid` | 11,652,992 B (11.1 MB) | 7,734,104 B (7.7 MB) | 3,360 | 52 | 7,651,328 B |
 | `query_runtime` | 11,649,328 B (11.1 MB) | 7,734,088 B (7.7 MB) | 3,353 | 52 | 7,651,328 B |
 
-**~30.9x smaller, stripped**, for the fully-monomorphized version. `size` on
-the stripped binaries confirms the gap is genuinely in compiled code, not
-just symbol-table noise — the `__TEXT` (executable code) segment column above
-tells the same story as the file-size columns. (The comptime binary grew ~16 KB
-vs. earlier revisions when named columns dropped their baked `index` in favor of
-resolving the position by name against the batch schema — that links
-`Schema.get_field_index`'s comparison code, a small, deliberate trade for one
-column type per dtype and a unified `Table[…]` / `col(…)` surface.)
+The table is in `__TEXT` (page-quantized — see the warning above), and none of
+these four `.mojo` sources exist any more, so it cannot be re-measured or
+re-verified; treat it as directional only. What it showed: `query_hybrid` and
+`query_runtime` came out byte-for-byte identical, so fusing only the
+*predicate value* while keeping a central planner/interpreter saved nothing.
+`query_erased_aot`, which kept the plan as a runtime, walkable tree but made
+the value box fused-only *and* let each node execute itself with no central
+planner, landed within a few hundred bytes of the fully-monomorphized
+`query_comptime` — i.e. rewritability and small binaries turned out to be
+independent, and the win comes from a closed (non-exhaustive) driver plus
+fused-only values, not from encoding the plan in the type system.
 
-## The hybrid result is the interesting one
-
-**`query_hybrid` and `query_runtime` have the *exact same* `__TEXT` size —
-fusing the predicate alone saved zero bytes of compiled code**, even though
-its own comparison genuinely runs fused (no per-element tag dispatch for
-that one operation). The ~4 KB unstripped difference and 7 extra symbols are
-just the one additional trampoline function (`_fused_eval_tramp_bool` et
-al., visible below as `marrow::aot::values` going from 0 to 4 symbols) —
-noise next to a 7.65 MB `__TEXT` segment.
-
-This is the useful negative result: **the size payoff comes almost entirely
-from erasing the *relational* layer (`marrow.dyn`), not the scalar/value
-layer.** `in_memory_table(batch).filter(predicate).select(...)` still walks
-through `Planner.build()`, which links in every `RelationProcessor` kind
-(`Scan`, `Filter`, `Project`, `Aggregate`, `Join`, `ParquetScan`, ...)
-regardless of which ones this query actually uses, plus the `DynRelation`
-vtable/trampoline machinery. `Expr.eval()`'s own op branches (`ADD`, `SUB`,
-`MUL`, `DIV`, `EQ`, `NE`, `LT`, `LE`, `GT`, `GE`, `AND`, `OR`, `NEG`, `ABS`,
-`NOT`, `IS_NULL`, `IF_ELSE`, `CAST`, `LENGTH`) are a comparatively small slice
-of that — boxing away the one comparison this query needs doesn't remove any
-of the *other* branches from the compiled function, and the relational
-executor around it dwarfs the interpreter either way.
-
-`query_comptime` avoids all of it: `Project[*Es]` and `Filter[Input, Pred]`
-are generic structs, so the compiler only ever instantiates the exact node
-types this one query uses (`Column`, `StringColumn`, `Gt`) — no relational
-processor pipeline, no `Expr` tag interpreter, no vtables, nothing unused to
-strip because there was never a branch to begin with.
-
-## The erased-AOT result is the payoff
-
-`query_erased_aot` is the interesting *positive* result. Its plan is a
-**runtime** object — `Project`/`Filter` are plain structs over
-`List[DynValue]`, walkable and rewritable, not a `*Es` type pack — yet its
-`__TEXT` is **229,376 B, byte-identical to `query_comptime`** (1.0x, versus
-30.9x for the runtime path). Making the plan a runtime, pushdown-friendly tree
-cost *zero* compiled code.
-
-Two properties, together, are what buy it — and the per-module table shows both
-holding:
-
-1. **The value box is fused-only.** `DynValue` trampolines straight into each
-   node's own fused `execute()` and carries no `eval()` tag-switch, so
-   `Expr.eval()` is never reachable. `kernels::arithmetic` (0, vs 371) and
-   `kernels::compare` (0, vs 74) confirm the per-op/per-dtype interpreter is
-   simply absent.
-2. **The driver is closed.** `Project`/`Filter` execute themselves single-shot;
-   there is no `Planner` referencing every processor kind, so
-   `kernels::join`/`groupby`/`hashing` (0/0/0, vs 11/17/141) and all of
-   `dyn::*` (0) never link.
-
-With *both* open surfaces gone, the big shared buckets that only collapse when
-neither is reachable (`execution` 9 vs 667, `views` 2 vs 455, `arrays`
-39 vs 376) fall to their comptime levels. The entire cost of the runtime plan
-tree is the 17 symbols in `aot::erased`/`aot::relations`/`aot::values` (5/7/5) —
-the box, its trampolines, the two column types, and `Gt`. This is the empirical
-proof that **rewritability and ~250 KB binaries are decoupled**: the size win is
-a property of the closed driver + fused-only values, not of encoding the plan in
-the type system. Contrast `query_hybrid`, which fused the value but kept the
-open driver and saved nothing — the two experiments bracket exactly which half
-matters.
-
-### Per-module symbol counts (unstripped)
-
-Counting distinct symbols whose mangled name references each module (a
-symbol can match more than one bucket, since Mojo names embed nested generic
-type params — this is a proportional breakdown, not a strict partition):
-
-| module | `query_comptime` | `query_erased_aot` | `query_hybrid` | `query_runtime` |
-|---|---:|---:|---:|---:|
-| `execution` | 9 | 9 | 667 | 667 |
-| `dtypes` | 58 | 62 | 566 | 562 |
-| `views` | 2 | 2 | 455 | 455 |
-| `arrays` | 39 | 39 | 376 | 376 |
-| `kernels::arithmetic` | 0 | 0 | 371 | 371 |
-| `builders` | 1 | 1 | 89 | 89 |
-| `kernels::hashing` | 0 | 0 | 141 | 141 |
-| `kernels::compare` | 0 | 0 | 74 | 74 |
-| `kernels::filter` | 10 | 10 | 66 | 66 |
-| `kernels::join` | 0 | 0 | 11 | 11 |
-| `kernels::groupby` | 0 | 0 | 17 | 17 |
-| `kernels::boolean` | 0 | 0 | 13 | 13 |
-| `scalars` | 0 | 0 | 20 | 20 |
-| `buffers` | 10 | 10 | 34 | 34 |
-| `dyn::executor` | 0 | 0 | 29 | 29 |
-| `dyn::relations` | 0 | 0 | 34 | 34 |
-| `dyn::values` | 0 | 0 | 16 | 13 |
-| `aot::values` | 0 | 5 | 4 | 0 |
-| `aot::relations` | 0 | 7 | 0 | 0 |
-| `aot::erased` | 0 | 5 | 0 | 0 |
-
-Why the biggest buckets are so lopsided: `comptime_query` only ever
-instantiates the *exact* concrete types this one query needs —
-`Column[Orders,"a",Int64Type]`, `StringColumn[Orders,"name"]`, `Gt[...]` —
-nothing else exists at compile time, so nothing else gets generated.
-`query_hybrid`/`query_runtime` go through `DynArray`, which erases the dtype
-to a runtime tag — any code operating on an `DynArray` (`Expr.eval()`,
-`DynRelation`'s processors, kernel dispatch functions) can't know at compile
-time which dtype it'll see, so the compiler generates a full typed
-instantiation *per supported dtype*, "just in case." `execution`
-(667, the CPU/GPU dispatch layer under every kernel) and `kernels::arithmetic`
-(371, even though this query does zero arithmetic) are the clearest examples:
-`Expr.eval()`'s `ADD`/`SUB`/`MUL`/`DIV` branches are reachable code
-regardless of whether this specific query ever hits them, so `add`/
-`subtract`/`multiply`/`divide` each get compiled for every numeric dtype.
-`kernels::join`/`groupby`/`hashing` (11/17/141, all zero for `query_comptime`)
-are the same story one level up: an exhaustive per-node-kind dispatch makes
-`AggregateProcessor`/`JoinProcessor` reachable — and therefore compiled in —
-even though this query never aggregates or joins anything. (`Planner` itself is
-gone; `Relation.to_processor` replaced it, so each node now pulls in only its
-own processor.)
-
-See `docs/architecture.md` for the "closed vs. open erasure boundary" framing
-this demonstrates.
+That conclusion is still the architecture today (`marrow.expr.relations`'s
+self-executing nodes, `BoxedValue`'s fused-only box) — see
+`docs/architecture.md` for the current, maintained "erasure boundary = fusion
+boundary" framing, rather than this retired four-binary experiment.

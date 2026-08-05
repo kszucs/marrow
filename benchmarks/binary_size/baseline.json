@@ -1,0 +1,10 @@
+{
+  "_comment": "__text baseline for the binary-size CI gate (see check_gate.py and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-08-05. Regenerate after an intentional size change with: pixi run -e dev python3 benchmarks/binary_size/check_gate.py --update",
+  "threshold_pct": 0.5,
+  "gates": {
+    "query_streaming": 1325672,
+    "query_join": 3816628,
+    "query_streaming_agg_fused": 3786228,
+    "query_streaming_agg": 4159796
+  }
+}

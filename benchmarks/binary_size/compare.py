@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Builds query_streaming.mojo, query_dynvalue.mojo, and query_runtime.mojo,
-strips each, and reports a size/symbol-count comparison table plus a
-per-module symbol breakdown so regressions (or improvements) can be traced
-back to a specific package.
+"""Builds every gate in NAMES below, strips each, and reports a size/symbol-
+count comparison table plus a per-module symbol breakdown so regressions (or
+improvements) can be traced back to a specific package.
 
 Run via `pixi run binary_size` from the repo root, or directly:
     python3 benchmarks/binary_size/compare.py
 
 Pass gate names to measure only those (query_streaming is always included, as
-the ratio baseline) -- a full sweep is five -O3 builds and about ten minutes:
+the ratio baseline) -- a full sweep is eleven -O3 builds and about ten to
+twenty minutes:
     python3 benchmarks/binary_size/compare.py query_dynvalue
 
 **Sizes are reported as the `__text` section, not file size.** See
