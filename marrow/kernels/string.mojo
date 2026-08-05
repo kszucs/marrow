@@ -24,7 +24,6 @@ them. Only `LengthKernel` exposes a fusable, offset-based fast path there.
 
 from std.sys import size_of
 from std.sys.info import simd_byte_width
-from std.algorithm.backend.vectorize import vectorize
 from std.utils.index import IndexList
 
 from ..arrays import (
@@ -37,6 +36,8 @@ from ..buffers import Buffer, Bitmap
 from ..builders import BinaryLikeBuilder
 from ..dtypes import StringLikeType, DType
 from .core import Kernel
+from ..views import apply
+from ..execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -70,26 +71,25 @@ struct LengthKernel(Kernel):
     @staticmethod
     def apply[
         T: StringLikeType
-    ](array: BinaryLikeArray[T]) raises -> Int32Array:
+    ](
+        array: BinaryLikeArray[T],
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> Int32Array:
         comptime off = T.offset
         var n = len(array)
         var out = Buffer.alloc_uninit[DType.int32](n)
         var offs = array.offsets.view[off](array.offset)
-        comptime width = simd_byte_width() // size_of[Scalar[off]]()
 
+        # `views.apply`, not stdlib `vectorize` directly. Kernels and the
+        # expression layer go through the `apply` family: it owns the SIMD width,
+        # the serial/parallel choice and the tail, so a kernel that reaches past
+        # it opts out of all three and diverges from every other kernel here.
         @parameter
         @always_inline
-        def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
-            var i = idx[0]
-            out.view[DType.int32](i).store[W](
-                0, Self.core(offs.load[W](i + 1), offs.load[W](i))
-            )
+        def producer[W: Int](i: Int) -> SIMD[DType.int32, W]:
+            return Self.core(offs.load[W](i + 1), offs.load[W](i))
 
-        @always_inline
-        def lane[W: Int](i: Int):
-            fill[W, rank=1](IndexList[1](i))
-
-        vectorize[width](n, lane)
+        apply[DType.int32, producer](out.view[DType.int32](0, n), ctx)
 
         # Propagate the input's validity: a null string yields a null length.
         var vbm: Optional[Bitmap[mut=False]] = None

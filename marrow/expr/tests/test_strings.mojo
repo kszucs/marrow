@@ -108,3 +108,50 @@ def test_b27_string_length_agrees_fused_and_alone() raises:
     assert_equal(Int(alone[1].value()), 2)
     assert_equal(Int(alone[2].value()), 3)
     assert_equal(Int(alone[3].value()), 0)
+
+
+def test_b27_two_breakers_read_distinct_slots() raises:
+    """Two breaker stages in one expression must read their own slots.
+
+    `Context.get_ref` hands out a *borrow* into the slot's `Datum` rather than a
+    copy (B27). Borrows are where aliasing goes wrong, so this pins the case with
+    two live stages: if both lanes read the same slot, or a borrow outlived its
+    slot, the sum would not be double the length.
+    """
+    var sb = StringBuilder(3)
+    sb.append("a")
+    sb.append("bb")
+    sb.append("cccc")
+    var batch = record_batch([sb.finish().to_dyn()], names=["s"])
+
+    var doubled_arr = into_array(
+        (col("s", string).length() + col("s", string).length()).execute(batch),
+        3,
+    )
+    ref doubled = doubled_arr.as_int32()
+    assert_equal(Int(doubled[0].value()), 2)
+    assert_equal(Int(doubled[1].value()), 4)
+    assert_equal(Int(doubled[2].value()), 8)
+
+
+def test_b27_breaker_result_survives_the_fused_lane() raises:
+    """A borrowed slot must stay valid for the whole fused pass.
+
+    The array lives in the `Context`, which outlives the lane loop -- but a
+    borrow that the compiler decided to shorten would read freed memory, and at
+    these lengths that shows up as wrong values rather than a crash. 4096 rows
+    is past any small-buffer or single-chunk special case.
+    """
+    var n = 4096
+    var sb = StringBuilder(n)
+    for i in range(n):
+        sb.append(String("x", i))  # length varies with i
+    var batch = record_batch([sb.finish().to_dyn()], names=["s"])
+
+    var got_arr = into_array(
+        (col("s", string).length() + lit(1, int32)).execute(batch), n
+    )
+    ref got = got_arr.as_int32()
+    for i in range(n):
+        var want = String("x", i).byte_length() + 1
+        assert_equal(Int(got[i].value()), want)

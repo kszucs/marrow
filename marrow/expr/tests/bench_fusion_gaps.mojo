@@ -1,4 +1,14 @@
-"""What the string breakers actually cost (Q7.1).
+"""What the string breakers actually cost (Q7.1, B27).
+
+**Read the unit on every row before comparing two numbers.** pytest-benchmark
+scales each benchmark independently, so one row reads `Name (time in ns)`, the
+next `(time in us)` and the next `(time in ms)`. Comparing the bare figures
+across rows reports a 25x speedup where there is a 40x slowdown -- which is
+exactly what happened when B27 was first filed, and the filed conclusion was the
+opposite of the truth. Strip the ANSI codes and read the header:
+
+    sed 's/\x1b\[[0-9;]*m//g' out.log | grep -E "Name \(time|^bench_"
+
 
 `StringLength` and `StringPredicate` are `Breaker`s: they materialise a full
 column in `prepare` and read it back per lane in `vectorwise`. So `s.len() + 1`
@@ -51,7 +61,7 @@ def _bench_len_only(mut bm: Benchmark, n: Int) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(into_array(col("s", string).length().execute(batch), n))
+        keep(into_array(col("s", string).length().execute(batch), n).length())
 
     bm.iter[call]()
     keep(batch)
@@ -67,7 +77,7 @@ def _bench_len_plus_one(mut bm: Benchmark, n: Int) raises:
         keep(
             into_array(
                 (col("s", string).length() + lit(1, int32)).execute(batch), n
-            )
+            ).length()
         )
 
     bm.iter[call]()
@@ -95,7 +105,7 @@ def bench_b27_probe_bare_column_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(into_array(col("s", string).execute(batch), 1_000_000))
+        keep(into_array(col("s", string).execute(batch), 1_000_000).length())
 
     b.iter[call]()
     keep(batch)
@@ -110,7 +120,7 @@ def bench_b27_probe_kernel_only_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(LengthKernel.dispatch(arr))
+        keep(LengthKernel.dispatch(arr).length())
 
     b.iter[call]()
     keep(arr)
@@ -130,8 +140,45 @@ def bench_b27_probe_kernel_typed_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(LengthKernel.apply(arr))
+        keep(len(LengthKernel.apply(arr)))
 
     b.iter[call]()
     keep(arr)
+    keep(batch)
+
+
+def bench_b27_probe_two_lengths_1m(mut b: Benchmark) raises:
+    """`s.len() + s.len()` — two Breaker stages, so `prepare` must run
+    `LengthKernel` twice. If this lands near the one-length fused case rather
+    than near double it, the kernel is not what the fused path is paying for."""
+    var batch = _strings(1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(
+            into_array(
+                (
+                    col("s", string).length() + col("s", string).length()
+                ).execute(batch),
+                1_000_000,
+            ).length()
+        )
+
+    b.iter[call]()
+    keep(batch)
+
+
+def bench_b27_probe_raw_copy_1m(mut b: Benchmark) raises:
+    """Scale reference: an O(1) column copy, no computation at all."""
+    var batch = _strings(1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(batch.columns[0].copy().length())
+
+    b.iter[call]()
     keep(batch)

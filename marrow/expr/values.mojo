@@ -226,10 +226,27 @@ struct Context(Copyable, Movable):
         return self._slots[i].copy()
 
     def get[A: Array](self, i: Int) -> A:
-        """Typed slot read — `ctx.get[BoolArray](i)`. Pulls the typed array straight
-        out of the slot's `Datum` (a ref-count bump), skipping the `as_xxx().copy()`
-        dance at every breaker read."""
+        """Typed slot read as an owned array — `ctx.get_ref[BoolArray](i)`.
+
+        Costs a ref-count bump. Fine once per `materialize`; **not** fine inside
+        a `vectorwise` lane, which runs once per SIMD chunk — see `get_ref`.
+        """
         return self._slots[i][DynArray].as_type[A]().copy()
+
+    @always_inline
+    def get_ref[A: Array](ref self, i: Int) -> ref [self._slots[i][DynArray]._v[A]] A:
+        """Typed slot read as a **borrow** — no ref-count bump.
+
+        This is what a fused lane wants. `vectorwise` is called once per SIMD
+        chunk, so `get`'s `.copy()` put an atomic read-modify-write in the hot
+        loop: at 1M rows and width 4 that is 250,000 atomics to read one array
+        that never changes. Measured cost of the difference is large -- a fused
+        expression over a breaker ran ~40x slower than the breaker alone.
+
+        The underlying `as_type` is already a borrow, so this only declines to
+        copy what it hands back.
+        """
+        return self._slots[i][DynArray].as_type[A]()
 
     def size(self) -> Int:
         return len(self._slots)
@@ -1229,7 +1246,7 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue, Breaker):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](s).values().load[DType.bool, W](idx)
 
 
 comptime IsNan = NumericPredicate[IsNanKernel, _]
@@ -1359,7 +1376,7 @@ struct StringToNum[To: NumericType, A: StringValue](Breaker, NumericValue):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.To]](i).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.To]](i).values().load[W](idx)
 
 
 @fieldwise_init
@@ -1390,7 +1407,7 @@ struct StringToBool[A: StringValue](BoolValue, Breaker):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](i).values().load[DType.bool, W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -1660,7 +1677,7 @@ struct NumToString[To: StringLikeType, A: NumericValue](Breaker, StringValue):
         var i = slot
         slot += 1
         return String(
-            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+            ctx.get_ref[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
         )
 
 
@@ -1686,7 +1703,7 @@ struct BoolToString[To: StringLikeType, A: BoolValue](Breaker, StringValue):
         var i = slot
         slot += 1
         return String(
-            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+            ctx.get_ref[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
         )
 
 
@@ -1712,7 +1729,7 @@ struct StringToString[To: StringLikeType, A: StringValue](Breaker, StringValue):
         var i = slot
         slot += 1
         return String(
-            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+            ctx.get_ref[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
         )
 
 
@@ -1787,7 +1804,7 @@ struct StringPredicate[
     ]:
         var s = slot
         slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](s).values().load[DType.bool, W](idx)
 
 
 comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
@@ -1839,7 +1856,7 @@ struct IsIn[A: Value](BoolValue, Breaker):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](s).values().load[DType.bool, W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -1881,7 +1898,7 @@ struct StringLength[A: StringValue](Breaker, NumericValue):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[Int32Array](s).values().load[W](idx)
+        return ctx.get_ref[Int32Array](s).values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -2102,7 +2119,7 @@ struct WindowFunction[Func: WindowKernel, A: Value](Breaker, NumericValue):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
 
 
 comptime RowNumber = WindowFunction[RowNumberKernel, _]
@@ -2160,7 +2177,7 @@ struct ConditionalBinary[
     ]:
         var i = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
 
 
 comptime Coalesce = ConditionalBinary[CoalesceKernel, _, _]
@@ -2218,7 +2235,7 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
     ]:
         var i = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -2335,7 +2352,7 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
     ]:
         var i = slot
         slot += 1
-        return ctx.get[Int32Array](i).values().load[W](idx)
+        return ctx.get_ref[Int32Array](i).values().load[W](idx)
 
 
 @fieldwise_init
@@ -2445,7 +2462,7 @@ struct ListLength[A: ListValue](Breaker, NumericValue):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[Int32Array](i).values().load[W](idx)
+        return ctx.get_ref[Int32Array](i).values().load[W](idx)
 
 
 @fieldwise_init
@@ -2478,7 +2495,7 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue, Breaker):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](i).values().load[DType.bool, W](idx)
 
 
 # ---------------------------------------------------------------------------
