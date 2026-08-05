@@ -17,6 +17,7 @@ from ...dtypes import string, int32
 from ...tabular import record_batch, RecordBatch
 from ...buffers import Buffer
 from ...views import apply
+from .test_a1_spike import SpikeColumn
 from ...expr.values import col, lit, into_array
 from ...kernels.string import LengthKernel
 from ...arrays import StringArray
@@ -270,6 +271,40 @@ def bench_b28_probe_hoisted_ideal_1m(mut b: Benchmark) raises:
         @always_inline
         def producer[W: Int](i: Int) -> SIMD[int32.native, W]:
             return vals.load[W](i) + SIMD[int32.native, W](1)
+
+        apply[int32.native, producer](out.view[int32.native](0, 1_000_000))
+        keep(out.to_immutable())
+
+    b.iter[call]()
+    keep(batch)
+
+
+def bench_a1_spike_state_lane_1m(mut b: Benchmark) raises:
+    """A1's shape, end to end: `a + 1` where the column leaf's state is
+    prepared once and the lane just loads from it.
+
+    Compare against `bench_b27_probe_plain_fused_add_1m` (today, 2.00 ms) and
+    `bench_b28_probe_hoisted_ideal_1m` (the floor, 65.7 us). If this lands near
+    the floor, A1's design is validated on the metric that matters.
+    """
+    var ib = Int32Builder(1_000_000)
+    for i in range(1_000_000):
+        ib.append(Int32(i))
+    var batch = record_batch([ib.finish().to_dyn()], names=["a"])
+    var node = SpikeColumn(0)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        # `prepare` once, outside the lane -- this is the A1 protocol.
+        var state = node.prepare(batch)
+        var out = Buffer.alloc_uninit[int32.native](1_000_000)
+
+        @parameter
+        @always_inline
+        def producer[W: Int](i: Int) -> SIMD[int32.native, W]:
+            return node.vectorwise[W](state, i) + SIMD[int32.native, W](1)
 
         apply[int32.native, producer](out.view[int32.native](0, 1_000_000))
         keep(out.to_immutable())
