@@ -183,3 +183,57 @@ def bench_b27_probe_plain_fused_add_1m(mut b: Benchmark) raises:
 
     b.iter[call]()
     keep(batch)
+
+
+def bench_b28_probe_two_columns_1m(mut b: Benchmark) raises:
+    """`a + a` — two column leaves, so two schema lookups per SIMD chunk.
+
+    Against `a + 1` (one lookup) this isolates the per-chunk column resolution
+    from everything else in the lane.
+    """
+    var ib = Int32Builder(1_000_000)
+    for i in range(1_000_000):
+        ib.append(Int32(i))
+    var batch = record_batch([ib.finish().to_dyn()], names=["a"])
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(
+            into_array(
+                (col("a", int32) + col("a", int32)).execute(batch), 1_000_000
+            ).length()
+        )
+
+    b.iter[call]()
+    keep(batch)
+
+
+def bench_b28_probe_two_literals_1m(mut b: Benchmark) raises:
+    """`1 + 1` broadcast — no column leaf at all, so no schema lookup.
+
+    OutShape 0 means this evaluates one lane and splats, so it is not a fair
+    throughput comparison; it is here to show the lane machinery itself is
+    cheap when nothing resolves a column.
+    """
+    var ib = Int32Builder(1_000_000)
+    for i in range(1_000_000):
+        ib.append(Int32(i))
+    var batch = record_batch([ib.finish().to_dyn()], names=["a"])
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(
+            into_array(
+                (col("a", int32) + (lit(1, int32) + lit(2, int32))).execute(
+                    batch
+                ),
+                1_000_000,
+            ).length()
+        )
+
+    b.iter[call]()
+    keep(batch)
