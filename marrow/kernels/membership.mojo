@@ -28,7 +28,7 @@ This falls out for free from ``rapidhash`` mapping every null to a single
 from ..arrays import DynArray, Array, BoolArray
 from ..builders import BoolBuilder
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .hashing import rapidhash
 from .hashtable import SwissHashTable
 
@@ -47,7 +47,7 @@ struct IsInKernel(Kernel):
 
     @staticmethod
     def apply(
-        values: DynArray, value_set: DynArray, ctx: ExecutionContext
+        values: DynArray, value_set: DynArray, ctx: ExecContext
     ) raises -> BoolArray:
         """Hash ``value_set`` into a ``SwissHashTable`` once, then probe each
         value.
@@ -80,7 +80,7 @@ struct IsInKernel(Kernel):
     def dispatch(
         values: DynArray,
         value_set: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         """Validate that both operands carry the same type, then probe."""
         Self.expect_same_dtype(values.dtype(), value_set.dtype())
@@ -101,7 +101,7 @@ struct IsInKernel(Kernel):
 def is_in(
     values: DynArray,
     value_set: DynArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> BoolArray:
     """Membership of each value in ``value_set``.
 
@@ -117,7 +117,7 @@ def is_in[
 ](
     values: A,
     value_set: A,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> BoolArray:
     """Membership of each value in ``value_set``, for two arrays of one type.
 

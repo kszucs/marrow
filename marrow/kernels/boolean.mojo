@@ -1,9 +1,9 @@
 """Boolean and bitwise kernels.
 
-Three tiers per kernel (same scheme as ``arithmetic.mojo``):
+Three tiers per kernel (same scheme as ``numeric.mojo``):
 
 - **Tier 0 (core)** — ``Kernel.core[W]``: raw SIMD predicate on
-  ``SIMD[DType.bool, W]``. Used by ``faszom.mojo`` expression nodes for
+  ``SIMD[DType.bool, W]``. Used by ``marrow/expr/values.mojo`` nodes for
   compile-time kernel fusion.
 - **Tier 1 (apply)** — ``Kernel.apply``: typed ``BoolArray`` API.  Operates
   directly on bit-packed bitmaps via 64-bit word operations — more efficient
@@ -24,7 +24,7 @@ from ..dtypes import (
 )
 from ..views import apply
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from ..utils import GPU_ENABLED
 
 
@@ -50,7 +50,7 @@ trait BoolBinaryKernel(Kernel):
     def apply(
         left: BoolArray,
         right: BoolArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         ...
 
@@ -58,7 +58,7 @@ trait BoolBinaryKernel(Kernel):
     def dispatch(
         left: DynArray,
         right: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         if left.dtype() != bool_dt or right.dtype() != bool_dt:
             raise Self.error("inputs must be bool arrays")
@@ -81,14 +81,14 @@ trait BoolUnaryKernel(Kernel):
     @staticmethod
     def apply(
         arr: BoolArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         ...
 
     @staticmethod
     def dispatch(
         arr: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         if arr.dtype() != bool_dt:
             raise Self.error("input must be a bool array")
@@ -109,14 +109,14 @@ trait UnaryPredicateKernel(Kernel):
     @staticmethod
     def apply(
         arr: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         ...
 
     @staticmethod
     def dispatch(
         arr: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         return Self.apply(arr, ctx).to_dyn()
 
@@ -211,7 +211,7 @@ struct AndKernel(BoolBinaryKernel):
     def apply(
         left: BoolArray,
         right: BoolArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         return _kleene[is_and=True](left, right, "and_")
 
@@ -230,7 +230,7 @@ struct OrKernel(BoolBinaryKernel):
     def apply(
         left: BoolArray,
         right: BoolArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         return _kleene[is_and=False](left, right, "or_")
 
@@ -246,7 +246,7 @@ struct NotKernel(BoolUnaryKernel):
     @staticmethod
     def apply(
         arr: BoolArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         # NOT flips the data; nulls propagate unchanged (NOT NULL = NULL).
         var bm: Optional[Bitmap[mut=False]] = None
@@ -275,7 +275,7 @@ struct XorKernel(BoolBinaryKernel):
     def apply(
         left: BoolArray,
         right: BoolArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         var n = len(left)
         if len(right) != n:
@@ -318,7 +318,7 @@ trait NullPredicateKernel(UnaryPredicateKernel):
 
     @staticmethod
     def apply(
-        arr: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        arr: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
         var n = len(arr)
         var validity = arr.to_data().validity()
@@ -352,7 +352,7 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
 
     @staticmethod
     def apply(
-        arr: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        arr: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
         @parameter
         def leaf[T: FloatingType](d: T) raises -> BoolArray:

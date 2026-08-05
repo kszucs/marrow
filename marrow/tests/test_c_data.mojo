@@ -1,4 +1,9 @@
-from std.testing import assert_equal, assert_true, assert_false
+from std.testing import (
+    assert_equal,
+    assert_true,
+    assert_false,
+    assert_raises,
+)
 from std.python import Python, PythonObject
 from std.memory import alloc
 from ..c_data import *
@@ -193,7 +198,7 @@ def test_arrow_array_stream() raises:
 
     var capsule = py_table.__arrow_c_stream__(Python.none())
     var stream = CArrowArrayStream.from_pycapsule(capsule)
-    var table = stream.to_table()
+    var table = stream^.to_table()
 
     assert_equal(table.num_columns(), 2)
     assert_equal(table.num_rows(), 5)
@@ -1130,3 +1135,90 @@ def test_map_array_roundtrip() raises:
     assert_equal(keys[2].to_string(), "z")
     assert_equal(vals[0].value(), 10)
     assert_equal(vals[2].value(), 30)
+
+
+def test_dictionary_ordered_survives_field_export() raises:
+    """`from_field` must not clobber the flags `from_dtype` already set.
+
+    It assigned `flags = NULLABLE or 0` rather than OR-ing, so the dictionary
+    ordered bit — set by `from_dtype` — was dropped for every field. Exporting a
+    whole schema goes through `from_field` for every column, so this was the
+    path that actually mattered; the existing round-trip test calls `from_dtype`
+    directly and cannot see it.
+    """
+    var dt = dictionary(DynType(int8), DynType(int32), ordered=True).to_dyn()
+    var c_schema = CArrowSchema.from_field(Field("d", dt.copy(), nullable=True))
+    var rt = c_schema.to_field()
+    assert_true(rt.dtype.is_dictionary())
+    assert_true(rt.dtype.as_dictionary().ordered)
+    assert_true(rt.nullable)
+
+
+def test_map_keys_sorted_survives_field_export() raises:
+    """Same clobber, other flag: ARROW_FLAG_MAP_KEYS_SORTED."""
+    var dt = map_(DynType(int32), DynType(int32), keys_sorted=True).to_dyn()
+    var c_schema = CArrowSchema.from_field(Field("m", dt.copy(), nullable=True))
+    var rt = c_schema.to_field()
+    assert_true(rt.dtype.is_map())
+    assert_true(rt.dtype.as_map().keys_sorted)
+
+
+def test_import_array_with_uncomputed_null_count() raises:
+    """`null_count == -1` means "not computed", not "-1 nulls".
+
+    The C Data Interface permits a producer to leave the count uncomputed, and
+    PyArrow does emit it. `to_data` assigned it straight through, so the
+    sentinel propagated into `ArrayData.nulls` and back out of `null_count()`.
+    """
+    var pa = Python.import_module("pyarrow")
+    var arr = c_array_from_pyobj(
+        pa.array(Python.list(1, None, 3), type=pa.int32())
+    )
+    arr.null_count = -1
+    var out = arr^.to_array(int32)
+    assert_equal(out.null_count(), 1)
+    assert_true(out.is_null(1))
+
+
+def test_import_all_valid_array_with_uncomputed_null_count() raises:
+    var pa = Python.import_module("pyarrow")
+    var arr = c_array_from_pyobj(
+        pa.array(Python.list(1, 2, 3), type=pa.int32())
+    )
+    arr.null_count = -1
+    var out = arr^.to_array(int32)
+    assert_equal(out.null_count(), 0)
+
+
+def test_stream_export_import_roundtrip() raises:
+    """A stream survives from_batches -> to_pycapsule -> from_pycapsule.
+
+    `to_pycapsule` and `to_table` are `deinit self`: they used to take `self` by
+    borrow and copy the struct onto the heap without marking the original
+    released, so consuming a stream twice handed the same `_StreamPrivateData`
+    to two owners and double-freed it — reproducibly, as a runtime crash.
+    Consuming makes a second use a compile error, so the guarantee is in the
+    type rather than in a runtime check.
+    """
+    var pa = Python.import_module("pyarrow")
+    var py_table = pa.table({"a": Python.list(1, 2, 3)})
+    var capsule = py_table.__arrow_c_stream__(Python.none())
+    var table = CArrowArrayStream.from_pycapsule(capsule).to_table()
+    assert_equal(table.num_rows(), 3)
+    assert_equal(table.num_columns(), 1)
+
+
+def test_import_rejects_too_few_buffers() raises:
+    """`to_data` must consult `n_buffers` before indexing them.
+
+    It indexed `buffers[0..2]` by dtype alone, so a producer supplying fewer
+    buffers than the layout implies caused an out-of-bounds read of the buffer
+    pointer array rather than a diagnostic.
+    """
+    var pa = Python.import_module("pyarrow")
+    var arr = c_array_from_pyobj(
+        pa.array(Python.list(1, 2, 3), type=pa.int32())
+    )
+    arr.n_buffers = 1  # a primitive array needs validity + values
+    with assert_raises(contains="buffers"):
+        _ = arr^.to_array(int32)

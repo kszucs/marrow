@@ -21,7 +21,11 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `filter.mojo` — selection, take, drop_null
   - `sort.mojo` — sort and sort_indices
   - `concat.mojo` — concatenation
-  - `core.mojo` — the `Kernel` root trait; `execution.mojo` — `ExecutionContext`
+  - `core.mojo` — the `Kernel` root trait
+
+`ExecContext` is re-exported here for convenience but lives in
+`marrow/execution.mojo`: it is a thread-count/device policy object that imports
+nothing from marrow, and `views.mojo` and `tabular.mojo` need it too.
 """
 
 from marrow.dtypes import (
@@ -50,7 +54,7 @@ from marrow.dtypes import (
     float32,
     float64,
 )
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .aggregate import (
     SumKernel,
     ProductKernel,

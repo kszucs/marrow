@@ -100,7 +100,7 @@ Pinned host allocation (kind=HOST):
 Bitmap operations
 -----------------
 Validity bitmaps use the dedicated `Bitmap` / `BitmapBuilder` types from
-`marrow.bitmap`, which wrap `Buffer[mut=False]` / `Buffer[mut=True]` with bit-level
+this module, which wrap `Buffer[mut=False]` / `Buffer[mut=True]` with bit-level
 and SIMD bulk operations.
 """
 
@@ -771,6 +771,22 @@ struct Buffer[*, mut: Bool = False](
     def unsafe_set[
         T: DType = DType.uint8
     ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
+        """Write `value` at element `index`, striding by `size_of[T]()`.
+
+        **Always type the value.** `T` is inferred from `value`, so a bare
+        integer literal does *not* give you the `uint8` default — it widens, and
+        the write strides by the wider type. `unsafe_get` has no argument to
+        infer from, so it *does* default to `uint8`. The pair then silently
+        disagrees:
+
+            buf.unsafe_set(1, 13)          # 8-byte store at byte offset 8
+            buf.unsafe_get(1)              # reads byte 1 -> 0, not 13
+
+        Write `unsafe_set(1, UInt8(13))` or `unsafe_set[DType.uint8](1, 13)`.
+        This cost two GPU tests, which read back zeros and were filed as a
+        device-transfer data-loss bug (B22) until the writes turned out to be
+        landing eight bytes away from the reads.
+        """
         comptime output = Scalar[T]
         self._ptr.bitcast[output]()[index] = value
 
@@ -1027,12 +1043,50 @@ struct Bitmap[*, mut: Bool = False](
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
+    @staticmethod
+    def intersect_views[
+        ao: Origin[mut=False], bo: Origin[mut=False]
+    ](
+        a: Optional[BitmapView[ao]], b: Optional[BitmapView[bo]]
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Bitwise AND of two optional validity **views**, offset applied.
+
+        **This is the one to use in a kernel.** Views index logically from zero,
+        owning `Bitmap`s do not, and a kernel's output is always `offset=0` — so
+        combining raw `array.bitmap` values and attaching the result to an
+        offset-0 array puts every null `offset` positions from where it belongs.
+        `array.validity()` hands you the offset-applied view; this combines two
+        of them.
+
+        The one-sided cases go through `to_owned()` rather than returning the
+        other operand directly, because a lone view still carries its parent's
+        offset — `Bitmap.intersect`'s pass-through is exactly the case that
+        looked safe and was not.
+
+        `None` means all-valid, so it is the identity: the result is `None` only
+        when both inputs are.
+        """
+        if not a and not b:
+            return None
+        if not a:
+            return b.value().to_owned()
+        if not b:
+            return a.value().to_owned()
+        return a.value().intersection(b.value()).to_immutable()
+
     # TODO: ensure that properly covered by tests
     @staticmethod
     def intersect(
         a: Optional[Bitmap[mut=False]], b: Optional[Bitmap[mut=False]]
     ) raises -> Optional[Bitmap[mut=False]]:
-        """Bitwise AND of two optional validity bitmaps.
+        """Bitwise AND of two optional validity bitmaps, **offset-unaware**.
+
+        Both operands are used whole. That is correct only when neither carries
+        an offset — i.e. neither array is a slice. A kernel building an
+        `offset=0` output from sliced inputs wants `intersect_views` instead;
+        this overload silently shifts the nulls. That was Q2.3, and it survived
+        because the expression layer recomputes validity itself and so masked
+        it from every expr-level test.
 
         `None` means all-valid, so it is the identity: the result is `None` only
         when both inputs are. Output bit i is set iff both inputs have it set.

@@ -67,11 +67,6 @@ trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     dtype is a **peer** of the concrete ones, not a supertype, and generic code
     bound on `DataType` accepts either."""
 
-    comptime IsErased: Bool = False
-    """Whether this dtype is the erased one. Lets a node parameterised on a
-    dtype (`NumericColumn[T]`, `NumericLiteral[T]`) know it is in the erased
-    lane without a separate erased node type existing."""
-
     def to_dyn(deinit self) -> DynType:
         return DynType(self^)
 
@@ -773,41 +768,16 @@ struct DynType(
     ConvertibleToPython,
     Copyable,
     DataType,
-    DecimalType,
     Equatable,
-    FloatingType,
-    IntegerType,
-    IntervalType,
-    ListLikeType,
     Movable,
-    NumericType,
-    StringLikeType,
-    TemporalType,
     Writable,
 ):
-    comptime IsErased = True
-
     comptime offset = DType.int32
     """Placeholder, never read — see `native`.
 
     Required by `BinaryLikeType`/`ListLikeType`, which `StringValue.OutType` is
     bound on. An erased dtype does not know its offset width; the erased arm
     resolves it at run time via `dispatch_binarylike`/`dispatch_listlike`."""
-
-    comptime native = DType.bool
-    """Placeholder, never read.
-
-    `DynType` conforms to the family traits so that `DynValue` can conform to
-    `NumericValue`/`BoolValue`/`StringValue`, which is what lets the fused nodes
-    (`NumericBinary[K, L, R]`, ...) accept an erased operand with no change to
-    their bounds. Those nodes select the erased arm via `comptime IsErased`, so
-    a `SIMD[Self.native, W]` is never elaborated from this.
-
-    There is no `DType.invalid`. `bool` is the deliberate stand-in: it is the one
-    `DType` that is not a numeric lane, so a path that wrongly elaborated against
-    it produces visibly bool-shaped results rather than a plausible-but-wrong
-    integer width. `byte_width()` below overrides `PrimitiveType`'s default for
-    the same reason — it must keep resolving the *runtime* dtype."""
 
     # `to_dyn` is overridden below rather than inherited, and that override is
     # load-bearing: the trait's default body is `DynType(self^)`, which for
@@ -1085,13 +1055,29 @@ struct DynType(
         return self.is_integer() or self.is_floating_point()
 
     def is_primitive(self) -> Bool:
-        """True for all fixed-width, buffer-backed types (numeric, temporal, interval, decimal).
+        """True for the fixed-**byte**-width, buffer-backed types: numeric,
+        temporal, interval, decimal.
 
-        Matches PyArrow's ``pa.types.is_primitive()`` semantics.
+        Exactly the set that conforms to the `PrimitiveType` trait, which is
+        what this predicate is for — every caller uses it to guard a
+        `variant_dispatch[PrimitiveType]`.
+
+        **Deliberately narrower than PyArrow and Arrow C++**, which both count
+        bool (`pa.types.is_primitive(pa.bool_())` is True; Arrow C++'s
+        `is_primitive` lists `Type::BOOL` first). Neither has a `PrimitiveType`
+        trait to stay consistent with; marrow does, and `BoolType` cannot
+        conform to it because bool is bit-packed rather than fixed-byte-width.
+        Answering True here made `byte_width()` abort. For PyArrow parity write
+        `is_bool() or is_primitive()` — which is what `ipc.mojo` already does.
+        There is deliberately no general fixed-width predicate: the one that
+        existed (`is_fixed_size`) covered neither `fixed_size_binary` nor
+        `fixed_size_list`, had no production caller, and was removed rather
+        than left lying. Arrow C++ spells the real thing `is_fixed_width` =
+        `is_primitive || is_dictionary || is_fixed_size_binary`; add that,
+        against that definition, if something ever needs it.
         """
         return (
-            self.is_bool()
-            or self.is_numeric()
+            self.is_numeric()
             or self.is_temporal()
             or self.is_interval()
             or self.is_decimal()
@@ -1102,6 +1088,44 @@ struct DynType(
 
     def is_large_string(self) -> Bool:
         return self._v.isa[LargeStringType]()
+
+    def num_buffers(self) -> Int:
+        """How many **data** buffers a value of this type owns.
+
+        Validity is not counted. Arrow C++ and arrow-rs both put the validity
+        bitmap at `buffers[0]`, but marrow's `ArrayData` carries `bitmap` as its
+        own field — so these counts are one lower than the references' and there
+        is no bitmap buffer kind to model.
+
+        This is the one genuinely structural fact the codecs kept re-deriving:
+        `ipc.mojo`'s buffer walk was a two-branch ladder asking exactly this, and
+        `c_data`'s importer hard-codes the same numbers as `_need_buffers`
+        arguments. `arrays.mojo` already enforced these counts in each typed
+        constructor without ever saying them anywhere a codec could ask.
+
+        Deliberately just a count. Both references also carry a per-buffer
+        `BufferSpec` (kind plus byte width) — and neither drives its IPC or C-ABI
+        codec from it; they use it for `ArrayData` validation. If a caller ever
+        needs the widths, add them then; see the A3 card for why the wider
+        version buys less than it looks.
+        """
+        if self.is_null() or self.is_struct() or self.is_fixed_size_list():
+            # Nothing of their own: a struct and a fixed-size list are entirely
+            # described by their children plus validity.
+            return 0
+        elif self.is_binary_like():
+            return 2  # offsets + data
+        elif self.is_list_like():
+            return 1  # offsets; the values are the child
+        elif self.is_dictionary():
+            # The array holds indices; the values are a separate dictionary.
+            # arrow-rs resolves this identically -- `layout(key_type)`.
+            return self.as_dictionary().index_type().num_buffers()
+        else:
+            # bool, numeric, temporal, interval, decimal, fixed_size_binary:
+            # one values buffer, bit-packed for bool and byte-addressed
+            # otherwise.
+            return 1
 
     def is_null(self) -> Bool:
         return self._v.isa[NullType]()
@@ -1218,8 +1242,6 @@ struct DynType(
             or self.is_decimal256()
         )
 
-    def is_fixed_size(self) -> Bool:
-        return self.is_primitive()
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter

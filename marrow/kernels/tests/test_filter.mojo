@@ -20,6 +20,7 @@ from ...builders import (
     Date32Builder,
     TimestampBuilder,
     DurationBuilder,
+    BoolBuilder,
 )
 from ...dtypes import (
     int32,
@@ -607,6 +608,49 @@ def test_take_duration_null_index() raises:
     assert_equal(r[2].value(), Scalar[int64.native](10))
 
 
+def test_filter_bool_array_after_primitive_narrowing() raises:
+    """`Filter.dispatch` peels bool off before `is_primitive()`. Narrowing that
+    predicate must not disturb the bool arm."""
+    var bb = BoolBuilder(capacity=4)
+    bb.append(True)
+    bb.append(False)
+    bb.append_null()
+    bb.append(True)
+    var arr = bb.finish()
+
+    var mb = BoolBuilder(capacity=4)
+    mb.append(True)
+    mb.append(True)
+    mb.append(True)
+    mb.append(False)
+    var mask = mb.finish()
+
+    var out = filter(arr^.to_dyn(), mask^).as_bool().copy()
+    assert_equal(len(out), 3)
+    assert_true(out[0].value())
+    assert_true(not out[1].value())
+    assert_true(out.is_null(2))
+
+
+def test_take_bool_array_after_primitive_narrowing() raises:
+    """`Take.dispatch` peels bool off before `is_primitive()`. Narrowing that
+    predicate must not disturb the bool arm, and a null index still produces a
+    null output row."""
+    var a = array([True, False, True, False])
+    var idx = Int32Builder(capacity=4)
+    idx.append(Scalar[int32.native](2))
+    idx.append_null()
+    idx.append(Scalar[int32.native](0))
+    idx.append(Scalar[int32.native](3))
+    var result = take(a^, idx.finish())
+    assert_equal(len(result), 4)
+    ref r = result.as_bool()
+    assert_true(r[0].value())
+    assert_false(r.is_valid(1))
+    assert_true(r[2].value())
+    assert_false(r[3].value())
+
+
 def test_drop_null_temporal() raises:
     """``drop_null`` on a timestamp column removes the null rows."""
     var b = TimestampBuilder(timestamp(second, "UTC"), 5)
@@ -667,3 +711,37 @@ def test_cross_check_temporal_pyarrow() raises:
     ref rt = got_t.as_timestamp()
     for i in range(len(got_t)):
         assert_equal(Int(rt[i].value()), Int(py=pa_t[i].as_py()))
+
+
+# ---------------------------------------------------------------------------
+# Moved here from `test_join.mojo` (B23).
+#
+# These are `take` tests and belong beside the other `take` tests, but the move
+# was forced rather than tidy: calling the *erased* `take(DynArray, Int32Array)`
+# from `test_join.mojo` deadlocked the Mojo compiler whenever that file was
+# selected on its own — 7 hours of wall clock against 10 s of CPU, with every
+# worker thread parked. The identical call compiles fine here. See B23 for the
+# minimal reproduction.
+# ---------------------------------------------------------------------------
+
+
+def test_take_primitive_basic_int32() raises:
+    """Gather elements from a primitive array at given indices."""
+    var a: DynArray = array([10, 20, 30, 40], int32)
+    var result = take(a.copy(), array([2, 0, 3], int32))
+    ref r = result.as_int32()
+    assert_equal(r[0].value(), Scalar[int32.native](30))
+    assert_equal(r[1].value(), Scalar[int32.native](10))
+    assert_equal(r[2].value(), Scalar[int32.native](40))
+
+
+def test_take_null_index_produces_null_int32() raises:
+    """Null index in take produces a null output element."""
+    var a: DynArray = array([10, 20, 30], int32)
+    var idx = Int32Builder(capacity=2)
+    idx.append_null()
+    idx.append(Scalar[int32.native](1))
+    var result = take(a.copy(), idx.finish())
+    assert_equal(result.null_count(), 1)
+    assert_false(result.is_valid(0))
+    assert_true(result.is_valid(1))

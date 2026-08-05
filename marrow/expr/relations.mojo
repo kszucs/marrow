@@ -47,14 +47,19 @@ Example
     var result = plan.execute()
 """
 
+from .values import Context, Datum, Value, into_array
+from .pruning import PruneBound, PruneStats
+from ..arrays import DynArray
+from std.builtin.rebind import rebind
+from .dynamic import DynValue
+from .values import AggExpr
 from std.memory import ArcPointer
 
 from ..dtypes import Field
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .values import DynValue, AggExpr
 from .values import col
-from ..kernels.execution import ExecutionContext
+from ..execution import ExecContext
 from .aggregates import AggFunc
 from ..parquet import LeafSet
 from .execution import (
@@ -80,6 +85,7 @@ from ..kernels.join import (
     JOIN_ANTI,
     JOIN_ALL,
     JOIN_ANY,
+    JoinKind,
 )
 
 
@@ -104,7 +110,7 @@ trait Relation(ImplicitlyDeletable, Movable):
     (O(1) — nodes are immutable and shared), and rewrite."""
 
     def with_predicate(
-        self, var predicate: DynValue
+        self, var predicate: BoxedValue
     ) raises -> Optional[ArcPointer[NoneType]]:
         """This node rebuilt to carry `predicate` as **pruning metadata**, as an
         erased pointer — or `None` when it cannot use one, which is every node
@@ -127,7 +133,7 @@ trait Relation(ImplicitlyDeletable, Movable):
     def schema(self) -> Schema:
         ...
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         """Build the physical operator for this node (opening its children)."""
         ...
 
@@ -144,6 +150,145 @@ trait Relation(ImplicitlyDeletable, Movable):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# BoxedValue — the plan's expression handle
+# ---------------------------------------------------------------------------
+struct BoxedValue(Copyable, Movable, Writable):
+    """Erases a `Value` so a relational operator can hold one.
+
+    **This is a wrapper, not an interpreter.** `_exec_tramp[V]` calls `V.execute`
+    on the *concrete* node, so a fused expression stays monomorphized and its
+    SIMD loop is entered through one indirect call per morsel. That is what keeps
+    an AOT plan small: the constructor below is generic, but this struct is not,
+    so `Filter`/`Project`/`FilterProcessor` compile exactly **once** no matter how
+    many expression types exist. Parameterising the operators instead
+    (`Filter[P]`) would fuse just as well and duplicate the whole operator per
+    predicate — the +115,600-byte shape recorded in CLAUDE.md.
+
+    It boxes either lane: a fused node from `values.mojo`, or a `DynValue` for an
+    expression built from strings.
+
+    **It conforms to `Value` and nothing else.** It used to also claim
+    `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` so that a fused node
+    would accept it as an *operand* (`Add[DynValue, DynValue]`). That was
+    unsound — those traits promise a comptime `OutType: NumericType` and a
+    `vectorwise` lane, and this struct could supply only a placeholder `native`
+    and a stub returning zero. The compiler reported it as `attempt to resolve a
+    recursive reference to declaration 'DynValue.__gt__'`, which is what forced
+    the fluent surface into a `NumericOps` sub-trait. Boxing is sound; being an
+    operand never was."""
+
+    var _boxed: ArcPointer[NoneType]
+    var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> DynArray
+    var _prune_fn: def(
+        ArcPointer[NoneType], PruneStats
+    ) thin raises -> PruneBound
+    var _name_fn: def(ArcPointer[NoneType]) thin -> String
+    var _write_fn: def(ArcPointer[NoneType]) thin -> String
+    var _referenced_columns_fn: def(ArcPointer[NoneType]) thin -> List[String]
+    var _bound_column_fn: def(ArcPointer[NoneType], Schema) thin raises -> Int
+    var _resolve_names_fn: def(
+        ArcPointer[NoneType], Schema
+    ) thin raises -> ArcPointer[NoneType]
+    """Bind `col("x")` references to positions against a schema.
+
+    Returns the **erased pointer**, not a `DynValue`: a field whose function type
+    mentions `DynValue` makes this struct recursive (`struct has recursive
+    reference to itself`) — the same failure `Relation.with_predicate` hits, and
+    the same fix. `resolve_names` below keeps its own trampolines and swaps only
+    the pointer, which is sound because resolving names never changes the node's
+    *type*.
+
+    Only the runtime lane has anything to bind — a fused column leaf looks its
+    name up in `materialize`, so it is already position-independent and its
+    trampoline hands back the pointer unchanged."""
+
+    # --- comptime fused `Value` box ----------------------------------------
+    @staticmethod
+    def _exec_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> DynArray:
+        var ctx = Context()
+        var d = rebind[ArcPointer[V]](ptr)[].execute(batch, ctx)
+        return into_array(d, batch.num_rows())
+
+    @staticmethod
+    def _prune_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
+        return rebind[ArcPointer[V]](ptr)[].prune(stats)
+
+    @staticmethod
+    def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        return rebind[ArcPointer[V]](ptr)[].name()
+
+    @staticmethod
+    def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        return rebind[ArcPointer[V]](ptr)[].render()
+
+    @staticmethod
+    def _referenced_columns_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType]) -> List[String]:
+        return rebind[ArcPointer[V]](ptr)[].referenced_columns()
+
+    @staticmethod
+    def _bound_column_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> Int:
+        return rebind[ArcPointer[V]](ptr)[].bound_column(schema)
+
+    @staticmethod
+    def _resolve_names_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> ArcPointer[NoneType]:
+        # Fused leaves resolve by name at execute time — nothing to bind.
+        return ptr.copy()
+
+    @implicit
+    def __init__[V: Value](out self, value: V):
+        var ptr = ArcPointer[V](value.copy())
+        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._execute = Self._exec_tramp[V]
+        self._prune_fn = Self._prune_tramp[V]
+        self._name_fn = Self._name_tramp[V]
+        self._write_fn = Self._write_tramp[V]
+        self._referenced_columns_fn = Self._referenced_columns_tramp[V]
+        self._bound_column_fn = Self._bound_column_tramp[V]
+        self._resolve_names_fn = Self._resolve_names_tramp[V]
+
+    def execute(self, batch: RecordBatch) raises -> DynArray:
+        """The column this expression produces — the relational engine's entry
+        point, called once per morsel."""
+        return self._execute(self._boxed, batch)
+
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        return self._prune_fn(self._boxed, stats)
+
+    def name(self) -> String:
+        return self._name_fn(self._boxed)
+
+    def render(self) -> String:
+        return self._write_fn(self._boxed)
+
+    def referenced_columns(self) -> List[String]:
+        return self._referenced_columns_fn(self._boxed)
+
+    def bound_column(self, schema: Schema) raises -> Int:
+        """This expression's column position, or -1 if it is not a bare column.
+        """
+        return self._bound_column_fn(self._boxed, schema)
+
+    def resolve_names(self, schema: Schema) raises -> BoxedValue:
+        """Bind name references against `schema`, keeping the same node type."""
+        var out = self.copy()
+        out._boxed = self._resolve_names_fn(self._boxed, schema)
+        return out^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._write_fn(self._boxed))
+
+
 struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     """Type-erased plan node behind an ``ArcPointer``.
 
@@ -156,13 +301,13 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     var _data: ArcPointer[NoneType]
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_to_processor: def(
-        ArcPointer[NoneType], ExecutionContext
+        ArcPointer[NoneType], ExecContext
     ) thin raises -> DynProcessor
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
     var _virt_kind: def(ArcPointer[NoneType]) thin -> Int
     var _virt_with_predicate: def(
-        ArcPointer[NoneType], var DynValue
+        ArcPointer[NoneType], var BoxedValue
     ) thin raises -> Optional[ArcPointer[NoneType]]
 
     @staticmethod
@@ -172,7 +317,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     @staticmethod
     def _tramp_with_predicate[
         T: Relation
-    ](ptr: ArcPointer[NoneType], var predicate: DynValue) raises -> Optional[
+    ](ptr: ArcPointer[NoneType], var predicate: BoxedValue) raises -> Optional[
         ArcPointer[NoneType]
     ]:
         return rebind[ArcPointer[T]](ptr)[].with_predicate(predicate^)
@@ -184,7 +329,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     @staticmethod
     def _tramp_to_processor[
         T: Relation
-    ](ptr: ArcPointer[NoneType], ctx: ExecutionContext) raises -> DynProcessor:
+    ](ptr: ArcPointer[NoneType], ctx: ExecContext) raises -> DynProcessor:
         return rebind[ArcPointer[T]](ptr)[].to_processor(ctx)
 
     @staticmethod
@@ -241,14 +386,12 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     # --- execution ---
 
     def to_processor(
-        self, ctx: ExecutionContext = ExecutionContext()
+        self, ctx: ExecContext = ExecContext()
     ) raises -> DynProcessor:
         """Build the operator tree for this plan; the plan is left untouched."""
         return self._virt_to_processor(self._data, ctx)
 
-    def execute(
-        self, ctx: ExecutionContext = ExecutionContext()
-    ) raises -> RecordBatch:
+    def execute(self, ctx: ExecContext = ExecContext()) raises -> RecordBatch:
         """Open this plan into a fresh operator tree and drain it into one
         `RecordBatch`.
 
@@ -263,7 +406,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
-        var exprs = List[DynValue]()
+        var exprs = List[BoxedValue]()
         var fields = List[Field]()
         for i in range(len(names)):
             var name = names[i]
@@ -282,7 +425,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             )
         )
 
-    def filter(self, var predicate: DynValue) raises -> DynRelation:
+    def filter(self, var predicate: BoxedValue) raises -> DynRelation:
         """Filter rows by a boolean predicate. Column references resolve by name
         against the batch schema when the boxed value executes.
 
@@ -300,7 +443,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         return DynRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
-        self, keys: List[DynValue], aggs: List[AggExpr]
+        self, keys: List[BoxedValue], aggs: List[AggExpr]
     ) raises -> DynRelation:
         """Grouped aggregation — ``GROUP BY keys`` with one output column per
         aggregate.
@@ -341,7 +484,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         var probe = RecordBatch.empty(input_schema)
 
         var fields = List[Field]()
-        var key_exprs = List[DynValue]()
+        var key_exprs = List[BoxedValue]()
         for i in range(len(keys)):
             var k = keys[i].resolve_names(input_schema)
             # A bare column keeps its own name; anything computed gets a
@@ -362,7 +505,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         # timezone; `count` and the distinct counts are int64; `mean` is
         # float64), and an aggregate not defined for the column's type is
         # rejected here rather than at execution.
-        var input_exprs = List[DynValue]()
+        var input_exprs = List[BoxedValue]()
         var resolved = List[AggFunc]()
         for i in range(len(aggs)):
             var v = aggs[i].input_for(input_schema)
@@ -382,8 +525,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
 
     def aggregate(
         self,
-        var keys: List[DynValue],
-        var inputs: List[DynValue],
+        var keys: List[BoxedValue],
+        var inputs: List[BoxedValue],
         var aggs: List[AggFunc],
         names: List[String],
     ) raises -> DynRelation:
@@ -431,9 +574,9 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     def join(
         self,
         right: DynRelation,
-        left_on: List[DynValue],
-        right_on: List[DynValue],
-        how: UInt8 = JOIN_INNER,
+        left_on: List[BoxedValue],
+        right_on: List[BoxedValue],
+        how: JoinKind = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> DynRelation:
         """Hash join on equijoin key expressions."""
@@ -468,7 +611,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         var fields = List[Field]()
         for ref f in left_schema.fields:
             fields.append(f.copy())
-        if how != JOIN_SEMI and how != JOIN_ANTI:
+        # One source for the output width — see `JoinKind`.
+        if how.emits_right_columns():
             var left_names = List[String]()
             for ref f in left_schema.fields:
                 left_names.append(f.name)
@@ -496,7 +640,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         )
 
     def project(
-        self, names: List[String], var values: List[DynValue]
+        self, names: List[String], var values: List[BoxedValue]
     ) raises -> DynRelation:
         """Project arbitrary named expressions (computed columns).
 
@@ -537,7 +681,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
 
     def sort(
         self,
-        keys: List[DynValue],
+        keys: List[BoxedValue],
         ascending: List[Bool],
         nulls_first: Bool = True,
         stable: Bool = True,
@@ -553,9 +697,9 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             raise Error("sort: len(keys) != len(ascending)")
 
         var input_schema = self.schema()
-        var key_exprs = List[DynValue]()
+        var key_exprs = List[BoxedValue]()
         for ref k in keys:
-            key_exprs.append(DynValue(k.resolve_names(input_schema)))
+            key_exprs.append(k.resolve_names(input_schema))
         return DynRelation(
             Sort(
                 input=self,
@@ -612,7 +756,7 @@ struct InMemoryTable(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return InMemoryTableProcessor(
             batch=RecordBatch(copy=self.batch),  # shares buffers (O(1))
             morsel_size=self.morsel_size,
@@ -652,7 +796,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     var path: String
     var _schema: Schema
     var morsel_size: Int
-    var predicate: Optional[DynValue]
+    var predicate: Optional[BoxedValue]
 
     def __init__(
         out self,
@@ -660,7 +804,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
         var path: String,
         var schema: Schema,
         morsel_size: Int = DEFAULT_MORSEL_SIZE,
-        var predicate: Optional[DynValue] = None,
+        var predicate: Optional[BoxedValue] = None,
     ):
         self.path = path^
         self._schema = schema^
@@ -671,7 +815,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
         return Schema(copy=self._schema)
 
     def with_predicate(
-        self, var predicate: DynValue
+        self, var predicate: BoxedValue
     ) raises -> Optional[ArcPointer[NoneType]]:
         """Accept the predicate as pruning metadata, **keeping `leaves`** —
         which is the point: `Self.leaves` is in scope here and a downcast at the
@@ -687,7 +831,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     def kind(self) -> Int:
         return RELATION_PARQUET_SCAN
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return ParquetScanProcessor[Self.leaves](
             path=self.path.copy(),
             schema=Schema(copy=self._schema),
@@ -723,16 +867,18 @@ struct Filter(Relation):
     """Apply a boolean predicate; keep rows where True (schema unchanged)."""
 
     var input: DynRelation
-    var predicate: DynValue
+    var predicate: BoxedValue
 
-    def __init__(out self, *, var input: DynRelation, var predicate: DynValue):
+    def __init__(
+        out self, *, var input: DynRelation, var predicate: BoxedValue
+    ):
         self.input = input^
         self.predicate = predicate^
 
     def schema(self) -> Schema:
         return self.input.schema()
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return FilterProcessor(
             input=self.input.to_processor(ctx), predicate=self.predicate.copy()
         )
@@ -748,7 +894,7 @@ struct Project(Relation):
 
     var input: DynRelation
     var names: List[String]
-    var values: List[DynValue]
+    var values: List[BoxedValue]
     var _schema: Schema
 
     def __init__(
@@ -756,7 +902,7 @@ struct Project(Relation):
         *,
         var input: DynRelation,
         var names: List[String],
-        var values: List[DynValue],
+        var values: List[BoxedValue],
         var schema: Schema,
     ):
         self.input = input^
@@ -767,7 +913,7 @@ struct Project(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return ProjectProcessor(
             input=self.input.to_processor(ctx),
             values=self.values.copy(),
@@ -800,7 +946,7 @@ struct Limit(Relation):
     def schema(self) -> Schema:
         return self.input.schema()
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return LimitProcessor(
             input=self.input.to_processor(ctx),
             offset=self.offset,
@@ -825,7 +971,7 @@ struct Sort(Relation):
     ``Sort``."""
 
     var input: DynRelation
-    var keys: List[DynValue]
+    var keys: List[BoxedValue]
     var ascending: List[Bool]
     var nulls_first: Bool
     var stable: Bool
@@ -836,7 +982,7 @@ struct Sort(Relation):
         out self,
         *,
         var input: DynRelation,
-        var keys: List[DynValue],
+        var keys: List[BoxedValue],
         var ascending: List[Bool],
         nulls_first: Bool,
         stable: Bool,
@@ -857,7 +1003,7 @@ struct Sort(Relation):
     def kind(self) -> Int:
         return RELATION_SORT
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return SortProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
@@ -890,8 +1036,8 @@ struct Aggregate(Relation):
     ``DynRelation.aggregate`` produces the same node from runtime names."""
 
     var input: DynRelation
-    var keys: List[DynValue]
-    var inputs: List[DynValue]
+    var keys: List[BoxedValue]
+    var inputs: List[BoxedValue]
     var aggs: List[AggFunc]
     var _schema: Schema
 
@@ -899,8 +1045,8 @@ struct Aggregate(Relation):
         out self,
         *,
         var input: DynRelation,
-        var keys: List[DynValue],
-        var inputs: List[DynValue],
+        var keys: List[BoxedValue],
+        var inputs: List[BoxedValue],
         var aggs: List[AggFunc],
         var schema: Schema,
     ):
@@ -913,7 +1059,7 @@ struct Aggregate(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return AggregateProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
@@ -939,7 +1085,7 @@ struct Join(Relation):
     var right: DynRelation
     var left_key_indices: List[Int]
     var right_key_indices: List[Int]
-    var join_kind: UInt8
+    var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
 
@@ -950,7 +1096,7 @@ struct Join(Relation):
         var right: DynRelation,
         var left_key_indices: List[Int],
         var right_key_indices: List[Int],
-        join_kind: UInt8,
+        join_kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
     ):
@@ -965,7 +1111,7 @@ struct Join(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def to_processor(self, ctx: ExecutionContext) raises -> DynProcessor:
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return JoinProcessor(
             left=self.left.to_processor(ctx),
             right=self.right.to_processor(ctx),

@@ -4,7 +4,7 @@ Splits rows into independent partitions by the top bits of a precomputed hash,
 so per-partition work (hash-table build/probe, grouped aggregation) runs in
 parallel with zero cross-thread synchronization:
 
-  Hash Function  ->  Partitioner  ->  per-partition parallel op  ->  merge
+  Hash Function  ->  RadixPartitioner  ->  per-partition parallel op  ->  merge
 
 ``RadixPartitioner.map_partitions`` is the reusable driver that ties the middle
 two steps together — hash once, split, run a worker per partition on its own
@@ -17,7 +17,7 @@ from std.algorithm.functional import sync_parallelize
 from ..arrays import Int32Array, UInt64Array
 from ..buffers import Buffer
 from ..dtypes import int32, uint64
-from .execution import ExecutionContext
+from ..execution import ExecContext
 
 
 comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
@@ -30,7 +30,7 @@ def radix_histogram[
 ](
     n: Int,
     num_buckets: Int,
-    ctx: ExecutionContext,
+    ctx: ExecContext,
     min_parallel_size: Int = _MIN_PARALLEL_PARTITION_ROWS,
 ) -> Tuple[List[Int], List[Int]]:
     """One counting/radix pass' histogram + partition-major prefix sum.
@@ -87,7 +87,7 @@ def radix_histogram[
 struct Partition(Copyable, Movable):
     """A subset of rows with pre-computed hashes.
 
-    ``row_indices = None`` means all rows in order (NoPartition fast-path,
+    ``row_indices = None`` means all rows in order (the unpartitioned case,
     avoids allocating an identity index array).
     """
 
@@ -116,32 +116,7 @@ struct Partition(Copyable, Movable):
         return i
 
 
-trait Partitioner(Movable):
-    """Splits rows into partitions by hash prefix."""
-
-    def num_partitions(self) -> Int:
-        ...
-
-    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        ...
-
-
-struct NoPartition(Partitioner):
-    """Single partition containing all rows (default, current behavior)."""
-
-    def __init__(out self):
-        pass
-
-    def num_partitions(self) -> Int:
-        return 1
-
-    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        var result = List[Partition]()
-        result.append(Partition(hashes^))
-        return result^
-
-
-struct RadixPartitioner(Partitioner):
+struct RadixPartitioner(Movable):
     """Partition rows by the top ``num_bits`` of their hash.
 
     The partitioner is the key enabler of partition-parallel joins: each
@@ -169,7 +144,7 @@ struct RadixPartitioner(Partitioner):
     var _num_partitions: Int
     """Cached ``1 << num_bits``."""
 
-    var ctx: ExecutionContext
+    var ctx: ExecContext
     """How the histogram + scatter passes execute. Held whole rather than
     reduced to a worker count, so a caller's device survives and both passes
     derive their stripe count from the same place."""
@@ -177,7 +152,7 @@ struct RadixPartitioner(Partitioner):
     def __init__(
         out self,
         num_bits: Int = 6,
-        var ctx: ExecutionContext = ExecutionContext(),
+        var ctx: ExecContext = ExecContext(),
     ):
         self.num_bits = num_bits
         self._num_partitions = 1 << num_bits

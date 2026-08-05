@@ -11,6 +11,7 @@ boxes fused nodes, stays tiny. That delta is the unification's DCE proof.
     pixi run binary_size
 """
 
+from marrow.expr.relations import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.schema import schema
@@ -31,7 +32,7 @@ def main() raises:
     var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
         col("a") > col("b")
     )
-    var values = List[DynValue]()
+    var values = List[BoxedValue]()
     values.append(col("a"))
     values.append(col("name"))
     var proj = Project(

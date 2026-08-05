@@ -49,6 +49,10 @@ from ...kernels.temporal import (
     DayOfWeekKernel,
     DateTruncKernel,
     CalendarUnit,
+    unit_month,
+    unit_quarter,
+    unit_year,
+    CalendarUnit,
     unit_second,
     unit_minute,
     unit_hour,
@@ -369,3 +373,75 @@ def test_extract_rejects_duration_with_a_useful_message() raises:
 
     with assert_raises(contains="requires a date or timestamp array"):
         _ = YearKernel.dispatch(d.copy().to_dyn())
+
+
+# --- date_trunc, calendar units (M1.4) --------------------------------------
+#
+# second/minute/hour/day are fixed-length, so flooring is one division on the
+# tick count. month/quarter/year are not: a month is 28-31 days, so these have
+# to go through the civil calendar. ClickBench Q35/Q36 group by month, and
+# without them they fail as queries rather than as compile errors.
+
+
+def test_date_trunc_month() raises:
+    # 2019-06-15 12:30:45 -> 2019-06-01 00:00:00 = 1559347200
+    var a = _ts([1_560_601_845], timestamp(second))
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_month)
+    assert_true(r.dtype() == timestamp(second).to_dyn())
+    assert_equal(r.as_timestamp()[0].value(), 1_559_347_200)
+
+
+def test_date_trunc_quarter() raises:
+    # 2019-06-15 is Q2, which starts 2019-04-01 00:00:00 = 1554076800
+    var a = _ts([1_560_601_845], timestamp(second))
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_quarter)
+    assert_equal(r.as_timestamp()[0].value(), 1_554_076_800)
+
+
+def test_date_trunc_year() raises:
+    # 2019-01-01 00:00:00 = 1546300800
+    var a = _ts([1_560_601_845], timestamp(second))
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_year)
+    assert_equal(r.as_timestamp()[0].value(), 1_546_300_800)
+
+
+def test_date_trunc_quarter_boundaries() raises:
+    """Each quarter floors to its own first month, not to the year."""
+    # 2019-01-10, 2019-05-10, 2019-08-10, 2019-11-10
+    var a = _ts(
+        [1_547_078_400, 1_557_446_400, 1_565_395_200, 1_573_344_000],
+        timestamp(second),
+    )
+    var r = DateTruncKernel.apply(a.copy().to_dyn(), unit_quarter)
+    ref t = r.as_timestamp()
+    assert_equal(t[0].value(), 1_546_300_800)  # Q1 -> 2019-01-01
+    assert_equal(t[1].value(), 1_554_076_800)  # Q2 -> 2019-04-01
+    assert_equal(t[2].value(), 1_561_939_200)  # Q3 -> 2019-07-01
+    assert_equal(t[3].value(), 1_569_888_000)  # Q4 -> 2019-10-01
+
+
+def test_date_trunc_calendar_units_apply_to_date32() raises:
+    """`date32` is day-granular, so sub-day units are a no-op — but month, quarter
+    and year are *not*, and the early return that skipped them was wrong."""
+    var db = PrimitiveBuilder[Date32Type](date32(), capacity=1)
+    db.append(Int32(18_062))  # 2019-06-15
+    var d = db.finish()
+    var m = DateTruncKernel.apply(d.copy().to_dyn(), unit_month)
+    assert_true(m.dtype() == date32().to_dyn())
+    assert_equal(m.as_date32()[0].value(), 18_048)  # 2019-06-01
+    var y = DateTruncKernel.apply(d.copy().to_dyn(), unit_year)
+    assert_equal(y.as_date32()[0].value(), 17_897)  # 2019-01-01
+    # sub-day still a no-op
+    assert_equal(
+        DateTruncKernel.apply(d.copy().to_dyn(), unit_hour)
+        .as_date32()[0]
+        .value(),
+        18_062,
+    )
+
+
+def test_calendar_unit_parses_the_new_names() raises:
+    assert_true(CalendarUnit.parse("month") == unit_month)
+    assert_true(CalendarUnit.parse("quarter") == unit_quarter)
+    assert_true(CalendarUnit.parse("year") == unit_year)
+    assert_equal(String(unit_quarter), "quarter")

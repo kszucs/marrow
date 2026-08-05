@@ -22,10 +22,11 @@ A size-critical AOT program legitimately skips that probe: it knows its own
 output schema at compile time. So the gate keeps measuring the floor, and the
 +16,528 is the standing measurement of what schema derivation costs. It is also
 avoidable — a *fused* value's `OutType` is statically known, so probing it by
-execution is unnecessary in principle (see Q4.x in
-`docs/tasks-code-quality.md`); if that lands, these can be converted.
+execution is unnecessary in principle (see Q0.5 in
+`docs/backlog.md`); if that lands, these can be converted.
 """
 
+from marrow.expr.relations import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
@@ -43,11 +44,11 @@ def main() raises:
     )
 
     var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
-        DynValue(col("a", int64) > col("b", int64))
+        BoxedValue(col("a", int64) > col("b", int64))
     )
-    var values = List[DynValue]()
-    values.append(DynValue(col("a", int64)))
-    values.append(DynValue(col("name", string)))
+    var values = List[BoxedValue]()
+    values.append(BoxedValue(col("a", int64)))
+    values.append(BoxedValue(col("name", string)))
     var proj = Project(
         input=filtered,
         names=["a", "name"],

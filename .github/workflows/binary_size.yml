@@ -1,0 +1,27 @@
+name: Binary size
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  binary-size:
+    name: binary size (macos, arm64)
+    runs-on: macos-latest
+    env:
+      MODULAR_HOME: "/Users/runner/.modular"
+      FORCE_COLOR: "1"
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v6
+    - uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        frozen: true
+        environments: dev
+    - name: Check binary-size gate
+      run: pixi run -e dev python3 benchmarks/binary_size/check_gate.py

@@ -8,7 +8,21 @@ from ...builders import (
     Float64Builder,
     StringBuilder,
 )
-from ...dtypes import int64, float64, Int64Type, Float64Type, large_string
+from ...dtypes import (
+    int64,
+    float64,
+    Int64Type,
+    Float64Type,
+    Int32Type,
+    large_string,
+    date32,
+    duration,
+    second,
+    decimal128,
+    Date32Type,
+    Decimal128Type,
+)
+from ...builders import Date32Builder, Decimal128Builder
 from ...kernels.cast import cast
 
 from ...kernels.string import (
@@ -329,3 +343,48 @@ def test_large_string_ordering() raises:
     assert_true(rb[0].value())  # apple < apricot
     assert_false(rb[1].value())  # banana == banana
     assert_false(rb[2].value())  # cherry > berry
+
+
+# ---------------------------------------------------------------------------
+# M1.0 — the erased comparison must accept every dtype its typed leaf accepts.
+#
+# `apply` is bound on `PrimitiveType`; `dispatch` narrowed to `NumericType`, so
+# runtime-typed comparison raised on temporal, interval and decimal columns even
+# though the leaf handles them. Exactly the defect CLAUDE.md's "dispatch on the
+# widest family the typed leaf accepts" rule names, and already fixed in
+# `filter`/`take` and `sort`.
+#
+# The consequence reached well past comparison: `pruning.mojo` mirrors this
+# bound, so no row group or page was ever pruned on a date or decimal predicate.
+# ---------------------------------------------------------------------------
+
+
+def _date32_arr(vals: List[Int]) raises -> DynArray:
+    var b = Date32Builder(date32(), len(vals))
+    for v in vals:
+        b.append(Scalar[Date32Type.native](v))
+    return b.finish()
+
+
+def test_erased_compare_accepts_date32() raises:
+    """A date column compares through the erased dispatch."""
+    var a = _date32_arr([19000, 18500, 19100])
+    var b = _date32_arr([19000, 19000, 18000])
+    ref r = LtKernel.dispatch(a, b).as_bool()
+    assert_false(r[0].value())
+    assert_true(r[1].value())
+    assert_false(r[2].value())
+
+
+def test_erased_compare_accepts_decimal128() raises:
+    """A decimal column compares through the erased dispatch."""
+    var d = decimal128(10, 2)
+    var ab = Decimal128Builder(d, 2)
+    ab.append(Scalar[Decimal128Type.native](150))
+    ab.append(Scalar[Decimal128Type.native](250))
+    var bb = Decimal128Builder(d, 2)
+    bb.append(Scalar[Decimal128Type.native](200))
+    bb.append(Scalar[Decimal128Type.native](200))
+    ref r = LtKernel.dispatch(ab.finish(), bb.finish()).as_bool()
+    assert_true(r[0].value())
+    assert_false(r[1].value())

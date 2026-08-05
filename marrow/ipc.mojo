@@ -23,10 +23,13 @@ list, fixed_size_list, struct, dictionary.
 from std.math import ceildiv
 from std.pathlib import Path
 
-from .arrays import DynArray, ArrayData, DictionaryArray, NullArray
+from .arrays import DynArray, ArrayData, DictionaryArray, NullArray, Int32Array
 from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
+from .builders import Int32Builder
+from .kernels.concat import concat as _concat
+from .kernels.filter import take as _take
 from .utils import LittleEndian
 from . import dtypes as dt
 
@@ -62,6 +65,7 @@ comptime _TYPE_LIST: UInt8 = 12
 comptime _TYPE_STRUCT: UInt8 = 13
 comptime _TYPE_FIXED_SIZE_BINARY: UInt8 = 15
 comptime _TYPE_FIXED_SIZE_LIST: UInt8 = 16
+comptime _TYPE_MAP: UInt8 = 17
 comptime _TYPE_DURATION: UInt8 = 18
 comptime _PRECISION_HALF: UInt16 = 0
 comptime _PRECISION_SINGLE: UInt16 = 1
@@ -565,6 +569,14 @@ struct _FlatbufReader(Movable):
             self._buf, ref_pos
         )
 
+    def has_field(self, tp: UInt32, slot: Int) raises -> Bool:
+        """Whether an optional table field is present.
+
+        FlatBuffers tables omit absent fields from the vtable, so a reader must
+        ask before reading — the typed readers raise on absence.
+        """
+        return self._field_voffset(tp, slot) != 0
+
     def read_table(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
@@ -799,6 +811,11 @@ struct _IpcEncoder(Movable):
             return _TYPE_UTF8
         elif dtype.is_large_string():
             return _TYPE_LARGE_UTF8
+        elif dtype.is_map():
+            # Before `is_list()`: a map is a list of entry structs, and if
+            # `is_list()` answered first a map would be written as a plain list
+            # and read back as one.
+            return _TYPE_MAP
         elif dtype.is_list():
             return _TYPE_LIST
         elif dtype.is_large_list():
@@ -887,6 +904,13 @@ struct _IpcEncoder(Movable):
             var prec_at = self._fb.prepend_u16(prec)
             var flds = List[_FieldOffset]()
             flds.append(_FieldOffset(0, prec_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_map():
+            ref m = dtype.as_map()
+            var ts = self._fb.offset()
+            var ks_at = self._fb.prepend_bool(m.keys_sorted)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, ks_at))
             return self._fb.write_table(flds, ts)
         elif dtype.is_fixed_size_list():
             ref fsl = dtype.as_fixed_size_list()
@@ -1063,7 +1087,13 @@ struct _IpcEncoder(Movable):
         var dtype = f.dtype.copy()
         var own_dict_id = -1
 
-        if dtype.is_list():
+        if dtype.is_map():
+            child_positions.append(
+                self._write_field(
+                    dtype.as_map().entries[].copy(), next_dict_id
+                )
+            )
+        elif dtype.is_list():
             child_positions.append(
                 self._write_field(
                     dtype.as_list().value_field().copy(), next_dict_id
@@ -1224,6 +1254,18 @@ struct _IpcDecoder(Movable):
         var db_pos = self._r.read_table(msg_tp, 2)
         return Int(self._r.read_i64(db_pos, 0, 0))
 
+    def peek_is_delta(self) raises -> Bool:
+        """`isDelta` from a DictionaryBatch header (slot 2).
+
+        A delta batch carries only the values appended since the last one. The
+        field is optional and defaults to false, so absence means "replace".
+        """
+        var msg_tp = self._r.root()
+        var db_pos = self._r.read_table(msg_tp, 2)
+        if not self._r.has_field(db_pos, 2):
+            return False
+        return self._r.read_bool(db_pos, 2, False)
+
     @staticmethod
     def _wire_to_time_unit(v: UInt16) -> dt.TimeUnit:
         if v == _TIME_UNIT_SECOND:
@@ -1359,6 +1401,16 @@ struct _IpcDecoder(Movable):
     ) raises -> Int64:
         var length = self._r.read_i64(rb_pos, 0, 0)
 
+        # Slot 3 is `BodyCompression`. Ignoring it does not mean "uncompressed";
+        # it means the buffers below are read as if they were raw, which decodes
+        # a compressed body into garbage with no error. Refuse until the codecs
+        # are wired through (they are already available for Parquet).
+        if self._r.has_field(rb_pos, 3):
+            raise Error(
+                "ipc: record batch body is compressed; reading compressed IPC"
+                " bodies (LZ4_FRAME / ZSTD) is not supported"
+            )
+
         var nodes_vec = self._r.read_vector(rb_pos, 1)
         var nn = Int(self._r.vector_len(nodes_vec))
         for i in range(nn):
@@ -1464,6 +1516,12 @@ struct _IpcDecoder(Movable):
             dtype = dt.string
         elif type_type == _TYPE_LARGE_UTF8:
             dtype = dt.large_string
+        elif type_type == _TYPE_MAP:
+            var tp = self._r.read_table(fp, 3)
+            var keys_sorted = self._r.read_bool(tp, 0, False)
+            if len(children) == 0:
+                raise Error("map Field must have 1 child, got 0")
+            dtype = dt.MapType(children[0].copy(), keys_sorted).to_dyn()
         elif type_type == _TYPE_LIST:
             if len(children) == 0:
                 raise Error("list Field must have 1 child, got 0")
@@ -1669,6 +1727,25 @@ struct _BatchEncoder(Movable):
         self.nodes = List[_FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
 
+    @staticmethod
+    def dense(arr: DynArray) raises -> ArrayData:
+        """Rebase a sliced array to offset 0.
+
+        Arrow IPC bodies are written dense from index 0 — there is no offset
+        field on the wire. The encoder writes whole value buffers under the
+        slice's declared length and the decoder hardcodes `offset=0`, so a
+        sliced column would round-trip as the parent's *first* `length`
+        elements. Gathering `0..n` produces a dense copy for every layout,
+        nested children included, and is paid only when `offset != 0`.
+        """
+        var data = arr.to_data()
+        if data.offset == 0:
+            return data^
+        var idx = Int32Builder(capacity=len(arr))
+        for i in range(len(arr)):
+            idx.append(Int32(i))
+        return _take(arr, idx.finish()).to_data()
+
     def write_array(mut self, root: ArrayData) raises:
         var stack = List[ArrayData]()
         stack.append(root.copy())
@@ -1744,7 +1821,7 @@ struct _BatchEncoder(Movable):
 
     def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
         for col in batch.columns:
-            self.write_array(col.to_data())
+            self.write_array(_BatchEncoder.dense(col))
         var buf_meta = List[_BodyBuffer]()
         var body = List[UInt8]()
         self._build_body(buf_meta, body)
@@ -1766,7 +1843,7 @@ struct _BatchEncoder(Movable):
     ) raises -> _EncodedBatch:
         """Encode a dictionary values array as a DictionaryBatch IPC message."""
         var benc = _BatchEncoder()
-        benc.write_array(values.to_data())
+        benc.write_array(_BatchEncoder.dense(values))
         var buf_meta = List[_BodyBuffer]()
         var body = List[UInt8]()
         benc._build_body(buf_meta, body)
@@ -1876,24 +1953,24 @@ struct _BatchDecoder(Movable):
                 indices^, values^, d.ordered
             ).to_dyn()
 
-        if (
-            dtype.is_string()
-            or dtype.is_binary()
-            or dtype.is_large_string()
-            or dtype.is_large_binary()
-        ):
-            self._consume_buffer(data_buffers)
-            self._consume_buffer(data_buffers)
-        elif (
-            dtype.is_bool()
-            or dtype.is_primitive()
-            or dtype.is_list()
-            or dtype.is_large_list()
-            or dtype.is_fixed_size_binary()
-        ):
+        # How many data buffers this type owns is a property of the type, not
+        # of this codec. The ladder here used to re-derive it and got `map`
+        # wrong -- it fell through every arm and so consumed *zero* buffers,
+        # silently shifting every buffer read after it.
+        for _ in range(dtype.num_buffers()):
             self._consume_buffer(data_buffers)
 
-        if dtype.is_list():
+        if dtype.is_map():
+            var child_ipc = (
+                ipc_info.children[0].copy() if len(ipc_info.children)
+                > 0 else _FieldIpcInfo()
+            )
+            children.append(
+                self.read_array(
+                    dtype.as_map().entries[].dtype.copy(), child_ipc
+                ).to_data()
+            )
+        elif dtype.is_list():
             var child_ipc = (
                 ipc_info.children[0].copy() if len(ipc_info.children)
                 > 0 else _FieldIpcInfo()
@@ -2249,6 +2326,7 @@ struct RecordBatchStreamReader(Movable):
             header_type = peek.peek_header()
             if Int(header_type) == Int(_HEADER_DICTIONARY_BATCH):
                 var dict_id = _IpcDecoder(meta.copy()).peek_dict_id()
+                var is_delta = _IpcDecoder(meta.copy()).peek_is_delta()
                 var lkup = _FieldIpcInfo.find_in_schema(
                     self.schema.fields, self._ipc_infos, dict_id
                 )
@@ -2262,7 +2340,14 @@ struct RecordBatchStreamReader(Movable):
                     )
                     while len(dict_values) <= dict_id:
                         dict_values.append(NullArray(0))
-                    dict_values[dict_id] = values^
+                    if is_delta and len(dict_values[dict_id]) > 0:
+                        # a delta carries only the newly-appended values
+                        var merged = List[DynArray]()
+                        merged.append(dict_values[dict_id].copy())
+                        merged.append(values^)
+                        dict_values[dict_id] = _concat(merged)
+                    else:
+                        dict_values[dict_id] = values^
             elif Int(header_type) == Int(_HEADER_RECORD_BATCH):
                 var dec = _IpcDecoder(meta^)
                 batches.append(

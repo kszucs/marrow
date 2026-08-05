@@ -29,7 +29,7 @@ from ..dtypes import Field, struct_
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .filter import Take, take
 from .concat import concat
 from .aggregate import Aggregation, AggFunction
@@ -353,13 +353,18 @@ struct GroupBy(Movable):
     """
 
     var _keys: StructArray
-    var _num_threads: Int
+    var _ctx: ExecContext
+    """How this grouping executes — held whole rather than destructured to a
+    worker count. It used to be a bare `_num_threads: Int`, which two internal
+    sites then rebuilt into `ExecContext.parallel(n)`; both silently dropped the
+    caller's GPU device, since that factory sets `device=None`. Same defect
+    `HashJoin` fixed and documented at `join.mojo:338`."""
     var _strategy: UInt8
 
     def __init__(
         out self,
         keys: StructArray,
-        ctx: ExecutionContext = ExecutionContext.auto(),
+        ctx: ExecContext = ExecContext.auto(),
         strategy: Optional[UInt8] = None,
     ) raises:
         """Group by a struct of key columns (multi-key GROUP BY).
@@ -369,17 +374,17 @@ struct GroupBy(Movable):
         the escape hatch tests and benchmarks need to compare the paths against
         each other on the same input."""
         self._keys = keys.copy()
-        self._num_threads = ctx.resolved_num_threads()
+        self._ctx = ctx.copy()
         self._strategy = (
             strategy.value() if strategy else Self._choose_strategy(
-                self._keys, self._num_threads
+                self._keys, self._ctx
             )
         )
 
     def __init__(
         out self,
         key: DynArray,
-        ctx: ExecutionContext = ExecutionContext.auto(),
+        ctx: ExecContext = ExecContext.auto(),
         strategy: Optional[UInt8] = None,
     ) raises:
         """Group by a single key column."""
@@ -400,9 +405,9 @@ struct GroupBy(Movable):
         )
 
     @staticmethod
-    def _choose_strategy(keys: StructArray, num_threads: Int) raises -> UInt8:
+    def _choose_strategy(keys: StructArray, ctx: ExecContext) raises -> UInt8:
         var n = len(keys)
-        if num_threads <= 1 or n < _PARALLEL_MIN_ROWS:
+        if not ctx.worth_parallel(n, _PARALLEL_MIN_ROWS):
             return GROUP_SERIAL
         var high_card = Self._is_high_cardinality(keys, n)
         if n < _PARALLEL_ALWAYS_ROWS and not high_card:
@@ -417,7 +422,7 @@ struct GroupBy(Movable):
 
     def num_threads(self) -> Int:
         """The resolved worker budget."""
-        return self._num_threads
+        return self._ctx.resolved_num_threads()
 
     def strategy(self) -> UInt8:
         """The grouping strategy chosen at construction (``GROUP_SERIAL`` /
@@ -486,7 +491,7 @@ struct GroupBy(Movable):
             )
         if self._strategy == GROUP_THREAD_LOCAL and agg.mergeable():
             return Self._thread_local_columns[C](
-                self._keys, agg, values, self._num_threads
+                self._keys, agg, values, self._ctx
             )
 
         @parameter
@@ -501,7 +506,7 @@ struct GroupBy(Movable):
     def _thread_local_columns[
         C: ColumnAggregator
     ](
-        keys: StructArray, agg: C, values: List[DynArray], num_threads: Int
+        keys: StructArray, agg: C, values: List[DynArray], ctx: ExecContext
     ) raises -> GroupedColumns:
         """Thread-local partial aggregation for N columns at once.
 
@@ -513,6 +518,7 @@ struct GroupBy(Movable):
         at all."""
         var n = len(keys)
         var na = agg.num_columns()
+        var num_threads = ctx.resolved_num_threads()
         var chunk = (n + num_threads - 1) // num_threads
 
         # Pre-sized per-thread slots — no races on list growth.
@@ -558,7 +564,7 @@ struct GroupBy(Movable):
         # Hand-rolled rather than `ctx.stripe`, and it has to stay that way:
         # this worker **raises** (it hashes keys inside the stripe), and
         # `stripe`'s body is typed non-raising. Widening it was tried and
-        # reverted — see the note on `ExecutionContext.stripe`; the parameter
+        # reverted — see the note on `ExecContext.stripe`; the parameter
         # form of `sync_parallelize` that accepts a raising worker needs an
         # implicitly-capturing closure, which miscompiles there.
         sync_parallelize[worker](num_threads)
@@ -602,7 +608,7 @@ struct GroupBy(Movable):
         return Self._by_partition[col_agg](
             self._keys,
             values,
-            self._num_threads,
+            self._ctx,
             partition=self._strategy != GROUP_SERIAL,
         )
 
@@ -614,7 +620,7 @@ struct GroupBy(Movable):
     ](
         keys: StructArray,
         values: List[DynArray],
-        num_threads: Int,
+        outer: ExecContext,
         partition: Bool,
     ) raises -> GroupedColumns:
         """The grouped-aggregation driver: group and aggregate one partition at
@@ -640,9 +646,18 @@ struct GroupBy(Movable):
         # One partition means one thread: gathering keys and concatenating a
         # single chunk under a parallel context would pay thread dispatch for a
         # `num_groups`-row `take`, which at small inputs is most of the query.
-        var ctx = ExecutionContext.parallel(
-            num_threads
-        ) if partition else ExecutionContext.serial()
+        #
+        # Both arms resolve the worker count rather than passing `outer`
+        # through, which reproduces the `ExecContext.parallel(n)` / `serial()`
+        # pair this replaced exactly — minus dropping the device. Passing a bare
+        # `auto()` down instead would be a *different* policy: every downstream
+        # `wants_parallel` would re-consult its own 32768-row threshold, where a
+        # forced count bypasses it. That may well be the better policy, but it
+        # is a measurable change to the group-by hot path and does not belong in
+        # a plumbing fix.
+        var ctx = outer.with_threads(
+            outer.resolved_num_threads()
+        ) if partition else outer.with_threads(1)
         var na = len(values)
 
         @parameter
@@ -682,8 +697,10 @@ struct GroupBy(Movable):
             ) raises -> Tuple[Int32Array, List[DynArray]]:
                 return group_partition(rows, part_hashes)
 
+            # `ctx` is already the forced-count context here — this branch only
+            # runs when `partition` is true.
             parts = RadixPartitioner(
-                num_bits=RADIX_BITS, ctx=ExecutionContext.parallel(num_threads)
+                num_bits=RADIX_BITS, ctx=ctx.copy()
             ).map_partitions[
                 Tuple[Int32Array, List[DynArray]], radix_partition
             ](

@@ -17,7 +17,7 @@ from ...builders import (
 )
 from ...dtypes import int64, Int64Type
 from ...kernels.filter import Filter, Take
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 from ...testing import Benchmark
 
 
@@ -210,7 +210,7 @@ def _indices_with_nulls(size: Int) raises -> Int32Array:
     return b.finish()
 
 
-def _bench_take(mut b: Benchmark, size: Int, ctx: ExecutionContext) raises:
+def _bench_take(mut b: Benchmark, size: Int, ctx: ExecContext) raises:
     var arr = arange[Int64Type](0, size)
     var idx = _shuffled_indices(size)
     b.throughput(BenchMetric.elements, size)
@@ -226,17 +226,16 @@ def _bench_take(mut b: Benchmark, size: Int, ctx: ExecutionContext) raises:
 
 
 def bench_take_100k(mut b: Benchmark) raises:
-    _bench_take(b, 100_000, ExecutionContext.serial())
+    _bench_take(b, 100_000, ExecContext.serial())
 
 
 def bench_take_1m(mut b: Benchmark) raises:
-    _bench_take(b, 1_000_000, ExecutionContext.serial())
+    _bench_take(b, 1_000_000, ExecContext.serial())
 
 
 def bench_take_parallel_1m(mut b: Benchmark) raises:
-    """Forces the striped path — `ExecutionContext.serial()` never reaches it.
-    """
-    _bench_take(b, 1_000_000, ExecutionContext(num_threads=0))
+    """Forces the striped path — `ExecContext.serial()` never reaches it."""
+    _bench_take(b, 1_000_000, ExecContext(num_threads=0))
 
 
 def bench_take_nulls_1m(mut b: Benchmark) raises:
@@ -247,7 +246,7 @@ def bench_take_nulls_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(Take.apply(arr, idx, ExecutionContext.serial())))
+        keep(len(Take.apply(arr, idx, ExecContext.serial())))
 
     b.iter[call]()
     keep(arr)

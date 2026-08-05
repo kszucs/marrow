@@ -2,7 +2,7 @@
 title: "Expression Execution"
 ---
 
-The `marrow/expr` module provides a lazy expression system for building and executing query plans. Expressions are composed into a logical plan tree, then compiled by a `Planner` into a pull-based processor hierarchy that streams `RecordBatch` results.
+The `marrow/expr` module provides a lazy expression system for building and executing query plans. Expressions compose into a plan tree of immutable `Relation` nodes; calling `.execute()` on a plan opens it into a pull-based processor tree that streams `RecordBatch` results. The plan itself is never mutated, so it is a reusable template.
 
 ::: {.callout-note}
 The examples on this page use the Mojo `marrow.expr` API. They illustrate the
@@ -32,7 +32,7 @@ threshold = lit(30)
 
 ### Operator overloads
 
-`AnyValue` supports standard Python operators, which compose into expression nodes:
+Expression nodes support the standard operators, which compose into larger nodes:
 
 | Operator | Expression node |
 |----------|----------------|
@@ -123,26 +123,26 @@ totals = source.aggregate(["dept"], ["salary"], ["sum"])
 
 ## Executing a plan
 
-`execute(plan)` opens the plan into a fresh pull-based processor tree, drains
-it, and returns a single `RecordBatch`. A plan is a pure description, so it can
-be executed repeatedly. An optional `ExecutionContext` selects the execution
-mode:
+`plan.execute()` opens the plan into a fresh pull-based processor tree, drains
+it, and returns a single `RecordBatch`. It is a method on the plan, not a free
+function. A plan is a pure description, so it can be executed repeatedly and
+concurrently. An optional `ExecContext` selects the execution mode:
 
 ```python
-from marrow.expr import execute, ExecutionContext
+from marrow.execution import ExecContext
 
-result = execute(plan)                       # serial by default
-result = execute(plan, ExecutionContext())   # explicit context
+result = plan.execute()                  # serial by default
+result = plan.execute(ExecContext())     # explicit context
 ```
 
-`ExecutionContext` comes from `marrow.kernels.execution` and offers
+`ExecContext` comes from `marrow.execution` and offers
 `.serial()`, `.parallel()` and `.gpu(device)` constructors — see
 [GPU acceleration](gpu.qmd).
 
 ## End-to-end example
 
 ```python
-from marrow.expr import col, lit, in_memory_table, execute
+from marrow.expr import col, lit, in_memory_table
 
 # Source data
 batch = ma.record_batch(
@@ -162,7 +162,7 @@ plan = (
 )
 
 # Execute — returns a single RecordBatch
-result = execute(plan)
+result = plan.execute()
 print(result)
 ```
 
@@ -174,7 +174,7 @@ into the scan so row groups and pages can be pruned using the file's
 statistics.
 
 ```python
-from marrow.expr import col, lit, parquet_scan, execute
+from marrow.expr import col, lit, parquet_scan
 
 plan = (
     parquet_scan("employees.parquet")
@@ -182,5 +182,5 @@ plan = (
     .select("name", "age")
 )
 
-result = execute(plan)
+result = plan.execute()
 ```

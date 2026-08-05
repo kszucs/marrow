@@ -1,16 +1,22 @@
 """Tests for marrow.expr.values — the staged, strategy-pluggable fusion engine.
 
-Covers the four value families and the universal `DynValue` box:
+Covers the four value families and the `BoxedValue` erasure box:
   * numeric — vectorized SIMD fusion (`Add`/`Mul`/…, reductions, casts, windows)
   * bool    — bit-packed vectorized fusion (comparisons, `And`/`Or`/`Not`, any/all)
   * string  — elementwise fusion (`Concat`/`Upper`/…, predicates, parses)
   * list    — materialize-only columns feeding fixed-width breakers
-  * DynValue — erases any comptime node OR a runtime `DynValue` behind `execute()`
+  * BoxedValue — erases a fused node OR a runtime `DynValue` behind `execute()`
 """
 
-from std.testing import assert_true, assert_equal
+from std.testing import assert_true, assert_equal, assert_raises
 
-from ...builders import array, ListBuilder, Int64Builder, PrimitiveBuilder
+from ...builders import (
+    array,
+    ListBuilder,
+    Int64Builder,
+    PrimitiveBuilder,
+    StringBuilder,
+)
 from ...dtypes import (
     int64,
     int32,
@@ -57,7 +63,6 @@ from ...expr.values import (
     WindowSpec,
     FrameBound,
     NumericValue,
-    DynValue,
     into_array,
     Concat,
     Upper,
@@ -93,6 +98,7 @@ from ...expr.values import (
     DayOfYear,
 )
 from ...expr.values import col as dyn_col
+from ...expr.relations import BoxedValue
 
 
 # instantiation is a COMPILE-TIME proof the operand is a fused `NumericValue` node
@@ -542,14 +548,14 @@ def test_list_contains() raises:
 
 
 # ===========================================================================
-# DynValue — the universal box over a comptime node OR a runtime DynValue
+# BoxedValue — the erasure box over a fused node OR a runtime DynValue
 # ===========================================================================
 
 
 def test_anyvalue_wraps_dynvalue() raises:
     # the runtime lane: erased operands through the *same* nodes the fused lane
     # builds — this is what the relational engine plans over
-    var boxed: DynValue = dyn_col("a") + dyn_col("b")
+    var boxed: BoxedValue = dyn_col("a") + dyn_col("b")
     var cv = boxed.execute(_batch())
     assert_true(cv == array([11, 22, 33, 44], int64).to_dyn())
 
@@ -557,7 +563,7 @@ def test_anyvalue_wraps_dynvalue() raises:
 def test_anyvalue_erases_to_array() raises:
     # box a comptime node; its erased execute yields a column (DynArray), the
     # interface the relational engine consumes
-    var boxed: DynValue = Add(col("a", int64), lit(10, int64))
+    var boxed: BoxedValue = Add(col("a", int64), lit(10, int64))
     var cv = boxed.execute(_batch())
     assert_true(cv == array([11, 12, 13, 14], int64).to_dyn())
 
@@ -566,9 +572,9 @@ def test_anyvalue_interchange() raises:
     # a heterogeneous list holds a fused comptime column *and* an interpreter
     # value; both run through the one erased execute — fused-vs-interpreted is
     # only which node you boxed.
-    var values = List[DynValue]()
-    values.append(DynValue(col("a", int64)))  # fused comptime
-    values.append(DynValue(dyn_col("b")))  # runtime interpreter
+    var values = List[BoxedValue]()
+    values.append(BoxedValue(col("a", int64)))  # fused comptime
+    values.append(BoxedValue(dyn_col("b")))  # runtime interpreter
     var batch = _batch()
     assert_true(values[0].execute(batch) == array([1, 2, 3, 4], int64).to_dyn())
     assert_true(
@@ -586,14 +592,14 @@ def test_dynvalue_name_only_for_load() raises:
 
 
 def test_anyvalue_write_to_delegates() raises:
-    # write_to on a DynValue-boxed DynValue renders the boxed node's expression
+    # write_to on a boxed DynValue renders the boxed node's expression
     # form (not just its column name)
-    var boxed: DynValue = dyn_col("a") + dyn_col("b")
+    var boxed: BoxedValue = dyn_col("a") + dyn_col("b")
     assert_true(String(boxed).find("add") != -1)
 
 
 # ===========================================================================
-# Plan analysis — referenced_columns / is_deterministic
+# Plan analysis — referenced_columns
 # ===========================================================================
 
 
@@ -640,16 +646,8 @@ def test_referenced_columns_reduction() raises:
 
 def test_referenced_columns_via_anyvalue_box() raises:
     # the erased box threads referenced_columns through the trampoline
-    var boxed: DynValue = Add(col("a", int64), col("b", int64))
+    var boxed: BoxedValue = Add(col("a", int64), col("b", int64))
     _assert_columns(boxed.referenced_columns(), ["a", "b"])
-
-
-def test_is_deterministic_default_true() raises:
-    # every current node is deterministic — on a node and through the box
-    assert_true(Add(col("a", int64), col("b", int64)).is_deterministic())
-    assert_true(lit(1, int64).is_deterministic())
-    var boxed: DynValue = col("a", int64)
-    assert_true(boxed.is_deterministic())
 
 
 # ===========================================================================
@@ -1006,3 +1004,69 @@ def test_date_trunc_fluent() raises:
     )
     # truncating to the hour zeroes minutes/seconds
     assert_true(into_array(h, 2) == array([0, 0], int32).to_dyn())
+
+
+# ---------------------------------------------------------------------------
+# Validity through the string lane, and missing-column diagnostics.
+#
+# `StringValue.materialize` is the only one of the three family drivers that
+# never consults `validity`, so every string *transformation* dropped nulls
+# while a bare column kept them (which is what hid it). And only
+# `NumericColumn` guarded the -1 that `get_field_index` answers for a missing
+# name; the other three leaves indexed with it, and a negative List index
+# wraps, so a typo silently read a different column.
+# ---------------------------------------------------------------------------
+
+
+def _str_batch_with_null() raises -> RecordBatch:
+    var b = StringBuilder()
+    b.append("a")
+    b.append_null()
+    b.append("c")
+    return record_batch([b.finish().to_dyn()], names=["s"])
+
+
+def test_string_map_preserves_nulls() raises:
+    # upper(["a", null, "c"]) keeps the null — the map applies to values only.
+    var cv = (Upper(col("s", string))).execute(_str_batch_with_null())
+    var got = into_array(cv, 3)
+    assert_equal(got.null_count(), 1)
+    assert_true(got.is_null(1))
+    assert_true(got.is_valid(0) and got.is_valid(2))
+
+
+def test_string_concat_preserves_nulls() raises:
+    # a null operand poisons the concatenation, as it does in the kernel.
+    var cv = (Concat(col("s", string), lit("!"))).execute(
+        _str_batch_with_null()
+    )
+    var got = into_array(cv, 3)
+    assert_equal(got.null_count(), 1)
+    assert_true(got.is_null(1))
+
+
+def test_string_parse_failure_survives_a_fused_parent() raises:
+    # to_int(["1","x","3"]) is null at "x"; adding 1 must not resurrect it as 0.
+    var b = record_batch([array(["1", "x", "3"]).copy()], names=["s"])
+    var e = StringToNum[Int64Type](col("s", string)) + lit(1, int64)
+    var got = into_array(e.execute(b), 3)
+    assert_equal(got.null_count(), 1)
+    assert_true(got.is_null(1))
+
+
+def test_string_column_missing_name_raises() raises:
+    # `get_field_index` answers -1; without a guard that indexes the column list
+    # with -1 and trips a bounds assert, which aborts the whole runner rather
+    # than reporting a missing column. Only `NumericColumn` guarded it.
+    with assert_raises(contains="nope"):
+        _ = (col("nope", string)).execute(_str_batch2())
+
+
+def test_temporal_column_missing_name_raises() raises:
+    with assert_raises(contains="nope"):
+        _ = (col("nope", timestamp(second))).execute(_ts_batch())
+
+
+def test_list_column_missing_name_raises() raises:
+    with assert_raises(contains="nope"):
+        _ = (ListColumn[ListType]("nope")).execute(_list_batch())

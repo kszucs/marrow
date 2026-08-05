@@ -11,6 +11,7 @@ from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
 from marrow.tabular import RecordBatch, Table
+from marrow.execution import ExecContext
 from marrow.schema import Schema
 from marrow.arrays import DynArray, ChunkedArray
 from marrow.dtypes import Field
@@ -410,7 +411,7 @@ def _record_batch_join(
         left_keys,
         rkeys,
         String(py=join_type),
-        Int(py=num_threads),
+        ExecContext.parallel(Int(py=num_threads)),
     ).to_python_object()
 
 
@@ -435,7 +436,7 @@ def _record_batch_group_by(
         _pylist_str(keys),
         _pylist_str(values),
         _pylist_str(funcs),
-        Int(py=num_threads),
+        ExecContext.parallel(Int(py=num_threads)),
     ).to_python_object()
 
 
@@ -485,7 +486,10 @@ def _record_batch_sort_by(
                 ascending.append(String(py=entry[1]) != "descending")
 
     return rb.sort_by(
-        keys, ascending, nulls_first, Int(py=num_threads)
+        keys,
+        ascending,
+        nulls_first,
+        ExecContext.parallel(Int(py=num_threads)),
     ).to_python_object()
 
 

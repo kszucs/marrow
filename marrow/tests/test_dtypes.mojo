@@ -13,7 +13,13 @@ def test_bool_type() raises:
     assert_false(t.is_integer())
     assert_false(t.is_floating_point())
     assert_false(t.is_numeric())
-    assert_true(t.is_primitive())
+    # marrow deliberately diverges from PyArrow and Arrow C++ here, both of
+    # which call bool primitive. marrow has something neither has: a
+    # `PrimitiveType` *trait* that generic code dispatches on, which `BoolType`
+    # cannot conform to because bool is bit-packed. `is_primitive()` exists to
+    # guard `variant_dispatch[PrimitiveType]`, so a True here is a trap — it
+    # aborted `byte_width()`. Do not "fix" this back.
+    assert_false(t.is_primitive())
     assert_false(t.is_string())
     assert_equal(String(t), "bool")
 
@@ -136,6 +142,18 @@ def test_byte_width_zero_for_non_fixed_width() raises:
     assert_equal(DynType(StringType()).byte_width(), 0)
     assert_equal(DynType(BinaryType()).byte_width(), 0)
     assert_equal(DynType(NullType()).byte_width(), 0)
+
+
+def test_bool_byte_width_is_zero_not_an_abort() raises:
+    """Bool has no byte width — it is one bit.
+
+    This used to abort the process: `is_primitive()` answered True, so
+    `byte_width()` fell through to `variant_dispatch[PrimitiveType]`, which
+    `BoolType` cannot enter. `c_data.mojo:1001` is one branch-ordering mistake
+    away from reaching it on the C Data import path.
+    """
+    assert_equal(DynType(dt.bool_).byte_width(), 0)
+    assert_false(DynType(dt.bool_).is_primitive())
 
 
 def test_eq() raises:
@@ -274,15 +292,6 @@ def test_field() raises:
 
     var f3 = field("a", DynType(Int64Type()), nullable=False)
     assert_equal(String(f3), "a: int64")
-
-
-def test_is_fixed_size() raises:
-    assert_true(DynType(Int32Type()).is_fixed_size())
-    assert_true(DynType(Float64Type()).is_fixed_size())
-    assert_true(DynType(BoolType()).is_fixed_size())
-    assert_false(DynType(NullType()).is_fixed_size())
-    assert_false(DynType(StringType()).is_fixed_size())
-    assert_false(DynType(list_(DynType(Int32Type()))).is_fixed_size())
 
 
 def test_temporal_dtypes_predicates() raises:
@@ -497,3 +506,75 @@ def test_time_unit_string() raises:
     assert_equal(String(millisecond), "ms")
     assert_equal(String(microsecond), "us")
     assert_equal(String(nanosecond), "ns")
+
+
+# ---------------------------------------------------------------------------
+# num_buffers — the one structural fact the codecs kept re-deriving.
+#
+# Counts *data* buffers only. Unlike Arrow C++ and arrow-rs, where `buffers[0]`
+# is the validity bitmap, marrow's `ArrayData` carries `bitmap` as its own field
+# — so these numbers are one lower than the references' throughout, and there is
+# no BITMAP buffer kind to model.
+#
+# This is deliberately just a count. Both references also carry a per-buffer
+# `BufferSpec` (kind + byte width), but neither drives its IPC or C-ABI codec
+# from it — see the A3 card. The count is what marrow's IPC buffer walk actually
+# asks for.
+# ---------------------------------------------------------------------------
+
+
+def test_num_buffers_fixed_width_types() raises:
+    """One values buffer, whatever the width — bool included, whose values are
+    bit-packed rather than byte-addressed."""
+    assert_equal(DynType(dt.bool_).num_buffers(), 1)
+    assert_equal(DynType(Int8Type()).num_buffers(), 1)
+    assert_equal(DynType(Int64Type()).num_buffers(), 1)
+    assert_equal(DynType(Float64Type()).num_buffers(), 1)
+    assert_equal(DynType(dt.date32()).num_buffers(), 1)
+    assert_equal(DynType(dt.timestamp(dt.second)).num_buffers(), 1)
+    assert_equal(DynType(dt.decimal128(10, 2)).num_buffers(), 1)
+    assert_equal(DynType(dt.fixed_size_binary_(4)).num_buffers(), 1)
+
+
+def test_num_buffers_variable_width_types() raises:
+    """Offsets plus data, for all four binary-like types."""
+    assert_equal(DynType(StringType()).num_buffers(), 2)
+    assert_equal(DynType(dt.large_string).num_buffers(), 2)
+    assert_equal(DynType(dt.binary).num_buffers(), 2)
+    assert_equal(DynType(dt.large_binary).num_buffers(), 2)
+
+
+def test_num_buffers_nested_types() raises:
+    """A list owns its offsets; a struct and a fixed-size list own nothing —
+    their data lives entirely in their children."""
+    assert_equal(DynType(list_(DynType(Int32Type()))).num_buffers(), 1)
+    assert_equal(DynType(dt.large_list_(DynType(Int32Type()))).num_buffers(), 1)
+    assert_equal(
+        DynType(fixed_size_list_(DynType(Int32Type()), 3)).num_buffers(), 0
+    )
+    assert_equal(
+        DynType(struct_(Field("a", DynType(Int32Type())))).num_buffers(), 0
+    )
+
+
+def test_num_buffers_null_owns_nothing() raises:
+    assert_equal(DynType(NullType()).num_buffers(), 0)
+
+
+def test_num_buffers_dictionary_follows_its_index_type() raises:
+    """A dictionary array stores indices; the values live in a separate
+    dictionary. arrow-rs resolves this the same way — `layout(key_type)`."""
+    var d = DynType(dt.dictionary(DynType(Int32Type()), DynType(StringType())))
+    assert_equal(d.num_buffers(), 1)
+
+
+def test_num_buffers_map_owns_its_offsets() raises:
+    """`map` is a list of structs, so it owns an offsets buffer like any list.
+
+    Worth pinning: `map` is absent from IPC's buffer-consuming ladder entirely
+    (see V0), so it silently read as owning zero buffers there.
+    """
+    var m = DynType(
+        map_(DynType(StringType()), DynType(Int32Type()))
+    )
+    assert_equal(m.num_buffers(), 1)

@@ -1,21 +1,17 @@
-"""Binary-size demo: the type-erased runtime relational layer.
-
-Same query as `query_comptime.mojo`:
+"""Binary-size demo: the type-erased runtime relational layer, end to end.
 
     SELECT a, name FROM orders WHERE a > b
 
 built with the `DynRelation`/`DynValue` layer
-(`marrow.expr.relations`, `marrow.expr.dynamic`, `marrow.expr.executor`)
--- `in_memory_table(batch).filter(...).select(...)` then `plan.execute()`, which
-walks the plan through `Planner.build()` into a pull-based
-`RelationProcessor` pipeline, evaluating the predicate via the erased nodes'
-tag dispatch. Filter comes before select in the chain (not select-then-filter
-as in `query_comptime.mojo`'s call site) because `DynRelation.filter()`
-resolves `col()` names against its *input*'s schema -- `b` must still be
-present when the predicate is resolved, so it has to run before the
-projection drops it.
+(`marrow.expr.relations`, `marrow.expr.dynamic`, `marrow.expr.execution`)
+-- `in_memory_table(batch).filter(...).select(...)` then `plan.execute()`,
+which builds each node's own processor via `Relation.to_processor()` into a
+pull-based pipeline. Filter comes before select in the chain because
+`DynRelation.filter()` resolves `col()` names against its *input*'s schema --
+`b` must still be present when the predicate is resolved, so it has to run
+before the projection drops it.
 
-Build + strip + compare against `query_comptime.mojo`:
+Build + strip + compare against the other gates:
 
     pixi run binary_size
 """

@@ -241,6 +241,11 @@ def _release_exported_schema(
         ptr[].name.free()
     if Int(ptr[].metadata) != 0:
         ptr[].metadata.free()
+    # `from_dtype` heap-allocates the dictionary value schema for a dictionary
+    # dtype; freeing everything else but not this leaked one struct shell per
+    # exported dictionary field.
+    if Int(ptr[].dictionary) != 0:
+        ptr[].dictionary.free()
     ptr[].mark_released()
 
 
@@ -531,12 +536,19 @@ struct CArrowSchema(Copyable, Movable):
 
         Delegates to `from_dtype` and then sets the field name (heap-allocated
         as a raw C string) and nullability flag.
+
+        Nullability is OR-ed in, never assigned: `from_dtype` has already set
+        `ARROW_FLAG_DICT_ORDERED` or `ARROW_FLAG_MAP_KEYS_SORTED` where they
+        apply, and assigning here dropped them. Every field of an exported
+        schema goes through this, so a `dictionary(ordered=True)` or
+        `map(keys_sorted=True)` column lost its flag on the way out.
         """
         var c_schema = CArrowSchema.from_dtype(field.dtype)
         c_schema.name = _alloc_c_string(field.name)
-        c_schema.flags = Int64(
-            ARROW_FLAG_NULLABLE
-        ) if field.nullable else Int64(0)
+        if field.nullable:
+            c_schema.flags |= Int64(ARROW_FLAG_NULLABLE)
+        else:
+            c_schema.flags &= ~Int64(ARROW_FLAG_NULLABLE)
         c_schema.metadata = _encode_c_metadata(field.metadata)
         return c_schema^
 
@@ -851,6 +863,10 @@ def _release_exported_array(
         ptr[].children.free()
     if Int(ptr[].buffers) != 0:
         ptr[].buffers.free()
+    # Same as the schema side: `from_data` heap-allocates the dictionary
+    # values array shell for a dictionary column.
+    if Int(ptr[].dictionary) != 0:
+        ptr[].dictionary.free()
     var data_ptr = ptr[].private_data.bitcast[ArrayData]()
     data_ptr.unsafe_deinit_pointee()
     data_ptr.free()
@@ -921,6 +937,18 @@ struct CArrowArray(Copyable, Movable):
                 UnsafePointer(to=self).unsafe_origin_cast[MutUntrackedOrigin]()
             )
 
+    def _need_buffers(self, n: Int, dtype: DynType) raises:
+        """Check the producer declared at least `n` buffers before indexing."""
+        if Int(self.n_buffers) < n:
+            raise Error(
+                "c_data: producer declared ",
+                Int(self.n_buffers),
+                " buffers for ",
+                String(dtype),
+                "; this layout needs ",
+                n,
+            )
+
     def to_data(
         self, dtype: DynType, owner: ArcPointer[Allocation]
     ) raises -> ArrayData:
@@ -937,9 +965,17 @@ struct CArrowArray(Copyable, Movable):
         # raw C buffers start at element 0 regardless of the logical array offset.
         var length = self.length + self.offset
 
+        # Each branch below indexes `self.buffers` by position, so the count
+        # the producer declared has to be checked first — otherwise a producer
+        # supplying fewer buffers than the layout implies is an out-of-bounds
+        # read of the pointer array rather than an error. The required count is
+        # asserted where it is used rather than in one table up front, so this
+        # does not become a second place that encodes layout.
         # Null arrays carry no buffers — `self.buffers` itself may be a null
         # pointer — so skip the validity read for them.
         var bitmap: Optional[Bitmap[]] = None
+        if not dtype.is_null():
+            self._need_buffers(1, dtype)
         if not dtype.is_null() and Int(self.buffers[0]) != 0:
             bitmap = Bitmap(
                 Buffer.from_foreign(
@@ -956,18 +992,21 @@ struct CArrowArray(Copyable, Movable):
         if dtype.is_null():
             pass  # no buffers, no children
         elif dtype.is_bool():
+            self._need_buffers(2, dtype)
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1], math.ceildiv(Int(length), 8), owner
                 )
             )
         elif dtype.is_primitive():
+            self._need_buffers(2, dtype)
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1], Int(length) * dtype.byte_width(), owner
                 )
             )
         elif dtype.is_string() or dtype.is_binary():
+            self._need_buffers(3, dtype)
             var offsets = Buffer.from_foreign(
                 self.buffers[1],
                 (Int(length) + 1) * size_of[DType.int32](),
@@ -1054,15 +1093,34 @@ struct CArrowArray(Copyable, Movable):
         else:
             raise Error("to_data: unsupported dtype: ", dtype)
 
-        return ArrayData(
+        # The C Data Interface allows -1 for "not computed", and PyArrow emits
+        # it. Passing it through makes `null_count()` answer -1; derive it from
+        # the validity bitmap instead. No bitmap means no nulls.
+        var nulls = Int(self.null_count)
+        if nulls < 0:
+            if bitmap:
+                nulls = (
+                    bitmap.value()
+                    .view(Int(self.offset), Int(self.length))
+                    .unset_count()
+                )
+            else:
+                nulls = 0
+
+        var data = ArrayData(
             dtype=dtype.copy(),
             length=Int(self.length),
-            nulls=Int(self.null_count),
+            nulls=nulls,
             offset=Int(self.offset),
             bitmap=bitmap,
             buffers=buffers^,
             children=children^,
         )
+        # These buffers are a foreign producer's memory and their count came
+        # from the ladder above; a mismatch here is a read past the end of
+        # somebody else's allocation rather than a Mojo error.
+        data.validate()
+        return data^
 
     def to_array(
         self, dtype: DynType, owner: ArcPointer[Allocation]
@@ -1421,7 +1479,7 @@ def _release_stream_capsule(capsule: PyObjectPtr) abi("C"):
 
 
 @fieldwise_init
-struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
+struct CArrowArrayStream(Movable):
     """Arrow C Stream Interface struct (ArrowArrayStream).
 
     Provides a streaming interface to exchange sequences of record batches.
@@ -1485,16 +1543,32 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         var src = cpy.PyCapsule_GetPointer(
             capsule._obj_ptr, "arrow_array_stream"
         ).bitcast[CArrowArrayStream]()
-        var stream = src[].copy()
+        # Take the struct out by field: the producer's copy is marked released
+        # immediately after, so exactly one owner remains.
+        var stream = CArrowArrayStream(
+            get_schema=src[].get_schema,
+            get_next=src[].get_next,
+            get_last_error=src[].get_last_error,
+            release=src[].release,
+            private_data=src[].private_data,
+        )
         src[].mark_released()
-        return stream
+        return stream^
 
-    def to_pycapsule(self) raises -> PythonObject:
-        """Wrap this stream in a Python "arrow_array_stream" PyCapsule."""
+    def to_pycapsule(deinit self) raises -> PythonObject:
+        """Wrap this stream in a Python "arrow_array_stream" PyCapsule.
+
+        Consumes the stream. It used to take `self` by borrow and copy the
+        struct onto the heap without marking the original released, so calling
+        this twice — or this and `to_table` — handed the same
+        `_StreamPrivateData` to two owners and double-freed it. `deinit self`
+        makes that a compile error, matching `CArrowSchema.to_pycapsule` and
+        `CArrowArray.to_pycapsule`.
+        """
         var py = Python()
         ref cpy = py.cpython()
         var ptr = alloc[CArrowArrayStream](1)
-        ptr.unsafe_write(self)
+        ptr.unsafe_write(self^)
         return PythonObject(
             from_owned=cpy.PyCapsule_New(
                 ptr.bitcast[NoneType](),
@@ -1503,13 +1577,14 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
             )
         )
 
-    def to_table(self) raises -> Table:
+    def to_table(deinit self) raises -> Table:
         """Consume the stream and build a Table.
 
         Calls get_schema once, then iterates get_next until end-of-stream.
+        Consuming — see `to_pycapsule` for why this is `deinit self`.
         """
         var heap = alloc[CArrowArrayStream](1)
-        heap.unsafe_write(self)
+        heap.unsafe_write(self^)
 
         # Get schema.
         var c_schema = alloc[CArrowSchema](1)

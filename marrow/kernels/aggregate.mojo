@@ -63,7 +63,7 @@ from ..scalars import (
 )
 from ..views import reduce
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 from .distinct import (
     count_distinct,
     approx_count_distinct,
@@ -147,7 +147,7 @@ trait AggKernel(Kernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         """Whole-array reduce — the single-(full-)group case. The input dtype is
         known at comptime, so the result is `PrimitiveScalar[Self.AccType[V]]`
@@ -171,7 +171,7 @@ trait AggKernel(Kernel):
         T: PrimitiveType
     ](
         array: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[T]:
         """SIMD-vectorized whole-array reduce to a same-type scalar via
         `views.reduce` — the fast path for same-type reductions (sum/min/max/
@@ -266,7 +266,7 @@ struct Widening[Op: WideningOp](AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         """Widened SIMD whole-array reduce: accumulate in `AccType[V]` so narrow
         integer inputs cannot overflow, matching the grouped path. The widening
@@ -364,7 +364,7 @@ struct MinMax[Op: MinMaxOp](AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         return Self.apply(array, ctx)  # AccType == V → same-type SIMD reduce
 
@@ -382,8 +382,13 @@ struct CountKernel(AggKernel):
     comptime AccType[V: NumericType] = Int64Type
     comptime empty_is_null = False
     comptime needs_count = True  # the answer *is* the count
-    # Grouped `count` is the validity scan, whatever the column's type: there is
-    # no accumulator to fold, and the scan is mergeable (counts add).
+    # `K.Grouped[V]` is the validity scan for every numeric `V` — there is no
+    # accumulator to fold, and the scan is mergeable (counts add). That is what
+    # the AOT lane uses (`values.mojo`'s `K.Grouped[In.OutType]`). The runtime
+    # lane picks differently: it resolves numeric columns to
+    # `NumericAgg[CountKernel, V]` instead (`CountValid.resolve`,
+    # `expr/aggregates.mojo`) and reaches `CountAgg` only for non-numeric
+    # columns. See `CountAgg`'s docstring for why the two lanes disagree here.
     comptime Grouped[V: NumericType] = CountAgg
 
     @staticmethod
@@ -405,7 +410,7 @@ struct CountKernel(AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         # Valid count is metadata — no scan. `AccType` is always int64.
         return Int64Scalar(Int64(len(array) - array.null_count()))
@@ -438,7 +443,7 @@ struct MeanKernel(AggKernel):
         V: NumericType
     ](
         array: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
         # Vectorized widened sum divided by the valid count; null on empty.
         var cnt = len(array) - array.null_count()
@@ -466,13 +471,13 @@ trait BoolReduceKernel(Kernel):
 
     @staticmethod
     def reduce(
-        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: BoolArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         ...
 
     @staticmethod
     def dispatch(
-        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         """Runtime-dtype entry: fold a boolean `DynArray` to a `Bool`."""
         return Self.reduce(array.as_bool(), ctx)
@@ -485,7 +490,7 @@ struct AnyKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: BoolArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         var n = len(array)
         var data_bv = array.values()
@@ -511,7 +516,7 @@ struct AnyKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         return Self.reduce(array.as_bool(), ctx)
 
@@ -523,7 +528,7 @@ struct AllKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: BoolArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         var n = len(array)
         var data_bv = array.values()
@@ -545,7 +550,7 @@ struct AllKernel(BoolReduceKernel):
 
     @staticmethod
     def reduce(
-        array: DynArray, ctx: ExecutionContext = ExecutionContext.serial()
+        array: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> Bool:
         return Self.reduce(array.as_bool(), ctx)
 
@@ -801,7 +806,7 @@ trait Aggregation(Kernel):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         """The whole-table aggregate (no GROUP BY) as a one-row column.
 
@@ -810,10 +815,15 @@ trait Aggregation(Kernel):
         only where there is a genuinely different route: a vectorized reduce, an
         O(1) answer, a whole-array sketch.
 
-        Takes a worker budget rather than an `ExecutionContext` so each
-        aggregation decides its own parallelism: the SIMD fold reductions are
-        serial (threads only pay off well above the sizes where the reduce is
-        the bottleneck), while the distinct sketches self-gate on size."""
+        Each aggregation still decides its own parallelism — the SIMD fold
+        reductions run serial (threads only pay off well above the sizes where
+        the reduce is the bottleneck), while the distinct sketches self-gate on
+        size. That freedom is why this used to take a bare worker budget, but it
+        never needed one: an implementation that wants serial says so with
+        `ctx.with_threads(1)`, and keeps the device it was handed. The `Int`
+        only ever discarded information — three of the four implementations
+        ignored it outright, and the fourth rebuilt `ExecContext.parallel(n)`,
+        dropping the caller's GPU device."""
         var n = len(Self.to_dyn(values))
         var zeros = Int32Builder(n)
         for _ in range(n):
@@ -895,12 +905,14 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         # The vectorized whole-array reduce, broadcast to length 1. Serial: the
         # SIMD reduce only benefits from threads well above the sizes reached
         # here, and that gating belongs in the reduce primitive itself.
-        return Self.K.reduce(values, ExecutionContext.serial()).repeat(1)
+        # `with_threads(1)` rather than `serial()` — forcing one worker must not
+        # also discard a device the reduce could run on.
+        return Self.K.reduce(values, ctx.with_threads(1)).repeat(1)
 
     @staticmethod
     def partials(
@@ -1034,11 +1046,28 @@ struct CountAgg(Aggregation):
     """`count` over a non-numeric column — a validity-only scan.
 
     `count` reads validity and nothing else, so it is defined for *every* dtype
-    and there is nothing to monomorphize on: the input stays erased. That makes
-    it the grouped form of `count` for numeric columns too (`CountKernel.Grouped`
-    names it), so there is one implementation rather than a fold for numbers and
-    a scan for everything else. An empty group counts 0 (never null), matching
-    SQL.
+    and there is nothing to monomorphize on: the input stays erased. It does
+    **not** serve numeric columns too — `CountValid.resolve`
+    (`marrow/expr/aggregates.mojo`) hands those `NumericAgg[CountKernel, V]`
+    instead, the typed `AggState` fold. This type serves non-numeric columns on
+    that runtime-dtype lane, plus the AOT lane's `K.Grouped` (`CountKernel.Grouped`
+    names it there, `values.mojo`), which has no separate numeric/non-numeric
+    split to begin with. The two lanes deliberately run different code for
+    numeric `count`, measured rather than assumed: `CountAgg.grouped` takes a
+    `DynArray` and calls `values.is_valid(i)` per row, which routes through
+    `variant_dispatch` — a linear `comptime for` over 37 variant arms, with
+    `Float64Array` at position 13 — paying roughly 13 sequential `isa[T]()`
+    checks plus an indirect call *per row*, inside an already cache-hostile
+    100k-group random-write loop. `AggState` pays one typed `bitmap.test()`
+    instead. At 1M rows, g100k, nullable input: `AggState` 1.7159 ms (sd 0.0702)
+    vs `CountAgg` 8.3555 ms (sd 0.2331) — roughly 4.9x, about 30x the stddev. On
+    a null-free column `CountAgg` skips validity entirely via its `has_null`
+    guard and never loads a value, which is why it edges ahead there instead:
+    `AggState` 1.4124 ms (sd 0.0098) vs `CountAgg` 1.3710 ms (sd 0.0117) — a ~3%
+    gap, only ~4x the stddev, and diluted by grouping overhead in the timed
+    region. Converging the two would mean paying the erased per-row cost on
+    every numeric `count`, so the split stays. An empty group counts 0 (never
+    null), matching SQL.
 
     Mergeable, because per-group counts merge by addition — which is exactly
     what the shared `(accumulator, valid count)` partial format already carries,
@@ -1079,7 +1108,7 @@ struct CountAgg(Aggregation):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         # Valid count is metadata — no scan.
         return Int64Scalar(Int64(len(values) - values.null_count())).repeat(1)
@@ -1148,11 +1177,12 @@ struct DistinctAgg[exact: Bool](Aggregation):
 
     @staticmethod
     def whole(
-        values: Self.InArray, num_threads: Int = 0
+        values: Self.InArray, ctx: ExecContext = ExecContext.auto()
     ) raises -> Self.OutArray:
         # `count_distinct` self-gates on size, going radix-partition-parallel at
-        # scale, so it gets the worker budget.
-        var ctx = ExecutionContext.parallel(num_threads)
+        # scale, so the context passes straight through — this is the one
+        # implementation that ever used the worker budget, and rebuilding it as
+        # `ExecContext.parallel(n)` is what dropped the device.
         comptime if Self.exact:
             return count_distinct(values, ctx).repeat(1)
         else:

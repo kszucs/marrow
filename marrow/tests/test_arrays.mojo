@@ -2238,3 +2238,223 @@ def test_empty_nested_list() raises:
     assert_true(arr.dtype().is_list())
     assert_equal(len(arr.as_list().values()), 0)
     assert_true(arr.as_list().values().dtype().is_list())
+
+
+def test_dictionary_builder_preserves_ordered() raises:
+    """`finish()` must not drop the `ordered` flag the builder was given.
+
+    It stored `ordered` in `_dtype` and then built the result with
+    `DictionaryArray.from_arrays(indices, values)`, whose `ordered` defaults to
+    False — so the flag survived construction and was lost on the way out.
+    """
+    var vb = StringBuilder()
+    vb.append("red")
+    vb.append("green")
+    var values: DynArray = vb.finish()
+
+    var builder = DictionaryBuilder(Int8Builder(), values^, ordered=True)
+    builder.append(0)
+    builder.append(1)
+
+    var arr = builder.finish()
+    assert_true(arr.type().as_dictionary().ordered)
+
+
+def test_dictionary_builder_defaults_to_unordered() raises:
+    var vb = StringBuilder()
+    vb.append("red")
+    var values: DynArray = vb.finish()
+    var builder = DictionaryBuilder(Int8Builder(), values^)
+    builder.append(0)
+    assert_true(not builder.finish().type().as_dictionary().ordered)
+
+
+# ---------------------------------------------------------------------------
+# Sliced BoolArray — `values()` is already offset-applied.
+#
+# `values()` returns `buffer.view(self.offset, self.length)` and
+# `BitmapView.test` adds its own `_offset`, so `values().test(self.offset + i)`
+# applied the offset twice. Every read of a sliced bool array was off by
+# `offset` bits. Recorded as blocked by the layout freeze, which was wrong:
+# dropping the redundant addition changes no field.
+# ---------------------------------------------------------------------------
+
+
+def _bools(values: List[Bool]) raises -> BoolArray:
+    var b = BoolBuilder(capacity=len(values))
+    for v in values:
+        b.append(v)
+    return b.finish()
+
+
+def test_sliced_bool_array_getitem() raises:
+    var a = _bools([True, False, True, True, False])
+    var s = a.slice(1, 3)  # [False, True, True]
+    assert_true(not s[0].value())
+    assert_true(s[1].value())
+    assert_true(s[2].value())
+
+
+def test_sliced_bool_array_getitem_crosses_byte_boundary() raises:
+    # offset 6, so the window straddles the first byte
+    var vals = List[Bool]()
+    for i in range(12):
+        vals.append(i % 3 == 0)  # T F F T F F T F F T F F
+    var a = _bools(vals)
+    var s = a.slice(6, 4)  # indices 6..9 -> T F F T
+    assert_true(s[0].value())
+    assert_true(not s[1].value())
+    assert_true(not s[2].value())
+    assert_true(s[3].value())
+
+
+def test_sliced_bool_array_write_to() raises:
+    var a = _bools([True, False, True, True, False])
+    var s = a.slice(1, 3)
+    assert_true(String(s) == "BoolArray([False, True, True])")
+
+
+# ---------------------------------------------------------------------------
+# Null count of a slice.
+#
+# `slice()` copied the parent's count verbatim, so a slice reported the wrong
+# number of nulls. That is not only a reporting bug: `PrimitiveBuilder.extend`
+# branches on it and accumulates it, so appending a slice corrupted the
+# builder's own count on the plain CPU path, and `to_data()` carried it across
+# the C ABI where PyArrow trusts it.
+# ---------------------------------------------------------------------------
+
+
+def _nullable_five() raises -> Int64Array:
+    # [10, null, 30, null, 50] — two nulls
+    var b = Int64Builder(capacity=5)
+    b.append(Int64(10))
+    b.append_null()
+    b.append(Int64(30))
+    b.append_null()
+    b.append(Int64(50))
+    return b.finish()
+
+
+def test_slice_reports_its_own_null_count() raises:
+    var full = _nullable_five()
+    assert_equal(full.null_count(), 2)
+    # [30, null, 50] — one null, where the parent has two
+    assert_equal(full.slice(2, 3).null_count(), 1)
+    # [10, null] — one null
+    assert_equal(full.slice(0, 2).null_count(), 1)
+    # [30] — none at all
+    assert_equal(full.slice(2, 1).null_count(), 0)
+
+
+def test_slice_of_null_free_array_has_no_nulls() raises:
+    var full = array([1, 2, 3, 4, 5], int64)
+    assert_equal(full.slice(1, 3).null_count(), 0)
+
+
+def test_slice_null_count_survives_to_data() raises:
+    """`to_data` must resolve the count — it crosses the C ABI."""
+    var s = _nullable_five().slice(2, 3)
+    assert_equal(s.to_data().nulls, 1)
+
+
+def test_extending_a_builder_with_a_slice_keeps_the_count_right() raises:
+    var s = _nullable_five().slice(2, 3)  # [30, null, 50]
+    var b = Int64Builder(capacity=3)
+    b.extend(s)
+    var out = b.finish()
+    assert_equal(len(out), 3)
+    assert_equal(out.null_count(), 1)
+    assert_true(out.is_valid(0))
+    assert_true(not out.is_valid(1))
+    assert_true(out.is_valid(2))
+
+
+def test_equal_slices_compare_equal() raises:
+    var a = _nullable_five().slice(2, 3)
+    var b = _nullable_five().slice(2, 3)
+    assert_true(a == b)
+
+
+def test_slice_of_all_null_array_is_all_null() raises:
+    var b = Int64Builder(capacity=4)
+    for _ in range(4):
+        b.append_null()
+    var full = b.finish()
+    assert_equal(full.null_count(), 4)
+    assert_equal(full.slice(1, 2).null_count(), 2)
+
+
+# ---------------------------------------------------------------------------
+# B26 — equality is a question about values and null *positions*, not about
+# how the validity happens to be stored.
+#
+# `__eq__` compared the bitmaps themselves: presence against presence, then
+# whole bitmap against whole bitmap. So an all-valid array carrying a bitmap was
+# unequal to one carrying none, and two slices whose logical validity matched
+# were unequal whenever their offsets differed. Six array types shared the shape.
+#
+# This matters more than it looks: CLAUDE.md tells you to write
+# `assert_true(result == expected)` rather than an element loop, and every kernel
+# that intersects validity emits an array with a bitmap while `array([...])`
+# emits one without — so the recommended assertion was unreliable for exactly
+# the values a kernel test wants to check.
+# ---------------------------------------------------------------------------
+
+
+def test_eq_ignores_a_redundant_all_valid_bitmap() raises:
+    """`[1, 2, 3]` with an all-valid bitmap equals `[1, 2, 3]` with none."""
+    # A builder given no nulls produces no bitmap at all, so the bitmap has to
+    # come from a parent: slice past every null and the child keeps the parent's
+    # bitmap while its own null count is 0.
+    var b = Int32Builder(5)
+    b.append_null()
+    b.append_null()
+    b.append(Scalar[int32.native](1))
+    b.append(Scalar[int32.native](2))
+    b.append(Scalar[int32.native](3))
+    var with_bitmap = b.finish().slice(2, 3)
+    assert_true(with_bitmap.bitmap.__bool__())
+
+    var plain = array([1, 2, 3], int32)
+    assert_false(plain.bitmap.__bool__())
+    assert_equal(with_bitmap.null_count(), 0)
+    assert_equal(plain.null_count(), 0)
+    assert_true(with_bitmap == plain)
+    assert_true(plain == with_bitmap)
+
+
+def test_eq_compares_null_positions_not_bitmap_offsets() raises:
+    """Two slices with the same logical validity are equal, whatever offset
+    they were taken at."""
+    var b1 = Int32Builder(5)
+    b1.append_null()
+    b1.append_null()
+    b1.append(Scalar[int32.native](7))
+    b1.append_null()
+    b1.append(Scalar[int32.native](9))
+    var left = b1.finish().slice(2, 3)  # [7, null, 9]
+
+    var b2 = Int32Builder(3)
+    b2.append(Scalar[int32.native](7))
+    b2.append_null()
+    b2.append(Scalar[int32.native](9))
+    var right = b2.finish()  # [7, null, 9] at offset 0
+
+    assert_equal(left.null_count(), right.null_count())
+    assert_true(left == right)
+
+
+def test_eq_still_separates_different_null_positions() raises:
+    """The complement: same null *count*, different positions, still unequal."""
+    var b1 = Int32Builder(3)
+    b1.append_null()
+    b1.append(Scalar[int32.native](1))
+    b1.append(Scalar[int32.native](2))
+
+    var b2 = Int32Builder(3)
+    b2.append(Scalar[int32.native](1))
+    b2.append_null()
+    b2.append(Scalar[int32.native](2))
+
+    assert_false(b1.finish() == b2.finish())

@@ -47,6 +47,7 @@ from ..arrays import (
     Int64Array,
 )
 from ..dtypes import DynType, Field
+from ..execution import ExecContext
 from ..schema import Schema
 from ..tabular import RecordBatch
 from ..dtypes import NumericType, StringLikeType, TemporalType
@@ -340,7 +341,7 @@ struct AggFold(Copyable, Movable):
     ``FoldedAggregates.append`` gets this and its ``AggFunc`` out of the same
     single resolution."""
 
-    var _whole_fn: def(DynArray, Int) thin raises -> DynArray
+    var _whole_fn: def(DynArray, ExecContext) thin raises -> DynArray
     var _partials_fn: def(Int32Array, DynArray, Int) thin raises -> Tuple[
         DynArray, Int64Array
     ]
@@ -351,8 +352,8 @@ struct AggFold(Copyable, Movable):
     @staticmethod
     def _whole[
         A: Aggregation
-    ](value: DynArray, num_threads: Int) raises -> DynArray:
-        return A.whole(A.from_any(value), num_threads).to_dyn()
+    ](value: DynArray, ctx: ExecContext) raises -> DynArray:
+        return A.whole(A.from_any(value), ctx).to_dyn()
 
     @staticmethod
     def _partials[
@@ -380,7 +381,7 @@ struct AggFold(Copyable, Movable):
     def __init__(
         out self,
         *,
-        whole_fn: def(DynArray, Int) thin raises -> DynArray,
+        whole_fn: def(DynArray, ExecContext) thin raises -> DynArray,
         partials_fn: def(Int32Array, DynArray, Int) thin raises -> Tuple[
             DynArray, Int64Array
         ],
@@ -400,9 +401,11 @@ struct AggFold(Copyable, Movable):
             merge_fn=Self._merge[A],
         )
 
-    def whole(self, value: DynArray, num_threads: Int = 0) raises -> DynArray:
+    def whole(
+        self, value: DynArray, ctx: ExecContext = ExecContext.auto()
+    ) raises -> DynArray:
         """The whole-table aggregate as a one-row column."""
-        return self._whole_fn(value, num_threads)
+        return self._whole_fn(value, ctx)
 
     def partials(
         self, gids: Int32Array, value: DynArray, num_groups: Int
@@ -523,21 +526,21 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         return self._named(gb.aggregate_all(self, values), gb.keys())
 
     def whole(
-        self, values: List[DynArray], num_threads: Int = 0
+        self, values: List[DynArray], ctx: ExecContext = ExecContext.auto()
     ) raises -> RecordBatch:
         """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
 
         A single implicit group, computed with each aggregation's own
         whole-column path (the vectorized SIMD reduce, ``O(1)`` count, direct
         ``count_distinct``) rather than the grouped scatter. Returns a one-row
-        batch. Each aggregation decides what to do with the worker budget: the
-        fold reductions stay serial, the distinct sketches self-gate on size."""
+        batch. Each aggregation decides what to do with the context: the fold
+        reductions force one worker, the distinct sketches self-gate on size."""
         if len(values) != len(self._funcs):
             raise Error("aggregate: one value column per aggregate is required")
         var out_fields = List[Field]()
         var out_cols = List[DynArray]()
         for j in range(len(self._funcs)):
-            var col = self._folds[j].whole(values[j], num_threads)
+            var col = self._folds[j].whole(values[j], ctx)
             out_fields.append(Field(self._funcs[j].name, col.dtype().copy()))
             out_cols.append(col^)
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)

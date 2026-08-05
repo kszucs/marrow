@@ -10,6 +10,7 @@ from std.python import Python, PythonObject
 from ..dtypes import *
 from ..arrays import DynArray, DictionaryArray
 from ..builders import (
+    MapBuilder,
     array,
     BoolBuilder,
     Int8Builder,
@@ -28,7 +29,7 @@ from ..builders import (
     StructBuilder,
 )
 from ..schema import Schema
-from ..tabular import RecordBatch
+from ..tabular import RecordBatch, record_batch
 from ..ipc import (
     read_ipc_file,
     read_ipc_stream,
@@ -718,3 +719,206 @@ def test_marrow_reads_pyarrow_dictionary() raises:
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 4)
     assert_true(batches[0].schema.fields[0].dtype.is_dictionary())
+
+
+# ---------------------------------------------------------------------------
+# Sliced columns.
+#
+# Arrow IPC bodies are written dense from index 0 — there is no offset field on
+# the wire. The encoder wrote the *whole* value buffer while declaring the
+# slice's length, and the decoder hardcodes `offset=0`, so a sliced column came
+# back as the array's first `length` elements instead of its own.
+# ---------------------------------------------------------------------------
+
+
+def test_file_roundtrip_sliced_column() raises:
+    var full = array([10, 20, 30, 40, 50], int64)
+    var batch = record_batch([full.slice(2, 3)], names=["a"])
+    var got = _roundtrip_file(batch^)
+    assert_equal(got.num_rows(), 3)
+    assert_true(got.columns[0] == array([30, 40, 50], int64).to_dyn())
+
+
+def test_file_roundtrip_sliced_column_with_nulls() raises:
+    var b = Int64Builder(capacity=5)
+    b.append(Int64(10))
+    b.append_null()
+    b.append(Int64(30))
+    b.append_null()
+    b.append(Int64(50))
+    var full: DynArray = b.finish().to_dyn()
+    var batch = record_batch([full.slice(1, 3)], names=["a"])
+    var got = _roundtrip_file(batch^)
+    assert_equal(got.num_rows(), 3)
+    assert_equal(got.columns[0].null_count(), 2)
+    assert_true(got.columns[0].is_null(0))
+    assert_true(got.columns[0].is_valid(1))
+    assert_true(got.columns[0].is_null(2))
+
+
+def test_file_roundtrip_sliced_string_column() raises:
+    var full = array(["a", "b", "c", "d"])
+    var batch = record_batch([full.slice(1, 2)], names=["s"])
+    var got = _roundtrip_file(batch^)
+    assert_equal(got.num_rows(), 2)
+    assert_true(got.columns[0] == array(["b", "c"]).to_dyn())
+
+
+def test_compressed_ipc_file_is_rejected_not_misread() raises:
+    """A ZSTD-compressed body must fail loudly, not decode as raw bytes.
+
+    `RecordBatch.compression` is FlatBuffer slot 3 and was never read, so a
+    compressed file was decoded as if its buffers were uncompressed — garbage
+    values, no error. Reading the codec is the prerequisite for supporting it;
+    until then the only correct behaviour is to say so.
+    """
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var table = pa.table({"a": [1, 2, 3, 4]})
+    var opts = pa.ipc.IpcWriteOptions(compression="zstd")
+    var sink = pa.OSFile(path, "wb")
+    var writer = pa.ipc.new_file(sink, table.schema, options=opts)
+    _ = writer.write_table(table)
+    _ = writer.close()
+    _ = sink.close()
+
+    var raised = False
+    try:
+        _ = read_ipc_file(path)
+    except e:
+        raised = True
+        assert_true("compress" in String(e))
+    assert_true(raised, "expected a compressed body to be rejected")
+
+
+def test_delta_dictionary_batch_appends_not_replaces() raises:
+    """A delta DictionaryBatch extends the dictionary; it does not replace it.
+
+    `isDelta` is DictionaryBatch slot 2 and was never read, and the decoder
+    overwrote the stored dictionary unconditionally — so after a delta carrying
+    only the new values, every index in the following batch resolved against a
+    truncated dictionary.
+    """
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var opts = pa.ipc.IpcWriteOptions(emit_dictionary_deltas=True)
+    var dtype = pa.dictionary(pa.int32(), pa.string())
+    var schema = pa.schema([pa.field("d", dtype)])
+    var b1 = pa.record_batch(
+        [pa.array(["a", "b"]).dictionary_encode().cast(dtype)], schema=schema
+    )
+    var b2 = pa.record_batch(
+        [pa.array(["a", "b", "c"]).dictionary_encode().cast(dtype)],
+        schema=schema,
+    )
+    var sink = pa.OSFile(path, "wb")
+    var writer = pa.ipc.new_stream(sink, schema, options=opts)
+    _ = writer.write_batch(b1)
+    _ = writer.write_batch(b2)
+    _ = writer.close()
+    _ = sink.close()
+
+    var batches = read_ipc_stream(path)
+    assert_equal(len(batches), 2)
+    var d2 = DictionaryArray(batches[1].columns[0].to_data())
+    # the second batch spells "a", "b", "c" — resolvable only if the delta was
+    # appended to the dictionary the first batch established
+    assert_equal(len(d2), 3)
+    assert_equal(len(d2.dictionary().as_string()), 3)
+
+
+# ---------------------------------------------------------------------------
+# V0 — map through IPC.
+#
+# `map` was implemented in dtypes, arrays, builders, the C Data Interface and
+# Parquet, and absent from IPC in both directions: type code 17 simply was not
+# in the writer's ladder or the reader's. A map written by marrow came back as
+# something else, or not at all.
+#
+# The buffer walk needed no work: a map owns one offsets buffer like any list,
+# which `DynType.num_buffers()` already answers.
+# ---------------------------------------------------------------------------
+
+
+def _map_batch() raises -> RecordBatch:
+    """One map column: [{"a": 1}, {}, {"b": 2, "c": 3}]."""
+    var b = MapBuilder(map_(DynType(string), DynType(int64)))
+    var entries_any = b.entries()
+    ref entries = entries_any.as_struct()
+    var keys_any = entries.field_builder(0)
+    var values_any = entries.field_builder(1)
+    ref keys = keys_any.as_string()
+    ref values = values_any.as_int64()
+
+    keys.append("a")
+    values.append(1)
+    entries.append_valid()
+    b.append_valid()
+
+    b.append_valid()  # {}
+
+    keys.append("b")
+    values.append(2)
+    entries.append_valid()
+    keys.append("c")
+    values.append(3)
+    entries.append_valid()
+    b.append_valid()
+
+    return record_batch([b.finish().to_dyn()], names=["m"])
+
+
+def test_ipc_file_round_trips_a_map() raises:
+    var batch = _map_batch()
+    var back = _roundtrip_file(batch)
+    assert_true(back.schema.fields[0].dtype.is_map())
+    assert_equal(back.num_rows(), 3)
+    assert_true(back.columns[0] == batch.columns[0])
+
+
+def test_ipc_stream_round_trips_a_map() raises:
+    var batch = _map_batch()
+    var back = _roundtrip_stream(batch)
+    assert_true(back.schema.fields[0].dtype.is_map())
+    assert_equal(back.num_rows(), 3)
+    assert_true(back.columns[0] == batch.columns[0])
+
+
+def test_ipc_map_keeps_keys_sorted_flag() raises:
+    """`keysSorted` is part of the Map type in the IPC schema, not decoration —
+    a reader that drops it reports an unsorted map as sorted."""
+    var mt = map_(DynType(string), DynType(int64), keys_sorted=True)
+    var b = MapBuilder(mt)
+    b.append_valid()  # one empty map is enough to carry the type
+    var batch = record_batch([b.finish().to_dyn()], names=["m"])
+
+    var back = _roundtrip_file(batch)
+    assert_true(back.schema.fields[0].dtype.as_map().keys_sorted)
+
+
+def test_pyarrow_reads_a_marrow_written_map() raises:
+    """PyArrow must agree, not just marrow with itself.
+
+    A self-round-trip proves the writer and reader share a convention; it does
+    not prove the convention is Arrow's. Writing type code 12 (List) for a map
+    would pass every test above. This is what pins the format.
+    """
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var batches_in = List[RecordBatch]()
+    batches_in.append(_map_batch())
+    write_ipc_file(path, batches_in)
+
+    var reader = pa.ipc.open_file(path)
+    var pa_batch = reader.get_batch(0)
+    assert_equal(Int(py=pa_batch.num_rows), 3)
+    # PyArrow renders the type as `map<string, int64>`; a list would render as
+    # `list<...>`, which is the failure this catches.
+    assert_true(String(py=pa_batch.schema.field("m").type).startswith("map<"))
+
+    var got = pa_batch.column(0).to_pylist()
+    assert_equal(Int(py=got.__len__()), 3)
+    # PyArrow surfaces a map as a list of (key, value) tuples.
+    assert_equal(Int(py=got[0].__len__()), 1)
+    assert_equal(Int(py=got[1].__len__()), 0)
+    assert_equal(Int(py=got[2].__len__()), 2)

@@ -39,7 +39,10 @@ class CustomBuildHook(BuildHookInterface):
                 )
 
         suffix = sysconfig.get_config_var("EXT_SUFFIX")
-        build_data["force_include"][str(SO.parent / "__init__.py")] = (
-            "marrow/__init__.py"
-        )
+        # Every module in the package, not just `__init__.py`: it ends with
+        # `from . import compute`, so shipping it alone made `import marrow`
+        # raise ImportError in the built wheel. Globbing keeps a new module from
+        # being forgotten the same way.
+        for module in sorted(SO.parent.glob("*.py")):
+            build_data["force_include"][str(module)] = f"marrow/{module.name}"
         build_data["force_include"][str(SO)] = f"marrow/libmarrow{suffix}"

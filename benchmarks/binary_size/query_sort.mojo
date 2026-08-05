@@ -11,6 +11,7 @@ into it), so this links the top-K path rather than a full sort plus a slice.
     pixi run binary_size query_sort
 """
 
+from marrow.expr.relations import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
@@ -25,8 +26,8 @@ def main() raises:
     var batch = record_batch([a.copy(), nm.copy()], names=["a", "name"])
     var sch = schema([field("a", int64), field("name", string)])
 
-    var keys = List[DynValue]()
-    keys.append(DynValue(col("a", int64)))
+    var keys = List[BoxedValue]()
+    keys.append(BoxedValue(col("a", int64)))
 
     var sorted = Sort(
         input=DynRelation(InMemoryTable(batch=batch)),

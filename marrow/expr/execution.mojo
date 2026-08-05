@@ -31,7 +31,14 @@ from ..kernels.filter import filter
 from ..kernels.sort import sort as sort_by_keys
 from ..kernels.groupby import HashGrouper
 from .aggregates import AggFunc
-from ..kernels.join import HashJoin
+from ..kernels.join import (
+    HashJoin,
+    JOIN_ANTI,
+    JOIN_FULL,
+    JOIN_LEFT,
+    JOIN_SEMI,
+    JoinKind,
+)
 from ..kernels.hashing import rapidhash
 from ..parquet.source import MappedFile
 from ..parquet import (
@@ -42,9 +49,9 @@ from ..parquet import (
     PageBounds,
 )
 from ..scalars import DynScalar
-from .values import DynValue
+from .relations import BoxedValue
 from .pruning import PruneStats
-from ..kernels.execution import ExecutionContext
+from ..execution import ExecContext
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536
@@ -217,7 +224,7 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
     var path: String
     var _schema: Schema
     var morsel_size: Int
-    var _predicate: Optional[DynValue]
+    var _predicate: Optional[BoxedValue]
     var _file: Optional[ParquetFile[MappedFile, Self.leaves]]
     # The read plan, computed once when the file is opened: the row groups to
     # decode in order, and (only when page-level skipping applies) one row
@@ -238,7 +245,7 @@ struct ParquetScanProcessor[leaves: LeafSet = LeafSet.all()](Processor):
         var path: String,
         var schema: Schema,
         morsel_size: Int,
-        var predicate: Optional[DynValue] = None,
+        var predicate: Optional[BoxedValue] = None,
     ):
         self.path = path^
         self._schema = schema^
@@ -492,9 +499,11 @@ struct FilterProcessor(Processor):
     """Keeps rows where the predicate is True; skips empty morsels."""
 
     var input: DynProcessor
-    var predicate: DynValue
+    var predicate: BoxedValue
 
-    def __init__(out self, *, var input: DynProcessor, var predicate: DynValue):
+    def __init__(
+        out self, *, var input: DynProcessor, var predicate: BoxedValue
+    ):
         self.input = input^
         self.predicate = predicate^
 
@@ -518,14 +527,14 @@ struct ProjectProcessor(Processor):
     """Evaluates each projected value against every input morsel."""
 
     var input: DynProcessor
-    var values: List[DynValue]
+    var values: List[BoxedValue]
     var _schema: Schema
 
     def __init__(
         out self,
         *,
         var input: DynProcessor,
-        var values: List[DynValue],
+        var values: List[BoxedValue],
         var schema: Schema,
     ):
         self.input = input^
@@ -605,26 +614,26 @@ struct SortProcessor(Processor):
     permutation) runs instead of a full sort followed by a slice."""
 
     var input: DynProcessor
-    var keys: List[DynValue]
+    var keys: List[BoxedValue]
     var ascending: List[Bool]
     var nulls_first: Bool
     var stable: Bool
     var limit: Optional[Int]
     var _schema: Schema
-    var _ctx: ExecutionContext
+    var _ctx: ExecContext
     var _emitted: Bool
 
     def __init__(
         out self,
         *,
         var input: DynProcessor,
-        var keys: List[DynValue],
+        var keys: List[BoxedValue],
         var ascending: List[Bool],
         nulls_first: Bool,
         stable: Bool,
         var limit: Optional[Int],
         var schema: Schema,
-        var ctx: ExecutionContext,
+        var ctx: ExecContext,
     ):
         self.input = input^
         self.keys = keys^
@@ -713,23 +722,23 @@ struct AggregateProcessor(Processor):
     post-aggregate filter over the aggregate output schema."""
 
     var input: DynProcessor
-    var keys: List[DynValue]
-    var inputs: List[DynValue]
+    var keys: List[BoxedValue]
+    var inputs: List[BoxedValue]
     var aggs: List[AggFunc]
     var _schema: Schema
     var _grouper: HashGrouper
-    var _ctx: ExecutionContext
+    var _ctx: ExecContext
     var _emitted: Bool
 
     def __init__(
         out self,
         *,
         var input: DynProcessor,
-        var keys: List[DynValue],
-        var inputs: List[DynValue],
+        var keys: List[BoxedValue],
+        var inputs: List[BoxedValue],
         var aggs: List[AggFunc],
         var schema: Schema,
-        var ctx: ExecutionContext,
+        var ctx: ExecContext,
     ) raises:
         self.input = input^
         self.keys = keys^
@@ -839,7 +848,7 @@ struct JoinProcessor(Processor):
     var right: DynProcessor
     var left_key_indices: List[Int]
     var right_key_indices: List[Int]
-    var join_kind: UInt8
+    var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
     var _index: Optional[HashJoin[rapidhash]]
@@ -852,7 +861,7 @@ struct JoinProcessor(Processor):
         var right: DynProcessor,
         var left_key_indices: List[Int],
         var right_key_indices: List[Int],
-        join_kind: UInt8,
+        join_kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
     ):
@@ -869,6 +878,27 @@ struct JoinProcessor(Processor):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
+    @staticmethod
+    def _blocks_on_probe_side(kind: JoinKind) -> Bool:
+        """Whether this join kind's output depends on the *whole* probe side.
+
+        LEFT/FULL emit build rows that no probe row matched, SEMI emits the
+        build rows that some probe row matched, and ANTI emits the complement —
+        all three are properties of every probe row taken together, not of one
+        morsel. Probing morsel-by-morsel recomputes them per morsel, so LEFT,
+        FULL and ANTI re-emit their tail once per morsel and SEMI emits a build
+        row once per morsel that matches it.
+
+        RIGHT is not here: its extra rows are unmatched *probe* rows, and each
+        probe row belongs to exactly one morsel, so streaming is correct.
+        """
+        return (
+            kind == JOIN_LEFT
+            or kind == JOIN_FULL
+            or kind == JOIN_SEMI
+            or kind == JOIN_ANTI
+        )
+
     def pull(mut self) raises -> RecordBatch:
         if self._exhausted:
             raise Exhausted()
@@ -877,6 +907,24 @@ struct JoinProcessor(Processor):
             var index = HashJoin[rapidhash]()
             index.build(left_struct, self.left_key_indices)
             self._index = index^
+
+        if JoinProcessor._blocks_on_probe_side(self.join_kind):
+            # One probe over the whole probe side. The streaming alternative
+            # needs the kernel to accumulate build-side matches across probes
+            # and emit the tail on drain; until it does, this is the shape that
+            # is correct.
+            self._exhausted = True
+            var right_all = self.right.collect()
+            var blocked = self._index.value().probe(
+                right_all.to_struct_array(),
+                self.right_key_indices,
+                self.join_kind,
+                self.strictness,
+            )
+            return RecordBatch(
+                schema=self._schema.copy(), columns=blocked.children.copy()
+            )
+
         try:
             var right_morsel = self.right.pull()
             var result = self._index.value().probe(

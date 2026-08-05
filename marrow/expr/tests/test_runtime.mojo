@@ -55,6 +55,7 @@ from ...kernels.temporal import (
 )
 from ...tabular import RecordBatch, record_batch
 from ...expr import (
+    BoxedValue,
     DynValue,
     col,
     lit,
@@ -78,8 +79,14 @@ def _exec_length(expr: DynValue, batch: RecordBatch) raises -> Int32Array:
     return result.copy()
 
 
-def _exec_pred(expr: DynValue, batch: RecordBatch) raises -> BoolArray:
-    """Helper: evaluate a predicate expression against the batch."""
+def _exec_pred(expr: BoxedValue, batch: RecordBatch) raises -> BoolArray:
+    """Helper: evaluate a predicate expression against the batch.
+
+    Takes the box, not `DynValue`: `isnull`/`notnull` are defaults on `Value`
+    itself, so they build a fused `NullPredicate` even over an erased operand —
+    the one place the runtime lane hands back something that is not a tag node.
+    `NullPredicate` is a breaker whose operand bound is `A: Value`, and it only
+    ever calls runtime methods on it, so that instantiation is sound."""
     var tmp = expr.execute(batch)
     return tmp.as_bool().copy()
 
@@ -378,15 +385,6 @@ def test_referenced_columns_literal_only() raises:
     """An expression over only literals references no columns."""
     var expr = lit[Int64Type](1) + lit[Int64Type](2)
     assert_equal(len(expr.referenced_columns()), 0)
-
-
-def test_is_deterministic() raises:
-    """All currently supported tags are deterministic."""
-    assert_true((col("c0") % col("c1")).is_deterministic())
-    assert_true(
-        if_else(col("c0") > col("c1"), col("c0"), col("c1")).is_deterministic()
-    )
-    assert_true(col("c0").cast(float64).is_deterministic())
 
 
 # ---------------------------------------------------------------------------

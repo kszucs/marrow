@@ -12,7 +12,7 @@ from ...arrays import PrimitiveArray
 from ...builders import arange, PrimitiveBuilder
 from ...dtypes import Int32Type, Float64Type, NumericType
 from ...kernels.numeric import AddKernel
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 from ...testing import Benchmark
 
 
@@ -261,12 +261,12 @@ def bench_add_nulls_float64_1m(mut b: Benchmark) raises:
 # add — parallel scaling on a 1M int32 input
 #
 # All benchmarks run on the same array (size 1M). They differ only in the
-# ExecutionContext passed: serial vs forced parallel(2/4/8) vs auto. Use
+# ExecContext passed: serial vs forced parallel(2/4/8) vs auto. Use
 # --competition to compare side-by-side and watch the scaling.
 # ---------------------------------------------------------------------------
 
 
-def _bench_add_1m_ctx(mut b: Benchmark, ctx: ExecutionContext) raises:
+def _bench_add_1m_ctx(mut b: Benchmark, ctx: ExecContext) raises:
     var lhs = arange[Int32Type](0, 1_000_000)
     var rhs = arange[Int32Type](0, 1_000_000)
     b.throughput(BenchMetric.elements, 1_000_000)
@@ -282,20 +282,20 @@ def _bench_add_1m_ctx(mut b: Benchmark, ctx: ExecutionContext) raises:
 
 
 def bench_add_int32_1m_serial(mut b: Benchmark) raises:
-    _bench_add_1m_ctx(b, ExecutionContext.serial())
+    _bench_add_1m_ctx(b, ExecContext.serial())
 
 
 def bench_add_int32_1m_parallel_2(mut b: Benchmark) raises:
-    _bench_add_1m_ctx(b, ExecutionContext.parallel(2))
+    _bench_add_1m_ctx(b, ExecContext.parallel(2))
 
 
 def bench_add_int32_1m_parallel_4(mut b: Benchmark) raises:
-    _bench_add_1m_ctx(b, ExecutionContext.parallel(4))
+    _bench_add_1m_ctx(b, ExecContext.parallel(4))
 
 
 def bench_add_int32_1m_parallel_8(mut b: Benchmark) raises:
-    _bench_add_1m_ctx(b, ExecutionContext.parallel(8))
+    _bench_add_1m_ctx(b, ExecContext.parallel(8))
 
 
 def bench_add_int32_1m_auto(mut b: Benchmark) raises:
-    _bench_add_1m_ctx(b, ExecutionContext.auto())
+    _bench_add_1m_ctx(b, ExecContext.auto())

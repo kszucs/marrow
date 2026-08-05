@@ -25,7 +25,7 @@ from ..arrays import (
 from ..buffers import Buffer, Bitmap
 from ..dtypes import ListLikeType, NumericType, DType
 from .core import Kernel
-from .execution import ExecutionContext
+from ..execution import ExecContext
 
 
 struct ArrayLengthKernel(Kernel):
@@ -102,7 +102,7 @@ struct ArrayContainsKernel(Kernel):
     ](
         list: ListLikeArray[T],
         elem: PrimitiveArray[V],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> BoolArray:
         comptime off = T.offset
         var n = len(list)
@@ -142,7 +142,7 @@ struct ArrayContainsKernel(Kernel):
     def dispatch(
         list: DynArray,
         elem: DynArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var list_dt = list.dtype()
         if not list_dt.is_list_like():

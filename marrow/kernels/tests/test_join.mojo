@@ -9,7 +9,7 @@ from ...arrays import (
     StructArray,
     UInt64Array,
 )
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 from ...builders import (
     array,
     PrimitiveBuilder,
@@ -30,7 +30,6 @@ from ...dtypes import (
     Float64Type,
 )
 from ...tabular import record_batch
-from ...kernels.filter import take
 from ...kernels.join import (
     hash_join,
     HashJoin,
@@ -40,8 +39,12 @@ from ...kernels.join import (
     JOIN_FULL,
     JOIN_SEMI,
     JOIN_ANTI,
+    JOIN_MARK,
+    JOIN_SINGLE,
+    JOIN_CROSS,
     JOIN_ALL,
     JOIN_ANY,
+    JoinKind,
 )
 
 
@@ -78,28 +81,6 @@ def _right_on() -> List[Int]:
 # ---------------------------------------------------------------------------
 # take — standalone tests
 # ---------------------------------------------------------------------------
-
-
-def test_take_primitive_basic() raises:
-    """Gather elements from a primitive array at given indices."""
-    var a: DynArray = array([10, 20, 30, 40], int32)
-    var result = take(a.copy(), array([2, 0, 3], int32))
-    ref r = result.as_int32()
-    assert_equal(r[0].value(), Scalar[int32.native](30))
-    assert_equal(r[1].value(), Scalar[int32.native](10))
-    assert_equal(r[2].value(), Scalar[int32.native](40))
-
-
-def test_take_null_index_produces_null() raises:
-    """Null index in take produces a null output element."""
-    var a: DynArray = array([10, 20, 30], int32)
-    var idx = Int32Builder(capacity=2)
-    idx.append_null()
-    idx.append(Scalar[int32.native](1))
-    var result = take(a.copy(), idx.finish())
-    assert_equal(result.null_count(), 1)
-    assert_false(result.is_valid(0))
-    assert_true(result.is_valid(1))
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +538,7 @@ def test_output_schema_column_name_collision() raises:
 
 def _constant_hash(
     keys: StructArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
+    ctx: ExecContext = ExecContext.serial(),
 ) raises -> UInt64Array:
     """Degenerate hash function: all keys map to the same hash.
 
@@ -664,7 +645,7 @@ def _run_inner(
         _right_on(),
         JOIN_INNER,
         JOIN_ALL,
-        ctx=ExecutionContext.parallel(num_threads),
+        ctx=ExecContext.parallel(num_threads),
     )
 
 
@@ -730,7 +711,7 @@ def test_parallel_partial_match() raises:
 # Execution context plumbing
 #
 # `HashJoin` used to store a bare worker count and rebuild
-# `ExecutionContext.parallel(n)` at five internal sites, each of which dropped
+# `ExecContext.parallel(n)` at five internal sites, each of which dropped
 # the caller's device. It now holds the context whole. These pin the observable
 # half of that: which path a given context selects, and that the default did not
 # silently change when `num_threads` was replaced by `ctx`.
@@ -753,7 +734,7 @@ def test_join_default_context_matches_explicit_auto() raises:
         right,
         _left_on(),
         _right_on(),
-        ctx=ExecutionContext.auto(),
+        ctx=ExecContext.auto(),
     )
     assert_equal(default_result.length, auto_result.length)
 
@@ -768,14 +749,14 @@ def test_join_serial_and_parallel_contexts_agree() raises:
         right,
         _left_on(),
         _right_on(),
-        ctx=ExecutionContext.serial(),
+        ctx=ExecContext.serial(),
     )
     var parallel = hash_join(
         left,
         right,
         _left_on(),
         _right_on(),
-        ctx=ExecutionContext.parallel(4),
+        ctx=ExecContext.parallel(4),
     )
     assert_equal(serial.length, parallel.length)
 
@@ -786,10 +767,84 @@ def test_hash_join_struct_default_is_serial() raises:
     `expr/execution.mojo` and `bench_join` both construct it that way, and its
     old `num_threads=1` default meant serial — unlike the free function's.
     """
-    var join = HashJoin(ExecutionContext())
+    var join = HashJoin(ExecContext())
     var left = _dense_struct(20_000)
     join.build(left, _left_on())
     var out = join.probe(
         _dense_struct(20_000), _right_on(), JOIN_INNER, JOIN_ALL
     )
     assert_true(out.length > 0)
+
+
+# ---------------------------------------------------------------------------
+# JoinKind — the "does this kind emit right-side columns?" question has one
+# answer, on the kind itself.
+#
+# It used to be re-derived at four sites with three different memberships:
+# `output_dtype` said MARK emits right columns, `_assemble` said it does not,
+# `relations.mojo` agreed with the first, and `tabular.mojo` re-parsed strings.
+# A `StructArray` whose dtype declares more fields than it has children is
+# corrupt, and nothing checked.
+# ---------------------------------------------------------------------------
+
+
+def test_join_kind_agrees_on_right_columns() raises:
+    """Every kind's declared schema must have exactly as many fields as the
+    assembled result has columns. This is the invariant the four copies broke.
+    """
+    var left = _dense_struct(64)
+    var right = _dense_struct(64)
+    var kinds = List[JoinKind]()
+    kinds.append(JOIN_INNER)
+    kinds.append(JOIN_LEFT)
+    kinds.append(JOIN_RIGHT)
+    kinds.append(JOIN_FULL)
+    kinds.append(JOIN_SEMI)
+    kinds.append(JOIN_ANTI)
+    for ref k in kinds:
+        var out = hash_join(left, right, _left_on(), _right_on(), k)
+        assert_equal(
+            len(out.dtype.as_struct().fields),
+            len(out.children),
+            String("kind ", k, ": dtype fields != columns"),
+        )
+
+
+def test_join_kind_semi_anti_emit_left_columns_only() raises:
+    assert_false(JOIN_SEMI.emits_right_columns())
+    assert_false(JOIN_ANTI.emits_right_columns())
+    assert_true(JOIN_INNER.emits_right_columns())
+    assert_true(JOIN_LEFT.emits_right_columns())
+    assert_true(JOIN_RIGHT.emits_right_columns())
+    assert_true(JOIN_FULL.emits_right_columns())
+
+
+def test_unimplemented_join_kind_raises_instead_of_corrupting() raises:
+    """MARK, SINGLE and CROSS have constants but no implementation.
+
+    MARK previously fell through to the LEFT/RIGHT/FULL arm and produced a
+    `StructArray` declaring the right side's fields while carrying only the
+    left side's columns. Raising is the honest answer until someone implements
+    the marker column.
+    """
+    var left = _dense_struct(64)
+    var right = _dense_struct(64)
+    var unimplemented = List[JoinKind]()
+    unimplemented.append(JOIN_MARK)
+    unimplemented.append(JOIN_SINGLE)
+    unimplemented.append(JOIN_CROSS)
+    for ref k in unimplemented:
+        var raised = False
+        try:
+            _ = hash_join(left, right, _left_on(), _right_on(), k)
+        except:
+            raised = True
+        assert_true(raised, String("kind ", k, " should raise"))
+
+
+def test_join_kind_writes_its_name() raises:
+    """A kind prints as a name, not a number — it is what error messages and
+    plan output show."""
+    assert_equal(String(JOIN_INNER), "inner")
+    assert_equal(String(JOIN_LEFT), "left outer")
+    assert_equal(String(JOIN_SEMI), "left semi")

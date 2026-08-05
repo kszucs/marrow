@@ -47,8 +47,8 @@ def test_buffer_host_builder() raises:
     """Buffer.alloc_host + to_immutable produce a valid HOST buffer."""
     var ctx = DeviceContext()
     var b = Buffer.alloc_host[DType.uint8](ctx, 64)
-    b.unsafe_set(0, 7)
-    b.unsafe_set(1, 13)
+    b.unsafe_set(0, UInt8(7))
+    b.unsafe_set(1, UInt8(13))
     var buf = b.to_immutable()
     assert_true(buf.is_host())
     assert_true(buf.is_cpu())
@@ -68,8 +68,8 @@ def test_buffer_to_cpu_round_trip() raises:
     """Upload a CPU buffer to GPU then download back; data is preserved."""
     var ctx = DeviceContext()
     var builder = Buffer.alloc_zeroed[DType.uint8](64)
-    builder.unsafe_set(0, 42)
-    builder.unsafe_set(1, 99)
+    builder.unsafe_set(0, UInt8(42))
+    builder.unsafe_set(1, UInt8(99))
     var cpu_buf = builder.to_immutable()
 
     var dev_buf = cpu_buf.to_device(ctx)

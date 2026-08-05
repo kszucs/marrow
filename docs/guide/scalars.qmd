@@ -12,6 +12,7 @@ distinct from a zero or an empty string.
 import sys
 sys.path.insert(0, "../../python")
 import marrow as ma
+from marrow import compute as mc
 ```
 
 ## Getting a scalar
@@ -30,7 +31,7 @@ print(first.type())       # int64
 Aggregate kernels also return scalars:
 
 ```{python}
-total = ma.sum(a)
+total = mc.sum(a)
 print(total, "|", total.as_py(), "|", total.type())
 ```
 

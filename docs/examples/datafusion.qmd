@@ -11,6 +11,7 @@ execute:
 import sys
 sys.path.insert(0, "../../python")
 import marrow as ma
+from marrow import compute as mc
 import pyarrow as pa
 from datafusion import SessionContext, udf
 ```
@@ -27,6 +28,7 @@ Or add it to an existing environment:
 
 ```python
 import marrow as ma
+from marrow import compute as mc
 import pyarrow as pa
 from datafusion import SessionContext, udf
 ```
@@ -37,7 +39,7 @@ Any Marrow compute function that accepts and returns Arrow arrays can be wrapped
 
 ```{python}
 def mojo_add(a: pa.Array, b: pa.Array) -> pa.Array:
-    return pa.array(ma.add(a, b, None))
+    return pa.array(mc.add(a, b))
 
 add_udf = udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")
 ```
@@ -88,7 +90,7 @@ pa.Table.from_batches(
 Each call to `mojo_add` inside a DataFusion query goes through these steps:
 
 1. DataFusion evaluates the query plan and produces a `pyarrow.Array` chunk for each argument column.
-2. `ma.add(a, b, None)` imports each argument into Marrow via `__arrow_c_array__` — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.
+2. `mc.add(a, b)` imports each argument into Marrow via `__arrow_c_array__` — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.
 3. `pa.array(result)` exports the result back to PyArrow via `__arrow_c_array__` — again, no copy.
 
 The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.

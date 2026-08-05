@@ -25,6 +25,7 @@ Then make it importable and bring it in under the customary `ma` alias:
 import sys
 sys.path.insert(0, "../../python")   # point at the built extension
 import marrow as ma
+from marrow import compute as mc
 ```
 
 ::: {.callout-tip}
@@ -64,32 +65,33 @@ print(ma.array([{"x": 1, "y": 1.5}, {"x": 2, "y": 2.5}]))
 
 ## Compute on arrays
 
-Compute kernels are vectorized and null-aware, and the names mirror
-`pyarrow.compute`. A null in either operand propagates to the result:
+Compute kernels live in `marrow.compute` (imported here as `mc`), vectorized
+and null-aware, with names that mirror `pyarrow.compute`. A null in either
+operand propagates to the result:
 
 ```{python}
 x = ma.array([1, 2, 3, None, 5])
 y = ma.array([10, 20, 30, 40, 50])
 
-print("add:     ", ma.add(x, y))        # index 3 is null
-print("multiply:", ma.multiply(y, y))
+print("add:     ", mc.add(x, y))        # index 3 is null
+print("multiply:", mc.multiply(y, y))
 ```
 
 Aggregates reduce an array to a scalar and **skip** nulls:
 
 ```{python}
-print("sum:", ma.sum(x))
-print("min:", ma.min(x))
-print("max:", ma.max(x))
+print("sum:", mc.sum(x))
+print("min:", mc.min(x))
+print("max:", mc.max(x))
 ```
 
 Comparisons return a boolean array, which you can feed straight into `filter`:
 
 ```{python}
-big  = ma.greater(y, ma.array([15, 15, 15, 15, 15]))
+big  = mc.greater(y, ma.array([15, 15, 15, 15, 15]))
 print("mask:  ", big)
-print("kept:  ", ma.filter(y, big))
-print("no nulls:", ma.drop_null(x))
+print("kept:  ", mc.filter(y, big))
+print("no nulls:", mc.drop_null(x))
 ```
 
 Sorting handles nulls explicitly and returns either the sorted values or the
@@ -97,8 +99,8 @@ sort indices:
 
 ```{python}
 s = ma.array([3, 1, None, 2, 5])
-print("sorted:  ", ma.sort(s))
-print("desc:    ", ma.sort(s, ascending=False, null_placement="at_end"))
+print("sorted:  ", mc.sort(s))
+print("desc:    ", mc.sort(s, [("", "descending")], null_placement="at_end"))
 print("argsort: ", s.argsort())
 ```
 

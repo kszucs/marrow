@@ -1,5 +1,5 @@
 """Expression execution — staged, strategy-pluggable fusion (see
-`docs/lane-shape-window-design.md`).
+`docs/architecture.md`).
 
 Model
 -----
@@ -176,7 +176,8 @@ from ..kernels.boolean import (
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from .pruning import PruneStats, PruneBound
-from .dynamic import DynAgg, _promote_operands
+from .dynamic import DynAgg, DynValue, _promote_operands
+from .relations import BoxedValue
 from .aggregates import AggFunc
 from ..kernels.cast import (
     cast as cast_array,
@@ -225,10 +226,27 @@ struct Context(Copyable, Movable):
         return self._slots[i].copy()
 
     def get[A: Array](self, i: Int) -> A:
-        """Typed slot read — `ctx.get[BoolArray](i)`. Pulls the typed array straight
-        out of the slot's `Datum` (a ref-count bump), skipping the `as_xxx().copy()`
-        dance at every breaker read."""
+        """Typed slot read as an owned array — `ctx.get_ref[BoolArray](i)`.
+
+        Costs a ref-count bump. Fine once per `materialize`; **not** fine inside
+        a `vectorwise` lane, which runs once per SIMD chunk — see `get_ref`.
+        """
         return self._slots[i][DynArray].as_type[A]().copy()
+
+    @always_inline
+    def get_ref[A: Array](ref self, i: Int) -> ref [self._slots[i][DynArray]._v[A]] A:
+        """Typed slot read as a **borrow** — no ref-count bump.
+
+        This is what a fused lane wants. `vectorwise` is called once per SIMD
+        chunk, so `get`'s `.copy()` put an atomic read-modify-write in the hot
+        loop: at 1M rows and width 4 that is 250,000 atomics to read one array
+        that never changes. Measured cost of the difference is large -- a fused
+        expression over a breaker ran ~40x slower than the breaker alone.
+
+        The underlying `as_type` is already a borrow, so this only declines to
+        copy what it hands back.
+        """
+        return self._slots[i][DynArray].as_type[A]()
 
     def size(self) -> Int:
         return len(self._slots)
@@ -305,20 +323,6 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
     comptime OutShape: Int  # 0 scalar, 1 columnar
     # A pipeline breaker (cross-row / materializing) — the family drivers prepare
     # it and read the slot straight back instead of running the fused loop. Default off.
-    comptime IsBreaker: Bool = False
-
-    comptime IsErased: Bool = False
-    """Whether this node resolves its operand types at run time.
-
-    `True` only for `DynValue` and for any composite holding one, so a composite
-    must propagate it (`IsErased = L.IsErased or R.IsErased`) rather than just
-    defaulting. A node whose operand is erased cannot fuse — its `vectorwise`
-    would have to call the child's, and an erased child has no lane — so the
-    composite's `materialize` keys off this to take the dispatch arm instead.
-
-    Missing that propagation is not a wrong answer, it is a build failure: the
-    fused arm elaborates `SIMD[Self.OutType.native, W]` against `DynType`'s
-    placeholder `native` and fails to instantiate."""
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         """Produce this node's result `Datum` — the family driver: a numeric `Buffer`,
@@ -331,7 +335,7 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         """The one dispatch, shared by every family: a breaker `prepare`s its stage
         and reads the slot straight back; everything else `materialize`s the result.
         """
-        comptime if Self.IsBreaker:
+        comptime if conforms_to(Self, Breaker):
             var i = ctx.size()
             self.prepare(batch, ctx)
             return ctx.get(i)
@@ -345,10 +349,11 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         return self.execute(batch, ctx)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        """Pre-pass before a fused loop: run pipeline-breaker stages into `ctx` in
-        DFS order. No-op for leaves (this default); composites recurse; breakers
-        override to prepare their stage and append it."""
-        pass
+        """Pre-pass before a fused loop: run breaker stages into `ctx` in DFS
+        order. A breaker runs its own; composites override to recurse; a leaf
+        does nothing."""
+        comptime if conforms_to(Self, Breaker):
+            ctx.append(self.materialize(batch, ctx))
 
     def name(self) -> String:
         """Best-effort output name — a column returns its name; most nodes are
@@ -363,31 +368,6 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         union of its children. Abstract — every node fixes it concretely so an
         optimizer can push projections/predicates through the fused subtree."""
         ...
-
-    def is_deterministic(self) -> Bool:
-        """Whether the node yields the same result for the same input on every
-        evaluation. `True` for every node today; a future `now()`/`random()`
-        overrides to `False` so an optimizer knows not to reorder or cache it.
-        """
-        return True
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        """Produce this node's result when its operands are erased.
-
-        The family drivers (`_numeric_fused`/`_bool_fused`/`_string_fused`) call
-        this instead of running the fused loop whenever `IsErased` is set, so a
-        node supplies only the strategy and never the branch. That is the point:
-        the branch used to be a `comptime if` repeated in every node's
-        `materialize`, and a node that forgot it silently took the fused arm —
-        for a *breaker* that is dead code rather than a build error, which is the
-        one failure mode here a compile cannot catch.
-
-        The default raises: a node that has no erased arm can only be reached
-        with erased operands if `IsErased` was propagated wrongly."""
-        raise Error(
-            "no erased strategy for this node — `IsErased` is set but nothing"
-            " implements `_erased`"
-        )
 
     def render(self) -> String:
         """How this node prints inside a plan.
@@ -451,58 +431,22 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         return NotNull(self.copy())
 
 
-struct RuntimeCast[A: Value](Value):
-    """A cast whose *target* dtype is only known at run time.
+trait Breaker(Value):
+    """A node that ends a fused pipeline: it cannot be evaluated a lane at a
+    time, so it materializes into `Context` and its consumer reads the slot.
 
-    The one node here with no fused counterpart, and it was checked rather than
-    assumed: `NumericCast[To, A]` is the only cast node, and `To` is bound on
-    `NumericType` because the node is a `NumericValue`. So it cannot express
-    `col("t").cast(timestamp(second))` — a temporal target is not a
-    `NumericType`, and dispatching the runtime dtype to a comptime one does not
-    help when no arm has a node to build.
+    Conformance *is* the marker. It replaces a `comptime IsBreaker: Bool` that
+    every node had to set by hand, the same hazard `IsErased` posed before it
+    was deleted.
 
-    `DynColumn`, `DynLiteral` and a first version of this were all added and
-    removed as redundant; this is the survivor. Reading a column by name needs no
-    dtype and a literal knows its own, but a cast target is genuinely a runtime
-    value that no existing node carries."""
+    It adds no method. `materialize` is the one strategy hook every node already
+    implements; conforming here says only *when* it runs: as a pre-pass, into a
+    `Context` slot, rather than inline in a fused loop.
+    """
 
-    comptime OutType = DynType
-    comptime OutShape = 1
-    comptime IsErased = True
-
-    var a: Self.A
-    var _to: DynType
-
-    def __init__(out self, var a: Self.A, var to: DynType):
-        self.a = a^
-        self._to = to^
-
-    def __init__(out self, *, copy: Self):
-        self.a = copy.a.copy()
-        self._to = copy._to.copy()
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        var col = into_array(self.a.execute(batch), batch.num_rows())
-        return Datum(cast_array(col, self._to.copy()))
-
-    def referenced_columns(self) -> List[String]:
-        return self.a.referenced_columns()
-
-    def render(self) -> String:
-        return String("cast(", self.a.render(), ")")
-
-    def dtype(self) -> DynType:
-        return self._to.copy()
-
-    def validity(
-        self, batch: RecordBatch
-    ) raises -> Optional[Bitmap[mut=False]]:
-        return self.a.validity(batch)
+    pass
 
 
-# ---------------------------------------------------------------------------
-# NumericValue — the vectorized numeric strategy.
-# ---------------------------------------------------------------------------
 trait NumericValue(Value):
     comptime OutType: NumericType
 
@@ -513,28 +457,6 @@ trait NumericValue(Value):
         Self.OutType.native, W
     ]:
         ...
-
-
-trait NumericOps(NumericValue):
-    """The fluent surface for *typed* numeric nodes — `a + b`, `a > b`, `a.abs()`.
-
-    Split out of `NumericValue` because `DynValue` must not inherit it. These
-    methods return nodes parameterised on `Self` (`Gt[Self, Rhs]`), so
-    elaborating them for `Self = DynValue` needs a `Gt` holding a `DynValue`,
-    which needs `DynValue`'s conformance, which needs the method:
-
-        error: attempt to resolve a recursive reference to declaration
-               'DynValue.__gt__'
-
-    It only bites when the package is compiled from *outside* — a standalone
-    program doing `col("a") > col("b")` failed while the same expression inside
-    `marrow/expr/tests` was fine, which is why it survived until a binary-size
-    gate was rebuilt.
-
-    Node bounds stay on `NumericValue`, so an operand can still be either lane;
-    only the operator surface is narrowed. `DynValue` defines its own operators,
-    returning the box rather than a node type.
-    """
 
     # --- fluent surface: arithmetic, comparison, unary, reductions -----------
     def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
@@ -628,9 +550,6 @@ trait NumericOps(NumericValue):
         return Count(self.copy())
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            return self._erased(batch, ctx)
-
         self.prepare(batch, ctx)
         comptime native = Self.OutType.native
         comptime if Self.OutShape == 0:  # scalar → evaluate the lane once, then splat
@@ -670,16 +589,12 @@ trait NumericOps(NumericValue):
     # accumulator), so they go straight to an `AggExpr`.
 
 
-struct NumericColumn[T: NumericType](NumericOps):
+struct NumericColumn[T: NumericType](NumericValue):
     """A numeric column, resolved by name against `batch.schema` each pass.
     PERF: `get_field_index` runs per pass; resolve-once is a follow-up."""
 
     comptime OutType = Self.T
     comptime OutShape = 1
-    comptime IsErased = Self.T.IsErased
-    """`NumericColumn[DynType]` *is* the erased column leaf. Reading a column by
-    name needs no dtype — `materialize` hands back `batch.columns[i]` as-is — so
-    the fused leaf already works erased and no separate node is needed."""
 
     var _name: String
 
@@ -705,31 +620,20 @@ struct NumericColumn[T: NumericType](NumericOps):
     ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
         Self.OutType.native, W
     ]:
-        comptime if Self.IsErased:
-            # Unreachable: an erased leaf is only ever reached through
-            # `materialize`, because every composite holding it propagates
-            # `IsErased` and takes its dispatch arm. It must still not
-            # *elaborate* — `as_primitive[DynType]().values()` trips the
-            # "use values() for bool arrays" guard, since the erased dtype's
-            # placeholder `native` is `bool`.
-            return SIMD[Self.OutType.native, W]()
-        else:
-            return (
-                batch.columns[batch.schema.get_field_index(self._name)]
-                .as_primitive[Self.T]()
-                .values()
-                .load[W](idx)
-            )
+        return (
+            batch.columns[batch.schema.get_field_index(self._name)]
+            .as_primitive[Self.T]()
+            .values()
+            .load[W](idx)
+        )
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # a leaf column returns as-is (keeps validity; the fused loop drops nulls)
-        var i = batch.schema.get_field_index(self._name)
-        if i == -1:
-            # `get_field_index` answers -1, which used to index the column list
-            # and trip a bounds assert deep in the engine. The interpreter
-            # raised here by name; so does the leaf that replaced it.
-            raise Error("column '", self._name, "' not found")
-        return batch.columns[i].copy()
+        # a leaf column returns as-is (keeps validity; the fused loop drops
+        # nulls). `RecordBatch.column(name)` owns the missing-name diagnostic —
+        # `get_field_index` answers -1, and indexing the column list with that
+        # trips a bounds assert that aborts the runner instead of reporting the
+        # name. Every column leaf goes through it for that reason.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
@@ -741,12 +645,11 @@ struct NumericColumn[T: NumericType](NumericOps):
 
 
 @fieldwise_init
-struct NumericLiteral[T: NumericType](NumericOps):
+struct NumericLiteral[T: NumericType](NumericValue):
     """A numeric constant, broadcast into every lane."""
 
     comptime OutType = Self.T
     comptime OutShape = 0
-    comptime IsErased = Self.T.IsErased
 
     def render(self) -> String:
         return String("literal(", self._value, ")")
@@ -771,7 +674,7 @@ struct NumericLiteral[T: NumericType](NumericOps):
 
 @fieldwise_init
 struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
-    NumericOps
+    NumericValue
 ):
     """Fused arithmetic over two operands, widening to the wider dtype. There is no
     "materialized" counterpart: a breaker operand is itself a fused leaf (it reads
@@ -781,39 +684,11 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     comptime OutType = promote[Self.L.OutType, Self.R.OutType]
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
 
-    comptime IsErased = Self.L.IsErased or Self.R.IsErased
     """Propagated, not defaulted: an operand that resolves its types at run time
     cannot be fused into, so this whole node takes the dispatch arm."""
 
     var l: Self.L
     var r: Self.R
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # One arm for the erased lane. `K` already names the operation, so
-        # this is the same node the fused lane builds — there is no separate
-        # interpreter tag and no switch to add an arm to.
-        var n = batch.num_rows()
-        var l = into_array(self.l.execute(batch), n)
-        var r = into_array(self.r.execute(batch), n)
-
-        comptime if Self.K.name == AddKernel.name:
-            # `+` over erased operands is a *runtime* decision: string-like
-            # means concatenate, otherwise add. It cannot be made when the
-            # tree is built — an erased column's dtype is only known once a
-            # schema is applied, so `DynValue.dtype()` is `None` for exactly
-            # the common case (`col(0) + col(1)`).
-            #
-            # An operator
-            # names a *pair* of kernels and the dtype picks one. The
-            # `comptime if` keeps it honest — only `+` links the string
-            # counterpart, so a `-` or `*` node does not carry a concat path
-            # it can never take. That property is why the equivalent
-            # `comptime StringKernel` was removed from the numeric kernels.
-            if l.dtype().is_string_like():
-                return Datum(ConcatKernel.dispatch(l, r))
-
-        _promote_operands(l, r)
-        return Datum(Self.K.dispatch(l, r))
 
     def render(self) -> String:
         return String(
@@ -850,19 +725,12 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
 
 @fieldwise_init
-struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericOps):
+struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
     """Fused unary op preserving the operand dtype — `neg`, `abs`, …."""
 
     comptime OutType = Self.A.OutType
     comptime OutShape = Self.A.OutShape
-    comptime IsErased = Self.A.IsErased
     var a: Self.A
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # Erased lane: `K` names the operation, so this is one arm, not
-        # one switch case per operator.
-        var n = batch.num_rows()
-        return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
 
     def render(self) -> String:
         return String(Self.K.name, "(", self.a.render(), ")")
@@ -890,21 +758,13 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericOps):
 
 
 @fieldwise_init
-struct NumericCast[To: NumericType, A: NumericValue](NumericOps):
+struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
     """Fused numeric → numeric cast — reinterprets the operand's SIMD lane at the
     target dtype, so `col.cast(int64) + other` stays a single fused pass."""
 
     comptime OutType = Self.To
     comptime OutShape = Self.A.OutShape
-    comptime IsErased = Self.A.IsErased
     var a: Self.A
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # `To` is still a comptime type here — only the *operand* is erased —
-        # so the target dtype is known and the runtime cast router does the
-        # rest. This is the one payload node whose payload survives erasure.
-        var col = into_array(self.a.execute(batch), batch.num_rows())
-        return Datum(cast_array(col, DynType(Self.To())))
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -930,33 +790,15 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericOps):
 
 @fieldwise_init
 struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
-    NumericOps
+    NumericValue
 ):
     """Binary op whose result is always float64 — `Div` (true division), `Pow`.
     Operands cast up to float64 before the kernel, so `5 / 2 == 2.5`."""
 
     comptime OutType = Float64Type
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # Erased lane: `K` names the operation, so this is one arm, not
-        # one switch case per operator.
-        #
-        # Cast to float64 *first*, matching the fused `vectorwise` below.
-        # `_promote_operands` is not enough here: it widens the narrower
-        # operand to the wider one, so two int64 columns stay int64 and
-        # `5 / 2` floor-divides to 2 where the fused lane says 2.5.
-        var n = batch.num_rows()
-        var l = cast_array(
-            into_array(self.l.execute(batch), n), DynType(Float64Type())
-        )
-        var r = cast_array(
-            into_array(self.r.execute(batch), n), DynType(Float64Type())
-        )
-        return Datum(Self.K.dispatch(l, r))
 
     def render(self) -> String:
         return String(
@@ -993,7 +835,7 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
 
 @fieldwise_init
-struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericOps):
+struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
     """Unary op whose result is always float64 — `sqrt`, `exp`, `log`."""
 
     comptime OutType = Float64Type
@@ -1077,9 +919,6 @@ trait BoolValue(Value):
         return All(self.copy())
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            return self._erased(batch, ctx)
-
         self.prepare(batch, ctx)
         var length = batch.num_rows()
         var bm = Bitmap.alloc_uninit(length)
@@ -1104,7 +943,6 @@ trait BoolValue(Value):
 @fieldwise_init
 struct NumericCompare[
     K: NumericCompareKernel,
-    S: StringPredicateKernel,
     L: NumericValue,
     R: NumericValue,
 ](BoolValue):
@@ -1127,20 +965,8 @@ struct NumericCompare[
     # `NumericBinary`, so `a > b` and `a + b` never disagree about widening.
     comptime ArgType = promote[Self.L.OutType, Self.R.OutType]
     comptime NativeType = wider[Self.L.OutType.native, Self.R.OutType.native]
-    comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # The operator names a pair; the runtime dtype picks one. Same rule
-        # as the erased `+`.
-        var n = batch.num_rows()
-        var l = into_array(self.l.execute(batch), n)
-        var r = into_array(self.r.execute(batch), n)
-        if l.dtype().is_string_like():
-            return Datum(Self.S.dispatch(l, r))
-        _promote_operands(l, r)
-        return Datum(Self.K.dispatch(l, r))
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
         # The interpreter had one switch arm per operator here. `K` names the
@@ -1195,12 +1021,12 @@ struct NumericCompare[
         self.r.prepare(batch, ctx)
 
 
-comptime Lt = NumericCompare[LtKernel, StringLtKernel, _, _]
-comptime Le = NumericCompare[LeKernel, StringLeKernel, _, _]
-comptime Gt = NumericCompare[GtKernel, StringGtKernel, _, _]
-comptime Ge = NumericCompare[GeKernel, StringGeKernel, _, _]
-comptime Eq = NumericCompare[EqKernel, StringEqKernel, _, _]
-comptime Ne = NumericCompare[NeKernel, StringNeKernel, _, _]
+comptime Lt = NumericCompare[LtKernel, _, _]
+comptime Le = NumericCompare[LeKernel, _, _]
+comptime Gt = NumericCompare[GtKernel, _, _]
+comptime Ge = NumericCompare[GeKernel, _, _]
+comptime Eq = NumericCompare[EqKernel, _, _]
+comptime Ne = NumericCompare[NeKernel, _, _]
 
 
 # ---------------------------------------------------------------------------
@@ -1218,17 +1044,8 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     # breaker) must not shrink W below what a wider sibling's load (int64) needs, or
     # `SIMD[int64, W]` overflows the register.
     comptime NativeType = wider[Self.L.NativeType, Self.R.NativeType]
-    comptime IsErased = Self.L.IsErased or Self.R.IsErased
     var l: Self.L
     var r: Self.R
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # Erased lane: `K` names the operation, so this is one arm, not
-        # one switch case per operator.
-        var n = batch.num_rows()
-        var l = into_array(self.l.execute(batch), n)
-        var r = into_array(self.r.execute(batch), n)
-        return Datum(Self.K.dispatch(l, r))
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
         var l = self.l.prune(stats).maybe_true
@@ -1296,14 +1113,7 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     comptime OutType = BoolType
     comptime OutShape = Self.A.OutShape
     comptime NativeType = Self.A.NativeType
-    comptime IsErased = Self.A.IsErased
     var a: Self.A
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # Erased lane: `K` names the operation, so this is one arm, not
-        # one switch case per operator.
-        var n = batch.num_rows()
-        return Datum(Self.K.dispatch(into_array(self.a.execute(batch), n)))
 
     def render(self) -> String:
         return String(Self.K.name, "(", self.a.render(), ")")
@@ -1335,7 +1145,7 @@ comptime Not = BoolUnary[NotKernel, _]
 
 
 @fieldwise_init
-struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
+struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue, Breaker):
     """Fold a bool column to a scalar bool (`any`/`all`) — a scalar bool breaker;
     once folded it splats.
 
@@ -1347,18 +1157,17 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
 
     comptime OutType = BoolType
     comptime OutShape = 0
-    comptime IsBreaker = True
     comptime NativeType = DType.int32
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = (
             into_array(self.a.execute(batch), batch.num_rows()).as_bool().copy()
         )
-        ctx.append(BoolScalar(Self.K.reduce(arr)).to_dyn())
+        return Datum(BoolScalar(Self.K.reduce(arr)).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1413,22 +1222,21 @@ struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
 
 
 @fieldwise_init
-struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
+struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue, Breaker):
     """`is_null`/`not_null` — reads the operand's validity (any family), so a bool
     breaker: prepare the operand, run the kernel into a `BoolArray`, read it."""
 
     comptime OutType = BoolType
     comptime OutShape = Self.A.OutShape
-    comptime IsBreaker = True
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Self.K.apply(arr).to_dyn())
+        return Datum(Self.K.apply(arr).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1438,7 +1246,7 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](s).values().load[DType.bool, W](idx)
 
 
 comptime IsNan = NumericPredicate[IsNanKernel, _]
@@ -1486,7 +1294,7 @@ struct NumToBool[A: NumericValue](BoolValue):
 
 
 @fieldwise_init
-struct BoolToNum[To: NumericType, A: BoolValue](NumericOps):
+struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
     """Fused bool -> numeric (`True->1, False->0`)."""
 
     comptime OutType = Self.To
@@ -1516,26 +1324,48 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericOps):
 
 
 @fieldwise_init
-struct StringToNum[To: NumericType, A: StringValue](NumericOps):
+struct StringToNum[To: NumericType, A: StringValue](Breaker, NumericValue):
     """Parse string -> numeric (nulling on unparseable). No value lane, so a breaker:
     parse the whole column once via the kernel, then load per lane."""
 
     comptime OutType = Self.To
     comptime OutShape = 1
-    comptime IsBreaker = True
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var s = (
             into_array(self.a.execute(batch), batch.num_rows())
             .as_string()
             .copy()
         )
-        ctx.append(
+        return Datum(
             StringToNumKernel.apply[StringType, Self.To, False](s).to_dyn()
+        )
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # A parse failure is a null the *input* does not have ("x" -> null), so
+        # validity comes from the parsed column, not from `a`. Inheriting the
+        # all-valid default made `to_int(s) + 1` yield 0 where it should be null.
+        #
+        # This re-runs the parse: `validity` has no access to the `Context` the
+        # stage result already sits in. That is the protocol defect
+        # `docs/design-expression-evaluation.md` removes by carrying validity in
+        # the node's state; correctness first, and the extra pass goes away with
+        # it.
+        var s = (
+            into_array(self.a.execute(batch), batch.num_rows())
+            .as_string()
+            .copy()
+        )
+        return (
+            StringToNumKernel.apply[StringType, Self.To, False](s)
+            .to_data()
+            .owned_validity()
         )
 
     @always_inline
@@ -1546,29 +1376,28 @@ struct StringToNum[To: NumericType, A: StringValue](NumericOps):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.To]](i).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.To]](i).values().load[W](idx)
 
 
 @fieldwise_init
-struct StringToBool[A: StringValue](BoolValue):
+struct StringToBool[A: StringValue](BoolValue, Breaker):
     """Parse string -> bool (`"true"`/`"false"`/`"1"`/`"0"`). A bool breaker."""
 
     comptime OutType = BoolType
     comptime OutShape = 1
-    comptime IsBreaker = True
     comptime NativeType = DType.int32
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var s = (
             into_array(self.a.execute(batch), batch.num_rows())
             .as_string()
             .copy()
         )
-        ctx.append(StringToBoolKernel.apply[StringType, False](s).to_dyn())
+        return Datum(StringToBoolKernel.apply[StringType, False](s).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1578,7 +1407,7 @@ struct StringToBool[A: StringValue](BoolValue):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](i).values().load[DType.bool, W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -1594,6 +1423,29 @@ trait StringValue(Value):
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
     ) -> String:
         ...
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        self.prepare(batch, ctx)
+        comptime if Self.OutShape == 0:
+            var slot = 0
+            return StringScalar(self.elementwise(batch, ctx, slot, 0)).to_dyn()
+        else:
+            var n = batch.num_rows()
+            # Validity is threaded here for the same reason the numeric and bool
+            # drivers thread it: `elementwise` reads values through `unsafe_get`,
+            # which does not consult the bitmap, so without this every string
+            # *transformation* returned an all-valid column. A bare column keeps
+            # its nulls (that path returns the column as-is), which is what hid
+            # this.
+            var v = self.validity(batch)
+            var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
+            for i in range(n):
+                var slot = 0
+                if v and not v.value().test(i):
+                    builder.append_null()
+                else:
+                    builder.append(self.elementwise(batch, ctx, slot, i))
+            return builder.finish().to_dyn()
 
     # --- fluent surface: maps, predicates, length, concat -------------------
     def length(self) -> StringLength[Self]:
@@ -1656,22 +1508,6 @@ trait StringValue(Value):
     def ilike[Rhs: StringValue](self, o: Rhs) -> ILike[Self, Rhs]:
         return ILike(self.copy(), o.copy())
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        comptime if Self.IsErased:
-            return self._erased(batch, ctx)
-
-        self.prepare(batch, ctx)
-        comptime if Self.OutShape == 0:
-            var slot = 0
-            return StringScalar(self.elementwise(batch, ctx, slot, 0)).to_dyn()
-        else:
-            var n = batch.num_rows()
-            var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
-            for i in range(n):
-                var slot = 0
-                builder.append(self.elementwise(batch, ctx, slot, i))
-            return builder.finish().to_dyn()
-
     # --- aggregates (marrow.expr.aggregates) --------------------------------
 
     def min(self) -> AggExpr:
@@ -1708,7 +1544,9 @@ struct StringColumn[T: StringLikeType](StringValue):
         )
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+        # `RecordBatch.column(name)` owns the missing-name diagnostic — see
+        # `NumericColumn.materialize`.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
@@ -1761,6 +1599,12 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
             self.r.elementwise(batch, ctx, slot, idx),
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # a null operand poisons the row, as it does in `ConcatKernel`
+        return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
         self.r.prepare(batch, ctx)
@@ -1786,6 +1630,12 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
         var s = self.a.elementwise(batch, ctx, slot, idx)
         return Self.K.transform(StringSlice(s))
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # a map transforms values, never validity — `upper(null)` is null
+        return self.a.validity(batch)
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
 
@@ -1806,20 +1656,19 @@ comptime Capitalize = StringUnary[CapitalizeKernel, _]
 # elementwise builder pass. Compute lives in the cast kernels.
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
+struct NumToString[To: StringLikeType, A: NumericValue](Breaker, StringValue):
     """Format numeric -> string."""
 
     comptime OutType = Self.To
     comptime OutShape = 1
-    comptime IsBreaker = True
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(NumToStringKernel.dispatch(arr, Self.To()))
+        return Datum(NumToStringKernel.dispatch(arr, Self.To()))
 
     @always_inline
     def elementwise(
@@ -1828,25 +1677,24 @@ struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
         var i = slot
         slot += 1
         return String(
-            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+            ctx.get_ref[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
         )
 
 
 @fieldwise_init
-struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
+struct BoolToString[To: StringLikeType, A: BoolValue](Breaker, StringValue):
     """`True`/`False` -> string."""
 
     comptime OutType = Self.To
     comptime OutShape = 1
-    comptime IsBreaker = True
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(BoolToStringKernel.dispatch(arr, Self.To()))
+        return Datum(BoolToStringKernel.dispatch(arr, Self.To()))
 
     @always_inline
     def elementwise(
@@ -1855,25 +1703,24 @@ struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
         var i = slot
         slot += 1
         return String(
-            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+            ctx.get_ref[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
         )
 
 
 @fieldwise_init
-struct StringToString[To: StringLikeType, A: StringValue](StringValue):
+struct StringToString[To: StringLikeType, A: StringValue](Breaker, StringValue):
     """Cast between string containers (`string` <-> `large_string`)."""
 
     comptime OutType = Self.To
     comptime OutShape = 1
-    comptime IsBreaker = True
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(StringToStringKernel.dispatch(arr, Self.To(), False))
+        return Datum(StringToStringKernel.dispatch(arr, Self.To(), False))
 
     @always_inline
     def elementwise(
@@ -1882,7 +1729,7 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
         var i = slot
         slot += 1
         return String(
-            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+            ctx.get_ref[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
         )
 
 
@@ -1895,23 +1742,12 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
 @fieldwise_init
 struct StringPredicate[
     K: StringPredicateKernel, L: StringValue, R: StringValue
-](BoolValue):
+](BoolValue, Breaker):
     comptime OutType = BoolType
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime IsErased = Self.L.IsErased or Self.R.IsErased
-    # Breaker only when fused: `Value.execute` routes a breaker through
-    # `prepare` and reads its slot, so `materialize` — where the erased arm
-    # lives — would never run. An erased node has no fused loop to break.
-    comptime IsBreaker = not Self.IsErased
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var l: Self.L
     var r: Self.R
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        var n = batch.num_rows()
-        var la = into_array(self.l.execute(batch), n)
-        var ra = into_array(self.r.execute(batch), n)
-        return Datum(Self.K.dispatch(la, ra))
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -1929,8 +1765,36 @@ struct StringPredicate[
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n).as_string().copy()
-        var ra = into_array(self.r.execute(batch), n).as_string().copy()
-        ctx.append(Self.K.apply(la, ra).to_dyn())
+        comptime if Self.R.OutShape == 0:
+            # A scalar right operand: evaluate it once. `into_array` would
+            # broadcast it into n copies of the same string, and the array x
+            # array kernel would then re-read — and for LIKE, recompile — that
+            # constant on every row.
+            #
+            # `apply_scalar`'s validity comes from the left operand alone
+            # (`Bitmap.intersect(l, None)` reduces to exactly that), which is
+            # only correct because no `OutShape == 0` string node can be null.
+            # `StringLiteral` is the only leaf with `OutShape == 0`, and it
+            # holds a plain `String` with no validity flag. The two composites
+            # that could also reach `OutShape == 0` forward the property
+            # rather than break it: `Concat.OutShape` is
+            # `max(L.OutShape, R.OutShape)`, so it is 0 only when both operands
+            # are themselves all-literal, and its `validity` intersects theirs
+            # (both `None`); `StringUnary.OutShape` is `A.OutShape`, so it is 0
+            # only when its single operand is, and its `validity` just forwards
+            # `a.validity(batch)` unchanged. So reaching `OutShape == 0` at all,
+            # through any nesting of these three, forces every leaf to be a
+            # `StringLiteral`, and the intersection/forwarding chain reduces to
+            # `None` all the way up. If a nullable string literal is ever
+            # added, this assumption breaks and needs revisiting here.
+            var rctx = Context()
+            self.r.prepare(batch, rctx)
+            var rslot = 0
+            var pat = self.r.elementwise(batch, rctx, rslot, 0)
+            ctx.append(Self.K.apply_scalar(la, pat).to_dyn())
+        else:
+            var ra = into_array(self.r.execute(batch), n).as_string().copy()
+            ctx.append(Self.K.apply(la, ra).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -1940,7 +1804,7 @@ struct StringPredicate[
     ]:
         var s = slot
         slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](s).values().load[DType.bool, W](idx)
 
 
 comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
@@ -1970,27 +1834,19 @@ comptime StrGe = StringPredicate[StringGeKernel, _, _]
 # always valid (PyArrow `is_in` never nulls), so validity defaults to `None`.
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct IsIn[A: Value](BoolValue):
+struct IsIn[A: Value](BoolValue, Breaker):
     comptime OutType = BoolType
     comptime OutShape = 1
-    comptime IsErased = Self.A.IsErased
-    # Breaker only when fused — see `StringLength`. The erased arm lives in
-    # `materialize`, which `Value.execute` skips entirely for a breaker.
-    comptime IsBreaker = not Self.IsErased
     comptime NativeType = DType.int32
     var a: Self.A
     var _value_set: DynArray
 
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        var arr = into_array(self.a.execute(batch), batch.num_rows())
-        return Datum(IsInKernel.dispatch(arr, self._value_set.copy()).to_dyn())
-
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(IsInKernel.dispatch(arr, self._value_set.copy()).to_dyn())
+        return Datum(IsInKernel.dispatch(arr, self._value_set.copy()).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -2000,7 +1856,7 @@ struct IsIn[A: Value](BoolValue):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](s).values().load[DType.bool, W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -2012,23 +1868,14 @@ struct IsIn[A: Value](BoolValue):
 # over the materialized lengths. Same shape as every other breaker.
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct StringLength[A: StringValue](NumericOps):
+struct StringLength[A: StringValue](Breaker, NumericValue):
     """Byte length of a string value → int32. `prepare` materializes the string
     stage and folds it to the length column via `LengthKernel`; `vectorwise` loads
     that column per lane."""
 
     comptime OutType = Int32Type
     comptime OutShape = 1
-    comptime IsErased = Self.A.IsErased
-    # Breaker only when fused: `Value.execute` routes a breaker through
-    # `prepare` and reads its slot, so `materialize` — where the erased arm
-    # lives — would never run. An erased node has no fused loop to break.
-    comptime IsBreaker = not Self.IsErased
     var a: Self.A
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        var col = into_array(self.a.execute(batch), batch.num_rows())
-        return Datum(LengthKernel.dispatch(col))
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2039,9 +1886,9 @@ struct StringLength[A: StringValue](NumericOps):
         # a null string has a null length — validity passes through unchanged.
         return self.a.validity(batch)
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var s = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(LengthKernel.dispatch(s))
+        return Datum(LengthKernel.dispatch(s))
 
     @always_inline
     def vectorwise[
@@ -2051,7 +1898,7 @@ struct StringLength[A: StringValue](NumericOps):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[Int32Array](s).values().load[W](idx)
+        return ctx.get_ref[Int32Array](s).values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -2060,31 +1907,112 @@ struct StringLength[A: StringValue](NumericOps):
 # breakers don't perturb the outer slot order), then act as fused leaves: a scalar
 # reduction splats, a columnar window loads. `prepare` appends the result; `core`
 # reads it back positionally via `slot`.
+struct AggExpr(Copyable, Movable, Writable):
+    """An aggregate over an input expression, under an output column name.
+
+    Two ways in:
+
+    - **fused / AOT** — ``col("amount", int64).sum()``. The ``Aggregation`` is
+      computed from the node's own ``OutType``, so nothing is interpreted: the
+      plan points straight at ``AggState[SumKernel, Int64Type]``.
+    - **dynamic** — ``col("amount").sum()`` on a ``DynValue``, which carries the
+      function's *name* until the plan is built and the input's dtype is known.
+
+    ``input_for(schema)`` hands back the input expression ready to execute:
+    the dynamic lane resolves its column names against the schema first (a
+    fused node addresses columns by name at execute time and needs nothing)."""
+
+    var out_name: String
+    """The output column name — the aggregate's own name unless aliased."""
+
+    var input: BoxedValue
+    var _unresolved: Optional[DynValue]
+    var _func: String
+    var _of: Optional[def(DynType) thin raises -> AggFunc]
+
+    @implicit
+    def __init__[
+        K: AggKernel, In: NumericValue
+    ](out self, var reduction: Reduction[K, In]):
+        """From a fused reduction: ``col("amount", int64).sum()`` is a scalar
+        `Reduction` inside an expression and this aggregate in a `GROUP BY` —
+        the same node, read two ways.
+
+        When the operand is typed, the kernel and its `OutType` name the
+        `Aggregation` outright and nothing is resolved later. When it is erased
+        there is no `OutType` to name one with, so the aggregate is carried by
+        name and resolved against the column's dtype at plan build — the same
+        split as `Reduction.alias`."""
+        self = AggExpr.of[K.Grouped[In.OutType]](reduction.a.copy())
+
+    @implicit
+    def __init__(out self, var agg: DynAgg):
+        """From the dynamic lane: keep the name, resolve it at plan build."""
+        var out_name = agg.out_name.copy()
+        if not out_name:
+            out_name = agg.func.copy()
+        self.out_name = out_name^
+        self.input = agg.input.copy()
+        self._unresolved = agg.input.copy()
+        self._func = agg.func.copy()
+        self._of = None
+
+    def __init__(
+        out self,
+        *,
+        var out_name: String,
+        var input: BoxedValue,
+        of: def(DynType) thin raises -> AggFunc,
+    ):
+        self.out_name = out_name^
+        self.input = input^
+        self._unresolved = None
+        self._func = String()
+        self._of = of
+
+    @staticmethod
+    def of[A: Aggregation, In: Value](var input: In) -> AggExpr:
+        """From the fused lane: the aggregation is named, not looked up."""
+        return AggExpr(
+            out_name=String(A.name),
+            input=BoxedValue(input^),
+            of=AggFunc.of[A],
+        )
+
+    def alias(self, var name: String) -> AggExpr:
+        """Name this aggregate's output column."""
+        var out = self.copy()
+        out.out_name = name^
+        return out^
+
+    def input_for(self, schema: Schema) raises -> BoxedValue:
+        """The input expression, ready to execute against ``schema``."""
+        if self._unresolved:
+            return BoxedValue(self._unresolved.value().resolve_names(schema))
+        return self.input.copy()
+
+    def resolve(self, in_dtype: DynType) raises -> AggFunc:
+        """The aggregate, bound to the dtype its input turned out to have."""
+        if self._of:
+            return self._of.value()(in_dtype)
+        return AggFunc(self._func, in_dtype)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._func if self._func else self.out_name, "(")
+        self.input.write_to(writer)
+        writer.write(")")
+
+
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct Reduction[K: AggKernel, A: NumericValue](NumericOps):
+struct Reduction[K: AggKernel, A: NumericValue](Breaker, NumericValue):
     """Whole-array reduction → a scalar. Output dtype is the kernel's accumulator
     algebra `K.AccType[A.OutType]` (sum widens, mean → float64, min/max keep it).
     """
 
     comptime OutType = Self.K.AccType[Self.A.OutType]
     comptime OutShape = 0
-    comptime IsErased = Self.A.IsErased
-    # Breaker only when fused — see `StringLength`.
-    comptime IsBreaker = not Self.IsErased
     var a: Self.A
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # `prepare` reduces at `A.OutType`, which is erased here, so the
-        # dtype is resolved from the column instead. Same kernel, same
-        # accumulator algebra — only the type comes from run time.
-        var arg = into_array(self.a.execute(batch), batch.num_rows())
-
-        @parameter
-        def leaf[T: NumericType](d: T) raises -> Datum:
-            return Datum(Self.K.reduce(arg.as_primitive[T]()).to_dyn())
-
-        return arg.dtype().dispatch_numeric[leaf]()
 
     def alias(self, var name: String) -> AggExpr:
         """Name this reduction's output column, making it a GROUP BY aggregate.
@@ -2095,23 +2023,18 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericOps):
         override `sum` (it is defaulted in exactly one family, so a second
         candidate is ambiguous rather than an override), and it does not need
         to."""
-        comptime if Self.IsErased:
-            # The input dtype is unknown, so name the aggregate and let
-            # `AggExpr` resolve it against the column at plan-build time.
-            return AggExpr(DynAgg(Self.K.name, DynValue(self.a.copy()), name^))
-        else:
-            return AggExpr.of[NumericAgg[Self.K, Self.A.OutType]](
-                self.a.copy()
-            ).alias(name^)
+        return AggExpr.of[NumericAgg[Self.K, Self.A.OutType]](
+            self.a.copy()
+        ).alias(name^)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # The operand's dtype is `A.OutType`, so the reduce is the fully typed
         # one — no dtype dispatch, and the erasure is only the `Context` slot.
         var arg = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Self.K.reduce(arg.as_primitive[Self.A.OutType]()).to_dyn())
+        return Datum(Self.K.reduce(arg.as_primitive[Self.A.OutType]()).to_dyn())
 
     @always_inline
     def vectorwise[
@@ -2172,22 +2095,21 @@ struct RowNumberKernel(WindowKernel):
 
 
 @fieldwise_init
-struct WindowFunction[Func: WindowKernel, A: Value](NumericOps):
+struct WindowFunction[Func: WindowKernel, A: Value](Breaker, NumericValue):
     """`func.over(spec)` → a columnar breaker. `prepare` materializes the whole
     output column into `ctx`; `core` then loads it per lane like a column."""
 
     comptime OutType = Self.Func.OutType
     comptime OutShape = 1
-    comptime IsBreaker = True
     var a: Self.A
     var spec: WindowSpec
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var v = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Self.Func.evaluate_all(v))
+        return Datum(Self.Func.evaluate_all(v))
 
     @always_inline
     def vectorwise[
@@ -2197,7 +2119,7 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericOps):
     ]:
         var s = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
 
 
 comptime RowNumber = WindowFunction[RowNumberKernel, _]
@@ -2219,24 +2141,14 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 @fieldwise_init
 struct ConditionalBinary[
     K: BinaryConditionalKernel, L: NumericValue, R: NumericValue
-](NumericOps):
+](Breaker, NumericValue):
     """`coalesce`/`nullif` over two same-dtype numeric operands; `K` picks the
     kernel. `prepare` materializes the result once; `vectorwise` loads it."""
 
     comptime OutType = Self.L.OutType
     comptime OutShape = 1
-    comptime IsErased = Self.L.IsErased or Self.R.IsErased
-    # Breaker only when fused: `Value.execute` routes a breaker through
-    # `prepare` and reads its slot, so `materialize` — where the erased arm
-    # lives — would never run. An erased node has no fused loop to break.
-    comptime IsBreaker = not Self.IsErased
     var l: Self.L
     var r: Self.R
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # `combine` is already erased (`DynArray` in, `DynArray` out), so
-        # the erased arm is `_result` with nothing around it.
-        return Datum(self._result(batch))
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2254,8 +2166,8 @@ struct ConditionalBinary[
     ) raises -> Optional[Bitmap[mut=False]]:
         return self._result(batch).to_data().owned_validity()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        ctx.append(self._result(batch))
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return Datum(self._result(batch))
 
     @always_inline
     def vectorwise[
@@ -2265,7 +2177,7 @@ struct ConditionalBinary[
     ]:
         var i = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
 
 
 comptime Coalesce = ConditionalBinary[CoalesceKernel, _, _]
@@ -2273,24 +2185,18 @@ comptime Nullif = ConditionalBinary[NullifKernel, _, _]
 
 
 @fieldwise_init
-struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericOps):
+struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
+    Breaker, NumericValue
+):
     """Single-branch `CASE WHEN cond THEN then ELSE otherwise` over numeric
     values — `then`/`otherwise` share a dtype. A null condition counts as false
     (Arrow semantics), so `otherwise` is chosen there."""
 
     comptime OutType = Self.T.OutType
     comptime OutShape = 1
-    comptime IsErased = (Self.C.IsErased or Self.T.IsErased or Self.E.IsErased)
-    # Breaker only when fused — see `StringLength`. The erased arm lives in
-    # `materialize`, which `Value.execute` skips entirely for a breaker.
-    comptime IsBreaker = not Self.IsErased
     var cond: Self.C
     var then: Self.T
     var otherwise: Self.E
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        # `_result` already works in `DynArray`, so the erased arm is it.
-        return Datum(self._result(batch))
 
     def referenced_columns(self) -> List[String]:
         return _union_columns(
@@ -2318,8 +2224,8 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericOps):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self._result(batch).to_data().owned_validity()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        ctx.append(self._result(batch))
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return Datum(self._result(batch))
 
     @always_inline
     def vectorwise[
@@ -2329,7 +2235,7 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericOps):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+        return ctx.get_ref[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -2401,7 +2307,9 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
         self._name = name^
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+        # `RecordBatch.column(name)` owns the missing-name diagnostic — see
+        # `NumericColumn.materialize`.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
@@ -2413,20 +2321,15 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
 
 
 @fieldwise_init
-struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](NumericOps):
+struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
+    Breaker, NumericValue
+):
     """Extract a calendar/clock field from a temporal value → int32. A breaker,
     same shape as `StringLength`."""
 
     comptime OutType = Int32Type
     comptime OutShape = 1
-    comptime IsErased = Self.A.IsErased
-    # Breaker only when fused — see `StringLength`.
-    comptime IsBreaker = not Self.IsErased
     var a: Self.A
-
-    def _erased(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        var col = into_array(self.a.execute(batch), batch.num_rows())
-        return Datum(Self.K.dispatch(col).to_dyn())
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2437,9 +2340,9 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](NumericOps):
         # a null temporal value has a null field — validity passes through.
         return self.a.validity(batch)
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Self.K.dispatch(arr))
+        return Datum(Self.K.dispatch(arr))
 
     @always_inline
     def vectorwise[
@@ -2449,7 +2352,7 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](NumericOps):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[Int32Array](i).values().load[W](idx)
+        return ctx.get_ref[Int32Array](i).values().load[W](idx)
 
 
 @fieldwise_init
@@ -2517,7 +2420,9 @@ struct ListColumn[T: ListLikeType](ListValue):
         self._name = name^
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+        # `RecordBatch.column(name)` owns the missing-name diagnostic — see
+        # `NumericColumn.materialize`.
+        return batch.column(self._name).copy()
 
     def validity(
         self, batch: RecordBatch
@@ -2529,12 +2434,11 @@ struct ListColumn[T: ListLikeType](ListValue):
 
 
 @fieldwise_init
-struct ListLength[A: ListValue](NumericOps):
+struct ListLength[A: ListValue](Breaker, NumericValue):
     """List element count -> int32. A breaker, same shape as `StringLength`."""
 
     comptime OutType = Int32Type
     comptime OutShape = 1
-    comptime IsBreaker = True
     var a: Self.A
 
     def referenced_columns(self) -> List[String]:
@@ -2546,9 +2450,9 @@ struct ListLength[A: ListValue](NumericOps):
         # a null list has a null length — validity passes through unchanged.
         return self.a.validity(batch)
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(ArrayLengthKernel.dispatch(arr))
+        return Datum(ArrayLengthKernel.dispatch(arr))
 
     @always_inline
     def vectorwise[
@@ -2558,17 +2462,16 @@ struct ListLength[A: ListValue](NumericOps):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[Int32Array](i).values().load[W](idx)
+        return ctx.get_ref[Int32Array](i).values().load[W](idx)
 
 
 @fieldwise_init
-struct ListContains[A: ListValue, E: NumericValue](BoolValue):
+struct ListContains[A: ListValue, E: NumericValue](BoolValue, Breaker):
     """Element-wise membership: `elem[i] in list[i]` -> bool. A breaker (a literal
     element broadcasts). Numeric element types."""
 
     comptime OutType = BoolType
     comptime OutShape = 1
-    comptime IsBreaker = True
     comptime NativeType = DType.int32
     var a: Self.A
     var elem: Self.E
@@ -2578,11 +2481,11 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
             self.a.referenced_columns(), self.elem.referenced_columns()
         )
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         var n = batch.num_rows()
         var la = into_array(self.a.execute(batch), n)
         var ea = into_array(self.elem.execute(batch), n)
-        ctx.append(ArrayContainsKernel.dispatch(la, ea))
+        return Datum(ArrayContainsKernel.dispatch(la, ea))
 
     @always_inline
     def vectorwise[
@@ -2592,331 +2495,14 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
     ]:
         var i = slot
         slot += 1
-        return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
+        return ctx.get_ref[BoolArray](i).values().load[DType.bool, W](idx)
 
 
 # ---------------------------------------------------------------------------
-# DynValue — erase any node to a boxed handle. Because `execute` already returns
-# a concrete `Datum`, erasure is a plain fn-pointer trampoline.
+# NOTE: erasure lives in `relations.mojo` (`BoxedValue`) — because `execute`
+# already returns a concrete `Datum`, it is a plain fn-pointer trampoline, and
+# it belongs beside the operators that hold one.
 # ---------------------------------------------------------------------------
-struct DynValue(
-    BoolValue,
-    Copyable,
-    Movable,
-    NumericValue,
-    StringValue,
-    TemporalValue,
-    Writable,
-):
-    """Type-erased expression handle — the boundary the relational engine
-    (`marrow.expr.execution`) holds.
-
-    It boxes **one** thing: a `Value`. There is no second representation. It
-    used to glue a fused node *or* a 41-tag interpreter, and had to carry the
-    union of both their behaviours; the interpreter is gone, so a runtime-built
-    tree is made of the same nodes a fused one is — `col("a") + col("b")` is an
-    `Add[DynValue, DynValue]` — and the box simply erases which node types those
-    are.
-
-    Being a `Value` itself is what makes that work in both directions: the fused
-    nodes accept it as an operand (it conforms to every value family), and it can
-    hold a tree that contains itself. `DynArray` erases the data lane; this
-    erases the plan shape, and the two are independent.
-    """
-
-    comptime OutType = DynType
-    """The erased dtype. `DynType` conforms to every family trait, which is what
-    lets a fused node accept this box as an operand without relaxing its bound."""
-
-    comptime OutShape = 1
-    comptime IsErased = True
-
-    comptime NativeType = DType.bool
-    """Required by `BoolValue` to size a SIMD lane. Never read — see
-    `vectorwise`."""
-
-    var _boxed: ArcPointer[NoneType]
-    var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> DynArray
-    var _prune_fn: def(
-        ArcPointer[NoneType], PruneStats
-    ) thin raises -> PruneBound
-    var _name_fn: def(ArcPointer[NoneType]) thin -> String
-    var _write_fn: def(ArcPointer[NoneType]) thin -> String
-    var _referenced_columns_fn: def(ArcPointer[NoneType]) thin -> List[String]
-    var _is_deterministic_fn: def(ArcPointer[NoneType]) thin -> Bool
-    var _bound_column_fn: def(ArcPointer[NoneType], Schema) thin raises -> Int
-    var _resolve_names_fn: def(
-        ArcPointer[NoneType], Schema
-    ) thin raises -> ArcPointer[NoneType]
-    """Bind `col("x")` references to positions against a schema.
-
-    Returns the **erased pointer**, not a `DynValue`: a field whose function type
-    mentions `DynValue` makes this struct recursive (`struct has recursive
-    reference to itself`) — the same failure `Relation.with_predicate` hits, and
-    the same fix. `resolve_names` below keeps its own trampolines and swaps only
-    the pointer, which is sound because resolving names never changes the node's
-    *type*.
-
-    Only the runtime lane has anything to bind — a fused column leaf looks its
-    name up in `materialize`, so it is already position-independent and its
-    trampoline hands back the pointer unchanged."""
-
-    # --- comptime fused `Value` box ----------------------------------------
-    @staticmethod
-    def _exec_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> DynArray:
-        var ctx = Context()
-        var d = rebind[ArcPointer[V]](ptr)[].execute(batch, ctx)
-        return into_array(d, batch.num_rows())
-
-    @staticmethod
-    def _prune_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
-        return rebind[ArcPointer[V]](ptr)[].prune(stats)
-
-    @staticmethod
-    def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-        return rebind[ArcPointer[V]](ptr)[].name()
-
-    @staticmethod
-    def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-        return rebind[ArcPointer[V]](ptr)[].render()
-
-    @staticmethod
-    def _referenced_columns_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType]) -> List[String]:
-        return rebind[ArcPointer[V]](ptr)[].referenced_columns()
-
-    @staticmethod
-    def _is_deterministic_tramp[V: Value](ptr: ArcPointer[NoneType]) -> Bool:
-        return rebind[ArcPointer[V]](ptr)[].is_deterministic()
-
-    @staticmethod
-    def _bound_column_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> Int:
-        return rebind[ArcPointer[V]](ptr)[].bound_column(schema)
-
-    @staticmethod
-    def _resolve_names_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> ArcPointer[NoneType]:
-        # Fused leaves resolve by name at execute time — nothing to bind.
-        return ptr.copy()
-
-    @implicit
-    def __init__[V: Value](out self, value: V):
-        var ptr = ArcPointer[V](value.copy())
-        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._execute = Self._exec_tramp[V]
-        self._prune_fn = Self._prune_tramp[V]
-        self._name_fn = Self._name_tramp[V]
-        self._write_fn = Self._write_tramp[V]
-        self._referenced_columns_fn = Self._referenced_columns_tramp[V]
-        self._is_deterministic_fn = Self._is_deterministic_tramp[V]
-        self._bound_column_fn = Self._bound_column_tramp[V]
-        self._resolve_names_fn = Self._resolve_names_tramp[V]
-
-    @always_inline
-    def vectorwise[
-        W: Int
-    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
-        Self.OutType.native, W
-    ]:
-        """Unreachable. Present only to satisfy `NumericValue` and `BoolValue`.
-
-        A composite holding this box has `IsErased = True`, so its `materialize`
-        takes the dispatch arm and never calls a fused lane. If that propagation
-        is ever missed the enclosing node fails to *instantiate* — a build error,
-        not a wrong answer.
-
-        One body satisfies **both** families, and that is not a coincidence to
-        lean on twice: `NumericValue` wants `SIMD[Self.OutType.native, W]` and
-        `BoolValue` wants `SIMD[DType.bool, W]`. `DynType.native` *is* `bool`, so
-        the two signatures coincide here and nowhere else."""
-        return SIMD[Self.OutType.native, W]()
-
-    @always_inline
-    def elementwise(
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> String:
-        """Unreachable — `StringValue`'s counterpart to `vectorwise` above."""
-        return String()
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        """`Value`'s abstract producer, satisfied by running the boxed node.
-
-        The box is never fused into, so it ignores `ctx` and hands back a whole
-        column: whatever it holds has already resolved its own types by the time
-        the trampoline returns."""
-        return Datum(self._execute(self._boxed, batch))
-
-    def execute(self, batch: RecordBatch) raises -> DynArray:
-        """The column this expression produces — the relational engine's entry
-        point, called once per morsel."""
-        return self._execute(self._boxed, batch)
-
-    def prune(self, stats: PruneStats) raises -> PruneBound:
-        return self._prune_fn(self._boxed, stats)
-
-    def name(self) -> String:
-        return self._name_fn(self._boxed)
-
-    def render(self) -> String:
-        return self._write_fn(self._boxed)
-
-    def referenced_columns(self) -> List[String]:
-        return self._referenced_columns_fn(self._boxed)
-
-    def is_deterministic(self) -> Bool:
-        return self._is_deterministic_fn(self._boxed)
-
-    # --- operators, disambiguated, building the *shared* nodes --------------
-    #
-    # Each returns `DynValue`, not the node type, and that is load-bearing.
-    # Returning `Gt[DynValue, DynValue]` names a type parameterised on this
-    # struct, so elaborating the trait's defaulted `__gt__` for `Self = DynValue`
-    # needs the struct, which needs the method: `attempt to resolve a recursive
-    # reference to declaration 'DynValue.__gt__'`. Boxing the node inside breaks
-    # the cycle — the signature no longer mentions it. Delegating to a
-    # differently-named sibling does *not* help here; the return type is what
-    # closes the loop.
-    #
-    # Conforming to several families means inheriting several fluent surfaces,
-    # and they collide: `NumericValue.__add__` yields `Add` while
-    # `StringValue.__add__` yields `Concat`, so `a + b` on two erased operands
-    # matches every generic candidate equally and is an ambiguous call. A
-    # *non-generic* overload is more specific, so it wins.
-    #
-    # Numeric is the right default — it is what the interpreter's `ADD` tag
-    # always meant. `+` still concatenates when the operands turn out to be
-    # strings; that decision is made in `NumericBinary`'s erased arm, against
-    # the runtime dtype, because a column's dtype is not known here.
-    def __add__(self, o: DynValue) -> DynValue:
-        return DynValue(Add(self.copy(), o.copy()))
-
-    def __sub__(self, o: DynValue) -> DynValue:
-        return DynValue(Sub(self.copy(), o.copy()))
-
-    def __mul__(self, o: DynValue) -> DynValue:
-        return DynValue(Mul(self.copy(), o.copy()))
-
-    def __mod__(self, o: DynValue) -> DynValue:
-        return DynValue(Mod(self.copy(), o.copy()))
-
-    def __floordiv__(self, o: DynValue) -> DynValue:
-        return DynValue(Floordiv(self.copy(), o.copy()))
-
-    def __truediv__(self, o: DynValue) -> DynValue:
-        return DynValue(Div(self.copy(), o.copy()))
-
-    def __lt__(self, o: DynValue) -> DynValue:
-        return DynValue(Lt(self.copy(), o.copy()))
-
-    def __le__(self, o: DynValue) -> DynValue:
-        return DynValue(Le(self.copy(), o.copy()))
-
-    def __gt__(self, o: DynValue) -> DynValue:
-        return DynValue(Gt(self.copy(), o.copy()))
-
-    def __ge__(self, o: DynValue) -> DynValue:
-        return DynValue(Ge(self.copy(), o.copy()))
-
-    def __eq__(self, o: DynValue) -> DynValue:
-        return DynValue(Eq(self.copy(), o.copy()))
-
-    def __ne__(self, o: DynValue) -> DynValue:
-        return DynValue(Ne(self.copy(), o.copy()))
-
-    def __neg__(self) -> DynValue:
-        return DynValue(Neg(self.copy()))
-
-    def abs(self) -> DynValue:
-        return DynValue(Abs(self.copy()))
-
-    def __and__(self, o: DynValue) -> DynValue:
-        return DynValue(And(self.copy(), o.copy()))
-
-    def __or__(self, o: DynValue) -> DynValue:
-        return DynValue(Or(self.copy(), o.copy()))
-
-    def __xor__(self, o: DynValue) -> DynValue:
-        return DynValue(Xor(self.copy(), o.copy()))
-
-    # --- ops whose payload is a runtime value -------------------------------
-    def cast(self, to: DynType) -> DynValue:
-        """Cast to a dtype known only at run time.
-
-        Uses `RuntimeCast` rather than resolving `to` to a comptime type and
-        building `NumericCast[To]`: that works only for numeric targets, and
-        `cast(timestamp(second))` is not one."""
-        return DynValue(RuntimeCast(self.copy(), to.copy()))
-
-    def like(self, var pattern: String) -> DynValue:
-        """SQL `LIKE`. The pattern is a string constant, so it becomes a
-        `StringLiteral` operand and the node is the shared `Like`."""
-        return DynValue(Like(self.copy(), StringLiteral[StringType](pattern^)))
-
-    def ilike(self, var pattern: String) -> DynValue:
-        return DynValue(ILike(self.copy(), StringLiteral[StringType](pattern^)))
-
-    def isin(self, value_set: DynArray) -> DynValue:
-        return DynValue(IsIn(self.copy(), value_set.copy()))
-
-    def nullif(self, o: DynValue) -> DynValue:
-        return DynValue(Nullif(self.copy(), o.copy()))
-
-    # --- aggregates: resolved from the runtime dtype ------------------------
-    #
-    # `min`/`max`/`count` are defaulted in `NumericValue`, `StringValue` and
-    # `TemporalValue` with genuinely different bodies — each names a different
-    # `Aggregation` (`Min` vs `StringMinMax` vs `TemporalMinMax`). Conforming to
-    # all three makes them ambiguous, and unlike `count_distinct` they cannot be
-    # hoisted to `Value` because there is no single answer.
-    #
-    # For an erased value there is no comptime answer either: which aggregate
-    # `min` means depends on the column's dtype. `DynAgg` is exactly that — it
-    # names the aggregate and resolves it against the input dtype when the plan
-    # is built — so the box returns one instead of an `AggExpr`.
-    def aggregate(self, var func: String) -> DynAgg:
-        return DynAgg(func^, self.copy())
-
-    def sum(self) -> DynAgg:
-        return self.aggregate("sum")
-
-    def mean(self) -> DynAgg:
-        return self.aggregate("mean")
-
-    def product(self) -> DynAgg:
-        return self.aggregate("product")
-
-    def min(self) -> DynAgg:
-        return self.aggregate("min")
-
-    def max(self) -> DynAgg:
-        return self.aggregate("max")
-
-    def count(self) -> DynAgg:
-        return self.aggregate("count")
-
-    def bound_column(self, schema: Schema) raises -> Int:
-        """This expression's column position, or -1 if it is not a bare column.
-        """
-        return self._bound_column_fn(self._boxed, schema)
-
-    def resolve_names(self, schema: Schema) raises -> DynValue:
-        """Bind name references against `schema`, keeping the same node type."""
-        var out = self.copy()
-        out._boxed = self._resolve_names_fn(self._boxed, schema)
-        return out^
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._write_fn(self._boxed))
-
-
 # NOTE: `Table[T]` (the `t.a` schema-struct sugar over a plain struct of
 # dtype-tag fields) is deferred — the parametric
 # `comptime _dtype[name] = reflect[T].field[name].T` alias hits the documented
@@ -2970,144 +2556,34 @@ def lit(value: String) -> StringLiteral[StringType]:
 # AggExpr — one aggregate in a query
 #
 # `col("x").sum()` on a fused node produces one of these with its `Aggregation`
-# already chosen; the same call on a `TagValue` produces a `DynAgg`, which
+# already chosen; the same call on a `DynValue` produces a `DynAgg`, which
 # converts into one and resolves its function name when the plan is built. Both
 # arrive at the same `AggFunc`, which is why `aggregate(...)` takes a single
 # list and does not care which lane each member came from.
 # ---------------------------------------------------------------------------
 
 
-struct AggExpr(Copyable, Movable, Writable):
-    """An aggregate over an input expression, under an output column name.
-
-    Two ways in:
-
-    - **fused / AOT** — ``col("amount", int64).sum()``. The ``Aggregation`` is
-      computed from the node's own ``OutType``, so nothing is interpreted: the
-      plan points straight at ``AggState[SumKernel, Int64Type]``.
-    - **dynamic** — ``col("amount").sum()`` on a ``TagValue``, which carries the
-      function's *name* until the plan is built and the input's dtype is known.
-
-    ``input_for(schema)`` hands back the input expression ready to execute:
-    the dynamic lane resolves its column names against the schema first (a
-    fused node addresses columns by name at execute time and needs nothing)."""
-
-    var out_name: String
-    """The output column name — the aggregate's own name unless aliased."""
-
-    var input: DynValue
-    var _unresolved: Optional[DynValue]
-    var _func: String
-    var _of: Optional[def(DynType) thin raises -> AggFunc]
-
-    @implicit
-    def __init__[
-        K: AggKernel, In: NumericValue
-    ](out self, var reduction: Reduction[K, In]):
-        """From a fused reduction: ``col("amount", int64).sum()`` is a scalar
-        `Reduction` inside an expression and this aggregate in a `GROUP BY` —
-        the same node, read two ways.
-
-        When the operand is typed, the kernel and its `OutType` name the
-        `Aggregation` outright and nothing is resolved later. When it is erased
-        there is no `OutType` to name one with, so the aggregate is carried by
-        name and resolved against the column's dtype at plan build — the same
-        split as `Reduction.alias`."""
-        comptime if In.IsErased:
-            self = AggExpr(
-                DynAgg(K.name, DynValue(reduction.a.copy()), String())
-            )
-        else:
-            self = AggExpr.of[K.Grouped[In.OutType]](reduction.a.copy())
-
-    @implicit
-    def __init__(out self, var agg: DynAgg):
-        """From the dynamic lane: keep the name, resolve it at plan build."""
-        var out_name = agg.out_name.copy()
-        if not out_name:
-            out_name = agg.func.copy()
-        self.out_name = out_name^
-        self.input = DynValue(agg.input.copy())
-        self._unresolved = agg.input.copy()
-        self._func = agg.func.copy()
-        self._of = None
-
-    def __init__(
-        out self,
-        *,
-        var out_name: String,
-        var input: DynValue,
-        of: def(DynType) thin raises -> AggFunc,
-    ):
-        self.out_name = out_name^
-        self.input = input^
-        self._unresolved = None
-        self._func = String()
-        self._of = of
-
-    @staticmethod
-    def of[A: Aggregation, In: Value](var input: In) -> AggExpr:
-        """From the fused lane: the aggregation is named, not looked up."""
-        return AggExpr(
-            out_name=String(A.name),
-            input=DynValue(input^),
-            of=AggFunc.of[A],
-        )
-
-    def alias(self, var name: String) -> AggExpr:
-        """Name this aggregate's output column."""
-        var out = self.copy()
-        out.out_name = name^
-        return out^
-
-    def input_for(self, schema: Schema) raises -> DynValue:
-        """The input expression, ready to execute against ``schema``."""
-        if self._unresolved:
-            return DynValue(self._unresolved.value().resolve_names(schema))
-        return self.input.copy()
-
-    def resolve(self, in_dtype: DynType) raises -> AggFunc:
-        """The aggregate, bound to the dtype its input turned out to have."""
-        if self._of:
-            return self._of.value()(in_dtype)
-        return AggFunc(self._func, in_dtype)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._func if self._func else self.out_name, "(")
-        self.input.write_to(writer)
-        writer.write(")")
-
-
-# ---------------------------------------------------------------------------
-# Runtime factories — the entry points a frontend without comptime types uses.
-#
-# **Overloads of the fused factories, not separate spellings.** `col("a")` and
-# `col("a", int64)` differ only in whether the caller knows the dtype; both build
-# a `NumericColumn`, one with `DynType`. These used to build `TagValue`
-# interpreter nodes, so `col(0) + col(1)` was a tag tree; it is now an
-# `Add[DynValue, DynValue]`.
-# ---------------------------------------------------------------------------
-
-
 def col(var name: String) -> DynValue:
     """Reference a column whose dtype is not known here — `col("a")`.
 
-    The node is `NumericColumn[DynType]`, the same leaf the fused lane uses.
-    Reading a column by name never needed a dtype."""
-    return DynValue(NumericColumn[DynType](name^))
+    Same verb as `col(name, dtype)`, one argument shorter, and that argument is
+    the whole difference between the lanes: with a dtype the fused
+    `NumericColumn[T]` leaf is built, without one the column's type is found on
+    the batch and this is a runtime-lane node."""
+    return DynValue.column(name^)
 
 
 def lit[T: NumericType](value: Scalar[T.native]) -> DynValue:
     """A scalar constant for the runtime lane — `lit[Int64Type](3)`.
 
-    A literal always knows its type where it is written, so this is the ordinary
-    `NumericLiteral[T]`; the *box* does the erasing."""
-    return DynValue(NumericLiteral[T](value))
+    A literal always knows its type where it is written; what is erased here is
+    the *expression*, so the value goes in as a `DynScalar` payload."""
+    return DynValue.literal(PrimitiveScalar[T](value))
 
 
 def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
     """Element-wise conditional — the single-branch `CaseWhen`."""
-    return DynValue(CaseWhen(cond.copy(), then_.copy(), else_.copy()))
+    return DynValue.if_else(cond, then_, else_)
 
 
 def coalesce(values: List[DynValue]) raises -> DynValue:
@@ -3120,7 +2596,7 @@ def coalesce(values: List[DynValue]) raises -> DynValue:
         raise Error("coalesce: needs at least one value")
     var acc = values[0].copy()
     for k in range(1, len(values)):
-        acc = DynValue(Coalesce(acc.copy(), values[k].copy()))
+        acc = acc.coalesce(values[k])
     return acc^
 
 
@@ -3142,11 +2618,7 @@ def case_when(
     # third operand, so the null is built from an existing node rather than a new
     # one: `Nullif(v, v)` is `v` with every element equal to itself removed — an
     # all-null column of the right dtype.
-    var acc = else_.value().copy() if else_ else DynValue(
-        Nullif(values[0].copy(), values[0].copy())
-    )
+    var acc = else_.value().copy() if else_ else values[0].nullif(values[0])
     for k in range(len(conditions) - 1, -1, -1):
-        acc = DynValue(
-            CaseWhen(conditions[k].copy(), values[k].copy(), acc.copy())
-        )
+        acc = DynValue.if_else(conditions[k], values[k], acc)
     return acc^

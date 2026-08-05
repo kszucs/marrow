@@ -51,7 +51,7 @@ from ...kernels.numeric import (
     SinKernel,
     CosKernel,
 )
-from ...kernels.execution import ExecutionContext
+from ...execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -616,11 +616,11 @@ def test_pow_runtime_typed() raises:
 
 
 # ---------------------------------------------------------------------------
-# ExecutionContext dispatch — serial / parallel / auto must agree
+# ExecContext dispatch — serial / parallel / auto must agree
 # ---------------------------------------------------------------------------
 
 
-def _assert_add_matches_reference(ctx: ExecutionContext) raises:
+def _assert_add_matches_reference(ctx: ExecContext) raises:
     """Run ``add`` over a 100k-element input with ``ctx`` and assert the
     output equals the analytic reference (a[i]+b[i] == 2*i)."""
     comptime N = 100_000
@@ -640,17 +640,17 @@ def _assert_add_matches_reference(ctx: ExecutionContext) raises:
 
 def test_add_dispatch_serial() raises:
     """Forced serial CPU dispatch produces correct results."""
-    _assert_add_matches_reference(ExecutionContext.serial())
+    _assert_add_matches_reference(ExecContext.serial())
 
 
 def test_add_dispatch_parallel_2() raises:
     """Forced 2-worker parallel CPU dispatch produces correct results."""
-    _assert_add_matches_reference(ExecutionContext.parallel(2))
+    _assert_add_matches_reference(ExecContext.parallel(2))
 
 
 def test_add_dispatch_parallel_4() raises:
     """Forced 4-worker parallel CPU dispatch produces correct results."""
-    _assert_add_matches_reference(ExecutionContext.parallel(4))
+    _assert_add_matches_reference(ExecContext.parallel(4))
 
 
 def test_add_dispatch_auto() raises:
@@ -659,7 +659,7 @@ def test_add_dispatch_auto() raises:
     With N=100_000 (>= the 32_768 default min_parallel_size) auto should
     pick the parallel path.
     """
-    _assert_add_matches_reference(ExecutionContext.auto())
+    _assert_add_matches_reference(ExecContext.auto())
 
 
 def test_add_dispatch_auto_small() raises:
@@ -670,7 +670,7 @@ def test_add_dispatch_auto_small() raises:
     """
     var a = arange[Int32Type](0, 100)
     var b = arange[Int32Type](0, 100)
-    var result = AddKernel.apply[Int32Type](a, b, ExecutionContext.auto())
+    var result = AddKernel.apply[Int32Type](a, b, ExecContext.auto())
     assert_equal(len(result), 100)
     assert_equal(result[0].value(), 0)
     assert_equal(result[50].value(), 100)
@@ -685,8 +685,89 @@ def test_add_dispatch_parallel_small() raises:
     """
     var a = arange[Int32Type](0, 100)
     var b = arange[Int32Type](0, 100)
-    var result = AddKernel.apply[Int32Type](a, b, ExecutionContext.parallel(8))
+    var result = AddKernel.apply[Int32Type](a, b, ExecContext.parallel(8))
     assert_equal(len(result), 100)
     assert_equal(result[0].value(), 0)
     assert_equal(result[50].value(), 100)
     assert_equal(result[99].value(), 198)
+
+
+# ---------------------------------------------------------------------------
+# Q2.3 — validity must be offset-aware.
+#
+# `apply` takes its values from `left.values()` / `right.values()`, which are
+# offset-applied views, but built its output bitmap from the raw `left.bitmap` /
+# `right.bitmap`. The output array is `offset=0`, so on a sliced input the data
+# came from the slice while the validity came from the parent: every null in the
+# result sat `offset` positions away from where it belonged.
+#
+# Same shape as B11/B13/B16/B17 — views index logically from zero, owning
+# Bitmaps do not, and mixing the two conventions is this codebase's most
+# repeated bug.
+# ---------------------------------------------------------------------------
+
+
+def _nulls_at_front(n: Int, num_null: Int) raises -> PrimitiveArray[Int32Type]:
+    """`[null, ..., null, k, k+1, ...]` — nulls only in the leading positions,
+    so slicing past them must produce an all-valid array."""
+    var b = Int32Builder(n)
+    for i in range(n):
+        if i < num_null:
+            b.append_null()
+        else:
+            b.append(Scalar[int32.native](i))
+    return b.finish()
+
+
+def test_add_on_sliced_input_does_not_inherit_parent_validity() raises:
+    """Slicing past every null must give an all-valid result.
+
+    With the parent's raw bitmap, the result reported nulls at positions 0 and 1
+    — the parent's null positions — even though those rows hold valid data.
+    """
+    var parent = _nulls_at_front(5, 2)
+    var sliced = parent.slice(2, 3)  # [2, 3, 4], no nulls
+    var other = array([10, 20, 30], int32)
+
+    var out = AddKernel.apply(sliced, other)
+    assert_equal(len(out), 3)
+    assert_equal(out.null_count(), 0)
+    for i in range(3):
+        assert_true(out.is_valid(i))
+    # `==` rather than an element loop, per CLAUDE.md. This assertion is only
+    # possible because B26 is fixed: `out` carries an all-valid bitmap (the
+    # kernel intersected validity) and the literal does not, and `__eq__` used
+    # to call those unequal.
+    assert_true(out == array([12, 23, 34], int32))
+
+
+def test_add_on_sliced_input_keeps_the_slice_s_own_nulls() raises:
+    """The complement: a null inside the slice must land at its slice-relative
+    position, not its parent-relative one."""
+    var b = Int32Builder(5)
+    b.append(Scalar[int32.native](0))
+    b.append(Scalar[int32.native](1))
+    b.append(Scalar[int32.native](2))
+    b.append_null()  # parent index 3 -> slice index 1
+    b.append(Scalar[int32.native](4))
+    var sliced = b.finish().slice(2, 3)  # [2, null, 4]
+    var other = array([10, 20, 30], int32)
+
+    var out = AddKernel.apply(sliced, other)
+    assert_equal(out.null_count(), 1)
+    assert_true(out.is_valid(0))
+    assert_false(out.is_valid(1))
+    assert_true(out.is_valid(2))
+
+
+def test_add_sliced_when_only_one_side_has_a_bitmap() raises:
+    """`Bitmap.intersect` returns the *other* bitmap when one side is None, so
+    the single-sided path skipped offsetting entirely."""
+    var parent = _nulls_at_front(5, 2)
+    var sliced = parent.slice(2, 3)  # nullable but all-valid
+    var other = array([10, 20, 30], int32)  # no bitmap at all
+
+    var out = AddKernel.apply(sliced, other)
+    assert_equal(out.null_count(), 0)
+    for i in range(3):
+        assert_true(out.is_valid(i))

@@ -1,6 +1,6 @@
 ---
 title: "GPU execution"
-subtitle: "Experimental device dispatch through ExecutionContext"
+subtitle: "Experimental device dispatch through ExecContext"
 execute:
   enabled: false
 ---
@@ -12,7 +12,7 @@ so far. Treat it as infrastructure to build on, not a turnkey speed-up.
 
 ::: {.callout-note}
 The code on this page is Mojo. GPU dispatch is a native-level capability driven
-by an `ExecutionContext`; it is not exposed as a distinct mode in the Python
+by an `ExecContext`; it is not exposed as a distinct mode in the Python
 bindings today.
 :::
 
@@ -27,22 +27,22 @@ Device dispatch is implemented for element-wise kernels only:
 | Hashing | yes | used by the hash-table kernels |
 | Sort, join, aggregate, filter | no | CPU only |
 
-## ExecutionContext
+## ExecContext
 
-Every kernel that can use a device takes an `ExecutionContext` as its last
+Every kernel that can use a device takes an `ExecContext` as its last
 argument. It bundles two independent choices — CPU worker count and an optional
 GPU device — behind three factory methods:
 
 ```mojo
-from marrow.kernels.execution import ExecutionContext
+from marrow.execution import ExecContext
 from gpu.host import DeviceContext
 
-var cpu       = ExecutionContext.serial()            # single-threaded CPU
-var threaded  = ExecutionContext.parallel(num_threads=0)  # 0 = all cores
-var on_device = ExecutionContext.gpu(DeviceContext())     # run on the GPU
+var cpu       = ExecContext.serial()            # single-threaded CPU
+var threaded  = ExecContext.parallel(num_threads=0)  # 0 = all cores
+var on_device = ExecContext.gpu(DeviceContext())     # run on the GPU
 ```
 
-The default constructor (`ExecutionContext()`) is serial CPU with no device.
+The default constructor (`ExecContext()`) is serial CPU with no device.
 
 ```mojo
 from marrow.kernels.arithmetic import add
@@ -52,8 +52,8 @@ from marrow.dtypes import int64
 var a = array[int64]([1, 2, 3, 4])
 var b = array[int64]([10, 20, 30, 40])
 
-var cpu_result = add(a, b, ExecutionContext.serial())
-var gpu_result = add(a, b, ExecutionContext.gpu(DeviceContext()))
+var cpu_result = add(a, b, ExecContext.serial())
+var gpu_result = add(a, b, ExecContext.gpu(DeviceContext()))
 ```
 
 ## Device transfer

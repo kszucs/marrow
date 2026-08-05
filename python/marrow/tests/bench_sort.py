@@ -93,7 +93,7 @@ def test_marrow_sort_indices_int64(benchmark, int64_arrays, n):
 def test_marrow_sort_indices_int64_serial(benchmark, int64_arrays, n):
     benchmark.extra_info.update(lib="marrow_serial", n=n)
     arr = int64_arrays["ma"]
-    benchmark(ma.compute.sort_indices, arr, ctx=ma.ExecutionContext.serial())
+    benchmark(ma.compute.sort_indices, arr, ctx=ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="sort_int64")
@@ -148,7 +148,7 @@ def test_marrow_sort_indices_float64(benchmark, float64_arrays, n):
 def test_marrow_sort_indices_float64_serial(benchmark, float64_arrays, n):
     benchmark.extra_info.update(lib="marrow_serial", n=n)
     arr = float64_arrays["ma"]
-    benchmark(ma.compute.sort_indices, arr, ctx=ma.ExecutionContext.serial())
+    benchmark(ma.compute.sort_indices, arr, ctx=ma.ExecContext.serial())
 
 
 @pytest.mark.benchmark(group="sort_float64")

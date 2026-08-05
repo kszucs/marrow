@@ -17,6 +17,8 @@ from ...kernels.aggregate import (
     MaxKernel,
     MeanKernel,
     NumericAgg,
+    CountKernel,
+    CountAgg,
 )
 
 
@@ -109,6 +111,74 @@ def bench_groupby_max_100k(mut b: Benchmark) raises:
 
 def bench_groupby_mean_100k(mut b: Benchmark) raises:
     _bench_group_by[NumericAgg[MeanKernel, Float64Type]](b, 100_000)
+
+
+def _make_vals_nulls(n: Int) raises -> DynArray:
+    """Values with every third row null — enough nulls that the validity check
+    cannot be branch-predicted away."""
+    var b = Float64Builder(n)
+    for i in range(n):
+        if i % 3 == 0:
+            b.append_null()
+        else:
+            b.append(Scalar[float64.native](Float64(i)))
+    return b.finish()
+
+
+def _bench_group_by_nulls[
+    A: Aggregation
+](mut b: Benchmark, n: Int, num_groups: Int = 10) raises:
+    var keys = _make_keys(n, num_groups)
+    var vals = A.from_any(_make_vals_nulls(n))
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(GroupBy(keys).aggregate[A](vals))
+
+    b.iter[call]()
+    keep(keys)
+    keep(vals)
+
+
+# ---------------------------------------------------------------------------
+# grouped count — the A/B for Q7.3.
+#
+# Two implementations exist and the two expression lanes disagree about which
+# to use: `CountValid.resolve` picks `NumericAgg[CountKernel, V]` for numeric
+# columns, while the AOT lane uses `CountKernel.Grouped`, which is `CountAgg`.
+#
+# They are not obviously ordered. `CountAgg` takes a `DynArray` and calls
+# `values.is_valid(i)` per row — erased dispatch — but skips it entirely when
+# the column is null-free, in which case it never loads a value at all.
+# `AggState` pays a typed validity check and does load the value. So null-free
+# should favour `CountAgg` and nullable may favour `AggState`.
+#
+# Both live in this one binary so the harness interleaves them: measuring one
+# variant, rebuilding, then measuring the other invents regressions that are not
+# there.
+#
+# g100k, never g10 — cardinality picks the execution strategy.
+# ---------------------------------------------------------------------------
+
+
+def bench_groupby_count_1m_g100k_aggstate(mut b: Benchmark) raises:
+    _bench_group_by[NumericAgg[CountKernel, Float64Type]](b, 1_000_000, 100_000)
+
+
+def bench_groupby_count_1m_g100k_countagg(mut b: Benchmark) raises:
+    _bench_group_by[CountAgg](b, 1_000_000, 100_000)
+
+
+def bench_groupby_count_nulls_1m_g100k_aggstate(mut b: Benchmark) raises:
+    _bench_group_by_nulls[NumericAgg[CountKernel, Float64Type]](
+        b, 1_000_000, 100_000
+    )
+
+
+def bench_groupby_count_nulls_1m_g100k_countagg(mut b: Benchmark) raises:
+    _bench_group_by_nulls[CountAgg](b, 1_000_000, 100_000)
 
 
 # ---------------------------------------------------------------------------

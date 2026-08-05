@@ -1,7 +1,7 @@
 """String compute kernels.
 
 Three shapes, each following the tier scheme used by the numeric kernels
-(`arithmetic.mojo`), adapted to variable-width UTF-8 data:
+(`numeric.mojo`), adapted to variable-width UTF-8 data:
 
 - **Length** (`LengthKernel`) — byte length per element → `Int32Array`. The one
   string op that vectorizes cleanly: byte length is `offsets[i+1] - offsets[i]`,
@@ -24,7 +24,6 @@ them. Only `LengthKernel` exposes a fusable, offset-based fast path there.
 
 from std.sys import size_of
 from std.sys.info import simd_byte_width
-from std.algorithm.backend.vectorize import vectorize
 from std.utils.index import IndexList
 
 from ..arrays import (
@@ -37,6 +36,8 @@ from ..buffers import Buffer, Bitmap
 from ..builders import BinaryLikeBuilder
 from ..dtypes import StringLikeType, DType
 from .core import Kernel
+from ..views import apply
+from ..execution import ExecContext
 
 
 # ---------------------------------------------------------------------------
@@ -61,33 +62,34 @@ struct LengthKernel(Kernel):
         T: DType, W: Int
     ](hi: SIMD[T, W], lo: SIMD[T, W]) -> SIMD[DType.int32, W]:
         """The fusable per-lane primitive: byte length from two loaded offset
-        vectors (`offsets[i+1] - offsets[i]`). Both `apply` and the expression
-        layer's `StringLength` build on it, so the compute lives here only."""
+        vectors (`offsets[i+1] - offsets[i]`), used by `apply`. The expression
+        layer's `StringLength` does *not* build on this — it is a breaker and
+        calls `LengthKernel.dispatch`, materialising an `Int32Array`. Making it
+        fuse through `core` is Q7.1."""
         return (hi - lo).cast[DType.int32]()
 
     @staticmethod
     def apply[
         T: StringLikeType
-    ](array: BinaryLikeArray[T]) raises -> Int32Array:
+    ](
+        array: BinaryLikeArray[T],
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> Int32Array:
         comptime off = T.offset
         var n = len(array)
         var out = Buffer.alloc_uninit[DType.int32](n)
         var offs = array.offsets.view[off](array.offset)
-        comptime width = simd_byte_width() // size_of[Scalar[off]]()
 
+        # `views.apply`, not stdlib `vectorize` directly. Kernels and the
+        # expression layer go through the `apply` family: it owns the SIMD width,
+        # the serial/parallel choice and the tail, so a kernel that reaches past
+        # it opts out of all three and diverges from every other kernel here.
         @parameter
         @always_inline
-        def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
-            var i = idx[0]
-            out.view[DType.int32](i).store[W](
-                0, Self.core(offs.load[W](i + 1), offs.load[W](i))
-            )
+        def producer[W: Int](i: Int) -> SIMD[DType.int32, W]:
+            return Self.core(offs.load[W](i + 1), offs.load[W](i))
 
-        @always_inline
-        def lane[W: Int](i: Int):
-            fill[W, rank=1](IndexList[1](i))
-
-        vectorize[width](n, lane)
+        apply[DType.int32, producer](out.view[DType.int32](0, n), ctx)
 
         # Propagate the input's validity: a null string yields a null length.
         var vbm: Optional[Bitmap[mut=False]] = None
@@ -311,7 +313,7 @@ trait StringPredicateKernel(Kernel):
     ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
         Self.expect_same_length(len(left), len(right))
         var n = len(left)
-        var bm = Bitmap.intersect(left.bitmap.copy(), right.bitmap.copy())
+        var bm = Bitmap.intersect_views(left.validity(), right.validity())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):
@@ -324,6 +326,38 @@ trait StringPredicateKernel(Kernel):
             nulls=bm.value().unset_count() if bm else 0,
             offset=0,
             bitmap=bm,
+            buffer=data.to_immutable(),
+        )
+
+    @staticmethod
+    def apply_scalar[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        """`array × one constant pattern`, without materialising the constant.
+
+        The peer of `apply` for the case where the right operand is a scalar.
+        `apply` needs a `BinaryLikeArray` on both sides, so the expression layer
+        had to splat a literal into an n-row array first — n copies of the same
+        string, allocated per morsel.
+
+        The default body is the same loop as `apply` with the right operand
+        hoisted. `LikeKernel`/`ILikeKernel` override it to compile their pattern
+        once instead of per row.
+        """
+        var n = len(array)
+        var data = Bitmap.alloc_zeroed(n)
+        for i in range(n):
+            if array.is_valid(i) and Self.predicate(
+                array.unsafe_get(UInt(i)), pattern
+            ):
+                data.set(i)
+        # Validity is the left operand's: a constant right operand is never
+        # null, so `Bitmap.intersect(l, None)` reduces to `l`.
+        return BoolArray(
+            length=n,
+            nulls=array.null_count(),
+            offset=0,
+            bitmap=_passthrough_validity(array, n),
             buffer=data.to_immutable(),
         )
 
@@ -676,6 +710,16 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
             return _match_tokens(self.tokens, s)
 
 
+def _passthrough_validity[
+    T: StringLikeType
+](array: BinaryLikeArray[T], n: Int) raises -> Optional[Bitmap[mut=False]]:
+    """The left operand's validity, offset-applied — what a predicate against a
+    constant returns, since a constant operand is never null."""
+    if array.bitmap:
+        return array.bitmap.value().view(array.offset, n).to_owned()
+    return None
+
+
 def _match_pattern[
     T: StringLikeType, ignore_case: Bool
 ](
@@ -693,15 +737,11 @@ def _match_pattern[
         if array.is_valid(i) and pattern.matches(array.unsafe_get(UInt(i))):
             data.set(i)
     # Null input yields a null output element.
-    var vbm: Optional[Bitmap[mut=False]] = None
-    if array.bitmap:
-        var v = array.bitmap.value().view(array.offset, n)
-        vbm = v.union(v).to_immutable()
     return BoolArray(
         length=n,
         nulls=array.null_count(),
         offset=0,
-        bitmap=vbm^,
+        bitmap=_passthrough_validity(array, n),
         buffer=data.to_immutable(),
     )
 
@@ -728,8 +768,8 @@ struct LikeKernel(StringPredicateKernel):
 
     Two shapes: the inherited array × array `apply`/`dispatch` (general case,
     one pattern per row) and the array × scalar-pattern `apply`/`dispatch`
-    below, which compiles the pattern once — use the latter whenever the
-    pattern is a constant, which is the dominant `col LIKE '%const%'` case."""
+    below, which compiles the pattern once — `apply_scalar` is what the
+    expression layer calls for a constant pattern."""
 
     comptime name = "match_like"
 
@@ -744,6 +784,14 @@ struct LikeKernel(StringPredicateKernel):
         T: StringLikeType
     ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
         return _match_pattern(array, LikePattern[False](pattern))
+
+    @staticmethod
+    def apply_scalar[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        # Compile once, not once per row — which is the whole point of
+        # `LikePattern`, and had no non-test caller before this.
+        return Self.apply(array, pattern)
 
     @staticmethod
     def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:
@@ -767,6 +815,12 @@ struct ILikeKernel(StringPredicateKernel):
         T: StringLikeType
     ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
         return _match_pattern(array, LikePattern[True](pattern))
+
+    @staticmethod
+    def apply_scalar[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
+        return Self.apply(array, pattern)
 
     @staticmethod
     def dispatch(array: DynArray, pattern: StringSlice) raises -> DynArray:

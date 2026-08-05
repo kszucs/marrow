@@ -14,6 +14,7 @@ noticing.
     pixi run binary_size query_arith
 """
 
+from marrow.expr.relations import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import int64, field
 from marrow.schema import schema
@@ -28,11 +29,11 @@ def main() raises:
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
     var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
-        DynValue(col("a", int64) > col("b", int64))
+        BoxedValue(col("a", int64) > col("b", int64))
     )
-    var values = List[DynValue]()
+    var values = List[BoxedValue]()
     values.append(
-        DynValue(
+        BoxedValue(
             (col("a", int64) + col("b", int64)) * col("a", int64)
             - col("b", int64)
         )

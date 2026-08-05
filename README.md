@@ -53,14 +53,17 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Group-by: `GroupBy(keys).sum(values)` / `.min` / `.max` / typed `.aggregate[K]`; radix-partition-parallel, returns `RecordBatch`
 - Hashing: `hash_` for primitive, string, and struct arrays
 - Selection: `filter`, `drop_null`, `take`
-- Sort: `argsort` (returns index array), `sort` (stable sort); LSD radix for N ≥ 32 768, PDQsort below; parallel radix for N ≥ 524 288; `nulls_first`/`nulls_last`; multi-column `sort(StructArray, key_indices, ascending)`
+- Sort: `sort_indices` (returns index array), `sort`; LSD radix for N ≥ 32 768, PDQsort below; parallel radix for N ≥ 524 288; `nulls_first`/`nulls_last`; multi-column `SortIndices.multi(StructArray, key_indices, ascending)`
 - Join: `hash_join` — inner, left, right, full, semi, anti; partition-parallel
-- Strings: `string_lengths`
+- Strings: length, upper/lower, strip/lstrip/rstrip, reverse, capitalize, concat, starts_with/ends_with/contains, the six comparisons, and `LIKE`/`ILIKE` with a pre-compiled pattern
+- Temporal: year, month, day, quarter, day_of_year, day_of_week, hour, minute, second, `date_trunc`
+- Conditional: `case_when`, `coalesce`, `nullif`, `fill_null`; membership: `is_in`; nested: `array_length`, `array_contains`
 
-**Expression execution** (`marrow.expr`) — two dispatch styles behind one
-relational API
-- **Runtime (dynamic)** — the `DynValue` node (`marrow/expr/dynamic.mojo`), type-erased and runtime-dispatched. Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …); relational plan nodes `InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate`, `Join` with `.filter()`, `.select()`, `.aggregate()`, `.join()` chaining; pull-based streaming executor (`execute(plan)` opens a processor tree and returns a `RecordBatch`). A `.filter` above a `ParquetScan` pushes its predicate into the scan for row-group/page pruning. This is what the Python bindings drive.
-- **Fused (AOT)** — the comptime-typed algebra (`marrow/expr/values.mojo`), fully monomorphized. A query's entire shape lives in its type (`Table`, `Column[Tbl, name, T]`, `Project`, `Filter`), compiling to fused SIMD loops with no tag dispatch — measured ~33x smaller stripped binary than the dynamic equivalent (`benchmarks/binary_size/`).
+**Expression execution** (`marrow.expr`) — two lanes behind one relational API
+- **Runtime lane** — the `DynValue` node (`marrow/expr/dynamic.mojo`). Its operand *dtypes* are resolved at run time, but its operation is not: each node carries a pointer to its evaluator, so a binary links exactly the kernels its expressions mention. Build expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …).
+- **AOT lane** — the comptime-typed algebra (`marrow/expr/values.mojo`), fully monomorphized: every operand is bound on a family trait, the output dtype is a comptime type, and a subtree fuses into one SIMD loop with no dispatch.
+- **One plan IR over both.** `BoxedValue` (`marrow/expr/relations.mojo`) is the single box both lanes erase into, so each relational operator compiles exactly once. Plan nodes `InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Limit`, `Sort`, `Aggregate`, `Join` chain via `.filter()`, `.select()`, `.aggregate()`, `.sort()`, `.limit()`, `.join()`; `plan.execute()` opens a pull-based processor tree. A `.filter` directly above a `ParquetScan` pushes its predicate into the scan for row-group and page pruning.
+- The AOT lane's whole point is that the closed world is dead-code-eliminable: the fused gate binary is several times smaller in `__text` than the runtime equivalent. `benchmarks/binary_size/` is the live gate — trust it over any ratio quoted in prose.
 
 **Parquet I/O** (`marrow/parquet`) — a from-scratch reader/writer, no PyArrow at runtime
 - `read_table(path, columns=None)` — decode a Parquet file into a marrow `Table`, with optional column projection
@@ -70,8 +73,9 @@ relational API
 
 **Python bindings** — `import marrow as ma`
 - `array(values, type=None)` — create any array type from Python lists with type inference
-- All compute kernels exposed as free functions
+- `marrow.compute` exposes 26 kernels — arithmetic, comparison, aggregates, `filter`/`take`/`drop_null`, `sort`/`sort_indices`, `cast`, distinct counts. The string, temporal, boolean and conditional families are implemented in Mojo but **not yet bound**.
 - Full null handling, type coercion, nested structure support
+- The relational engine is **not** bound yet — there is no lazy/expression frontend in Python
 
 **Arrow IPC** (`marrow/ipc`)
 - `read_ipc_file(path)` / `write_ipc_file(path, schema, batches)` — IPC file format
@@ -335,15 +339,15 @@ pixi run -e bench pytest --benchmark --no-mojo python/marrow/tests/bench_join.py
 ## GPU Execution (experimental)
 
 A few element-wise kernels — arithmetic, comparisons, and hashing — can dispatch
-to the GPU (Metal on Apple Silicon, CUDA on NVIDIA) when an `ExecutionContext`
+to the GPU (Metal on Apple Silicon, CUDA on NVIDIA) when an `ExecContext`
 carries a `DeviceContext`. The GPU and CPU paths share the same kernel source.
 
 ```mojo
 from gpu.host import DeviceContext
-from marrow.kernels.execution import ExecutionContext
+from marrow.execution import ExecContext
 from marrow.kernels.arithmetic import add
 
-var result = add(a, b, ExecutionContext.gpu(DeviceContext()))
+var result = add(a, b, ExecContext.gpu(DeviceContext()))
 ```
 
 These kernels are all low arithmetic intensity (~1 op per element), so for most

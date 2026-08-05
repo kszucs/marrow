@@ -18,6 +18,7 @@ the two is the measurement: it is exactly the cost of the aggregate identity
     pixi run binary_size
 """
 
+from marrow.expr.relations import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import DynType, int64, string, field
 from marrow.schema import schema
@@ -35,12 +36,12 @@ def main() raises:
         [a.copy(), b.copy(), nm.copy()], names=["a", "b", "name"]
     )
 
-    var keys = List[DynValue]()
-    keys.append(DynValue(col("name", string)))
+    var keys = List[BoxedValue]()
+    keys.append(BoxedValue(col("name", string)))
 
-    var aggs = List[DynValue]()
-    aggs.append(DynValue(col("a", int64)))
-    aggs.append(DynValue(col("b", int64)))
+    var aggs = List[BoxedValue]()
+    aggs.append(BoxedValue(col("a", int64)))
+    aggs.append(BoxedValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
     funcs.append(AggFunc("sum", DynType(int64)))

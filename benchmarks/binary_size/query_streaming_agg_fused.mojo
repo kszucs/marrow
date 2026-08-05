@@ -13,6 +13,7 @@ stripped sizes is precisely the cost of a runtime aggregate identity.
     pixi run binary_size
 """
 
+from marrow.expr.relations import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import DynType, Int64Type, int64, string, field
 from marrow.kernels.aggregate import NumericAgg, SumKernel, MinKernel
@@ -31,12 +32,12 @@ def main() raises:
         [a.copy(), b.copy(), nm.copy()], names=["a", "b", "name"]
     )
 
-    var keys = List[DynValue]()
-    keys.append(DynValue(col("name", string)))
+    var keys = List[BoxedValue]()
+    keys.append(BoxedValue(col("name", string)))
 
-    var aggs = List[DynValue]()
-    aggs.append(DynValue(col("a", int64)))
-    aggs.append(DynValue(col("b", int64)))
+    var aggs = List[BoxedValue]()
+    aggs.append(BoxedValue(col("a", int64)))
+    aggs.append(BoxedValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
     funcs.append(AggFunc.of[NumericAgg[SumKernel, Int64Type]](DynType(int64)))
