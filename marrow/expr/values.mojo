@@ -578,9 +578,6 @@ struct NumericColumn[T: NumericType](NumericValue):
 
     comptime OutType = Self.T
     comptime OutShape = 1
-    """`NumericColumn[DynType]` *is* the erased column leaf. Reading a column by
-    name needs no dtype — `materialize` hands back `batch.columns[i]` as-is — so
-    the fused leaf already works erased and no separate node is needed."""
 
     var _name: String
 
@@ -929,7 +926,6 @@ trait BoolValue(Value):
 @fieldwise_init
 struct NumericCompare[
     K: NumericCompareKernel,
-    S: StringPredicateKernel,
     L: NumericValue,
     R: NumericValue,
 ](BoolValue):
@@ -1008,12 +1004,12 @@ struct NumericCompare[
         self.r.prepare(batch, ctx)
 
 
-comptime Lt = NumericCompare[LtKernel, StringLtKernel, _, _]
-comptime Le = NumericCompare[LeKernel, StringLeKernel, _, _]
-comptime Gt = NumericCompare[GtKernel, StringGtKernel, _, _]
-comptime Ge = NumericCompare[GeKernel, StringGeKernel, _, _]
-comptime Eq = NumericCompare[EqKernel, StringEqKernel, _, _]
-comptime Ne = NumericCompare[NeKernel, StringNeKernel, _, _]
+comptime Lt = NumericCompare[LtKernel, _, _]
+comptime Le = NumericCompare[LeKernel, _, _]
+comptime Gt = NumericCompare[GtKernel, _, _]
+comptime Ge = NumericCompare[GeKernel, _, _]
+comptime Eq = NumericCompare[EqKernel, _, _]
+comptime Ne = NumericCompare[NeKernel, _, _]
 
 
 # ---------------------------------------------------------------------------
