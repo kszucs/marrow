@@ -65,6 +65,7 @@ comptime _TYPE_LIST: UInt8 = 12
 comptime _TYPE_STRUCT: UInt8 = 13
 comptime _TYPE_FIXED_SIZE_BINARY: UInt8 = 15
 comptime _TYPE_FIXED_SIZE_LIST: UInt8 = 16
+comptime _TYPE_MAP: UInt8 = 17
 comptime _TYPE_DURATION: UInt8 = 18
 comptime _PRECISION_HALF: UInt16 = 0
 comptime _PRECISION_SINGLE: UInt16 = 1
@@ -810,6 +811,11 @@ struct _IpcEncoder(Movable):
             return _TYPE_UTF8
         elif dtype.is_large_string():
             return _TYPE_LARGE_UTF8
+        elif dtype.is_map():
+            # Before `is_list()`: a map is a list of entry structs, and if
+            # `is_list()` answered first a map would be written as a plain list
+            # and read back as one.
+            return _TYPE_MAP
         elif dtype.is_list():
             return _TYPE_LIST
         elif dtype.is_large_list():
@@ -898,6 +904,13 @@ struct _IpcEncoder(Movable):
             var prec_at = self._fb.prepend_u16(prec)
             var flds = List[_FieldOffset]()
             flds.append(_FieldOffset(0, prec_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_map():
+            ref m = dtype.as_map()
+            var ts = self._fb.offset()
+            var ks_at = self._fb.prepend_bool(m.keys_sorted)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, ks_at))
             return self._fb.write_table(flds, ts)
         elif dtype.is_fixed_size_list():
             ref fsl = dtype.as_fixed_size_list()
@@ -1074,7 +1087,13 @@ struct _IpcEncoder(Movable):
         var dtype = f.dtype.copy()
         var own_dict_id = -1
 
-        if dtype.is_list():
+        if dtype.is_map():
+            child_positions.append(
+                self._write_field(
+                    dtype.as_map().entries[].copy(), next_dict_id
+                )
+            )
+        elif dtype.is_list():
             child_positions.append(
                 self._write_field(
                     dtype.as_list().value_field().copy(), next_dict_id
@@ -1497,6 +1516,12 @@ struct _IpcDecoder(Movable):
             dtype = dt.string
         elif type_type == _TYPE_LARGE_UTF8:
             dtype = dt.large_string
+        elif type_type == _TYPE_MAP:
+            var tp = self._r.read_table(fp, 3)
+            var keys_sorted = self._r.read_bool(tp, 0, False)
+            if len(children) == 0:
+                raise Error("map Field must have 1 child, got 0")
+            dtype = dt.MapType(children[0].copy(), keys_sorted).to_dyn()
         elif type_type == _TYPE_LIST:
             if len(children) == 0:
                 raise Error("list Field must have 1 child, got 0")
@@ -1935,7 +1960,17 @@ struct _BatchDecoder(Movable):
         for _ in range(dtype.num_buffers()):
             self._consume_buffer(data_buffers)
 
-        if dtype.is_list():
+        if dtype.is_map():
+            var child_ipc = (
+                ipc_info.children[0].copy() if len(ipc_info.children)
+                > 0 else _FieldIpcInfo()
+            )
+            children.append(
+                self.read_array(
+                    dtype.as_map().entries[].dtype.copy(), child_ipc
+                ).to_data()
+            )
+        elif dtype.is_list():
             var child_ipc = (
                 ipc_info.children[0].copy() if len(ipc_info.children)
                 > 0 else _FieldIpcInfo()

@@ -10,6 +10,7 @@ from std.python import Python, PythonObject
 from ..dtypes import *
 from ..arrays import DynArray, DictionaryArray
 from ..builders import (
+    MapBuilder,
     array,
     BoolBuilder,
     Int8Builder,
@@ -824,3 +825,100 @@ def test_delta_dictionary_batch_appends_not_replaces() raises:
     # appended to the dictionary the first batch established
     assert_equal(len(d2), 3)
     assert_equal(len(d2.dictionary().as_string()), 3)
+
+
+# ---------------------------------------------------------------------------
+# V0 — map through IPC.
+#
+# `map` was implemented in dtypes, arrays, builders, the C Data Interface and
+# Parquet, and absent from IPC in both directions: type code 17 simply was not
+# in the writer's ladder or the reader's. A map written by marrow came back as
+# something else, or not at all.
+#
+# The buffer walk needed no work: a map owns one offsets buffer like any list,
+# which `DynType.num_buffers()` already answers.
+# ---------------------------------------------------------------------------
+
+
+def _map_batch() raises -> RecordBatch:
+    """One map column: [{"a": 1}, {}, {"b": 2, "c": 3}]."""
+    var b = MapBuilder(map_(DynType(string), DynType(int64)))
+    var entries_any = b.entries()
+    ref entries = entries_any.as_struct()
+    var keys_any = entries.field_builder(0)
+    var values_any = entries.field_builder(1)
+    ref keys = keys_any.as_string()
+    ref values = values_any.as_int64()
+
+    keys.append("a")
+    values.append(1)
+    entries.append_valid()
+    b.append_valid()
+
+    b.append_valid()  # {}
+
+    keys.append("b")
+    values.append(2)
+    entries.append_valid()
+    keys.append("c")
+    values.append(3)
+    entries.append_valid()
+    b.append_valid()
+
+    return record_batch([b.finish().to_dyn()], names=["m"])
+
+
+def test_ipc_file_round_trips_a_map() raises:
+    var batch = _map_batch()
+    var back = _roundtrip_file(batch)
+    assert_true(back.schema.fields[0].dtype.is_map())
+    assert_equal(back.num_rows(), 3)
+    assert_true(back.columns[0] == batch.columns[0])
+
+
+def test_ipc_stream_round_trips_a_map() raises:
+    var batch = _map_batch()
+    var back = _roundtrip_stream(batch)
+    assert_true(back.schema.fields[0].dtype.is_map())
+    assert_equal(back.num_rows(), 3)
+    assert_true(back.columns[0] == batch.columns[0])
+
+
+def test_ipc_map_keeps_keys_sorted_flag() raises:
+    """`keysSorted` is part of the Map type in the IPC schema, not decoration —
+    a reader that drops it reports an unsorted map as sorted."""
+    var mt = map_(DynType(string), DynType(int64), keys_sorted=True)
+    var b = MapBuilder(mt)
+    b.append_valid()  # one empty map is enough to carry the type
+    var batch = record_batch([b.finish().to_dyn()], names=["m"])
+
+    var back = _roundtrip_file(batch)
+    assert_true(back.schema.fields[0].dtype.as_map().keys_sorted)
+
+
+def test_pyarrow_reads_a_marrow_written_map() raises:
+    """PyArrow must agree, not just marrow with itself.
+
+    A self-round-trip proves the writer and reader share a convention; it does
+    not prove the convention is Arrow's. Writing type code 12 (List) for a map
+    would pass every test above. This is what pins the format.
+    """
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+    var batches_in = List[RecordBatch]()
+    batches_in.append(_map_batch())
+    write_ipc_file(path, batches_in)
+
+    var reader = pa.ipc.open_file(path)
+    var pa_batch = reader.get_batch(0)
+    assert_equal(Int(py=pa_batch.num_rows), 3)
+    # PyArrow renders the type as `map<string, int64>`; a list would render as
+    # `list<...>`, which is the failure this catches.
+    assert_true(String(py=pa_batch.schema.field("m").type).startswith("map<"))
+
+    var got = pa_batch.column(0).to_pylist()
+    assert_equal(Int(py=got.__len__()), 3)
+    # PyArrow surfaces a map as a list of (key, value) tuples.
+    assert_equal(Int(py=got[0].__len__()), 1)
+    assert_equal(Int(py=got[1].__len__()), 0)
+    assert_equal(Int(py=got[2].__len__()), 2)
