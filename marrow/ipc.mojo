@@ -1928,21 +1928,11 @@ struct _BatchDecoder(Movable):
                 indices^, values^, d.ordered
             ).to_dyn()
 
-        if (
-            dtype.is_string()
-            or dtype.is_binary()
-            or dtype.is_large_string()
-            or dtype.is_large_binary()
-        ):
-            self._consume_buffer(data_buffers)
-            self._consume_buffer(data_buffers)
-        elif (
-            dtype.is_bool()
-            or dtype.is_primitive()
-            or dtype.is_list()
-            or dtype.is_large_list()
-            or dtype.is_fixed_size_binary()
-        ):
+        # How many data buffers this type owns is a property of the type, not
+        # of this codec. The ladder here used to re-derive it and got `map`
+        # wrong -- it fell through every arm and so consumed *zero* buffers,
+        # silently shifting every buffer read after it.
+        for _ in range(dtype.num_buffers()):
             self._consume_buffer(data_buffers)
 
         if dtype.is_list():

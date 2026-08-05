@@ -150,6 +150,31 @@
 
 ### Features
 
+- **`DynType.num_buffers()`, and `ArrayData` now validates its own layout.**
+  How many data buffers a type owns was re-derived by every codec; `ipc.mojo`'s
+  buffer walk was a two-branch ladder asking exactly that, and it gave `map`
+  **zero** buffers, silently shifting every buffer read after it. That walk is
+  now `for _ in range(dtype.num_buffers())`.
+
+  Counts data buffers only -- marrow's `ArrayData` carries `bitmap` as its own
+  field, unlike Arrow C++ and arrow-rs where `buffers[0]` is validity -- so there
+  is no bitmap buffer kind to model and no per-buffer `BufferSpec`, just a count.
+
+  `ArrayData` replaces `@fieldwise_init` with a constructor that asserts the
+  count, so none of its ~39 construction sites can bypass the invariant, plus a
+  raising `validate()` used by the C Data Interface importer, where the buffers
+  are a foreign producer's memory and a wrong count reads past the end of
+  somebody else's allocation.
+
+  Costs **+1.27%** of the AOT size gate (`query_streaming` __text 1,309,032 ->
+  1,325,672), accepted deliberately. Measured split: +8,832 for the explicit
+  constructor alone -- `DynType` is dispatched over a 37-member variant, and
+  per-arm work there costs ~8 KB, the lever B12 found -- and +7,808 for the
+  check, which `-O3` does not eliminate and `@no_inline` recovers only 128 bytes
+  of. Both references decline this trade (arrow-rs pairs `try_new` with
+  `new_unchecked`; Arrow C++ leaves `ValidateFull` opt-in); marrow takes the
+  safety. `num_buffers()`, `validate()` and the IPC rewrite on their own cost 0.
+
 - **`StringPredicateKernel.apply_scalar`**, a scalar-pattern entry point for the eleven
   string predicate kernels (`StartsWith`/`EndsWith`/`Contains`/`StrEq`/`StrNe`/`Like`/
   `ILike`/the ordering compares), and `StringPredicate.prepare` in the expression layer

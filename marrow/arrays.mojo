@@ -225,7 +225,6 @@ def _sliced_null_count(
 # ---------------------------------------------------------------------------
 
 
-@fieldwise_init
 struct ArrayData(Copyable, Movable):
     """Generic array layout — the old DynArray wire format, now a pure DTO.
 
@@ -241,6 +240,89 @@ struct ArrayData(Copyable, Movable):
     var bitmap: Optional[Bitmap[mut=False]]
     var buffers: List[Buffer[mut=False]]
     var children: List[ArrayData]
+
+    def __init__(
+        out self,
+        var dtype: DynType,
+        length: Int,
+        nulls: Int,
+        offset: Int,
+        var bitmap: Optional[Bitmap[mut=False]],
+        var buffers: List[Buffer[mut=False]],
+        var children: List[ArrayData],
+    ):
+        """Build a layout, checking it against what its dtype describes.
+
+        Written out rather than `@fieldwise_init` so the buffer-count invariant
+        cannot be bypassed: all ~39 construction sites go through here.
+
+        `debug_assert` rather than `raise` because `to_data()` is non-raising on
+        several array types, and making it raise would cascade a `raises` through
+        the whole array API for a check about *our* correctness. It is live under
+        `-D ASSERT=all`, which is how every test in this repo runs.
+
+        Foreign data additionally gets the raising `validate()` -- see the C Data
+        Interface importer. There a wrong count reads past the end of somebody
+        else's allocation, so it must be checked in release builds too.
+        """
+        debug_assert(
+            len(buffers) == dtype.num_buffers(),
+            "ArrayData: buffer count does not match dtype",
+        )
+        self.dtype = dtype^
+        self.length = length
+        self.nulls = nulls
+        self.offset = offset
+        self.bitmap = bitmap^
+        self.buffers = buffers^
+        self.children = children^
+
+    def validate(self) raises:
+        """Raise if this layout does not match what its dtype describes.
+
+        The **raising** counterpart of the `debug_assert` in `__init__`. The
+        constructor's check is compiled out of release builds; this one is not,
+        which is what a boundary taking foreign memory needs.
+
+        Cost of always-on validation, measured 2026-08-05 and accepted
+        deliberately: `query_streaming` __text 1,309,032 -> 1,325,672, **+1.27%**
+        of the AOT size gate. The split is +8,832 for replacing
+        `@fieldwise_init` with an explicit constructor at all -- `DynType` is
+        dispatched over a 37-member variant, and per-arm work in such a method
+        costs ~8 KB, the lever B12 found -- and +7,808 for the check itself,
+        which `-O3` does not eliminate and `@no_inline` on `num_buffers()`
+        recovers only 128 bytes of.
+
+        Both references decline this trade: arrow-rs pairs a validating
+        `ArrayData::try_new` with an `unsafe new_unchecked` that hot paths use,
+        and Arrow C++ leaves `ValidateFull` opt-in. marrow takes the safety over
+        the 1.27% because an unvalidated layout is a read past the end of an
+        allocation, not a Mojo error.
+
+        Only the buffer count so far, which is the one structural fact
+        `DynType` now states. Worth having because `ArrayData` is the shape
+        *external* data arrives in — the C Data Interface hands over a producer's
+        buffer array and marrow trusts it — and a wrong count there is read past
+        the end of somebody else's memory, not a Mojo error.
+
+        This is what both references use their `layout()` for: Arrow C++ in
+        `array/validate.cc`, arrow-rs in `ArrayData`'s own validation. Neither
+        drives its codecs from it.
+
+        Not checked yet: child count against the dtype's own arity. That wants a
+        `num_children()` alongside this, and it is the check that would catch a
+        struct whose declared fields outnumber its children — the shape of B6.
+        """
+        var want = self.dtype.num_buffers()
+        if len(self.buffers) != want:
+            raise Error(
+                "ArrayData: ",
+                self.dtype,
+                " owns ",
+                want,
+                " data buffer(s), got ",
+                len(self.buffers),
+            )
 
     # Explicit (empty) destructor so this self-referential struct
     # (`children: List[ArrayData]`) is ImplicitlyDeletable; fields are still

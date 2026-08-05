@@ -1107,7 +1107,7 @@ struct CArrowArray(Copyable, Movable):
             else:
                 nulls = 0
 
-        return ArrayData(
+        var data = ArrayData(
             dtype=dtype.copy(),
             length=Int(self.length),
             nulls=nulls,
@@ -1116,6 +1116,11 @@ struct CArrowArray(Copyable, Movable):
             buffers=buffers^,
             children=children^,
         )
+        # These buffers are a foreign producer's memory and their count came
+        # from the ladder above; a mismatch here is a read past the end of
+        # somebody else's allocation rather than a Mojo error.
+        data.validate()
+        return data^
 
     def to_array(
         self, dtype: DynType, owner: ArcPointer[Allocation]
