@@ -15,6 +15,8 @@ from ...testing import Benchmark
 from ...builders import StringBuilder, Int32Builder
 from ...dtypes import string, int32
 from ...tabular import record_batch, RecordBatch
+from ...buffers import Buffer
+from ...views import apply
 from ...expr.values import col, lit, into_array
 from ...kernels.string import LengthKernel
 from ...arrays import StringArray
@@ -234,6 +236,43 @@ def bench_b28_probe_two_literals_1m(mut b: Benchmark) raises:
                 1_000_000,
             ).length()
         )
+
+    b.iter[call]()
+    keep(batch)
+
+
+def bench_b28_probe_hoisted_ideal_1m(mut b: Benchmark) raises:
+    """What A1 is aiming at: `a + 1` with the typed view resolved **once**.
+
+    Hand-written to stand in for a fused lane whose state is hoisted out of the
+    loop -- the column is looked up, unwrapped and viewed before the pass, and
+    the per-chunk body is just a load, an add and a store. Same `views.apply`
+    driver the expression layer uses, so the only difference from
+    `bench_b27_probe_plain_fused_add_1m` is where the resolution happens.
+
+    This is the number A1 should be judged against.
+    """
+    var ib = Int32Builder(1_000_000)
+    for i in range(1_000_000):
+        ib.append(Int32(i))
+    var batch = record_batch([ib.finish().to_dyn()], names=["a"])
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        # Resolved once, outside the lane -- the whole point.
+        ref src = batch.columns[0].as_int32()
+        var vals = src.values()
+        var out = Buffer.alloc_uninit[int32.native](1_000_000)
+
+        @parameter
+        @always_inline
+        def producer[W: Int](i: Int) -> SIMD[int32.native, W]:
+            return vals.load[W](i) + SIMD[int32.native, W](1)
+
+        apply[int32.native, producer](out.view[int32.native](0, 1_000_000))
+        keep(out.to_immutable())
 
     b.iter[call]()
     keep(batch)
