@@ -310,4 +310,9 @@ def bench_a1_spike_state_lane_1m(mut b: Benchmark) raises:
         keep(out.to_immutable())
 
     b.iter[call]()
+    # `keep(node)` is mandatory, not tidiness: ASAP destruction can free a
+    # captured value after the closure is registered and before it runs, and the
+    # "assignment was never used" warning on `node` is exactly the tell CLAUDE.md
+    # records for a capture that was not made.
+    keep(node)
     keep(batch)
