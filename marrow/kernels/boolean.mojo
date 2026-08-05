@@ -1,9 +1,9 @@
 """Boolean and bitwise kernels.
 
-Three tiers per kernel (same scheme as ``arithmetic.mojo``):
+Three tiers per kernel (same scheme as ``numeric.mojo``):
 
 - **Tier 0 (core)** — ``Kernel.core[W]``: raw SIMD predicate on
-  ``SIMD[DType.bool, W]``. Used by ``faszom.mojo`` expression nodes for
+  ``SIMD[DType.bool, W]``. Used by ``marrow/expr/values.mojo`` nodes for
   compile-time kernel fusion.
 - **Tier 1 (apply)** — ``Kernel.apply``: typed ``BoolArray`` API.  Operates
   directly on bit-packed bitmaps via 64-bit word operations — more efficient

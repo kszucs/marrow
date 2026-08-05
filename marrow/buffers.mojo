@@ -100,7 +100,7 @@ Pinned host allocation (kind=HOST):
 Bitmap operations
 -----------------
 Validity bitmaps use the dedicated `Bitmap` / `BitmapBuilder` types from
-`marrow.bitmap`, which wrap `Buffer[mut=False]` / `Buffer[mut=True]` with bit-level
+this module, which wrap `Buffer[mut=False]` / `Buffer[mut=True]` with bit-level
 and SIMD bulk operations.
 """
 

@@ -1,7 +1,7 @@
 """String compute kernels.
 
 Three shapes, each following the tier scheme used by the numeric kernels
-(`arithmetic.mojo`), adapted to variable-width UTF-8 data:
+(`numeric.mojo`), adapted to variable-width UTF-8 data:
 
 - **Length** (`LengthKernel`) — byte length per element → `Int32Array`. The one
   string op that vectorizes cleanly: byte length is `offsets[i+1] - offsets[i]`,
@@ -61,8 +61,10 @@ struct LengthKernel(Kernel):
         T: DType, W: Int
     ](hi: SIMD[T, W], lo: SIMD[T, W]) -> SIMD[DType.int32, W]:
         """The fusable per-lane primitive: byte length from two loaded offset
-        vectors (`offsets[i+1] - offsets[i]`). Both `apply` and the expression
-        layer's `StringLength` build on it, so the compute lives here only."""
+        vectors (`offsets[i+1] - offsets[i]`), used by `apply`. The expression
+        layer's `StringLength` does *not* build on this — it is a breaker and
+        calls `LengthKernel.dispatch`, materialising an `Int32Array`. Making it
+        fuse through `core` is Q7.1."""
         return (hi - lo).cast[DType.int32]()
 
     @staticmethod

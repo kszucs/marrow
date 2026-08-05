@@ -11,7 +11,7 @@ result: a scan still applies the exact predicate to whatever it decodes.
 `PruneStats` is the per-column bounds view (fed by a row-group's ColumnStatistics
 or a page's ColumnIndex entry). `PruneBound` is the result of evaluating one node
 against it: an interval `[lo, hi]` for a numeric sub-expression, or `maybe_true`
-for a boolean predicate. Both `TagValue` (dynamic) and the fused comptime `Value`
+for a boolean predicate. Both `DynValue` (the runtime lane) and the fused comptime `Value`
 nodes (static) implement `prune(stats)`, so either kind of expression can be
 evaluated against the index.
 """
@@ -58,7 +58,7 @@ struct PruneBound(Copyable, Movable):
 
     # Comparison rules — "could `self <op> other` be true for some pair of values
     # drawn from the two intervals?". Each is the min/max test used by both the
-    # fused nodes and the TagValue interpreter, so they share one definition.
+    # fused nodes and the runtime lane's `DynValue`, so they share one definition.
     def maybe_gt(self, other: Self) raises -> Bool:
         """`self > other` — possible iff max(self) > min(other)."""
         var c = Self._cmp_bounds(self.hi, other.lo)

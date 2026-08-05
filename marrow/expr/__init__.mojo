@@ -27,8 +27,8 @@ that are pure, immutable, and cheaply copied, plus the plan-building API and
 ``Relation.to_processor(ctx)`` builds (pull-based, owning all mutable state — offset,
 hash index, grouper, child processors), erased behind ``DynProcessor`` which
 drives ``collect()``. ``plan.execute()`` opens a plan into a fresh processor tree and
-drains it, so a plan is a reusable template. Depends only on the value box and
-kernels (one-way: ``relations`` → ``execution``).
+drains it, so a plan is a reusable template. ``relations`` and ``execution`` import each other -- a cycle Mojo resolves,
+recorded here rather than claimed away (see backlog Q-NEW).
 
 Usage::
 
@@ -57,6 +57,8 @@ from .relations import (
     ParquetScan,
     Aggregate,
     Join,
+    Sort,
+    Limit,
     in_memory_table,
     parquet_scan,
     # Join kind constants (hash join: inner/left/right/full/semi/anti)

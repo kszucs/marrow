@@ -39,4 +39,4 @@ trait Kernel:
             raise Self.error(t"dtype mismatch: {left} vs {right}")
 
 
-# TODO: have vectorwise and elementiwise kernels conform to a common trait
+# TODO: have vectorwise and elementwise kernels conform to a common trait

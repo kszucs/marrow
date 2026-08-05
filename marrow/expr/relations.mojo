@@ -165,7 +165,7 @@ struct BoxedValue(Copyable, Movable, Writable):
     (`Filter[P]`) would fuse just as well and duplicate the whole operator per
     predicate — the +115,600-byte shape recorded in CLAUDE.md.
 
-    It boxes either lane: a fused node from `values.mojo`, or a `TagValue` for an
+    It boxes either lane: a fused node from `values.mojo`, or a `DynValue` for an
     expression built from strings.
 
     **It conforms to `Value` and nothing else.** It used to also claim
