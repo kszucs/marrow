@@ -294,15 +294,14 @@ Rewrite `clickbench.py` against the lazy frontend, all 42 queries, cross-checked
 against DuckDB, wall-clock compared to polars/duckdb on the same box, binary-size
 gate green.
 
-### M1.6 — AOT DSL docs and a runnable example — **S**
+### M1.6 — AOT DSL docs — **stale API references FIXED 2026-08-05**
 
-`docs/guide/expressions.qmd` exists but documents a `Planner` type (zero hits),
-`from marrow.expr import execute` (it is a method, `relations.mojo:393`),
-`AnyValue`, `Binary(ADD)` node types, and a `parquet_scan("f.parquet")` that
-requires a `schema`. It predates the two-lane split entirely and must be
-rewritten, not patched. **The two-lane split, `BoxedValue`, and the
-lane-choice/binary-size trade-off — the central design fact — are undocumented
-anywhere user-facing.**
+`docs/guide/expressions.qmd` documented a `Planner` type (**zero hits** in the tree), an `AnyValue` type (**zero hits**), and `from marrow.expr import execute` — `execute` is a *method* on the plan (`relations.mojo:394`), not a free function, so every example calling `execute(plan)` was wrong. All corrected, and the page now describes what the tree does: plans are immutable `Relation` trees and `.execute()` opens one into a processor tree, so a plan is a reusable template. The site still builds clean.
+
+These blocks are illustrative (plain ```python```, not executed), which is exactly why the errors survived I2 — the docs build cannot catch prose that names types that do not exist.
+
+**Still open on this card:** the runnable AOT example it also asks for.
+
 
 ---
 
