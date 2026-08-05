@@ -198,7 +198,7 @@ concedes the restriction.
 
 This path is almost entirely sequential and is the whole critical path.
 
-### M1.0 — Widen the numeric dispatch bound *(do first; smallest change, largest blast radius)*
+### M1.0 — Widen the numeric dispatch bound — **DONE 2026-08-05**
 
 `NumericCompareKernel.apply` is bound on `PrimitiveType` but `dispatch` narrows
 to `NumericType` (`numeric.mojo:552` vs `:570`). Consequences, all live:
@@ -216,8 +216,17 @@ to `NumericType` (`numeric.mojo:552` vs `:570`). Consequences, all live:
 This is precisely the defect class CLAUDE.md's *"dispatch on the widest family
 the typed leaf accepts"* rule was written for. It is already fixed in
 `filter`/`take` (`filter.mojo:97`) and `sort` (`sort.mojo:433`).
-**Size: S. Do it before the optimizer** — pruning correctness is a prerequisite
-for measuring the optimizer.
+**Done.** `NumericCompareKernel.dispatch` now dispatches on `PrimitiveType`,
+and `pruning.mojo` with it — the card was right that pruning mirrored the bound,
+and fixing only the kernel would have left the headline benefit (date pushdown)
+unrealised. Arithmetic's own `dispatch_numeric` at `numeric.mojo:134` was left
+alone: adding two dates is not meaningful, and widening it is a separate
+question with its own semantics.
+
+Cost, caught by the new CI gate on its first real use: `query_streaming`
++0.512%, `query_join` +1.154%, aggregates unchanged. That is comparison leaves
+being emitted for temporal, interval and decimal — the code that supports those
+dtypes — and the baseline was raised deliberately.
 
 ### M1.1 — Optimizer v1 — **L**
 

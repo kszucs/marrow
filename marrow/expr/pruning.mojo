@@ -112,15 +112,20 @@ struct PruneBound(Copyable, Movable):
         var t = a.type()
         if t != b.type():
             return None
-        if t.is_numeric():
-
+        if t.is_primitive():
+            # `PrimitiveType`, not `NumericType` -- the same widening M1.0 made
+            # in `NumericCompareKernel.dispatch`, and for the same reason. While
+            # this said `is_numeric`, a predicate on a date, timestamp or decimal
+            # column compared no statistics at all, so **no row group and no page
+            # was ever pruned on one**. ClickBench filters on `EventDate` and
+            # `EventTime`; they were getting zero pushdown.
             @parameter
-            def cmp_typed[T: dt.NumericType](witness: T) raises -> Int:
+            def cmp_typed[T: dt.PrimitiveType](witness: T) raises -> Int:
                 return Self._cmp(
                     a.as_primitive[T]().value(), b.as_primitive[T]().value()
                 )
 
-            return t.dispatch_numeric[cmp_typed]()
+            return t.dispatch_primitive[cmp_typed]()
         elif t.is_string():
             var x = a.as_string().to_string()
             var y = b.as_string().to_string()

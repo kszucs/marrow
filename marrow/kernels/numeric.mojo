@@ -564,13 +564,21 @@ trait NumericCompareKernel(Kernel):
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
+        # `apply` is bound on `PrimitiveType`, so dispatch on that family, not
+        # the narrower `NumericType`: temporal, interval and decimal columns all
+        # reach the same leaf. Narrowing here made runtime comparison raise on
+        # those dtypes, took `equal_any` -- and with it hash-join key
+        # verification and `nullif` -- down too, and left `pruning.mojo` unable
+        # to prune a single row group on a date or decimal predicate. CLAUDE.md's
+        # "dispatch on the widest family the typed leaf accepts" rule is for
+        # exactly this; `filter`/`take` and `sort` were already fixed.
         @parameter
-        def leaf[T: NumericType](d: T) raises -> DynArray:
+        def leaf[T: PrimitiveType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_dyn()
 
-        return left.dtype().dispatch_numeric[leaf]()
+        return left.dtype().dispatch_primitive[leaf]()
 
 
 # ---------------------------------------------------------------------------
