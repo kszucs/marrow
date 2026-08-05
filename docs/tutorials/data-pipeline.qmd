@@ -13,6 +13,7 @@ cell runs when the docs are built.
 import sys
 sys.path.insert(0, "../../python")
 import marrow as ma
+from marrow import compute as mc
 ```
 
 ## The data
@@ -47,7 +48,7 @@ constantly.
 ```{python}
 def filter_rows(batch, mask):
     """Keep the rows of `batch` where boolean `mask` is True."""
-    cols = [ma.filter(batch.column(n), mask) for n in batch.column_names()]
+    cols = [mc.filter(batch.column(n), mask) for n in batch.column_names()]
     return ma.record_batch(cols, names=batch.column_names())
 ```
 
@@ -57,7 +58,7 @@ array of the threshold:
 
 ```{python}
 threshold = ma.array([80_000] * employees.num_rows())
-well_paid = ma.greater(employees.column("salary"), threshold)
+well_paid = mc.greater(employees.column("salary"), threshold)
 print("mask:", well_paid)
 
 top_earners = filter_rows(employees, well_paid)
@@ -107,7 +108,7 @@ sort, project.
 joined = employees.join(departments, ["dept_id"], join_type="inner")
 
 # 2. keep the well-paid rows
-mask = ma.greater(joined.column("salary"), ma.array([80_000] * joined.num_rows()))
+mask = mc.greater(joined.column("salary"), ma.array([80_000] * joined.num_rows()))
 filtered = filter_rows(joined, mask)
 
 # 3. sort by salary, highest first
@@ -126,8 +127,8 @@ automatically:
 ```{python}
 salaries = report.column("salary")
 print("headcount:  ", report.num_rows())
-print("total spend:", ma.sum(salaries))
-print("top salary: ", ma.max(salaries))
+print("total spend:", mc.sum(salaries))
+print("top salary: ", mc.max(salaries))
 ```
 
 Or aggregate the whole table at once, and group by a key to get per-group

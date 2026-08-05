@@ -48,12 +48,13 @@ Pass `None` to mark a position as null. The validity bitmap tracks which positio
 arr = ma.array([1, None, 3, None, 5])
 print(arr)
 print("null count:", arr.null_count())
-print("is_valid(0):", arr.is_valid(0))   # True
-print("is_valid(1):", arr.is_valid(1))   # False — null
+print("is_valid:  ", arr.is_valid())     # elementwise BooleanArray
+print("is_valid(0):", arr[0].is_valid())   # True
+print("is_valid(1):", arr[1].is_valid())   # False — null
 ```
 
 ::: {.callout-note}
-**Null is not zero.** `is_valid(1)` is `False` — the value at index 1 is absent entirely, not 0 or empty.
+**Null is not zero.** `is_valid()` reports `False` at index 1 — the value there is absent entirely, not 0 or empty. `Array.is_valid()` returns an elementwise `BooleanArray` (like `pyarrow.compute.is_valid`); index into the array first (`arr[1]`) to check a single position.
 :::
 
 ### Inspecting arrays
@@ -74,7 +75,7 @@ String arrays store variable-length UTF-8 strings.
 s = ma.array(["hello", None, "world", "mañana"])
 print(s)
 print("null count:", s.null_count())
-print("is_valid(1):", s.is_valid(1))
+print("is_valid(1):", s[1].is_valid())
 ```
 
 ## List arrays

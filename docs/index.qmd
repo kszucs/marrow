@@ -112,6 +112,7 @@ format:
 import sys
 sys.path.insert(0, "../python")
 import marrow as ma
+from marrow import compute as mc
 ```
 
 Build arrays straight from Python data — the type is inferred in a single pass,
@@ -130,9 +131,9 @@ Compute is vectorized and null-aware — a null in either operand propagates,
 and aggregates skip nulls:
 
 ```{python}
-next_year = ma.add(ages, ma.array([1, 1, 1, 1, 1]))
+next_year = mc.add(ages, ma.array([1, 1, 1, 1, 1]))
 print("age next year:", next_year)   # index 3 stays null
-print("total payroll:", ma.sum(salary))
+print("total payroll:", mc.sum(salary))
 ```
 
 Assemble columns into a `RecordBatch`, then sort and reshape it with a

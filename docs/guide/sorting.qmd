@@ -12,42 +12,45 @@ sort to the front or the back.
 import sys
 sys.path.insert(0, "../../python")
 import marrow as ma
+from marrow import compute as mc
 ```
 
 ## Sorting an array
 
-`ma.sort` returns a sorted copy; the array's `.argsort()` method (or
-`ma.sort_indices`) returns the indices that would sort it (an `int32` array),
+`mc.sort` returns a sorted copy; the array's `.argsort()` method (or
+`mc.sort_indices`) returns the indices that would sort it (an `int32` array),
 leaving the input untouched:
 
 ```{python}
 a = ma.array([3, 1, None, 2, 5])
 
-print("sorted:      ", ma.sort(a))
+print("sorted:      ", mc.sort(a))
 print("argsort:     ", a.argsort())
-print("sort_indices:", ma.sort_indices(a))
+print("sort_indices:", mc.sort_indices(a))
 ```
 
 ### Direction and null placement
 
-Both functions accept `ascending` and `null_placement` keyword arguments:
+`sort` and `sort_indices` take a `sort_keys` sequence of `(column, order)`
+pairs — ignored for a plain array, since there is only one column — and a
+`null_placement` keyword argument:
 
 ```{python}
-print(ma.sort(a, ascending=True,  null_placement="at_start"))
-print(ma.sort(a, ascending=True,  null_placement="at_end"))
-print(ma.sort(a, ascending=False, null_placement="at_end"))
+print(mc.sort(a, [("", "ascending")],  null_placement="at_start"))
+print(mc.sort(a, [("", "ascending")],  null_placement="at_end"))
+print(mc.sort(a, [("", "descending")], null_placement="at_end"))
 ```
 
 | Argument | Values | Default |
 |----------|--------|---------|
-| `ascending` | `True` / `False` | `True` |
-| `null_placement` | `"at_start"` / `"at_end"` | `"at_start"` |
+| `sort_keys` | `[(column, "ascending" \| "descending")]` | `()` (ascending) |
+| `null_placement` | `"at_start"` / `"at_end"` | `"at_end"` |
 
 Sorting works across types — strings order lexicographically:
 
 ```{python}
 words = ma.array(["pear", "apple", None, "cherry"])
-print(ma.sort(words, null_placement="at_end"))
+print(mc.sort(words, null_placement="at_end"))
 ```
 
 ## Sorting a table
@@ -77,21 +80,23 @@ forces the serial path) for large batches.
 
 ## Under the hood — the Mojo sort kernel
 
-At the Mojo level the `sort` and `argsort` kernels support **multi-column** keys
-directly. `argsort` returns an index array; `sort` applies those indices.
+At the Mojo level, `sort_indices` returns the permutation for a single array;
+`Take.apply` applies it to get a sorted copy. The `sort` kernel itself is only
+defined for `StructArray`, where it supports **multi-column** keys directly.
 
 ```mojo
-from marrow.kernels.sort import argsort, sort
+from marrow.kernels.sort import sort_indices
+from marrow.kernels.filter import Take
 from marrow.arrays import array
 from marrow.dtypes import int64
 
 var values = array[int64]([3, 1, 4, 1, 5, 9, 2, 6])
 
 # Indices that would sort the array
-var idx = argsort(values, ascending=True, nulls_first=True)
+var idx = sort_indices(values, ascending=True, nulls_first=True)
 
 # A sorted copy
-var ordered = sort(values, ascending=True, nulls_first=True)
+var ordered = Take.apply(values, idx)
 ```
 
 Multi-column sort operates on a `StructArray`, ordering rows by a list of key
