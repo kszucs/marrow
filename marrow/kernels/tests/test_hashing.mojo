@@ -3,6 +3,8 @@ from std.testing import assert_equal, assert_true, assert_false
 
 from ...arrays import DynArray, DictionaryArray, PrimitiveArray, StringArray
 from ...builders import (
+    Int8Builder,
+    Int16Builder,
     array,
     Date32Builder,
     Decimal128Builder,
@@ -320,6 +322,51 @@ def test_hash_dictionary_matches_decoded() raises:
     var h = RapidHash.dispatch(dict_arr)
     assert_equal(len(h), 4)
     assert_true(RapidHash.dispatch(plain_arr) == h)
+
+
+def test_hash_dictionary_with_narrow_indices() raises:
+    """The same, with int8 indices.
+
+    Arrow allows any integer type as a dictionary index. The int32 case above
+    takes a fast path that returns the indices as-is; every other width goes
+    through the widening in `_indices_as_int32`, which replaced the `cast` call
+    that used to make `kernels.cast` reachable from every hashing binary (Q4.7).
+    Without this the widening branch has no coverage at all.
+    """
+    var values = StringBuilder(2)
+    values.append("red")
+    values.append("blue")
+    var ib = Int8Builder(4)
+    for i in [0, 1, 0, 1]:
+        ib.append(Int8(i))
+    var dict_arr: DynArray = DictionaryArray.from_arrays(
+        ib.finish(), values.finish()
+    )
+
+    var plain = StringBuilder(4)
+    for s in ["red", "blue", "red", "blue"]:
+        plain.append(s)
+    var plain_arr: DynArray = plain.finish()
+
+    assert_true(RapidHash.dispatch(plain_arr) == RapidHash.dispatch(dict_arr))
+
+
+def test_hash_dictionary_with_null_index() raises:
+    """A null index must survive the widening as a null, not as index 0."""
+    var values = StringBuilder(2)
+    values.append("red")
+    values.append("blue")
+    var ib = Int16Builder(3)
+    ib.append(Int16(1))
+    ib.append_null()
+    ib.append(Int16(0))
+    var dict_arr: DynArray = DictionaryArray.from_arrays(
+        ib.finish(), values.finish()
+    )
+    var h = RapidHash.dispatch(dict_arr)
+    assert_equal(len(h), 3)
+    # The null row must not hash as "red" (index 0).
+    assert_true(h[1].value() != h[2].value())
 
 
 # ---------------------------------------------------------------------------

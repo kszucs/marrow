@@ -1,10 +1,10 @@
 {
-  "_comment": "__text baseline for the binary-size CI gate (see check_gate.py and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-08-05. Regenerate after an intentional size change with: pixi run -e dev python3 benchmarks/binary_size/check_gate.py --update Last raised 2026-08-05 by M1.0, which widened comparison dispatch from NumericType to PrimitiveType: query_streaming +0.512%, query_join +1.154%. That is the cost of emitting comparison leaves for temporal, interval and decimal -- i.e. of supporting those dtypes at all -- and it buys row-group pruning on date and decimal predicates, which ClickBench needs.",
+  "_comment": "__text baseline for the binary-size CI gate (see check_gate.py and .github/workflows/binary_size.yml). Measured osx-arm64, 2026-08-05. Regenerate after an intentional size change with: pixi run -e dev python3 benchmarks/binary_size/check_gate.py --update Last raised 2026-08-05 by M1.0, which widened comparison dispatch from NumericType to PrimitiveType: query_streaming +0.512%, query_join +1.154%. That is the cost of emitting comparison leaves for temporal, interval and decimal -- i.e. of supporting those dtypes at all -- and it buys row-group pruning on date and decimal predicates, which ClickBench needs. Lowered dramatically 2026-08-05 by Q4.7: hashing decoded dictionary keys via `cast`, which made all of `kernels.cast` reachable from every binary that hashes. Decoding by `take` instead removed ~2.4 MB from each -- query_join -63.5%, agg_fused -64.6%, agg -55.3%.",
   "threshold_pct": 0.5,
   "gates": {
     "query_streaming": 1332456,
-    "query_join": 3860660,
-    "query_streaming_agg_fused": 3786228,
-    "query_streaming_agg": 4159796
+    "query_join": 1410788,
+    "query_streaming_agg_fused": 1338468,
+    "query_streaming_agg": 1858644
   }
 }

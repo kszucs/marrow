@@ -37,21 +37,51 @@ from ..arrays import (
     FixedSizeListArray,
     DynArray,
     UInt64Array,
+    Int32Array,
 )
-from ..builders import UInt64Builder
+from ..builders import UInt64Builder, Int32Builder
 from ..buffers import Buffer
 from ..views import apply
-from .cast import cast
+from .filter import take
 from .core import Kernel
 from ..execution import ExecContext
 from ..dtypes import (
     BinaryLikeType,
+    IntegerType,
     PrimitiveType,
     ListLikeType,
     bool_,
+    int32,
     uint64,
 )
 from ..utils import GPU_ENABLED
+
+
+def _indices_as_int32(indices: DynArray) raises -> Int32Array:
+    """Dictionary indices as `Int32Array`, without reaching `kernels.cast`.
+
+    Arrow allows any signed or unsigned integer as a dictionary index, and
+    `take` wants int32. `cast` would do this, but importing it for the
+    conversion is what made `kernels.cast` reachable from every binary that
+    hashes (Q4.7). Narrow integer widening does not need the cast machinery.
+    """
+    var dt = indices.dtype()
+    if dt == int32:
+        return indices.as_int32().copy()
+
+    @parameter
+    def widen[T: IntegerType](d: T) raises -> Int32Array:
+        ref src = indices.as_primitive[T]()
+        var out = Int32Builder(len(src))
+        for i in range(len(src)):
+            if src.is_valid(i):
+                out.append(Scalar[int32.native](Int(src.unsafe_get(i))))
+            else:
+                out.append_null()
+        return out.finish()
+
+    return dt.dispatch_integer[widen]()
+
 
 comptime _h = Scalar[uint64.native]
 
@@ -304,8 +334,16 @@ struct RapidHash(Kernel):
             # Hash the decoded values: a dictionary-encoded key must hash the
             # same as the equivalent plain column, otherwise two batches with
             # different dictionaries would never group together.
+            #
+            # Decoded by gather rather than through `cast`. `DictionaryCast`
+            # does exactly this -- normalise the indices, `take` the values,
+            # then a re-cast that is a no-op when the target *is* the value
+            # type, which is the only way this called it. Reaching it imported
+            # the whole `kernels.cast` fanout, ~797 symbols and roughly a fifth
+            # of the fused binary, for one call site. Q4.7.
+            ref d = keys.as_dictionary()
             return RapidHash.dispatch(
-                cast(keys, dt.as_dictionary().value_type().copy(), False, ctx),
+                take(d.dictionary().copy(), _indices_as_int32(d.indices()), ctx),
                 ctx,
             )
         elif dt.is_primitive():
