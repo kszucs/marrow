@@ -4,7 +4,7 @@ Splits rows into independent partitions by the top bits of a precomputed hash,
 so per-partition work (hash-table build/probe, grouped aggregation) runs in
 parallel with zero cross-thread synchronization:
 
-  Hash Function  ->  Partitioner  ->  per-partition parallel op  ->  merge
+  Hash Function  ->  RadixPartitioner  ->  per-partition parallel op  ->  merge
 
 ``RadixPartitioner.map_partitions`` is the reusable driver that ties the middle
 two steps together — hash once, split, run a worker per partition on its own
@@ -87,7 +87,7 @@ def radix_histogram[
 struct Partition(Copyable, Movable):
     """A subset of rows with pre-computed hashes.
 
-    ``row_indices = None`` means all rows in order (NoPartition fast-path,
+    ``row_indices = None`` means all rows in order (the unpartitioned case,
     avoids allocating an identity index array).
     """
 
@@ -116,32 +116,7 @@ struct Partition(Copyable, Movable):
         return i
 
 
-trait Partitioner(Movable):
-    """Splits rows into partitions by hash prefix."""
-
-    def num_partitions(self) -> Int:
-        ...
-
-    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        ...
-
-
-struct NoPartition(Partitioner):
-    """Single partition containing all rows (default, current behavior)."""
-
-    def __init__(out self):
-        pass
-
-    def num_partitions(self) -> Int:
-        return 1
-
-    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        var result = List[Partition]()
-        result.append(Partition(hashes^))
-        return result^
-
-
-struct RadixPartitioner(Partitioner):
+struct RadixPartitioner(Movable):
     """Partition rows by the top ``num_bits`` of their hash.
 
     The partitioner is the key enabler of partition-parallel joins: each

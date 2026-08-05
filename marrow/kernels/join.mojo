@@ -152,9 +152,10 @@ struct JoinKind(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
        declaring the right side's fields while carrying only the left's. That is
        a corrupt array, and nothing checked. It is one method now.
     2. **`kind` and `strictness` were both `UInt8`.** Passing them swapped
-       compiled silently, and the numbering makes it plausible: `JOIN_ANTI` is
-       5, `JOIN_ASOF` is 2. Strictness stays `UInt8` for now, but the two are no
-       longer interchangeable at a call site.
+       compiled silently, and the numbering makes it invisible rather than merely
+       plausible: `JOIN_INNER` and `JOIN_ALL` are both 0, `JOIN_LEFT` and
+       `JOIN_ANY` are both 1. Strictness stays `UInt8` for now, but the two
+       are no longer interchangeable at a call site.
 
     Both references put these predicates on the type — polars has
     `JoinType::is_semi_anti()` / `is_equi()`, ClickHouse a set of `constexpr
@@ -302,27 +303,7 @@ comptime JOIN_ALL: UInt8 = 0
 comptime JOIN_ANY: UInt8 = 1
 """ANY strictness: return at most one matching right row per left row (no row duplication)."""
 
-comptime JOIN_ASOF: UInt8 = 2
-"""ASOF strictness: nearest-match on last key (future; requires sorted inputs)."""
 
-# ---------------------------------------------------------------------------
-# Join algorithm hint constants
-# ---------------------------------------------------------------------------
-
-comptime JOIN_ALGO_AUTO: UInt8 = 0
-"""Auto: planner selects the best algorithm based on input properties."""
-
-comptime JOIN_ALGO_HASH: UInt8 = 1
-"""Force hash join."""
-
-comptime JOIN_ALGO_SORT_MERGE: UInt8 = 2
-"""Force sort-merge join (requires sorted inputs)."""
-
-comptime JOIN_ALGO_PIECEWISE: UInt8 = 3
-"""Piecewise merge join for inequality conditions (future)."""
-
-comptime JOIN_ALGO_GRACE_HASH: UInt8 = 4
-"""Grace hash join for out-of-memory joins (future)."""
 
 
 comptime IndexPairs = Tuple[Int32Array, Int32Array]

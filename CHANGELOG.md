@@ -179,6 +179,16 @@
 
 ### Refactors
 
+- **Dead constants, imports and scaffolding removed (Q7.5).** Five `JOIN_ALGO_*`
+  hints, `JOIN_ASOF`, five `RAPID_SECRET*`, `comptime lo32`, four unused imports,
+  and `trait Partitioner` / `NoPartition` -- the latter had no caller and would
+  have crashed `map_partitions`, which unwraps `row_indices` unconditionally.
+  Two stale banners went with them: one titled a section of "temporal reinterpret
+  helpers" that documented a design the single `is_primitive()` dispatch arm
+  replaced, and one describing a `sync_parallelize` loop that is now `ctx.stripe`.
+  No size change -- the dead code was already being eliminated, so this buys
+  readability, not bytes.
+
 - **`ExecutionContext` is now `ExecContext`, and lives in `marrow/execution.mojo`.**
   It was filed under `kernels/`, which made it the tree's only `core -> kernels`
   import edge — `views.apply` and `tabular` both need it, so core reached *up* into

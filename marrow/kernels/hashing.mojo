@@ -65,13 +65,8 @@ comptime NULL_HASH_SENTINEL = UInt64(0x517CC1B727220A95)
 # ---------------------------------------------------------------------------
 
 
-comptime RAPID_SECRET0 = UInt64(0x2D358DCCAA6C78A5)
 comptime RAPID_SECRET1 = UInt64(0x8BB84B93962EACC9)
 comptime RAPID_SECRET2 = UInt64(0x4B33A62ED433D4A3)
-comptime RAPID_SECRET3 = UInt64(0x4D5A2DA51DE1AA47)
-comptime RAPID_SECRET4 = UInt64(0xA0761D6478BD642F)
-comptime RAPID_SECRET5 = UInt64(0xE7037ED1A0B428DB)
-comptime RAPID_SECRET6 = UInt64(0x90ED1765281C388C)
 comptime RAPID_SECRET7 = UInt64(0xAAAAAAAAAAAAAAAA)
 
 
@@ -127,7 +122,6 @@ def _rapid_mum_wide[
 
     GPU-compatible: avoids uint128 which Metal does not support.
     """
-    comptime lo32 = SIMD[uint64.native, 1](0xFFFFFFFF)
     var a_lo = a & SIMD[uint64.native, W](0xFFFFFFFF)
     var a_hi = a >> 32
     var b_lo = b & SIMD[uint64.native, W](0xFFFFFFFF)

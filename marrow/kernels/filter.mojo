@@ -7,7 +7,6 @@
 All functions support arrays with non-zero offsets (sliced arrays).
 """
 
-import std.math as math
 from std.bit import count_trailing_zeros
 from std.sys import size_of
 from std.sys.info import simd_byte_width
@@ -38,27 +37,13 @@ from ..dtypes import (
     Int32Type,
     bool_,
     int32,
-    int64,
     uint8,
     uint64,
-    string,
 )
-from std.algorithm.functional import sync_parallelize
 
 from ..views import BitmapView
 from .core import Kernel
 from ..execution import ExecContext
-
-
-# ---------------------------------------------------------------------------
-# Temporal reinterpret helpers
-#
-# filter/take are order- and value-agnostic byte moves, so a temporal column
-# (date/time/timestamp/duration) is selected through its signed-integer backing
-# and the result relabelled back to the temporal dtype — reusing the whole
-# numeric filter/take path (no per-temporal-dtype loops). Validity and offset
-# ride through unchanged; the relabel is O(1) ArcPointer metadata, no data copy.
-# ---------------------------------------------------------------------------
 
 
 struct Filter(Kernel):
@@ -666,10 +651,9 @@ struct Take(Kernel):
         null output elements (used by outer joins for unmatched rows).
         Source nulls are also propagated.
 
-        When ``ctx.num_threads > 1`` and ``indices`` is long enough, the
-        no-null fast path stripes the gather loop across workers via
-        ``sync_parallelize`` — each worker writes to a disjoint output
-        slice.  The slow path (null indices or source nulls) stays serial
+        The no-null fast path hands its gather loop to ``ctx.stripe``, which
+        decides serial versus striped and writes each worker into a disjoint
+        output slice. The slow path (null indices or source nulls) stays serial
         because it builds the validity bitmap in-order.
 
         Args:
