@@ -687,6 +687,21 @@ mostly bite generic trait hierarchies such as `marrow.expr.values`.
   trait's abstract requirement** for conforming structs (`does not implement all
   requirements for <BaseTrait>`) — declare the member on each concrete struct even
   if a parent trait "provides" it.
+- **A trait-level *default method* cannot return `Self.AssocType` unless that
+  associated type's bound is `ImplicitlyCopyable`.** Declaring
+  `comptime State: Copyable & ImplicitlyDeletable = DynArray` alongside a
+  defaulted `def state(self, …) -> Self.State` fails: the compiler will not
+  reduce `Self.State` to its own declared default at the return site
+  (`cannot implicitly convert 'DynArray' value to '_Self.State'`), and `rebind`
+  cannot bridge it — `rebind[Self.State](x)` reports *"value of type
+  '_Self.State' cannot be implicitly copied"*, since `rebind` itself requires
+  `ImplicitlyCopyable`. Transferring with `^` does not help, and widening the
+  bound is not available when the default is an array type, because `DynArray`
+  and friends deliberately are not implicitly copyable. **Consequence:** a
+  protocol whose associated type carries non-implicitly-copyable state cannot be
+  rolled out incrementally behind defaults — every conformer must implement it in
+  the same commit. Found 2026-08-05 attempting exactly that for A1 (see
+  `docs/backlog.md`); same family as the conditional-type limitation below.
 - **A comptime *conditional type* is usable as a type, but carries no trait
   conformance and does not reduce at a return site** — not even inside a
   `comptime if` that has already selected the branch.
