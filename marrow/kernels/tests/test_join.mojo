@@ -30,7 +30,6 @@ from ...dtypes import (
     Float64Type,
 )
 from ...tabular import record_batch
-from ...kernels.filter import take
 from ...kernels.join import (
     hash_join,
     HashJoin,
@@ -82,28 +81,6 @@ def _right_on() -> List[Int]:
 # ---------------------------------------------------------------------------
 # take — standalone tests
 # ---------------------------------------------------------------------------
-
-
-def test_take_primitive_basic() raises:
-    """Gather elements from a primitive array at given indices."""
-    var a: DynArray = array([10, 20, 30, 40], int32)
-    var result = take(a.copy(), array([2, 0, 3], int32))
-    ref r = result.as_int32()
-    assert_equal(r[0].value(), Scalar[int32.native](30))
-    assert_equal(r[1].value(), Scalar[int32.native](10))
-    assert_equal(r[2].value(), Scalar[int32.native](40))
-
-
-def test_take_null_index_produces_null() raises:
-    """Null index in take produces a null output element."""
-    var a: DynArray = array([10, 20, 30], int32)
-    var idx = Int32Builder(capacity=2)
-    idx.append_null()
-    idx.append(Scalar[int32.native](1))
-    var result = take(a.copy(), idx.finish())
-    assert_equal(result.null_count(), 1)
-    assert_false(result.is_valid(0))
-    assert_true(result.is_valid(1))
 
 
 # ---------------------------------------------------------------------------
