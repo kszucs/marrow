@@ -47,7 +47,7 @@ Example
     var result = plan.execute()
 """
 
-from .values import Context, Datum, Value, into_array
+from .values import Datum, Value, into_array
 from .pruning import PruneBound, PruneStats
 from ..arrays import DynArray
 from std.builtin.rebind import rebind
@@ -172,7 +172,7 @@ struct BoxedValue(Copyable, Movable, Writable):
     `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` so that a fused node
     would accept it as an *operand* (`Add[DynValue, DynValue]`). That was
     unsound — those traits promise a comptime `OutType: NumericType` and a
-    `vectorwise` lane, and this struct could supply only a placeholder `native`
+    typed `State`/`lane` pair, and this struct could supply only a placeholder
     and a stub returning zero. The compiler reported it as `attempt to resolve a
     recursive reference to declaration 'DynValue.__gt__'`, which is what forced
     the fluent surface into a `NumericOps` sub-trait. Boxing is sound; being an
@@ -208,8 +208,10 @@ struct BoxedValue(Copyable, Movable, Writable):
     def _exec_tramp[
         V: Value
     ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> DynArray:
-        var ctx = Context()
-        var d = rebind[ArcPointer[V]](ptr)[].execute(batch, ctx)
+        # `materialize`, not `execute`: `DynValue` overrides the latter with a
+        # `DynArray` return, and the trampoline needs the `Datum` every node
+        # produces.
+        var d = rebind[ArcPointer[V]](ptr)[].materialize(batch)
         return into_array(d, batch.num_rows())
 
     @staticmethod

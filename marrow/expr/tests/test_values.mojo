@@ -421,7 +421,7 @@ def test_concat_chain_fuses() raises:
 def test_strlen_fuses_into_numeric() raises:
     # length(s) + 1 over ["ab","cd"] → byte lengths [2,2] + 1 = [3,3]. A STRATEGY
     # TRANSITION: the string stage materializes, then `length` reads offsets as a
-    # vectorwise numeric leaf and the `+ 1` fuses in the same numeric pass.
+    # numeric lane leaf and the `+ 1` fuses in the same numeric pass.
     var expr = Add(StringLength(col("s", string)), lit(1, int32))
     var cv = (expr).execute(_str_batch())
     assert_true(into_array(cv, 2) == array([3, 3], int32).to_dyn())

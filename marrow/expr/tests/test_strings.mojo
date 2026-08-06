@@ -33,7 +33,8 @@ def test_like_with_literal_matches_like_with_column() raises:
     var by_literal = col("s", string).like(lit("hel%")).execute(batch)
     var by_column = col("s", string).like(col("p", string)).execute(batch)
     assert_true(
-        into_array(by_literal, 4).as_bool() == into_array(by_column, 4).as_bool()
+        into_array(by_literal, 4).as_bool()
+        == into_array(by_column, 4).as_bool()
     )
 
 
@@ -57,7 +58,8 @@ def test_string_eq_with_literal_matches_eq_with_column() raises:
     var by_literal = (col("s", string) == lit("x")).execute(batch)
     var by_column = (col("s", string) == col("p", string)).execute(batch)
     assert_true(
-        into_array(by_literal, 4).as_bool() == into_array(by_column, 4).as_bool()
+        into_array(by_literal, 4).as_bool()
+        == into_array(by_column, 4).as_bool()
     )
 
 
@@ -71,9 +73,11 @@ def test_like_literal_preserves_null_rows() raises:
     sb.append("nope")
     var batch = record_batch([sb.finish().to_dyn()], names=["s"])
 
-    var out = into_array(
-        col("s", string).like(lit("hel%")).execute(batch), 3
-    ).as_bool().copy()
+    var out = (
+        into_array(col("s", string).like(lit("hel%")).execute(batch), 3)
+        .as_bool()
+        .copy()
+    )
     assert_true(out[0].value())
     assert_true(out.is_null(1))
     assert_true(not out[2].value())
@@ -93,9 +97,7 @@ def test_b27_string_length_agrees_fused_and_alone() raises:
     sb.append("")
     var batch = record_batch([sb.finish().to_dyn()], names=["s"])
 
-    var alone_arr = into_array(
-        col("s", string).length().execute(batch), 4
-    )
+    var alone_arr = into_array(col("s", string).length().execute(batch), 4)
     var fused_arr = into_array(
         (col("s", string).length() + lit(0, int32)).execute(batch), 4
     )
@@ -110,13 +112,14 @@ def test_b27_string_length_agrees_fused_and_alone() raises:
     assert_equal(Int(alone[3].value()), 0)
 
 
-def test_b27_two_breakers_read_distinct_slots() raises:
-    """Two breaker stages in one expression must read their own slots.
+def test_b27_two_breakers_read_distinct_stages() raises:
+    """Two breaker stages in one expression must read their own state.
 
-    `Context.get_ref` hands out a *borrow* into the slot's `Datum` rather than a
-    copy (B27). Borrows are where aliasing goes wrong, so this pins the case with
-    two live stages: if both lanes read the same slot, or a borrow outlived its
-    slot, the sum would not be double the length.
+    Each breaker's `State` is its own materialized stage, and a binary node
+    holds both in a `Pair`. Composite state is where aliasing goes wrong, so
+    this pins the case with two live stages: if both lanes read the same one,
+    or a state did not outlive the lane loop, the sum would not be double the
+    length.
     """
     var sb = StringBuilder(3)
     sb.append("a")
@@ -135,12 +138,12 @@ def test_b27_two_breakers_read_distinct_slots() raises:
 
 
 def test_b27_breaker_result_survives_the_fused_lane() raises:
-    """A borrowed slot must stay valid for the whole fused pass.
+    """A breaker's state must stay valid for the whole fused pass.
 
-    The array lives in the `Context`, which outlives the lane loop -- but a
-    borrow that the compiler decided to shorten would read freed memory, and at
-    these lengths that shows up as wrong values rather than a crash. 4096 rows
-    is past any small-buffer or single-chunk special case.
+    The array lives in the node's `State`, which the driver owns for the whole
+    pass -- but a borrow that the compiler decided to shorten would read freed
+    memory, and at these lengths that shows up as wrong values rather than a
+    crash. 4096 rows is past any small-buffer or single-chunk special case.
     """
     var n = 4096
     var sb = StringBuilder(n)

@@ -1,6 +1,11 @@
 # A1 — typed per-node `State` for the fused lane
 
-**Status:** ready to execute. Design validated, surface enumerated, target measured.
+**Status:** EXECUTED 2026-08-06. `a + 1` over 1M rows 2.04 ms → 70.9 µs (28.8x,
+within 2.4% of the 69.2 µs floor); `a + a` now costs the same as `a + 1`. Size
+gate +0.056%; core+parquet+python 1145 passed; expr+kernels 845 of 846. The one
+failure is **B29** in `docs/backlog.md` — a miscompile in `_drive_bool` that ten
+source-level formulations did not move. `docs/backlog.md` is the live status;
+this file is kept as the record of what was planned.
 **Size:** one commit, ~27 structs. Not incremental — see "Why one commit".
 
 ## Why

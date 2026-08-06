@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **A1: typed per-node `State` for the fused expression lane — `a + 1` over 1M
+  rows goes from 2.04 ms to 70.9 µs.** Every fused node now implements a
+  two-method protocol: a comptime `State`, `state(batch)` which resolves the
+  whole subtree once per pass, and `lane(state, idx)` which reads nothing else.
+  A column leaf's `State` is its typed column, a literal's is nothing, a unary
+  node's is its operand's, a binary node's is `Pair[L.State, R.State]`, and a
+  pipeline breaker's *is* its materialized stage.
+
+  The old lane re-resolved everything on every SIMD chunk — a schema lookup by
+  name, a `Variant` unwrap and a `BufferView` reconstruction, 250,000 times over
+  a million rows to read a column that never moves. Hoisting that into `state()`
+  lands within 2.4% of a hand-written loop with the view resolved once
+  (69.2 µs), a **28.8x** win, and cost no longer scales with column-leaf count:
+  `a + a` now costs 70.4 µs, the same as `a + 1`, where it used to cost exactly
+  double.
+
+  The `Context` of positionally-addressed slots goes with it, and with it the
+  invariant that a `prepare` walk and a `core` walk had to visit breakers in the
+  same DFS order for a bare integer `slot` to match reads to writes. Six methods
+  collapse to two: `Context.get`/`get_ref`/`append`/`size`, `prepare`, and the
+  `mut slot` threading are all deleted, along with ~84 hand-written recursion
+  bodies. `execute(batch, ctx)` is gone; `execute(batch)` is `materialize(batch)`.
+
+  A trait default returning `Self.State` cannot be written — the bound would have
+  to be `ImplicitlyCopyable`, which array states deliberately are not — so every
+  conformer had to land in one commit. The three fused drivers are free functions
+  rather than trait defaults for a related reason, recorded at their definition.
+
+- **The `Breaker` trait is deleted.** It existed to answer one question —
+  does this node materialize into a `Context` slot instead of running the fused
+  loop? — asked by `conforms_to(Self, Breaker)` in `Value.execute` and
+  `Value.prepare`. With per-node `State` there is no slot and no pre-pass: a
+  breaker is simply a node whose `state()` does the work and whose `lane()` is a
+  load or a splat, which its own `State` declaration already says. The marker
+  drove no dispatch once A1 landed, so its 16 conformances went with it.
+
+  The `Context` positional-slot invariant — "the single most dangerous thing in
+  `marrow/expr`", where `prepare` and `vectorwise` had to walk the tree in
+  identical DFS order by hand across 15 and 29 sites with nothing enforcing it —
+  is gone with the mechanism rather than mitigated. Its worst failure mode
+  returned the wrong column silently. `DateTrunc` was latently in another of its
+  three modes, unreachable only because no temporal breaker existed to sit under
+  it.
+
 ### Docs
 
 - **`CountAgg`'s docstring claimed to be the grouped `count` for numeric columns

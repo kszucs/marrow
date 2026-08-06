@@ -652,42 +652,33 @@ researched on 2026-08-05 and came back **smaller than written** — see its row.
 
 | ID | Fix | What it removes |
 |---|---|---|
-| **A1** | **Validated end-to-end and de-risked, but it must land as ONE change — no incremental path exists.** Spike: `marrow/expr/tests/test_a1_spike.mojo`. A column leaf with `comptime State = Int32Array`, a `state()` that resolves once and a `lane()` that only loads, runs `a + 1` over 1M rows in **67.37 µs** against a hand-written ideal of **66.82 µs** and today's lane at **2.04 ms** — **30x**, within 1% of the floor. Three design fears are dead: no origin gymnastics, no `unsafe_origin_cast`, no parameterised associated types — `State` holding the *owned typed array* suffices, because the costs were the schema lookup and the `Variant` unwrap (both hoist into `state()`) while `.values()` is free per chunk. **The scheduling constraint, found 2026-08-05:** a defaulted `state()` returning `Self.State` does not compile when `State`'s bound is not `ImplicitlyCopyable`, and it cannot be — the natural default is `DynArray`, which deliberately is not. `rebind` cannot bridge it either (it requires `ImplicitlyCopyable` itself). So the "convert three nodes and measure" plan is **not available**: every `NumericValue` conformer must implement `State`/`state`/`lane` in the same commit. See the new CLAUDE.md gotcha. **Per-node State shapes** (the conversion is mechanical once started): column leaf -> its typed array; literal -> `NoneType`; binary -> `Tuple[L.State, R.State]`; unary -> `A.State`; breaker -> its materialised result, which *replaces* its `Context` slot. **Gate:** hold `query_streaming` `__text` at **1,332,456**. | L, one commit, highest value |
+| **A1** | **LANDED 2026-08-06, with one open defect — see B29 below.** `a + 1` over 1M rows: **2.04 ms -> 70.9 µs** (28.8x), against a hand-written hoisted floor of 69.2 µs, so within 2.4% of it. Cost no longer scales with column-leaf count: `a + a` is **70.4 µs**, the same as `a + 1`, where it used to be exactly double. `Context`, its positional slots, `prepare` and the `mut slot` threading are deleted; 27 structs carry a `comptime State` plus `state()`/`lane()`. `query_streaming` `__text` 1,332,456 -> 1,333,208 (**+0.056%**), inside the 0.5% gate. Suites: core+parquet+python **1145 passed**; expr+kernels **845 of 846**, the exception being B29. Original card follows. **Validated end-to-end and de-risked, but it must land as ONE change — no incremental path exists.** Spike: `marrow/expr/tests/test_a1_spike.mojo`. A column leaf with `comptime State = Int32Array`, a `state()` that resolves once and a `lane()` that only loads, runs `a + 1` over 1M rows in **67.37 µs** against a hand-written ideal of **66.82 µs** and today's lane at **2.04 ms** — **30x**, within 1% of the floor. Three design fears are dead: no origin gymnastics, no `unsafe_origin_cast`, no parameterised associated types — `State` holding the *owned typed array* suffices, because the costs were the schema lookup and the `Variant` unwrap (both hoist into `state()`) while `.values()` is free per chunk. **The scheduling constraint, found 2026-08-05:** a defaulted `state()` returning `Self.State` does not compile when `State`'s bound is not `ImplicitlyCopyable`, and it cannot be — the natural default is `DynArray`, which deliberately is not. `rebind` cannot bridge it either (it requires `ImplicitlyCopyable` itself). So the "convert three nodes and measure" plan is **not available**: every `NumericValue` conformer must implement `State`/`state`/`lane` in the same commit. See the new CLAUDE.md gotcha. **Per-node State shapes** (the conversion is mechanical once started): column leaf -> its typed array; literal -> `NoneType`; binary -> `Tuple[L.State, R.State]`; unary -> `A.State`; breaker -> its materialised result, which *replaces* its `Context` slot. **Gate:** hold `query_streaming` `__text` at **1,332,456**. | L, one commit, highest value |
 | **A3** | **Give `DataType` a `layout()`.** **Researched against both references 2026-08-05, and it cuts the original claim down — read this before scheduling it.** Both have exactly this type. Arrow C++: `struct DataTypeLayout { vector<BufferSpec> buffers; bool has_dictionary; optional<BufferSpec> variadic_spec; }` with `BufferKind {FIXED_WIDTH, VARIABLE_WIDTH, BITMAP, ALWAYS_NULL}`, reached through a **pure virtual `layout()` on `DataType`** that each concrete type overrides (`type.h:93-178`); marked EXPERIMENTAL. arrow-rs: the same shape as a **free `fn layout(&DataType)`** — one `match` over the enum (`arrow-data/src/data.rs:1787`), explicitly ported from C++ with the source commit linked, plus an `alignment` field on `FixedWidth` that C++ lacks, and `Dictionary` delegating to its key type's layout. **The correction: neither reference drives its serializers from it.** `layout()` in Arrow C++ is consumed by `array/data.cc`, `array/validate.cc`, `compute/exec.cc` and `extension_type.*` — **zero hits under `ipc/` or `c/`**. In arrow-rs there is exactly one IPC use, and it is narrow: `get_or_truncate_buffer` reads `layout.buffers[0]` for an element width when slicing (`arrow-ipc/src/writer.rs:2346`); `ffi.rs` does not use it at all. So this card's "removes 17 dtype ladders across `c_data` + `ipc`" does **not** follow from the design both references chose, and the `map`-absent-from-IPC claim is overstated with it: IPC additionally needs type code 17 in its type-writing and type-reading switches, which a buffer-layout description does not supply. A codec needs more than buffer structure — which flatbuffer table to write, which child to recurse into, what parameters (precision/scale, list size, timezone) to emit. **What it does buy**, on both references' evidence: validation (does this `ArrayData` have the right buffer count, kinds and widths?) and the `ArrayData` round-trip — which is the *other* half of the audit finding, the 11 array types that are each their own `ArrayData` codec, 22 methods of duplicated layout knowledge. Schedule it for that, not for the ladders. marrow's shape suits either spelling: it has a `DataType` trait with concrete structs (C++'s form) *and* a `DynType` variant (arrow-rs's form). | S-M for validation + `ArrayData`; the ladder collapse is **not** on offer |
 
-### The `Context` positional-slot invariant
+### B29 — one wrong answer left by A1 (open)
 
-**The single most dangerous thing in `marrow/expr`.** Correctness requires that
-`prepare` (`values.mojo:334-339`, appending breaker results to `Context._slots`)
-and `vectorwise` (threading `mut slot: Int`, each breaker consuming one) walk
-the tree in **identical DFS order, per node, by hand**. `NumericBinary` does it
-right — `prepare` l-then-r at `:710-712`, `vectorwise` l-then-r at `:697-703` —
-and nothing enforces it.
+| ID | Defect | Where |
+|---|---|---|
+| **B29** | **`And(StrLt(s, p), StrGt(s, p))` returns `[True, False, False]`; every operand answers `False` at index 0.** A Mojo miscompile, not a logic error: the lane reads correctly when called outside the fused closure, and *any* added observation — a `print` in the lane or in the driver — makes the pass correct. It does not reproduce in a small compilation unit. The value is the tell: `[True, False, False]` is the byte `0x01` read as three bits, and `0x01` is the two-element mask an earlier case left on the heap, so **both operand buffers are freed before the loop consumes them** and their AND reproduces the recycled byte exactly. A pre-filled output bitmap confirms the driver does write index 0, with that value. Nine formulations were measured, each in its own build, and none changed it: `_ = state^` inside the driver and in the caller; state as a local, a borrowed argument, and an owned `var`; `Tuple` versus a plain `Pair` struct; trait default versus free function; `state` by value versus by `ref`; `views.apply` versus a hand-rolled scalar loop (it fails with **no closure at all**); `vectorize` versus a hand-rolled width loop; explicit `^` moves into the pair; and giving the two operands **distinct** `State` types via a `K`-parameterised wrapper, which rules out same-type field aliasing. **Scope is narrow:** only a binary bool node whose *two* operands are both breakers holding a `BoolArray` state. `And(StartsWith, Gt(StringLength, lit))` (one such operand) and every single-breaker node are correct, as is all 1145 of core+parquet+python. Test: `test_string_compare_composes_under_bool_logic`. Next move: reduce it to a standalone file for an upstream bug report — the ten source-level formulations above exhaust the workarounds available from this side. | `expr/values.mojo` `_drive_bool`; `test_values.mojo:790` |
 
-Counts: **42 structs (37 of them value nodes), 29 with `vectorwise`, `prepare`
-at 15 sites** (the trait default plus 14 node overrides).
+### The `Context` positional-slot invariant — GONE (A1, 2026-08-06)
 
-Three failure modes, and the one that matters is silent:
+**This was "the single most dangerous thing in `marrow/expr`", and A1 deleted the
+mechanism rather than mitigating it.** Correctness used to require that `prepare`
+(appending breaker results to `Context._slots`) and `vectorwise` (threading
+`mut slot: Int`, each breaker consuming one) walk the tree in **identical DFS
+order, per node, by hand**, across 15 `prepare` sites and 29 `vectorwise` ones,
+with nothing enforcing it. Its three failure modes were: order swapped with
+identical slot types → **the wrong column, silently**; order swapped with
+differing types → a run-time `Variant` trip; and a composite forgetting to
+override `prepare` → an out-of-bounds slot read. `DateTrunc` was latently in the
+third category, unreachable only because no temporal breaker existed to sit
+under it.
 
-1. **Order swapped, slot types identical** → the tree compiles, both
-   `ctx.get[…]` calls succeed, and the query returns **the wrong column with no
-   error**. `coalesce(a,b) + nullif(a,b)` is a two-int64-slot instance.
-2. Order swapped, slot types differ → the `Variant` accessor trips at run time.
-   Loud, but by luck of the operand types, not by design.
-3. A non-`Breaker` composite forgets to override `prepare` → no slot is
-   appended, `vectorwise` still increments → out-of-bounds. **`DateTrunc`
-   (`values.mojo:2271`) is exactly this case today** — latently wrong, currently
-   unreachable only because no temporal breaker exists to sit under it.
-
-There is no compile-time signal for any of the three; slot consumption is a
-property of a *traversal*, not of a type. Breakers are insulated only by
-accident: `materialize` runs its operand through the single-argument `execute`
-(`:329-332`), which allocates a fresh `Context` — but the two-argument overload
-is equally in scope, equally callable, and would corrupt the numbering.
-
-**Cheapest mitigation, pending A1:** a debug-only `ASSERT` that `prepare`
-appended exactly as many slots as the root's `vectorwise` consumed. That turns
-mode 1 from silent into loud.
+A node's state is now its own typed value, keyed by *type* rather than by
+position, so there is no traversal to keep in step and no shared numbering to
+corrupt. The proposed debug-only ASSERT (that `prepare` appended as many slots as
+`vectorwise` consumed) is moot and was never needed.
 
 ### Both-lane parity is a hand-maintained list, and it has already drifted
 
