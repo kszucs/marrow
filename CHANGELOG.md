@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **A bit-packed mask was read byte-wise, so `mask1 & mask2` could return wrong
+  rows.** `BitmapView.load[DType.bool, W]` bitcasts to `Scalar[DType.bool]` —
+  which is a *byte* — so it walked a bit-packed validity/data mask one byte per
+  element and reported true for any non-zero byte. The mask `[F, F, T]` is the
+  byte `0b100`, which reads as `True` at element 0. Five fused bool lanes used
+  it: `NullPredicate`, `StringToBool`, `StringPredicate`, `IsIn` and
+  `ListContains`. Wrong answers appeared whenever a bool binary had **two**
+  materialized-stage operands — `s.startswith(x) & s.endswith(y)`,
+  `a.isin(…) & b.isin(…)`, `x.isnull() & y.isnull()`. Numeric breakers were
+  never affected; they read a plain buffer, never a bitmap.
+
+  The fix is `mask[W]`, the bit-wise reader that already sat directly above
+  `load` in the same struct ("expand W consecutive bits starting at logical
+  index"). `BitmapView.load`'s docstring now warns that the `bool` instantiation
+  is almost never what a caller wants.
+
+  **This predates the A1 refactor below** — the same five lanes spelled it
+  `ctx.get_ref[BoolArray](i).values().load[DType.bool, W](idx)` beforehand, and
+  three of the four regression tests added here also fail when checked out
+  against the pre-A1 tree. A1 changed which expressions happened to hit it,
+  which is how it surfaced. Regression tests: `test_or_over_two_bool_breakers`,
+  `test_and_over_two_isin_breakers`,
+  `test_and_over_two_breakers_of_different_types`,
+  `test_and_over_breaker_and_fused_unary`, and the numeric control
+  `test_add_over_two_numeric_breakers`.
+
 ### Refactors
 
 - **A1: typed per-node `State` for the fused expression lane — `a + 1` over 1M

@@ -235,8 +235,6 @@ struct Pair[
     it works here too; this is a plain struct instead because named fields read
     better at the use site — `state.l` / `state.r` against `state[0]` /
     `state[1]` — and because it carries none of `Tuple`'s variadic-pack storage.
-    Neither spelling fixes the open miscompile noted on `_drive_bool`; both were
-    measured against it and behave identically.
     """
 
     var l: Self.L
@@ -302,16 +300,6 @@ def _union_columns(var acc: List[String], names: List[String]) -> List[String]:
 # Free functions rather than trait default methods so that `V.State` is a single
 # projection off a *directly trait-bound parameter*, the form CLAUDE.md records
 # as reducing reliably, rather than `Self.State` inside a trait default.
-#
-# **`_drive_bool` has an open miscompile — B29 in `docs/backlog.md`.** A binary
-# bool node whose *two* operands are both breakers holding a `BoolArray` state
-# reads a freed operand buffer at index 0: `And(StrLt(s, p), StrGt(s, p))`
-# answers `[True, False, False]` where both operands say `False`. The lane is
-# correct when called outside the closure and any added `print` makes the pass
-# correct, so it is a miscompile, not a logic error. Ten source-level
-# formulations were measured against it and none moved it — the backlog lists
-# them, so a future attempt does not repeat the search. Anything touching these
-# drivers should re-run `test_string_compare_composes_under_bool_logic`.
 # ---------------------------------------------------------------------------
 def _drive_numeric[
     V: NumericValue
@@ -1217,7 +1205,7 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().load[DType.bool, W](idx)
+        return state.values().mask[W](idx)
 
 
 comptime IsNan = NumericPredicate[IsNanKernel, _]
@@ -1358,7 +1346,7 @@ struct StringToBool[A: StringValue](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().load[DType.bool, W](idx)
+        return state.values().mask[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -1743,7 +1731,7 @@ struct StringPredicate[
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().load[DType.bool, W](idx)
+        return state.values().mask[W](idx)
 
 
 comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
@@ -1793,7 +1781,7 @@ struct IsIn[A: Value](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().load[DType.bool, W](idx)
+        return state.values().mask[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -2429,7 +2417,7 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().load[DType.bool, W](idx)
+        return state.values().mask[W](idx)
 
 
 # ---------------------------------------------------------------------------

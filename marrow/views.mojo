@@ -697,7 +697,15 @@ struct BitmapView[
         ``index`` is in units of T (e.g. index=2 with T=uint32 reads bytes 8–11).
         No ``_offset`` adjustment — the caller is responsible for computing
         the correct element address. Safe because Arrow buffers are 64-byte padded.
-        """
+
+        **This reads bytes, not bits — `load[DType.bool, W]` is almost never
+        what you want.** `Scalar[DType.bool]` is a byte, so that spelling walks
+        a bit-packed mask one *byte* per element and answers true for any
+        non-zero byte: the mask `[F, F, T]` is the byte `0b100`, which reads as
+        `True` at element 0. Use `mask[W]` to expand W consecutive *bits*. Five
+        fused bool lanes in `marrow/expr/values.mojo` had this wrong and
+        returned wrong answers for `mask1 & mask2` whenever both operands were
+        materialized stages (fixed 2026-08-06)."""
         return self._data.bitcast[Scalar[T]]().load[width=W, alignment=1](index)
 
     # TODO: probably should be removed
