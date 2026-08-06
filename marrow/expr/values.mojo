@@ -1205,7 +1205,7 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().mask[W](idx)
+        return state.values().load[W](idx)
 
 
 comptime IsNan = NumericPredicate[IsNanKernel, _]
@@ -1346,7 +1346,7 @@ struct StringToBool[A: StringValue](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().mask[W](idx)
+        return state.values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -1731,7 +1731,7 @@ struct StringPredicate[
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().mask[W](idx)
+        return state.values().load[W](idx)
 
 
 comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
@@ -1781,7 +1781,7 @@ struct IsIn[A: Value](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().mask[W](idx)
+        return state.values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -2417,7 +2417,7 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
-        return state.values().mask[W](idx)
+        return state.values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------

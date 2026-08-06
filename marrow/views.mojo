@@ -634,15 +634,15 @@ struct BitmapView[
         var byte_idx = bit_offset >> 3
         var bit_off = bit_offset & 7
         var shifted = bits << UInt64(bit_off)
-        self.store[DType.uint8, 8](
+        self.store_bytes[DType.uint8, 8](
             byte_idx,
-            self.load[DType.uint8, 8](byte_idx)
+            self.load_bytes[DType.uint8, 8](byte_idx)
             | bitcast[DType.uint8, 8](shifted),
         )
         if bit_off > 0 and bit_off + count > 64:
-            self.store[DType.uint8](
+            self.store_bytes[DType.uint8](
                 byte_idx + 8,
-                self.load[DType.uint8](byte_idx + 8)
+                self.load_bytes[DType.uint8](byte_idx + 8)
                 | UInt8(bits >> UInt64(64 - bit_off)),
             )
 
@@ -656,12 +656,17 @@ struct BitmapView[
         return Bool((self._data[bit_index >> 3] >> UInt8(bit_index & 7)) & 1)
 
     @always_inline
-    def mask[W: Int](self, index: Int) -> SIMD[DType.bool, W]:
+    def load[W: Int](self, index: Int) -> SIMD[DType.bool, W]:
         """Expand W consecutive bits starting at logical ``index`` into a
-        SIMD bool vector.
+        SIMD bool vector — the bit-addressed counterpart of `store[W]`.
 
-        Each lane j is True iff bit (index + j) is set. Loads a full UInt32
-        unconditionally — safe because Arrow buffers are 64-byte padded.
+        Each lane j is True iff bit (index + j) is set. ``_offset`` is applied.
+        Loads a full UInt32 unconditionally — safe because Arrow buffers are
+        64-byte padded.
+
+        This is the default reader, and it mirrors `BufferView.load[W]`: both
+        take a logical element index and return W elements. Reach for
+        `load_bytes` only for whole-byte bitmap arithmetic.
         """
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
@@ -676,10 +681,13 @@ struct BitmapView[
 
     @always_inline
     def load_bits[T: DType](self, index: Int) -> Scalar[T]:
-        """Load ``sizeof[T]*8`` bits starting at logical position ``index``.
+        """Load ``sizeof[T]*8`` bits starting at logical position ``index``,
+        still **packed** into a scalar.
 
-        Handles the view's bit offset correctly. Safe because Arrow buffers
-        are 64-byte padded.
+        Bit-addressed and ``_offset``-applying, like `load[W]` — the difference
+        is the result shape: `load[W]` expands each bit into its own SIMD lane,
+        this returns the run as packed bits. Safe because Arrow buffers are
+        64-byte padded.
         """
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
@@ -690,35 +698,43 @@ struct BitmapView[
         return raw >> Scalar[T](bit_off)
 
     # TODO: could be good idea to use std.sys.intrinsics.masked_load
+    # --- Raw byte access ---
+    #
+    # Everything above is bit-addressed and applies `_offset`. The two below are
+    # byte-addressed and do NOT. Keeping that split visible is the point: the
+    # names used to be `load`/`store`, and `load[DType.bool, W]` silently read a
+    # bit-packed mask one byte per element (B29).
+
     @always_inline
-    def load[T: DType, W: Int = 1](self, index: Int) -> SIMD[T, W]:
-        """Load W elements of type T from bitmap data at element ``index``.
+    def load_bytes[T: DType, W: Int = 1](self, index: Int) -> SIMD[T, W]:
+        """Load W elements of type T from the raw bitmap bytes at ``index``.
 
-        ``index`` is in units of T (e.g. index=2 with T=uint32 reads bytes 8–11).
-        No ``_offset`` adjustment — the caller is responsible for computing
-        the correct element address. Safe because Arrow buffers are 64-byte padded.
+        **Byte-addressed, and it ignores ``_offset``** — both unlike every other
+        accessor here. ``index`` is in units of T (index=2 with T=uint32 reads
+        bytes 8–11) and the caller owns computing that address. Safe because
+        Arrow buffers are 64-byte padded.
 
-        **This reads bytes, not bits — `load[DType.bool, W]` is almost never
-        what you want.** `Scalar[DType.bool]` is a byte, so that spelling walks
-        a bit-packed mask one *byte* per element and answers true for any
-        non-zero byte: the mask `[F, F, T]` is the byte `0b100`, which reads as
-        `True` at element 0. Use `mask[W]` to expand W consecutive *bits*. Five
-        fused bool lanes in `marrow/expr/values.mojo` had this wrong and
-        returned wrong answers for `mask1 & mask2` whenever both operands were
-        materialized stages (fixed 2026-08-06)."""
+        For bit-addressed reads use `load[W]` (W bits as SIMD bool), `test` (one
+        bit) or `load_bits[T]` (a packed run of bits). This exists for whole-byte
+        bitmap arithmetic — the bitwise and/or/xor kernels below — and has no
+        caller outside this module. It used to be spelled `load`, which made
+        `load[DType.bool, W]` an easy way to read a bit-packed mask a *byte* at
+        a time: `Scalar[DType.bool]` is a byte, so `[F, F, T]` is `0b100`, which
+        answers `True` at element 0. Five fused bool lanes did exactly that and
+        returned wrong rows (B29, fixed 2026-08-06)."""
         return self._data.bitcast[Scalar[T]]().load[width=W, alignment=1](index)
 
     # TODO: probably should be removed
     # TODO: could be good idea to use std.sys.intrinsics.masked_store
     @always_inline
-    def store[
+    def store_bytes[
         T: DType, W: Int = 1
     ](self: BitmapView[mut=True, origin=_], index: Int, val: SIMD[T, W]):
-        """Store W elements of type T into bitmap data at element ``index``.
+        """Store W elements of type T into the raw bitmap bytes at ``index``.
 
-        ``index`` is in units of T (e.g. index=2 with T=uint32 writes bytes 8–11).
-        No ``_offset`` adjustment — the caller is responsible for computing
-        the correct element address.
+        **Byte-addressed, and it ignores ``_offset``** — the mirror of
+        `load_bytes`, and the same caveats apply. For bit-addressed writes use
+        `store[W]`.
         """
         self._data.bitcast[Scalar[T]]().store[width=W](index, val)
 
@@ -1482,7 +1498,7 @@ def apply[
     @always_inline
     def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
         var i = Int(coord[0].value())
-        dst.store[W](i, op[W](src.mask[W](i)))
+        dst.store[W](i, op[W](src.load[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
 
@@ -1504,7 +1520,7 @@ def apply[
     @always_inline
     def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
         var i = Int(coord[0].value())
-        dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
+        dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
         length, ctx
@@ -1527,7 +1543,7 @@ def apply[
     @always_inline
     def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
         var i = Int(coord[0].value())
-        dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
+        dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
 
@@ -1563,7 +1579,7 @@ def apply[
         def process_zero[
             W: Int
         ](i: Int) {imm dst, imm data, imm byte_start,}:
-            dst.store[DType.uint8, W](
+            dst.store_bytes[DType.uint8, W](
                 i, op[W]((data + byte_start + i).load[width=W]())
             )
 
@@ -1581,7 +1597,9 @@ def apply[
         ](i: Int) {imm dst, imm data, imm byte_start, imm rshift, imm lshift,}:
             var lo = (data + byte_start + i).load[width=W]()
             var hi = (data + byte_start + i + 1).load[width=W]()
-            dst.store[DType.uint8, W](i, op[W]((lo >> rshift) | (hi << lshift)))
+            dst.store_bytes[DType.uint8, W](
+                i, op[W]((lo >> rshift) | (hi << lshift))
+            )
 
         vectorize[cpu_width](bulk, process_shifted)
 
@@ -1594,7 +1612,7 @@ def apply[
         last_result = last_result | (
             (data + byte_start + bulk + 1).load[width=1]() << lshift
         )
-    dst.store[DType.uint8, 1](bulk, op[1](last_result))
+    dst.store_bytes[DType.uint8, 1](bulk, op[1](last_result))
 
 
 def apply[
@@ -1643,7 +1661,7 @@ def apply[
             imm src_b,
             imm byte_start_b,
         }:
-            dst.store[DType.uint8, W](
+            dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
                     (src_a + byte_start_a + i).load[width=W](),
@@ -1678,7 +1696,7 @@ def apply[
             var hi_a = (src_a + byte_start_a + i + 1).load[width=W]()
             var lo_b = (src_b + byte_start_b + i).load[width=W]()
             var hi_b = (src_b + byte_start_b + i + 1).load[width=W]()
-            dst.store[DType.uint8, W](
+            dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
                     (lo_a >> rs_a) | (hi_a << ls_a),
@@ -1702,7 +1720,7 @@ def apply[
         result_b = result_b | (
             (src_b + byte_start_b + bulk + 1).load[width=1]() << ls_b
         )
-    dst.store[DType.uint8, 1](bulk, op[1](result_a, result_b))
+    dst.store_bytes[DType.uint8, 1](bulk, op[1](result_a, result_b))
 
 
 # ---------------------------------------------------------------------------
@@ -1898,7 +1916,7 @@ def reduce[
     @parameter
     def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[Acc, W]:
         var i = idx[0]
-        return bitmap.mask[W](i).select(
+        return bitmap.load[W](i).select(
             src.load[W](i).cast[Acc](), SIMD[Acc, W](identity)
         )
 
@@ -1957,10 +1975,10 @@ def apply_checked[
     var i = 0
     var simd_end = (length // w) * w
     while i < simd_end:
-        _checked_block[In, Out, op, w](src, dst, i, validity.mask[w](i))
+        _checked_block[In, Out, op, w](src, dst, i, validity.load[w](i))
         i += w
     while i < length:
-        _checked_block[In, Out, op, 1](src, dst, i, validity.mask[1](i))
+        _checked_block[In, Out, op, 1](src, dst, i, validity.load[1](i))
         i += 1
 
 

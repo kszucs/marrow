@@ -32,6 +32,30 @@
 
 ### Refactors
 
+- **`BitmapView`'s bit-addressed accessors are now the default pair; the
+  byte-addressed ones say so in their names.** The struct had six accessors
+  split across two families that a call site could not tell apart: `test`,
+  `mask[W]`, `load_bits[T]` and `store[W]` are bit-addressed and apply
+  `_offset`; `load[T, W]` and `store[T, W]` were byte-addressed and silently
+  ignored it. Two traps followed. `store` was overloaded on *whether a DType was
+  passed*, and `load` had no bit-wise overload at all — so the pairing that
+  looks matched, `store[W]` to write and `load[...]` to read, was write-bits /
+  read-bytes. That is exactly how the fused bool lanes came to read a mask a
+  byte at a time (see Fixes). And on a *sliced* bitmap the offset divergence is
+  wrong on its own, independent of the bit/byte confusion.
+
+  `mask[W]` is now `load[W]`, mirroring `BufferView.load[W]` — both take a
+  logical element index and return W elements — and pairing with the existing
+  bit-wise `store[W]`. The byte-addressed forms become `load_bytes` /
+  `store_bytes`, under a comment marking where the two families divide. `store`
+  is no longer overloaded, and `load[DType.bool, W]` is no longer expressible.
+
+  No caller outside `views.mojo` used the byte forms: the remaining ones are its
+  own bitwise and/or/xor kernels doing deliberate whole-byte arithmetic with an
+  explicitly computed `byte_idx`. Behaviour unchanged; all four size gates
+  unchanged.
+
+
 - **A1: typed per-node `State` for the fused expression lane — `a + 1` over 1M
   rows goes from 2.04 ms to 70.9 µs.** Every fused node now implements a
   two-method protocol: a comptime `State`, `state(batch)` which resolves the

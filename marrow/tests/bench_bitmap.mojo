@@ -317,7 +317,7 @@ def _bench_set_range(mut b: Benchmark, size: Int) raises:
     @parameter
     def call():
         builder.set_range(0, size, True)
-        keep(builder.view().load[DType.uint8](0))
+        keep(builder.view().load_bytes[DType.uint8](0))
 
     b.iter[call]()
 
@@ -581,7 +581,7 @@ def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
     def call():
         for i in range(0, size - W + 1, W):
             bv.store[W](i, pattern)
-        keep(bv.load[DType.uint8](0))
+        keep(bv.load_bytes[DType.uint8](0))
 
     b.iter[call]()
 
@@ -660,7 +660,7 @@ def _bench_pack_bools_w32(mut b: Benchmark, size: Int) raises:
     def call():
         for i in range(0, size - W + 1, W):
             bv.store[W](i, pattern)
-        keep(bv.load[DType.uint8](0))
+        keep(bv.load_bytes[DType.uint8](0))
 
     b.iter[call]()
 
@@ -771,7 +771,7 @@ def _bench_pack_bools_w64(mut b: Benchmark, size: Int) raises:
     def call():
         for i in range(0, size - W + 1, W):
             bv.store[W](i, pattern)
-        keep(bv.load[DType.uint8](0))
+        keep(bv.load_bytes[DType.uint8](0))
 
     b.iter[call]()
 
