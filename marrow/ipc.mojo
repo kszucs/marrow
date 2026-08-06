@@ -1089,9 +1089,7 @@ struct _IpcEncoder(Movable):
 
         if dtype.is_map():
             child_positions.append(
-                self._write_field(
-                    dtype.as_map().entries[].copy(), next_dict_id
-                )
+                self._write_field(dtype.as_map().entries[].copy(), next_dict_id)
             )
         elif dtype.is_list():
             child_positions.append(

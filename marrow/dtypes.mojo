@@ -1242,7 +1242,6 @@ struct DynType(
             or self.is_decimal256()
         )
 
-
     def write_to[W: Writer](self, mut writer: W):
         @parameter
         def f[T: DataType](t: T):

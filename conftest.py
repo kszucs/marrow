@@ -118,8 +118,7 @@ def run_with_progress(config, cmd, cwd, label):
             proc.kill()
             out, err = proc.communicate()
             err = (
-                (err or "")
-                + f"\n\nTIMEOUT: killed after {timeout}s with no exit.\n"
+                (err or "") + f"\n\nTIMEOUT: killed after {timeout}s with no exit.\n"
                 "A Mojo compile or run that produces no output for this long is "
                 "hung, not slow -- compare elapsed time against CPU time with "
                 "`ps -o etime,time <pid>` to confirm. Raise --mojo-timeout if "

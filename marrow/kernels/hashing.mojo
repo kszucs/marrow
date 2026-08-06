@@ -343,7 +343,9 @@ struct RapidHash(Kernel):
             # of the fused binary, for one call site. Q4.7.
             ref d = keys.as_dictionary()
             return RapidHash.dispatch(
-                take(d.dictionary().copy(), _indices_as_int32(d.indices()), ctx),
+                take(
+                    d.dictionary().copy(), _indices_as_int32(d.indices()), ctx
+                ),
                 ctx,
             )
         elif dt.is_primitive():

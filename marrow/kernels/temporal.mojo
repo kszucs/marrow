@@ -498,9 +498,7 @@ def _trunc_calendar[
         # Floor-divide, so pre-epoch instants land on the day containing them
         # rather than the day after -- the same reason `_trunc` uses `_fdiv`.
         var days = _fdiv(raw, ticks_per_day)
-        dst.unsafe_set(
-            i, Scalar[N](_floor_civil(days, unit) * ticks_per_day)
-        )
+        dst.unsafe_set(i, Scalar[N](_floor_civil(days, unit) * ticks_per_day))
 
     var vbm: Optional[Bitmap[mut=False]] = None
     if data.bitmap:
@@ -554,9 +552,7 @@ struct DateTruncKernel(Kernel):
                     data, dt, ticks_per_day, unit, n
                 )
             else:
-                raise Self.error(
-                    t"{dt} is {width} bytes wide; expected 4 or 8"
-                )
+                raise Self.error(t"{dt} is {width} bytes wide; expected 4 or 8")
 
         var ticks_per_unit = _ticks_per_second(dt) * unit.seconds()
         if width == 4:  # time32
