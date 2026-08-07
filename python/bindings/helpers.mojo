@@ -126,7 +126,7 @@ def pyfunction[
 
 
 def pyinit[
-    T: Movable & ImplicitlyDestructible & ConvertibleFromPython
+    T: ConvertibleFromPython
 ](out self: T, args: PythonObject, kwargs: PythonObject) raises:
     """Generic ``def_py_init`` wrapper that delegates to ``T(py=args[0])``.
 

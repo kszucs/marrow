@@ -63,9 +63,9 @@ def _scalar_repr(py_self: PythonObject) raises -> PythonObject:
 
 
 def _scalar_bool(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[DynScalar]()
     """Support bool(scalar) — needed for truthiness checks like ``assert arr[0]``.
     """
+    var ptr = py_self.downcast_value_ptr[DynScalar]()
     var py_val = ptr[].as_py()
     return PythonObject(Bool(py=py_val))
 
