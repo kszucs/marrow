@@ -202,7 +202,9 @@ struct PyHelpers(Copyable, Movable):
         if rc != 0:
             self.raise_on_error()
         return StringSlice[ImmutAnyOrigin](
-            ptr=data_ptr.value().bitcast[UInt8](), length=Int(size)
+            unsafe_from_utf8=Span[Byte, ImmutAnyOrigin](
+                unsafe_ptr=data_ptr.value().bitcast[Byte](), length=Int(size)
+            )
         )
 
     @always_inline
@@ -484,7 +486,7 @@ struct PyInferrer(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-trait PyConverter(ImplicitlyDestructible, Movable):
+trait PyConverter(ImplicitlyDeletable, Movable):
     def append(mut self, value: PyObjectPtr) raises:
         ...
 

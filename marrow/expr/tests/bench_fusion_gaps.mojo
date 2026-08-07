@@ -137,9 +137,9 @@ def bench_b27_probe_two_lengths_1m(mut b: Benchmark) raises:
     def call() raises:
         keep(
             into_array(
-                (
-                    col("s", string).length() + col("s", string).length()
-                ).execute(batch),
+                (col("s", string).length() + col("s", string).length()).execute(
+                    batch
+                ),
                 1_000_000,
             ).length()
         )

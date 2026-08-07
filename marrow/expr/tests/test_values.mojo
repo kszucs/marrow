@@ -421,7 +421,7 @@ def test_concat_chain_fuses() raises:
 def test_strlen_fuses_into_numeric() raises:
     # length(s) + 1 over ["ab","cd"] → byte lengths [2,2] + 1 = [3,3]. A STRATEGY
     # TRANSITION: the string stage materializes, then `length` reads offsets as a
-    # vectorwise numeric leaf and the `+ 1` fuses in the same numeric pass.
+    # numeric lane leaf and the `+ 1` fuses in the same numeric pass.
     var expr = Add(StringLength(col("s", string)), lit(1, int32))
     var cv = (expr).execute(_str_batch())
     assert_true(into_array(cv, 2) == array([3, 3], int32).to_dyn())
@@ -788,6 +788,69 @@ def test_string_compare_composes_under_bool_logic() raises:
         )
     ).execute(_sp_batch())
     assert_true(into_array(cv, 3) == array([False, False, False]).to_dyn())
+
+
+def test_or_over_two_bool_breakers() raises:
+    # Regression: a bit-packed mask must be read bit-wise, not byte-wise. Two
+    # breaker operands under one bool binary is the shape that exposed it —
+    # `lt=[F,F,T]` is the byte 0b100, which reads as *true* if loaded as a byte.
+    # lt or gt -> [F,T,T]
+    var cv = (
+        Or(
+            StrLt(col("s", string), col("p", string)),
+            StrGt(col("s", string), col("p", string)),
+        )
+    ).execute(_sp_batch())
+    assert_true(into_array(cv, 3) == array([False, True, True]).to_dyn())
+
+
+def test_and_over_two_isin_breakers() raises:
+    # Same regression with no string anywhere — the defect is in the bitmap
+    # read, not in the string lane.
+    # a=[1,2,3,4]; in{2,3}=[F,T,T,F]; in{1,2}=[T,T,F,F] -> and=[F,T,F,F]
+    var cv = (
+        And(
+            IsIn(col("a", int64), array([2, 3], int64)),
+            IsIn(col("a", int64), array([1, 2], int64)),
+        )
+    ).execute(_batch())
+    assert_true(
+        into_array(cv, 4) == array([False, True, False, False]).to_dyn()
+    )
+
+
+def test_add_over_two_numeric_breakers() raises:
+    # Control for the two above: a *numeric* binary over two breakers reads a
+    # plain buffer, never a bitmap, and was never affected.
+    # len("ab")=2, len("cd")=2 -> 2+2=4 for both rows.
+    var cv = (
+        Add(StringLength(col("s", string)), StringLength(col("s", string)))
+    ).execute(_str_batch())
+    assert_true(into_array(cv, 2) == array([4, 4], int32).to_dyn())
+
+
+def test_and_over_breaker_and_fused_unary() raises:
+    # A breaker beside a fused unary over another breaker — `x & ~x` is false
+    # everywhere, and a byte-wise mask read got it wrong.
+    var cv = (
+        And(
+            StrLt(col("s", string), col("p", string)),
+            Not(StrLt(col("s", string), col("p", string))),
+        )
+    ).execute(_sp_batch())
+    assert_true(into_array(cv, 3) == array([False, False, False]).to_dyn())
+
+
+def test_and_over_two_breakers_of_different_types() raises:
+    # The two breakers need not be the same node type to hit it.
+    # s=[apple,banana,cherry]; lt(s,p)=[F,F,T]; s in {cherry}=[F,F,T] -> [F,F,T]
+    var cv = (
+        And(
+            StrLt(col("s", string), col("p", string)),
+            IsIn(col("s", string), array(["cherry"])),
+        )
+    ).execute(_sp_batch())
+    assert_true(into_array(cv, 3) == array([False, False, True]).to_dyn())
 
 
 def _like_batch() raises -> RecordBatch:

@@ -61,7 +61,9 @@ def _batch(n: Int, num_groups: Int) raises -> RecordBatch:
     )
 
 
-def _plan(var batch: RecordBatch, var funcs: List[AggFunc]) raises -> DynRelation:
+def _plan(
+    var batch: RecordBatch, var funcs: List[AggFunc]
+) raises -> DynRelation:
     """`SELECT name, sum(a), min(b) FROM t GROUP BY name` over `funcs`."""
     var keys = List[BoxedValue]()
     keys.append(BoxedValue(col("name", string)))

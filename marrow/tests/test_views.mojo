@@ -463,7 +463,7 @@ def test_bitmapview_mask() raises:
     bm.set(2)
     bm.set(3)
     var view = bm.view(0, 16)
-    var m = view.mask[8](0)
+    var m = view.load[8](0)
     assert_true(m[0])
     assert_false(m[1])
     assert_true(m[2])

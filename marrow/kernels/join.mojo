@@ -304,8 +304,6 @@ comptime JOIN_ANY: UInt8 = 1
 """ANY strictness: return at most one matching right row per left row (no row duplication)."""
 
 
-
-
 @fieldwise_init
 struct JoinIndex(Copyable, Movable):
     """Which build row pairs with which probe row, one entry per output row.
@@ -813,7 +811,9 @@ struct HashJoin[
 
         if kind.emits_right_columns():
             for c in range(len(right.children)):
-                out_cols.append(take(right.children[c].copy(), pairs.probe, ctx))
+                out_cols.append(
+                    take(right.children[c].copy(), pairs.probe, ctx)
+                )
 
         var out_length = out_cols[0].length() if len(out_cols) > 0 else 0
         return StructArray(

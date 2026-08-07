@@ -574,7 +574,5 @@ def test_num_buffers_map_owns_its_offsets() raises:
     Worth pinning: `map` is absent from IPC's buffer-consuming ladder entirely
     (see V0), so it silently read as owning zero buffers there.
     """
-    var m = DynType(
-        map_(DynType(StringType()), DynType(Int32Type()))
-    )
+    var m = DynType(map_(DynType(StringType()), DynType(Int32Type())))
     assert_equal(m.num_buffers(), 1)

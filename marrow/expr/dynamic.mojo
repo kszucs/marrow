@@ -17,7 +17,7 @@ nodes would accept it as an operand. That conformance was **unsound** — the bo
 stubbed both of the promises those traits make:
 
 - `comptime OutType: NumericType`, whose `native` was a placeholder `DType.bool`;
-- `vectorwise[W] -> SIMD[OutType.native, W]`, which had no lane and returned zero.
+- `lane[W] -> SIMD[OutType.native, W]`, which had no lane and returned zero.
 
 It satisfied the signatures and none of the contract, and the compiler surfaced
 that as `attempt to resolve a recursive reference to declaration
@@ -136,7 +136,7 @@ from ..kernels.string import (
     StripKernel,
     UpperKernel,
 )
-from .values import Context, Datum
+from .values import Datum
 from .pruning import PruneBound, PruneStats
 from .values import Value
 
@@ -238,7 +238,7 @@ struct DynValue(Copyable, Movable, Value, Writable):
 
     Conforms to `Value` and to nothing else. `Value`'s members are all runtime
     methods, so erasing into it is honest — unlike the family traits, whose
-    comptime `OutType: NumericType` and `vectorwise` this struct could only stub.
+    comptime `OutType: NumericType`, `State` and `lane` this struct could only stub.
     That distinction is the whole design: **erase into a trait of methods, never
     into one with comptime members you cannot supply.**
     """
@@ -504,7 +504,7 @@ struct DynValue(Copyable, Movable, Value, Writable):
                 args.append(self._kids[i][]._eval(batch))
             return self._eval_fn(args^, self._payload, batch)
 
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+    def materialize(self, batch: RecordBatch) raises -> Datum:
         return Datum(self._eval(batch))
 
     def execute(self, batch: RecordBatch) raises -> DynArray:

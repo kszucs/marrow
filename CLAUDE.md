@@ -217,6 +217,20 @@ use has passed. When a `@parameter` closure captures a variable and is handed to
 it runs — a heap-use-after-free inside the iteration loop. This applies to
 `StructArray`, `PrimitiveArray[T]`, `SwissHashTable`, `HashJoin`, and friends.
 
+**Two rules that each cost a wrong conclusion on 2026-08-05:**
+
+- **Read the unit on every row before comparing two numbers.** pytest-benchmark
+  scales each benchmark independently, so one row prints `Name (time in ns)`,
+  the next `(time in us)` and the next `(time in ms)`. Comparing the bare figures
+  reported a 25x speedup where there was a 40x slowdown, and the filed bug said
+  the opposite of the truth. Strip the colour codes and read the headers:
+  `sed 's/\x1b\[[0-9;]*m//g' out.log | grep -E "Name \(time|^bench_"`.
+- **An `assignment to 'x' was never used` warning on a value the closure *does*
+  use means the capture was not made** — the body reads garbage and the timing is
+  meaningless. Same tell as the `sync_parallelize` miscompile noted under
+  `ExecContext.stripe`. Add the missing `keep(x)` and re-measure; never report a
+  number from a run that emitted it.
+
 For multiple sizes, share a helper and add one thin wrapper per size:
 
 ```mojo
