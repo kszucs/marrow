@@ -684,32 +684,37 @@ position, so there is no traversal to keep in step and no shared numbering to
 corrupt. The proposed debug-only ASSERT (that `prepare` appended as many slots as
 `vectorwise` consumed) is moot and was never needed.
 
-### Both-lane parity is a hand-maintained list, and it has already drifted
+### Both-lane parity — A5 done 2026-08-13, and it found a live bug
 
-Invariant 2 ("no feature in only one lane") is enforced by `test_parity.mojo`
-alone: 47 cases, of which **39 assert both lanes** and 13 pin one lane against a
-literal. Ops with a genuine cross-lane assertion: **19 of the 55 shared ops
-(35%)**. No parity for `** <= >= != ^`, any of `abs sign floor ceil round sqrt
-exp ln`, the seven string maps, `length`, `startswith`/`contains`/`like`, eight
-of nine temporal extracts, `date_trunc`, or any aggregate. The file names the
-hole itself — it is how the Q0.4 divergence survived.
+Invariant 2 ("no feature in only one lane") was enforced by hand-written cases
+in `test_parity.mojo`: 19 of 55 shared ops (35%) had a genuine cross-lane
+assertion. Two mechanical tests replace the hand-maintained half.
 
-**The op-name strings have already diverged**: `mod`/`modulo`, `pow_`/`power`,
-`neg`/`negate`, `and_`/`and`, `or_`/`or`, `not_`/`not`, `abs_`/`abs`,
-`log`/`ln`. `render()` therefore differs across lanes for the same expression —
-and more seriously, **`prune` correctness keys on these strings against two
-hand-maintained literal sets** (`values.mojo:1043-1046` vs
-`dynamic.mojo:592-601`). A typo falls through to `PruneBound.unknown()`, which
-is *sound*, so it fails as silently-disabled row-group skipping, never as an
-error. The two lanes also disagree structurally: `prune` and `bound_column`
-exist on `NumericColumn` only, so in the AOT lane a string column cannot be a
-join key and a string predicate prunes nothing — while the runtime lane keys on
-`_tag == "column"` regardless of dtype and does prune it.
+**`test_op_names_agree_across_lanes`** enumerates the op set and reads every
+expected name *off the kernel* — it never spells one. It landed red on the eight
+pairs that had already drifted: `mod`/`modulo`, `pow_`/`power`, `neg`/`negate`,
+`abs_`/`abs`, `and_`/`and`, `or_`/`or`, `not_`/`not`, `log`/`ln`. Kernels now use
+the spelling Arrow uses, and the 47 runtime factories read `XKernel.name` rather
+than repeating a literal.
 
-**A5 — enumerate the op set and assert parity over it mechanically**, rather
-than by hand-written case. The model already exists in the same file:
-`test_numeric_rank_agrees_across_lanes` loops all 11 numeric dtypes through
-`dispatch_numeric`. That is the right shape, applied to the wrong axis.
+**`test_string_predicate_prunes_in_both_lanes`** landed red on a real defect,
+not a naming one: `prune` and `bound_column` existed on `NumericColumn` alone,
+so in the fused lane a string predicate pruned nothing and a string column could
+not be a join key — while the runtime lane, keying on `_tag == "column"`
+regardless of dtype, pruned it. An AOT plan with a string predicate decoded
+every row group. Sound, so nothing failed; it was just slower, silently.
+
+The structural cause is fixed rather than patched: `prune` no longer dispatches
+on `Kernel.name` at all. The interval reading of each operator is its own kernel
+family in `marrow/kernels/interval.mojo`, and the node names it
+(`NumericCompare[LtKernel, LtInterval, L, R]`) — the same layering the removed
+`comptime StringKernel` established. Both string-match ladders are gone, so a
+rename can no longer silently disable pruning.
+
+**Still hand-written, and worth doing next:** the *value* parity cases. There is
+still no cross-lane assertion for `** <= >= != ^`, the eight float unaries, the
+seven string maps, `length`, or any aggregate — the naming and pruning axes are
+now mechanical, the arithmetic axis is not.
 
 ### Types carrying a second and third responsibility
 

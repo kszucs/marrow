@@ -277,7 +277,7 @@ struct FloordivKernel(BinaryNumericKernel):
 
 
 struct ModKernel(BinaryNumericKernel):
-    comptime name = "mod"
+    comptime name = "modulo"
 
     @always_inline
     @staticmethod
@@ -309,7 +309,7 @@ struct MaxKernel(BinaryNumericKernel):
 
 
 struct NegKernel(UnaryNumericKernel):
-    comptime name = "neg"
+    comptime name = "negate"
 
     @always_inline
     @staticmethod
@@ -318,7 +318,7 @@ struct NegKernel(UnaryNumericKernel):
 
 
 struct AbsKernel(UnaryNumericKernel):
-    comptime name = "abs_"
+    comptime name = "abs"
 
     @always_inline
     @staticmethod
@@ -377,7 +377,7 @@ struct RoundKernel(UnaryNumericKernel):
 
 
 struct PowKernel(BinaryFloatKernel):
-    comptime name = "pow_"
+    comptime name = "power"
 
     @always_inline
     @staticmethod
@@ -421,7 +421,7 @@ struct Exp2Kernel(UnaryFloatKernel):
 
 
 struct LogKernel(UnaryFloatKernel):
-    comptime name = "log"
+    comptime name = "ln"
 
     @always_inline
     @staticmethod

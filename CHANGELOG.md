@@ -30,7 +30,59 @@
   `test_and_over_breaker_and_fused_unary`, and the numeric control
   `test_add_over_two_numeric_breakers`.
 
+### Fixes
+
+- **A string predicate pruned nothing in the fused lane, so an AOT plan decoded
+  every row group.** `prune` and `bound_column` were defined on `NumericColumn`
+  alone. `StringColumn` inherited `Value`'s conservative defaults, which meant a
+  fused `s > "z"` could not skip a row group whose `s` maxes out at `"p"`, and a
+  string column could not be a join key. The runtime lane had neither problem —
+  its `prune` keys on `_tag == "column"` regardless of dtype — so the two lanes
+  disagreed about the same predicate. `Interval.compare` has ordered strings the
+  whole time; only the overrides were missing. Sound, therefore silent: nothing
+  failed, the scan just did more work. Pinned by
+  `test_string_predicate_prunes_in_both_lanes`, which asserts both lanes.
+
 ### Refactors
+
+- **A5: pruning is a kernel family, not a match on a display string.** Both
+  lanes selected their interval rule by comparing `Kernel.name` against
+  hand-maintained literals — `values.mojo` against `"and_"`/`"or_"` and five
+  comparison names, `dynamic.mojo` against its own set. `Kernel.name` is
+  documented as "for display and diagnostics, **never dispatch**", and the
+  consequence of ignoring that was invisible: renaming a kernel dropped through
+  to `Interval.unknown()`, which is *sound*, so pruning switched itself off with
+  no error and no failing test.
+
+  `marrow/kernels/interval.mojo` now holds the interval reading of each operator
+  — `LtInterval`, `AndInterval`, and so on, each a one-line naming of an
+  `Interval` method, exactly as `LtKernel.core` is a one-line naming of `a < b`
+  over SIMD. The expression node pairs the two (`NumericCompare[LtKernel,
+  LtInterval, L, R]`), which is where the codebase already decided this belongs:
+  `NumericCompareKernel` used to carry a `comptime StringKernel` and it was
+  removed because "which family `a < b` means is a question about the operands,
+  and it belongs to whoever is interpreting the operator, not to the SIMD
+  kernel". Both string ladders are deleted, and the runtime lane matches its tag
+  against the *kernel's* own `name`, so rule and spelling cannot drift apart.
+
+  `PruneBound` moves to that module as `Interval` — the interval domain is a
+  value concept, and `kernels/` must not take an inbound edge from `expr/`.
+  `expr/pruning.mojo` keeps `PruneStats`, the plan-level half.
+
+- **The two lanes named the same operator differently, and now cannot.** Eight
+  pairs had drifted: `mod`/`modulo`, `pow_`/`power`, `neg`/`negate`,
+  `abs_`/`abs`, `and_`/`and`, `or_`/`or`, `not_`/`not`, `log`/`ln` — so
+  `render()` printed a different plan per lane for the same expression. The
+  kernels adopt the spelling Arrow uses (which is what the runtime lane already
+  had); the trailing underscores were Mojo identifier artifacts leaking into
+  display strings, and a `comptime name: String` need not match its struct's
+  identifier. The 47 runtime factories now read `XKernel.name` instead of
+  repeating a literal, so there is one source of truth.
+
+  `test_op_names_agree_across_lanes` enumerates the op set and reads every
+  expected name off the kernel — it never spells one — so adding an op to one
+  lane, or renaming a kernel, fails loudly.
+
 
 - **`BitmapView`'s bit-addressed accessors are now the default pair; the
   byte-addressed ones say so in their names.** The struct had six accessors

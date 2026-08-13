@@ -78,6 +78,46 @@ from ...expr.values import (
     Hour,
 )
 
+from ...kernels.core import Kernel
+from ...kernels.numeric import (
+    AddKernel,
+    SubKernel,
+    MulKernel,
+    DivKernel,
+    ModKernel,
+    FloordivKernel,
+    PowKernel,
+    LtKernel,
+    LeKernel,
+    GtKernel,
+    GeKernel,
+    EqKernel,
+    NeKernel,
+    NegKernel,
+    AbsKernel,
+    SignKernel,
+    FloorKernel,
+    CeilKernel,
+    RoundKernel,
+    SqrtKernel,
+    ExpKernel,
+    LogKernel,
+)
+from ...kernels.boolean import AndKernel, OrKernel, XorKernel, NotKernel
+from ...kernels.string import StartsWithKernel, EndsWithKernel, ContainsKernel
+from ...kernels.temporal import (
+    YearKernel,
+    MonthKernel,
+    DayKernel,
+    HourKernel,
+    MinuteKernel,
+    SecondKernel,
+    QuarterKernel,
+    DayOfWeekKernel,
+    DayOfYearKernel,
+)
+from ...kernels.conditional import CoalesceKernel, NullifKernel
+
 from ...expr.dynamic import DynValue, _numeric_rank
 from ...expr.relations import BoxedValue
 
@@ -876,4 +916,101 @@ def test_runtime_literal_and_cast() raises:
         fcol("a", int64) + flit(3, int64),
         fcol("a") + flit[Int64Type](3),
         batch,
+    )
+
+
+# ---------------------------------------------------------------------------
+# A5 — op-name parity, asserted mechanically rather than by hand-written literal
+# ---------------------------------------------------------------------------
+def _tag_mismatch[K: Kernel](rendered: String) -> String:
+    """Empty when a runtime node renders under its fused kernel's own `name`.
+
+    The expected string is never written down here — it is read off the kernel
+    the runtime factory already names. That is the whole point: `prune`
+    correctness keys on these strings against two hand-maintained sets, and a
+    divergence between them fails *silently*, as a `Interval.unknown()`
+    fall-through that disables row-group skipping rather than raising.
+
+    Returns a description rather than asserting so one run reports *every*
+    divergence; stopping at the first would hide the rest.
+    """
+    if rendered.startswith(String(K.name) + "("):
+        return String()
+    return (
+        String("\n  `")
+        + rendered
+        + "` should render under `"
+        + String(K.name)
+        + "`"
+    )
+
+
+def test_op_names_agree_across_lanes() raises:
+    """Every shared op must render under one name in both lanes.
+
+    The runtime factories already name their kernel — `Self("modulo",
+    Self._binary[ModKernel], ...)` — so the tag string is redundant with
+    `ModKernel.name` and can only drift away from it. This enumerates the op
+    set once and reads every expected name off the kernel.
+    """
+    var a = dcol("a")
+    var b = dcol("b")
+    var bad = String()
+
+    # arithmetic
+    bad += _tag_mismatch[AddKernel]((a + b).render())
+    bad += _tag_mismatch[SubKernel]((a - b).render())
+    bad += _tag_mismatch[MulKernel]((a * b).render())
+    bad += _tag_mismatch[DivKernel]((a / b).render())
+    bad += _tag_mismatch[ModKernel]((a % b).render())
+    bad += _tag_mismatch[FloordivKernel]((a // b).render())
+    bad += _tag_mismatch[PowKernel]((a**b).render())
+
+    # comparison
+    bad += _tag_mismatch[LtKernel]((a < b).render())
+    bad += _tag_mismatch[LeKernel]((a <= b).render())
+    bad += _tag_mismatch[GtKernel]((a > b).render())
+    bad += _tag_mismatch[GeKernel]((a >= b).render())
+    bad += _tag_mismatch[EqKernel]((a == b).render())
+    bad += _tag_mismatch[NeKernel]((a != b).render())
+
+    # boolean logic
+    bad += _tag_mismatch[AndKernel]((a & b).render())
+    bad += _tag_mismatch[OrKernel]((a | b).render())
+    bad += _tag_mismatch[XorKernel]((a ^ b).render())
+    bad += _tag_mismatch[NotKernel]((~a).render())
+
+    # numeric unaries
+    bad += _tag_mismatch[NegKernel]((-a).render())
+    bad += _tag_mismatch[AbsKernel](a.abs().render())
+    bad += _tag_mismatch[SignKernel](a.sign().render())
+    bad += _tag_mismatch[FloorKernel](a.floor().render())
+    bad += _tag_mismatch[CeilKernel](a.ceil().render())
+    bad += _tag_mismatch[RoundKernel](a.round().render())
+
+    # float unaries
+    bad += _tag_mismatch[SqrtKernel](a.sqrt().render())
+    bad += _tag_mismatch[ExpKernel](a.exp().render())
+    bad += _tag_mismatch[LogKernel](a.ln().render())
+
+    # string predicates and temporal extracts — these already agreed, and the
+    # test is what keeps them agreeing
+    bad += _tag_mismatch[StartsWithKernel](a.startswith(b).render())
+    bad += _tag_mismatch[EndsWithKernel](a.endswith(b).render())
+    bad += _tag_mismatch[ContainsKernel](a.contains(b).render())
+    bad += _tag_mismatch[YearKernel](a.year().render())
+    bad += _tag_mismatch[MonthKernel](a.month().render())
+    bad += _tag_mismatch[DayKernel](a.day().render())
+    bad += _tag_mismatch[HourKernel](a.hour().render())
+    bad += _tag_mismatch[MinuteKernel](a.minute().render())
+    bad += _tag_mismatch[SecondKernel](a.second().render())
+    bad += _tag_mismatch[QuarterKernel](a.quarter().render())
+    bad += _tag_mismatch[DayOfWeekKernel](a.day_of_week().render())
+    bad += _tag_mismatch[DayOfYearKernel](a.day_of_year().render())
+    bad += _tag_mismatch[CoalesceKernel](a.coalesce(b).render())
+    bad += _tag_mismatch[NullifKernel](a.nullif(b).render())
+
+    assert_true(
+        not bad,
+        String("op names diverge between the fused and runtime lanes:") + bad,
     )
