@@ -69,6 +69,17 @@
   value concept, and `kernels/` must not take an inbound edge from `expr/`.
   `expr/pruning.mojo` keeps `PruneStats`, the plan-level half.
 
+- **Aggregate parity across the two lanes, the last A5 axis.** An aggregate is
+  not a `Value`, so `assert_parity` cannot reach it: `col("x").sum()` on a
+  `DynValue` yields a `DynAgg` (a group-by spec) while `col("x", int64).sum()`
+  on a fused node yields a scalar `Reduction`. They converge only at `AggExpr`,
+  so parity is observed through a plan. `sum`, `mean`, `min`, `max`, `product`,
+  `count` and `count_distinct` now run through a keyless plan in each lane —
+  keyless so there is one output row and the comparison cannot be confused by
+  group order, which follows the key hash — plus one grouped `sum`, since the
+  grouped path is a separate implementation from the whole-table fold. All
+  passed on arrival and were mutation-checked.
+
 - **Value parity for the 25 ops that had no cross-lane assertion.** `<= >= !=
   ** ^`, `neg`/`abs`/`sign`/`floor`/`ceil`/`round`, `sqrt`/`exp`/`ln`, the seven
   string maps, `length`, and `startswith`/`endswith`/`contains` are now asserted

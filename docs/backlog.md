@@ -751,11 +751,19 @@ invariant from here. That the assertions actually bite was checked by mutation
 — swapping the fused side of `ln` for `exp` and of `rstrip` for `lstrip` failed
 exactly those two cases and nothing else.
 
-**Still uncovered: aggregates.** They are a genuinely different shape rather
-than an omission — `DynValue.sum()` returns a `DynAgg` (a group-by spec) while
-the fused `Sum(col)` is a scalar `Reduction`, so parity for them is a
-plan-level comparison through `aggregate(...)`, not an `assert_parity` over two
-expressions.
+**Aggregates are covered too** (2026-08-14), and they needed a different shape
+rather than a different case: `DynValue.sum()` returns a `DynAgg` (a group-by
+spec) while the fused `Sum(col)` is a scalar `Reduction`, so they converge only
+at `AggExpr` and parity has to be observed through a plan. Eight cases in
+`test_aggregates.mojo` run `sum`, `mean`, `min`, `max`, `product`, `count` and
+`count_distinct` through a **keyless** plan in each lane — no GROUP BY, so one
+output row, so the comparison cannot be confused by group order, which follows
+the key hash — plus one grouped `sum`, since the grouped path is a separate
+implementation from the whole-table fold. All passed on arrival; mutation-checked
+by swapping one fused `min` for `max` and one grouped `sum` for `max`, which
+failed exactly those two.
+
+**A5 is now complete across all four axes** — names, pruning, values, aggregates.
 
 ### Types carrying a second and third responsibility
 

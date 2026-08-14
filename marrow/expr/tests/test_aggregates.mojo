@@ -57,6 +57,7 @@ from ...kernels.aggregate import (
     MaxKernel,
 )
 from ...expr.aggregates import AggFunc
+from ...expr.values import AggExpr
 from ...expr.values import col, lit
 from ...expr.relations import DynRelation, in_memory_table
 from ...expr.relations import BoxedValue
@@ -472,3 +473,114 @@ def test_fused_non_numeric_aggregation() raises:
     var out = plan.execute()
     var east = _row_for(out, "east")
     assert_true(out.column(1).as_string()[east].to_string() == "east")
+
+
+# ---------------------------------------------------------------------------
+# A5 — aggregate parity across the two lanes
+#
+# The third axis of invariant 2, and the one `test_parity.mojo` cannot reach:
+# an aggregate is not a `Value`, so there is no `assert_parity` for it.
+# `col("amount").sum()` on a `DynValue` yields a `DynAgg` (a group-by spec),
+# while `col("amount", int64).sum()` on a fused node yields a scalar
+# `Reduction`. They converge only at `AggExpr`, so parity has to be observed
+# where both are usable — through a plan.
+# ---------------------------------------------------------------------------
+def _assert_agg_parity(
+    var fused: AggExpr, var dyn: AggExpr, label: String
+) raises:
+    """Run one aggregate through a keyless plan in each lane and compare.
+
+    Keyless on purpose: with no GROUP BY there is one output row, so the
+    comparison cannot be confused by group order, which follows the key hash.
+    """
+    var f = (
+        in_memory_table(_orders())
+        .aggregate(keys=List[BoxedValue](), aggs=[fused^])
+        .execute()
+    )
+    var d = (
+        in_memory_table(_orders())
+        .aggregate(keys=List[BoxedValue](), aggs=[dyn^])
+        .execute()
+    )
+    assert_equal(f.num_rows(), d.num_rows())
+    assert_true(
+        f.column(0) == d.column(0),
+        String("aggregate `") + label + "` disagrees across lanes",
+    )
+
+
+def test_agg_parity_sum() raises:
+    _assert_agg_parity(
+        fused_col("amount", int64).sum(), col("amount").sum(), "sum"
+    )
+
+
+def test_agg_parity_mean() raises:
+    _assert_agg_parity(
+        fused_col("amount", int64).mean(), col("amount").mean(), "mean"
+    )
+
+
+def test_agg_parity_min() raises:
+    _assert_agg_parity(
+        fused_col("amount", int64).min(), col("amount").min(), "min"
+    )
+
+
+def test_agg_parity_max() raises:
+    _assert_agg_parity(
+        fused_col("amount", int64).max(), col("amount").max(), "max"
+    )
+
+
+def test_agg_parity_product() raises:
+    _assert_agg_parity(
+        fused_col("quantity", int32).product(),
+        col("quantity").product(),
+        "product",
+    )
+
+
+def test_agg_parity_count() raises:
+    _assert_agg_parity(
+        fused_col("quantity", int32).count(), col("quantity").count(), "count"
+    )
+
+
+def test_agg_parity_count_distinct() raises:
+    """`count_distinct` is defaulted on `Value` itself, so both lanes reach the
+    same `DistinctAgg` — this pins that they still agree on a column with
+    repeats (region has 5 rows and 2 distinct values)."""
+    _assert_agg_parity(
+        fused_col("region", string).count_distinct(),
+        col("region").count_distinct(),
+        "count_distinct",
+    )
+
+
+def test_agg_parity_grouped_sum() raises:
+    """The same aggregate under a GROUP BY, since the grouped path is a
+    different implementation from the whole-table fold."""
+    var f = (
+        in_memory_table(_orders())
+        .aggregate(
+            keys=[BoxedValue(fused_col("region", string))],
+            aggs=[fused_col("amount", int64).sum().alias("total")],
+        )
+        .execute()
+    )
+    var d = (
+        in_memory_table(_orders())
+        .aggregate(
+            keys=[BoxedValue(col("region"))],
+            aggs=[col("amount").sum().alias("total")],
+        )
+        .execute()
+    )
+    assert_equal(f.num_rows(), d.num_rows())
+    for region in ["east", "west"]:
+        assert_equal(
+            f.column(1).as_int64()[_row_for(f, region)].value(),
+            d.column(1).as_int64()[_row_for(d, region)].value(),
+        )
