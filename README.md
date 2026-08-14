@@ -396,7 +396,8 @@ pixi run -e bench bench_python    # Python vs PyArrow benchmarks only
 pixi run -e dev fmt               # format all code (Mojo + Python)
 
 # AddressSanitizer
-pixi run -e asan test_mojo_asan   # Mojo tests under ASAN
+pixi run -e asan test_asan_core   # the memory-owning types (what CI runs)
+pixi run -e asan test_mojo_asan   # the whole suite; slow and memory-hungry
 ```
 
 The Python shared library (`python/libmarrow.so`) is built automatically before
