@@ -711,10 +711,20 @@ family in `marrow/kernels/interval.mojo`, and the node names it
 `comptime StringKernel` established. Both string-match ladders are gone, so a
 rename can no longer silently disable pruning.
 
-**Still hand-written, and worth doing next:** the *value* parity cases. There is
-still no cross-lane assertion for `** <= >= != ^`, the eight float unaries, the
-seven string maps, `length`, or any aggregate — the naming and pruning axes are
-now mechanical, the arithmetic axis is not.
+**The value axis is now covered too** (2026-08-14): 25 cases for the ops that
+had no cross-lane assertion at all — `<= >= != ** ^`, `neg`/`abs`/`sign`/
+`floor`/`ceil`/`round`, `sqrt`/`exp`/`ln`, the seven string maps, `length`, and
+`startswith`/`endswith`/`contains`. All 25 passed on arrival, so unlike the
+naming and pruning axes this one found no divergence; its value is holding the
+invariant from here. That the assertions actually bite was checked by mutation
+— swapping the fused side of `ln` for `exp` and of `rstrip` for `lstrip` failed
+exactly those two cases and nothing else.
+
+**Still uncovered: aggregates.** They are a genuinely different shape rather
+than an omission — `DynValue.sum()` returns a `DynAgg` (a group-by spec) while
+the fused `Sum(col)` is a scalar `Reduction`, so parity for them is a
+plan-level comparison through `aggregate(...)`, not an `assert_parity` over two
+expressions.
 
 ### Types carrying a second and third responsibility
 

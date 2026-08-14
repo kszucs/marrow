@@ -69,6 +69,20 @@
   value concept, and `kernels/` must not take an inbound edge from `expr/`.
   `expr/pruning.mojo` keeps `PruneStats`, the plan-level half.
 
+- **Value parity for the 25 ops that had no cross-lane assertion.** `<= >= !=
+  ** ^`, `neg`/`abs`/`sign`/`floor`/`ceil`/`round`, `sqrt`/`exp`/`ln`, the seven
+  string maps, `length`, and `startswith`/`endswith`/`contains` are now asserted
+  to compute the same answer in both lanes, over batches chosen so the ops are
+  distinguishable from each other (signed fractional floats for the rounding
+  family, whitespace and mixed case for the string maps). All 25 passed on
+  arrival — this axis found no divergence, unlike naming and pruning. The
+  assertions were verified to bite by mutation: swapping the fused side of `ln`
+  for `exp` and `rstrip` for `lstrip` failed exactly those two cases.
+
+  Aggregates stay uncovered on purpose. `DynValue.sum()` returns a `DynAgg`, a
+  group-by spec, while the fused `Sum(col)` is a scalar `Reduction`, so their
+  parity is a plan-level comparison rather than two expressions over one batch.
+
 - **The two lanes named the same operator differently, and now cannot.** Eight
   pairs had drifted: `mod`/`modulo`, `pow_`/`power`, `neg`/`negate`,
   `abs_`/`abs`, `and_`/`and`, `or_`/`or`, `not_`/`not`, `log`/`ln` — so
