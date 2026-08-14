@@ -83,6 +83,29 @@ def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | Non
             if child is None
             else pa.list_(child, type_obj["listSize"])
         )
+    if name == "map":
+        # The single child is the entries struct field; its two fields carry the
+        # key/value names, which `map_non_canonical` deliberately varies.
+        entries = _json_field_to_pa(children_fields[0])
+        if entries is None or not pa.types.is_struct(entries.type):
+            return None
+        return pa.map_(
+            entries.type.field(0),
+            entries.type.field(1),
+            keys_sorted=type_obj.get("keysSorted", False),
+        )
+    if name == "interval":
+        # Only MONTH_DAY_NANO is reachable: pyarrow 23 exposes
+        # `month_day_nano_interval` and has no type at all for YEAR_MONTH or
+        # DAY_TIME, and this converter builds every column through pyarrow
+        # before bridging to marrow over the C Data Interface.  Marrow itself
+        # handles all three -- it reads them back from C++/Rust/Go -- so the
+        # limit here is the bridge, not the library.
+        return (
+            pa.month_day_nano_interval()
+            if type_obj.get("unit") == "MONTH_DAY_NANO"
+            else None
+        )
     if name == "struct":
         pa_fields = [_json_field_to_pa(f) for f in children_fields]
         return (
@@ -228,6 +251,39 @@ def _json_col_to_pa(
         return pa.FixedSizeListArray.from_arrays(
             child_arr, pa_type.list_size, mask=mask_pa
         )
+
+    if pa.types.is_map(pa_type):
+        offsets = [int(v) for v in col_obj.get("OFFSET", [])]
+        child_jf = (
+            json_field["children"][0]
+            if json_field and json_field.get("children")
+            else None
+        )
+        entries = _json_col_to_pa(
+            col_obj["children"][0],
+            pa.struct([pa_type.key_field, pa_type.item_field]),
+            dict_cache,
+            child_jf,
+        )
+        return pa.MapArray.from_arrays(
+            offsets,
+            entries.field(0),
+            entries.field(1),
+            type=pa_type,
+            mask=mask_pa,
+        )
+
+    if pa.types.is_interval(pa_type):
+        # DATA is a list of {'months', 'days', 'nanoseconds'} objects.
+        data = [
+            None
+            if v is None
+            else pa.MonthDayNano(
+                [v["months"], v["days"], int(v["nanoseconds"])]
+            )
+            for v in col_obj.get("DATA", [])
+        ]
+        return pa.array(data, type=pa_type, mask=mask_np)
 
     if pa.types.is_struct(pa_type):
         field_arrs = []

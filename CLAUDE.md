@@ -812,11 +812,11 @@ release with both artifacts attached.
    `MapArray` reports `list<…>`) and `cast` has no arm for it. **This used to say
    `map` did not go through IPC "in either direction" because "type code 17 is
    absent from `ipc.mojo`" — that is false**: `comptime _TYPE_MAP: UInt8 = 17` is
-   there, and the archery integration suite reads `map` and `interval` back from
-   C++, Rust and Go correctly (10 of 14 phases). The four that fail are all
-   *Mojo producing*, and they fail in the harness rather than the library —
-   `integration/tester.py`'s `_json_field_to_pa` cannot build a `map` or
-   `interval` column from archery's JSON, so marrow's writer is never reached.
+   there, and the archery integration suite now runs `map`, `map_non_canonical` and
+   `interval_mdn` at **14/14** against C++, Rust and Go — both directions.
+   `interval` (YEAR_MONTH / DAY_TIME) is still skipped there, but that is a
+   pyarrow limit: it has no type for either unit, and the harness bridges
+   through pyarrow. Marrow consumes all three from the other implementations.
 4. **Scalar fidelity**: six types have no dedicated scalar — `binary`,
    `large_binary` and `large_string` collapse to `StringScalar`; `large_list`,
    `map` and `fixed_size_list` collapse to `ListScalar`. `StringScalar.type()`

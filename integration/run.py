@@ -48,10 +48,8 @@ from integration.tester import MarrowTester
 # that Marrow *writes* them correctly.  Until then they stay skipped, because
 # 10/14 fails the job.
 _UNSUPPORTED = {
-    'interval',
-    'interval_mdn',       # month_day_nano_interval
-    'map',
-    'map_non_canonical',
+    'interval',           # YEAR_MONTH / DAY_TIME — see tester.py, pyarrow has
+                          # no type for either, so the bridge cannot build them
     'union',
     'binary_view',
     'list_view',

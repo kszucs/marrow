@@ -153,25 +153,30 @@ group rather than a line:
 
 ---
 
-### The integration suite skips four types it could verify
+### The integration suite now covers map and month_day_nano interval
 
 Run locally 2026-08-14 for the first time (CI has not run it since 2026-05-11).
-**It passes** — every attempted case is green, and `stop_on_error` is on, so the
-job does carry signal rather than reporting unconditionally.
+It passes, and `stop_on_error` is on, so the job carries signal rather than
+reporting unconditionally.
 
-But `integration/run.py`'s `_UNSUPPORTED` list called `interval`,
-`interval_mdn`, `map` and `map_non_canonical` "not yet implemented in Marrow",
-and that is wrong. Un-skipping them scores **10/14 each**, and all four failures
-are `Mojo producing` — Marrow *reads* map and interval back from C++, Rust and
-Go correctly. The gap is in this harness: `_json_field_to_pa`
-(`integration/tester.py`) returns `None` for those types, so `json_to_file`
-refuses the case and Marrow's IPC writer is never reached.
+Its `_UNSUPPORTED` list called `interval`, `interval_mdn`, `map` and
+`map_non_canonical` "not yet implemented in Marrow". That was wrong: un-skipped
+they scored **10/14 each**, and all four failures were `Mojo producing` — Marrow
+already *read* them back from C++, Rust and Go. The gap was in the harness.
+`_json_field_to_pa` returned `None` for those types, so `json_to_file` refused
+the case and Marrow's IPC writer was never reached.
 
-**Worth doing:** add `map` and `interval` arms to `_json_field_to_pa`. That is a
-small ladder addition, it takes the four cases to 14/14, and it would be the
-first check anywhere that Marrow *writes* those types correctly — three
-reference implementations consuming them. Note the writer is currently unproven,
-so this may surface real library bugs; that is the point.
+`map`, `map_non_canonical` and `interval_mdn` now build through the bridge and
+score **14/14**, which is the first check anywhere that Marrow *writes* them
+correctly — three reference implementations consuming the output. The writer
+turned out to be right; nothing in the library needed changing.
+
+**`interval` (YEAR_MONTH / DAY_TIME) stays skipped, and it is a pyarrow limit,
+not a Marrow one.** pyarrow 23 exposes `month_day_nano_interval` and has no type
+at all for the other two units, while this harness builds every column through
+pyarrow before bridging over the C Data Interface. Marrow handles all three —
+it consumes them from the other implementations. Same shape as the existing
+`nested_dictionary` skip. Lifting it means bypassing pyarrow for that one type.
 
 CLAUDE.md's Known Limitations claimed `map` did not go through IPC "in either
 direction" because "type code 17 is absent from `ipc.mojo`". `comptime
