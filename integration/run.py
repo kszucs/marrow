@@ -32,9 +32,21 @@ from archery.integration.util import SKIP_C_ARRAY, SKIP_C_SCHEMA
 from integration.reporter import Tee, report
 from integration.tester import MarrowTester
 
-# Types not yet implemented in Marrow — skip these test cases rather than
-# failing.  We monkey-patch datagen so archery marks them as skipped without
-# modifying the upstream archery source.
+# Skipped test cases.  We monkey-patch datagen so archery marks them as skipped
+# without modifying the upstream archery source.
+#
+# `union`, `binary_view`, `list_view`, `extension` and `run_end_encoded` are
+# genuinely absent from Marrow's layout coverage.
+#
+# `interval`, `interval_mdn`, `map` and `map_non_canonical` are NOT — measured
+# 2026-08-14, un-skipping them scores 10/14 each, and all four failures are
+# `Mojo producing`.  Marrow *reads* them back from C++, Rust and Go correctly;
+# what is missing is in this harness, not the library: `_json_field_to_pa` in
+# tester.py returns None for those types, so `json_to_file` refuses the case and
+# Marrow's IPC writer is never reached.  Teaching that function to build map and
+# interval columns would take all four to 14/14 and would be the first check
+# that Marrow *writes* them correctly.  Until then they stay skipped, because
+# 10/14 fails the job.
 _UNSUPPORTED = {
     'interval',
     'interval_mdn',       # month_day_nano_interval

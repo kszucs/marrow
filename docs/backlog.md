@@ -153,6 +153,32 @@ group rather than a line:
 
 ---
 
+### The integration suite skips four types it could verify
+
+Run locally 2026-08-14 for the first time (CI has not run it since 2026-05-11).
+**It passes** — every attempted case is green, and `stop_on_error` is on, so the
+job does carry signal rather than reporting unconditionally.
+
+But `integration/run.py`'s `_UNSUPPORTED` list called `interval`,
+`interval_mdn`, `map` and `map_non_canonical` "not yet implemented in Marrow",
+and that is wrong. Un-skipping them scores **10/14 each**, and all four failures
+are `Mojo producing` — Marrow *reads* map and interval back from C++, Rust and
+Go correctly. The gap is in this harness: `_json_field_to_pa`
+(`integration/tester.py`) returns `None` for those types, so `json_to_file`
+refuses the case and Marrow's IPC writer is never reached.
+
+**Worth doing:** add `map` and `interval` arms to `_json_field_to_pa`. That is a
+small ladder addition, it takes the four cases to 14/14, and it would be the
+first check anywhere that Marrow *writes* those types correctly — three
+reference implementations consuming them. Note the writer is currently unproven,
+so this may surface real library bugs; that is the point.
+
+CLAUDE.md's Known Limitations claimed `map` did not go through IPC "in either
+direction" because "type code 17 is absent from `ipc.mojo`". `comptime
+_TYPE_MAP: UInt8 = 17` is right there; corrected.
+
+---
+
 ## 2. Wave 2 — Infrastructure
 
 **CI has not run since 2026-05-11**, and on that last run everything except Lint
