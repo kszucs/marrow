@@ -331,7 +331,7 @@ def _drive_numeric[
             return node.lane[W](state, i)
 
         apply[native, producer](buf.view[native](0, length))
-        var v = node.validity(batch)
+        var v = node.state_validity(batch, state)
         var arr = PrimitiveArray[V.OutType](
             dtype=V.OutType(),
             length=length,
@@ -356,7 +356,7 @@ def _drive_bool[
         return node.lane[W](state, i)
 
     apply[V.NativeType, producer](bm.view())  # bit-packing overload
-    var v = node.validity(batch)
+    var v = node.state_validity(batch, state)
     return BoolArray(
         length=length,
         nulls=v.value().unset_count() if v else 0,
@@ -381,7 +381,7 @@ def _drive_string[
         # *transformation* returned an all-valid column. A bare column keeps
         # its nulls (that path returns the column as-is), which is what hid
         # this.
-        var v = node.validity(batch)
+        var v = node.state_validity(batch, state)
         var builder = BinaryLikeBuilder[V.OutType](capacity=n)
         for i in range(n):
             if v and not v.value().test(i):
@@ -515,6 +515,20 @@ trait NumericValue(Value):
         """One SIMD chunk. Reads `state` and `idx` and nothing else — that
         removal is the optimization, worth 30x on `a + 1` over 1M rows."""
         ...
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, given the state the driver already has.
+
+        Defaults to `validity(batch)`: most nodes derive validity from their
+        operands and have no use for the state. A **breaker** whose `State` is
+        its materialized result overrides this to read the bitmap straight off
+        that array. Without the hook the driver's two calls — `state()` and
+        `validity()` — are independent, and for `coalesce`, `nullif` and
+        `case_when` each one ran the whole selection kernel, so every fused pass
+        over them did the work twice (FU-7a)."""
+        return self.validity(batch)
 
     # --- fluent surface: arithmetic, comparison, unary, reductions -----------
     def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
@@ -746,6 +760,20 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     ) raises -> Optional[Bitmap[mut=False]]:
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
+
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
+
 
 @fieldwise_init
 struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
@@ -776,6 +804,13 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
+
 
 @fieldwise_init
 struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
@@ -805,6 +840,13 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 @fieldwise_init
@@ -846,6 +888,20 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     ) raises -> Optional[Bitmap[mut=False]]:
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
+
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
+
 
 @fieldwise_init
 struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
@@ -874,6 +930,13 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 comptime Add = NumericBinary[AddKernel, _, _]
@@ -910,6 +973,20 @@ trait BoolValue(Value):
     @always_inline
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
         ...
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, given the state the driver already has.
+
+        Defaults to `validity(batch)`: most nodes derive validity from their
+        operands and have no use for the state. A **breaker** whose `State` is
+        its materialized result overrides this to read the bitmap straight off
+        that array. Without the hook the driver's two calls — `state()` and
+        `validity()` — are independent, and for `coalesce`, `nullif` and
+        `case_when` each one ran the whole selection kernel, so every fused pass
+        over them did the work twice (FU-7a)."""
+        return self.validity(batch)
 
     # --- fluent surface: boolean logic + reductions --------------------------
     def __and__[Rhs: BoolValue](self, o: Rhs) -> And[Self, Rhs]:
@@ -1000,6 +1077,20 @@ struct NumericCompare[
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
+
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
 
 
 comptime Lt = NumericCompare[LtKernel, LtInterval, _, _]
@@ -1109,6 +1200,13 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
+
 
 comptime And = BoolBinary[AndKernel, AndInterval, _, _]
 comptime Or = BoolBinary[OrKernel, OrInterval, _, _]
@@ -1186,6 +1284,13 @@ struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
+
 
 @fieldwise_init
 struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
@@ -1253,6 +1358,13 @@ struct NumToBool[A: NumericValue](BoolValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
+
 
 @fieldwise_init
 struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
@@ -1281,6 +1393,13 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 @fieldwise_init
@@ -1314,10 +1433,17 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
         # validity comes from the parsed column, not from `a`. Inheriting the
         # all-valid default made `to_int(s) + 1` yield 0 where it should be null.
         #
-        # This re-runs the parse: the driver asks for `validity` and `state`
-        # separately, so the stage is built twice. Folding validity into `State`
-        # is the follow-up; correctness first.
+        # Re-runs the parse. Only reached when this node is not the one being
+        # driven; a fused parent takes `state_validity` below, which reads the
+        # bitmap off the state it already has.
         return self.state(batch).to_data().owned_validity()
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Read off the materialized result rather than re-running the kernel —
+        see the trait's `state_validity`."""
+        return state.to_data().owned_validity()
 
     @always_inline
     def lane[
@@ -1374,6 +1500,20 @@ trait StringValue(Value):
         """One row. Variable-width UTF-8 has no W-wide lane, so this is the
         elementwise counterpart of the SIMD families' `lane[W]`."""
         ...
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, given the state the driver already has.
+
+        Defaults to `validity(batch)`: most nodes derive validity from their
+        operands and have no use for the state. A **breaker** whose `State` is
+        its materialized result overrides this to read the bitmap straight off
+        that array. Without the hook the driver's two calls — `state()` and
+        `validity()` — are independent, and for `coalesce`, `nullif` and
+        `case_when` each one ran the whole selection kernel, so every fused pass
+        over them did the work twice (FU-7a)."""
+        return self.validity(batch)
 
     def materialize(self, batch: RecordBatch) raises -> Datum:
         return _drive_string(self, batch, self.state(batch))
@@ -1560,6 +1700,20 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
         # a null operand poisons the row, as it does in `ConcatKernel`
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
+
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
+
 
 @fieldwise_init
 struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
@@ -1590,6 +1744,13 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         # a map transforms values, never validity — `upper(null)` is null
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 comptime Upper = StringUnary[UpperKernel, _]
@@ -2131,7 +2292,16 @@ struct ConditionalBinary[
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
+        """Asked only when this node is *not* the one being driven — a fused
+        parent takes `state_validity` instead, which costs nothing extra."""
         return self._result(batch).to_data().owned_validity()
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Read off the materialized result rather than re-running the kernel —
+        see the trait's `state_validity`."""
+        return state.to_data().owned_validity()
 
     def state(self, batch: RecordBatch) raises -> Self.State:
         return self._result(batch).as_primitive[Self.OutType]().copy()
@@ -2187,7 +2357,16 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
+        """Asked only when this node is *not* the one being driven — a fused
+        parent takes `state_validity` instead, which costs nothing extra."""
         return self._result(batch).to_data().owned_validity()
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Read off the materialized result rather than re-running the kernel —
+        see the trait's `state_validity`."""
+        return state.to_data().owned_validity()
 
     def state(self, batch: RecordBatch) raises -> Self.State:
         return self._result(batch).as_primitive[Self.OutType]().copy()

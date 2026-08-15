@@ -43,6 +43,26 @@
   failed, the scan just did more work. Pinned by
   `test_string_predicate_prunes_in_both_lanes`, which asserts both lanes.
 
+### Fixes
+
+- **FU-7a: `coalesce`, `nullif` and `case_when` ran their kernel twice per fused
+  pass.** 1M rows, `coalesce(a, b) + 1`: **150.72 ms → 81.31 ms, 1.85x.** The
+  driver asked a node for its `state` and, separately, for its `validity`, and
+  for a conditional breaker both calls ran the whole selection kernel. The same
+  shape cost `StringToNum` a second parse.
+
+  Nodes now answer `state_validity(batch, state)`, and a breaker reads the
+  bitmap straight off the array it already materialized.
+
+  **The first version of this fix measured no gain — 149.78 ms, inside the noise
+  — and that measurement is what found the real defect.** Hooking only the
+  breaker leaves the chain stopping at the first composite above it: a fused
+  parent's default `state_validity` falls back to `validity(batch)`, which
+  recurses into the child's expensive `validity` and re-runs the kernel anyway.
+  Validity has to ride the *same state tree* the lane does, so the four `Pair`
+  binaries and the eight delegating unaries propagate it as well. Pinned by
+  `bench_fu7_coalesce_fused_1m`.
+
 ### Refactors
 
 - **Q4.1: `Grouping` names the `(gids, num_groups)` pair.** The two were threaded
