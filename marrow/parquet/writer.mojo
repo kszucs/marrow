@@ -35,7 +35,15 @@ from .codecs import (
 from ..utils import LittleEndian, Crc32
 from .utils import CompressionLibs
 from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
-from .schema import SchemaMapping, LeafColumn, SchemaNode
+from .schema import (
+    SchemaMapping,
+    LeafColumn,
+    SchemaNode,
+    physical_type,
+    is_wide_decimal,
+    flba_width,
+    has_plain_physical,
+)
 from .statistics import Statistics
 from .format import (
     PageHeader,
@@ -94,62 +102,26 @@ struct ColumnWriter(Movable):
         """Dispatch on the leaf's Arrow type to the right `Plain` encoder (the
         writer's mirror of the reader's decode dispatch)."""
         ref vt = self.leaf.dtype
-        if vt == dt.int32:
-            Plain.encode_primitive[phys=DType.int32](col.as_int32(), body)
-        elif vt == dt.int64:
-            Plain.encode_primitive[phys=DType.int64](col.as_int64(), body)
-        elif vt == dt.uint32:
-            Plain.encode_primitive[phys=DType.uint32](col.as_uint32(), body)
-        elif vt == dt.uint64:
-            Plain.encode_primitive[phys=DType.uint64](col.as_uint64(), body)
-        elif vt == dt.float32:
-            Plain.encode_primitive[phys=DType.float32](col.as_float32(), body)
-        elif vt == dt.float64:
-            Plain.encode_primitive[phys=DType.float64](col.as_float64(), body)
-        elif vt == dt.float16:
-            # FLOAT16 -> FIXED_LEN_BYTE_ARRAY(2): the 2 little-endian half bits.
-            Plain.encode_primitive[phys=DType.float16](col.as_float16(), body)
-        elif vt == dt.int8:
-            Plain.encode_primitive[phys=DType.int32](col.as_int8(), body)
-        elif vt == dt.int16:
-            Plain.encode_primitive[phys=DType.int32](col.as_int16(), body)
-        elif vt == dt.uint8:
-            Plain.encode_primitive[phys=DType.int32](col.as_uint8(), body)
-        elif vt == dt.uint16:
-            Plain.encode_primitive[phys=DType.int32](col.as_uint16(), body)
-        elif vt == dt.bool_:
+        if vt == dt.bool_:
             Plain.encode_bool(col.as_bool(), body)
-        elif vt.is_string():
-            Plain.encode_bytes(col.as_string(), body)
-        elif vt.is_large_string():
-            Plain.encode_bytes(col.as_large_string(), body)
-        elif vt.is_binary():
-            Plain.encode_bytes(col.as_binary(), body)
-        elif vt.is_large_binary():
-            Plain.encode_bytes(col.as_large_binary(), body)
-        elif vt.is_date32():
-            Plain.encode_primitive[phys=DType.int32](col.as_date32(), body)
-        elif vt.is_time32():
-            Plain.encode_primitive[phys=DType.int32](col.as_time32(), body)
-        elif vt.is_time64():
-            Plain.encode_primitive[phys=DType.int64](col.as_time64(), body)
-        elif vt.is_timestamp():
-            Plain.encode_primitive[phys=DType.int64](col.as_timestamp(), body)
-        elif vt.is_decimal32():
-            Plain.encode_primitive[phys=DType.int32](col.as_decimal32(), body)
-        elif vt.is_decimal64():
-            Plain.encode_primitive[phys=DType.int64](col.as_decimal64(), body)
-        elif vt.is_decimal128():
-            # DECIMAL as FIXED_LEN_BYTE_ARRAY(16): big-endian two's complement.
-            Plain.encode_primitive[phys=DType.int128, big_endian=True](
-                col.as_decimal128(), body
-            )
-        elif vt.is_decimal256():
-            Plain.encode_primitive[phys=DType.int256, big_endian=True](
-                col.as_decimal256(), body
-            )
         elif vt.is_fixed_size_binary():
             Plain.encode_fixed_size_binary(col.as_fixed_size_binary(), body)
+        elif vt.is_binary_like():
+
+            @parameter
+            def encode_bytes[BT: dt.BinaryLikeType](witness: BT) raises:
+                Plain.encode_bytes(col.as_type[BinaryLikeArray[BT]](), body)
+
+            vt.dispatch_binarylike[encode_bytes]()
+        elif has_plain_physical(vt):
+
+            @parameter
+            def encode_fixed[T: dt.PrimitiveType](witness: T) raises:
+                Plain.encode_primitive[
+                    phys=physical_type[T], big_endian=is_wide_decimal[T]
+                ](col.as_primitive[T](), body)
+
+            vt.dispatch_primitive[encode_fixed]()
         else:
             raise Error("parquet: cannot write column type " + String(vt))
 
@@ -212,67 +184,36 @@ struct ColumnWriter(Movable):
         self, col: DynArray, mut hashes: List[UInt64]
     ) raises -> Bool:
         """XXH64 of each present value's physical bytes; False for a type marrow
-        does not bloom-filter (bool)."""
+        does not bloom-filter (bool).
+
+        The dtype ladder that used to live here mirrored `_encode_values`
+        arm-for-arm; both now consult `_phys` / `_wide_decimal` instead."""
         ref vt = self.leaf.dtype
-        if vt == dt.int32:
-            Self._hash_prim[dt.Int32Type, DType.int32](col.as_int32(), hashes)
-        elif vt == dt.int64:
-            Self._hash_prim[dt.Int64Type, DType.int64](col.as_int64(), hashes)
-        elif vt == dt.uint32:
-            Self._hash_prim[dt.UInt32Type, DType.uint32](
-                col.as_uint32(), hashes
-            )
-        elif vt == dt.uint64:
-            Self._hash_prim[dt.UInt64Type, DType.uint64](
-                col.as_uint64(), hashes
-            )
-        elif vt == dt.float32:
-            Self._hash_prim[dt.Float32Type, DType.float32](
-                col.as_float32(), hashes
-            )
-        elif vt == dt.float64:
-            Self._hash_prim[dt.Float64Type, DType.float64](
-                col.as_float64(), hashes
-            )
-        elif vt == dt.float16:
-            Self._hash_prim[dt.Float16Type, DType.float16](
-                col.as_float16(), hashes
-            )
-        elif vt == dt.int8:
-            Self._hash_prim[dt.Int8Type, DType.int32](col.as_int8(), hashes)
-        elif vt == dt.int16:
-            Self._hash_prim[dt.Int16Type, DType.int32](col.as_int16(), hashes)
-        elif vt == dt.uint8:
-            Self._hash_prim[dt.UInt8Type, DType.int32](col.as_uint8(), hashes)
-        elif vt == dt.uint16:
-            Self._hash_prim[dt.UInt16Type, DType.int32](col.as_uint16(), hashes)
-        elif vt.is_string():
-            Self._hash_bytes(col.as_string(), hashes)
-        elif vt.is_large_string():
-            Self._hash_bytes(col.as_large_string(), hashes)
-        elif vt.is_binary():
-            Self._hash_bytes(col.as_binary(), hashes)
-        elif vt.is_large_binary():
-            Self._hash_bytes(col.as_large_binary(), hashes)
-        elif vt.is_date32():
-            Self._hash_prim[phys=DType.int32](col.as_date32(), hashes)
-        elif vt.is_time32():
-            Self._hash_prim[phys=DType.int32](col.as_time32(), hashes)
-        elif vt.is_time64():
-            Self._hash_prim[phys=DType.int64](col.as_time64(), hashes)
-        elif vt.is_timestamp():
-            Self._hash_prim[phys=DType.int64](col.as_timestamp(), hashes)
-        elif vt.is_decimal32():
-            Self._hash_prim[phys=DType.int32](col.as_decimal32(), hashes)
-        elif vt.is_decimal64():
-            Self._hash_prim[phys=DType.int64](col.as_decimal64(), hashes)
-        elif vt.is_decimal128():
-            Self._hash_flba[width=16](col.as_decimal128(), hashes)
-        elif vt.is_decimal256():
-            Self._hash_flba[width=32](col.as_decimal256(), hashes)
-        elif vt.is_fixed_size_binary():
+        if vt.is_fixed_size_binary():
             self._hash_fixed_size_binary(col, hashes)
+        elif vt.is_binary_like():
+
+            @parameter
+            def hash_bytes[BT: dt.BinaryLikeType](witness: BT) raises:
+                Self._hash_bytes(col.as_type[BinaryLikeArray[BT]](), hashes)
+
+            vt.dispatch_binarylike[hash_bytes]()
+        elif has_plain_physical(vt):
+
+            @parameter
+            def hash_fixed[T: dt.PrimitiveType](witness: T) raises:
+                comptime if is_wide_decimal[T]:
+                    Self._hash_flba[width=flba_width[T]](
+                        col.as_primitive[T](), hashes
+                    )
+                else:
+                    Self._hash_prim[phys=physical_type[T]](
+                        col.as_primitive[T](), hashes
+                    )
+
+            vt.dispatch_primitive[hash_fixed]()
         else:
+            # bool, and anything else marrow does not bloom-filter
             return False
         return True
 

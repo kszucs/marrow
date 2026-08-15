@@ -71,12 +71,77 @@ from ...expr.values import (
     CaseWhen,
     Gt,
     Lt,
+    Le,
+    Ge,
+    Ne,
+    Pow,
+    Xor,
+    Neg,
+    Abs,
+    Sign,
+    Floor,
+    Ceil,
+    Round,
+    Sqrt,
+    Exp,
+    Ln,
+    Upper,
+    Lower,
+    Strip,
+    LStrip,
+    RStrip,
+    Reverse,
+    Capitalize,
+    StringLength,
+    StartsWith,
+    EndsWith,
+    StrContains,
     Any,
     All,
     Year,
     DateTrunc,
     Hour,
 )
+
+from ...kernels.core import Kernel
+from ...kernels.numeric import (
+    AddKernel,
+    SubKernel,
+    MulKernel,
+    DivKernel,
+    ModKernel,
+    FloordivKernel,
+    PowKernel,
+    LtKernel,
+    LeKernel,
+    GtKernel,
+    GeKernel,
+    EqKernel,
+    NeKernel,
+    NegKernel,
+    AbsKernel,
+    SignKernel,
+    FloorKernel,
+    CeilKernel,
+    RoundKernel,
+    SqrtKernel,
+    ExpKernel,
+    LogKernel,
+)
+from ...kernels.boolean import AndKernel, OrKernel, XorKernel, NotKernel
+from ...kernels.string import StartsWithKernel, EndsWithKernel, ContainsKernel
+from ...kernels.temporal import (
+    YearKernel,
+    MonthKernel,
+    DayKernel,
+    HourKernel,
+    MinuteKernel,
+    SecondKernel,
+    QuarterKernel,
+    DayOfWeekKernel,
+    DayOfYearKernel,
+)
+from ...kernels.conditional import CoalesceKernel, NullifKernel
 
 from ...expr.dynamic import DynValue, _numeric_rank
 from ...expr.relations import BoxedValue
@@ -876,4 +941,302 @@ def test_runtime_literal_and_cast() raises:
         fcol("a", int64) + flit(3, int64),
         fcol("a") + flit[Int64Type](3),
         batch,
+    )
+
+
+# ---------------------------------------------------------------------------
+# A5 — op-name parity, asserted mechanically rather than by hand-written literal
+# ---------------------------------------------------------------------------
+def _tag_mismatch[K: Kernel](rendered: String) -> String:
+    """Empty when a runtime node renders under its fused kernel's own `name`.
+
+    The expected string is never written down here — it is read off the kernel
+    the runtime factory already names. That is the whole point: `prune`
+    correctness keys on these strings against two hand-maintained sets, and a
+    divergence between them fails *silently*, as a `Interval.unknown()`
+    fall-through that disables row-group skipping rather than raising.
+
+    Returns a description rather than asserting so one run reports *every*
+    divergence; stopping at the first would hide the rest.
+    """
+    if rendered.startswith(String(K.name) + "("):
+        return String()
+    return (
+        String("\n  `")
+        + rendered
+        + "` should render under `"
+        + String(K.name)
+        + "`"
+    )
+
+
+def test_op_names_agree_across_lanes() raises:
+    """Every shared op must render under one name in both lanes.
+
+    The runtime factories already name their kernel — `Self("modulo",
+    Self._binary[ModKernel], ...)` — so the tag string is redundant with
+    `ModKernel.name` and can only drift away from it. This enumerates the op
+    set once and reads every expected name off the kernel.
+    """
+    var a = dcol("a")
+    var b = dcol("b")
+    var bad = String()
+
+    # arithmetic
+    bad += _tag_mismatch[AddKernel]((a + b).render())
+    bad += _tag_mismatch[SubKernel]((a - b).render())
+    bad += _tag_mismatch[MulKernel]((a * b).render())
+    bad += _tag_mismatch[DivKernel]((a / b).render())
+    bad += _tag_mismatch[ModKernel]((a % b).render())
+    bad += _tag_mismatch[FloordivKernel]((a // b).render())
+    bad += _tag_mismatch[PowKernel]((a**b).render())
+
+    # comparison
+    bad += _tag_mismatch[LtKernel]((a < b).render())
+    bad += _tag_mismatch[LeKernel]((a <= b).render())
+    bad += _tag_mismatch[GtKernel]((a > b).render())
+    bad += _tag_mismatch[GeKernel]((a >= b).render())
+    bad += _tag_mismatch[EqKernel]((a == b).render())
+    bad += _tag_mismatch[NeKernel]((a != b).render())
+
+    # boolean logic
+    bad += _tag_mismatch[AndKernel]((a & b).render())
+    bad += _tag_mismatch[OrKernel]((a | b).render())
+    bad += _tag_mismatch[XorKernel]((a ^ b).render())
+    bad += _tag_mismatch[NotKernel]((~a).render())
+
+    # numeric unaries
+    bad += _tag_mismatch[NegKernel]((-a).render())
+    bad += _tag_mismatch[AbsKernel](a.abs().render())
+    bad += _tag_mismatch[SignKernel](a.sign().render())
+    bad += _tag_mismatch[FloorKernel](a.floor().render())
+    bad += _tag_mismatch[CeilKernel](a.ceil().render())
+    bad += _tag_mismatch[RoundKernel](a.round().render())
+
+    # float unaries
+    bad += _tag_mismatch[SqrtKernel](a.sqrt().render())
+    bad += _tag_mismatch[ExpKernel](a.exp().render())
+    bad += _tag_mismatch[LogKernel](a.ln().render())
+
+    # string predicates and temporal extracts — these already agreed, and the
+    # test is what keeps them agreeing
+    bad += _tag_mismatch[StartsWithKernel](a.startswith(b).render())
+    bad += _tag_mismatch[EndsWithKernel](a.endswith(b).render())
+    bad += _tag_mismatch[ContainsKernel](a.contains(b).render())
+    bad += _tag_mismatch[YearKernel](a.year().render())
+    bad += _tag_mismatch[MonthKernel](a.month().render())
+    bad += _tag_mismatch[DayKernel](a.day().render())
+    bad += _tag_mismatch[HourKernel](a.hour().render())
+    bad += _tag_mismatch[MinuteKernel](a.minute().render())
+    bad += _tag_mismatch[SecondKernel](a.second().render())
+    bad += _tag_mismatch[QuarterKernel](a.quarter().render())
+    bad += _tag_mismatch[DayOfWeekKernel](a.day_of_week().render())
+    bad += _tag_mismatch[DayOfYearKernel](a.day_of_year().render())
+    bad += _tag_mismatch[CoalesceKernel](a.coalesce(b).render())
+    bad += _tag_mismatch[NullifKernel](a.nullif(b).render())
+
+    assert_true(
+        not bad,
+        String("op names diverge between the fused and runtime lanes:") + bad,
+    )
+
+
+# ---------------------------------------------------------------------------
+# A5 — value parity for the ops the hand-written cases never reached
+#
+# Naming and pruning are held mechanically above. This is the third axis: do
+# the two lanes compute the same *answer*? Each case is one op, both lanes,
+# against real data — the ops below had no cross-lane assertion at all, which
+# is how the op-name drift survived long enough to be found by a different
+# test.
+# ---------------------------------------------------------------------------
+def _unary_batch() raises -> RecordBatch:
+    """Signed, fractional and integral float64 — enough to tell `floor`,
+    `ceil`, `round`, `abs` and `sign` apart from each other and from identity.
+    """
+    var a = array([-2.5, -0.5, 0.0, 1.5, 3.25], float64)
+    return record_batch([a^], names=["a"])
+
+
+def _positive_batch() raises -> RecordBatch:
+    """Strictly positive float64, so `sqrt`/`ln` are defined everywhere."""
+    var a = array([0.25, 1.0, 2.0, 7.5], float64)
+    return record_batch([a^], names=["a"])
+
+
+def _smaps_batch() raises -> RecordBatch:
+    """Mixed case with leading and trailing whitespace, so the seven string
+    maps produce visibly different results from one another."""
+    var s = array(["  hello  ", "WORLD  ", "  MiXeD", "x"])
+    return record_batch([s^], names=["s"])
+
+
+# --- comparisons the hand-written cases skipped: <= >= != ------------------
+
+
+def test_parity_le() raises:
+    var b = _ab_batch()
+    assert_parity(
+        Le(fcol("a", int64), fcol("b", int64)), dcol("a") <= dcol("b"), b
+    )
+
+
+def test_parity_ge() raises:
+    var b = _ab_batch()
+    assert_parity(
+        Ge(fcol("a", int64), fcol("b", int64)), dcol("a") >= dcol("b"), b
+    )
+
+
+def test_parity_ne() raises:
+    var b = _ab_batch()
+    assert_parity(
+        Ne(fcol("a", int64), fcol("b", int64)), dcol("a") != dcol("b"), b
+    )
+
+
+# --- pow and xor ------------------------------------------------------------
+
+
+def test_parity_pow() raises:
+    var b = _ab_batch()
+    assert_parity(
+        Pow(fcol("a", int64), fcol("b", int64)), dcol("a") ** dcol("b"), b
+    )
+
+
+def test_parity_xor() raises:
+    """`(a < b) ^ (a > b)` — true wherever the two differ."""
+    var b = _ab_batch()
+    assert_parity(
+        Xor(
+            Lt(fcol("a", int64), fcol("b", int64)),
+            Gt(fcol("a", int64), fcol("b", int64)),
+        ),
+        (dcol("a") < dcol("b")) ^ (dcol("a") > dcol("b")),
+        b,
+    )
+
+
+# --- numeric unaries --------------------------------------------------------
+
+
+def test_parity_neg() raises:
+    var b = _unary_batch()
+    assert_parity(Neg(fcol("a", float64)), -dcol("a"), b)
+
+
+def test_parity_abs() raises:
+    var b = _unary_batch()
+    assert_parity(Abs(fcol("a", float64)), dcol("a").abs(), b)
+
+
+def test_parity_sign() raises:
+    var b = _unary_batch()
+    assert_parity(Sign(fcol("a", float64)), dcol("a").sign(), b)
+
+
+def test_parity_floor() raises:
+    var b = _unary_batch()
+    assert_parity(Floor(fcol("a", float64)), dcol("a").floor(), b)
+
+
+def test_parity_ceil() raises:
+    var b = _unary_batch()
+    assert_parity(Ceil(fcol("a", float64)), dcol("a").ceil(), b)
+
+
+def test_parity_round() raises:
+    var b = _unary_batch()
+    assert_parity(Round(fcol("a", float64)), dcol("a").round(), b)
+
+
+# --- float unaries ----------------------------------------------------------
+
+
+def test_parity_sqrt() raises:
+    var b = _positive_batch()
+    assert_parity(Sqrt(fcol("a", float64)), dcol("a").sqrt(), b)
+
+
+def test_parity_exp() raises:
+    var b = _positive_batch()
+    assert_parity(Exp(fcol("a", float64)), dcol("a").exp(), b)
+
+
+def test_parity_ln() raises:
+    var b = _positive_batch()
+    assert_parity(Ln(fcol("a", float64)), dcol("a").ln(), b)
+
+
+# --- string maps ------------------------------------------------------------
+
+
+def test_parity_upper() raises:
+    var b = _smaps_batch()
+    assert_parity(Upper(fcol("s", string)), dcol("s").upper(), b)
+
+
+def test_parity_lower() raises:
+    var b = _smaps_batch()
+    assert_parity(Lower(fcol("s", string)), dcol("s").lower(), b)
+
+
+def test_parity_strip() raises:
+    var b = _smaps_batch()
+    assert_parity(Strip(fcol("s", string)), dcol("s").strip(), b)
+
+
+def test_parity_lstrip() raises:
+    var b = _smaps_batch()
+    assert_parity(LStrip(fcol("s", string)), dcol("s").lstrip(), b)
+
+
+def test_parity_rstrip() raises:
+    var b = _smaps_batch()
+    assert_parity(RStrip(fcol("s", string)), dcol("s").rstrip(), b)
+
+
+def test_parity_reverse() raises:
+    var b = _smaps_batch()
+    assert_parity(Reverse(fcol("s", string)), dcol("s").reverse(), b)
+
+
+def test_parity_capitalize() raises:
+    var b = _smaps_batch()
+    assert_parity(Capitalize(fcol("s", string)), dcol("s").capitalize(), b)
+
+
+# --- string -> numeric, and the remaining string predicates -----------------
+
+
+def test_parity_length() raises:
+    var b = _smaps_batch()
+    assert_parity(StringLength(fcol("s", string)), dcol("s").length(), b)
+
+
+def test_parity_startswith() raises:
+    var b = _spair_batch()
+    assert_parity(
+        StartsWith(fcol("s", string), fcol("p", string)),
+        dcol("s").startswith(dcol("p")),
+        b,
+    )
+
+
+def test_parity_endswith() raises:
+    var b = _spair_batch()
+    assert_parity(
+        EndsWith(fcol("s", string), fcol("p", string)),
+        dcol("s").endswith(dcol("p")),
+        b,
+    )
+
+
+def test_parity_contains() raises:
+    var b = _spair_batch()
+    assert_parity(
+        StrContains(fcol("s", string), fcol("p", string)),
+        dcol("s").contains(dcol("p")),
+        b,
     )

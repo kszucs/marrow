@@ -69,7 +69,7 @@ jobs:
         frozen: true
         environments: asan
     - name: asan tests
-      run: pixi run -e asan test_mojo_asan_parallel --no-gpu --no-python
+      run: pixi run -e asan test_asan_core --no-gpu --no-python
 
   asan-macos-arm64:
     name: asan (macos, arm64)
@@ -89,4 +89,4 @@ jobs:
         frozen: true
         environments: asan
     - name: asan tests
-      run: pixi run -e asan test_mojo_asan_parallel --no-gpu --no-python
+      run: pixi run -e asan test_asan_core --no-gpu --no-python

@@ -10,6 +10,7 @@ a caller sees is the same sentence whichever kernel raised it, and a new family
 inherits it by conforming rather than by copying the message.
 """
 
+from ..arrays import Int32Array
 from ..dtypes import DynType
 
 
@@ -40,3 +41,30 @@ trait Kernel:
 
 
 # TODO: have vectorwise and elementwise kernels conform to a common trait
+
+
+@fieldwise_init
+struct Grouping(Copyable, Movable):
+    """A batch's rows assigned to dense group ids, with how many groups exist.
+
+    The two always travel together: `ids[i]` is row `i`'s group, and
+    `num_groups` sizes every per-group accumulator the ids then scatter into.
+    They were passed as two parameters through ~22 signatures across `groupby`,
+    `aggregate`, `distinct` and `expr.aggregates`, which let a caller size an
+    accumulator from one grouping and index it with another's ids — an
+    out-of-bounds scatter rather than a type error, and silent when the
+    mismatched count happens to be larger.
+
+    Sibling of `JoinIndex`, which named `Tuple[Int32Array, Int32Array]` for the
+    same reason.
+    """
+
+    var ids: Int32Array
+    """Dense group id per row of the batch."""
+
+    var num_groups: Int
+    """How many distinct groups exist — the size of a per-group accumulator."""
+
+    def __len__(self) -> Int:
+        """Number of rows assigned, not number of groups."""
+        return len(self.ids)

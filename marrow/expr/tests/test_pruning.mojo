@@ -10,7 +10,10 @@ from ...schema import Schema
 from ...scalars import DynScalar, Int64Scalar
 from ...expr.pruning import PruneStats
 from ...expr.relations import BoxedValue
-from ...expr.values import col, lit
+from ...scalars import StringScalar
+from ...expr.dynamic import DynValue
+from ...expr.values import col, lit, StrGt
+from ...expr.values import col as dyn_col
 
 # Both lanes are covered: the runtime `DynValue` cases first, the fused
 # `marrow.expr.values` cases below. A previous note here claimed fused pruning
@@ -155,3 +158,46 @@ def test_boxed_fused_predicate_prunes() raises:
     var boxed: BoxedValue = col("x", int64) > lit(100, int64)
     assert_false(boxed.prune(_stats(0, 50, 0, 0)).maybe_true)
     assert_true(boxed.prune(_stats(0, 200, 0, 0)).maybe_true)
+
+
+# ---------------------------------------------------------------------------
+# A5 — the two lanes must prune the same predicate the same way
+# ---------------------------------------------------------------------------
+def _string_stats() raises -> PruneStats:
+    """One string column `s` bounded to ["m", "p"]."""
+    var fields = List[Field]()
+    fields.append(Field("s", dt.string))
+    var mins = List[Optional[DynScalar]]()
+    var maxs = List[Optional[DynScalar]]()
+    mins.append(Optional[DynScalar](StringScalar("m")))
+    maxs.append(Optional[DynScalar](StringScalar("p")))
+    return PruneStats(Schema(fields=fields^), mins^, maxs^)
+
+
+def test_string_predicate_prunes_in_both_lanes() raises:
+    """`s > "z"` cannot match a row group whose `s` maxes out at "p".
+
+    The runtime lane already proves it: `DynValue.prune` keys on
+    `_tag == "column"` regardless of dtype, so a string column reports its
+    bounds like any other. The fused lane does not — `prune` and
+    `bound_column` are defined on `NumericColumn` alone, so `StringColumn`
+    inherits `Value`'s conservative default and the predicate prunes nothing.
+
+    That is sound but silently disabled: an AOT plan carrying a string
+    predicate decodes every row group, and no test or error says so. The two
+    lanes must agree, which is what makes this an A5 case rather than a
+    performance note.
+    """
+    var stats = _string_stats()
+
+    var runtime = dyn_col("s") > DynValue.literal(StringScalar("z"))
+    assert_false(
+        runtime.prune(stats).maybe_true,
+        'runtime lane failed to prune `s > "z"` against max="p"',
+    )
+
+    var fused = StrGt(col("s", dt.string), lit("z"))
+    assert_false(
+        fused.prune(stats).maybe_true,
+        'fused lane failed to prune `s > "z"` against max="p"',
+    )

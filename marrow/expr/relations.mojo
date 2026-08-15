@@ -48,7 +48,8 @@ Example
 """
 
 from .values import Datum, Value, into_array
-from .pruning import PruneBound, PruneStats
+from ..kernels.interval import Interval
+from .pruning import PruneStats
 from ..arrays import DynArray
 from std.builtin.rebind import rebind
 from .dynamic import DynValue
@@ -180,9 +181,7 @@ struct BoxedValue(Copyable, Movable, Writable):
 
     var _boxed: ArcPointer[NoneType]
     var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> DynArray
-    var _prune_fn: def(
-        ArcPointer[NoneType], PruneStats
-    ) thin raises -> PruneBound
+    var _prune_fn: def(ArcPointer[NoneType], PruneStats) thin raises -> Interval
     var _name_fn: def(ArcPointer[NoneType]) thin -> String
     var _write_fn: def(ArcPointer[NoneType]) thin -> String
     var _referenced_columns_fn: def(ArcPointer[NoneType]) thin -> List[String]
@@ -217,7 +216,7 @@ struct BoxedValue(Copyable, Movable, Writable):
     @staticmethod
     def _prune_tramp[
         V: Value
-    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
+    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> Interval:
         return rebind[ArcPointer[V]](ptr)[].prune(stats)
 
     @staticmethod
@@ -264,7 +263,7 @@ struct BoxedValue(Copyable, Movable, Writable):
         point, called once per morsel."""
         return self._execute(self._boxed, batch)
 
-    def prune(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> Interval:
         return self._prune_fn(self._boxed, stats)
 
     def name(self) -> String:

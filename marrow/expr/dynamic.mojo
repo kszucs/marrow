@@ -137,7 +137,17 @@ from ..kernels.string import (
     UpperKernel,
 )
 from .values import Datum
-from .pruning import PruneBound, PruneStats
+from ..kernels.interval import (
+    Interval,
+    AndInterval,
+    OrInterval,
+    LtInterval,
+    LeInterval,
+    GtInterval,
+    GeInterval,
+    EqInterval,
+)
+from .pruning import PruneStats
 from .values import Value
 
 
@@ -568,7 +578,7 @@ struct DynValue(Copyable, Movable, Value, Writable):
             out._kids[i] = ArcPointer(self._kids[i][].resolve_names(schema))
         return out^
 
-    def prune(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> Interval:
         """What this expression's value can be, given per-column `[min, max]`.
 
         The tag twin of the `prune` overrides on the fused nodes — a column
@@ -585,43 +595,38 @@ struct DynValue(Copyable, Movable, Value, Writable):
         var t = self._tag
         if t == "column":
             var iv = stats.by_name(self._text())
-            return PruneBound.interval(iv[0].copy(), iv[1].copy())
+            return Interval.bounds(iv[0].copy(), iv[1].copy())
         elif t == "literal":
             var v = self._payload[DynScalar].copy()
-            return PruneBound.interval(Optional(v.copy()), Optional(v^))
-        elif t == "and":
-            return PruneBound.boolean(
-                self._kids[0][].prune(stats).maybe_true
-                and self._kids[1][].prune(stats).maybe_true
-            )
-        elif t == "or":
-            return PruneBound.boolean(
-                self._kids[0][].prune(stats).maybe_true
-                or self._kids[1][].prune(stats).maybe_true
-            )
-        elif (
-            t == "equal"
-            or t == "less"
-            or t == "less_equal"
-            or t == "greater"
-            or t == "greater_equal"
-        ):
+            return Interval.bounds(Optional(v.copy()), Optional(v^))
+        elif len(self._kids) == 2:
+            # The rule for each operator is its interval kernel, shared with the
+            # fused lane rather than restated here — and the tag is matched
+            # against that kernel's own `name`, which is the same string the
+            # factory tagged the node with. Neither the rule nor the spelling
+            # can drift between the lanes.
             var l = self._kids[0][].prune(stats)
             var r = self._kids[1][].prune(stats)
-            if t == "equal":
-                return PruneBound.boolean(l.maybe_eq(r))
-            elif t == "less":
-                return PruneBound.boolean(l.maybe_lt(r))
-            elif t == "less_equal":
-                return PruneBound.boolean(l.maybe_le(r))
-            elif t == "greater":
-                return PruneBound.boolean(l.maybe_gt(r))
+            if t == AndInterval.name:
+                return Interval.truth(AndInterval.apply(l, r))
+            elif t == OrInterval.name:
+                return Interval.truth(OrInterval.apply(l, r))
+            elif t == LtInterval.name:
+                return Interval.truth(LtInterval.apply(l, r))
+            elif t == LeInterval.name:
+                return Interval.truth(LeInterval.apply(l, r))
+            elif t == GtInterval.name:
+                return Interval.truth(GtInterval.apply(l, r))
+            elif t == GeInterval.name:
+                return Interval.truth(GeInterval.apply(l, r))
+            elif t == EqInterval.name:
+                return Interval.truth(EqInterval.apply(l, r))
             else:
-                return PruneBound.boolean(l.maybe_ge(r))
+                # `not_equal` and `xor` have no usable rule; everything else is
+                # arithmetic or a payload op this never modelled.
+                return Interval.unknown()
         else:
-            # `not_equal` and `xor` carry no usable interval rule; everything
-            # else is arithmetic or a payload op this never modelled.
-            return PruneBound.unknown()
+            return Interval.unknown()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self.render())
@@ -635,106 +640,114 @@ struct DynValue(Copyable, Movable, Value, Writable):
         return Self("add", Self._add, self, o)
 
     def __sub__(self, o: Self) -> Self:
-        return Self("subtract", Self._binary[SubKernel], self, o)
+        return Self(SubKernel.name, Self._binary[SubKernel], self, o)
 
     def __mul__(self, o: Self) -> Self:
-        return Self("multiply", Self._binary[MulKernel], self, o)
+        return Self(MulKernel.name, Self._binary[MulKernel], self, o)
 
     def __truediv__(self, o: Self) -> Self:
-        return Self("divide", Self._float_binary[DivKernel], self, o)
+        return Self(DivKernel.name, Self._float_binary[DivKernel], self, o)
 
     def __mod__(self, o: Self) -> Self:
-        return Self("modulo", Self._binary[ModKernel], self, o)
+        return Self(ModKernel.name, Self._binary[ModKernel], self, o)
 
     def __floordiv__(self, o: Self) -> Self:
-        return Self("floordiv", Self._binary[FloordivKernel], self, o)
+        return Self(FloordivKernel.name, Self._binary[FloordivKernel], self, o)
 
     def __pow__(self, o: Self) -> Self:
-        return Self("power", Self._pow, self, o)
+        return Self(PowKernel.name, Self._pow, self, o)
 
     def __lt__(self, o: Self) -> Self:
-        return Self("less", Self._compare[LtKernel, StringLtKernel], self, o)
+        return Self(
+            LtKernel.name, Self._compare[LtKernel, StringLtKernel], self, o
+        )
 
     def __le__(self, o: Self) -> Self:
         return Self(
-            "less_equal", Self._compare[LeKernel, StringLeKernel], self, o
+            LeKernel.name, Self._compare[LeKernel, StringLeKernel], self, o
         )
 
     def __gt__(self, o: Self) -> Self:
-        return Self("greater", Self._compare[GtKernel, StringGtKernel], self, o)
+        return Self(
+            GtKernel.name, Self._compare[GtKernel, StringGtKernel], self, o
+        )
 
     def __ge__(self, o: Self) -> Self:
         return Self(
-            "greater_equal", Self._compare[GeKernel, StringGeKernel], self, o
+            GeKernel.name, Self._compare[GeKernel, StringGeKernel], self, o
         )
 
     def __eq__(self, o: Self) -> Self:
-        return Self("equal", Self._compare[EqKernel, StringEqKernel], self, o)
+        return Self(
+            EqKernel.name, Self._compare[EqKernel, StringEqKernel], self, o
+        )
 
     def __ne__(self, o: Self) -> Self:
         return Self(
-            "not_equal", Self._compare[NeKernel, StringNeKernel], self, o
+            NeKernel.name, Self._compare[NeKernel, StringNeKernel], self, o
         )
 
     def __and__(self, o: Self) -> Self:
-        return Self("and", Self._bool_binary[AndKernel], self, o)
+        return Self(AndKernel.name, Self._bool_binary[AndKernel], self, o)
 
     def __or__(self, o: Self) -> Self:
-        return Self("or", Self._bool_binary[OrKernel], self, o)
+        return Self(OrKernel.name, Self._bool_binary[OrKernel], self, o)
 
     def __xor__(self, o: Self) -> Self:
-        return Self("xor", Self._bool_binary[XorKernel], self, o)
+        return Self(XorKernel.name, Self._bool_binary[XorKernel], self, o)
 
     def __neg__(self) -> Self:
-        return Self("negate", Self._unary[NegKernel], self)
+        return Self(NegKernel.name, Self._unary[NegKernel], self)
 
     def __invert__(self) -> Self:
-        return Self("not", Self._bool_unary[NotKernel], self)
+        return Self(NotKernel.name, Self._bool_unary[NotKernel], self)
 
     def abs(self) -> Self:
-        return Self("abs", Self._unary[AbsKernel], self)
+        return Self(AbsKernel.name, Self._unary[AbsKernel], self)
 
     def sign(self) -> Self:
-        return Self("sign", Self._unary[SignKernel], self)
+        return Self(SignKernel.name, Self._unary[SignKernel], self)
 
     def floor(self) -> Self:
-        return Self("floor", Self._unary[FloorKernel], self)
+        return Self(FloorKernel.name, Self._unary[FloorKernel], self)
 
     def ceil(self) -> Self:
-        return Self("ceil", Self._unary[CeilKernel], self)
+        return Self(CeilKernel.name, Self._unary[CeilKernel], self)
 
     def round(self) -> Self:
-        return Self("round", Self._unary[RoundKernel], self)
+        return Self(RoundKernel.name, Self._unary[RoundKernel], self)
 
     def sqrt(self) -> Self:
-        return Self("sqrt", Self._float_unary[SqrtKernel], self)
+        return Self(SqrtKernel.name, Self._float_unary[SqrtKernel], self)
 
     def exp(self) -> Self:
-        return Self("exp", Self._float_unary[ExpKernel], self)
+        return Self(ExpKernel.name, Self._float_unary[ExpKernel], self)
 
     def ln(self) -> Self:
-        return Self("ln", Self._float_unary[LogKernel], self)
+        return Self(LogKernel.name, Self._float_unary[LogKernel], self)
 
     def upper(self) -> Self:
-        return Self("upper", Self._string_unary[UpperKernel], self)
+        return Self(UpperKernel.name, Self._string_unary[UpperKernel], self)
 
     def lower(self) -> Self:
-        return Self("lower", Self._string_unary[LowerKernel], self)
+        return Self(LowerKernel.name, Self._string_unary[LowerKernel], self)
 
     def strip(self) -> Self:
-        return Self("strip", Self._string_unary[StripKernel], self)
+        return Self(StripKernel.name, Self._string_unary[StripKernel], self)
 
     def lstrip(self) -> Self:
-        return Self("lstrip", Self._string_unary[LStripKernel], self)
+        return Self(LStripKernel.name, Self._string_unary[LStripKernel], self)
 
     def rstrip(self) -> Self:
-        return Self("rstrip", Self._string_unary[RStripKernel], self)
+        return Self(RStripKernel.name, Self._string_unary[RStripKernel], self)
 
     def reverse(self) -> Self:
-        return Self("reverse", Self._string_unary[ReverseKernel], self)
+        return Self(ReverseKernel.name, Self._string_unary[ReverseKernel], self)
 
     def capitalize(self) -> Self:
-        return Self("capitalize", Self._string_unary[CapitalizeKernel], self)
+        return Self(
+            CapitalizeKernel.name, Self._string_unary[CapitalizeKernel], self
+        )
 
     def length(self) -> Self:
         return Self("length", Self._length, self)
@@ -746,18 +759,25 @@ struct DynValue(Copyable, Movable, Value, Writable):
 
     def startswith(self, o: Self) -> Self:
         return Self(
-            "startswith", Self._string_binary[StartsWithKernel], self, o
+            StartsWithKernel.name,
+            Self._string_binary[StartsWithKernel],
+            self,
+            o,
         )
 
     def endswith(self, o: Self) -> Self:
-        return Self("endswith", Self._string_binary[EndsWithKernel], self, o)
+        return Self(
+            EndsWithKernel.name, Self._string_binary[EndsWithKernel], self, o
+        )
 
     def contains(self, o: Self) -> Self:
-        return Self("contains", Self._string_binary[ContainsKernel], self, o)
+        return Self(
+            ContainsKernel.name, Self._string_binary[ContainsKernel], self, o
+        )
 
     def like(self, var pattern: String) -> Self:
         return Self(
-            "like",
+            LikeKernel.name,
             Self._string_binary[LikeKernel],
             self,
             Self.literal(StringScalar(pattern^)),
@@ -765,44 +785,46 @@ struct DynValue(Copyable, Movable, Value, Writable):
 
     def ilike(self, var pattern: String) -> Self:
         return Self(
-            "ilike",
+            ILikeKernel.name,
             Self._string_binary[ILikeKernel],
             self,
             Self.literal(StringScalar(pattern^)),
         )
 
     def year(self) -> Self:
-        return Self("year", Self._temporal[YearKernel], self)
+        return Self(YearKernel.name, Self._temporal[YearKernel], self)
 
     def month(self) -> Self:
-        return Self("month", Self._temporal[MonthKernel], self)
+        return Self(MonthKernel.name, Self._temporal[MonthKernel], self)
 
     def day(self) -> Self:
-        return Self("day", Self._temporal[DayKernel], self)
+        return Self(DayKernel.name, Self._temporal[DayKernel], self)
 
     def hour(self) -> Self:
-        return Self("hour", Self._temporal[HourKernel], self)
+        return Self(HourKernel.name, Self._temporal[HourKernel], self)
 
     def minute(self) -> Self:
-        return Self("minute", Self._temporal[MinuteKernel], self)
+        return Self(MinuteKernel.name, Self._temporal[MinuteKernel], self)
 
     def second(self) -> Self:
-        return Self("second", Self._temporal[SecondKernel], self)
+        return Self(SecondKernel.name, Self._temporal[SecondKernel], self)
 
     def day_of_week(self) -> Self:
-        return Self("day_of_week", Self._temporal[DayOfWeekKernel], self)
+        return Self(DayOfWeekKernel.name, Self._temporal[DayOfWeekKernel], self)
 
     def quarter(self) -> Self:
-        return Self("quarter", Self._temporal[QuarterKernel], self)
+        return Self(QuarterKernel.name, Self._temporal[QuarterKernel], self)
 
     def day_of_year(self) -> Self:
-        return Self("day_of_year", Self._temporal[DayOfYearKernel], self)
+        return Self(DayOfYearKernel.name, Self._temporal[DayOfYearKernel], self)
 
     def coalesce(self, o: Self) -> Self:
-        return Self("coalesce", Self._conditional[CoalesceKernel], self, o)
+        return Self(
+            CoalesceKernel.name, Self._conditional[CoalesceKernel], self, o
+        )
 
     def nullif(self, o: Self) -> Self:
-        return Self("nullif", Self._conditional[NullifKernel], self, o)
+        return Self(NullifKernel.name, Self._conditional[NullifKernel], self, o)
 
     def date_trunc(self, var unit: String) -> Self:
         var out = Self("date_trunc", Self._date_trunc, self)

@@ -181,7 +181,20 @@ from ..kernels.boolean import (
     IsInfKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
-from .pruning import PruneStats, PruneBound
+from ..kernels.interval import (
+    Interval,
+    IntervalKernel,
+    LtInterval,
+    LeInterval,
+    GtInterval,
+    GeInterval,
+    EqInterval,
+    NeInterval,
+    AndInterval,
+    OrInterval,
+    XorInterval,
+)
+from .pruning import PruneStats
 from .dynamic import DynAgg, DynValue, _promote_operands
 from .relations import BoxedValue
 from .aggregates import AggFunc
@@ -318,7 +331,7 @@ def _drive_numeric[
             return node.lane[W](state, i)
 
         apply[native, producer](buf.view[native](0, length))
-        var v = node.validity(batch)
+        var v = node.state_validity(batch, state)
         var arr = PrimitiveArray[V.OutType](
             dtype=V.OutType(),
             length=length,
@@ -343,7 +356,7 @@ def _drive_bool[
         return node.lane[W](state, i)
 
     apply[V.NativeType, producer](bm.view())  # bit-packing overload
-    var v = node.validity(batch)
+    var v = node.state_validity(batch, state)
     return BoolArray(
         length=length,
         nulls=v.value().unset_count() if v else 0,
@@ -368,7 +381,7 @@ def _drive_string[
         # *transformation* returned an all-valid column. A bare column keeps
         # its nulls (that path returns the column as-is), which is what hid
         # this.
-        var v = node.validity(batch)
+        var v = node.state_validity(batch, state)
         var builder = BinaryLikeBuilder[V.OutType](capacity=n)
         for i in range(n):
             if v and not v.value().test(i):
@@ -436,7 +449,7 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         instead, and every non-column node inherits "no"."""
         return -1
 
-    def prune(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> Interval:
         """What this node's value can be, given per-column statistics.
 
         Defaults to "no information", which is always sound — a caller only ever
@@ -446,7 +459,7 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         This used to be a 9-arm switch on the interpreter's tag. Putting it on
         the node means a new node cannot be forgotten by it: it either says
         something or inherits the conservative answer."""
-        return PruneBound.unknown()
+        return Interval.unknown()
 
     # --- validity (null tracking) -------------------------------------------
     def validity(
@@ -502,6 +515,20 @@ trait NumericValue(Value):
         """One SIMD chunk. Reads `state` and `idx` and nothing else — that
         removal is the optimization, worth 30x on `a + 1` over 1M rows."""
         ...
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, given the state the driver already has.
+
+        Defaults to `validity(batch)`: most nodes derive validity from their
+        operands and have no use for the state. A **breaker** whose `State` is
+        its materialized result overrides this to read the bitmap straight off
+        that array. Without the hook the driver's two calls — `state()` and
+        `validity()` — are independent, and for `coalesce`, `nullif` and
+        `case_when` each one ran the whole selection kernel, so every fused pass
+        over them did the work twice (FU-7a)."""
+        return self.validity(batch)
 
     # --- fluent surface: arithmetic, comparison, unary, reductions -----------
     def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
@@ -625,9 +652,9 @@ struct NumericColumn[T: NumericType](NumericValue):
             raise Error("column '", self._name, "' not found")
         return i
 
-    def prune(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> Interval:
         var iv = stats.by_name(self._name)
-        return PruneBound.interval(iv[0].copy(), iv[1].copy())
+        return Interval.bounds(iv[0].copy(), iv[1].copy())
 
     def __init__(out self, var name: String):
         self._name = name^
@@ -672,9 +699,9 @@ struct NumericLiteral[T: NumericType](NumericValue):
     def render(self) -> String:
         return String("literal(", self._value, ")")
 
-    def prune(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> Interval:
         var v = PrimitiveScalar[Self.T](self._value).to_dyn()
-        return PruneBound.interval(Optional(v.copy()), Optional(v^))
+        return Interval.bounds(Optional(v.copy()), Optional(v^))
 
     var _value: Scalar[Self.OutType.native]
 
@@ -733,6 +760,20 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     ) raises -> Optional[Bitmap[mut=False]]:
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
+
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
+
 
 @fieldwise_init
 struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
@@ -763,6 +804,13 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](NumericValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
+
 
 @fieldwise_init
 struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
@@ -792,6 +840,13 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 @fieldwise_init
@@ -833,6 +888,20 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     ) raises -> Optional[Bitmap[mut=False]]:
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
+
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
+
 
 @fieldwise_init
 struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
@@ -861,6 +930,13 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 comptime Add = NumericBinary[AddKernel, _, _]
@@ -898,6 +974,20 @@ trait BoolValue(Value):
     def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[DType.bool, W]:
         ...
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, given the state the driver already has.
+
+        Defaults to `validity(batch)`: most nodes derive validity from their
+        operands and have no use for the state. A **breaker** whose `State` is
+        its materialized result overrides this to read the bitmap straight off
+        that array. Without the hook the driver's two calls — `state()` and
+        `validity()` — are independent, and for `coalesce`, `nullif` and
+        `case_when` each one ran the whole selection kernel, so every fused pass
+        over them did the work twice (FU-7a)."""
+        return self.validity(batch)
+
     # --- fluent surface: boolean logic + reductions --------------------------
     def __and__[Rhs: BoolValue](self, o: Rhs) -> And[Self, Rhs]:
         return And(self.copy(), o.copy())
@@ -924,6 +1014,7 @@ trait BoolValue(Value):
 @fieldwise_init
 struct NumericCompare[
     K: NumericCompareKernel,
+    P: IntervalKernel,
     L: NumericValue,
     R: NumericValue,
 ](BoolValue):
@@ -950,24 +1041,18 @@ struct NumericCompare[
     var l: Self.L
     var r: Self.R
 
-    def prune(self, stats: PruneStats) raises -> PruneBound:
-        # The interpreter had one switch arm per operator here. `K` names the
-        # operator, so the rule is selected at elaboration instead.
-        var l = self.l.prune(stats)
-        var r = self.r.prune(stats)
-        comptime n = Self.K.name
-        comptime if n == "equal":
-            return PruneBound.boolean(l.maybe_eq(r))
-        elif n == "less":
-            return PruneBound.boolean(l.maybe_lt(r))
-        elif n == "less_equal":
-            return PruneBound.boolean(l.maybe_le(r))
-        elif n == "greater":
-            return PruneBound.boolean(l.maybe_gt(r))
-        elif n == "greater_equal":
-            return PruneBound.boolean(l.maybe_ge(r))
-        else:  # not_equal carries no usable interval rule
-            return PruneBound.unknown()
+    def prune(self, stats: PruneStats) raises -> Interval:
+        """`P` is this operator read over intervals — see `kernels.interval`.
+
+        This used to branch on `Self.K.name`, matching the SIMD kernel's
+        *display* string against five literals. `Kernel.name` is documented as
+        "for display and diagnostics, never dispatch", and the mismatch was not
+        theoretical: renaming a kernel silently dropped through to
+        `unknown()`, which is sound, so pruning switched itself off with no
+        error and no failing test."""
+        return Interval.truth(
+            Self.P.apply(self.l.prune(stats), self.r.prune(stats))
+        )
 
     def render(self) -> String:
         return String(
@@ -993,13 +1078,27 @@ struct NumericCompare[
     ) raises -> Optional[Bitmap[mut=False]]:
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
 
-comptime Lt = NumericCompare[LtKernel, _, _]
-comptime Le = NumericCompare[LeKernel, _, _]
-comptime Gt = NumericCompare[GtKernel, _, _]
-comptime Ge = NumericCompare[GeKernel, _, _]
-comptime Eq = NumericCompare[EqKernel, _, _]
-comptime Ne = NumericCompare[NeKernel, _, _]
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
+
+
+comptime Lt = NumericCompare[LtKernel, LtInterval, _, _]
+comptime Le = NumericCompare[LeKernel, LeInterval, _, _]
+comptime Gt = NumericCompare[GtKernel, GtInterval, _, _]
+comptime Ge = NumericCompare[GeKernel, GeInterval, _, _]
+comptime Eq = NumericCompare[EqKernel, EqInterval, _, _]
+comptime Ne = NumericCompare[NeKernel, NeInterval, _, _]
 
 
 # ---------------------------------------------------------------------------
@@ -1008,7 +1107,9 @@ comptime Ne = NumericCompare[NeKernel, _, _]
 # `(a < 3) & (b > 15)` is one fused pass. Compute lives in the boolean kernels.
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
+struct BoolBinary[
+    K: BoolBinaryKernel, P: IntervalKernel, L: BoolValue, R: BoolValue
+](BoolValue):
     """Fused `and`/`or`/`xor` over two bool masks."""
 
     comptime OutType = BoolType
@@ -1021,16 +1122,12 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     var l: Self.L
     var r: Self.R
 
-    def prune(self, stats: PruneStats) raises -> PruneBound:
-        var l = self.l.prune(stats).maybe_true
-        var r = self.r.prune(stats).maybe_true
-        comptime n = Self.K.name
-        comptime if n == "and_":
-            return PruneBound.boolean(l and r)
-        elif n == "or_":
-            return PruneBound.boolean(l or r)
-        else:  # xor tells us nothing about the row group
-            return PruneBound.unknown()
+    def prune(self, stats: PruneStats) raises -> Interval:
+        """`P` is this operator read over intervals — see `NumericCompare.prune`
+        for why this is a kernel rather than a match on `Self.K.name`."""
+        return Interval.truth(
+            Self.P.apply(self.l.prune(stats), self.r.prune(stats))
+        )
 
     def render(self) -> String:
         return String(
@@ -1103,10 +1200,17 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
-comptime And = BoolBinary[AndKernel, _, _]
-comptime Or = BoolBinary[OrKernel, _, _]
-comptime Xor = BoolBinary[XorKernel, _, _]
+
+comptime And = BoolBinary[AndKernel, AndInterval, _, _]
+comptime Or = BoolBinary[OrKernel, OrInterval, _, _]
+comptime Xor = BoolBinary[XorKernel, XorInterval, _, _]
 comptime Not = BoolUnary[NotKernel, _]
 
 
@@ -1180,6 +1284,13 @@ struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
+
 
 @fieldwise_init
 struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
@@ -1247,6 +1358,13 @@ struct NumToBool[A: NumericValue](BoolValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
+
 
 @fieldwise_init
 struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
@@ -1275,6 +1393,13 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 @fieldwise_init
@@ -1308,10 +1433,17 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
         # validity comes from the parsed column, not from `a`. Inheriting the
         # all-valid default made `to_int(s) + 1` yield 0 where it should be null.
         #
-        # This re-runs the parse: the driver asks for `validity` and `state`
-        # separately, so the stage is built twice. Folding validity into `State`
-        # is the follow-up; correctness first.
+        # Re-runs the parse. Only reached when this node is not the one being
+        # driven; a fused parent takes `state_validity` below, which reads the
+        # bitmap off the state it already has.
         return self.state(batch).to_data().owned_validity()
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Read off the materialized result rather than re-running the kernel —
+        see the trait's `state_validity`."""
+        return state.to_data().owned_validity()
 
     @always_inline
     def lane[
@@ -1368,6 +1500,20 @@ trait StringValue(Value):
         """One row. Variable-width UTF-8 has no W-wide lane, so this is the
         elementwise counterpart of the SIMD families' `lane[W]`."""
         ...
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, given the state the driver already has.
+
+        Defaults to `validity(batch)`: most nodes derive validity from their
+        operands and have no use for the state. A **breaker** whose `State` is
+        its materialized result overrides this to read the bitmap straight off
+        that array. Without the hook the driver's two calls — `state()` and
+        `validity()` — are independent, and for `coalesce`, `nullif` and
+        `case_when` each one ran the whole selection kernel, so every fused pass
+        over them did the work twice (FU-7a)."""
+        return self.validity(batch)
 
     def materialize(self, batch: RecordBatch) raises -> Datum:
         return _drive_string(self, batch, self.state(batch))
@@ -1457,6 +1603,23 @@ struct StringColumn[T: StringLikeType](StringValue):
     def referenced_columns(self) -> List[String]:
         return [self._name.copy()]
 
+    def bound_column(self, schema: Schema) raises -> Int:
+        var i = schema.get_field_index(self._name)
+        if i == -1:
+            raise Error("column '", self._name, "' not found")
+        return i
+
+    def prune(self, stats: PruneStats) raises -> Interval:
+        """A string column reports its bounds like any other.
+
+        These two were on `NumericColumn` alone, so in the fused lane a string
+        column could not be a join key and a string predicate pruned nothing —
+        while the runtime lane, which keys on `_tag == "column"` regardless of
+        dtype, pruned it. `Interval.compare` has ordered strings the whole
+        time; only these overrides were missing."""
+        var iv = stats.by_name(self._name)
+        return Interval.bounds(iv[0].copy(), iv[1].copy())
+
     def __init__(out self, var name: String):
         self._name = name^
 
@@ -1489,6 +1652,10 @@ struct StringLiteral[T: StringLikeType](StringValue):
     comptime OutShape = 0
     comptime State = NoneType
     var _value: String
+
+    def prune(self, stats: PruneStats) raises -> Interval:
+        var v = StringScalar(self._value).to_dyn()
+        return Interval.bounds(Optional(v.copy()), Optional(v^))
 
     def referenced_columns(self) -> List[String]:
         return List[String]()
@@ -1533,6 +1700,20 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
         # a null operand poisons the row, as it does in `ConcatKernel`
         return Bitmap.intersect(self.l.validity(batch), self.r.validity(batch))
 
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree rather than re-deriving from `batch`.
+
+        Without this the chain stops at the first composite: the driver asks
+        the root, the root's default falls back to `validity(batch)`, and a
+        breaker operand re-runs its whole kernel — which is the FU-7a cost this
+        was meant to remove."""
+        return Bitmap.intersect(
+            self.l.state_validity(batch, state.l),
+            self.r.state_validity(batch, state.r),
+        )
+
 
 @fieldwise_init
 struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
@@ -1563,6 +1744,13 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     ) raises -> Optional[Bitmap[mut=False]]:
         # a map transforms values, never validity — `upper(null)` is null
         return self.a.validity(batch)
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Propagate down the state tree — see `NumericBinary.state_validity`.
+        """
+        return self.a.state_validity(batch, state)
 
 
 comptime Upper = StringUnary[UpperKernel, _]
@@ -1672,7 +1860,10 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
 # ---------------------------------------------------------------------------
 @fieldwise_init
 struct StringPredicate[
-    K: StringPredicateKernel, L: StringValue, R: StringValue
+    K: StringPredicateKernel,
+    P: IntervalKernel,
+    L: StringValue,
+    R: StringValue,
 ](BoolValue):
     comptime OutType = BoolType
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
@@ -1684,6 +1875,16 @@ struct StringPredicate[
     def referenced_columns(self) -> List[String]:
         return _union_columns(
             self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
+    def prune(self, stats: PruneStats) raises -> Interval:
+        """`P` reads this operator over the operands' string bounds.
+
+        Ordering predicates carry a real rule; `startswith`/`like` and friends
+        pass `NeInterval`, whose answer is always "maybe" — the conservative
+        default they had implicitly by inheriting `Value.prune`."""
+        return Interval.truth(
+            Self.P.apply(self.l.prune(stats), self.r.prune(stats))
         )
 
     def validity(
@@ -1734,24 +1935,24 @@ struct StringPredicate[
         return state.values().load[W](idx)
 
 
-comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
-comptime EndsWith = StringPredicate[EndsWithKernel, _, _]
-comptime StrContains = StringPredicate[ContainsKernel, _, _]
-comptime StrEq = StringPredicate[StringEqKernel, _, _]
-comptime StrNe = StringPredicate[StringNeKernel, _, _]
+comptime StartsWith = StringPredicate[StartsWithKernel, NeInterval, _, _]
+comptime EndsWith = StringPredicate[EndsWithKernel, NeInterval, _, _]
+comptime StrContains = StringPredicate[ContainsKernel, NeInterval, _, _]
+comptime StrEq = StringPredicate[StringEqKernel, EqInterval, _, _]
+comptime StrNe = StringPredicate[StringNeKernel, NeInterval, _, _]
 # SQL LIKE / ILIKE — same breaker shape (`LikeKernel`/`ILikeKernel` are
 # `StringPredicateKernel`s), so they slot straight into `StringPredicate`.
-comptime Like = StringPredicate[LikeKernel, _, _]
-comptime ILike = StringPredicate[ILikeKernel, _, _]
+comptime Like = StringPredicate[LikeKernel, NeInterval, _, _]
+comptime ILike = StringPredicate[ILikeKernel, NeInterval, _, _]
 
 
 # String ordering comparisons — `string < <= > >=` -> bool. The compare kernels
 # name their string counterpart, so ordering is the same node as every other
 # string predicate; only the kernel differs.
-comptime StrLt = StringPredicate[StringLtKernel, _, _]
-comptime StrLe = StringPredicate[StringLeKernel, _, _]
-comptime StrGt = StringPredicate[StringGtKernel, _, _]
-comptime StrGe = StringPredicate[StringGeKernel, _, _]
+comptime StrLt = StringPredicate[StringLtKernel, LtInterval, _, _]
+comptime StrLe = StringPredicate[StringLeKernel, LeInterval, _, _]
+comptime StrGt = StringPredicate[StringGtKernel, GtInterval, _, _]
+comptime StrGe = StringPredicate[StringGeKernel, GeInterval, _, _]
 
 
 # ---------------------------------------------------------------------------
@@ -2091,7 +2292,16 @@ struct ConditionalBinary[
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
+        """Asked only when this node is *not* the one being driven — a fused
+        parent takes `state_validity` instead, which costs nothing extra."""
         return self._result(batch).to_data().owned_validity()
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Read off the materialized result rather than re-running the kernel —
+        see the trait's `state_validity`."""
+        return state.to_data().owned_validity()
 
     def state(self, batch: RecordBatch) raises -> Self.State:
         return self._result(batch).as_primitive[Self.OutType]().copy()
@@ -2147,7 +2357,16 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
     def validity(
         self, batch: RecordBatch
     ) raises -> Optional[Bitmap[mut=False]]:
+        """Asked only when this node is *not* the one being driven — a fused
+        parent takes `state_validity` instead, which costs nothing extra."""
         return self._result(batch).to_data().owned_validity()
+
+    def state_validity(
+        self, batch: RecordBatch, state: Self.State
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Read off the materialized result rather than re-running the kernel —
+        see the trait's `state_validity`."""
+        return state.to_data().owned_validity()
 
     def state(self, batch: RecordBatch) raises -> Self.State:
         return self._result(batch).as_primitive[Self.OutType]().copy()

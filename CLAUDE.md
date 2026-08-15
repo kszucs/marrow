@@ -34,7 +34,7 @@ Dependencies (pinned in `pixi.toml`):
 | Environment | Purpose | Key command |
 |-------------|---------|-------------|
 | `dev`         | Tests + formatting (the default) | `pixi run -e dev test` |
-| `asan`        | AddressSanitizer test runs | `pixi run -e asan test_mojo_asan` |
+| `asan`        | AddressSanitizer test runs | `pixi run -e asan test_asan_core` |
 | `bench`       | Benchmarks (polars, duckdb for comparison) | `pixi run -e bench bench` |
 | `format`      | Formatting only (no test deps) | `pixi run -e format fmt` |
 | `docs`        | Quarto documentation | `pixi run -e docs docs` |
@@ -45,7 +45,7 @@ Dependencies (pinned in `pixi.toml`):
 ```bash
 pixi run -e dev test         # everything (pytest -v)
 pixi run -e dev fmt          # mojo format + ruff format
-pixi run package             # marrow.mojopkg
+pixi run package             # package/marrow.mojoc
 pixi run binary_size         # AOT/hybrid/runtime binary-size gate
 ```
 
@@ -790,7 +790,7 @@ Marrow is published to prefix.dev as a conda package. A push of a `v*` tag fires
 2. `git commit -m "chore: bump version to X.Y.Z"`
 3. `git tag vX.Y.Z && git push origin main vX.Y.Z`
 
-The workflow then runs the full test suite, builds `marrow.mojopkg`
+The workflow then runs the full test suite, builds `package/marrow.mojoc`
 (`pixi run package`) and the conda package (`pixi build`), uploads it with
 `pixi run publish` (needs the `PREFIX_API_TOKEN` secret), and creates a GitHub
 release with both artifacts attached.
@@ -804,11 +804,16 @@ release with both artifacts attached.
 3. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary,
    decimal (32/64/128/256) and temporal (date/time/timestamp/duration/interval)
-   are implemented; union, run-end-encoded and view layouts are not. **`map` is
-   the exception to "implemented"** — it works in dtypes, arrays, builders, the C
-   Data Interface and Parquet, but **not through IPC in either direction** (type
-   code 17 is absent from `ipc.mojo`), it has no `MapScalar` (a scalar taken from
-   a `MapArray` reports `list<…>`), and `cast` has no arm for it.
+   are implemented; union, run-end-encoded and view layouts are not. `map`'s
+   remaining gaps are that it has no `MapScalar` (a scalar taken from a
+   `MapArray` reports `list<…>`) and `cast` has no arm for it. **This used to say
+   `map` did not go through IPC "in either direction" because "type code 17 is
+   absent from `ipc.mojo`" — that is false**: `comptime _TYPE_MAP: UInt8 = 17` is
+   there, and the archery integration suite now runs `map`, `map_non_canonical` and
+   `interval_mdn` at **14/14** against C++, Rust and Go — both directions.
+   `interval` (YEAR_MONTH / DAY_TIME) is still skipped there, but that is a
+   pyarrow limit: it has no type for either unit, and the harness bridges
+   through pyarrow. Marrow consumes all three from the other implementations.
 4. **Scalar fidelity**: six types have no dedicated scalar — `binary`,
    `large_binary` and `large_string` collapse to `StringScalar`; `large_list`,
    `map` and `fixed_size_list` collapse to `ListScalar`. `StringScalar.type()`

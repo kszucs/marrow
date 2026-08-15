@@ -26,7 +26,7 @@ jobs:
       with:
         cache: true
         frozen: true
-    - name: Build mojopkg
+    - name: Build the package artifact
       run: pixi run package
     - name: Build conda package
       run: |
@@ -43,6 +43,6 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          package/marrow.mojopkg
+          package/marrow.mojoc
           marrow-*.conda
         generate_release_notes: true

@@ -50,6 +50,7 @@ from ..parquet import (
 )
 from ..scalars import DynScalar
 from .relations import BoxedValue
+from ..kernels.core import Grouping
 from .pruning import PruneStats
 from ..execution import ExecContext
 
@@ -821,7 +822,11 @@ struct AggregateProcessor(Processor):
 
             var cols = List[DynArray]()
             for i in range(len(self.aggs)):
-                cols.append(self.aggs[i].grouped(group_zero, values[i], 1))
+                cols.append(
+                    self.aggs[i].grouped(
+                        Grouping(group_zero.copy(), 1), values[i]
+                    )
+                )
             return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
         # Phase 2 — the unique key columns, then one shared per-column aggregate
@@ -837,7 +842,9 @@ struct AggregateProcessor(Processor):
         for i in range(len(self.aggs)):
             var value = concat(value_chunks[i], self._ctx)
             value_chunks[i].clear()
-            cols.append(self.aggs[i].grouped(gids, value, num_groups))
+            cols.append(
+                self.aggs[i].grouped(Grouping(gids.copy(), num_groups), value)
+            )
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 

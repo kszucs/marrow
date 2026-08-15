@@ -198,7 +198,7 @@ def _kleene[
 
 
 struct AndKernel(BoolBinaryKernel):
-    comptime name = "and_"
+    comptime name = "and"
 
     @always_inline
     @staticmethod
@@ -217,7 +217,7 @@ struct AndKernel(BoolBinaryKernel):
 
 
 struct OrKernel(BoolBinaryKernel):
-    comptime name = "or_"
+    comptime name = "or"
 
     @always_inline
     @staticmethod
@@ -236,7 +236,7 @@ struct OrKernel(BoolBinaryKernel):
 
 
 struct NotKernel(BoolUnaryKernel):
-    comptime name = "not_"
+    comptime name = "not"
 
     @always_inline
     @staticmethod

@@ -51,6 +51,7 @@ from ..execution import ExecContext
 from ..schema import Schema
 from ..tabular import RecordBatch
 from ..dtypes import NumericType, StringLikeType, TemporalType
+from ..kernels.core import Grouping
 from ..kernels.aggregate import (
     Aggregation,
     AggFunction,
@@ -271,15 +272,15 @@ struct AggFunc(Copyable, Movable, Writable):
     column) are dedicated per-group passes rather than the ``AggState`` fold the
     merge understands."""
 
-    var _grouped_fn: def(Int32Array, DynArray, Int) thin raises -> DynArray
+    var _grouped_fn: def(Grouping, DynArray) thin raises -> DynArray
 
     @staticmethod
     def _grouped[
         A: Aggregation
-    ](gids: Int32Array, value: DynArray, num_groups: Int) raises -> DynArray:
+    ](groups: Grouping, value: DynArray) raises -> DynArray:
         """The erasure boundary: a typed column in, a typed column out, widened
         back to ``DynArray`` only for the caller's heterogeneous column list."""
-        return A.grouped(gids, A.from_any(value), num_groups).to_dyn()
+        return A.grouped(groups, A.from_any(value)).to_dyn()
 
     def __init__(
         out self,
@@ -287,7 +288,7 @@ struct AggFunc(Copyable, Movable, Writable):
         var func_name: String,
         var out_dtype: DynType,
         is_mergeable: Bool,
-        grouped_fn: def(Int32Array, DynArray, Int) thin raises -> DynArray,
+        grouped_fn: def(Grouping, DynArray) thin raises -> DynArray,
     ):
         self.name = func_name^
         self.out_dtype = out_dtype^
@@ -317,11 +318,9 @@ struct AggFunc(Copyable, Movable, Writable):
         resolve_agg[make](name, value_dtype)
         self = box[0].copy()
 
-    def grouped(
-        self, gids: Int32Array, value: DynArray, num_groups: Int
-    ) raises -> DynArray:
+    def grouped(self, groups: Grouping, value: DynArray) raises -> DynArray:
         """One aggregate column over precomputed group ids."""
-        return self._grouped_fn(gids, value, num_groups)
+        return self._grouped_fn(groups, value)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self.name)
@@ -342,7 +341,7 @@ struct AggFold(Copyable, Movable):
     single resolution."""
 
     var _whole_fn: def(DynArray, ExecContext) thin raises -> DynArray
-    var _partials_fn: def(Int32Array, DynArray, Int) thin raises -> Tuple[
+    var _partials_fn: def(Grouping, DynArray) thin raises -> Tuple[
         DynArray, Int64Array
     ]
     var _merge_fn: def(
@@ -358,10 +357,8 @@ struct AggFold(Copyable, Movable):
     @staticmethod
     def _partials[
         A: Aggregation
-    ](gids: Int32Array, value: DynArray, num_groups: Int) raises -> Tuple[
-        DynArray, Int64Array
-    ]:
-        var parts = A.partials(gids, A.from_any(value), num_groups)
+    ](groups: Grouping, value: DynArray) raises -> Tuple[DynArray, Int64Array]:
+        var parts = A.partials(groups, A.from_any(value))
         return (parts[0].copy().to_dyn(), parts[1].copy())
 
     @staticmethod
@@ -382,7 +379,7 @@ struct AggFold(Copyable, Movable):
         out self,
         *,
         whole_fn: def(DynArray, ExecContext) thin raises -> DynArray,
-        partials_fn: def(Int32Array, DynArray, Int) thin raises -> Tuple[
+        partials_fn: def(Grouping, DynArray) thin raises -> Tuple[
             DynArray, Int64Array
         ],
         merge_fn: def(
@@ -408,11 +405,11 @@ struct AggFold(Copyable, Movable):
         return self._whole_fn(value, ctx)
 
     def partials(
-        self, gids: Int32Array, value: DynArray, num_groups: Int
+        self, groups: Grouping, value: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         """A thread-local partial fold: raw per-group accumulator + valid counts.
         """
-        return self._partials_fn(gids, value, num_groups)
+        return self._partials_fn(groups, value)
 
     def merge(
         self,
@@ -492,14 +489,14 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         return True
 
     def grouped(
-        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+        self, column: Int, groups: Grouping, values: DynArray
     ) raises -> DynArray:
-        return self._funcs[column].grouped(gids, values, num_groups)
+        return self._funcs[column].grouped(groups, values)
 
     def partials(
-        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+        self, column: Int, groups: Grouping, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
-        return self._folds[column].partials(gids, values, num_groups)
+        return self._folds[column].partials(groups, values)
 
     def merge(
         self,

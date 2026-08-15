@@ -12,13 +12,13 @@ rows whose `Name (time in ...)` header shows the same unit.
 from std.benchmark import BenchMetric, keep
 
 from ...testing import Benchmark
-from ...builders import StringBuilder, Int32Builder
-from ...dtypes import string, int32
+from ...builders import StringBuilder, Int32Builder, Int64Builder
+from ...dtypes import int64, string, int32
 from ...tabular import record_batch, RecordBatch
 from ...buffers import Buffer
 from ...views import apply
 from .test_a1_spike import SpikeColumn
-from ...expr.values import col, lit, into_array
+from ...expr.values import Coalesce, col, lit, into_array
 from ...kernels.string import LengthKernel
 from ...arrays import StringArray
 
@@ -315,4 +315,47 @@ def bench_a1_spike_state_lane_1m(mut b: Benchmark) raises:
     # "assignment was never used" warning on `node` is exactly the tell CLAUDE.md
     # records for a capture that was not made.
     keep(node)
+    keep(batch)
+
+
+def _cond_batch(n: Int) raises -> RecordBatch:
+    """Two int64 columns, `b` all-null in a third of the rows so `coalesce`
+    actually has to choose."""
+    var ab = Int64Builder(n)
+    var bb = Int64Builder(n)
+    for i in range(n):
+        ab.append(Int64(i))
+        if i % 3 == 0:
+            bb.append_null()
+        else:
+            bb.append(Int64(i * 2))
+    return record_batch(
+        [ab.finish().to_dyn(), bb.finish().to_dyn()], names=["a", "b"]
+    )
+
+
+def bench_fu7_coalesce_fused_1m(mut b: Benchmark) raises:
+    """`coalesce(a, b) + 1` over 1M rows — a conditional breaker under a fused
+    parent.
+
+    The shape FU-7a was about: the driver asks the breaker for its `state` and
+    for its validity, and both used to run the whole selection kernel, so a
+    fused pass over `coalesce`/`nullif`/`case_when` did the work twice.
+    """
+    var batch = _cond_batch(1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(
+            into_array(
+                (
+                    Coalesce(col("a", int64), col("b", int64)) + lit(1, int64)
+                ).execute(batch),
+                1_000_000,
+            ).length()
+        )
+
+    b.iter[call]()
     keep(batch)
