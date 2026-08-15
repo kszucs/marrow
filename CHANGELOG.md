@@ -45,6 +45,28 @@
 
 ### Refactors
 
+- **Q4.1: `Grouping` names the `(gids, num_groups)` pair.** The two were threaded
+  separately through ~22 signatures across `groupby`, `aggregate`, `distinct`,
+  `expr/aggregates` and `expr/execution`. They are one fact — `ids[i]` is row
+  `i`'s group and `num_groups` sizes the accumulator those ids scatter into —
+  and passing them apart let a caller size an accumulator from one grouping and
+  index it with another's ids. That is an out-of-bounds scatter rather than a
+  type error, and silent whenever the mismatched count happened to be larger.
+
+  `struct Grouping { ids, num_groups }` lives in `kernels/core.mojo`: neutral
+  ground both `aggregate` and `distinct` can import without a cycle, since
+  `groupby` already imports `aggregate`. Three *function types* carried the pair
+  as well — `def(Int, Int32Array, DynArray, Int)` and two
+  `def(Int32Array, DynArray, Int)` — so a callback with a mismatched arity
+  type-checked; they name `Grouping` now too. Sibling of the `JoinIndex` half of
+  the same card.
+
+  Size cost worth watching: `query_streaming_agg_fused` +0.449% against the 0.5%
+  ceiling (from +0.416%), and `query_streaming_agg` +0.335%. The aggregate
+  binaries are where a `Grouping` parameter lands, and the headroom on that gate
+  is nearly gone.
+
+
 - **Q4.3: the Arrow → Parquet physical-type mapping is stated once instead of
   three times.** `writer._encode_values`, `writer._bloom_hashes` and
   `statistics.decode` each carried a hand-written dtype ladder — 25, 25 and 22

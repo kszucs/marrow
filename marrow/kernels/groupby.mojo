@@ -26,6 +26,7 @@ from ..arrays import (
 )
 from ..builders import DynBuilder, Int32Builder
 from ..dtypes import Field, struct_
+from .core import Grouping
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import rapidhash
@@ -173,13 +174,13 @@ trait ColumnAggregator(Copyable, ImplicitlyDeletable, Movable):
         ...
 
     def grouped(
-        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+        self, column: Int, groups: Grouping, values: DynArray
     ) raises -> DynArray:
         """Aggregate one value column over precomputed group ids."""
         ...
 
     def partials(
-        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+        self, column: Int, groups: Grouping, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         """One thread's raw per-group accumulator + valid counts."""
         ...
@@ -215,16 +216,14 @@ struct OneAggregation[A: Aggregation](ColumnAggregator):
         return Self.A.is_mergeable
 
     def grouped(
-        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+        self, column: Int, groups: Grouping, values: DynArray
     ) raises -> DynArray:
-        return Self.A.grouped(
-            gids, Self.A.from_any(values), num_groups
-        ).to_dyn()
+        return Self.A.grouped(groups, Self.A.from_any(values)).to_dyn()
 
     def partials(
-        self, column: Int, gids: Int32Array, values: DynArray, num_groups: Int
+        self, column: Int, groups: Grouping, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
-        var parts = Self.A.partials(gids, Self.A.from_any(values), num_groups)
+        var parts = Self.A.partials(groups, Self.A.from_any(values))
         return (parts[0].copy().to_dyn(), parts[1].copy())
 
     def merge(
@@ -496,9 +495,9 @@ struct GroupBy(Movable):
 
         @parameter
         def by_column(
-            j: Int, gids: Int32Array, value: DynArray, ng: Int
+            j: Int, groups: Grouping, value: DynArray
         ) raises -> DynArray:
-            return agg.grouped(j, gids, value, ng)
+            return agg.grouped(j, groups, value)
 
         return self.aggregate_columns[by_column](values)
 
@@ -543,7 +542,7 @@ struct GroupBy(Movable):
             var cnts = List[Int64Array]()
             for j in range(na):
                 var parts = agg.partials(
-                    j, gids, values[j].slice(start, length), ng
+                    j, Grouping(gids.copy(), ng), values[j].slice(start, length)
                 )
                 accs.append(parts[0].copy())
                 cnts.append(parts[1].copy())
@@ -594,9 +593,7 @@ struct GroupBy(Movable):
         return GroupedColumns(key_cols^, agg_cols^)
 
     def aggregate_columns[
-        col_agg: def(Int, Int32Array, DynArray, Int) raises capturing[
-            _
-        ] -> DynArray
+        col_agg: def(Int, Grouping, DynArray) raises capturing[_] -> DynArray
     ](self, values: List[DynArray]) raises -> GroupedColumns:
         """Group the keys once, then emit ``col_agg(j, gids, values[j], ng)`` as
         output column ``j`` — the multi-aggregate driver.
@@ -614,9 +611,7 @@ struct GroupBy(Movable):
 
     @staticmethod
     def _by_partition[
-        col_agg: def(Int, Int32Array, DynArray, Int) raises capturing[
-            _
-        ] -> DynArray,
+        col_agg: def(Int, Grouping, DynArray) raises capturing[_] -> DynArray,
     ](
         keys: StructArray,
         values: List[DynArray],
@@ -683,9 +678,17 @@ struct GroupBy(Movable):
                 # Values in partition order, aligned with `gids`. A single
                 # partition *is* the whole input, already in order — no gather.
                 if partition:
-                    agg_cols.append(col_agg(j, gids, take(values[j], rows), ng))
+                    agg_cols.append(
+                        col_agg(
+                            j,
+                            Grouping(gids.copy(), ng),
+                            take(values[j], rows),
+                        )
+                    )
                 else:
-                    agg_cols.append(col_agg(j, gids, values[j], ng))
+                    agg_cols.append(
+                        col_agg(j, Grouping(gids.copy(), ng), values[j])
+                    )
             return (first^, agg_cols^)
 
         var parts = List[Tuple[Int32Array, List[DynArray]]]()

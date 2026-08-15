@@ -62,7 +62,7 @@ from ..scalars import (
     Float64Scalar,
 )
 from ..views import reduce
-from .core import Kernel
+from .core import Kernel, Grouping
 from ..execution import ExecContext
 from .distinct import (
     count_distinct,
@@ -798,9 +798,7 @@ trait Aggregation(Kernel):
         ...
 
     @staticmethod
-    def grouped(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
-    ) raises -> Self.OutArray:
+    def grouped(groups: Grouping, values: Self.InArray) raises -> Self.OutArray:
         """One aggregate column over precomputed group ids."""
         ...
 
@@ -828,11 +826,11 @@ trait Aggregation(Kernel):
         var zeros = Int32Builder(n)
         for _ in range(n):
             zeros.append(Int32(0))
-        return Self.grouped(zeros.finish(), values, 1)
+        return Self.grouped(Grouping(zeros.finish(), 1), values)
 
     @staticmethod
     def partials(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
+        groups: Grouping, values: Self.InArray
     ) raises -> Tuple[Self.OutArray, Int64Array]:
         """A thread-local partial fold: the raw (non-finalized) per-group
         accumulator plus valid counts, for a later `merge`."""
@@ -896,12 +894,10 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
         return DynType(Self.K.AccType[Self.V]())
 
     @staticmethod
-    def grouped(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
-    ) raises -> Self.OutArray:
+    def grouped(groups: Grouping, values: Self.InArray) raises -> Self.OutArray:
         var state = AggState[Self.K, Self.V]()
-        state.update(gids, values, num_groups)
-        return state.finish(num_groups)
+        state.update(groups.ids, values, groups.num_groups)
+        return state.finish(groups.num_groups)
 
     @staticmethod
     def whole(
@@ -916,10 +912,10 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
 
     @staticmethod
     def partials(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
+        groups: Grouping, values: Self.InArray
     ) raises -> Tuple[Self.OutArray, Int64Array]:
         var state = AggState[Self.K, Self.V]()
-        state.update(gids, values, num_groups)
+        state.update(groups.ids, values, groups.num_groups)
         return state.into_partials()
 
     @staticmethod
@@ -979,12 +975,10 @@ struct TemporalMinMax[Op: MinMaxOp, T: TemporalType](Aggregation):
         return relabelled.as_primitive[Self.T]().copy()
 
     @staticmethod
-    def grouped(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
-    ) raises -> Self.OutArray:
+    def grouped(groups: Grouping, values: Self.InArray) raises -> Self.OutArray:
         var state = AggState[MinMax[Self.Op], Self.Backing]()
-        state.update(gids, Self._as_backing(values), num_groups)
-        return Self._as_temporal(state.finish(num_groups), values.dtype)
+        state.update(groups.ids, Self._as_backing(values), groups.num_groups)
+        return Self._as_temporal(state.finish(groups.num_groups), values.dtype)
 
 
 struct StringMinMax[Op: MinMaxOp, T: StringLikeType](Aggregation):
@@ -1021,20 +1015,18 @@ struct StringMinMax[Op: MinMaxOp, T: StringLikeType](Aggregation):
         return (a < b) if Self.Op.is_min else (b < a)
 
     @staticmethod
-    def grouped(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
-    ) raises -> Self.OutArray:
-        var best = List[Int](length=num_groups, fill=-1)
-        var gv = gids.values()
+    def grouped(groups: Grouping, values: Self.InArray) raises -> Self.OutArray:
+        var best = List[Int](length=groups.num_groups, fill=-1)
+        var gv = groups.ids.values()
         var has_null = values.null_count() > 0
-        for i in range(len(gids)):
+        for i in range(len(groups.ids)):
             if has_null and not values.is_valid(i):
                 continue
             var g = Int(gv[i])
             if best[g] == -1 or Self._better(values, i, best[g]):
                 best[g] = i
-        var out = BinaryLikeBuilder[Self.T](capacity=num_groups)
-        for g in range(num_groups):
+        var out = BinaryLikeBuilder[Self.T](capacity=groups.num_groups)
+        for g in range(groups.num_groups):
             if best[g] == -1:
                 out.append_null()
             else:
@@ -1091,18 +1083,16 @@ struct CountAgg(Aggregation):
         return DynType(int64)
 
     @staticmethod
-    def grouped(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
-    ) raises -> Self.OutArray:
-        var counts = List[Int64](length=num_groups, fill=0)
-        var gv = gids.values()
+    def grouped(groups: Grouping, values: Self.InArray) raises -> Self.OutArray:
+        var counts = List[Int64](length=groups.num_groups, fill=0)
+        var gv = groups.ids.values()
         var has_null = values.null_count() > 0
-        for i in range(len(gids)):
+        for i in range(len(groups.ids)):
             if has_null and not values.is_valid(i):
                 continue
             counts[Int(gv[i])] += 1
-        var out = Int64Builder(num_groups)
-        for g in range(num_groups):
+        var out = Int64Builder(groups.num_groups)
+        for g in range(groups.num_groups):
             out.append(Scalar[int64.native](counts[g]))
         return out.finish()
 
@@ -1115,12 +1105,12 @@ struct CountAgg(Aggregation):
 
     @staticmethod
     def partials(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
+        groups: Grouping, values: Self.InArray
     ) raises -> Tuple[Self.OutArray, Int64Array]:
         """A thread's per-group counts, in both slots of the partial format: as
         the accumulator to merge, and as the valid count that says the group was
         seen at all."""
-        var counts = Self.grouped(gids, values, num_groups)
+        var counts = Self.grouped(groups, values)
         return (counts.copy(), counts.copy())
 
     @staticmethod
@@ -1167,13 +1157,11 @@ struct DistinctAgg[exact: Bool](Aggregation):
         return DynType(int64)
 
     @staticmethod
-    def grouped(
-        gids: Int32Array, values: Self.InArray, num_groups: Int
-    ) raises -> Self.OutArray:
+    def grouped(groups: Grouping, values: Self.InArray) raises -> Self.OutArray:
         comptime if Self.exact:
-            return count_distinct_grouped(gids, values, num_groups)
+            return count_distinct_grouped(groups, values)
         else:
-            return approx_count_distinct_grouped(gids, values, num_groups)
+            return approx_count_distinct_grouped(groups, values)
 
     @staticmethod
     def whole(

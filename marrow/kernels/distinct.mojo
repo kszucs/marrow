@@ -26,6 +26,7 @@ from ..builders import Int64Builder
 from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
 from ..execution import ExecContext
+from .core import Grouping
 from .hashing import rapidhash
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
@@ -164,23 +165,22 @@ def approx_count_distinct(
 
 
 def count_distinct_grouped(
-    gids: Int32Array,
+    groups: Grouping,
     value: DynArray,
-    num_groups: Int,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int64Array:
-    """Exact distinct count of ``value`` per group, over precomputed ``gids``.
+    """Exact distinct count of ``value`` per group, over precomputed ``groups.ids``.
 
     Dedups ``(group_id, value)`` pairs in one ``SwissHashTable``: each pair's
     combined hash is inserted once, and the first time a pair is seen its group's
     counter is bumped. One pass, O(distinct pairs) memory, no per-group set.
     Null values are excluded.
     """
-    var n = len(gids)
+    var n = len(groups.ids)
     # Hash the (group_id, value) pair per row via the struct hasher (per-field
     # rapidhash + combine) — reusing the exact join/group-by hashing path.
     var children = List[DynArray]()
-    children.append(gids.copy())
+    children.append(groups.ids.copy())
     children.append(value.copy())
     var pairs = StructArray(
         dtype=struct_(Field("g", int32), Field("v", value.dtype().copy())),
@@ -194,7 +194,7 @@ def count_distinct_grouped(
     var bids = table.insert_hashes(rapidhash(pairs, ctx), grow_adaptively=True)
 
     var seen = List[Bool](length=table.num_keys(), fill=False)
-    var counts = List[Int64](length=num_groups, fill=0)
+    var counts = List[Int64](length=groups.num_groups, fill=0)
     var has_null = value.null_count() > 0
     for i in range(n):
         if has_null and not value.is_valid(i):
@@ -202,41 +202,40 @@ def count_distinct_grouped(
         var b = Int(bids.unsafe_get(i))
         if not seen[b]:
             seen[b] = True
-            counts[Int(gids.unsafe_get(i))] += 1
+            counts[Int(groups.ids.unsafe_get(i))] += 1
 
-    var out = Int64Builder(num_groups)
-    for g in range(num_groups):
+    var out = Int64Builder(groups.num_groups)
+    for g in range(groups.num_groups):
         out.append(counts[g])
     return out.finish()
 
 
 def approx_count_distinct_grouped(
-    gids: Int32Array,
+    groups: Grouping,
     value: DynArray,
-    num_groups: Int,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int64Array:
     """Approximate distinct count of ``value`` per group via one HyperLogLog
     sketch per group (2**11 registers each). Bounds memory at
-    ``num_groups * 2 KiB`` regardless of per-group cardinality. Nulls excluded.
+    ``groups.num_groups * 2 KiB`` regardless of per-group cardinality. Nulls excluded.
     """
     comptime p = _HLL_P_GROUPED
     comptime m = 1 << p
-    var registers = List[UInt8](length=num_groups * m, fill=0)
+    var registers = List[UInt8](length=groups.num_groups * m, fill=0)
 
     var hv = rapidhash(value, ctx).values()
-    var n = len(gids)
+    var n = len(groups.ids)
     var has_null = value.null_count() > 0
     for i in range(n):
         if has_null and not value.is_valid(i):
             continue
         var h = UInt64(hv[i])
-        var idx = Int(gids.unsafe_get(i)) * m + Int(h >> (64 - p))
+        var idx = Int(groups.ids.unsafe_get(i)) * m + Int(h >> (64 - p))
         var rho = _hll_rho[p](h)
         if rho > registers[idx]:
             registers[idx] = rho
 
-    var out = Int64Builder(num_groups)
-    for g in range(num_groups):
+    var out = Int64Builder(groups.num_groups)
+    for g in range(groups.num_groups):
         out.append(_hll_estimate[p](registers, g * m))
     return out.finish()
