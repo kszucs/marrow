@@ -10,11 +10,59 @@ geometry (`non_null_def`, `child_def`) computed once during the parse walk so
 `assemble` stays a clean recursive walk.
 """
 
+from std.sys import bit_width_of
+
 from .. import dtypes as dt
 from ..schema import Schema
 from ..arrays import DynArray, StructArray, BoolArray, ListArray
 from ..builders import BoolBuilder, PrimitiveBuilder
 from ..buffers import Bitmap
+
+# ---------------------------------------------------------------------------
+# Arrow leaf -> Parquet physical type.
+#
+# One statement of the mapping, consulted by everything that has to know it:
+# the value encoder and bloom hasher (`writer.mojo`) and the statistics decoder
+# (`statistics.mojo`). Each of those used to carry its own dtype ladder --
+# 13, 13 and 22 arms -- restating the same relation and free to drift apart.
+# With the mapping named, each collapses onto `DynType.dispatch_*`, which
+# resolves a runtime dtype to its comptime type.
+# ---------------------------------------------------------------------------
+comptime physical_type[T: dt.PrimitiveType] = DType.int32 if (
+    T.native == DType.int8
+    or T.native == DType.int16
+    or T.native == DType.uint8
+    or T.native == DType.uint16
+) else T.native
+"""The physical type `T` is stored as.
+
+Parquet has no 8- or 16-bit physical type, so narrow ints widen to INT32.
+Everything else uses its own native, which already collapses
+date32/time32/decimal32 onto INT32 and time64/timestamp/decimal64 onto INT64
+without naming any of them."""
+
+comptime is_wide_decimal[T: dt.PrimitiveType] = (
+    T.native == DType.int128 or T.native == DType.int256
+)
+"""DECIMAL wider than 64 bits is FIXED_LEN_BYTE_ARRAY, big-endian two's
+complement, rather than one of the fixed-width physical types."""
+
+comptime flba_width[T: dt.PrimitiveType] = bit_width_of[T.native]() // 8
+"""Byte width of the FIXED_LEN_BYTE_ARRAY `is_wide_decimal` types use."""
+
+
+def has_plain_physical(vt: dt.DynType) -> Bool:
+    """Whether `vt` maps onto a fixed-width Parquet physical type.
+
+    `dispatch_primitive` covers every fixed-width dtype, including `date64`,
+    `duration` and the intervals, which marrow's Parquet layer has never
+    written or read. They are excluded explicitly so that widening a ladder
+    into a dispatch does not silently start accepting them."""
+    return vt.is_primitive() and not (
+        vt.is_date64() or vt.is_duration() or vt.is_interval()
+    )
+
+
 from .format import (
     SchemaElement,
     FileMetaData,

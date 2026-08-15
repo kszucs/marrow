@@ -45,6 +45,29 @@
 
 ### Refactors
 
+- **Q4.3: the Arrow → Parquet physical-type mapping is stated once instead of
+  three times.** `writer._encode_values`, `writer._bloom_hashes` and
+  `statistics.decode` each carried a hand-written dtype ladder — 25, 25 and 22
+  arms — restating the same relation: narrow ints widen to INT32, date32 and
+  time32 and decimal32 ride on INT32, time64/timestamp/decimal64 on INT64,
+  decimal128/256 on a big-endian FIXED_LEN_BYTE_ARRAY. Three copies, free to
+  drift, and `marrow/parquet/` used the `dispatch_*` family nowhere at all.
+
+  `schema.mojo` now names the mapping (`physical_type`, `is_wide_decimal`,
+  `flba_width`) and each ladder collapses to five arms over
+  `DynType.dispatch_primitive` / `dispatch_binarylike`, which resolve a runtime
+  dtype to its comptime type. The statistics decoder no longer names
+  `Time32Scalar`, `Decimal64Scalar` and the rest one at a time either: the
+  dispatch witness carries the unit or precision/scale, so one
+  `PrimitiveScalar[T](value, witness)` retags them all.
+
+  `has_plain_physical` guards the widening: `dispatch_primitive` covers every
+  fixed-width dtype including `date64`, `duration` and the intervals, which this
+  layer has never written or read, and turning a ladder into a dispatch must not
+  silently start accepting them. The reader's 28-arm comptime-gated ladder is
+  deliberate and untouched. Net −54 lines; all four size gates unchanged.
+
+
 - **A5: pruning is a kernel family, not a match on a display string.** Both
   lanes selected their interval rule by comparing `Kernel.name` against
   hand-maintained literals — `values.mojo` against `"and_"`/`"or_"` and five
