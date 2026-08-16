@@ -134,8 +134,11 @@ requires `ScalarType: ArrowScalar`. Top-down keeps every stage compiling.
 - Generic `[T: Array]` callers that added `try`/`raises` for this can drop it.
   `DynArray.slice` / `DynBuilder.reset` stay `raises` — they are ordinary methods
   now, not trait implementations.
-- **Verify:** `precompile` (measured clean), then `pixi run binary_size` — expect
-  to recover most of the recorded **+13,428 bytes**. Record the actual number.
+- **Verify:** `precompile` (measured clean), then the gate. **Outcome: 0 bytes
+  recovered** — see §8. The gate command is
+  `pixi run -e dev python3 benchmarks/binary_size/check_gate.py`;
+  `pixi run binary_size` is `compare.py`, which prints per-module symbol counts
+  and no `__text` totals.
 
 ### Stage 5 — `Value` drops `OutType`
 - `values.mojo:397` — delete `comptime OutType: DataType`.
@@ -276,9 +279,35 @@ trait over `Array ∪ ChunkedArray` (§1.12).
 **Deleted:** 4 conformance entries, 3 companion `comptime` members
 (`ArrayType`, `ScalarType`, `OutType`), 1 trait member (`Value.OutType`),
 2 duplicate `DynArray` members, 1 dead `DynType` placeholder, 2 `raises` and their
-explanatory docstrings, 1 stale docstring, probably 1 compiler workaround.
+explanatory docstrings, 1 stale docstring, 1 compiler workaround (confirmed
+retired — `pymethod[DynScalar.is_valid]()` compiles again).
 
-**Recovered:** ~13 KB of `__text` on the AOT gate (confirm in Stage 4).
+**Recovered: 0 bytes — the predicted ~13 KB did not materialise.**
+
+Measured after Stage 6 by running `check_gate.py` on this branch and on the
+unmodified branch point `71f069c` in a separate worktree:
+
+| gate | `71f069c` | this branch | delta |
+|---|---|---|---|
+| `query_streaming` | 2,607,180 | 2,607,180 | **0** |
+| `query_join` | 2,341,108 | 2,341,108 | **0** |
+| `query_streaming_agg_fused` | 2,089,084 | 2,089,084 | **0** |
+| `query_streaming_agg` | 2,637,536 | 2,637,536 | **0** |
+
+Byte-identical. §2 quoted `8334bf0`'s recorded **+13,428 bytes** for *adding* the
+raising trait requirements and this plan banked on reclaiming it; that was a
+mistake in reasoning, not in execution. That figure was measured under
+`mojo 1.0.0b3`, and a `raises` on a trait requirement only costs anything at
+generic call sites — of which there are none, since nothing outside the boxes is
+generic over `Array` or `Builder`. The conformances were free to hold and are
+free to drop.
+
+**Separately: the size gate is already red on `main`, and not because of this
+work.** `71f069c` measures +95.7% / +65.9% / +56.1% / +41.9% against
+`baseline.json`, which was last recorded at `8504152` — before `04d01e4`
+(Mojo 1.0 / MAX 26.5) and `4a2c0a9` (Mojo 1.1). The baseline is two toolchain
+upgrades stale and needs re-recording by someone who can attribute the jump. Not
+in scope here; flagged because a red gate hides real regressions.
 
 **Lost:** a compile-time drift check between the erased and typed surfaces that
 was already only partially effective.

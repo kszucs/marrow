@@ -129,6 +129,37 @@
     `AggFunction` banner moved from the end of `kernels/aggregate.mojo` up to the
     trait it describes; four `# Main` banners left in `bench_*.mojo` from when
     benches carried a `main()` deleted.
+- **The erased containers no longer conform to the traits they erase.**
+  `DynBuilder`, `DynArray`, `DynScalar` and `DynType` dropped `Builder`,
+  `Array`, `ArrowScalar` and `DataType`. Each exposes the same surface as its
+  own API; nothing is generic over those traits except the boxes' own
+  `_dispatch` closures, so the conformances had no consumer. They were added in
+  `8334bf0` as step 1 of a lane unification that `7d57398` then abandoned.
+
+  The four were load-bearing only for each other, in two closed loops:
+  `DynBuilder.ArrayType` required `DynArray: Array`, which required
+  `DynArray.ScalarType`, which required `DynScalar: ArrowScalar`; and
+  `Value.OutType: DataType` — read by no `[V: Value]` code anywhere — required
+  `DynValue.OutType = DynType`, which required `DynType: DataType`. Removing
+  `Value.OutType` collapsed the second loop entirely.
+
+  What went with them: `DynArray.type()` (a forward to `dtype()`, which ~200
+  call sites use), `DynArray.__init__(ArrayData)` (a delegate to `from_data`),
+  the `ArrayType`/`ScalarType`/`OutType` companion members, and `DynType`'s
+  `offset` placeholder. `Array.slice` and `Builder.reset` are non-raising again
+  — they were widened only to accommodate the erased implementations' variant
+  dispatch. The `pymethod[DynScalar.X]()` compiler crash that `8334bf0` worked
+  around with three hand-written binding wrappers does not recur, confirming the
+  conformance caused it.
+
+  `DynValue: Value` stays. It is the one erasure with a consumer outside its own
+  loop — `BoxedValue` boxes it, and `NullPredicate`/`IsIn`/`WindowFunction` are
+  bound on plain `Value`, so a runtime leaf can feed a fused tree.
+
+  Binary size: **0 bytes on all four gates**, byte-identical to the branch
+  point. `8334bf0` had recorded +13,428 for adding the raising requirements, but
+  a `raises` on a trait requirement only costs anything at generic call sites,
+  and there are none.
 
 - **Migrated 288 of 292 closures off parametric `@__parameter` onto
   value-taking unified closures.** `Benchmark.iter`, `ExecContext.stripe`, the

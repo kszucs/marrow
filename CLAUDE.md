@@ -220,6 +220,22 @@ bumps.
 `var arr: DynArray = my_primitive_array` and
 `var prim: PrimitiveArray[Int64Type] = some_array` both work transparently.
 
+**The erased containers do not conform to the traits they erase.** `DynArray`,
+`DynScalar`, `DynBuilder` and `DynType` expose the same surface as `Array`,
+`ArrowScalar`, `Builder` and `DataType`, but as their own API — they are not
+substitutable for a typed value in generic code, and nothing in the tree asks
+them to be: every `[T: Array]`-style bound lives inside a box's own `_dispatch`.
+They did conform until the `Dyn*` conformance removal; the four were held up
+only by each other's companion members (`ArrayType` → `ScalarType`,
+`Value.OutType` → `DynType`), and dropping them changed no behaviour and no
+binary size. Keep it that way: a box may *hold* trait-bound values, it should
+not *be* one.
+
+The exception is `DynValue: Value`, and it earns it — `Value` is a trait of
+runtime methods plus `OutShape`, which `DynValue` answers truthfully, and the
+conformance is what lets a runtime leaf be an operand of the fused
+`NullPredicate`/`IsIn`/`WindowFunction` nodes.
+
 ### Arrays, builders, scalars
 
 **Arrays** (`marrow/arrays.mojo`):
