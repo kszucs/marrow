@@ -2,7 +2,7 @@
 authors = ["Krisztian Szucs <szucs.krisztian@gmail.com>"]
 channels = [
   "https://prefix.dev/mojo-community",
-  "https://conda.modular.com/max-nightly/",
+  "https://conda.modular.com/max/",
   "conda-forge",
   "https://prefix.dev/pixi-build-backends",
 ]
@@ -17,12 +17,12 @@ version = "0.1.0"
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
 [package.build-dependencies]
-mojo-compiler = "==1.0.0b3.dev2026072406"
-mojo = "==1.0.0b3.dev2026072406"
+mojo-compiler = "==1.0.0"
+mojo = "==1.0.0"
 
 [package.run-dependencies]
-# Mojo nightly builds are compiled against a specific CPython minor version;
-# update the minor bound together with mojo when upgrading.
+# Mojo builds are compiled against a specific CPython minor version; update the
+# minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"
 
 [tasks]
@@ -231,21 +231,24 @@ docker = { features = ["docker"], no-default-feature = true }
 wheel = { features = ["wheel"], solve-group = "default" }
 
 [dependencies]
-mojo = ">=1.0.0b3.dev2026072406,<2"
-# NOTE: this should NOT be required, and was not before
-# mojo 1.0.0b3.dev2026072406 — GPU kernels compiled fine without MAX.  That
-# release made GPU codegen resolve `max.package_root` and hard-error
-# ("please install MAX for accelerator support") when `lib/libmax.dylib` is
-# absent, which trips any build on a machine reporting an accelerator, since
-# `has_accelerator()` is `is_gpu() or _accelerator_arch() != ""`.
-# Minimal repro: a `DeviceContext.enqueue_function[k]` call in a single file.
-# Treat as a toolchain regression: retry dropping this on the next upgrade.
-# MAX uses its own version line; upstream pins the pair together (see the
-# modular release commit "Pin lockfiles to Mojo 1.0.0b3.dev2026072406,
-# MAX 26.5.0.dev2026072406").
-max = "==26.5.0.dev2026072406"
-# Mojo nightly builds are compiled against a specific CPython minor version;
-# update the minor bound together with mojo when upgrading.
+mojo = ">=1.0.0,<2"
+# MAX is a hard dependency, in two independent ways:
+#
+#  1. Since mojo 1.0.0b3.dev2026072406, GPU codegen resolves `max.package_root`
+#     and hard-errors ("please install MAX for accelerator support") when
+#     `lib/libmax.dylib` is absent — which trips any build on a machine
+#     reporting an accelerator, since `has_accelerator()` is
+#     `is_gpu() or _accelerator_arch() != ""`.
+#  2. Since mojo 1.0.0, `DeviceContext`/`DeviceBuffer`/`HostBuffer` live in the
+#     `max.gpu.host` *Mojo* package, not `std.gpu.host`, so the import itself
+#     needs MAX on the search path.
+#
+# (1) alone was once considered a toolchain regression worth retrying without
+# the pin; (2) makes that moot — do not drop it.  MAX uses its own version
+# line; upstream pins the pair together (mojo 1.0.0 ↔ max 26.5.0).
+max = "==26.5.0"
+# Mojo builds are compiled against a specific CPython minor version; update the
+# minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"
 # The mojo-community channel ships a zlib 0.1.0 stub that satisfies no real
 # version constraint; pin to the real conda-forge zlib so that pyarrow's

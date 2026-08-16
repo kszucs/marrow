@@ -1134,7 +1134,7 @@ def struct_array_from_arrays(
 
 def _any_array_str(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynArray]()
-    return PythonObject(String.write(ptr[]))
+    return PythonObject(String(ptr[]))
 
 
 def _array_to_device(self: DynArray, ctx: ExecContext) raises -> DynArray:

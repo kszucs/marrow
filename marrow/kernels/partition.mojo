@@ -12,7 +12,7 @@ thread, collect the results — shared by the hash join (build + probe) and the
 radix group-by path.
 """
 
-from std.algorithm.functional import sync_parallelize
+from max.algorithm.functional import sync_parallelize
 
 from ..arrays import Int32Array, UInt64Array
 from ..buffers import Buffer

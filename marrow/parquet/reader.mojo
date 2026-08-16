@@ -10,7 +10,7 @@ this module is the entire deserialization layer; the metadata / statistics /
 page-index readers reuse the same footer decode without touching column data.
 """
 
-from std.algorithm.functional import sync_parallelize
+from max.algorithm.functional import sync_parallelize
 from std.memory import ArcPointer
 from std.builtin.rebind import downcast
 from std.sys import size_of

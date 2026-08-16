@@ -727,7 +727,7 @@ struct ColumnWriter(Movable):
         meta.total_uncompressed_size = total_uncompressed
         meta.total_compressed_size = total_compressed
         meta.data_page_offset = first_data_offset
-        var encs = [Encoding.RLE.code]
+        var encs: List[Int] = [Encoding.RLE.code]
         if dict_page_offset >= 0:
             meta.dictionary_page_offset = dict_page_offset
             encs.append(Encoding.PLAIN.code)

@@ -8,7 +8,7 @@ which is what made the inconsistency visible.
 """
 
 from std.testing import assert_equal, assert_true
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from ..arrays import BoolArray, Int64Array
 from ..builders import array, BoolBuilder, Int64Builder

@@ -116,7 +116,7 @@ from std.memory import (
 from std.sys.info import simd_byte_width
 from std.sys import size_of
 import std.math as math
-from std.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
+from max.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
 from .views import (
     BufferView,
     BitmapView,
@@ -656,7 +656,7 @@ struct Buffer[*, mut: Bool = False](
 
     # --- Mutability transition ---
 
-    def to_immutable(deinit self: Buffer[mut=True]) -> Buffer[mut=False]:
+    def to_immutable(deinit self) -> Buffer[mut=False] where Self.mut:
         """Consume the mutable buffer and return an immutable Buffer.
 
         For CPU buffers (`alloc_zeroed`, `alloc_uninit`): returns kind=CPU.
@@ -710,6 +710,10 @@ struct Buffer[*, mut: Bool = False](
 
     # --- Write operations (mut=True only) ---
 
+    # TODO(MOCO-4220): `where Self.mut` does not refine `Self` to
+    # `Buffer[mut=True]` in the body, so `swap(self, new)` below cannot
+    # typecheck.  Drop the decorator once the refinement lands.
+    @__allow_legacy_custom_self_type
     def resize[
         I: Intable, //, T: DType = DType.uint8
     ](mut self: Buffer[mut=True], length: I) raises:
@@ -744,15 +748,15 @@ struct Buffer[*, mut: Bool = False](
         T: DType,
         src_origin: Origin,
     ](
-        mut self: Buffer[mut=True],
+        mut self,
         src: BufferView[T, src_origin],
         dst_offset: Int,
         count: Int,
-    ):
+    ) where Self.mut:
         """Copy `count` elements of type T from `src` into self at `dst_offset`.
         """
         unsafe_memcpy(
-            dest=self._ptr.bitcast[Scalar[T]]() + dst_offset,
+            dest=self._ptr.unsafe_mut_cast[True]().bitcast[Scalar[T]]() + dst_offset,
             src=src._data,
             count=count,
         )
@@ -770,7 +774,7 @@ struct Buffer[*, mut: Bool = False](
     @always_inline
     def unsafe_set[
         T: DType = DType.uint8
-    ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
+    ](self, index: Int, value: Scalar[T]) where Self.mut:
         """Write `value` at element `index`, striding by `size_of[T]()`.
 
         **Always type the value.** `T` is inferred from `value`, so a bare
@@ -788,7 +792,7 @@ struct Buffer[*, mut: Bool = False](
         landing eight bytes away from the reads.
         """
         comptime output = Scalar[T]
-        self._ptr.bitcast[output]()[index] = value
+        self._ptr.unsafe_mut_cast[True]().bitcast[output]()[index] = value
 
     # --- Read operations (both modes) ---
 
@@ -839,8 +843,8 @@ struct Buffer[*, mut: Bool = False](
     # --- Transfer (mut=False only) ---
 
     def to_device(
-        self: Buffer[mut=False], ctx: DeviceContext
-    ) raises -> Buffer[mut=False]:
+        self, ctx: DeviceContext
+    ) raises -> Buffer[mut=False] where not Self.mut:
         """Upload this CPU-accessible buffer to the GPU.
 
         Returns a new DEVICE buffer with the same `device_id` as the context
@@ -860,8 +864,8 @@ struct Buffer[*, mut: Bool = False](
         return Buffer.from_device(dev, self._size)
 
     def to_cpu(
-        self: Buffer[mut=False], ctx: DeviceContext
-    ) raises -> Buffer[mut=False]:
+        self, ctx: DeviceContext
+    ) raises -> Buffer[mut=False] where not Self.mut:
         """Download this DEVICE buffer to an owned CPU heap buffer.
 
         HOST (pinned) buffers are already CPU-accessible via `_ptr`; this method
@@ -882,7 +886,7 @@ struct Buffer[*, mut: Bool = False](
         ctx.synchronize()
         return builder^.to_immutable()
 
-    def __eq__(self: Buffer[mut=_], other: Buffer[mut=_]) -> Bool:
+    def __eq__[m: Bool](self, other: Buffer[mut=m]) -> Bool:
         """Compare two buffers byte-by-byte (64-bit chunks for speed)."""
         if self._size != other._size:
             return False
@@ -931,7 +935,7 @@ struct Buffer[*, mut: Bool = False](
 
     def __setitem__[
         T: DType = DType.uint8
-    ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
+    ](self, index: Int, value: Scalar[T]) where Self.mut:
         """Set the byte at `index` to `value`."""
         self._check_bounds[T](index)
         self.unsafe_set[T](index, value)
@@ -1121,7 +1125,7 @@ struct Bitmap[*, mut: Bool = False](
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return self.view(offset, length)
 
-    def __eq__(self: Bitmap[mut=_], other: Bitmap[mut=_]) -> Bool:
+    def __eq__[m: Bool](self, other: Bitmap[mut=m]) -> Bool:
         """Compare two bitmaps over their valid ranges.
 
         Bit comparison has one implementation, `BitmapView.__eq__` (word-level
@@ -1148,31 +1152,31 @@ struct Bitmap[*, mut: Bool = False](
             self._length,
         )
 
-    def set(mut self: Bitmap[mut=True], index: Int):
+    def set(mut self, index: Int) where Self.mut:
         """Set the bit at `index` to 1."""
         self._check_bounds(index)
         self.unsafe_set(index)
 
     @always_inline
-    def unsafe_set(mut self: Bitmap[mut=True], index: Int):
+    def unsafe_set(mut self, index: Int) where Self.mut:
         """Set the bit at `index` to 1."""
         var byte_index = index // 8
         var bit_mask = UInt8(1 << (index % 8))
-        self._buffer._ptr[byte_index] = self._buffer._ptr[byte_index] | bit_mask
+        var ptr = self._buffer._ptr.unsafe_mut_cast[True]()
+        ptr[byte_index] = ptr[byte_index] | bit_mask
 
-    def clear(mut self: Bitmap[mut=True], index: Int):
+    def clear(mut self, index: Int) where Self.mut:
         """Clear the bit at `index` to 0."""
         self._check_bounds(index)
         self.unsafe_clear(index)
 
     @always_inline
-    def unsafe_clear(mut self: Bitmap[mut=True], index: Int):
+    def unsafe_clear(mut self, index: Int) where Self.mut:
         """Clear the bit at `index` to 0."""
         var byte_index = index // 8
         var bit_mask = UInt8(1 << (index % 8))
-        self._buffer._ptr[byte_index] = (
-            self._buffer._ptr[byte_index] & ~bit_mask
-        )
+        var ptr = self._buffer._ptr.unsafe_mut_cast[True]()
+        ptr[byte_index] = ptr[byte_index] & ~bit_mask
 
     def test(self, raw_index: Int) -> Bool:
         """Return True if the bit at `raw_index` (not offset-adjusted) is set.
@@ -1198,13 +1202,13 @@ struct Bitmap[*, mut: Bool = False](
 
     @always_inline
     def __getitem__(
-        self: Bitmap[], slc: ContiguousSlice
-    ) -> BitmapView[origin_of(self)]:
+        self, slc: ContiguousSlice
+    ) -> BitmapView[origin_of(self)] where not Self.mut:
         """Return a zero-copy sub-bitmap view for the given slice."""
         var start, end = slc.indices(self._length)
         return self.slice(start, end - start)
 
-    def __setitem__(mut self: Bitmap[mut=True], index: Int, value: Bool):
+    def __setitem__(mut self, index: Int, value: Bool) where Self.mut:
         """Set or clear the bit at `index`."""
         var i = index if index >= 0 else index + self._length
         self._check_bounds(i)
@@ -1214,8 +1218,8 @@ struct Bitmap[*, mut: Bool = False](
             self.unsafe_clear(i)
 
     def set_range(
-        mut self: Bitmap[mut=True], start: Int, length: Int, value: Bool
-    ):
+        mut self, start: Int, length: Int, value: Bool
+    ) where Self.mut:
         """Set `length` bits starting at `start` to `value`."""
         if length == 0:
             return
@@ -1225,7 +1229,7 @@ struct Bitmap[*, mut: Bool = False](
         var end_byte = end >> 3
         var end_bit = end & 7
         var fill = UInt8(255 if value else 0)
-        var ptr = self._buffer._ptr
+        var ptr = self._buffer._ptr.unsafe_mut_cast[True]()
 
         if start_byte == end_byte:
             var mask = UInt8((1 << end_bit) - 1) & (
@@ -1256,11 +1260,11 @@ struct Bitmap[*, mut: Bool = False](
             unsafe_memset(ptr + start_byte, fill, end_byte - start_byte)
 
     def extend(
-        mut self: Bitmap[mut=True],
+        mut self,
         src: BitmapView[_],
         dst_start: Int,
         length: Int,
-    ):
+    ) where Self.mut:
         """Copy `length` bits from `src` into self at `dst_start`.
 
         Three code paths:
@@ -1270,7 +1274,7 @@ struct Bitmap[*, mut: Bool = False](
         """
         if length == 0:
             return
-        var dst = self._buffer._ptr
+        var dst = self._buffer._ptr.unsafe_mut_cast[True]()
         var dst_offset = dst_start
         var src_ptr = src._data
         var src_offset = src._offset
@@ -1372,12 +1376,15 @@ struct Bitmap[*, mut: Bool = False](
                 )
 
     def extend(
-        mut self: Bitmap[mut=True], src: Bitmap[], dst_start: Int, length: Int
-    ):
+        mut self, src: Bitmap[], dst_start: Int, length: Int
+    ) where Self.mut:
         """Copy `length` bits from `src` into self at `dst_start`."""
         # TODO: do we need extend on view? if not move it here
         self.extend(src.view(0, length), dst_start, length)
 
+    # TODO(MOCO-4220): mirrors `Buffer.resize` above — it delegates there,
+    # which needs a statically-mutable `_buffer`.
+    @__allow_legacy_custom_self_type
     def resize(mut self: Bitmap[mut=True], capacity: Int) raises:
         """Resize the underlying buffer to hold `capacity` bits.
 
@@ -1392,22 +1399,22 @@ struct Bitmap[*, mut: Bool = False](
         return self._buffer.is_device()
 
     def to_device(
-        self: Bitmap[mut=False], ctx: DeviceContext
-    ) raises -> Bitmap[mut=False]:
+        self, ctx: DeviceContext
+    ) raises -> Bitmap[mut=False] where not Self.mut:
         """Upload bitmap to the GPU; returns a new device-resident Bitmap."""
         return Bitmap[mut=False](
             self._buffer.to_device(ctx), length=self._length
         )
 
     def to_cpu(
-        self: Bitmap[mut=False], ctx: DeviceContext
-    ) raises -> Bitmap[mut=False]:
+        self, ctx: DeviceContext
+    ) raises -> Bitmap[mut=False] where not Self.mut:
         """Download bitmap from the GPU to owned CPU heap buffers."""
         return Bitmap[mut=False](self._buffer.to_cpu(ctx), length=self._length)
 
     def to_immutable(
-        deinit self: Bitmap[mut=True], *, length: Int = -1
-    ) -> Bitmap[mut=False]:
+        deinit self, *, length: Int = -1
+    ) -> Bitmap[mut=False] where Self.mut:
         """Consume and freeze the builder into an immutable `Bitmap[]`.
 
         Pass `length` to set the number of meaningful bits explicitly; otherwise

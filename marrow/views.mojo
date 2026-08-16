@@ -26,9 +26,9 @@ from std.memory import bitcast, unsafe_memcpy
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
-from std.algorithm.backend.cpu.parallelize import sync_parallelize
-from std.algorithm.functional import elementwise
-from std.algorithm.reduction import _reduce_generator_wrapper
+from max.algorithm.functional import sync_parallelize
+from max.algorithm.functional import elementwise
+from max.algorithm.reduction import _reduce_generator_wrapper
 from std.math import ceildiv
 from std.utils.index import IndexList
 from std.utils.coord import Coord
@@ -203,11 +203,11 @@ struct BufferView[
 
     @always_inline
     def unsafe_set(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         index: Int,
         value: Scalar[Self.T],
-    ):
-        self._data.store(index, value)
+    ) where Self.mut:
+        self._data.unsafe_mut_cast[True]().store(index, value)
 
     # --- SIMD ---
 
@@ -221,11 +221,11 @@ struct BufferView[
     def store[
         W: Int
     ](
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         index: Int,
         value: SIMD[Self.T, W],
-    ):
-        self._data.store(index, value)
+    ) where Self.mut:
+        self._data.unsafe_mut_cast[True]().store(index, value)
 
     @always_inline
     def gather[W: Int](self, offsets: SIMD[DType.int64, W]) -> SIMD[Self.T, W]:
@@ -238,20 +238,20 @@ struct BufferView[
     def compressed_store[
         W: Int
     ](
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         value: SIMD[Self.T, W],
         mask: SIMD[DType.bool, W],
-    ):
+    ) where Self.mut:
         """Compress-store via LLVM intrinsic: write only mask=True lanes,
         packed sequentially from the start of this view."""
-        _compressed_store(value, self._data, mask)
+        _compressed_store(value, self._data.unsafe_mut_cast[True](), mask)
 
     @always_inline
     def compressed_store_sparse(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         sel_bits: UInt64,
-    ):
+    ) where Self.mut:
         """CTZ scatter: write only set-bit positions. O(popcount).
 
         Best when few bits are set (low popcount).
@@ -265,10 +265,10 @@ struct BufferView[
 
     @always_inline
     def compressed_store_dense(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         sel_bits: UInt64,
-    ):
+    ) where Self.mut:
         """Byte-chunked branchless scatter. O(64).
 
         Processes the 64-bit mask one byte at a time, breaking the serial
@@ -290,10 +290,10 @@ struct BufferView[
     def compressed_store[
         sparse_threshold: Int = 24
     ](
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         sel_bits: UInt64,
-    ) -> Int:
+    ) -> Int where Self.mut:
         """Adaptive compressed store: dispatches to sparse or dense based on
         popcount vs threshold. Returns number of elements written."""
         var cnt = Int(pop_count(sel_bits))
@@ -324,13 +324,13 @@ struct BufferView[
         prefetch(self._data + offset)
 
     def copy_from(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         count: Int,
-    ):
+    ) where Self.mut:
         """Copy `count` elements from `src` into `self`."""
         unsafe_memcpy(
-            dest=self._data.bitcast[UInt8](),
+            dest=self._data.unsafe_mut_cast[True]().bitcast[UInt8](),
             src=src._data.bitcast[UInt8](),
             count=count * size_of[Scalar[Self.T]](),
         )
@@ -400,12 +400,12 @@ struct BufferView[
         )
 
     def copy_from(
-        self: BufferView[mut=True, T=DType.uint8, origin=_],
+        self,
         src: StringSlice[_],
-    ):
+    ) where (Self.mut and Self.T == DType.uint8):
         """Copy bytes from a StringSlice into this view."""
         unsafe_memcpy(
-            dest=self._data.bitcast[Byte](),
+            dest=self._data.unsafe_mut_cast[True]().bitcast[Byte](),
             src=src.unsafe_ptr(),
             count=src.byte_length(),
         )
@@ -415,15 +415,17 @@ struct BufferView[
     # TODO: remove this in favor of the free-function apply with explicit SIMD function parameters
     def apply[
         func: def[W: Int](SIMD[Self.T, W]) thin -> SIMD[Self.T, W]
-    ](self: BufferView[mut=True, T=Self.T, origin=_]):
+    ](self) where Self.mut:
         """Apply a SIMD function in-place over all elements."""
         comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
         var i = 0
         while i + width <= self._length:
-            self._data.store(i, func[width](self._data.load[width=width](i)))
+            var out = self._data.unsafe_mut_cast[True]()
+            out.store(i, func[width](self._data.load[width=width](i)))
             i += width
         while i < self._length:
-            self._data[i] = func[1](self._data[i])
+            var out = self._data.unsafe_mut_cast[True]()
+            out[i] = func[1](self._data[i])
             i += 1
 
     def count[
@@ -618,11 +620,11 @@ struct BitmapView[
 
     @always_inline
     def compressed_store(
-        self: BitmapView[mut=True, origin=_],
+        self,
         bit_offset: Int,
         bits: UInt64,
         count: Int,
-    ):
+    ) where Self.mut:
         """Deposit ``count`` LSBs from ``bits`` at ``bit_offset``.
 
         Uses OR — bitmap must be zero-initialized. Handles arbitrary bit
@@ -729,23 +731,23 @@ struct BitmapView[
     @always_inline
     def store_bytes[
         T: DType, W: Int = 1
-    ](self: BitmapView[mut=True, origin=_], index: Int, val: SIMD[T, W]):
+    ](self, index: Int, val: SIMD[T, W]) where Self.mut:
         """Store W elements of type T into the raw bitmap bytes at ``index``.
 
         **Byte-addressed, and it ignores ``_offset``** — the mirror of
         `load_bytes`, and the same caveats apply. For bit-addressed writes use
         `store[W]`.
         """
-        self._data.bitcast[Scalar[T]]().store[width=W](index, val)
+        self._data.unsafe_mut_cast[True]().bitcast[Scalar[T]]().store[width=W](index, val)
 
     @always_inline
     def store[
         W: Int
     ](
-        self: BitmapView[mut=True, origin=_],
+        self,
         bit_index: Int,
         val: SIMD[DType.bool, W],
-    ):
+    ) where Self.mut:
         """Bit-pack W bools and store into the bitmap at ``bit_index``.
 
         - W divisible by 8: single _pack_bools + bitcast store.
@@ -757,22 +759,19 @@ struct BitmapView[
 
         comptime if W % 8 == 0:
             var packed = _pack_bools(val).reduce_or()
-            var dst = self._data + (bit_index >> 3)
+            var dst = self._data.unsafe_mut_cast[True]() + (bit_index >> 3)
             dst.store(bitcast[DType.uint8, W // 8](packed))
         else:
             var abs_pos = self._offset + bit_index
+            var out = self._data.unsafe_mut_cast[True]()
             comptime for i in range(W):
                 var p = abs_pos + i
                 var byte_idx = p >> 3
                 var bit_off = UInt8(p & 7)
                 if val[i]:
-                    self._data[byte_idx] = self._data[byte_idx] | (
-                        UInt8(1) << bit_off
-                    )
+                    out[byte_idx] = out[byte_idx] | (UInt8(1) << bit_off)
                 else:
-                    self._data[byte_idx] = self._data[byte_idx] & ~(
-                        UInt8(1) << bit_off
-                    )
+                    out[byte_idx] = out[byte_idx] & ~(UInt8(1) << bit_off)
 
     # --- Slicing ---
 
@@ -978,31 +977,34 @@ struct BitmapView[
     # --- Write operations (mut=True only, BitSet-style) ---
 
     @always_inline
-    def set(self: BitmapView[mut=True, origin=_], index: Int):
+    def set(self, index: Int) where Self.mut:
         """Set the bit at ``index`` to 1."""
         self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
-        self._data[byte_index] = self._data[byte_index] | bit_mask
+        var out = self._data.unsafe_mut_cast[True]()
+        out[byte_index] = out[byte_index] | bit_mask
 
     @always_inline
-    def clear(self: BitmapView[mut=True, origin=_], index: Int):
+    def clear(self, index: Int) where Self.mut:
         """Set the bit at ``index`` to 0."""
         self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
-        self._data[byte_index] = self._data[byte_index] & ~bit_mask
+        var out = self._data.unsafe_mut_cast[True]()
+        out[byte_index] = out[byte_index] & ~bit_mask
 
     @always_inline
-    def toggle(self: BitmapView[mut=True, origin=_], index: Int):
+    def toggle(self, index: Int) where Self.mut:
         """Invert the bit at ``index``."""
         self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
-        self._data[byte_index] = self._data[byte_index] ^ bit_mask
+        var out = self._data.unsafe_mut_cast[True]()
+        out[byte_index] = out[byte_index] ^ bit_mask
 
     # --- Byte-level functors for the set operations above.  `apply` takes a
     # SIMD functor, and these are the five `BitmapView` needs; they live here

@@ -150,7 +150,11 @@ comptime _WORDS_PER_BLOCK = 8
 def _block_mask(x: UInt32, mut out: InlineArray[UInt32, 8]):
     """The eight per-word bit masks a value sets/tests within one block."""
     comptime for i in range(8):
-        var y = x * _SALT[i]  # wrapping 32-bit multiply
+        # Read the salt at comptime: `Array` is not `ImplicitlyCopyable`, so
+        # indexing it in a runtime expression would try to materialize the
+        # whole table.
+        comptime salt = _SALT[i]
+        var y = x * salt  # wrapping 32-bit multiply
         out[i] = UInt32(1) << (y >> 27)  # top 5 bits -> a bit in [0, 32)
 
 

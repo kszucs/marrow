@@ -1,6 +1,6 @@
 import std.math as math
 from std.testing import assert_equal, assert_true, assert_false
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from ..buffers import Buffer, DeviceType
 

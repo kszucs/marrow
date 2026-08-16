@@ -12,7 +12,7 @@ from .buffers import (
 
 import std.math as math
 
-from std.gpu import DeviceContext
+from max.gpu.host import DeviceContext
 from .dtypes import (
     DynType,
     Field,

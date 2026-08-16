@@ -15,7 +15,7 @@ convenience on top of it, and the serial / thread-local / radix execution
 strategy is picked from row count + cardinality.
 """
 
-from std.algorithm.functional import sync_parallelize
+from max.algorithm.functional import sync_parallelize
 
 from ..arrays import (
     StructArray,

@@ -11,7 +11,7 @@ so every assertion passes on a context that has already lost its device.
 """
 
 from std.testing import assert_true, assert_false, assert_equal
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
 from ...execution import ExecContext
 

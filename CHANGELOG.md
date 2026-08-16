@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **Upgraded to Mojo 1.0.0 / MAX 26.5.0** (from the `1.0.0b3.dev2026072406`
+  nightly), switching the channel from `max-nightly` to `max`. The breaking
+  half of the 1.0 stabilization push:
+
+  - `DeviceContext`, `DeviceBuffer` and `HostBuffer` moved from `std.gpu.host`
+    to the **`max.gpu.host`** Mojo package, and `sync_parallelize`,
+    `elementwise` and `_reduce_generator_wrapper` from `std.algorithm.*` to
+    **`max.algorithm.*`**. `get_gpu_target` and `vectorize` stayed in `std`.
+    MAX is now a load-bearing *import* dependency, not just a codegen one.
+  - A method's `self` must have type `Self`. The 37 methods that spelled a
+    custom `self` type to select the mutable or immutable instantiation of
+    `Buffer` / `Bitmap` / `BufferView` / `BitmapView` now use a trailing
+    `where Self.mut` (or `where not Self.mut`) clause instead, and the two
+    `__eq__` pairs take an explicit `[m: Bool]` parameter.
+  - A `where Self.mut` clause constrains the instantiation but does **not**
+    refine `Self.mut` to `True` inside the body (upstream MOCO-4220), so a
+    write through an origin-typed field still sees a symbolic origin. Each
+    write site now casts with `unsafe_mut_cast[True]()`, the same workaround
+    the standard library uses in `Span.fill`. `Buffer.resize` and
+    `Bitmap.resize` swap whole buffer *values* rather than writing through a
+    pointer, which the cast cannot express; they keep a custom `self` type
+    behind the temporary `@__allow_legacy_custom_self_type` escape hatch, as
+    `Span.unsafe_swap_elements` does upstream.
+  - Static `String.write(...)` was removed; all 15 call sites use the
+    equivalent `String(...)` constructor.
+  - A list expression now builds an `Array`, not a `List`, so the nine
+    unannotated list literals that fed a `List` parameter are now spelled
+    `var x: List[T] = [...]`. `Array` also lost `ImplicitlyCopyable`, so the
+    bloom filter's comptime salt table is read at comptime rather than
+    materialized per call.
+
 ### Fixes
 
 - **`cast` had no map arm**, so `map<string, int64> → map<string, int32>` raised

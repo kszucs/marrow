@@ -35,7 +35,7 @@ paths.  It is NOT stored inside DynArray.
 
 from std.memory import OwnedPointer
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.utils import Variant
@@ -412,7 +412,7 @@ struct NullArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return null
@@ -494,7 +494,7 @@ struct BoolArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return bool_
@@ -738,7 +738,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return self.dtype.copy().to_dyn()
@@ -976,7 +976,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -1190,7 +1190,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -1403,7 +1403,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         Matches PyArrow's ``MapArray.from_arrays(offsets, keys, items)``. The
         entries struct is built non-nullable with a required key, then the
         offsets fold it into a map (`ListArray.from_arrays(...).to_map()`)."""
-        var entry_fields = [
+        var entry_fields: List[Field] = [
             field("key", keys.dtype(), nullable=False),
             field("value", items.dtype(), nullable=True),
         ]
@@ -1504,7 +1504,7 @@ struct FixedSizeListArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -1720,7 +1720,7 @@ struct FixedSizeBinaryArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return FixedSizeBinaryType(self.byte_width).to_dyn()
@@ -1876,7 +1876,7 @@ struct StructArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -2164,7 +2164,7 @@ struct DictionaryArray(Array):
         return self._length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return self._dtype.copy()

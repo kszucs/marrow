@@ -495,12 +495,12 @@ def _record_batch_sort_by(
 
 def _record_batch_str(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return PythonObject(String.write(ptr[]))
+    return PythonObject(String(ptr[]))
 
 
 def _table_str(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
-    return PythonObject(String.write(ptr[]))
+    return PythonObject(String(ptr[]))
 
 
 # ---------------------------------------------------------------------------

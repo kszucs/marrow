@@ -26,8 +26,8 @@ Implicit conversions from ``Optional[DeviceContext]`` keep all existing
 call sites working without source changes.
 """
 
-from std.algorithm.functional import sync_parallelize
-from std.gpu.host import DeviceContext
+from max.algorithm.functional import sync_parallelize
+from max.gpu.host import DeviceContext
 from std.math import ceildiv
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
