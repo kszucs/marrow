@@ -317,12 +317,11 @@ def _radix_sort_indices[
         # (shared with the radix partitioner, cf. ``radix_histogram``).
         var ka_h = key_a.view[DType.uint64](0, n)
 
-        @__parameter
-        def bucket_of(i: Int) -> Int:
+        def bucket_of(i: Int) {imm} -> Int:
             return Int((ka_h.unsafe_get(i) >> shift) & mask)
 
-        var offsets = radix_histogram[bucket_of](
-            n, bucket_count, ctx, _PARALLEL_THRESHOLD
+        var offsets = radix_histogram(
+            n, bucket_count, bucket_of, ctx, _PARALLEL_THRESHOLD
         )
         var write_offsets = offsets[0].copy()
         ref bucket_start = offsets[1]
@@ -347,8 +346,9 @@ def _radix_sort_indices[
         var ib_s = idx_b.view[DType.int32](0, n)
 
         @always_inline
-        @__parameter
-        def scatter_worker(t: Int, start: Int, end: Int):
+        def scatter_worker(
+            t: Int, start: Int, end: Int
+        ) {mut write_offsets, imm}:
             var base = t * bucket_count
             for i in range(start, end):
                 var b = Int((ka_s.unsafe_get(i) >> shift) & mask)
@@ -357,7 +357,7 @@ def _radix_sort_indices[
                 ib_s.unsafe_set(pos, ia_s.unsafe_get(i))
                 write_offsets[base + b] = pos + 1
 
-        ctx.stripe[scatter_worker](n, _PARALLEL_THRESHOLD)
+        ctx.stripe(n, scatter_worker, _PARALLEL_THRESHOLD)
 
         # Swap A ↔ B so the next pass always reads from "current A".
         var tmp_key = key_a^
@@ -422,8 +422,7 @@ struct SortIndices(Kernel):
             )
         elif dt.is_binary_like():
 
-            @__parameter
-            def binarylike[T: BinaryLikeType](d: T) raises -> Int32Array:
+            def binarylike[T: BinaryLikeType](d: T) raises {imm} -> Int32Array:
                 return SortIndices.apply(
                     array.as_binary_like[T](),
                     ascending,
@@ -432,7 +431,7 @@ struct SortIndices(Kernel):
                     ctx,
                 )
 
-            result = dt.dispatch_binarylike[binarylike]()
+            result = dt.dispatch_binarylike(binarylike)
         elif dt.is_dictionary():
             # Order by the *decoded* values: dictionary index order is an
             # encoding artefact (`ordered=False` is the norm), not a value order.
@@ -454,13 +453,12 @@ struct SortIndices(Kernel):
             # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
             # separate numeric/decimal128/decimal256 arms this replaces were
             # three more spellings of this one call.
-            @__parameter
-            def primitive[T: PrimitiveType](d: T) raises -> Int32Array:
+            def primitive[T: PrimitiveType](d: T) raises {imm} -> Int32Array:
                 return SortIndices.apply(
                     array.as_primitive[T](), ascending, nulls_first, stable, ctx
                 )
 
-            result = dt.dispatch_primitive[primitive]()
+            result = dt.dispatch_primitive(primitive)
         else:
             raise Self.error(t"unsupported dtype {dt}")
 

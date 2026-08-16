@@ -75,15 +75,16 @@ def _scale_by_two[
     them — pointer + length — to the GPU before elementwise launches the kernel.
     """
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+    def process[
+        W: Int, alignment: Int = 1
+    ](coord: Coord) {var src, var dst} -> None:
         var i = Int(coord[0].value())
         dst.store[W](i, src.load[W](i) * 2)
 
     comptime if has_accelerator():
         comptime width = simd_width_of[T, target=get_gpu_target()]()
-        elementwise[process, width, target="gpu"](Coord(length), ctx)
+        elementwise[simd_width=width, target="gpu"](process, Coord(length), ctx)
     else:
         raise Error("_scale_by_two: no GPU accelerator available")
 
@@ -107,14 +108,15 @@ def _bits_to_bytes[
     transferred to the GPU via DevicePassable.
     """
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+    def process[
+        W: Int, alignment: Int = 1
+    ](coord: Coord) {var bv, var dst} -> None:
         var i = Int(coord[0].value())
         dst.unsafe_set(i, UInt8(1) if bv.test(i) else UInt8(0))
 
     comptime if has_accelerator():
-        elementwise[process, 1, target="gpu"](Coord(length), ctx)
+        elementwise[simd_width=1, target="gpu"](process, Coord(length), ctx)
     else:
         raise Error("_bits_to_bytes: no GPU accelerator available")
 
@@ -468,9 +470,10 @@ def _eq_i32[
 def test_apply_comparison_to_bitmap_gpu() raises:
     """`apply[BinaryFn → bool]` bit-packs comparison results into a bitmap via GPU.
 
-    This exercises BitmapView.store with SIMD[bool, W] on Metal, which
-    requires the portable _pack_bools (iota + shift + OR-reduce) instead
-    of std.memory.pack_bits (x86 pmovmskb).
+    This exercises BitmapView.store with SIMD[bool, W] on Metal, which uses
+    the portable _pack_bools (iota + shift + OR-reduce). `std.memory.pack_bits`
+    is the obvious-looking alternative and is measurably slower — see the note
+    on _pack_bools.
     """
     var ctx = DeviceContext()
     comptime N = 16  # two full 8-bool groups to exercise the unrolled loop

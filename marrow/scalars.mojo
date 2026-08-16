@@ -35,7 +35,8 @@ from .arrays import (
     DynArray,
 )
 from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
-from .utils import variant_dispatch
+from std.os import abort
+from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
     PrimitiveType,
@@ -610,6 +611,37 @@ struct DynScalar(
 
     var _v: Self.VariantType
 
+    def _dispatch[
+        R: Movable, //, Func: def[T: ArrowScalar](T) -> R
+    ](self, func: Func) -> R:
+        """Run `func` on the active variant member, narrowed to `ArrowScalar`.
+
+        The one narrowing adapter for this type; the dispatch loop itself lives
+        in `variant_dispatch`. `ArrowScalar` has to be named concretely here — a
+        closure type cannot be generic over its own trait bound.
+        """
+
+        def narrow[T: Movable](t: T) {imm} -> R:
+            comptime if conforms_to(T, ArrowScalar):
+                return func(rebind[downcast[T, ArrowScalar]](t))
+            else:
+                abort("DynScalar._dispatch: member is not ArrowScalar")
+
+        return variant_dispatch(self._v, narrow)
+
+    def _dispatch[
+        R: Movable, //, Func: def[T: ArrowScalar](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Raising counterpart of `_dispatch`."""
+
+        def narrow[T: Movable](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, ArrowScalar):
+                return func(rebind[downcast[T, ArrowScalar]](t))
+            else:
+                raise Error("DynScalar._dispatch: member is not ArrowScalar")
+
+        return variant_dispatch_raises(self._v, narrow)
+
     # --- construction ---
 
     @implicit
@@ -628,18 +660,16 @@ struct DynScalar(
     # --- dispatch-based methods ---
 
     def type(self) -> DynType:
-        @__parameter
-        def f[T: ArrowScalar](t: T) -> DynType:
+        def f[T: ArrowScalar](t: T) {imm} -> DynType:
             return t.type()
 
-        return variant_dispatch[ArrowScalar, func=f](self._v)
+        return self._dispatch(f)
 
     def is_valid(self) -> Bool:
-        @__parameter
-        def f[T: ArrowScalar](t: T) -> Bool:
+        def f[T: ArrowScalar](t: T) {imm} -> Bool:
             return t.is_valid()
 
-        return variant_dispatch[ArrowScalar, func=f](self._v)
+        return self._dispatch(f)
 
     def repeat(self, times: Int) raises -> DynArray:
         """Broadcast this scalar into an array of length `times`.
@@ -662,18 +692,16 @@ struct DynScalar(
             return self.as_bool().repeat(times).to_dyn()
         elif dt.is_string_like():
 
-            @__parameter
-            def stringlike[T: StringLikeType](d: T) raises -> DynArray:
+            def stringlike[T: StringLikeType](d: T) raises {imm} -> DynArray:
                 return self.as_string().repeat(times).to_dyn()
 
-            return dt.dispatch_stringlike[stringlike]()
+            return dt.dispatch_stringlike(stringlike)
         elif dt.is_numeric():
 
-            @__parameter
-            def numeric[T: NumericType](d: T) raises -> DynArray:
+            def numeric[T: NumericType](d: T) raises {imm} -> DynArray:
                 return self.as_primitive[T]().repeat(times).to_dyn()
 
-            return dt.dispatch_numeric[numeric]()
+            return dt.dispatch_numeric(numeric)
         else:
             raise Error(t"DynScalar.repeat: unsupported dtype {dt}")
 
@@ -819,18 +847,16 @@ struct DynScalar(
         return self._v == other._v
 
     def write_to[W: Writer](self, mut writer: W):
-        @__parameter
-        def f[T: ArrowScalar](t: T):
+        def f[T: ArrowScalar](t: T) {mut writer, imm}:
             t.write_to(writer)
 
-        variant_dispatch[ArrowScalar, func=f](self._v)
+        self._dispatch(f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
-        @__parameter
-        def f[T: ArrowScalar](t: T):
+        def f[T: ArrowScalar](t: T) {mut writer, imm}:
             t.write_repr_to(writer)
 
-        variant_dispatch[ArrowScalar, func=f](self._v)
+        self._dispatch(f)
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
@@ -854,11 +880,10 @@ struct DynScalar(
             return PythonObject(self.as_bool().value())
         elif dt.is_numeric() or dt.is_interval():
 
-            @__parameter
-            def numeric[T: PrimitiveType](d: T) raises -> PythonObject:
+            def numeric[T: PrimitiveType](d: T) raises {imm} -> PythonObject:
                 return PythonObject(self.as_primitive[T]().value())
 
-            return dt.dispatch_primitive[numeric]()
+            return dt.dispatch_primitive(numeric)
         elif dt.is_string_like():
             return PythonObject(self.as_string().to_string())
         elif dt.is_list():

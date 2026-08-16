@@ -125,13 +125,12 @@ trait BinaryNumericKernel(BinaryKernel):
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
-        @__parameter
-        def leaf[T: NumericType](d: T) raises -> DynArray:
+        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_dyn()
 
-        return left.dtype().dispatch_numeric[leaf]()
+        return left.dtype().dispatch_numeric(leaf)
 
 
 trait BinaryFloatKernel(BinaryKernel):
@@ -145,13 +144,12 @@ trait BinaryFloatKernel(BinaryKernel):
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
-        @__parameter
-        def leaf[T: FloatingType](d: T) raises -> DynArray:
+        def leaf[T: FloatingType](d: T) raises {imm} -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_dyn()
 
-        return left.dtype().dispatch_floating[leaf]()
+        return left.dtype().dispatch_floating(leaf)
 
 
 trait UnaryKernel(Kernel):
@@ -203,11 +201,10 @@ trait UnaryNumericKernel(UnaryKernel):
         array: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        @__parameter
-        def leaf[T: NumericType](d: T) raises -> DynArray:
+        def leaf[T: NumericType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), ctx).to_dyn()
 
-        return array.dtype().dispatch_numeric[leaf]()
+        return array.dtype().dispatch_numeric(leaf)
 
 
 trait UnaryFloatKernel(UnaryKernel):
@@ -218,11 +215,10 @@ trait UnaryFloatKernel(UnaryKernel):
         array: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        @__parameter
-        def leaf[T: FloatingType](d: T) raises -> DynArray:
+        def leaf[T: FloatingType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[T](), ctx).to_dyn()
 
-        return array.dtype().dispatch_floating[leaf]()
+        return array.dtype().dispatch_floating(leaf)
 
 
 # ---------------------------------------------------------------------------
@@ -572,13 +568,12 @@ trait NumericCompareKernel(Kernel):
         # to prune a single row group on a date or decimal predicate. CLAUDE.md's
         # "dispatch on the widest family the typed leaf accepts" rule is for
         # exactly this; `filter`/`take` and `sort` were already fixed.
-        @__parameter
-        def leaf[T: PrimitiveType](d: T) raises -> DynArray:
+        def leaf[T: PrimitiveType](d: T) raises {imm} -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_dyn()
 
-        return left.dtype().dispatch_primitive[leaf]()
+        return left.dtype().dispatch_primitive(leaf)
 
 
 # ---------------------------------------------------------------------------

@@ -108,20 +108,22 @@ struct ColumnWriter(Movable):
             Plain.encode_fixed_size_binary(col.as_fixed_size_binary(), body)
         elif vt.is_binary_like():
 
-            @__parameter
-            def encode_bytes[BT: dt.BinaryLikeType](witness: BT) raises:
+            def encode_bytes[
+                BT: dt.BinaryLikeType
+            ](witness: BT) raises {mut body, imm}:
                 Plain.encode_bytes(col.as_type[BinaryLikeArray[BT]](), body)
 
-            vt.dispatch_binarylike[encode_bytes]()
+            vt.dispatch_binarylike(encode_bytes)
         elif has_plain_physical(vt):
 
-            @__parameter
-            def encode_fixed[T: dt.PrimitiveType](witness: T) raises:
+            def encode_fixed[
+                T: dt.PrimitiveType
+            ](witness: T) raises {mut body, imm}:
                 Plain.encode_primitive[
                     phys=physical_type[T], big_endian=is_wide_decimal[T]
                 ](col.as_primitive[T](), body)
 
-            vt.dispatch_primitive[encode_fixed]()
+            vt.dispatch_primitive(encode_fixed)
         else:
             raise Error("parquet: cannot write column type " + String(vt))
 
@@ -193,15 +195,17 @@ struct ColumnWriter(Movable):
             self._hash_fixed_size_binary(col, hashes)
         elif vt.is_binary_like():
 
-            @__parameter
-            def hash_bytes[BT: dt.BinaryLikeType](witness: BT) raises:
+            def hash_bytes[
+                BT: dt.BinaryLikeType
+            ](witness: BT) raises {mut hashes, imm}:
                 Self._hash_bytes(col.as_type[BinaryLikeArray[BT]](), hashes)
 
-            vt.dispatch_binarylike[hash_bytes]()
+            vt.dispatch_binarylike(hash_bytes)
         elif has_plain_physical(vt):
 
-            @__parameter
-            def hash_fixed[T: dt.PrimitiveType](witness: T) raises:
+            def hash_fixed[
+                T: dt.PrimitiveType
+            ](witness: T) raises {mut hashes, imm}:
                 comptime if is_wide_decimal[T]:
                     Self._hash_flba[width=flba_width[T]](
                         col.as_primitive[T](), hashes
@@ -211,7 +215,7 @@ struct ColumnWriter(Movable):
                         col.as_primitive[T](), hashes
                     )
 
-            vt.dispatch_primitive[hash_fixed]()
+            vt.dispatch_primitive(hash_fixed)
         else:
             # bool, and anything else marrow does not bloom-filter
             return False

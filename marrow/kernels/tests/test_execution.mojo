@@ -160,12 +160,11 @@ def _stripes(
     var ends = List[Int](length=workers, fill=-1)
 
     @always_inline
-    @__parameter
-    def record(wid: Int, start: Int, end: Int):
+    def record(wid: Int, start: Int, end: Int) {mut starts, mut ends, imm}:
         starts[wid] = start
         ends[wid] = end
 
-    ctx.stripe[record](length, align=align)
+    ctx.stripe(length, record, align=align)
     return (starts^, ends^)
 
 
@@ -254,11 +253,10 @@ def test_stripe_wid_indexes_within_stripe_workers() raises:
     var seen = List[Int](length=workers, fill=0)
 
     @always_inline
-    @__parameter
-    def mark(wid: Int, start: Int, end: Int):
+    def mark(wid: Int, start: Int, end: Int) {mut seen, imm}:
         seen[wid] += 1
 
-    ctx.stripe[mark](1000)
+    ctx.stripe(1000, mark)
     # Exactly once each, not "at most once" — the weaker form would also pass if
     # no stripe ran at all.
     assert_equal(workers, 4)
@@ -271,9 +269,8 @@ def test_stripe_zero_length_visits_nothing() raises:
     var total = List[Int](length=1, fill=0)
 
     @always_inline
-    @__parameter
-    def count(wid: Int, start: Int, end: Int):
+    def count(wid: Int, start: Int, end: Int) {mut total, imm}:
         total[0] += end - start
 
-    ExecContext.serial().stripe[count](0)
+    ExecContext.serial().stripe(0, count)
     assert_equal(total[0], 0)

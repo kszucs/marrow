@@ -14,12 +14,11 @@ Example usage::
         b.throughput(BenchMetric.elements, 1_000)
 
         @always_inline
-        @__parameter
-        def call():
+        def call() raises {imm}:
             var r = SumKernel.dispatch(arr)
             keep(r)
 
-        b.iter[call]()
+        b.iter(call)
 
     def main() raises:
         var suite = BenchSuite.discover_benches[__functions_in_module()]()
@@ -70,7 +69,7 @@ struct Benchmark:
 
     Benchmark functions receive this instead of raw ``Bencher``.  Call
     ``b.throughput(metric, count)`` to declare throughput, then use
-    ``b.iter[fn]()`` exactly like ``Bencher``.
+    ``b.iter(fn)`` exactly like ``Bencher``.
     """
 
     var _bencher: Bencher
@@ -91,14 +90,13 @@ struct Benchmark:
 
     # ── Forward all Bencher methods ────────────────────────────────────
 
-    def iter[iter_fn: def() capturing[_] -> None](mut self):
-        self._bencher.iter[iter_fn]()
+    def iter[IterFn: def() -> None](mut self, ref iter_fn: IterFn):
+        self._bencher.iter(iter_fn)
 
-    def iter[iter_fn: def() capturing raises -> None](mut self) raises:
-        self._bencher.iter[iter_fn]()
-
-    def iter_custom[iter_fn: def(Int) raises capturing[_] -> Int](mut self):
-        self._bencher.iter_custom[iter_fn]()
+    def iter[
+        IterFn: def() raises -> None
+    ](mut self, ref iter_fn: IterFn) raises:
+        self._bencher.iter(iter_fn)
 
     def get_num_iters(self) -> Int:
         return self._bencher.num_iters
@@ -141,7 +139,7 @@ struct BenchSuite(Movable):
     - `run()` executes and prints JSON results for pytest consumption
 
     Each benchmark function has the signature `def bench_*(mut b: Bencher) raises`.
-    Inside the function, call `b.iter[fn]()` (or `b.iter_custom`, etc.) to
+    Inside the function, call `b.iter(fn)` to
     time the hot loop — exactly like `std.benchmark.Bench` usage.
     """
 

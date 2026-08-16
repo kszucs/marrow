@@ -26,10 +26,11 @@ dispatch + per-thread histogram overhead would dominate."""
 
 
 def radix_histogram[
-    bucket_of: def(Int) capturing[_] -> Int
+    BucketOf: def(Int) -> Int
 ](
     n: Int,
     num_buckets: Int,
+    bucket_of: BucketOf,
     ctx: ExecContext,
     min_parallel_size: Int = _MIN_PARALLEL_PARTITION_ROWS,
 ) -> Tuple[List[Int], List[Int]]:
@@ -59,13 +60,12 @@ def radix_histogram[
     var hist = List[Int](length=num_threads * num_buckets, fill=0)
 
     @always_inline
-    @__parameter
-    def hist_worker(t: Int, start: Int, end: Int):
+    def hist_worker(t: Int, start: Int, end: Int) {mut hist, imm}:
         var base = t * num_buckets
         for i in range(start, end):
             hist[base + bucket_of(i)] += 1
 
-    ctx.stripe[hist_worker](n, min_parallel_size)
+    ctx.stripe(n, hist_worker, min_parallel_size)
 
     var write_offsets = List[Int](length=num_threads * num_buckets, fill=0)
     var bucket_start = List[Int](length=num_buckets + 1, fill=0)
@@ -197,12 +197,11 @@ struct RadixPartitioner(Movable):
 
         # 1-2. Histogram rows by top-bit partition id + prefix-sum into per-thread
         # write cursors (shared with the radix sort, cf. ``radix_histogram``).
-        @__parameter
-        def bucket_of(i: Int) -> Int:
+        def bucket_of(i: Int) {imm} -> Int:
             return Int(UInt64(src.load[1](i)) >> shift)
 
-        var offsets = radix_histogram[bucket_of](
-            n, p, self.ctx, _MIN_PARALLEL_PARTITION_ROWS
+        var offsets = radix_histogram(
+            n, p, bucket_of, self.ctx, _MIN_PARALLEL_PARTITION_ROWS
         )
         var write_offsets = offsets[0].copy()
         var partition_offsets = offsets[1].copy()  # bucket_start
@@ -221,8 +220,9 @@ struct RadixPartitioner(Movable):
         # allocation (each alloc contends on tcmalloc's page heap
         # spinlock, which showed up as ~11% of worker time in profiling).
         @always_inline
-        @__parameter
-        def scatter_worker(t: Int, start: Int, end: Int):
+        def scatter_worker(
+            t: Int, start: Int, end: Int
+        ) {mut write_offsets, imm}:
             var base = t * p
             for i in range(start, end):
                 var h = UInt64(src.load[1](i))
@@ -232,7 +232,7 @@ struct RadixPartitioner(Movable):
                 hash_view.store[1](pos, h)
                 write_offsets[base + pid] = pos + 1
 
-        self.ctx.stripe[scatter_worker](n, _MIN_PARALLEL_PARTITION_ROWS)
+        self.ctx.stripe(n, scatter_worker, _MIN_PARALLEL_PARTITION_ROWS)
 
         # 5. Freeze buffers once, then expose per-partition slices via
         # ref-counted shares (ArcPointer bumps — O(1)).
@@ -266,8 +266,8 @@ struct RadixPartitioner(Movable):
         # conditionally conforms to it, so an unconstrained `R` makes the
         # slot list linear and unable to be dropped.
         R: Copyable & Deinitable,
-        op: def(Int, Int32Array, UInt64Array) raises capturing[_] -> R,
-    ](self, var hashes: UInt64Array) raises -> List[R]:
+        Op: def(Int, Int32Array, UInt64Array) raises -> R,
+    ](self, var hashes: UInt64Array, op: Op) raises -> List[R]:
         """Run ``op`` on every partition in parallel and collect the results.
 
         Partitions ``hashes`` (one radix pass), then dispatches one worker per
@@ -289,15 +289,25 @@ struct RadixPartitioner(Movable):
         var p = len(partitions)
         var slots = List[Optional[R]](length=p, fill=None)
 
-        @__parameter
-        def worker(i: Int) raises:
-            slots[i] = op(
-                i,
-                partitions[i].row_indices.value().copy(),
-                partitions[i].hashes.copy(),
-            )
+        var worker_err: Optional[Error] = None
 
-        sync_parallelize[worker](p)
+        def worker(i: Int) {mut worker_err, mut slots, imm}:
+            # `sync_parallelize`'s value form takes a non-raising worker, so the
+            # first error is parked and re-raised after the join.
+            try:
+                slots[i] = op(
+                    i,
+                    partitions[i].row_indices.value().copy(),
+                    partitions[i].hashes.copy(),
+                )
+
+            except e:
+                if not worker_err:
+                    worker_err = e
+
+        sync_parallelize(worker, p)
+        if worker_err:
+            raise worker_err.value()
 
         var out = List[R](capacity=p)
         for i in range(p):

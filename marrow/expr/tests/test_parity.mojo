@@ -661,12 +661,11 @@ def test_numeric_rank_agrees_across_lanes() raises:
         ref dt = numerics[i]
         var runtime_rank = _numeric_rank(dt)
 
-        @__parameter
-        def check[T: NumericType](d: T) raises -> Bool:
+        def check[T: NumericType](d: T) raises {imm} -> Bool:
             return _rank[T]() == runtime_rank
 
         assert_true(
-            dt.dispatch_numeric[check](),
+            dt.dispatch_numeric(check),
             String("rank disagreement for ") + String(dt),
         )
 

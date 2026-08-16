@@ -36,11 +36,10 @@ def _bench_int32_to_float64(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(NumericCast.apply[Int32Type, Float64Type, safe=True](src)))
 
-    b.iter[call]()
+    b.iter(call)
     keep(src)
 
 
@@ -66,11 +65,10 @@ def _bench_int64_to_int32_unsafe(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(NumericCast.apply[Int64Type, Int32Type, safe=False](src)))
 
-    b.iter[call]()
+    b.iter(call)
     keep(src)
 
 
@@ -96,11 +94,10 @@ def _bench_dispatch_int64_to_float64(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(cast(src, float64, safe=True)))
 
-    b.iter[call]()
+    b.iter(call)
     keep(src)
 
 
@@ -122,11 +119,10 @@ def _bench_timestamp_upscale(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(cast(src, timestamp(millisecond))))
 
-    b.iter[call]()
+    b.iter(call)
     keep(src)
 
 

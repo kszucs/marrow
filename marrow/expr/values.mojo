@@ -307,7 +307,7 @@ def _union_columns(var acc: List[String], names: List[String]) -> List[String]:
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # The fused drivers. Each takes the node's `State` — resolved once by the caller
-# — and runs one pass, reading it through a `@__parameter` closure handed to
+# — and runs one pass, reading it through a producer closure handed to
 # `views.apply`.
 #
 # Free functions rather than trait default methods so that `V.State` is a single
@@ -325,12 +325,11 @@ def _drive_numeric[
         var length = batch.num_rows()
         var buf = Buffer.alloc_uninit[native](length)
 
-        @__parameter
         @always_inline
-        def producer[W: Int](i: Int) -> SIMD[native, W]:
+        def producer[W: Int](i: Int) {imm} -> SIMD[native, W]:
             return node.lane[W](state, i)
 
-        apply[native, producer](buf.view[native](0, length))
+        apply[native](buf.view[native](0, length), producer)
         var v = node.state_validity(batch, state)
         var arr = PrimitiveArray[V.OutType](
             dtype=V.OutType(),
@@ -350,12 +349,11 @@ def _drive_bool[
     var length = batch.num_rows()
     var bm = Bitmap.alloc_uninit(length)
 
-    @__parameter
     @always_inline
-    def producer[W: Int](i: Int) -> SIMD[DType.bool, W]:
+    def producer[W: Int](i: Int) {imm} -> SIMD[DType.bool, W]:
         return node.lane[W](state, i)
 
-    apply[V.NativeType, producer](bm.view())  # bit-packing overload
+    apply[V.NativeType](bm.view(), producer)  # bit-packing overload
     var v = node.state_validity(batch, state)
     return BoolArray(
         length=length,

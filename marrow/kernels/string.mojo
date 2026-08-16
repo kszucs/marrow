@@ -84,12 +84,11 @@ struct LengthKernel(Kernel):
         # expression layer go through the `apply` family: it owns the SIMD width,
         # the serial/parallel choice and the tail, so a kernel that reaches past
         # it opts out of all three and diverges from every other kernel here.
-        @__parameter
         @always_inline
-        def producer[W: Int](i: Int) -> SIMD[DType.int32, W]:
+        def producer[W: Int](i: Int) {imm} -> SIMD[DType.int32, W]:
             return Self.core(offs.load[W](i + 1), offs.load[W](i))
 
-        apply[DType.int32, producer](out.view[DType.int32](0, n), ctx)
+        apply[DType.int32](out.view[DType.int32](0, n), producer, ctx)
 
         # Propagate the input's validity: a null string yields a null length.
         var vbm: Optional[Bitmap[mut=False]] = None
@@ -113,11 +112,10 @@ struct LengthKernel(Kernel):
         if not dt.is_string_like():
             raise Self.error(t"expected a string array, got {dt}")
 
-        @__parameter
-        def leaf[T: StringLikeType](d: T) raises -> DynArray:
+        def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.dispatch_stringlike[leaf]()
+        return dt.dispatch_stringlike(leaf)
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +154,10 @@ trait StringMapKernel(Kernel):
         if not dt.is_string_like():
             raise Self.error(t"expected a string array, got {dt}")
 
-        @__parameter
-        def leaf[T: StringLikeType](d: T) raises -> DynArray:
+        def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
-        return dt.dispatch_stringlike[leaf]()
+        return dt.dispatch_stringlike(leaf)
 
 
 struct UpperKernel(StringMapKernel):
@@ -262,13 +259,12 @@ struct ConcatKernel(Kernel):
         Self.expect_same_dtype(dt, right.dtype())
         Self.expect_same_length(len(left), len(right))
 
-        @__parameter
-        def leaf[T: StringLikeType](d: T) raises -> DynArray:
+        def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(
                 left.as_binary_like[T](), right.as_binary_like[T]()
             ).to_dyn()
 
-        return dt.dispatch_stringlike[leaf]()
+        return dt.dispatch_stringlike(leaf)
 
     @staticmethod
     def apply[
@@ -368,13 +364,12 @@ trait StringPredicateKernel(Kernel):
         if not dt.is_string_like():
             raise Self.error(t"expected string arrays, got {dt}")
 
-        @__parameter
-        def leaf[T: StringLikeType](d: T) raises -> DynArray:
+        def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(
                 left.as_binary_like[T](), right.as_binary_like[T]()
             ).to_dyn()
 
-        return dt.dispatch_stringlike[leaf]()
+        return dt.dispatch_stringlike(leaf)
 
 
 struct StartsWithKernel(StringPredicateKernel):
@@ -755,11 +750,10 @@ def _dispatch_pattern[
     if not dt.is_string_like():
         raise Error(t"{name}: expected a string array, got {dt}")
 
-    @__parameter
-    def leaf[T: StringLikeType](d: T) raises -> DynArray:
+    def leaf[T: StringLikeType](d: T) raises {imm} -> DynArray:
         return _match_pattern(array.as_binary_like[T](), compiled).to_dyn()
 
-    return dt.dispatch_stringlike[leaf]()
+    return dt.dispatch_stringlike(leaf)
 
 
 struct LikeKernel(StringPredicateKernel):

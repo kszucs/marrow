@@ -18,6 +18,7 @@ from std.memory.alloc import unsafe_alloc
 from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
+from std.builtin.rebind import downcast
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.execution import ExecContext
 from marrow.arrays import (
@@ -608,18 +609,24 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
             raise Error("unsupported type: ", dtype)
 
     def append(mut self, value: PyObjectPtr) raises:
-        @__parameter
-        def f[T: PyConverter](mut t: T) raises:
-            t.append(value)
+        def narrow[T: Movable](mut t: T) raises {imm}:
+            comptime if conforms_to(T, PyConverter):
+                ref c = rebind[downcast[T, PyConverter]](t)
+                c.append(value)
+            else:
+                raise Error("PyConverter dispatch: unsupported member")
 
-        dt.variant_dispatch_raises[PyConverter, func=f](self._v[])
+        dt.variant_dispatch_raises(self._v[], narrow)
 
     def extend(mut self, values: PyObjectPtr) raises:
-        @__parameter
-        def f[T: PyConverter](mut t: T) raises:
-            t.extend(values)
+        def narrow[T: Movable](mut t: T) raises {imm}:
+            comptime if conforms_to(T, PyConverter):
+                ref c = rebind[downcast[T, PyConverter]](t)
+                c.extend(values)
+            else:
+                raise Error("PyConverter dispatch: unsupported member")
 
-        dt.variant_dispatch_raises[PyConverter, func=f](self._v[])
+        dt.variant_dispatch_raises(self._v[], narrow)
 
 
 # ---------------------------------------------------------------------------

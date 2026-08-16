@@ -1,20 +1,29 @@
 """Generic Variant dispatch utilities.
 
-These helpers drive runtime dispatch over a `Variant[*Ts]` without dynamic
-dispatch or vtables.  The active type is detected via `v.isa[T]()` in a
-compile-time loop; the value is then reinterpreted as *Trait* through
-`rebind[downcast[T, Trait]]` (guarded by a `comptime assert conforms_to`
-witness) and forwarded to *func*.
+`variant_dispatch(v, func)` drives runtime dispatch over a `Variant[*Ts]`
+without dynamic dispatch or vtables: the active type is detected via
+`v.isa[T]()` in a compile-time loop and the value is forwarded to `func`.
 
-Three overloads are provided — distinguished by whether *func* raises and
-whether it takes its argument by value or by mutable reference:
+**`func` is bound on `Movable`, not on a trait of the caller's choosing**, and
+that is deliberate rather than a limitation of the loop. A closure type cannot
+be generic over its own trait bound, so a `Trait` parameter here would be
+declarable and never satisfiable (see CLAUDE.md). Binding on `Movable` — which
+`Variant` already requires of every member — removes the parameter entirely and
+leaves *narrowing* to the caller, which is where the trait is concrete anyway:
 
-  variant_dispatch            — *func* is non-raising, argument by ref
-  variant_dispatch_raises     — *func* raises,         argument by ref
-  variant_dispatch_raises     — *func* raises,         argument by mut-ref
+```mojo
+def narrow[T: Movable](t: T) raises {imm} -> R:
+    comptime if conforms_to(T, Array):
+        return func(rebind[downcast[T, Array]](t))
+    else:
+        raise Error("...")
+return variant_dispatch(self._v, narrow)
+```
 
-Note: a single `ref[_] v` overload would unify all three, but the Mojo
-compiler currently crashes when `ref[_]` is used here (tracked as a TODO).
+`DynType`, `DynArray`, `DynScalar` and `DynBuilder` each wrap it in exactly one
+such adapter (`_dispatch`), and `DynType.dispatch_*` narrows a second step to a
+dtype family. `variant_dispatch` takes a non-raising `func`; `variant_dispatch_raises`
+takes a raising one, by value or by mutable reference.
 """
 
 from std.utils import Variant
@@ -266,61 +275,41 @@ def has_accelerator_support[*dtypes: DType]() -> Bool:
 
 
 def variant_dispatch[
-    R: AnyType,
-    //,
-    Trait: type_of(AnyType),
-    *Ts: Movable,
-    func: def[T: Trait](T) capturing[_] -> R,
-](ref v: Variant[*Ts]) -> R:
-    """Dispatch *func* to the active type in *v*, reinterpreted as *Trait*.
-
-    Only the variant types conforming to *Trait* are dispatched (the rest can't
-    satisfy *func*'s `T: Trait` bound); pass a `Trait` every variant type
-    conforms to (e.g. the container's own trait) to cover the full variant.
-    """
+    R: Movable, //, *Ts: Movable, Func: def[T: Movable](T) -> R
+](ref v: Variant[*Ts], func: Func) -> R:
+    """Run `func` on the active member of `v`. See the module docstring."""
     comptime for i in range(len(Ts)):
         comptime T = Ts[i]
-        comptime if conforms_to(T, Trait):
-            if v.isa[T]():
-                return func(rebind[downcast[T, Trait]](v[T]))
+        if v.isa[T]():
+            return func(v[T])
     abort("unreachable: variant_dispatch")
 
 
 def variant_dispatch_raises[
-    R: AnyType,
-    //,
-    Trait: type_of(AnyType),
-    *Ts: Movable,
-    func: def[T: Trait](T) raises capturing[_] -> R,
-](ref v: Variant[*Ts]) raises -> R:
-    """Like *variant_dispatch* but *func* may raise."""
+    R: Movable, //, *Ts: Movable, Func: def[T: Movable](T) raises -> R
+](ref v: Variant[*Ts], func: Func) raises -> R:
+    """Like `variant_dispatch` but `func` may raise.
+
+    Named apart rather than overloaded: a non-raising closure also satisfies
+    `raises`, so a single overload set is ambiguous at every call site.
+    """
     comptime for i in range(len(Ts)):
         comptime T = Ts[i]
-        comptime if conforms_to(T, Trait):
-            if v.isa[T]():
-                return func(rebind[downcast[T, Trait]](v[T]))
-    raise Error(
-        "variant_dispatch_raises: no arm matched the active variant type"
-    )
+        if v.isa[T]():
+            return func(v[T])
+    raise Error("variant_dispatch: no arm matched the active variant type")
 
 
 # TODO: using `ref v` should support both `read` and `mut` args but the compiler crashes
 def variant_dispatch_raises[
-    R: AnyType,
-    //,
-    Trait: type_of(AnyType),
-    *Ts: Movable,
-    func: def[T: Trait](mut T) raises capturing[_] -> R,
-](mut v: Variant[*Ts]) raises -> R:
-    """Like *variant_dispatch_raises* but *func* takes a mutable reference."""
+    R: Movable, //, *Ts: Movable, Func: def[T: Movable](mut T) raises -> R
+](mut v: Variant[*Ts], func: Func) raises -> R:
+    """Like `variant_dispatch` but `func` takes a mutable reference."""
     comptime for i in range(len(Ts)):
         comptime T = Ts[i]
-        comptime if conforms_to(T, Trait):
-            if v.isa[T]():
-                return func(rebind[downcast[T, Trait]](v[T]))
-    raise Error(
-        "variant_dispatch_raises: no arm matched the active variant type"
-    )
+        if v.isa[T]():
+            return func(v[T])
+    raise Error("variant_dispatch: no arm matched the active variant type")
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +317,7 @@ def variant_dispatch_raises[
 #
 # Thin wrappers over `variant_dispatch_raises` that fix the trait to a dtype
 # family, so a kernel's runtime dispatch reads as
-# `array.dtype().dispatch_numeric[leaf]()` instead of an 11-way
+# `array.dtype().dispatch_numeric(leaf)` instead of an 11-way
 # `if dtype == int8 ... elif ...` cascade. `func` receives the runtime dtype
 # resolved to its concrete comptime type `T`; the return type `R` is inferred
 # from `func`. A dtype outside the family raises (the family trait bound filters

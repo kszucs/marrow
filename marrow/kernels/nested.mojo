@@ -48,16 +48,19 @@ struct ArrayLengthKernel(Kernel):
         var offs = array.offsets.view[off](array.offset)
         comptime width = simd_byte_width() // size_of[Scalar[off]]()
 
-        @__parameter
         @always_inline
-        def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) {mut out, imm}:
             var i = idx[0]
             out.view[DType.int32](i).store[W](
                 0, (offs.load[W](i + 1) - offs.load[W](i)).cast[DType.int32]()
             )
 
         @always_inline
-        def lane[W: Int](i: Int):
+        def lane[
+            W: Int
+        ](i: Int) {imm fill,}:
             fill[W, rank=1](IndexList[1](i))
 
         vectorize[width](n, lane)
@@ -81,11 +84,10 @@ struct ArrayLengthKernel(Kernel):
         if not dt.is_list_like():
             raise Self.error(t"expected a list array, got {dt}")
 
-        @__parameter
-        def leaf[T: ListLikeType](d: T) raises -> DynArray:
+        def leaf[T: ListLikeType](d: T) raises {imm} -> DynArray:
             return Self.apply(array.as_list_like[T]()).to_dyn()
 
-        return dt.dispatch_listlike[leaf]()
+        return dt.dispatch_listlike(leaf)
 
 
 struct ArrayContainsKernel(Kernel):
@@ -148,16 +150,14 @@ struct ArrayContainsKernel(Kernel):
         if not list_dt.is_list_like():
             raise Self.error(t"expected a list array, got {list_dt}")
 
-        @__parameter
-        def leaf[V: NumericType](d: V) raises -> DynArray:
+        def leaf[V: NumericType](d: V) raises {imm} -> DynArray:
             # Two nested family walks: the element type picks `V`, the list
             # offset width picks `T`. Neither is a hand-written arm.
-            @__parameter
-            def outer[T: ListLikeType](o: T) raises -> DynArray:
+            def outer[T: ListLikeType](o: T) raises {imm} -> DynArray:
                 return Self.apply(
                     list.as_list_like[T](), elem.as_primitive[V](), ctx
                 ).to_dyn()
 
-            return list_dt.dispatch_listlike[outer]()
+            return list_dt.dispatch_listlike(outer)
 
-        return elem.dtype().dispatch_numeric[leaf]()
+        return elem.dtype().dispatch_numeric(leaf)

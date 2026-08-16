@@ -37,11 +37,10 @@ def _bench_len_only(mut bm: Benchmark, n: Int) raises:
     bm.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(into_array(col("s", string).length().execute(batch), n).length())
 
-    bm.iter[call]()
+    bm.iter(call)
     keep(batch)
 
 
@@ -50,15 +49,14 @@ def _bench_len_plus_one(mut bm: Benchmark, n: Int) raises:
     bm.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(
             into_array(
                 (col("s", string).length() + lit(1, int32)).execute(batch), n
             ).length()
         )
 
-    bm.iter[call]()
+    bm.iter(call)
     keep(batch)
 
 
@@ -81,11 +79,10 @@ def bench_b27_probe_bare_column_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(into_array(col("s", string).execute(batch), 1_000_000).length())
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)
 
 
@@ -96,11 +93,10 @@ def bench_b27_probe_kernel_only_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(LengthKernel.dispatch(arr).length())
 
-    b.iter[call]()
+    b.iter(call)
     keep(arr)
     keep(batch)
 
@@ -116,11 +112,10 @@ def bench_b27_probe_kernel_typed_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(LengthKernel.apply(arr)))
 
-    b.iter[call]()
+    b.iter(call)
     keep(arr)
     keep(batch)
 
@@ -133,8 +128,7 @@ def bench_b27_probe_two_lengths_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(
             into_array(
                 (col("s", string).length() + col("s", string).length()).execute(
@@ -144,7 +138,7 @@ def bench_b27_probe_two_lengths_1m(mut b: Benchmark) raises:
             ).length()
         )
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)
 
 
@@ -154,11 +148,10 @@ def bench_b27_probe_raw_copy_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(batch.columns[0].copy().length())
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)
 
 
@@ -176,15 +169,14 @@ def bench_b27_probe_plain_fused_add_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(
             into_array(
                 (col("a", int32) + lit(1, int32)).execute(batch), 1_000_000
             ).length()
         )
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)
 
 
@@ -201,15 +193,14 @@ def bench_b28_probe_two_columns_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(
             into_array(
                 (col("a", int32) + col("a", int32)).execute(batch), 1_000_000
             ).length()
         )
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)
 
 
@@ -227,8 +218,7 @@ def bench_b28_probe_two_literals_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(
             into_array(
                 (col("a", int32) + (lit(1, int32) + lit(2, int32))).execute(
@@ -238,7 +228,7 @@ def bench_b28_probe_two_literals_1m(mut b: Benchmark) raises:
             ).length()
         )
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)
 
 
@@ -260,22 +250,27 @@ def bench_b28_probe_hoisted_ideal_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
-        # Resolved once, outside the lane -- the whole point.
-        ref src = batch.columns[0].as_int32()
+    def call() raises {
+        imm batch,
+    }:
+        # Resolved once, outside the lane -- the whole point. `src` is an owned
+        # O(1) ref-count bump rather than a `ref` into `batch`: `producer` is a
+        # unified closure, and a capture that reaches through two closure layers
+        # into an interior reference is not expressible.
+        var src = batch.columns[0].as_int32().copy()
         var vals = src.values()
         var out = Buffer.alloc_uninit[int32.native](1_000_000)
 
-        @__parameter
         @always_inline
-        def producer[W: Int](i: Int) -> SIMD[int32.native, W]:
+        def producer[
+            W: Int
+        ](i: Int) {imm vals,} -> SIMD[int32.native, W]:
             return vals.load[W](i) + SIMD[int32.native, W](1)
 
-        apply[int32.native, producer](out.view[int32.native](0, 1_000_000))
+        apply[int32.native](out.view[int32.native](0, 1_000_000), producer)
         keep(out.to_immutable())
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)
 
 
@@ -295,21 +290,19 @@ def bench_a1_spike_state_lane_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         # `prepare` once, outside the lane -- this is the A1 protocol.
         var state = node.prepare(batch)
         var out = Buffer.alloc_uninit[int32.native](1_000_000)
 
-        @__parameter
         @always_inline
-        def producer[W: Int](i: Int) -> SIMD[int32.native, W]:
+        def producer[W: Int](i: Int) {imm} -> SIMD[int32.native, W]:
             return node.vectorwise[W](state, i) + SIMD[int32.native, W](1)
 
-        apply[int32.native, producer](out.view[int32.native](0, 1_000_000))
+        apply[int32.native](out.view[int32.native](0, 1_000_000), producer)
         keep(out.to_immutable())
 
-    b.iter[call]()
+    b.iter(call)
     # `keep(node)` is mandatory, not tidiness: ASAP destruction can free a
     # captured value after the closure is registered and before it runs, and the
     # "assignment was never used" warning on `node` is exactly the tell CLAUDE.md
@@ -346,8 +339,7 @@ def bench_fu7_coalesce_fused_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(
             into_array(
                 (
@@ -357,5 +349,5 @@ def bench_fu7_coalesce_fused_1m(mut b: Benchmark) raises:
             ).length()
         )
 
-    b.iter[call]()
+    b.iter(call)
     keep(batch)

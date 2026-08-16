@@ -42,6 +42,8 @@ from std.utils import Variant
 
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
+from std.builtin.rebind import downcast
+from std.os import abort
 from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
@@ -2407,6 +2409,37 @@ struct DynArray(
 
     var _v: Self.VariantType
 
+    def _dispatch[
+        R: Movable, //, Func: def[T: Array](T) -> R
+    ](self, func: Func) -> R:
+        """Run `func` on the active variant member, narrowed to `Array`.
+
+        The one narrowing adapter for this type; the dispatch loop itself lives
+        in `variant_dispatch`. `Array` has to be named concretely here — a
+        closure type cannot be generic over its own trait bound.
+        """
+
+        def narrow[T: Movable](t: T) {imm} -> R:
+            comptime if conforms_to(T, Array):
+                return func(rebind[downcast[T, Array]](t))
+            else:
+                abort("DynArray._dispatch: member is not Array")
+
+        return variant_dispatch(self._v, narrow)
+
+    def _dispatch[
+        R: Movable, //, Func: def[T: Array](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Raising counterpart of `_dispatch`."""
+
+        def narrow[T: Movable](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, Array):
+                return func(rebind[downcast[T, Array]](t))
+            else:
+                raise Error("DynArray._dispatch: member is not Array")
+
+        return variant_dispatch_raises(self._v, narrow)
+
     # --- construction ---
 
     @implicit
@@ -2456,11 +2489,10 @@ struct DynArray(
     # --- dispatch-based methods ---
 
     def length(self) -> Int:
-        @__parameter
-        def f[T: Array](a: T) -> Int:
+        def f[T: Array](a: T) {imm} -> Int:
             return len(a)
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     comptime ScalarType = DynScalar
     """`Array`'s companion-scalar member. `DynScalar` conforms to `ArrowScalar`,
@@ -2478,25 +2510,22 @@ struct DynArray(
         return self.dtype()
 
     def dtype(self) -> DynType:
-        @__parameter
-        def f[T: Array](a: T) -> DynType:
+        def f[T: Array](a: T) {imm} -> DynType:
             return a.type()
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def null_count(self) -> Int:
-        @__parameter
-        def f[T: Array](a: T) -> Int:
+        def f[T: Array](a: T) {imm} -> Int:
             return a.null_count()
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def is_valid(self, index: Int) -> Bool:
-        @__parameter
-        def f[T: Array](a: T) -> Bool:
+        def f[T: Array](a: T) {imm} -> Bool:
             return a.is_valid(index)
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def is_null(self, index: Int) -> Bool:
         return not self.is_valid(index)
@@ -2507,12 +2536,11 @@ struct DynArray(
         Matches PyArrow's Array.slice(offset, length) API.
         """
 
-        @__parameter
-        def f[T: Array](a: T) raises -> DynArray:
+        def f[T: Array](a: T) raises {imm} -> DynArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def view(self, var dtype: DynType) raises -> DynArray:
         """Reinterpret this array's buffers under a same-layout `dtype`.
@@ -2536,40 +2564,36 @@ struct DynArray(
         Not intended for hot paths — prefer typed downcast methods.
         """
 
-        @__parameter
-        def f[T: Array](a: T) raises -> ArrayData:
+        def f[T: Array](a: T) raises {imm} -> ArrayData:
             return a.to_data()
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def to_device(self, ctx: DeviceContext) raises -> DynArray:
         """Upload this array to the GPU device."""
 
-        @__parameter
-        def f[T: Array](a: T) raises -> DynArray:
+        def f[T: Array](a: T) raises {imm} -> DynArray:
             return a.to_device(ctx)
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def to_cpu(self, ctx: DeviceContext) raises -> DynArray:
         """Download this array from the GPU device to CPU memory."""
 
-        @__parameter
-        def f[T: Array](a: T) raises -> DynArray:
+        def f[T: Array](a: T) raises {imm} -> DynArray:
             return a.to_cpu(ctx)
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def to_dyn(deinit self) -> DynArray:
         """Returns this array as DynArray, transferring ownership."""
         return self^
 
     def write_to[W: Writer](self, mut writer: W):
-        @__parameter
-        def f[T: Array](a: T):
+        def f[T: Array](a: T) {mut writer, imm}:
             a.write_to(writer)
 
-        variant_dispatch[Array, func=f](self._v)
+        self._dispatch(f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -2591,11 +2615,10 @@ struct DynArray(
                 t"index {index} out of bounds for length {self.length()}"
             )
 
-        @__parameter
-        def f[T: Array](a: T) raises -> DynScalar:
+        def f[T: Array](a: T) raises {imm} -> DynScalar:
             return a[index].to_dyn()
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     # --- typed downcasts (zero-cost reference borrows) ---
 

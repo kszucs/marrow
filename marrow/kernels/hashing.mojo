@@ -69,8 +69,7 @@ def _indices_as_int32(indices: DynArray) raises -> Int32Array:
     if dt == int32:
         return indices.as_int32().copy()
 
-    @__parameter
-    def widen[T: IntegerType](d: T) raises -> Int32Array:
+    def widen[T: IntegerType](d: T) raises {imm} -> Int32Array:
         ref src = indices.as_primitive[T]()
         var out = Int32Builder(len(src))
         for i in range(len(src)):
@@ -80,7 +79,7 @@ def _indices_as_int32(indices: DynArray) raises -> Int32Array:
                 out.append_null()
         return out.finish()
 
-    return dt.dispatch_integer[widen]()
+    return dt.dispatch_integer(widen)
 
 
 comptime _h = Scalar[uint64.native]
@@ -314,18 +313,16 @@ struct RapidHash(Kernel):
             return RapidHash.apply(keys.as_bool(), ctx)
         elif dt.is_binary_like():
 
-            @__parameter
-            def binarylike[T: BinaryLikeType](d: T) raises -> UInt64Array:
+            def binarylike[T: BinaryLikeType](d: T) raises {imm} -> UInt64Array:
                 return RapidHash.apply(keys.as_binary_like[T](), ctx)
 
-            return dt.dispatch_binarylike[binarylike]()
+            return dt.dispatch_binarylike(binarylike)
         elif dt.is_list_like():
 
-            @__parameter
-            def listlike[T: ListLikeType](d: T) raises -> UInt64Array:
+            def listlike[T: ListLikeType](d: T) raises {imm} -> UInt64Array:
                 return RapidHash.apply(keys.as_list_like[T](), ctx)
 
-            return dt.dispatch_listlike[listlike]()
+            return dt.dispatch_listlike(listlike)
         elif dt.is_struct():
             return RapidHash.apply(keys.as_struct(), ctx)
         elif dt.is_fixed_size_list():
@@ -358,11 +355,10 @@ struct RapidHash(Kernel):
             # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
             # separate numeric/decimal128/decimal256 arms this replaces were
             # three more spellings of this one call.
-            @__parameter
-            def primitive[T: PrimitiveType](d: T) raises -> UInt64Array:
+            def primitive[T: PrimitiveType](d: T) raises {imm} -> UInt64Array:
                 return RapidHash.apply(keys.as_primitive[T](), ctx)
 
-            return dt.dispatch_primitive[primitive]()
+            return dt.dispatch_primitive(primitive)
         else:
             raise Self.error(t"unsupported dtype {dt}")
 

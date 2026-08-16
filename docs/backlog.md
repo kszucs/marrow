@@ -112,6 +112,21 @@ obvious. Read before planning anything.
   "assignment was never used" warnings on buffers the body writes.
 - **`origin_of(a, b)` is an origin union**, which is what lets a function return
   values borrowed from either of two storages.
+- **A closure type cannot be generic over its own trait bound**, so
+  `variant_dispatch` binds `func` on `Movable` and leaves narrowing to the
+  caller. Do not try to reintroduce a `Trait` parameter.
+- **Two closure arguments to the same call may not both capture mutably**, nor
+  mut+imm over one origin. An API taking several closures over shared mutable
+  state must thread that state through as an explicit `mut` parameter of each
+  closure — which, when there are several callbacks over one object, is a trait
+  (`parquet`'s `LeveledSink`). A state *struct* handed to separate closures does
+  not work: it makes them parametric over the enclosing generic parameter.
+- **macOS needs the Metal toolchain installed separately** —
+  `xcodebuild -downloadComponent MetalToolchain`. Without it every GPU test dies
+  with `Metal Compiler failed to compile metallib`, which reads like a Mojo bug
+  and is not one (a marrow-free three-line `elementwise` program fails
+  identically). This was tracked as B25 and blamed on a backend crash for
+  months; resolved 2026-08-16, `test_views_gpu` is 15/15.
 - **`.claude/worktrees/` contains two stale worktrees** (`docs-revamp`, `q25`) holding pre-Q2.5 `AGG_*` and `reinterpret_array` code.
   Exclude them from every grep or you will get false positives.
 
@@ -163,7 +178,6 @@ whose absence would not stop that claim is Should or below, however appealing.
 | ID | Reason |
 |---|---|
 | **B4** | Needs a hand-assembled BIT_PACKED file; no reference writer emits them |
-| **B25** | Metal backend crash, and every CI job passes `--no-gpu`, so it is unobserved either way |
 | ASAN on Linux | `test.yml if: false`; the macOS job now carries the signal |
 | `interval` YEAR_MONTH/DAY_TIME in archery | pyarrow has no type for either unit and the harness bridges through pyarrow |
 | **M2.5** spill · **M3.1/M3.2** join completeness/reordering · **M3.8** late materialization | Post-M1 by construction — M2 and M3 milestones |
@@ -195,7 +209,6 @@ structurally prevented:
 | ID | Defect | Evidence | Size |
 |---|---|---|---|
 | **B4** | **BIT_PACKED Parquet levels are mis-decoded.** `definition_level_encoding` / `repetition_level_encoding` are parsed (`format.mojo:576-578`) then never consulted — `_data_page_v1` (`reader.mojo:240-270`) applies `Rle.decode` unconditionally, and also reads RLE's 4-byte length prefix, which BIT_PACKED pages do not have. **Blocked on a fixture, not on the fix.** The guard is a few lines, but BIT_PACKED is deprecated: arrow-cpp never writes it and PyArrow exposes no option for it, so there is no reference writer to produce a test file. Doing this means hand-assembling a Parquet file with Thrift page headers declaring BIT_PACKED. Do not land the guard untested — a decode path that silently changes behaviour is exactly what this card is about. | as cited | S fix, M fixture |
-| **B25** | **`test_views_gpu.mojo` fails 13 of 15 with a Metal codegen error**, and has for at least the whole of this branch. Every failure is `error: Metal Compiler failed to compile metallib. Please submit a bug report.` followed by `mojo: error: failed to run the pass manager` — a backend crash, not an assertion. Verified 2026-08-05 at both `d565c1a` and `3c747c0` (pre-block), so nothing in the Q7.4/Q7.3/B8 work caused it. `test_buffers_gpu.mojo` (4/4) and `test_arrays_gpu.mojo` (4/4) pass, so the accelerator itself works — it is these kernels. Compiling all three GPU files as one selection fails the same way, so it is not a combined-unit effect either. **This invalidates an earlier claim in this repo's history that `test_views_gpu` passes 15/15.** Needs: minimise which of the 13 cases trips the backend, then either work around it or file upstream. | `marrow/tests/test_views_gpu.mojo`; `views.mojo` `_apply_dispatch`/`reduce` | M |
 
 ---
 
@@ -383,6 +396,13 @@ capabilities those two milestones require.
 ---
 
 ## 5. Quality debt
+
+### Closure migration — done bar an upstream block
+
+**Done (2026-08-16):** 288 of 292 closures are value-taking. Four remain, in
+`views._reduce_dispatch`; they feed `_reduce_generator_wrapper`, which has one
+definition upstream and it is comptime-`capturing[_]` only. Removing them needs
+an upstream value overload or dropping GPU reduce — not a local change.
 
 Surviving items from the Q/L/V backlogs, with their original IDs kept so git
 history and CHANGELOG references still resolve. Everything else in those files

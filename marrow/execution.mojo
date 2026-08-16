@@ -235,8 +235,14 @@ struct ExecContext(
 
     @always_inline
     def stripe[
-        body: def(Int, Int, Int) capturing[_] -> None
-    ](self, length: Int, min_parallel_size: Int = 32768, align: Int = 1):
+        Body: def(Int, Int, Int) -> None
+    ](
+        self,
+        length: Int,
+        body: Body,
+        min_parallel_size: Int = 32768,
+        align: Int = 1,
+    ):
         """Run ``body(wid, start, end)`` over ``[0, length)``, striped or serial.
 
         ``wid`` is the stripe index, always in ``[0, stripe_workers(length))``.
@@ -273,20 +279,19 @@ struct ExecContext(
         1 for such a body is a silent throughput loss, not a correctness bug,
         which is exactly why it is a parameter rather than an assumption.
 
-        **``body`` may not raise, and widening it is not a small change.**
-        Tried and reverted 2026-07-28. `sync_parallelize` accepts a raising
-        worker only in its *parameter* form (`sync_parallelize[w](n)`), which
-        needs an implicitly-capturing `@__parameter` closure; the *value* form
-        used here takes an explicit capture list and rejects `raises`. Switching
-        to the parameter form compiles — with new "assignment was never used"
-        warnings on the very buffers the body writes — and then **crashes at
-        run time**: the captures are not made and the body reads garbage. The
-        warnings are the tell. `test_partition.mojo`'s coverage assertions catch
-        it immediately, which is what they are for.
+        **``body`` may not raise.** `sync_parallelize`'s value form — the one
+        used here — takes a non-raising worker. A caller whose body genuinely
+        raises should park the first error and re-raise after the join, which is
+        what `GroupBy._thread_local_columns`, `RadixPartitioner.map_partitions`
+        and the Parquet row-group reader do. Do **not** reach for
+        `sync_parallelize`'s parameter form instead: it accepts a raising worker
+        but needs an implicitly-capturing closure whose captures are silently
+        not made, and the body then reads garbage at run time. The tell is an
+        "assignment was never used" warning on a buffer the body writes.
 
-        Consequence: a kernel whose stripe body raises keeps its hand-rolled
-        loop. `GroupBy._thread_local_columns` is the one such caller
-        (`groupby.mojo`) — its worker hashes keys inside the stripe.
+        ``body`` is a **unified closure passed by value**, so it carries an
+        explicit capture list (``{imm}``, ``{mut scratch, imm}``, …) rather than
+        capturing implicitly. Keep ``@always_inline`` on it — see above.
 
         GPU kernels do not use this: ``wants_parallel`` is always False on the
         GPU path, since the device handles its own parallelism, so a caller with
@@ -299,7 +304,7 @@ struct ExecContext(
             @always_inline
             def task(
                 wid: Int,
-            ) {imm chunk, imm length,}:
+            ) {imm chunk, imm length, imm body,}:
                 var start = wid * chunk
                 var end = min(start + chunk, length)
                 # The last stripes are empty when `length < workers`.

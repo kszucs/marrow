@@ -29,6 +29,8 @@ from std.utils import Variant
 
 from .buffers import Buffer, Bitmap
 
+from std.builtin.rebind import downcast
+from std.os import abort
 from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
@@ -313,47 +315,72 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
         else:
             raise Error("unsupported type: ", dtype)
 
+    def _dispatch[
+        R: Movable, //, Func: def[T: Builder](T) -> R
+    ](self, func: Func) -> R:
+        """Run `func` on the active variant member, narrowed to `Builder`.
+
+        The one narrowing adapter for this type; the dispatch loop itself lives
+        in `variant_dispatch`. `Builder` has to be named concretely here — a
+        closure type cannot be generic over its own trait bound.
+        """
+
+        def narrow[T: Movable](t: T) {imm} -> R:
+            comptime if conforms_to(T, Builder):
+                return func(rebind[downcast[T, Builder]](t))
+            else:
+                abort("DynBuilder._dispatch: member is not Builder")
+
+        return variant_dispatch(self._ptr[], narrow)
+
+    def _dispatch_mut[
+        R: Movable, //, Func: def[T: Builder](mut T) raises -> R
+    ](mut self, func: Func) raises -> R:
+        """Mutating, raising counterpart of `_dispatch`."""
+
+        def narrow[T: Movable](mut t: T) raises {imm} -> R:
+            comptime if conforms_to(T, Builder):
+                return func(rebind[downcast[T, Builder]](t))
+            else:
+                raise Error("DynBuilder._dispatch: member is not Builder")
+
+        return variant_dispatch_raises(self._ptr[], narrow)
+
     def length(self) -> Int:
-        @__parameter
-        def f[T: Builder](b: T) -> Int:
+        def f[T: Builder](b: T) {imm} -> Int:
             return b.length()
 
-        return variant_dispatch[Builder, func=f](self._ptr[])
+        return self._dispatch(f)
 
     def null_count(self) -> Int:
-        @__parameter
-        def f[T: Builder](b: T) -> Int:
+        def f[T: Builder](b: T) {imm} -> Int:
             return b.null_count()
 
-        return variant_dispatch[Builder, func=f](self._ptr[])
+        return self._dispatch(f)
 
     def dtype(self) -> DynType:
-        @__parameter
-        def f[T: Builder](b: T) -> DynType:
+        def f[T: Builder](b: T) {imm} -> DynType:
             return b.dtype()
 
-        return variant_dispatch[Builder, func=f](self._ptr[])
+        return self._dispatch(f)
 
     def reserve(mut self, additional: Int) raises:
-        @__parameter
-        def f[T: Builder](mut b: T) raises:
+        def f[T: Builder](mut b: T) raises {imm}:
             b.reserve(additional)
 
-        variant_dispatch_raises[Builder, func=f](self._ptr[])
+        self._dispatch_mut(f)
 
     def append_null(mut self) raises:
-        @__parameter
-        def f[T: Builder](mut b: T) raises:
+        def f[T: Builder](mut b: T) raises {imm}:
             b.append_null()
 
-        variant_dispatch_raises[Builder, func=f](self._ptr[])
+        self._dispatch_mut(f)
 
     def extend(mut self, arr: DynArray) raises:
-        @__parameter
-        def f[T: Builder](mut b: T) raises:
+        def f[T: Builder](mut b: T) raises {imm}:
             b.extend(arr)
 
-        variant_dispatch_raises[Builder, func=f](self._ptr[])
+        self._dispatch_mut(f)
 
     comptime ArrayType = DynArray
     """`Builder`'s companion-array member. This is what `DynArray: Array`
@@ -361,18 +388,16 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
     conformed there was nothing for the erased builder to name."""
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
-        @__parameter
-        def f[T: Builder](mut b: T) raises -> DynArray:
+        def f[T: Builder](mut b: T) raises {imm} -> DynArray:
             return b.finish(shrink_to_fit=shrink_to_fit).to_dyn()
 
-        return variant_dispatch_raises[Builder, func=f](self._ptr[])
+        return self._dispatch_mut(f)
 
     def reset(mut self) raises:
-        @__parameter
-        def f[T: Builder](mut b: T) raises:
+        def f[T: Builder](mut b: T) raises {imm}:
             b.reset()
 
-        variant_dispatch_raises[Builder, func=f](self._ptr[])
+        self._dispatch_mut(f)
 
     # --- typed downcasts (zero-cost reference borrows) ---
 

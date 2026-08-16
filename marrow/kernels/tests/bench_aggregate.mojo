@@ -48,11 +48,10 @@ def bench_sumint64_1k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_sumint64_100k(mut b: Benchmark) raises:
@@ -60,11 +59,10 @@ def bench_sumint64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_sumint64_1m(mut b: Benchmark) raises:
@@ -72,11 +70,10 @@ def bench_sumint64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -89,11 +86,10 @@ def bench_sumfloat64_1k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Float64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_sumfloat64_100k(mut b: Benchmark) raises:
@@ -101,11 +97,10 @@ def bench_sumfloat64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Float64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_sumfloat64_1m(mut b: Benchmark) raises:
@@ -113,11 +108,10 @@ def bench_sumfloat64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Float64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +124,10 @@ def bench_sumnulls_int64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_sumnulls_int64_1m(mut b: Benchmark) raises:
@@ -142,11 +135,10 @@ def bench_sumnulls_int64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(SumKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +151,10 @@ def bench_product_int64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(ProductKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_product_int64_1m(mut b: Benchmark) raises:
@@ -171,11 +162,10 @@ def bench_product_int64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(ProductKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -188,11 +178,10 @@ def bench_minint64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(MinKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_minint64_1m(mut b: Benchmark) raises:
@@ -200,11 +189,10 @@ def bench_minint64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(MinKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_maxint64_100k(mut b: Benchmark) raises:
@@ -212,11 +200,10 @@ def bench_maxint64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(MaxKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_maxint64_1m(mut b: Benchmark) raises:
@@ -224,11 +211,10 @@ def bench_maxint64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(MaxKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_minnulls_int64_1m(mut b: Benchmark) raises:
@@ -236,11 +222,10 @@ def bench_minnulls_int64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(MinKernel.reduce[Int64Type](arr))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------

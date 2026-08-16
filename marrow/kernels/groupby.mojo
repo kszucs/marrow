@@ -448,11 +448,10 @@ struct GroupBy(Movable):
         names its ``Aggregation`` directly and calls ``aggregate``."""
         var box = List[GroupedColumns]()
 
-        @__parameter
-        def run[A: Aggregation]() raises:
+        def run[A: Aggregation]() raises {mut box, imm}:
             box.append(self.aggregate[A](A.from_any(value)))
 
-        F.resolve[run](value.dtype())
+        F.resolve(value.dtype(), run)
         return box[0].copy()
 
     @staticmethod
@@ -493,13 +492,12 @@ struct GroupBy(Movable):
                 self._keys, agg, values, self._ctx
             )
 
-        @__parameter
         def by_column(
             j: Int, groups: Grouping, value: DynArray
-        ) raises -> DynArray:
+        ) raises {imm} -> DynArray:
             return agg.grouped(j, groups, value)
 
-        return self.aggregate_columns[by_column](values)
+        return self.aggregate_columns(values, by_column)
 
     @staticmethod
     def _thread_local_columns[
@@ -525,40 +523,50 @@ struct GroupBy(Movable):
             length=num_threads, fill=None
         )
 
-        @__parameter
-        def worker(t: Int) raises:
-            var start = t * chunk
-            if start >= n:
-                return
-            var length = min(chunk, n - start)
-            var kchunk = keys.slice(start, length)
+        var worker_err: Optional[Error] = None
 
-            var grouper = HashGrouper()
-            var gids = grouper.consume_keys(kchunk)  # group this chunk ONCE
-            var ng = grouper.num_groups()
+        def worker(t: Int) {mut worker_err, mut partials, imm}:
+            # `sync_parallelize`'s value form takes a non-raising worker, so the
+            # first error is parked and re-raised after the join.
+            try:
+                var start = t * chunk
+                if start >= n:
+                    return
+                var length = min(chunk, n - start)
+                var kchunk = keys.slice(start, length)
 
-            var kcols = grouper.key_columns(grouper.key_fields(kchunk))
-            var accs = List[DynArray]()
-            var cnts = List[Int64Array]()
-            for j in range(na):
-                var parts = agg.partials(
-                    j, Grouping(gids.copy(), ng), values[j].slice(start, length)
+                var grouper = HashGrouper()
+                var gids = grouper.consume_keys(kchunk)  # group this chunk ONCE
+                var ng = grouper.num_groups()
+
+                var kcols = grouper.key_columns(grouper.key_fields(kchunk))
+                var accs = List[DynArray]()
+                var cnts = List[Int64Array]()
+                for j in range(na):
+                    var parts = agg.partials(
+                        j,
+                        Grouping(gids.copy(), ng),
+                        values[j].slice(start, length),
+                    )
+                    accs.append(parts[0].copy())
+                    cnts.append(parts[1].copy())
+
+                partials[t] = ThreadPartials(
+                    StructArray(
+                        dtype=keys.dtype.copy(),
+                        length=ng,
+                        nulls=0,
+                        offset=0,
+                        bitmap=None,
+                        children=kcols^,
+                    ),
+                    accs^,
+                    cnts^,
                 )
-                accs.append(parts[0].copy())
-                cnts.append(parts[1].copy())
 
-            partials[t] = ThreadPartials(
-                StructArray(
-                    dtype=keys.dtype.copy(),
-                    length=ng,
-                    nulls=0,
-                    offset=0,
-                    bitmap=None,
-                    children=kcols^,
-                ),
-                accs^,
-                cnts^,
-            )
+            except e:
+                if not worker_err:
+                    worker_err = e
 
         # Hand-rolled rather than `ctx.stripe`, and it has to stay that way:
         # this worker **raises** (it hashes keys inside the stripe), and
@@ -566,7 +574,9 @@ struct GroupBy(Movable):
         # reverted — see the note on `ExecContext.stripe`; the parameter
         # form of `sync_parallelize` that accepts a raising worker needs an
         # implicitly-capturing closure, which miscompiles there.
-        sync_parallelize[worker](num_threads)
+        sync_parallelize(worker, num_threads)
+        if worker_err:
+            raise worker_err.value()
 
         # Merge — re-key every chunk into the global grouper ONCE (shared across
         # columns), then fold each column's partials at the global ids.
@@ -593,8 +603,8 @@ struct GroupBy(Movable):
         return GroupedColumns(key_cols^, agg_cols^)
 
     def aggregate_columns[
-        col_agg: def(Int, Grouping, DynArray) raises capturing[_] -> DynArray
-    ](self, values: List[DynArray]) raises -> GroupedColumns:
+        ColAgg: def(Int, Grouping, DynArray) raises -> DynArray
+    ](self, values: List[DynArray], col_agg: ColAgg) raises -> GroupedColumns:
         """Group the keys once, then emit ``col_agg(j, gids, values[j], ng)`` as
         output column ``j`` — the multi-aggregate driver.
 
@@ -602,19 +612,21 @@ struct GroupBy(Movable):
         partial state can't be merged. (The thread-local *fold* path is
         ``aggregate[A]``, where the aggregation — and therefore its ``merge`` —
         is statically known.)"""
-        return Self._by_partition[col_agg](
+        return Self._by_partition(
             self._keys,
             values,
+            col_agg,
             self._ctx,
             partition=self._strategy != GROUP_SERIAL,
         )
 
     @staticmethod
     def _by_partition[
-        col_agg: def(Int, Grouping, DynArray) raises capturing[_] -> DynArray,
+        ColAgg: def(Int, Grouping, DynArray) raises -> DynArray,
     ](
         keys: StructArray,
         values: List[DynArray],
+        col_agg: ColAgg,
         outer: ExecContext,
         partition: Bool,
     ) raises -> GroupedColumns:
@@ -655,10 +667,9 @@ struct GroupBy(Movable):
         ) if partition else outer.with_threads(1)
         var na = len(values)
 
-        @__parameter
         def group_partition(
             rows: Int32Array, part_hashes: UInt64Array
-        ) raises -> Tuple[Int32Array, List[DynArray]]:
+        ) raises {imm} -> Tuple[Int32Array, List[DynArray]]:
             var grouper = HashGrouper()
             var grouped = grouper.consume_hashes(
                 part_hashes, grow_adaptively=not partition
@@ -694,20 +705,17 @@ struct GroupBy(Movable):
         var parts = List[Tuple[Int32Array, List[DynArray]]]()
         if partition:
 
-            @__parameter
             def radix_partition(
                 _pi: Int, rows: Int32Array, part_hashes: UInt64Array
-            ) raises -> Tuple[Int32Array, List[DynArray]]:
+            ) raises {imm} -> Tuple[Int32Array, List[DynArray]]:
                 return group_partition(rows, part_hashes)
 
             # `ctx` is already the forced-count context here — this branch only
             # runs when `partition` is true.
             parts = RadixPartitioner(
                 num_bits=RADIX_BITS, ctx=ctx.copy()
-            ).map_partitions[
-                Tuple[Int32Array, List[DynArray]], radix_partition
-            ](
-                rapidhash(keys, ctx)
+            ).map_partitions[Tuple[Int32Array, List[DynArray]]](
+                rapidhash(keys, ctx), radix_partition
             )
         else:
             var no_rows = Int32Builder(0)

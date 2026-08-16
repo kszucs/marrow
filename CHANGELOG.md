@@ -4,6 +4,61 @@
 
 ### Refactors
 
+- **Migrated 288 of 292 closures off parametric `@__parameter` onto
+  value-taking unified closures.** `Benchmark.iter`, `ExecContext.stripe`, the
+  `views.apply` family, `DynType.dispatch_*`, the erased
+  `DynArray`/`DynScalar`/`DynBuilder` methods, the Parquet leaf decoders and the
+  aggregate/partition/cast helpers all take their closure as an argument.
+  Explicit capture lists surfaced state the implicit form hid — `{mut
+  write_offsets, imm}` in `sort`'s radix scatter, `{mut writer, imm}` on every
+  `write_to`.
+
+  Three structural changes did the real work, each forced by a compiler limit:
+
+  - **`variant_dispatch` binds `func` on `Movable`, not on a trait parameter.**
+    A closure type cannot be generic over its own trait bound, so the dispatch
+    loop cannot name the caller's trait. Binding on `Movable` — which `Variant`
+    already requires — removes the parameter and leaves narrowing to the caller.
+    `DynType`, `DynArray`, `DynScalar` and `DynBuilder` each wrap it in one
+    adapter instead of hand-rolling the loop. Free: `bench_cast` median +0.2%.
+  - **`parquet`'s `_drive_leveled` takes a `LeveledSink` trait**, not four
+    closures. Sibling closure arguments may not both capture mutably, and all
+    four worked on one builder; passing the state as a parameter makes the
+    callbacks its methods. A state *struct* handed to four closures does not
+    work — it makes them parametric over the leaf's dtype.
+  - **`views.apply` split into five single-purpose functions** —
+    `_cpu_striped` / `_cpu_serial` / `_gpu_launch` / `_apply_dispatch` /
+    `_apply_packed_dispatch`. The distinction is not "is the output packed" but
+    "can this lane run on a device", which `elementwise`'s
+    `RegisterPassable & ImplicitlyCopyable` bound already states.
+
+  `sync_parallelize`'s value form takes a non-raising worker, so the three
+  raising workers (`groupby`, `partition`, Parquet row-groups) now park the
+  first error and re-raise after the join. All workers complete rather than one
+  aborting early.
+
+  **Performance is neutral, measured against a drift reference.** This machine
+  drifts up to ±8% per benchmark, so deltas were normalised against 24 untouched
+  `count_set_bits`/`set_range` rows: median −0.0% over 30 sort/expr/scan
+  benchmarks, worst +1.5% against a ±7.7% same-config floor, with
+  `bench_sort_int32_10k` a reproducible −25%. Binary size max +0.36%.
+  2033 tests pass, 15/15 on GPU.
+
+  Two changes were tried and reverted on evidence: **`std.memory.pack_bits`**
+  (+12-15% on all 18 `bench_pack_bools_*` — ARM has no mask-move instruction;
+  the old comment blamed x86 `pmovmskb`, which is no longer what it is), and
+  `BitmapView.load_bytes`' alignment, which turned out to be drift.
+
+  Four `@__parameter` remain, in `views._reduce_dispatch`. They feed
+  `max.algorithm.reduction._reduce_generator_wrapper`, which has exactly one
+  definition upstream and it is comptime-only — there is no value overload to
+  migrate to.
+
+- **`views.mojo` lost 95 lines** and its raw pointer arithmetic: the ten
+  hand-built `Coord` closures collapsed to one, and the byte-level bitmap
+  applies dropped 15 `unsafe_load` chains and 13 private-field reach-ins in
+  favour of `BitmapView.load_bytes` and a new `BitmapView.offset()`.
+
 - **Upgraded to Mojo 1.1.0.dev2026081605 / MAX 26.6.0.dev2026081605**, from the
   `1.0.0b3.dev2026072406` nightly, via stable 1.0.0. The tree is warning-clean:
   `mojo precompile marrow` and `build_python` both report 0 errors and

@@ -53,11 +53,10 @@ def bench_filter50pct_10k(mut b: Benchmark) raises:
     var mask = _make_mask(10_000, 50)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_filter50pct_100k(mut b: Benchmark) raises:
@@ -65,11 +64,10 @@ def bench_filter50pct_100k(mut b: Benchmark) raises:
     var mask = _make_mask(100_000, 50)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_filter50pct_1m(mut b: Benchmark) raises:
@@ -77,11 +75,10 @@ def bench_filter50pct_1m(mut b: Benchmark) raises:
     var mask = _make_mask(1_000_000, 50)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -94,11 +91,10 @@ def bench_filter10pct_100k(mut b: Benchmark) raises:
     var mask = _make_mask(100_000, 10)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_filter10pct_1m(mut b: Benchmark) raises:
@@ -106,11 +102,10 @@ def bench_filter10pct_1m(mut b: Benchmark) raises:
     var mask = _make_mask(1_000_000, 10)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +118,10 @@ def bench_filter90pct_100k(mut b: Benchmark) raises:
     var mask = _make_mask(100_000, 90)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_filter90pct_1m(mut b: Benchmark) raises:
@@ -135,11 +129,10 @@ def bench_filter90pct_1m(mut b: Benchmark) raises:
     var mask = _make_mask(1_000_000, 90)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -152,11 +145,10 @@ def bench_filter50pct_nulls_100k(mut b: Benchmark) raises:
     var mask = _make_mask(100_000, 50)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
@@ -164,11 +156,10 @@ def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
     var mask = _make_mask(1_000_000, 50)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Filter.apply(arr, mask.values())))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -216,11 +207,10 @@ def _bench_take(mut b: Benchmark, size: Int, ctx: ExecContext) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Take.apply(arr, idx, ctx)))
 
-    b.iter[call]()
+    b.iter(call)
     keep(arr)
     keep(idx)
 
@@ -244,10 +234,9 @@ def bench_take_nulls_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(Take.apply(arr, idx, ExecContext.serial())))
 
-    b.iter[call]()
+    b.iter(call)
     keep(arr)
     keep(idx)

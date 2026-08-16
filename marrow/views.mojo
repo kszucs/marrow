@@ -61,8 +61,14 @@ def _pack_bools[
     uses ``.reduce_or()`` (for a single scalar result) or stores the
     per-lane shifted values directly.
 
-    Uses iota + shift which compiles to standard LLVM ops on all
-    backends including Metal/AIR (no x86-specific pmovmskb).
+    **Faster than `std.memory.pack_bits` here, and that is measured.**
+    `pack_bits` is a single `pop.bitcast` from `<W x i1>`, which looks
+    strictly better and is what an x86 `pmovmskb` compiles to. ARM has no
+    mask-move instruction, so the bitcast lowers to a worse sequence than
+    this one: swapping to it cost **+12-15% on all 18 `bench_pack_bools_*`
+    cases** (w8/w32/w64 x 1k..100m, Apple Silicon, 2026-08-16) with no case
+    improving. Do not "simplify" this to `pack_bits` without re-measuring on
+    the target you care about.
 
     W must be 8, 16, 32, or 64.
     """
@@ -515,6 +521,15 @@ struct BitmapView[
     @always_inline
     def __len__(self) -> Int:
         return self._length
+
+    @always_inline
+    def offset(self) -> Int:
+        """Bit offset of this view into its backing buffer.
+
+        Byte-level readers need it to derive a starting byte and a sub-byte
+        shift; every bit-addressed accessor here applies it for them.
+        """
+        return self._offset
 
     # --- Boolable (any bit set) ---
 
@@ -1235,59 +1250,154 @@ comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
 
 
 @always_inline
+def _cpu_striped[
+    Out: DType, Lane: def[W: Int](Int) -> None
+](length: Int, lane: Lane, ctx: ExecContext):
+    """Run ``lane(i)`` over ``[0, length)`` on the CPU, striped by ``ctx``.
+
+    One ``vectorize`` over a half-open range; ``ctx.stripe`` decides whether it
+    runs on the calling thread or across ``ctx.resolved_num_threads()``
+    workers. Thread count is owned by ``ctx`` — no Mojo-internal heuristic. No
+    ``align``: ``vectorize`` handles its own tail within each stripe.
+    """
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+
+    @always_inline
+    def span(wid: Int, start: Int, end: Int) {imm}:
+        @always_inline
+        def strip[
+            W: Int
+        ](i: Int) {imm start, imm lane,}:
+            lane[W](start + i)
+
+        vectorize[cpu_width](end - start, strip)
+
+    ctx.stripe(length, span)
+
+
+@always_inline
+def _cpu_serial[
+    In: DType, Lane: def[W: Int](Int) -> None
+](length: Int, lane: Lane):
+    """Run ``lane(i)`` over ``[0, length)`` on the calling thread only.
+
+    What a **bit-packed** destination requires: a whole-byte-aligned stride is
+    the only thing keeping parallel workers off each other's read-modify-write,
+    and striping does not preserve it. ``In`` — the *input* dtype — sizes the
+    lane, because a bitmap lane is one bit and cannot size anything.
+    """
+    comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
+
+    @always_inline
+    def whole[
+        W: Int
+    ](i: Int) {imm lane,}:
+        lane[W](i)
+
+    vectorize[cpu_width](length, whole)
+
+
+@always_inline
+def _gpu_launch[
+    Lane: (def[W: Int](Int) -> None) & RegisterPassable & ImplicitlyCopyable,
+    gpu_width: Int,
+](shape: Int, lane: Lane, ctx: ExecContext) raises:
+    """One grid launch of ``lane`` over ``[0, shape)``.
+
+    The only place in this module that talks to ``elementwise``, and therefore
+    the only place that pays for the ``Coord``-shaped, ``alignment``-carrying
+    signature it insists on. Everything upstream is written per element index.
+
+    The ``RegisterPassable & ImplicitlyCopyable`` bound is ``elementwise``'s,
+    and it is load-bearing: a lane closing over host state (an expression node,
+    a `RecordBatch`) satisfies neither, which is precisely the set of lanes
+    that cannot run on a device. Such lanes go straight to `_cpu_striped` /
+    `_cpu_serial` instead.
+    """
+
+    # `lane` is captured **by value**, not `imm`. An `imm` capture is a
+    # reference into the host stack frame; the kernel then dereferences a host
+    # address on the device and silently computes garbage — it did, and there
+    # is no diagnostic: six `test_views_gpu` cases simply returned wrong
+    # values. The `ImplicitlyCopyable` half of `_gpu_launch`'s bound is what
+    # makes the by-value capture legal.
+    var device_lane = lane
+
+    @always_inline
+    def process[
+        W: Int, alignment: Int = 1
+    ](coord: Coord) {var device_lane,} -> None:
+        device_lane[W](Int(coord[0].value()))
+
+    elementwise[simd_width=gpu_width, target="gpu"](
+        process, Coord(shape), ctx.device.value()
+    )
+
+
+@always_inline
 def _apply_dispatch[
     Out: DType,
     gpu_ok: Bool,
-    process: def[W: Int, alignment: Int = 1](Coord) capturing -> None,
-](length: Int, ctx: ExecContext) raises:
-    """Dispatch ``process`` to GPU or CPU (serial / parallel) based on ``ctx``.
+    Lane: (def[W: Int](Int) -> None) & RegisterPassable & ImplicitlyCopyable,
+](length: Int, lane: Lane, ctx: ExecContext) raises:
+    """Run ``lane(i)`` over ``[0, length)`` into a **buffer** destination.
 
     ``gpu_ok`` is the caller's ``has_accelerator_support[...]`` check, passed
     as a comptime ``Bool`` so the GPU branch is dead-code-eliminated when
     unsupported.
 
-    Two execution paths, picked from ``ctx``:
-
-    - **GPU** (``ctx.is_gpu()``) — single grid launch via ``elementwise``.
-    - **CPU** — one ``vectorize`` body handed to ``ctx.stripe``, which runs it
-      on the calling thread or across ``ctx.resolved_num_threads()`` workers.
-      Thread count is owned by ``ctx`` — no Mojo-internal heuristic involved.
+    For a bit-packed destination use `_apply_packed_dispatch`; for a host-only
+    lane call `_cpu_striped` directly.
     """
     if ctx.is_gpu():
         comptime if gpu_ok:
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](
-                Coord(length), ctx.device.value()
+            _gpu_launch[gpu_width=gpu_width](length, lane, ctx)
+        else:
+            raise Error("apply: no GPU accelerator available")
+        return
+
+    _cpu_striped[Out](length, lane, ctx)
+
+
+@always_inline
+def _apply_packed_dispatch[
+    In: DType,
+    gpu_ok: Bool,
+    Lane: (def[W: Int](Int) -> None) & RegisterPassable & ImplicitlyCopyable,
+](length: Int, lane: Lane, ctx: ExecContext) raises:
+    """Run ``lane(i)`` over ``[0, length)`` into a **bit-packed** (bitmap)
+    destination.
+
+    The GPU launch is rounded up to a full ``gpu_width`` chunk so every store
+    is a complete byte. Arrow's 64-byte padding makes the over-write safe; the
+    clamp keeps it inside that padding. The CPU arm is `_cpu_serial` — see
+    there for why it may not stripe.
+    """
+    if ctx.is_gpu():
+        comptime if gpu_ok:
+            comptime gpu_width = max(
+                8, simd_width_of[In, target=get_gpu_target()]()
+            )
+            comptime max_pad = 64 // size_of[Scalar[In]]()
+            _gpu_launch[gpu_width=gpu_width](
+                min(math.align_up(length, gpu_width), length + max_pad),
+                lane,
+                ctx,
             )
         else:
             raise Error("apply: no GPU accelerator available")
         return
 
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
-
-    # One `vectorize` over a half-open range; `ctx.stripe` decides whether it
-    # runs on the calling thread or across workers. No `align`: `vectorize`
-    # handles its own tail within each stripe, which is exactly what the
-    # hand-written pair did.
-    @always_inline
-    @__parameter
-    def span(wid: Int, start: Int, end: Int):
-        @always_inline
-        def lane[
-            W: Int
-        ](i: Int) {imm start,}:
-            process[W](Coord(start + i))
-
-        vectorize[cpu_width](end - start, lane)
-
-    ctx.stripe[span](length)
+    _cpu_serial[In](length, lane)
 
 
 def apply[
     Out: DType,
-    op: def[W: Int](Int) capturing[_] -> SIMD[Out, W],
+    Op: def[W: Int](Int) -> SIMD[Out, W],
 ](
     dst: BufferView[mut=True, Out, _],
+    op: Op,
     ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Fill ``dst[i] = op(i)`` element-wise via the shared CPU serial/parallel
@@ -1298,20 +1408,21 @@ def apply[
     """
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](i))
 
-    _apply_dispatch[Out, False, process](length, ctx)
+    if ctx.is_gpu():
+        raise Error("apply: a producer lane closes over host state")
+    _cpu_striped[Out](length, lane, ctx)
 
 
 def apply[
     In: DType,
-    op: def[W: Int](Int) capturing[_] -> SIMD[DType.bool, W],
+    Op: def[W: Int](Int) -> SIMD[DType.bool, W],
 ](
     dst: BitmapView[mut=True, _],
+    op: Op,
     ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Bit-pack ``dst[i] = op(i)`` from the index — the bitmap counterpart of the
@@ -1323,19 +1434,13 @@ def apply[
     """
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](i))
 
-    comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
-
-    @always_inline
-    def lane[W: Int](i: Int):
-        process[W](Coord(i))
-
-    vectorize[cpu_width](length, lane)
+    if ctx.is_gpu():
+        raise Error("apply: a producer lane closes over host state")
+    _cpu_serial[In](length, lane)
 
 
 def apply[
@@ -1354,24 +1459,23 @@ def apply[
     """
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
-    )
+    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
 
 
 def apply[
     In: DType,
     Out: DType,
-    op: def[W: Int](SIMD[In, W]) capturing[_] -> SIMD[Out, W],
+    Op: (def[W: Int](SIMD[In, W]) -> SIMD[Out, W])
+    & RegisterPassable
+    & ImplicitlyCopyable,
 ](
     src: BufferView[In, _],
     dst: BufferView[mut=True, Out, _],
+    op: Op,
     ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Like the type-mapping unary ``apply`` above, but ``op`` may *capture*
@@ -1379,15 +1483,11 @@ def apply[
     via ``ctx``, so a captured-state map still parallelizes and offloads."""
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
-    )
+    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
 
 
 def apply[
@@ -1404,15 +1504,11 @@ def apply[
     """
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
-    )
+    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
 
 
 def apply[
@@ -1435,40 +1531,11 @@ def apply[
     """
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[In]():
-            comptime gpu_width = max(
-                8, simd_width_of[In, target=get_gpu_target()]()
-            )
-            # Round up to a full gpu_width chunk so every store is a
-            # complete byte (no scalar read-modify-write race on GPU).
-            # Over-read/write is safe thanks to Arrow's 64-byte padding;
-            # clamp so we never exceed it.
-            comptime max_pad = 64 // size_of[Scalar[In]]()
-            var padded = min(
-                math.align_up(length, gpu_width),
-                length + max_pad,
-            )
-
-            elementwise[process, gpu_width, target="gpu"](
-                Coord(padded), ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
-
-        @always_inline
-        def lane[W: Int](i: Int):
-            process[W](Coord(i))
-
-        vectorize[cpu_width](length, lane)
+    _apply_packed_dispatch[In, has_accelerator_support[In]()](length, lane, ctx)
 
 
 def apply[
@@ -1490,35 +1557,11 @@ def apply[
     """
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[In]():
-            comptime gpu_width = max(
-                8, simd_width_of[In, target=get_gpu_target()]()
-            )
-            comptime max_pad = 64 // size_of[Scalar[In]]()
-            var padded = min(
-                math.align_up(length, gpu_width),
-                length + max_pad,
-            )
-            elementwise[process, gpu_width, target="gpu"](
-                Coord(padded), ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
-
-        @always_inline
-        def lane[W: Int](i: Int):
-            process[W](Coord(i))
-
-        vectorize[cpu_width](length, lane)
+    _apply_packed_dispatch[In, has_accelerator_support[In]()](length, lane, ctx)
 
 
 def apply[
@@ -1532,13 +1575,11 @@ def apply[
     """Apply a bool-to-Out unary op from a BitmapView into a BufferView."""
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
+    _apply_dispatch[Out, has_accelerator_support[Out]()](length, lane, ctx)
 
 
 def apply[
@@ -1554,15 +1595,11 @@ def apply[
     """Apply a masked SIMD op element-wise: op(values, validity) into dst."""
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
-    )
+    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
 
 
 def apply[
@@ -1577,13 +1614,11 @@ def apply[
     """Apply a masked bool-to-Out op: op(bits, validity) into dst."""
     var length = len(dst)
 
-    @__parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
+    _apply_dispatch[Out, has_accelerator_support[Out]()](length, lane, ctx)
 
 
 def apply[
@@ -1600,12 +1635,11 @@ def apply[
     GPU support is not yet implemented; ctx is reserved for future use.
     """
     # TODO: GPU bitmap op
-    var byte_start = src._offset >> 3
-    var bit_shift = src._offset & 7
+    var byte_start = src.offset() >> 3
+    var bit_shift = src.offset() & 7
     var rshift = UInt8(bit_shift)
     var lshift = UInt8(8 - bit_shift)
-    var out_bytes = (src._length + 7) >> 3
-    var data = src._data
+    var out_bytes = (len(src) + 7) >> 3
     comptime cpu_width = simd_width_of[DType.uint8]()
 
     if out_bytes == 0:
@@ -1616,14 +1650,9 @@ def apply[
         @always_inline
         def process_zero[
             W: Int
-        ](i: Int) {imm dst, imm data, imm byte_start,}:
+        ](i: Int) {imm dst, imm src, imm byte_start,}:
             dst.store_bytes[DType.uint8, W](
-                i,
-                op[W](
-                    (
-                        (data.unsafe_offset(byte_start)).unsafe_offset(i)
-                    ).unsafe_load[width=W]()
-                ),
+                i, op[W](src.load_bytes[DType.uint8, W](byte_start + i))
             )
 
         vectorize[cpu_width](out_bytes, process_zero)
@@ -1637,15 +1666,9 @@ def apply[
         @always_inline
         def process_shifted[
             W: Int
-        ](i: Int) {imm dst, imm data, imm byte_start, imm rshift, imm lshift,}:
-            var lo = (
-                (data.unsafe_offset(byte_start)).unsafe_offset(i)
-            ).unsafe_load[width=W]()
-            var hi = (
-                (
-                    (data.unsafe_offset(byte_start)).unsafe_offset(i)
-                ).unsafe_offset(1)
-            ).unsafe_load[width=W]()
+        ](i: Int) {imm dst, imm src, imm byte_start, imm rshift, imm lshift,}:
+            var lo = src.load_bytes[DType.uint8, W](byte_start + i)
+            var hi = src.load_bytes[DType.uint8, W](byte_start + i + 1)
             dst.store_bytes[DType.uint8, W](
                 i, op[W]((lo >> rshift) | (hi << lshift))
             )
@@ -1654,19 +1677,11 @@ def apply[
 
     # Last output byte: read hi only when the view's bits span into the next
     # source byte, avoiding a read past the end of source data.
-    var last_lo = (
-        (data.unsafe_offset(byte_start)).unsafe_offset(bulk)
-    ).unsafe_load[width=1]()
-    var last_result = last_lo >> rshift
-    var remaining_bits = src._length - bulk * 8
+    var last_result = src.load_bytes[DType.uint8](byte_start + bulk) >> rshift
+    var remaining_bits = len(src) - bulk * 8
     if remaining_bits > 8 - bit_shift:
         last_result = last_result | (
-            (
-                (
-                    (data.unsafe_offset(byte_start)).unsafe_offset(bulk)
-                ).unsafe_offset(1)
-            ).unsafe_load[width=1]()
-            << lshift
+            src.load_bytes[DType.uint8](byte_start + bulk + 1) << lshift
         )
     dst.store_bytes[DType.uint8, 1](bulk, op[1](last_result))
 
@@ -1689,17 +1704,15 @@ def apply[
         raise Error("BitmapView lengths must match")
 
     # TODO: GPU bitmap op
-    var byte_start_a = lhs._offset >> 3
-    var bit_shift_a = lhs._offset & 7
-    var byte_start_b = rhs._offset >> 3
-    var bit_shift_b = rhs._offset & 7
+    var byte_start_a = lhs.offset() >> 3
+    var bit_shift_a = lhs.offset() & 7
+    var byte_start_b = rhs.offset() >> 3
+    var bit_shift_b = rhs.offset() & 7
     var rs_a = UInt8(bit_shift_a)
     var ls_a = UInt8(8 - bit_shift_a)
     var rs_b = UInt8(bit_shift_b)
     var ls_b = UInt8(8 - bit_shift_b)
-    var out_bytes = (lhs._length + 7) >> 3
-    var src_a = lhs._data
-    var src_b = rhs._data
+    var out_bytes = (len(lhs) + 7) >> 3
     comptime cpu_width = simd_width_of[DType.uint8]()
 
     if out_bytes == 0:
@@ -1712,20 +1725,16 @@ def apply[
             W: Int
         ](i: Int) {
             imm dst,
-            imm src_a,
+            imm lhs,
             imm byte_start_a,
-            imm src_b,
+            imm rhs,
             imm byte_start_b,
         }:
             dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
-                    (
-                        (src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)
-                    ).unsafe_load[width=W](),
-                    (
-                        (src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)
-                    ).unsafe_load[width=W](),
+                    lhs.load_bytes[DType.uint8, W](byte_start_a + i),
+                    rhs.load_bytes[DType.uint8, W](byte_start_b + i),
                 ),
             )
 
@@ -1743,31 +1752,19 @@ def apply[
             W: Int
         ](i: Int) {
             imm dst,
-            imm src_a,
+            imm lhs,
             imm byte_start_a,
-            imm src_b,
+            imm rhs,
             imm byte_start_b,
             imm rs_a,
             imm ls_a,
             imm rs_b,
             imm ls_b,
         }:
-            var lo_a = (
-                (src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)
-            ).unsafe_load[width=W]()
-            var hi_a = (
-                (
-                    (src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)
-                ).unsafe_offset(1)
-            ).unsafe_load[width=W]()
-            var lo_b = (
-                (src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)
-            ).unsafe_load[width=W]()
-            var hi_b = (
-                (
-                    (src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)
-                ).unsafe_offset(1)
-            ).unsafe_load[width=W]()
+            var lo_a = lhs.load_bytes[DType.uint8, W](byte_start_a + i)
+            var hi_a = lhs.load_bytes[DType.uint8, W](byte_start_a + i + 1)
+            var lo_b = rhs.load_bytes[DType.uint8, W](byte_start_b + i)
+            var hi_b = rhs.load_bytes[DType.uint8, W](byte_start_b + i + 1)
             dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
@@ -1779,32 +1776,16 @@ def apply[
         vectorize[cpu_width](bulk, process_shifted)
 
     # Last output byte: read hi only when bits span into the next source byte.
-    var remaining_bits = lhs._length - bulk * 8
-    var last_lo_a = (
-        (src_a.unsafe_offset(byte_start_a)).unsafe_offset(bulk)
-    ).unsafe_load[width=1]()
-    var last_lo_b = (
-        (src_b.unsafe_offset(byte_start_b)).unsafe_offset(bulk)
-    ).unsafe_load[width=1]()
-    var result_a = last_lo_a >> rs_a
-    var result_b = last_lo_b >> rs_b
+    var remaining_bits = len(lhs) - bulk * 8
+    var result_a = lhs.load_bytes[DType.uint8](byte_start_a + bulk) >> rs_a
+    var result_b = rhs.load_bytes[DType.uint8](byte_start_b + bulk) >> rs_b
     if remaining_bits > 8 - bit_shift_a:
         result_a = result_a | (
-            (
-                (
-                    (src_a.unsafe_offset(byte_start_a)).unsafe_offset(bulk)
-                ).unsafe_offset(1)
-            ).unsafe_load[width=1]()
-            << ls_a
+            lhs.load_bytes[DType.uint8](byte_start_a + bulk + 1) << ls_a
         )
     if remaining_bits > 8 - bit_shift_b:
         result_b = result_b | (
-            (
-                (
-                    (src_b.unsafe_offset(byte_start_b)).unsafe_offset(bulk)
-                ).unsafe_offset(1)
-            ).unsafe_load[width=1]()
-            << ls_b
+            rhs.load_bytes[DType.uint8](byte_start_b + bulk + 1) << ls_b
         )
     dst.store_bytes[DType.uint8, 1](bulk, op[1](result_a, result_b))
 

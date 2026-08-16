@@ -862,8 +862,8 @@ trait AggFunction(Kernel):
 
     @staticmethod
     def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: DynType) raises:
+        Job: def[A: Aggregation]() raises -> None
+    ](value_dtype: DynType, job: Job) raises:
         """Run `job[A]` with the `Aggregation` implementing this function over a
         `value_dtype` column. Raises if the aggregate is not defined for it."""
         ...

@@ -317,10 +317,9 @@ struct Statistics:
             # precision/scale, so the scalar retags to the Arrow type without
             # this needing to name time32, timestamp, decimal64 and the rest
             # one at a time.
-            @__parameter
             def decode_fixed[
                 T: dt.PrimitiveType
-            ](witness: T) raises -> Optional[DynScalar]:
+            ](witness: T) raises {imm} -> Optional[DynScalar]:
                 comptime if is_wide_decimal[T]:
                     # big-endian two's-complement FIXED_LEN_BYTE_ARRAY
                     return PrimitiveScalar[T](
@@ -334,7 +333,7 @@ struct Statistics:
                         witness,
                     ).to_dyn()
 
-            return dtype.dispatch_primitive[decode_fixed]()
+            return dtype.dispatch_primitive(decode_fixed)
         else:
             # binary / large_binary have no scalar type; the raw min/max bytes are
             # still available via `read_metadata`.

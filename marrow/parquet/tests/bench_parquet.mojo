@@ -48,11 +48,10 @@ def _bench_read(mut b: Benchmark, n: Int, compression: String) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(read_table(path))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_read_snappy_100k(mut b: Benchmark) raises:
@@ -74,9 +73,8 @@ def bench_read_dict_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @__parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(read_table(path))
 
-    b.iter[call]()
+    b.iter(call)
     keep(path)  # keep the captured path alive through the whole benchmark

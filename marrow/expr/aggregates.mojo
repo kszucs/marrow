@@ -90,8 +90,8 @@ struct NumericFold[K: AggKernel](AggFunction):
 
     @staticmethod
     def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: DynType) raises:
+        Job: def[A: Aggregation]() raises -> None
+    ](value_dtype: DynType, job: Job) raises:
         if not value_dtype.is_numeric():
             raise Error(
                 "aggregate '",
@@ -101,11 +101,10 @@ struct NumericFold[K: AggKernel](AggFunction):
                 " columns",
             )
 
-        @__parameter
-        def numeric[V: NumericType](d: V) raises:
+        def numeric[V: NumericType](d: V) raises {imm}:
             job[Self.K.Grouped[V]]()
 
-        value_dtype.dispatch_numeric[numeric]()
+        value_dtype.dispatch_numeric(numeric)
 
 
 struct OrderPreserving[Op: MinMaxOp](AggFunction):
@@ -117,29 +116,26 @@ struct OrderPreserving[Op: MinMaxOp](AggFunction):
 
     @staticmethod
     def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: DynType) raises:
+        Job: def[A: Aggregation]() raises -> None
+    ](value_dtype: DynType, job: Job) raises:
         if value_dtype.is_numeric():
 
-            @__parameter
-            def numeric[V: NumericType](d: V) raises:
+            def numeric[V: NumericType](d: V) raises {imm}:
                 job[MinMax[Self.Op].Grouped[V]]()
 
-            value_dtype.dispatch_numeric[numeric]()
+            value_dtype.dispatch_numeric(numeric)
         elif value_dtype.is_temporal():
 
-            @__parameter
-            def temporal[T: TemporalType](d: T) raises:
+            def temporal[T: TemporalType](d: T) raises {imm}:
                 job[TemporalMinMax[Self.Op, T]]()
 
-            value_dtype.dispatch_temporal[temporal]()
+            value_dtype.dispatch_temporal(temporal)
         elif value_dtype.is_string() or value_dtype.is_large_string():
 
-            @__parameter
-            def stringly[T: StringLikeType](d: T) raises:
+            def stringly[T: StringLikeType](d: T) raises {imm}:
                 job[StringMinMax[Self.Op, T]]()
 
-            value_dtype.dispatch_stringlike[stringly]()
+            value_dtype.dispatch_stringlike(stringly)
         else:
             raise Error(
                 "aggregate '",
@@ -158,15 +154,14 @@ struct CountValid(AggFunction):
 
     @staticmethod
     def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: DynType) raises:
+        Job: def[A: Aggregation]() raises -> None
+    ](value_dtype: DynType, job: Job) raises:
         if value_dtype.is_numeric():
 
-            @__parameter
-            def numeric[V: NumericType](d: V) raises:
+            def numeric[V: NumericType](d: V) raises {imm}:
                 job[NumericAgg[CountKernel, V]]()
 
-            value_dtype.dispatch_numeric[numeric]()
+            value_dtype.dispatch_numeric(numeric)
         else:
             job[CountAgg]()
 
@@ -178,8 +173,8 @@ struct DistinctCount[exact: Bool](AggFunction):
 
     @staticmethod
     def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: DynType) raises:
+        Job: def[A: Aggregation]() raises -> None
+    ](value_dtype: DynType, job: Job) raises:
         job[DistinctAgg[Self.exact]]()
 
 
@@ -194,8 +189,8 @@ comptime ApproxCountDistinct = DistinctCount[False]
 
 
 def resolve_agg[
-    job: def[A: Aggregation]() raises capturing[_] -> None
-](name: String, value_dtype: DynType) raises:
+    Job: def[A: Aggregation]() raises -> None
+](name: String, value_dtype: DynType, job: Job) raises:
     """Resolve an aggregate function *name* over a ``value_dtype`` column to the
     ``Aggregation`` that implements it, and run ``job[A]``.
 
@@ -204,21 +199,21 @@ def resolve_agg[
     types an aggregate supports — and what it does for each — is stated by the
     aggregate itself, never re-listed here."""
     if name == Sum.name:
-        Sum.resolve[job](value_dtype)
+        Sum.resolve(value_dtype, job)
     elif name == Product.name:
-        Product.resolve[job](value_dtype)
+        Product.resolve(value_dtype, job)
     elif name == Mean.name:
-        Mean.resolve[job](value_dtype)
+        Mean.resolve(value_dtype, job)
     elif name == Min.name:
-        Min.resolve[job](value_dtype)
+        Min.resolve(value_dtype, job)
     elif name == Max.name:
-        Max.resolve[job](value_dtype)
+        Max.resolve(value_dtype, job)
     elif name == Count.name:
-        Count.resolve[job](value_dtype)
+        Count.resolve(value_dtype, job)
     elif name == CountDistinct.name:
-        CountDistinct.resolve[job](value_dtype)
+        CountDistinct.resolve(value_dtype, job)
     elif name == ApproxCountDistinct.name:
-        ApproxCountDistinct.resolve[job](value_dtype)
+        ApproxCountDistinct.resolve(value_dtype, job)
     else:
         raise Error("unknown aggregate function: ", name)
 
@@ -311,11 +306,10 @@ struct AggFunc(Copyable, Movable, Writable):
         (``marrow.expr.dynamic.resolve_agg`` — the one string comparison)."""
         var box = List[AggFunc]()
 
-        @__parameter
-        def make[A: Aggregation]() raises:
+        def make[A: Aggregation]() raises {mut box, imm}:
             box.append(Self.of[A](value_dtype))
 
-        resolve_agg[make](name, value_dtype)
+        resolve_agg(name, value_dtype, make)
         self = box[0].copy()
 
     def grouped(self, groups: Grouping, value: DynArray) raises -> DynArray:
@@ -459,12 +453,11 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         var funcs = List[AggFunc]()
         var folds = List[AggFold]()
 
-        @__parameter
-        def make[A: Aggregation]() raises:
+        def make[A: Aggregation]() raises {mut funcs, mut folds, imm}:
             funcs.append(AggFunc.of[A](value_dtype))
             folds.append(AggFold.of[A]())
 
-        resolve_agg[make](name, value_dtype)
+        resolve_agg(name, value_dtype, make)
         self._funcs.append(funcs[0].copy())
         self._folds.append(folds[0].copy())
 
