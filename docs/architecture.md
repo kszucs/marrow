@@ -1,10 +1,15 @@
 # Architecture
 
 How marrow's compute stack is organized, and why it is shaped this way. This is
-a **living document**: it describes what the code does at `265df9b`
-(2026-08-03), not a plan. It is the single "what the system is" reference for the
-kernel, expression and relational layers; unbuilt specs live in the other files
-under `docs/`, and the open work lives in `docs/backlog.md`.
+a **living document**: it describes what the code does, not a plan. It is the
+single "what the system is" reference for the kernel, expression and relational
+layers; unbuilt specs live in the other files under `docs/`, and the open work
+lives in `docs/backlog.md`.
+
+§3 was re-verified against the tree on 2026-08-17 and had drifted badly: it
+still described the `Breaker` / `Context` / `prepare` staging model that
+`7d57398` deleted. Treat a section's line references as evidence it was checked,
+and re-check anything that cites a symbol you cannot find.
 
 Three claims carry the whole design:
 
@@ -20,7 +25,7 @@ Three claims carry the whole design:
 Five standing invariants, in force for any change to this stack:
 
 - **AOT fusion is the differentiator** — a comptime-typed expression
-  monomorphizes to one straight-line SIMD loop, `vectorwise[W]` inlining across
+  monomorphizes to one straight-line SIMD loop, `lane[W]` inlining across
   the whole subtree with no dispatch. Preserve it for every node that fuses.
 - **No feature may live in only one lane** — the runtime lane
   (`marrow/expr/dynamic.mojo`) must reach parity. Window functions currently
@@ -128,9 +133,11 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 ):                                                     # values.mojo:664
     comptime OutType = promote[Self.L.OutType, Self.R.OutType]
     ...
-    def vectorwise[W: Int](self, batch, ctx, mut slot: Int, idx: Int) -> ...:
-        var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[...]()
-        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[...]()
+    comptime State = Pair[Self.L.State, Self.R.State]
+    def state(self, batch) raises -> Self.State: ...
+    def lane[W: Int](self, state: Self.State, idx: Int) -> ...:
+        var a = self.l.lane[W](state[0], idx).cast[...]()
+        var b = self.r.lane[W](state[1], idx).cast[...]()
         return Self.K.core[Self.OutType.native, W](a, b)
 
 comptime Add = NumericBinary[AddKernel, _, _]          # values.mojo:857
@@ -149,7 +156,7 @@ and a single input-family-unified `Equal[L, R]` branching on
 `conforms_to(L, NumericValue)`, were both probed and **not taken**. The
 per-output-family fallback shipped instead: `NumericBinary` (`:664`),
 `FloatBinary` (`:780`, float-forcing `/` and `**`), `NumericCompare` (`:932`),
-`BoolBinary` (`:1027`), `StringPredicate` (`:1685`, also a `Breaker`).
+`BoolBinary` (`:1027`), `StringPredicate` (`:1685`, a breaker).
 
 `NumericCompare` (`values.mojo:932`) is the one node carrying **two** kernel
 parameters — `K: NumericCompareKernel` for fixed-width lanes and
@@ -185,140 +192,94 @@ and all four shipped:
 |---|---|---|
 | `NumToBool[A: NumericValue](BoolValue)` | `values.mojo:1255` | `x != 0`, pure lane |
 | `BoolToNum[To: NumericType, A: BoolValue](NumericValue)` | `:1286` | `True→1`, pure lane |
-| `StringToNum[To: NumericType, A: StringValue](Breaker, NumericValue)` | `:1316` | no value lane → breaker |
-| `StringToBool[A: StringValue](BoolValue, Breaker)` | `:1349` | no value lane → breaker |
+| `StringToNum[To: NumericType, A: StringValue](NumericValue)` | `:1316` | no value lane → breaker |
+| `StringToBool[A: StringValue](BoolValue)` | `:1349` | no value lane → breaker |
 
 **There is no struct value family.** No `StructValue`, no `StructField`, no
 reflection of a child dtype into a family-typed leaf: zero occurrences in the
 tree. `ListValue` / `ListColumn` / `ListLength` (`values.mojo:2310-2351`) are the
 only nested nodes.
 
-## 3. Staging — `Value`, `Breaker`, `Context`
+## 3. Staging — `Value`, per-node `State`, and the three drivers
 
 Not every operation can be evaluated a lane at a time. The model that resolves
-this is **polarity, expressed as conformance**, not a flag. Two axes: **shape**
-(one element versus N) × **locality** (computable per lane at `idx`, versus
-needing other rows). Locality is the `Breaker` line; shape is `OutShape`.
+this is **per-node typed state**: each node declares what it needs resolved once
+per pass, and a driver then walks the batch calling a pure lane function.
 
-| | **fuses** — `vectorwise[W]` runs in the loop | **breaks** — conforms to `Breaker`, stages into `Context` |
-|---|---|---|
-| **scalar** (`OutShape == 0`) | `lit` → `vectorwise` splats the constant | `Reduction` (`:1922`), `BoolReduce` (`:1137`) → a `DynScalar` `Datum` |
-| **columnar** (`OutShape == 1`) | col, arith, cast, compare, bool logic, string map/concat | `StringToNum`, `StringToBool`, `StringPredicate`, `StringLength`, `IsIn`, `ListLength`, `ConditionalBinary`, `CaseWhen`, `TemporalExtract`, `WindowFunction` |
+> **Superseded design.** This section used to describe `trait Breaker(Value)`,
+> a `prepare(batch, ctx)` pre-pass, and a `Context` holding stage results in a
+> positional `List[Datum]`. `7d57398` replaced all three. There is no `Breaker`
+> trait, no `Context`, and no `prepare`; `vectorwise` is now `lane`. The
+> positional-slot hazard that section warned about at length — "`prepare` and
+> `vectorwise` must walk the tree in exactly the same DFS order, by hand … no
+> diagnostic" — **is gone by construction**, because state is per-node and
+> typed rather than appended to a shared list.
 
-`trait Value` (`values.mojo:304`) is every node. It fixes two comptime members:
+`trait Value` (`values.mojo:396`) is every node. It fixes **one** comptime
+member, `OutShape` (0 scalar, 1 columnar), plus runtime methods: `materialize`
+/ `execute` returning a `Datum`, and the plan-analysis surface `name`,
+`referenced_columns`, `render`, `bound_column`, `prune`, `validity`.
 
-```mojo
-comptime OutType: DataType
-comptime OutShape: Int   # 0 scalar, 1 columnar   (values.mojo:306)
-```
+`comptime Datum = Variant[DynScalar, DynArray]` (`:217`) is a stdlib `Variant`,
+not a bespoke struct — no `load[W]`, no `is_scalar`. A scalar stays a scalar
+until something needs a column; `into_array(d, n)` (`:220`) is the one
+lazy-broadcast forcing point.
 
-and a `Datum` result — `comptime Datum = Variant[DynScalar, DynArray]`
-(`values.mojo:198`). `Datum` is a stdlib `Variant`, not a bespoke struct: there
-is no `load[W]` on it and no `is_scalar`/`num_rows` accessor. A scalar stays a
-scalar until something needs a column; `into_array(d, n)` (`:201`) is the one
-lazy-broadcast forcing point. `OutShape` is what lets a node know statically
-whether its child folds to one value or a column, so `sum(a) + b` sizes its lane
-correctly.
+`Value` deliberately does **not** declare an output dtype. `OutType` lived here
+until the `Dyn*` conformance removal and was read by no `[V: Value]` code: the
+three nodes bound on plain `Value` — `NullPredicate`, `IsIn`, `WindowFunction` —
+each declare their own, and every family trait redeclares it with a tighter
+bound.
 
-| node kind | `OutShape` | site |
-|---|---|---|
-| column (`NumericColumn`, …) | `1` | `values.mojo:580` |
-| literal (`NumericLiteral`, …) | `0` | `:640` |
-| unary / cast / bridge | `Self.A.OutShape` | `:720`, `:754`, `:1259`, `:1290` |
-| binary (arith, compare, bool) | `max(Self.L.OutShape, Self.R.OutShape)` | `:673`, `:787`, `:952`, `:1031` |
-| reduction | `0` | `:1928` |
-| window | `1` | `:2017` |
-| string/list breakers, predicates | `1` | `:1321`, `:1353`, `:1689`, `:2351` |
+### The fusion contract lives on the family traits, not on `Value`
 
-`trait Breaker(Value)` (`values.mojo:417`) marks a cross-row or materializing
-node. **Conformance is the marker** — it adds no method, replacing a
-`comptime IsBreaker: Bool` every node had to set by hand (the same hazard the
-deleted `IsErased` posed). It is orthogonal to the family: a node conforms to a
-family *and* to `Breaker` (`StringToNum(Breaker, NumericValue)`).
-
-Two hooks implement the staging:
-
-- **`materialize(batch, ctx) -> Datum`** (`:310`) — the family driver. The
-  numeric one (`:538-543`) carries the scalar-eval-once branch: at
-  `OutShape == 0` it runs the lane once at `W == 1` and returns a
-  `PrimitiveScalar`, so `lit(1) + lit(2)` folds with no loop and never becomes a
-  length-1 array; otherwise it runs one fused vectorized pass into a `Buffer`.
-  The bool driver (`:909`) bit-packs into a `Bitmap`; the string one (`:1393`)
-  appends rows into a builder. Validity threads alongside — each node exposes
-  `validity(batch)` returning an offset-0 owned bitmap, and the driver folds it
-  into the finished array.
-- **`prepare(batch, ctx)`** (`:334`) — a pre-pass. A breaker runs its own
-  `materialize` and appends the result to the `Context`; composites override to
-  recurse into their children; a leaf does nothing.
-
-`execute` (`:317`) is the one dispatch shared by every family:
+`NumericValue` (`:503`), `BoolValue` (`:972`) and `StringValue` (`:1497`) each
+add four members:
 
 ```mojo
-comptime if conforms_to(Self, Breaker):
-    var i = ctx.size()
-    self.prepare(batch, ctx)
-    return ctx.get(i)
-else:
-    return self.materialize(batch, ctx)
+comptime State: Copyable & Deinitable      # resolved once per pass
+def state(self, batch) raises -> Self.State
+def lane[W: Int](self, state: Self.State, idx: Int) -> SIMD[...]
+def state_validity(self, batch, state) raises -> Optional[Bitmap[mut=False]]
 ```
 
-### The positional-slot invariant is held by convention only
+and default `materialize` to their driver. `lane` reads `state` and `idx` and
+nothing else — that removal is the optimization, worth 30x on `a + 1` over 1M
+rows.
 
-`Context` (`values.mojo:215`) is per-execute scratch holding stage results
-**positionally** in a `List[Datum]` (`:216`). Keeping results in the context
-rather than on the nodes is what keeps expressions immutable and re-executable
-across batches. But nothing enforces the correspondence:
+Three drivers, one per family: `_drive_numeric` (`:317`) fills a `Buffer`,
+`_drive_bool` (`:345`) bit-packs a `Bitmap`, `_drive_string` (`:367`) appends
+into a builder. The numeric and string drivers carry the scalar-eval-once
+branch — at `OutShape == 0` they run the lane once and return a scalar, so
+`lit(1) + lit(2)` folds with no loop.
 
-> **`prepare` and `vectorwise` must walk the tree in exactly the same DFS order,
-> per node, by hand.** `prepare` *appends* breaker results to `Context._slots`;
-> `vectorwise` threads a `mut slot: Int` cursor and each breaker consumes one.
-> No index is ever stored. The two passes agree only because they happen to
-> recurse identically. A node that visits `l, r` in one and `r, l` in the other
-> produces the wrong column with **no diagnostic** — not a crash, not a type
-> error.
+`state_validity` exists because a node's result validity and its state are often
+the same computation: a breaker whose `State` is its materialized column reads
+the bitmap straight off that array instead of re-running the kernel (FU-7a).
 
-`NumericBinary` gets it right: `prepare` recurses left-then-right
-(`values.mojo:710-712`) and `vectorwise` loads left-then-right (`:697-703`).
-`StringLength` shows the consuming half — `var s = slot; slot += 1` before
-reading `ctx.get[Int32Array](s)` (`:1813-1815`).
+**`TemporalValue` (`:2399`) and `ListValue` (`:2549`) declare no fusion contract
+at all** — only a fluent surface. Their columns hand themselves back from
+`materialize`, and every temporal or list operation is a breaker into the
+numeric family. So `Value` has two kinds of sub-trait under one name: a fused
+family, and an operator namespace.
 
-The exposure is countable. `values.mojo` declares 42 `struct`s, of which 37 are
-value nodes (the rest are `Context`, `AggExpr`, `FrameBound`, `WindowSpec`,
-`RowNumberKernel`). 29 define `vectorwise`. `prepare` is defined at only **15**
-sites — the trait default at `:334` plus **14** node overrides. Every other node
-relies on the default, which is a no-op for a non-breaker and therefore **wrong
-for any composite with a breaker descendant**. Breakers are insulated by accident
-rather than by design: a breaker's `materialize` runs its operand through the
-single-argument `execute` (`:329-332`), which allocates a *fresh* `Context`.
-Among the non-breaker composites exactly one lacks the override — `DateTrunc`
-(`:2271`) — and it is latently, not actually, wrong, because no temporal breaker
-exists for it to hold.
+### A breaker is a node, not a conformance
 
-The fix is designed but unbuilt: `docs/design-expression-evaluation.md` §2.1-2.2
-replaces arrival-order allocation with a reflection-driven `traverse` and an
-explicit stored slot index, which makes the positional read *safe* rather than
-merely conventional. The task is carried in `docs/backlog.md` §5 (paired with
-L2). Do not add a composite node without an explicit `prepare` until it lands.
+There is no marker trait. A breaker is simply a node whose `State` *is* its
+materialized result: `state()` runs the eager kernel once into a column and
+`lane` loads from it, which is exactly what a column leaf does. So to its
+parent a breaker is indistinguishable from a column, and fusion happens *above*
+it: `length(s) + 1` is one numeric pass over a materialized length column, and
+`rank(a) + b + c` is **one** fused pass, not three. The tree splits into stages
+at each breaker; each stage is one fused loop.
 
-### Fusion happens *above* a breaker, not around it
+Materialization is therefore the universal fallback and fusion is never
+all-or-nothing: an operation with no per-lane functor runs eagerly in `state`
+and its consumer loads the result per lane, so every kernel is immediately
+usable from the expression layer. What does *not* exist is a `Materialized` leaf
+adapter — an arbitrary `DynArray` produced outside the tree cannot re-enter a
+fused subtree without a node for the operation.
 
-`NumericBinary`'s docstring (`values.mojo:667-670`) states the rule: there is no
-"materialized" counterpart node, because a breaker operand *is* a fused leaf —
-its `vectorwise` just loads its own stage result out of `ctx`, so to its parent
-it is indistinguishable from a column leaf. So `length(s) + 1` is one numeric
-pass over a materialized length column, and `sum(a) * 2` is one pass over a
-splatted scalar. `rank(a) + b + c` is **one** fused pass, not three. The tree
-splits into stages at each breaker; each stage is one fused loop.
-`test_arithmetic_above_window_materializes`
-(`marrow/expr/tests/test_values.mojo:226`) pins it.
-
-Materialization is therefore the universal fallback, and fusion is never
-all-or-nothing: an operation with no per-lane functor conforms to `Breaker`, runs
-eagerly through `apply`/`dispatch` in `prepare`, and its consumer reads the slot
-per lane. Every kernel is thus immediately usable from the expression layer.
-What does *not* exist is a `Materialized` leaf adapter — an arbitrary `DynArray`
-produced outside the tree cannot re-enter a fused subtree without writing a
-`Breaker` node for the operation (`docs/backlog.md` Q7.1).
 
 ### Classification, as shipped
 
