@@ -289,11 +289,14 @@ struct RadixPartitioner(Movable):
         var p = len(partitions)
         var slots = List[Optional[R]](length=p, fill=None)
 
-        var worker_err: Optional[Error] = None
+        # One slot per worker, like the result slots above: a single shared
+        # `Optional[Error]` would be written by every failing thread at once.
+        var worker_errs = List[Optional[Error]](length=p, fill=None)
 
-        def worker(i: Int) {mut worker_err, mut slots, imm}:
-            # `sync_parallelize`'s value form takes a non-raising worker, so the
-            # first error is parked and re-raised after the join.
+        def worker(i: Int) {mut worker_errs, mut slots, imm}:
+            # `sync_parallelize`'s value form takes a non-raising worker. The
+            # body still unwinds at its first error; the other workers cannot be
+            # cancelled, so their errors are collected and raised after the join.
             try:
                 slots[i] = op(
                     i,
@@ -302,12 +305,12 @@ struct RadixPartitioner(Movable):
                 )
 
             except e:
-                if not worker_err:
-                    worker_err = e
+                worker_errs[i] = e
 
         sync_parallelize(worker, p)
-        if worker_err:
-            raise worker_err.value()
+        for err in worker_errs:
+            if err:
+                raise err.value()
 
         var out = List[R](capacity=p)
         for i in range(p):

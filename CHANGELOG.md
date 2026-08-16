@@ -33,9 +33,11 @@
     `RegisterPassable & ImplicitlyCopyable` bound already states.
 
   `sync_parallelize`'s value form takes a non-raising worker, so the three
-  raising workers (`groupby`, `partition`, Parquet row-groups) now park the
-  first error and re-raise after the join. All workers complete rather than one
-  aborting early.
+  raising workers (`groupby`, `partition`, Parquet row-groups) collect errors
+  into a per-worker slot — sized like the result slots beside them — and raise
+  after the join. Each worker still unwinds at its own first error;
+  `sync_parallelize` offers no cancellation, so sibling workers cannot be
+  stopped, which was equally true of the parametric form this replaces.
 
   **Performance is neutral, measured against a drift reference.** This machine
   drifts up to ±8% per benchmark, so deltas were normalised against 24 untouched
