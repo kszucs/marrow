@@ -997,16 +997,13 @@ struct DynType(
 
         return self._dispatch(narrow)
 
-    def to_dyn(deinit self) -> DynType:
-        return self^
-
     def __init__(out self):
-        """The Arrow `null` type — the identity `Defaultable` requires.
+        """An erased dtype that has not been told what it holds: Arrow `null`.
 
-        `NumericType` extends `Defaultable`, so conforming needs this. `null` is
-        the honest default for an erased dtype that has not been told what it
-        holds: it is a real Arrow type meaning "no value", not a numeric width
-        picked arbitrarily."""
+        A real Arrow type meaning "no value", rather than a numeric width picked
+        arbitrarily. This used to be justified as "the identity `Defaultable`
+        requires", because `DynType` conformed to `NumericType`; it conforms to
+        no dtype trait now, so the default stands on its own merits."""
         self._v = Self.VariantType(NullType())
 
     def __init__(out self, *, copy: Self):

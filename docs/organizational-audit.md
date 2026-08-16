@@ -7,7 +7,7 @@ Verified against the working tree at `f5226d5` + uncommitted changes
 (2026-08-16). **Nothing here has been changed** — this is a findings list.
 
 Companion to `docs/abstraction-audit.md` (trait hierarchies and leaks) and
-`docs/duplication-audit.md` (repeated code). Three items are shared with the
+the duplication audit (uncommitted; may not be present on this branch). Three items are shared with the
 abstraction audit because a misplaced *type* and a leaky *abstraction* are the
 same defect seen from two sides; they are cross-referenced, not repeated.
 

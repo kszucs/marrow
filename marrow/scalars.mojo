@@ -710,17 +710,6 @@ struct DynScalar(
     def is_null(self) -> Bool:
         return not self.is_valid()
 
-    def to_dyn(deinit self) -> DynScalar:
-        """Already erased — hand back `self`.
-
-        Overriding this is not a convenience, it is required. The trait's
-        default body is `DynScalar(self^)`, which for `Self = DynScalar` would
-        ask the variant to hold a `DynScalar`; it deliberately does not list
-        itself, so the default would fail to instantiate. `DynType` and
-        `DynArray` override it for exactly the same reason.
-        """
-        return self^
-
     # --- typed downcasts ---
 
     def as_type[T: ArrowScalar](ref self) -> ref[self._v[T]] T:

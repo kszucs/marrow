@@ -2547,10 +2547,6 @@ struct DynArray(
 
         return self._dispatch(f)
 
-    def to_dyn(deinit self) -> DynArray:
-        """Returns this array as DynArray, transferring ownership."""
-        return self^
-
     def write_to[W: Writer](self, mut writer: W):
         def f[T: Array](a: T) {mut writer, imm}:
             a.write_to(writer)

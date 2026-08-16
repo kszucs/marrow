@@ -7,8 +7,9 @@ its implementation.
 Verified against the working tree at `f5226d5` + uncommitted changes
 (2026-08-16), over the 52 traits declared under `marrow/` and `python/bindings/`.
 
-Companion to `docs/duplication-audit.md` (repeated code) and
-`docs/duplication-audit-proposals.md`. This document asks a different question:
+Companion to the duplication audit (`docs/duplication-audit.md` and
+`-proposals.md`, uncommitted at the time of writing — they may not be present on
+this branch). This document asks a different question:
 not "is this written twice" but "does this type have one responsibility, and does
 its trait promise only what it can deliver".
 
@@ -308,7 +309,7 @@ into the numeric family. That is a reasonable implementation choice, but it is
 invisible from the hierarchy — a reader cannot tell from `trait TemporalValue(Value)`
 that no temporal expression ever fuses.
 
-Related, and already noted in `docs/duplication-audit.md` §1.1: `state_validity`'s
+Related, and already noted in the duplication audit's §1.1: `state_validity`'s
 12-line docstring and one-line body are **verbatim identical** in all three fused
 families. A `FusedFamily(Value)` intermediate holding `State` + `state_validity`
 is the obvious home — and is likely blocked by the limit `CLAUDE.md` records
