@@ -206,3 +206,10 @@ integration/arrow/
 *.mojoc
 *.mojopkg
 *.dSYM/
+
+# Agent tooling installed into the working tree (Modular's `skills-lock.json`
+# and the `.agents/skills` it links into `.claude/skills`).  Toolchain-managed,
+# not marrow source — it appeared during the Mojo 1.1 upgrade.
+.agents/
+.claude/skills/
+skills-lock.json
