@@ -609,7 +609,7 @@ struct HashJoin[
         for _ in range(p):
             tables.append(SwissHashTable[Self.hasher]())
 
-        @parameter
+        @__parameter
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[StructArray, Int32Array]:
@@ -656,7 +656,7 @@ struct HashJoin[
         # Per-partition probe: gather this partition's probe keys, look them up
         # in the matching build-side table `i` (same radix bits → same
         # partition), and remap partition-local indices to global row numbers.
-        @parameter
+        @__parameter
         def probe_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises -> IndexPairs:

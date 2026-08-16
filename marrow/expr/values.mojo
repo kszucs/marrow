@@ -10,7 +10,7 @@ Model
   composable per-element `core` + a driver that runs a whole same-strategy subtree
   in one pass. Every fused node implements the same two-method protocol:
 
-      comptime State: Copyable & ImplicitlyDeletable   # per-node, comptime
+      comptime State: Copyable & Deinitable   # per-node, comptime
       def state(self, batch) raises -> Self.State       # once per pass
       def lane[W](self, state, idx) -> ...              # once per SIMD chunk
 
@@ -239,9 +239,9 @@ def into_array(d: Datum, n: Int) raises -> DynArray:
 # ---------------------------------------------------------------------------
 @fieldwise_init
 struct Pair[
-    L: Copyable & ImplicitlyDeletable,
-    R: Copyable & ImplicitlyDeletable,
-](Copyable, ImplicitlyDeletable, Movable):
+    L: Copyable & Deinitable,
+    R: Copyable & Deinitable,
+](Copyable, Deinitable, Movable):
     """The state of a two-operand fused node.
 
     `Tuple[L.State, R.State]` is the spelling CLAUDE.md records as verified and
@@ -307,7 +307,7 @@ def _union_columns(var acc: List[String], names: List[String]) -> List[String]:
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # The fused drivers. Each takes the node's `State` — resolved once by the caller
-# — and runs one pass, reading it through a `@parameter` closure handed to
+# — and runs one pass, reading it through a `@__parameter` closure handed to
 # `views.apply`.
 #
 # Free functions rather than trait default methods so that `V.State` is a single
@@ -325,7 +325,7 @@ def _drive_numeric[
         var length = batch.num_rows()
         var buf = Buffer.alloc_uninit[native](length)
 
-        @parameter
+        @__parameter
         @always_inline
         def producer[W: Int](i: Int) -> SIMD[native, W]:
             return node.lane[W](state, i)
@@ -350,7 +350,7 @@ def _drive_bool[
     var length = batch.num_rows()
     var bm = Bitmap.alloc_uninit(length)
 
-    @parameter
+    @__parameter
     @always_inline
     def producer[W: Int](i: Int) -> SIMD[DType.bool, W]:
         return node.lane[W](state, i)
@@ -395,7 +395,7 @@ def _drive_string[
 # Value — every node. `materialize` is abstract; the family traits default it to
 # their fused driver and the breakers override it with their stage result.
 # ---------------------------------------------------------------------------
-trait Value(Copyable, ImplicitlyDeletable, Movable):
+trait Value(Copyable, Deinitable, Movable):
     comptime OutType: DataType
     comptime OutShape: Int  # 0 scalar, 1 columnar
 
@@ -495,7 +495,7 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
 trait NumericValue(Value):
     comptime OutType: NumericType
 
-    comptime State: Copyable & ImplicitlyDeletable
+    comptime State: Copyable & Deinitable
     """Everything this node's lane needs, resolved once per pass.
 
     A column leaf's is its typed column; a literal's is nothing; a composite's is
@@ -964,7 +964,7 @@ comptime Ln = FloatUnary[LogKernel, _]
 trait BoolValue(Value):
     comptime NativeType: DType  # operand width (sizes the SIMD lane), not the output
 
-    comptime State: Copyable & ImplicitlyDeletable
+    comptime State: Copyable & Deinitable
     """Resolved once per pass — see `NumericValue.State`."""
 
     def state(self, batch: RecordBatch) raises -> Self.State:
@@ -1489,7 +1489,7 @@ struct StringToBool[A: StringValue](BoolValue):
 trait StringValue(Value):
     comptime OutType: StringLikeType
 
-    comptime State: Copyable & ImplicitlyDeletable
+    comptime State: Copyable & Deinitable
     """Resolved once per pass — see `NumericValue.State`."""
 
     def state(self, batch: RecordBatch) raises -> Self.State:

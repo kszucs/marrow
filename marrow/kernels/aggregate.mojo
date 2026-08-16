@@ -767,7 +767,7 @@ trait Aggregation(Kernel):
     `DistinctAgg[exact]`. Which one a runtime dtype maps to is decided once, by
     `AggFunction.resolve`."""
 
-    comptime InArray: Copyable & ImplicitlyDeletable
+    comptime InArray: Copyable & Deinitable
     """The typed input column this aggregation consumes. `DynArray` for the two
     aggregations whose work *is* dtype-generic (validity scan, row hashing) —
     there is nothing to monomorphize on."""

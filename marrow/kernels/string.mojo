@@ -84,7 +84,7 @@ struct LengthKernel(Kernel):
         # expression layer go through the `apply` family: it owns the SIMD width,
         # the serial/parallel choice and the tail, so a kernel that reaches past
         # it opts out of all three and diverges from every other kernel here.
-        @parameter
+        @__parameter
         @always_inline
         def producer[W: Int](i: Int) -> SIMD[DType.int32, W]:
             return Self.core(offs.load[W](i + 1), offs.load[W](i))
@@ -113,7 +113,7 @@ struct LengthKernel(Kernel):
         if not dt.is_string_like():
             raise Self.error(t"expected a string array, got {dt}")
 
-        @parameter
+        @__parameter
         def leaf[T: StringLikeType](d: T) raises -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
@@ -156,7 +156,7 @@ trait StringMapKernel(Kernel):
         if not dt.is_string_like():
             raise Self.error(t"expected a string array, got {dt}")
 
-        @parameter
+        @__parameter
         def leaf[T: StringLikeType](d: T) raises -> DynArray:
             return Self.apply(array.as_binary_like[T]()).to_dyn()
 
@@ -262,7 +262,7 @@ struct ConcatKernel(Kernel):
         Self.expect_same_dtype(dt, right.dtype())
         Self.expect_same_length(len(left), len(right))
 
-        @parameter
+        @__parameter
         def leaf[T: StringLikeType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_binary_like[T](), right.as_binary_like[T]()
@@ -368,7 +368,7 @@ trait StringPredicateKernel(Kernel):
         if not dt.is_string_like():
             raise Self.error(t"expected string arrays, got {dt}")
 
-        @parameter
+        @__parameter
         def leaf[T: StringLikeType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_binary_like[T](), right.as_binary_like[T]()
@@ -755,7 +755,7 @@ def _dispatch_pattern[
     if not dt.is_string_like():
         raise Error(t"{name}: expected a string array, got {dt}")
 
-    @parameter
+    @__parameter
     def leaf[T: StringLikeType](d: T) raises -> DynArray:
         return _match_pattern(array.as_binary_like[T](), compiled).to_dyn()
 

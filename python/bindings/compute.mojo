@@ -77,7 +77,7 @@ def aggregate[
 ](array: DynArray, ctx: ExecContext) raises -> DynScalar:
     var box = List[DynScalar]()
 
-    @parameter
+    @__parameter
     def run[A: Aggregation]() raises:
         box.append(
             # `ctx` whole, not `ctx.resolved_num_threads()` — destructuring

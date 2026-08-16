@@ -75,14 +75,14 @@ struct Filter(Kernel):
             # from the trait bound, and between them left interval and
             # decimal columns raising `unsupported dtype`.
 
-            @parameter
+            @__parameter
             def primitive[T: PrimitiveType](d: T) raises -> DynArray:
                 return Filter.apply(array.as_primitive[T](), mask, ctx).to_dyn()
 
             return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
-            @parameter
+            @__parameter
             def binarylike[T: BinaryLikeType](d: T) raises -> DynArray:
                 return Filter.apply(
                     array.as_binary_like[T](), mask, ctx
@@ -99,7 +99,7 @@ struct Filter(Kernel):
             return Filter.apply(array.as_struct(), mask, ctx).to_dyn()
         elif dt.is_list_like():
 
-            @parameter
+            @__parameter
             def listlike[T: ListLikeType](d: T) raises -> DynArray:
                 return Filter.apply(array.as_list_like[T](), mask, ctx).to_dyn()
 
@@ -597,7 +597,7 @@ struct Take(Kernel):
             # from the trait bound, and between them left interval and
             # decimal columns raising `unsupported dtype`.
 
-            @parameter
+            @__parameter
             def primitive[T: PrimitiveType](d: T) raises -> DynArray:
                 return Take.apply(
                     array.as_primitive[T](), indices, ctx
@@ -606,7 +606,7 @@ struct Take(Kernel):
             return dt.dispatch_primitive[primitive]()
         elif dt.is_binary_like():
 
-            @parameter
+            @__parameter
             def binarylike[T: BinaryLikeType](d: T) raises -> DynArray:
                 return Take.apply(
                     array.as_binary_like[T](), indices, ctx
@@ -623,7 +623,7 @@ struct Take(Kernel):
             return Take.apply(array.as_struct(), indices, ctx).to_dyn()
         elif dt.is_list_like():
 
-            @parameter
+            @__parameter
             def listlike[T: ListLikeType](d: T) raises -> DynArray:
                 return Take.apply(
                     array.as_list_like[T](), indices, ctx
@@ -692,7 +692,7 @@ struct Take(Kernel):
             # scalar tail runs at the end of the last stripe rather than once
             # per stripe.
             @always_inline
-            @parameter
+            @__parameter
             def gather(wid: Int, start: Int, end: Int):
                 var k = start
                 while k + W <= end:

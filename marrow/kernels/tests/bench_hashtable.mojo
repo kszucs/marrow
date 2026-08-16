@@ -42,7 +42,7 @@ def bench_hash_table_build_100k(mut b: Benchmark) raises:
     var keys = _make_keys(100_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var t = SwissHashTable[rapidhash]()
         t.build(keys)
@@ -56,7 +56,7 @@ def bench_hash_table_build_1m(mut b: Benchmark) raises:
     var keys = _make_keys(1_000_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var t = SwissHashTable[rapidhash]()
         t.build(keys)
@@ -75,7 +75,7 @@ def bench_hash_table_insert_100k(mut b: Benchmark) raises:
     var keys = _make_keys(100_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var t = SwissHashTable[rapidhash]()
         var bids = t.insert(keys)
@@ -89,7 +89,7 @@ def bench_hash_table_insert_1m(mut b: Benchmark) raises:
     var keys = _make_keys(1_000_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var t = SwissHashTable[rapidhash]()
         var bids = t.insert(keys)
@@ -110,7 +110,7 @@ def bench_hash_table_probe_100k(mut b: Benchmark) raises:
     table.build(keys)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var pairs = table.probe(keys, keys, 100_000)
         keep(len(pairs[0]))
@@ -126,7 +126,7 @@ def bench_hash_table_probe_1m(mut b: Benchmark) raises:
     table.build(keys)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var pairs = table.probe(keys, keys, 1_000_000)
         keep(len(pairs[0]))
@@ -147,7 +147,7 @@ def bench_hash_table_probe_semi_100k(mut b: Benchmark) raises:
     table.build(keys)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var pairs = table.probe(keys, keys, 100_000, single_match=True)
         keep(len(pairs[0]))
@@ -163,7 +163,7 @@ def bench_hash_table_probe_semi_1m(mut b: Benchmark) raises:
     table.build(keys)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var pairs = table.probe(keys, keys, 1_000_000, single_match=True)
         keep(len(pairs[0]))

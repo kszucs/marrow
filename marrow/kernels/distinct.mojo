@@ -109,7 +109,7 @@ def count_distinct(
         n = table.num_keys()
     else:
 
-        @parameter
+        @__parameter
         def count_partition(
             _pi: Int, _rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Int:

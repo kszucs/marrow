@@ -562,7 +562,7 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     var values = List[DynArray]()
     values.append(vals.copy())
 
-    @parameter
+    @__parameter
     def exact(_j: Int, groups: Grouping, col: DynArray) raises -> DynArray:
         return count_distinct_grouped(groups, col)
 

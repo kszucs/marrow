@@ -125,7 +125,7 @@ trait BinaryNumericKernel(BinaryKernel):
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
-        @parameter
+        @__parameter
         def leaf[T: NumericType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
@@ -145,7 +145,7 @@ trait BinaryFloatKernel(BinaryKernel):
     ) raises -> DynArray:
         Self.expect_same_dtype(left.dtype(), right.dtype())
 
-        @parameter
+        @__parameter
         def leaf[T: FloatingType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx
@@ -203,7 +203,7 @@ trait UnaryNumericKernel(UnaryKernel):
         array: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        @parameter
+        @__parameter
         def leaf[T: NumericType](d: T) raises -> DynArray:
             return Self.apply(array.as_primitive[T](), ctx).to_dyn()
 
@@ -218,7 +218,7 @@ trait UnaryFloatKernel(UnaryKernel):
         array: DynArray,
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        @parameter
+        @__parameter
         def leaf[T: FloatingType](d: T) raises -> DynArray:
             return Self.apply(array.as_primitive[T](), ctx).to_dyn()
 
@@ -572,7 +572,7 @@ trait NumericCompareKernel(Kernel):
         # to prune a single row group on a date or decimal predicate. CLAUDE.md's
         # "dispatch on the widest family the typed leaf accepts" rule is for
         # exactly this; `filter`/`take` and `sort` were already fixed.
-        @parameter
+        @__parameter
         def leaf[T: PrimitiveType](d: T) raises -> DynArray:
             return Self.apply(
                 left.as_primitive[T](), right.as_primitive[T](), ctx

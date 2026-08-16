@@ -69,7 +69,7 @@ def _indices_as_int32(indices: DynArray) raises -> Int32Array:
     if dt == int32:
         return indices.as_int32().copy()
 
-    @parameter
+    @__parameter
     def widen[T: IntegerType](d: T) raises -> Int32Array:
         ref src = indices.as_primitive[T]()
         var out = Int32Builder(len(src))
@@ -314,14 +314,14 @@ struct RapidHash(Kernel):
             return RapidHash.apply(keys.as_bool(), ctx)
         elif dt.is_binary_like():
 
-            @parameter
+            @__parameter
             def binarylike[T: BinaryLikeType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_binary_like[T](), ctx)
 
             return dt.dispatch_binarylike[binarylike]()
         elif dt.is_list_like():
 
-            @parameter
+            @__parameter
             def listlike[T: ListLikeType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_list_like[T](), ctx)
 
@@ -358,7 +358,7 @@ struct RapidHash(Kernel):
             # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
             # separate numeric/decimal128/decimal256 arms this replaces were
             # three more spellings of this one call.
-            @parameter
+            @__parameter
             def primitive[T: PrimitiveType](d: T) raises -> UInt64Array:
                 return RapidHash.apply(keys.as_primitive[T](), ctx)
 

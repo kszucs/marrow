@@ -661,7 +661,7 @@ def test_numeric_rank_agrees_across_lanes() raises:
         ref dt = numerics[i]
         var runtime_rank = _numeric_rank(dt)
 
-        @parameter
+        @__parameter
         def check[T: NumericType](d: T) raises -> Bool:
             return _rank[T]() == runtime_rank
 

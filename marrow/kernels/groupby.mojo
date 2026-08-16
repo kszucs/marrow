@@ -154,7 +154,7 @@ struct HashGrouper(Movable):
             self._key_builders[k].extend(gathered.children[k])
 
 
-trait ColumnAggregator(Copyable, ImplicitlyDeletable, Movable):
+trait ColumnAggregator(Copyable, Deinitable, Movable):
     """What to compute per value column, for a grouping this layer drives.
 
     The grouper knows how to split rows and resolve them to group ids; it does
@@ -448,7 +448,7 @@ struct GroupBy(Movable):
         names its ``Aggregation`` directly and calls ``aggregate``."""
         var box = List[GroupedColumns]()
 
-        @parameter
+        @__parameter
         def run[A: Aggregation]() raises:
             box.append(self.aggregate[A](A.from_any(value)))
 
@@ -493,7 +493,7 @@ struct GroupBy(Movable):
                 self._keys, agg, values, self._ctx
             )
 
-        @parameter
+        @__parameter
         def by_column(
             j: Int, groups: Grouping, value: DynArray
         ) raises -> DynArray:
@@ -525,7 +525,7 @@ struct GroupBy(Movable):
             length=num_threads, fill=None
         )
 
-        @parameter
+        @__parameter
         def worker(t: Int) raises:
             var start = t * chunk
             if start >= n:
@@ -655,7 +655,7 @@ struct GroupBy(Movable):
         ) if partition else outer.with_threads(1)
         var na = len(values)
 
-        @parameter
+        @__parameter
         def group_partition(
             rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[Int32Array, List[DynArray]]:
@@ -694,7 +694,7 @@ struct GroupBy(Movable):
         var parts = List[Tuple[Int32Array, List[DynArray]]]()
         if partition:
 
-            @parameter
+            @__parameter
             def radix_partition(
                 _pi: Int, rows: Int32Array, part_hashes: UInt64Array
             ) raises -> Tuple[Int32Array, List[DynArray]]:

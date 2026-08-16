@@ -110,7 +110,7 @@ from .arrays import (
 # ---------------------------------------------------------------------------
 
 
-trait Builder(ImplicitlyDeletable, Movable, Sized):
+trait Builder(Deinitable, Movable, Sized):
     comptime ArrayType: Array
 
     def __len__(self) -> Int:
@@ -217,10 +217,10 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
     def __init__(out self, *, copy: Self):
         self._ptr = copy._ptr.copy()
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # Explicit (empty) destructor so this type is Deinitable despite
     # the `StructBuilder -> List[DynBuilder] -> DynBuilder` reference cycle; the
     # ArcPointer field is still destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def __init__(out self, dtype: DynType, capacity: Int = 0) raises:
@@ -314,42 +314,42 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
             raise Error("unsupported type: ", dtype)
 
     def length(self) -> Int:
-        @parameter
+        @__parameter
         def f[T: Builder](b: T) -> Int:
             return b.length()
 
         return variant_dispatch[Builder, func=f](self._ptr[])
 
     def null_count(self) -> Int:
-        @parameter
+        @__parameter
         def f[T: Builder](b: T) -> Int:
             return b.null_count()
 
         return variant_dispatch[Builder, func=f](self._ptr[])
 
     def dtype(self) -> DynType:
-        @parameter
+        @__parameter
         def f[T: Builder](b: T) -> DynType:
             return b.dtype()
 
         return variant_dispatch[Builder, func=f](self._ptr[])
 
     def reserve(mut self, additional: Int) raises:
-        @parameter
+        @__parameter
         def f[T: Builder](mut b: T) raises:
             b.reserve(additional)
 
         variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     def append_null(mut self) raises:
-        @parameter
+        @__parameter
         def f[T: Builder](mut b: T) raises:
             b.append_null()
 
         variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     def extend(mut self, arr: DynArray) raises:
-        @parameter
+        @__parameter
         def f[T: Builder](mut b: T) raises:
             b.extend(arr)
 
@@ -361,14 +361,14 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
     conformed there was nothing for the erased builder to name."""
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
-        @parameter
+        @__parameter
         def f[T: Builder](mut b: T) raises -> DynArray:
             return b.finish(shrink_to_fit=shrink_to_fit).to_dyn()
 
         return variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     def reset(mut self) raises:
-        @parameter
+        @__parameter
         def f[T: Builder](mut b: T) raises:
             b.reset()
 
@@ -1289,9 +1289,9 @@ struct StructBuilder(Builder):
         self._children = children^
 
     # Explicit (empty) destructor so this struct's `_children: List[DynBuilder]`
-    # (which cycles back through DynBuilder's variant) is ImplicitlyDeletable;
+    # (which cycles back through DynBuilder's variant) is Deinitable;
     # fields are still destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def length(self) -> Int:

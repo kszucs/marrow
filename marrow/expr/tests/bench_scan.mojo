@@ -58,7 +58,7 @@ def _bench_scan(
     b.throughput(BenchMetric.elements, n * ncols)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(
             DynRelation(

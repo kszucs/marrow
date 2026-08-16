@@ -130,7 +130,7 @@ struct XxHash64:
 # Split-block bloom filter
 # ---------------------------------------------------------------------------
 
-comptime _SALT = InlineArray[UInt32, 8](
+comptime _SALT = Array[UInt32, 8](
     UInt32(0x47B6137B),
     UInt32(0x44974D91),
     UInt32(0x8824AD5B),
@@ -147,7 +147,7 @@ comptime _WORDS_PER_BLOCK = 8
 
 
 @always_inline
-def _block_mask(x: UInt32, mut out: InlineArray[UInt32, 8]):
+def _block_mask(x: UInt32, mut out: Array[UInt32, 8]):
     """The eight per-word bit masks a value sets/tests within one block."""
     comptime for i in range(8):
         # Read the salt at comptime: `Array` is not `ImplicitlyCopyable`, so
@@ -217,7 +217,7 @@ struct SplitBlockBloomFilter(Movable):
 
     def insert_hash(mut self, hash: UInt64):
         var bi = self._block_of(hash) * _WORDS_PER_BLOCK
-        var m = InlineArray[UInt32, 8](fill=0)
+        var m = Array[UInt32, 8](fill=0)
         _block_mask(UInt32(hash & 0xFFFFFFFF), m)
 
         comptime for i in range(8):
@@ -225,7 +225,7 @@ struct SplitBlockBloomFilter(Movable):
 
     def contains_hash(self, hash: UInt64) -> Bool:
         var bi = self._block_of(hash) * _WORDS_PER_BLOCK
-        var m = InlineArray[UInt32, 8](fill=0)
+        var m = Array[UInt32, 8](fill=0)
         _block_mask(UInt32(hash & 0xFFFFFFFF), m)
 
         comptime for i in range(8):

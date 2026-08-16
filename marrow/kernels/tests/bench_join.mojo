@@ -69,7 +69,7 @@ def _bench_build(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var j = HashJoin()
         j.build(left, keys)
@@ -96,7 +96,7 @@ def _bench_probe(mut b: Benchmark, build_n: Int, probe_n: Int) raises:
     b.throughput(BenchMetric.elements, probe_n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var r = j.probe(right, keys, JOIN_INNER, JOIN_ALL)
         keep(len(r))
@@ -120,7 +120,7 @@ def _bench_full(mut b: Benchmark, build_n: Int, probe_n: Int) raises:
     b.throughput(BenchMetric.elements, build_n + probe_n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var r = hash_join(left, right, keys, keys, JOIN_INNER, JOIN_ALL)
         keep(len(r))

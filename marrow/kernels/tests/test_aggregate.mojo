@@ -45,7 +45,7 @@ def whole[F: AggFunction](value: DynArray) raises -> DynScalar:
     """
     var box = List[DynArray]()
 
-    @parameter
+    @__parameter
     def run[A: Aggregation]() raises:
         box.append(A.whole(A.from_any(value)).to_dyn())
 

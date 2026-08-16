@@ -49,7 +49,7 @@ def bench_rapidhash_int64_10k(mut b: Benchmark) raises:
     var keys = _make_int64(10_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -61,7 +61,7 @@ def bench_rapidhash_int64_100k(mut b: Benchmark) raises:
     var keys = _make_int64(100_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -73,7 +73,7 @@ def bench_rapidhash_int64_1m(mut b: Benchmark) raises:
     var keys = _make_int64(1_000_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -90,7 +90,7 @@ def bench_rapidhash_int32_10k(mut b: Benchmark) raises:
     var keys = _make_int32(10_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -102,7 +102,7 @@ def bench_rapidhash_int32_100k(mut b: Benchmark) raises:
     var keys = _make_int32(100_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -114,7 +114,7 @@ def bench_rapidhash_int32_1m(mut b: Benchmark) raises:
     var keys = _make_int32(1_000_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -131,7 +131,7 @@ def bench_rapidhash_bool_10k(mut b: Benchmark) raises:
     var keys = _make_bool(10_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -143,7 +143,7 @@ def bench_rapidhash_bool_100k(mut b: Benchmark) raises:
     var keys = _make_bool(100_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 
@@ -155,7 +155,7 @@ def bench_rapidhash_bool_1m(mut b: Benchmark) raises:
     var keys = _make_bool(1_000_000)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(RapidHash.apply(keys)))
 

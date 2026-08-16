@@ -160,7 +160,7 @@ def _stripes(
     var ends = List[Int](length=workers, fill=-1)
 
     @always_inline
-    @parameter
+    @__parameter
     def record(wid: Int, start: Int, end: Int):
         starts[wid] = start
         ends[wid] = end
@@ -254,7 +254,7 @@ def test_stripe_wid_indexes_within_stripe_workers() raises:
     var seen = List[Int](length=workers, fill=0)
 
     @always_inline
-    @parameter
+    @__parameter
     def mark(wid: Int, start: Int, end: Int):
         seen[wid] += 1
 
@@ -271,7 +271,7 @@ def test_stripe_zero_length_visits_nothing() raises:
     var total = List[Int](length=1, fill=0)
 
     @always_inline
-    @parameter
+    @__parameter
     def count(wid: Int, start: Int, end: Int):
         total[0] += end - start
 

@@ -121,7 +121,7 @@ from .scalars import (
 trait Array(
     Copyable,
     Equatable,
-    ImplicitlyDeletable,
+    Deinitable,
     Movable,
     Sized,
     Writable,
@@ -325,7 +325,7 @@ struct ArrayData(Copyable, Movable):
             )
 
     # Explicit (empty) destructor so this self-referential struct
-    # (`children: List[ArrayData]`) is ImplicitlyDeletable; fields are still
+    # (`children: List[ArrayData]`) is Deinitable; fields are still
     # destroyed automatically after the body runs.
     def validity(
         ref self,
@@ -348,7 +348,7 @@ struct ArrayData(Copyable, Movable):
         else:
             return None
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
 
@@ -1366,7 +1366,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         var n = offsets.length - 1
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if m := mask^:
+        if var m := mask^:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -1641,7 +1641,7 @@ struct FixedSizeListArray(Array):
         var n = values.length() // list_size if list_size > 0 else 0
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if m := mask^:
+        if var m := mask^:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -2036,7 +2036,7 @@ struct StructArray(Array):
         var n = children[0].length() if len(children) > 0 else 0
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if m := mask^:
+        if var m := mask^:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -2426,10 +2426,10 @@ struct DynArray(
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # Explicit (empty) destructor so this type is Deinitable despite
     # the `StructArray -> List[DynArray] -> DynArray` reference cycle; the
     # variant field is still destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -2456,7 +2456,7 @@ struct DynArray(
     # --- dispatch-based methods ---
 
     def length(self) -> Int:
-        @parameter
+        @__parameter
         def f[T: Array](a: T) -> Int:
             return len(a)
 
@@ -2478,21 +2478,21 @@ struct DynArray(
         return self.dtype()
 
     def dtype(self) -> DynType:
-        @parameter
+        @__parameter
         def f[T: Array](a: T) -> DynType:
             return a.type()
 
         return variant_dispatch[Array, func=f](self._v)
 
     def null_count(self) -> Int:
-        @parameter
+        @__parameter
         def f[T: Array](a: T) -> Int:
             return a.null_count()
 
         return variant_dispatch[Array, func=f](self._v)
 
     def is_valid(self, index: Int) -> Bool:
-        @parameter
+        @__parameter
         def f[T: Array](a: T) -> Bool:
             return a.is_valid(index)
 
@@ -2507,7 +2507,7 @@ struct DynArray(
         Matches PyArrow's Array.slice(offset, length) API.
         """
 
-        @parameter
+        @__parameter
         def f[T: Array](a: T) raises -> DynArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
@@ -2536,7 +2536,7 @@ struct DynArray(
         Not intended for hot paths — prefer typed downcast methods.
         """
 
-        @parameter
+        @__parameter
         def f[T: Array](a: T) raises -> ArrayData:
             return a.to_data()
 
@@ -2545,7 +2545,7 @@ struct DynArray(
     def to_device(self, ctx: DeviceContext) raises -> DynArray:
         """Upload this array to the GPU device."""
 
-        @parameter
+        @__parameter
         def f[T: Array](a: T) raises -> DynArray:
             return a.to_device(ctx)
 
@@ -2554,7 +2554,7 @@ struct DynArray(
     def to_cpu(self, ctx: DeviceContext) raises -> DynArray:
         """Download this array from the GPU device to CPU memory."""
 
-        @parameter
+        @__parameter
         def f[T: Array](a: T) raises -> DynArray:
             return a.to_cpu(ctx)
 
@@ -2565,7 +2565,7 @@ struct DynArray(
         return self^
 
     def write_to[W: Writer](self, mut writer: W):
-        @parameter
+        @__parameter
         def f[T: Array](a: T):
             a.write_to(writer)
 
@@ -2591,7 +2591,7 @@ struct DynArray(
                 t"index {index} out of bounds for length {self.length()}"
             )
 
-        @parameter
+        @__parameter
         def f[T: Array](a: T) raises -> DynScalar:
             return a[index].to_dyn()
 

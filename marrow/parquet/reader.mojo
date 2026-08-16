@@ -458,7 +458,7 @@ def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
     )
 
 
-trait LeafBuilder(ImplicitlyDeletable, Movable):
+trait LeafBuilder(Deinitable, Movable):
     """Accumulates the values of a column chunk, page by page, into an array."""
 
     def consume(mut self, var page: Page) raises:
@@ -522,7 +522,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
     def _scatter(
         mut self,
         page: Page,
-        present: UnsafePointer[Scalar[Self.store_dt], _],
+        present: Pointer[Scalar[Self.store_dt], _],
         mask: Optional[List[Bool]] = None,
     ) raises:
         """Place `page.num_present` contiguous decoded values into the output
@@ -534,7 +534,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if not mask and page.all_present():
             unsafe_memcpy(
-                dest=vptr + self.wpos, src=present, count=page.num_present
+                dest=vptr.unsafe_offset(self.wpos), src=present, count=page.num_present
             )
             if self.has_bitmap:
                 self.bitmap.set_range(self.wpos, page.num_present, True)
@@ -542,14 +542,14 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             return
         self._ensure_bitmap()
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if selected:
                 if present_here:
-                    vptr[self.wpos] = present[vi]
+                    vptr[unsafe_offset=self.wpos] = present[unsafe_offset=vi]
                     self.bitmap.set(self.wpos)
                 else:
-                    vptr[self.wpos] = 0
+                    vptr[unsafe_offset=self.wpos] = 0
                     self.null_count += 1
                 self.wpos += 1
 
@@ -562,7 +562,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                 self.dict.resize(unsafe_uninit_length=page.num_values)
                 unsafe_memcpy(
                     dest=self.dict.unsafe_ptr(),
-                    src=page.body.unsafe_ptr().bitcast[Scalar[Self.store_dt]](),
+                    src=page.body.unsafe_ptr().unsafe_bitcast[Scalar[Self.store_dt]](),
                     count=page.num_values,
                 )
             else:
@@ -576,7 +576,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             # fast path: PLAIN stores only present values, contiguous and already
             # the store width — scatter straight from the page (no copy).
             self._scatter(
-                page, vspan.unsafe_ptr().bitcast[Scalar[Self.store_dt]]()
+                page, vspan.unsafe_ptr().unsafe_bitcast[Scalar[Self.store_dt]]()
             )
         elif page.is_dictionary() and page.all_present():
             # fast path: fused index-decode + gather straight to the output.
@@ -649,7 +649,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
         shared placement path for the materializing encodings (dictionary,
         DELTA_*). With `mask`, only the selected rows are appended."""
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if selected:
                 if present_here:
@@ -671,7 +671,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
         since PLAIN stores no offsets."""
         var bpos = 0
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if present_here:
                 var n = LittleEndian.u32(vspan, bpos)
@@ -818,7 +818,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
             )
             use_decoded = True
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if selected:
                 if present_here:
@@ -878,7 +878,7 @@ struct Int96LeafBuilder(LeafBuilder):
         elif not page.is_plain():
             raise Error("parquet: unsupported INT96 encoding")
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if selected:
                 if present_here:
@@ -937,7 +937,7 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
             )
             use_decoded = True
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if selected:
                 if present_here:
@@ -993,7 +993,7 @@ struct BoolLeafBuilder(LeafBuilder):
         `mask`, only selected rows are appended. `vi` is the present-value index,
         which for a bit-packed PLAIN page is exactly the bit offset."""
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if present_here:
                 var byte = vspan[vi >> 3]
@@ -1014,7 +1014,7 @@ struct BoolLeafBuilder(LeafBuilder):
         """Scatter already-decoded present booleans (the RLE path) honoring def
         levels; with `mask`, only selected rows are appended."""
 
-        @parameter
+        @__parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if selected:
                 if present_here:
@@ -1379,24 +1379,24 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
 
-        @parameter
+        @__parameter
         def handle_dict(pg: Page) raises:
             Dictionary.decode_page_primitive[T.native, phys](
                 pg.body, pg.num_values, dict
             )
 
-        @parameter
+        @__parameter
         def decode_present(pg: Page) raises:
             present.clear()
             pg.encoding.decode_primitive[T.native, phys](
                 pg.values(), pg.num_present, dict, present
             )
 
-        @parameter
+        @__parameter
         def place_present(vi: Int) raises:
             builder.append(present[vi])
 
-        @parameter
+        @__parameter
         def place_null() raises:
             builder.append_null()
 
@@ -1421,13 +1421,13 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
 
-        @parameter
+        @__parameter
         def handle_dict(pg: Page) raises:
             Dictionary.decode_page_bytes(
                 pg.body, pg.num_values, dict_body, dict_off, dict_len
             )
 
-        @parameter
+        @__parameter
         def decode_present(pg: Page) raises:
             values.clear()
             values.extend(
@@ -1436,11 +1436,11 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
                 )
             )
 
-        @parameter
+        @__parameter
         def place_present(vi: Int) raises:
             builder.append(StringSlice(unsafe_from_utf8=Span(values[vi])))
 
-        @parameter
+        @__parameter
         def place_null() raises:
             builder.append_null()
 
@@ -1458,20 +1458,20 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
 
-        @parameter
+        @__parameter
         def handle_dict(pg: Page) raises:
             raise Error("parquet: dictionary-encoded bool not supported")
 
-        @parameter
+        @__parameter
         def decode_present(pg: Page) raises:
             present.clear()
             present.extend(pg.encoding.decode_bool(pg.values(), pg.num_present))
 
-        @parameter
+        @__parameter
         def place_present(vi: Int) raises:
             builder.append(present[vi])
 
-        @parameter
+        @__parameter
         def place_null() raises:
             builder.append_null()
 
@@ -1502,14 +1502,14 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
 
-        @parameter
+        @__parameter
         def handle_dict(pg: Page) raises:
             for i in range(pg.num_values):
                 dict.append(
                     Plain.decode_be_flba[native](pg.body, i * width, width)
                 )
 
-        @parameter
+        @__parameter
         def decode_present(pg: Page) raises:
             present.clear()
             var vspan = pg.values()
@@ -1533,11 +1533,11 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
                         )
                     )
 
-        @parameter
+        @__parameter
         def place_present(vi: Int) raises:
             builder.append(present[vi])
 
-        @parameter
+        @__parameter
         def place_null() raises:
             builder.append_null()
 
@@ -1559,12 +1559,12 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
 
-        @parameter
+        @__parameter
         def handle_dict(pg: Page) raises:
             dict_body.clear()
             dict_body.extend(pg.body)
 
-        @parameter
+        @__parameter
         def decode_present(pg: Page) raises:
             present.clear()
             var vspan = pg.values()
@@ -1585,11 +1585,11 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
                     var o = i * width
                     present.append(List[UInt8](Span(bytes)[o : o + width]))
 
-        @parameter
+        @__parameter
         def place_present(vi: Int) raises:
             builder.append(Span(present[vi]))
 
-        @parameter
+        @__parameter
         def place_null() raises:
             builder.append_null()
 
@@ -1717,12 +1717,12 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
 
-        @parameter
+        @__parameter
         def handle_dict(pg: Page) raises:
             for i in range(pg.num_values):
                 dict.append(_int96_nanos(pg.body, i * 12))
 
-        @parameter
+        @__parameter
         def decode_present(pg: Page) raises:
             present.clear()
             var vspan = pg.values()
@@ -1736,11 +1736,11 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
             else:
                 raise Error("parquet: unsupported INT96 encoding")
 
-        @parameter
+        @__parameter
         def place_present(vi: Int) raises:
             builder.append(present[vi])
 
-        @parameter
+        @__parameter
         def place_null() raises:
             builder.append_null()
 
@@ -2110,7 +2110,7 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
         while len(codecs[]) < nt:
             codecs[].append(CompressionLibs())
 
-        @parameter
+        @__parameter
         def worker(w: Int) raises:
             ref codecs_w = codecs[][w]
             var t = w

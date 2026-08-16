@@ -276,7 +276,7 @@ struct ExecContext(
         **``body`` may not raise, and widening it is not a small change.**
         Tried and reverted 2026-07-28. `sync_parallelize` accepts a raising
         worker only in its *parameter* form (`sync_parallelize[w](n)`), which
-        needs an implicitly-capturing `@parameter` closure; the *value* form
+        needs an implicitly-capturing `@__parameter` closure; the *value* form
         used here takes an explicit capture list and rejects `raises`. Switching
         to the parameter form compiles — with new "assignment was never used"
         warnings on the very buffers the body writes — and then **crashes at

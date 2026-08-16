@@ -163,11 +163,11 @@ struct NumericCast(Kernel):
         """Runtime numeric → numeric: resolve source and target over the numeric
         dtypes, branching ``safe`` into the checked / unchecked ``apply``."""
 
-        @parameter
+        @__parameter
         def on_source[From: NumericType](s: From) raises -> DynArray:
             var typed = array.as_primitive[From]().copy()
 
-            @parameter
+            @__parameter
             def on_target[To: NumericType](d: To) raises -> DynArray:
                 if safe:
                     return Self.apply[From, To, True](typed, ctx).to_dyn()
@@ -197,7 +197,7 @@ struct NumToBool(Kernel):
     def dispatch(array: DynArray, ctx: ExecContext) raises -> DynArray:
         """Runtime numeric → bool over the numeric source dtypes."""
 
-        @parameter
+        @__parameter
         def from_num[From: NumericType](s: From) raises -> DynArray:
             return Self.apply(array.as_primitive[From](), ctx).to_dyn()
 
@@ -244,7 +244,7 @@ struct BoolToNum(Kernel):
         """Runtime bool → numeric over the numeric target dtypes."""
         var b = array.as_bool().copy()
 
-        @parameter
+        @__parameter
         def to_num[To: NumericType](d: To) raises -> DynArray:
             return Self.apply[To](b, ctx).to_dyn()
 
@@ -400,7 +400,7 @@ struct TemporalCast(Kernel):
         var buf = Buffer.alloc_uninit[DstN](length)
         var src = data.buffers[0].view[SrcN](data.offset, length)
 
-        @parameter
+        @__parameter
         @always_inline
         def scale[W: Int](v: SIMD[SrcN, W]) -> SIMD[DstN, W]:
             var x = v.cast[DType.int64]()
@@ -438,11 +438,11 @@ struct StringToNum(Kernel):
         """Runtime string-like → numeric: resolve source string kind and numeric
         target, branching ``safe`` into the raising / nulling ``apply``."""
 
-        @parameter
+        @__parameter
         def on_str[From: StringLikeType](s: From) raises -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
 
-            @parameter
+            @__parameter
             def to_num[To: NumericType](d: To) raises -> DynArray:
                 if safe:
                     return Self.apply[From, To, True](a).to_dyn()
@@ -491,7 +491,7 @@ struct StringToBool(Kernel):
     ) raises -> DynArray:
         """Runtime string-like → bool over the source string kinds."""
 
-        @parameter
+        @__parameter
         def on_str[From: StringLikeType](s: From) raises -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
             if safe:
@@ -532,9 +532,9 @@ struct NumToString(Kernel):
         """Runtime numeric → string-like: resolve target string kind and numeric
         source."""
 
-        @parameter
+        @__parameter
         def on_target[To: StringLikeType](d: To) raises -> DynArray:
-            @parameter
+            @__parameter
             def from_num[From: NumericType](s: From) raises -> DynArray:
                 return Self.apply[From, To](array.as_primitive[From]()).to_dyn()
 
@@ -565,7 +565,7 @@ struct BoolToString(Kernel):
         """Runtime bool → string-like over the target string kinds."""
         var b = array.as_bool().copy()
 
-        @parameter
+        @__parameter
         def on_target[To: StringLikeType](d: To) raises -> DynArray:
             return Self.apply[To](b).to_dyn()
 
@@ -603,11 +603,11 @@ struct BinaryLikeCast(Kernel):
         """Runtime bytes ↔ bytes: resolve the source and target binary-like kinds,
         branching ``safe`` into the UTF-8-validating / trusting ``apply``."""
 
-        @parameter
+        @__parameter
         def on_src[From: BinaryLikeType](s: From) raises -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
 
-            @parameter
+            @__parameter
             def on_to[To: BinaryLikeType](d: To) raises -> DynArray:
                 if safe:
                     return Self.apply[From, To, True](a).to_dyn()
@@ -673,7 +673,7 @@ struct FixedSizeBinaryCast(Kernel):
         if array.dtype().is_fixed_size_binary():  # fsb → binary
             var fsb = array.as_fixed_size_binary().copy()
 
-            @parameter
+            @__parameter
             def to_bin[To: BinaryLikeType](d: To) raises -> DynArray:
                 return Self.to_binary[To](fsb).to_dyn()
 
@@ -681,7 +681,7 @@ struct FixedSizeBinaryCast(Kernel):
         else:  # binary → fsb
             var width = to.as_fixed_size_binary().byte_width
 
-            @parameter
+            @__parameter
             def from_bin[From: BinaryLikeType](s: From) raises -> DynArray:
                 var a = BinaryLikeArray[From](array.to_data())
                 return Self.from_binary[From](a, width).to_dyn()
@@ -772,9 +772,9 @@ struct DecimalCast(Kernel):
         var from_scale = Self._scale(array.dtype())
         var to_scale = Self._scale(to)
 
-        @parameter
+        @__parameter
         def on_from[FromN: DType]() raises -> DynArray:
-            @parameter
+            @__parameter
             def on_to[ToN: DType]() raises -> DynArray:
                 return Self._convert[FromN, ToN](data, from_scale, to_scale, to)
 
@@ -813,14 +813,14 @@ struct DecimalCast(Kernel):
         native, then run ``func`` with that scalar ``DType``."""
         if dt.is_decimal():
 
-            @parameter
+            @__parameter
             def by_dec[T: DecimalType](x: T) raises -> DynArray:
                 return func[T.native]()
 
             return dt.dispatch_decimal[by_dec]()
         else:
 
-            @parameter
+            @__parameter
             def by_num[T: NumericType](x: T) raises -> DynArray:
                 return func[T.native]()
 
@@ -836,7 +836,7 @@ struct DecimalCast(Kernel):
         comptime if FromN.is_floating_point():  # float → decimal
             var f = Self._pow10[DType.float64](to_scale)
 
-            @parameter
+            @__parameter
             def to_dec(x: Scalar[FromN]) -> Scalar[ToN]:
                 return round(x.cast[DType.float64]() * f).cast[ToN]()
 
@@ -844,7 +844,7 @@ struct DecimalCast(Kernel):
         elif ToN.is_floating_point():  # decimal → float
             var f = Self._pow10[DType.float64](from_scale)
 
-            @parameter
+            @__parameter
             def to_flt(x: Scalar[FromN]) -> Scalar[ToN]:
                 return (x.cast[DType.float64]() / f).cast[ToN]()
 
@@ -854,7 +854,7 @@ struct DecimalCast(Kernel):
             if delta >= 0:
                 var f = Self._pow10[ToN](delta)
 
-                @parameter
+                @__parameter
                 def up(x: Scalar[FromN]) -> Scalar[ToN]:
                     return x.cast[ToN]() * f
 
@@ -862,7 +862,7 @@ struct DecimalCast(Kernel):
             else:
                 var f = Self._pow10[FromN](-delta)
 
-                @parameter
+                @__parameter
                 def down(x: Scalar[FromN]) -> Scalar[ToN]:
                     return (x // f).cast[ToN]()
 

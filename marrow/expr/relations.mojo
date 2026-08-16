@@ -102,7 +102,7 @@ comptime RELATION_PARQUET_SCAN: Int = 1
 comptime RELATION_SORT: Int = 2
 
 
-trait Relation(ImplicitlyDeletable, Movable):
+trait Relation(Deinitable, Movable):
     """A relational plan node: a pure, immutable description of an operation.
 
     Nodes hold only their parameters and child relations — no execution state.
@@ -367,7 +367,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_kind = copy._virt_kind
         self._virt_with_predicate = copy._virt_with_predicate
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         self._virt_drop(self._data^)
 
     # --- introspection ---

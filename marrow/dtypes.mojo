@@ -53,7 +53,7 @@ from .utils import variant_dispatch, variant_dispatch_raises
 # ---------------------------------------------------------------------------
 
 
-trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
+trait DataType(Copyable, Equatable, Deinitable, Movable, Writable):
     """A concrete Arrow type.
 
     Deliberately minimal: five inherited traits and one defaulted method, and
@@ -730,7 +730,7 @@ struct DictionaryType(DataType):
     # Explicit (empty) destructor: `OwnedPointer[DynType]` is not implicitly
     # deletable, so the compiler cannot synthesize one. Fields are still
     # destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def index_type(ref self) -> ref[self._index_type[]] DynType:
@@ -981,7 +981,7 @@ struct DynType(
         if not self.is_primitive():
             return 0
 
-        @parameter
+        @__parameter
         def f[T: PrimitiveType](t: T) -> Int:
             return t.byte_width()
 
@@ -1243,7 +1243,7 @@ struct DynType(
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        @parameter
+        @__parameter
         def f[T: DataType](t: T):
             t.write_to(writer)
 

@@ -75,7 +75,7 @@ def _scale_by_two[
     them — pointer + length — to the GPU before elementwise launches the kernel.
     """
 
-    @parameter
+    @__parameter
     @always_inline
     def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
         var i = Int(coord[0].value())
@@ -107,7 +107,7 @@ def _bits_to_bytes[
     transferred to the GPU via DevicePassable.
     """
 
-    @parameter
+    @__parameter
     @always_inline
     def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
         var i = Int(coord[0].value())

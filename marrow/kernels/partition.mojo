@@ -59,7 +59,7 @@ def radix_histogram[
     var hist = List[Int](length=num_threads * num_buckets, fill=0)
 
     @always_inline
-    @parameter
+    @__parameter
     def hist_worker(t: Int, start: Int, end: Int):
         var base = t * num_buckets
         for i in range(start, end):
@@ -197,7 +197,7 @@ struct RadixPartitioner(Movable):
 
         # 1-2. Histogram rows by top-bit partition id + prefix-sum into per-thread
         # write cursors (shared with the radix sort, cf. ``radix_histogram``).
-        @parameter
+        @__parameter
         def bucket_of(i: Int) -> Int:
             return Int(UInt64(src.load[1](i)) >> shift)
 
@@ -221,7 +221,7 @@ struct RadixPartitioner(Movable):
         # allocation (each alloc contends on tcmalloc's page heap
         # spinlock, which showed up as ~11% of worker time in profiling).
         @always_inline
-        @parameter
+        @__parameter
         def scatter_worker(t: Int, start: Int, end: Int):
             var base = t * p
             for i in range(start, end):
@@ -261,11 +261,11 @@ struct RadixPartitioner(Movable):
         return result^
 
     def map_partitions[
-        # `ImplicitlyDeletable` is required since mojo 1.0.0b3.dev2026072406:
+        # `Deinitable` is required since mojo 1.0.0b3.dev2026072406:
         # `Optional[R]` (used for the per-worker result slots below) only
         # conditionally conforms to it, so an unconstrained `R` makes the
         # slot list linear and unable to be dropped.
-        R: Copyable & ImplicitlyDeletable,
+        R: Copyable & Deinitable,
         op: def(Int, Int32Array, UInt64Array) raises capturing[_] -> R,
     ](self, var hashes: UInt64Array) raises -> List[R]:
         """Run ``op`` on every partition in parallel and collect the results.
@@ -289,7 +289,7 @@ struct RadixPartitioner(Movable):
         var p = len(partitions)
         var slots = List[Optional[R]](length=p, fill=None)
 
-        @parameter
+        @__parameter
         def worker(i: Int) raises:
             slots[i] = op(
                 i,

@@ -101,7 +101,7 @@ struct NumericFold[K: AggKernel](AggFunction):
                 " columns",
             )
 
-        @parameter
+        @__parameter
         def numeric[V: NumericType](d: V) raises:
             job[Self.K.Grouped[V]]()
 
@@ -121,21 +121,21 @@ struct OrderPreserving[Op: MinMaxOp](AggFunction):
     ](value_dtype: DynType) raises:
         if value_dtype.is_numeric():
 
-            @parameter
+            @__parameter
             def numeric[V: NumericType](d: V) raises:
                 job[MinMax[Self.Op].Grouped[V]]()
 
             value_dtype.dispatch_numeric[numeric]()
         elif value_dtype.is_temporal():
 
-            @parameter
+            @__parameter
             def temporal[T: TemporalType](d: T) raises:
                 job[TemporalMinMax[Self.Op, T]]()
 
             value_dtype.dispatch_temporal[temporal]()
         elif value_dtype.is_string() or value_dtype.is_large_string():
 
-            @parameter
+            @__parameter
             def stringly[T: StringLikeType](d: T) raises:
                 job[StringMinMax[Self.Op, T]]()
 
@@ -162,7 +162,7 @@ struct CountValid(AggFunction):
     ](value_dtype: DynType) raises:
         if value_dtype.is_numeric():
 
-            @parameter
+            @__parameter
             def numeric[V: NumericType](d: V) raises:
                 job[NumericAgg[CountKernel, V]]()
 
@@ -311,7 +311,7 @@ struct AggFunc(Copyable, Movable, Writable):
         (``marrow.expr.dynamic.resolve_agg`` — the one string comparison)."""
         var box = List[AggFunc]()
 
-        @parameter
+        @__parameter
         def make[A: Aggregation]() raises:
             box.append(Self.of[A](value_dtype))
 
@@ -459,7 +459,7 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         var funcs = List[AggFunc]()
         var folds = List[AggFold]()
 
-        @parameter
+        @__parameter
         def make[A: Aggregation]() raises:
             funcs.append(AggFunc.of[A](value_dtype))
             folds.append(AggFold.of[A]())

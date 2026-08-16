@@ -69,7 +69,7 @@ def _bench_sort_int32(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(sort_indices(data.copy()))
 
@@ -82,7 +82,7 @@ def _bench_sort_int64(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(sort_indices(data.copy()))
 
@@ -95,7 +95,7 @@ def _bench_sort_float64(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(sort_indices(data.copy()))
 
@@ -178,7 +178,7 @@ def _bench_sort_multi(mut b: Benchmark, n: Int, keys: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(SortIndices.multi(data, key_indices, ascending))
 

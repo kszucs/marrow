@@ -13,7 +13,8 @@ from std.python._cpython import (
     PyTypeObjectPtr,
 )
 from std.ffi import c_char, c_int, c_ssize_t, _CPointer
-from std.memory import ArcPointer, alloc, UnsafePointer
+from std.memory import ArcPointer, Pointer
+from std.memory.alloc import unsafe_alloc
 from std.builtin.type_aliases import MutAnyOrigin
 from std.utils import Variant
 from std.builtin.variadics import Variadic
@@ -53,8 +54,8 @@ comptime _PyBytesAsStringAndSizeFn = ExternalFunction[
     "PyBytes_AsStringAndSize",
     def(
         PyObjectPtr,
-        UnsafePointer[_CPointer[c_char, ImmutAnyOrigin], MutAnyOrigin],
-        UnsafePointer[c_ssize_t, MutAnyOrigin],
+        Pointer[_CPointer[c_char, ImmutAnyOrigin], MutAnyOrigin],
+        Pointer[c_ssize_t, MutAnyOrigin],
     ) thin -> c_int,
 ]
 
@@ -196,8 +197,8 @@ struct PyHelpers(Copyable, Movable):
         # compiler no longer converts implicitly).
         var rc = self._bytes_as_string_and_size_fn(
             ptr,
-            UnsafePointer(to=data_ptr).unsafe_origin_cast[MutAnyOrigin](),
-            UnsafePointer(to=size).unsafe_origin_cast[MutAnyOrigin](),
+            Pointer(to=data_ptr).unsafe_origin_cast[MutAnyOrigin](),
+            Pointer(to=size).unsafe_origin_cast[MutAnyOrigin](),
         )
         if rc != 0:
             self.raise_on_error()
@@ -313,8 +314,8 @@ struct PyInferrer(Copyable, Movable):
 
     # Explicit (empty) destructor so this self-referential struct
     # (`_list_child` / `_field_children` are `List[PyInferrer]`) is
-    # ImplicitlyDeletable; fields are still destroyed automatically.
-    def __del__(deinit self):
+    # Deinitable; fields are still destroyed automatically.
+    def __deinit__(deinit self):
         pass
 
     def visit(mut self, ptr: PyObjectPtr) raises -> Bool:
@@ -384,9 +385,9 @@ struct PyInferrer(Copyable, Movable):
         ref cpy = self.py.cpy()
         var n = self.py.length(dict_ptr)
         var pos = Int(0)
-        var key_raw = alloc[PyObjectPtr](1)
-        var val_raw = alloc[PyObjectPtr](1)
-        var pos_ptr = UnsafePointer(to=pos)
+        var key_raw = unsafe_alloc[PyObjectPtr](1)
+        var val_raw = unsafe_alloc[PyObjectPtr](1)
+        var pos_ptr = Pointer(to=pos)
         for _ in range(n):
             _ = cpy.PyDict_Next(
                 dict_ptr,
@@ -486,7 +487,7 @@ struct PyInferrer(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-trait PyConverter(ImplicitlyDeletable, Movable):
+trait PyConverter(Deinitable, Movable):
     def append(mut self, value: PyObjectPtr) raises:
         ...
 
@@ -535,10 +536,10 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
     def __init__(out self, *, copy: Self):
         self._v = copy._v.copy()
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # Explicit (empty) destructor so this type is Deinitable despite
     # the `PyStructConverter -> List[PyAnyConverter] -> PyAnyConverter` cycle;
     # the ArcPointer field is still destroyed automatically after the body.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def __init__(
@@ -591,14 +592,14 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
             raise Error("unsupported type: ", dtype)
 
     def append(mut self, value: PyObjectPtr) raises:
-        @parameter
+        @__parameter
         def f[T: PyConverter](mut t: T) raises:
             t.append(value)
 
         dt.variant_dispatch_raises[PyConverter, func=f](self._v[])
 
     def extend(mut self, values: PyObjectPtr) raises:
-        @parameter
+        @__parameter
         def f[T: PyConverter](mut t: T) raises:
             t.extend(values)
 
@@ -931,10 +932,10 @@ struct PyStructConverter(PyConverter):
     var _field_keys: List[PythonObject]
     var py: PyHelpers
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite the
+    # Explicit (empty) destructor so this type is Deinitable despite the
     # `List[PyAnyConverter]` field (PyAnyConverter is recursive, so not
     # implicitly deletable); fields are still destroyed automatically.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def __init__(out self, builder: DynBuilder) raises:
@@ -999,7 +1000,7 @@ struct PyStructConverter(PyConverter):
 
 
 def arrow_c_array[
-    T: ImplicitlyDeletable, //, to_array_fn: def(T) thin -> DynArray
+    T: Deinitable, //, to_array_fn: def(T) thin -> DynArray
 ](py_self: PythonObject, requested_schema: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[T]()
     var arr = to_array_fn(ptr[])
@@ -1009,7 +1010,7 @@ def arrow_c_array[
 
 
 def arrow_c_schema[
-    T: ImplicitlyDeletable, //, type_fn: def(T) thin -> dt.DynType
+    T: Deinitable, //, type_fn: def(T) thin -> dt.DynType
 ](py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[T]()
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()

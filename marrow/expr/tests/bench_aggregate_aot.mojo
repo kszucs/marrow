@@ -104,7 +104,7 @@ def _bench_fused(mut bm: Benchmark, n: Int, num_groups: Int) raises:
     bm.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(_plan(batch.copy(), _fused_funcs()).execute())
 
@@ -117,7 +117,7 @@ def _bench_named(mut bm: Benchmark, n: Int, num_groups: Int) raises:
     bm.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(_plan(batch.copy(), _named_funcs()).execute())
 

@@ -79,7 +79,7 @@ from .dtypes import (
 # ---------------------------------------------------------------------------
 
 
-trait ArrowScalar(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
+trait ArrowScalar(Copyable, Equatable, Deinitable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
     def type(self) -> DynType:
@@ -619,23 +619,23 @@ struct DynScalar(
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # Explicit (empty) destructor so this type is Deinitable despite
     # the `StructScalar -> List[DynScalar] -> DynScalar` reference cycle; the
     # variant field is still destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     # --- dispatch-based methods ---
 
     def type(self) -> DynType:
-        @parameter
+        @__parameter
         def f[T: ArrowScalar](t: T) -> DynType:
             return t.type()
 
         return variant_dispatch[ArrowScalar, func=f](self._v)
 
     def is_valid(self) -> Bool:
-        @parameter
+        @__parameter
         def f[T: ArrowScalar](t: T) -> Bool:
             return t.is_valid()
 
@@ -662,14 +662,14 @@ struct DynScalar(
             return self.as_bool().repeat(times).to_dyn()
         elif dt.is_string_like():
 
-            @parameter
+            @__parameter
             def stringlike[T: StringLikeType](d: T) raises -> DynArray:
                 return self.as_string().repeat(times).to_dyn()
 
             return dt.dispatch_stringlike[stringlike]()
         elif dt.is_numeric():
 
-            @parameter
+            @__parameter
             def numeric[T: NumericType](d: T) raises -> DynArray:
                 return self.as_primitive[T]().repeat(times).to_dyn()
 
@@ -819,14 +819,14 @@ struct DynScalar(
         return self._v == other._v
 
     def write_to[W: Writer](self, mut writer: W):
-        @parameter
+        @__parameter
         def f[T: ArrowScalar](t: T):
             t.write_to(writer)
 
         variant_dispatch[ArrowScalar, func=f](self._v)
 
     def write_repr_to[W: Writer](self, mut writer: W):
-        @parameter
+        @__parameter
         def f[T: ArrowScalar](t: T):
             t.write_repr_to(writer)
 
@@ -854,7 +854,7 @@ struct DynScalar(
             return PythonObject(self.as_bool().value())
         elif dt.is_numeric() or dt.is_interval():
 
-            @parameter
+            @__parameter
             def numeric[T: PrimitiveType](d: T) raises -> PythonObject:
                 return PythonObject(self.as_primitive[T]().value())
 

@@ -15,7 +15,7 @@ from marrow.execution import ExecContext
 from marrow.schema import Schema
 from marrow.arrays import DynArray, ChunkedArray
 from marrow.dtypes import Field
-from std.memory import ArcPointer, UnsafePointer
+from std.memory import ArcPointer, Pointer
 from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.arrays import Int32Array

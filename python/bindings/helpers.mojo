@@ -6,7 +6,7 @@ implicit PythonObject construction (ConvertibleToPython or primitive types).
 """
 
 from std.builtin.type_aliases import MutAnyOrigin
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.python import (
     PythonObject,
     Python,
@@ -141,7 +141,7 @@ def pyinit[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     R: ConvertibleToPython,
     //,
     method: def(T) raises thin -> R,
@@ -156,7 +156,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     //,
     method: def(T) raises thin -> Int,
 ]() -> def(PythonObject) raises thin -> PythonObject:
@@ -170,7 +170,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     //,
     method: def(T) raises thin -> Bool,
 ]() -> def(PythonObject) raises thin -> PythonObject:
@@ -184,7 +184,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A0: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
@@ -202,7 +202,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A0: ConvertibleFromPython,
     //,
     method: def(T, A0) raises thin -> Bool,
@@ -219,7 +219,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     R: ConvertibleToPython,
@@ -242,7 +242,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
@@ -267,7 +267,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     E: ConvertibleToPython & Copyable,
     //,
     method: def(T) raises thin -> List[E],
@@ -287,7 +287,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A0: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
     //,
@@ -310,7 +310,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
@@ -338,7 +338,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
@@ -361,7 +361,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A0: ConvertibleFromPython,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
@@ -453,7 +453,7 @@ def pyfunction[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     //,
     method: def(T, Int) raises thin -> Bool,
 ]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
@@ -467,7 +467,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     R: ConvertibleToPython,
     //,
     method: def(T, Int) raises thin -> R,
@@ -482,7 +482,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     R: ConvertibleToPython,
     //,
     method: def(T, Int, Int) raises thin -> R,
@@ -501,7 +501,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDeletable,
+    T: Deinitable,
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
     R: ConvertibleToPython,

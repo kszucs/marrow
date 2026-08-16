@@ -47,7 +47,7 @@ def _bench_group_by[
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(GroupBy(keys).aggregate[A](vals))
 
@@ -133,7 +133,7 @@ def _bench_group_by_nulls[
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(GroupBy(keys).aggregate[A](vals))
 

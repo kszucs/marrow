@@ -221,7 +221,7 @@ trait TemporalExtractKernel(Kernel):
         if not dt.is_temporal():
             raise Self.error(t"expected a temporal array, got {dt}")
 
-        @parameter
+        @__parameter
         def leaf[T: TemporalType](d: T) raises -> DynArray:
             return Self.apply(array.as_primitive[T]()).to_dyn()
 

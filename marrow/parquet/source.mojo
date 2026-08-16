@@ -17,7 +17,7 @@ when this struct happens to go out of scope.
 from ..buffers import Buffer
 
 
-trait ByteSource(ImplicitlyDeletable, Movable):
+trait ByteSource(Deinitable, Movable):
     """A random-access source of the Parquet file's bytes.
 
     The reader consumes the file through this seam: `size()` bounds the footer

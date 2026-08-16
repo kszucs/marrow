@@ -80,7 +80,7 @@ struct LittleEndian:
         — callers validate `pos` (matches the raw span reads in the hot decode
         paths)."""
         comptime W = size_of[Scalar[T]]()
-        var arr = InlineArray[UInt8, W](fill=0)
+        var arr = Array[UInt8, W](fill=0)
         for i in range(W):
             arr[i] = data[pos + i]
         return SIMD[T, 1].from_bytes[big_endian=False](arr)

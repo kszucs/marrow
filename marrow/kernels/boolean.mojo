@@ -354,7 +354,7 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
     def apply(
         arr: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
-        @parameter
+        @__parameter
         def leaf[T: FloatingType](d: T) raises -> BoolArray:
             ref prim = arr.as_primitive[T]()
             var n = len(prim)

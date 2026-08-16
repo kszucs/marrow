@@ -132,7 +132,7 @@ struct Interval(Copyable, Movable):
             # column compared no statistics at all, so **no row group and no page
             # was ever pruned on one**. ClickBench filters on `EventDate` and
             # `EventTime`; they were getting zero pushdown.
-            @parameter
+            @__parameter
             def cmp_typed[T: dt.PrimitiveType](witness: T) raises -> Int:
                 return Self._three_way(
                     a.as_primitive[T]().value(), b.as_primitive[T]().value()

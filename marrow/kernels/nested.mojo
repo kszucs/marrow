@@ -48,7 +48,7 @@ struct ArrayLengthKernel(Kernel):
         var offs = array.offsets.view[off](array.offset)
         comptime width = simd_byte_width() // size_of[Scalar[off]]()
 
-        @parameter
+        @__parameter
         @always_inline
         def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
             var i = idx[0]
@@ -81,7 +81,7 @@ struct ArrayLengthKernel(Kernel):
         if not dt.is_list_like():
             raise Self.error(t"expected a list array, got {dt}")
 
-        @parameter
+        @__parameter
         def leaf[T: ListLikeType](d: T) raises -> DynArray:
             return Self.apply(array.as_list_like[T]()).to_dyn()
 
@@ -148,11 +148,11 @@ struct ArrayContainsKernel(Kernel):
         if not list_dt.is_list_like():
             raise Self.error(t"expected a list array, got {list_dt}")
 
-        @parameter
+        @__parameter
         def leaf[V: NumericType](d: V) raises -> DynArray:
             # Two nested family walks: the element type picks `V`, the list
             # offset width picks `T`. Neither is a hand-written arm.
-            @parameter
+            @__parameter
             def outer[T: ListLikeType](o: T) raises -> DynArray:
                 return Self.apply(
                     list.as_list_like[T](), elem.as_primitive[V](), ctx

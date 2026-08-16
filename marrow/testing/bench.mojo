@@ -14,7 +14,7 @@ Example usage::
         b.throughput(BenchMetric.elements, 1_000)
 
         @always_inline
-        @parameter
+        @__parameter
         def call():
             var r = SumKernel.dispatch(arr)
             keep(r)

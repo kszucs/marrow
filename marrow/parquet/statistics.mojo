@@ -317,7 +317,7 @@ struct Statistics:
             # precision/scale, so the scalar retags to the Arrow type without
             # this needing to name time32, timestamp, decimal64 and the rest
             # one at a time.
-            @parameter
+            @__parameter
             def decode_fixed[
                 T: dt.PrimitiveType
             ](witness: T) raises -> Optional[DynScalar]:

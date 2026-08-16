@@ -48,7 +48,7 @@ def _bench_read(mut b: Benchmark, n: Int, compression: String) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(read_table(path))
 
@@ -74,7 +74,7 @@ def bench_read_dict_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(read_table(path))
 

@@ -108,14 +108,14 @@ struct ColumnWriter(Movable):
             Plain.encode_fixed_size_binary(col.as_fixed_size_binary(), body)
         elif vt.is_binary_like():
 
-            @parameter
+            @__parameter
             def encode_bytes[BT: dt.BinaryLikeType](witness: BT) raises:
                 Plain.encode_bytes(col.as_type[BinaryLikeArray[BT]](), body)
 
             vt.dispatch_binarylike[encode_bytes]()
         elif has_plain_physical(vt):
 
-            @parameter
+            @__parameter
             def encode_fixed[T: dt.PrimitiveType](witness: T) raises:
                 Plain.encode_primitive[
                     phys=physical_type[T], big_endian=is_wide_decimal[T]
@@ -193,14 +193,14 @@ struct ColumnWriter(Movable):
             self._hash_fixed_size_binary(col, hashes)
         elif vt.is_binary_like():
 
-            @parameter
+            @__parameter
             def hash_bytes[BT: dt.BinaryLikeType](witness: BT) raises:
                 Self._hash_bytes(col.as_type[BinaryLikeArray[BT]](), hashes)
 
             vt.dispatch_binarylike[hash_bytes]()
         elif has_plain_physical(vt):
 
-            @parameter
+            @__parameter
             def hash_fixed[T: dt.PrimitiveType](witness: T) raises:
                 comptime if is_wide_decimal[T]:
                     Self._hash_flba[width=flba_width[T]](

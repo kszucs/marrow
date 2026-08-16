@@ -51,7 +51,7 @@ def _bench_count_set_bits(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call():
         keep(bm_view.count_set_bits())
 
@@ -92,7 +92,7 @@ def _bench_count_set_bits_aligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call():
         keep(bm.count_set_bits())
 
@@ -133,7 +133,7 @@ def _bench_count_set_bits_unaligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call():
         keep(bm.count_set_bits())
 
@@ -177,7 +177,7 @@ def _bench_and(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(lhs_view & rhs_view))
 
@@ -225,7 +225,7 @@ def _bench_or(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(lhs_view | rhs_view))
 
@@ -271,7 +271,7 @@ def _bench_invert(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(~bitmap_view))
 
@@ -314,7 +314,7 @@ def _bench_set_range(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call():
         builder.set_range(0, size, True)
         keep(builder.view().load_bytes[DType.uint8](0))
@@ -356,7 +356,7 @@ def _bench_invert_cache_aligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(~bitmap))
 
@@ -398,7 +398,7 @@ def _bench_invert_cache_unaligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(~bitmap))
 
@@ -441,7 +441,7 @@ def _bench_and_cache_unaligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(lhs & rhs))
 
@@ -485,7 +485,7 @@ def _bench_and_same_offset(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size - 8)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(lhs & rhs))
 
@@ -529,7 +529,7 @@ def _bench_and_diff_offset(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size - 8)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(len(lhs & rhs))
 
@@ -577,7 +577,7 @@ def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call():
         for i in range(0, size - W + 1, W):
             bv.store[W](i, pattern)
@@ -656,7 +656,7 @@ def _bench_pack_bools_w32(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call():
         for i in range(0, size - W + 1, W):
             bv.store[W](i, pattern)
@@ -767,7 +767,7 @@ def _bench_pack_bools_w64(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call():
         for i in range(0, size - W + 1, W):
             bv.store[W](i, pattern)
@@ -818,7 +818,7 @@ def _bench_filter_bits(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         var res = src_view.filter(sel_view, sel_start, sel_end, out_len)
         keep(res[0])
@@ -873,7 +873,7 @@ def _bench_filter_values(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
+    @__parameter
     def call() raises:
         keep(src_view.filter(sel_view, sel_start, sel_end, out_len))
 
