@@ -5,7 +5,6 @@ auto-converting arguments via ConvertibleFromPython and return values via
 implicit PythonObject construction (ConvertibleToPython or primitive types).
 """
 
-from std.builtin.type_aliases import MutAnyOrigin
 from std.memory import Pointer
 from std.python import (
     PythonObject,

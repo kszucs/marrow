@@ -12,10 +12,9 @@ from std.python._cpython import (
     PyTypeObject,
     PyTypeObjectPtr,
 )
-from std.ffi import c_char, c_int, c_ssize_t, _CPointer
+from std.ffi import c_char, c_int, c_ssize_t
 from std.memory import ArcPointer, Pointer
 from std.memory.alloc import unsafe_alloc
-from std.builtin.type_aliases import MutAnyOrigin
 from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
@@ -54,7 +53,7 @@ comptime _PyBytesAsStringAndSizeFn = ExternalFunction[
     "PyBytes_AsStringAndSize",
     def(
         PyObjectPtr,
-        Pointer[_CPointer[c_char, ImmutAnyOrigin], MutAnyOrigin],
+        Pointer[OptionalPointer[c_char, ImmutAnyOrigin], MutAnyOrigin],
         Pointer[c_ssize_t, MutAnyOrigin],
     ) thin -> c_int,
 ]
@@ -86,18 +85,30 @@ struct PyHelpers(Copyable, Movable):
         self.py = Python()
         ref cpy = self.py.cpython()
         self.none_ptr = cpy.Py_None()
-        self._unicode_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyUnicode_Type"
-        ).value()
-        self._bytes_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyBytes_Type"
-        ).value()
-        self._list_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyList_Type"
-        ).value()
-        self._tuple_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyTuple_Type"
-        ).value()
+        self._unicode_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyUnicode_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+        self._bytes_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyBytes_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+        self._list_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyList_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+        self._tuple_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
         self._dict_type = cpy.PyDict_Type()
         self._bytes_as_string_and_size_fn = _PyBytesAsStringAndSizeFn.load(
             cpy.lib.borrow()
@@ -154,7 +165,11 @@ struct PyHelpers(Copyable, Movable):
             var val = self.cpy().PyLong_AsSsize_t(ptr)
             if val == -1:
                 self.raise_on_error()
-            return Scalar[dtype](val != 0)
+            # `Bool` is `Intable`, and since Mojo 1.0 that constructor is
+            # selected for any integer scalar — it then rejects `bool` as
+            # non-integral. Go through the bool-typed conversion instead.
+            var flag: Scalar[DType.bool] = val != 0
+            return rebind[Scalar[dtype]](flag)
         elif dtype.is_floating_point():
             var val = self.cpy().PyFloat_AsDouble(ptr)
             if val == -1.0:
@@ -190,7 +205,7 @@ struct PyHelpers(Copyable, Movable):
     ) raises -> StringSlice[ImmutAnyOrigin]:
         """Return the raw bytes buffer of a Python bytes object as a StringSlice.
         """
-        var data_ptr = _CPointer[c_char, ImmutAnyOrigin]()
+        var data_ptr = OptionalPointer[c_char, ImmutAnyOrigin]()
         var size = c_ssize_t(0)
         # The CPython FFI signature pins `MutAnyOrigin`; the pointers to these
         # locals carry a concrete origin, so cast at the C boundary (the stricter
@@ -204,7 +219,7 @@ struct PyHelpers(Copyable, Movable):
             self.raise_on_error()
         return StringSlice[ImmutAnyOrigin](
             unsafe_from_utf8=Span[Byte, ImmutAnyOrigin](
-                unsafe_ptr=data_ptr.value().bitcast[Byte](), length=Int(size)
+                unsafe_ptr=data_ptr.value().unsafe_bitcast[Byte](), length=Int(size)
             )
         )
 
@@ -406,8 +421,8 @@ struct PyInferrer(Copyable, Movable):
                 self._field_order.append(String(name))
                 self._field_children.append(PyInferrer())
             _ = self._field_children[idx].visit(val_raw[])
-        key_raw.free()
-        val_raw.free()
+        key_raw.unsafe_free()
+        val_raw.unsafe_free()
 
     def _total_count(self) -> Int:
         return (
