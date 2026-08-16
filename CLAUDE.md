@@ -17,9 +17,12 @@ upgrade, https://docs.modular.com/mojo/changelog/.
 
 Dependencies (pinned in `pixi.toml`):
 
-- `mojo >=1.0.0b3.dev2026072406,<2` and `max ==26.5.0.dev2026072406` — MAX is
-  pinned to the matching version line because GPU codegen resolves
-  `max.package_root` since that Mojo release.
+- `mojo >=1.1.0.dev2026081605,<2` and `max ==26.6.0.dev2026081605` — MAX is
+  pinned to the matching version line, and is **load-bearing**: GPU codegen
+  resolves `max.package_root`, *and* `DeviceContext`/`DeviceBuffer`/
+  `HostBuffer` live in the `max.gpu.host` Mojo package while
+  `sync_parallelize`/`elementwise`/`_reduce_generator_wrapper` live in
+  `max.algorithm.*`. `get_gpu_target` and `vectorize` stayed in `std`.
 - `python >=3.14,<3.15` — Mojo nightlies are built against one CPython minor;
   bump it together with `mojo`.
 - `pyarrow >=23.0.1,<24` (dev/test only) — the PyPI wheel, not conda-forge; see
@@ -314,8 +317,11 @@ Rules:
 
 - Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for
   computation. No naked pointer arithmetic in kernel or array code.
-- **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`, and
-  `c_data.mojo`.** Everything else goes through the view abstractions.
+- **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`,
+  `c_data.mojo` and the Parquet codec layer** (`parquet/utils.mojo`,
+  `parquet/reader.mojo`, `parquet/codecs.mojo`, which `dlopen` the C codecs
+  and hand them raw pointers). Everything else goes through the view
+  abstractions.
 - **Avoid `AnyOrigin` types (`MutAnyOrigin`, `ImmutAnyOrigin`) and
   `unsafe_origin_cast`.** Use parametric origins (`out_o: Origin[mut=True]`,
   `src_o: Origin[mut=False]`) and pass views directly.
@@ -686,8 +692,8 @@ mostly bite generic trait hierarchies such as `marrow.expr.values`.
   at least depth 4 with mixed shapes — including a node whose `State` is an
   owning container, and one such node nested inside another. It also survives
   capture by a `@parameter` closure. The one non-obvious requirement: because
-  `prepare` raises, the associated type needs `ImplicitlyDeletable`
-  (`comptime State: Copyable & ImplicitlyDeletable`), else every call site fails
+  `prepare` raises, the associated type needs `Deinitable`
+  (`comptime State: Copyable & Deinitable`), else every call site fails
   with *"abandoned without being explicitly destroyed"* on the throw path.
 - **Re-defaulting a base trait's abstract method in a sub-trait recurses** if that
   method returns `Self.ArrayType` and a conforming node's `ArrayType` transitively
@@ -703,7 +709,7 @@ mostly bite generic trait hierarchies such as `marrow.expr.values`.
   if a parent trait "provides" it.
 - **A trait-level *default method* cannot return `Self.AssocType` unless that
   associated type's bound is `ImplicitlyCopyable`.** Declaring
-  `comptime State: Copyable & ImplicitlyDeletable = DynArray` alongside a
+  `comptime State: Copyable & Deinitable = DynArray` alongside a
   defaulted `def state(self, …) -> Self.State` fails: the compiler will not
   reduce `Self.State` to its own declared default at the return site
   (`cannot implicitly convert 'DynArray' value to '_Self.State'`), and `rebind`

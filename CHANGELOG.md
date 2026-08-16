@@ -4,9 +4,18 @@
 
 ### Refactors
 
-- **Upgraded to Mojo 1.0.0 / MAX 26.5.0** (from the `1.0.0b3.dev2026072406`
-  nightly), switching the channel from `max-nightly` to `max`. The breaking
-  half of the 1.0 stabilization push:
+- **Upgraded to Mojo 1.1.0.dev2026081605 / MAX 26.6.0.dev2026081605**, from the
+  `1.0.0b3.dev2026072406` nightly, via stable 1.0.0. The tree is warning-clean:
+  `mojo precompile marrow` and `build_python` both report 0 errors and
+  0 warnings.
+
+  Measured against the pre-migration toolchain: the binary-size gate moved
+  −0.57% (`query_dynvalue`), −0.45% (`query_sort`) and +0.39% (`query_arith`)
+  of `__text`, and 132 benchmarks moved a median of −0.3% (mean +0.0%). Every
+  delta above 10% was re-measured and has run-to-run spread on the *unchanged*
+  baseline wider than the delta itself.
+
+  The breaking half of the 1.0 stabilization push:
 
   - `DeviceContext`, `DeviceBuffer` and `HostBuffer` moved from `std.gpu.host`
     to the **`max.gpu.host`** Mojo package, and `sync_parallelize`,
@@ -34,6 +43,29 @@
     `var x: List[T] = [...]`. `Array` also lost `ImplicitlyCopyable`, so the
     bloom filter's comptime salt table is read at comptime rather than
     materialized per call.
+
+  The 1.1 nightly then *removes* what 1.0 deprecated, so the rest followed:
+
+  - `ImplicitlyDeletable` → `Deinitable`, `InlineArray` → `Array`,
+    `as_immutable()` → `as_imm()`, `std.builtin.type_aliases` → the prelude,
+    `std.ffi._CPointer` → `OptionalPointer`.
+  - `sort` moved to unified closures: the comparator is a runtime argument
+    with a capture list, not a comptime function parameter.
+  - `alloc` → `unsafe_alloc`, which is not re-exported from `std.memory`, so
+    six files import it from `std.memory.alloc`.
+  - `UnsafePointer` → `Pointer`, `@parameter` → `@__parameter`, `__del__` →
+    `__deinit__`, and the raw pointer operations gained their `unsafe_` prefix
+    and keyword offset: `ptr[i]` → `ptr[unsafe_offset=i]`, `a + b` →
+    `a.unsafe_offset(b)`, `bitcast`/`free`/`load`/`store`/`gather`/
+    `take_pointee` → `unsafe_*`. These were applied from the compiler's own
+    diagnostics — the underline in each message gives the exact extent of the
+    expression — so marrow's own same-named methods on `BufferView`, `Rle` and
+    `page` were left untouched.
+  - Implicit variable declarations now need `var`, walrus bindings included,
+    and `Schema`'s `deinit take` move constructor is now `deinit move`.
+  - `Scalar[DType.bool](someBool)` no longer compiles: since 1.0 any integer
+    scalar constructs from an `Intable`, `Bool` is `Intable`, and that
+    overload rejects `bool` as non-integral.
 
 ### Fixes
 
