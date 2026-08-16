@@ -203,9 +203,7 @@ struct Allocation(Movable):
     var ptr: Optional[Pointer[UInt8, MutUntrackedOrigin]]
     """Raw CPU pointer.  Some for CPU and FOREIGN; None for HOST/DEVICE."""
 
-    var release: Optional[
-        def(Pointer[UInt8, MutUntrackedOrigin]) thin -> None
-    ]
+    var release: Optional[def(Pointer[UInt8, MutUntrackedOrigin]) thin -> None]
     """Release callback.  Set for CPU (_cpu_release) and FOREIGN (producer callback);
     None for HOST and DEVICE (their Optional field destructors handle release)."""
 
@@ -227,9 +225,7 @@ struct Allocation(Movable):
     def __init__(
         out self,
         ptr: Optional[Pointer[UInt8, MutUntrackedOrigin]],
-        release: Optional[
-            def(Pointer[UInt8, MutUntrackedOrigin]) thin -> None
-        ],
+        release: Optional[def(Pointer[UInt8, MutUntrackedOrigin]) thin -> None],
         host: Optional[HostBuffer[DType.uint8]],
         device: Optional[DeviceBuffer[DType.uint8]],
         mapped_size: Optional[Int] = None,
@@ -507,9 +503,7 @@ struct Buffer[*, mut: Bool = False](
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
         var host = ctx.enqueue_create_host_buffer[DType.uint8](byte_size)
-        var ptr = rebind[Pointer[UInt8, MutUntrackedOrigin]](
-            host.unsafe_ptr()
-        )
+        var ptr = rebind[Pointer[UInt8, MutUntrackedOrigin]](host.unsafe_ptr())
         unsafe_memset_zero(ptr, byte_size)
         return Buffer[mut=True](
             size=byte_size,
@@ -529,9 +523,7 @@ struct Buffer[*, mut: Bool = False](
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
         var dev = ctx.enqueue_create_buffer[DType.uint8](byte_size)
-        var ptr = rebind[Pointer[UInt8, MutUntrackedOrigin]](
-            dev.unsafe_ptr()
-        )
+        var ptr = rebind[Pointer[UInt8, MutUntrackedOrigin]](dev.unsafe_ptr())
         return Buffer[mut=True](
             size=byte_size,
             ptr=rebind[Pointer[UInt8, MutUntrackedOrigin]](ptr),
@@ -572,9 +564,9 @@ struct Buffer[*, mut: Bool = False](
         if size <= 0:
             raise Error("Buffer.mmap_file: empty or unreadable file ", path)
         # PROT_READ=1, MAP_PRIVATE=2; the mapping outlives the fd.
-        var ptr = external_call[
-            "mmap", Pointer[UInt8, MutUntrackedOrigin]
-        ](UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0))
+        var ptr = external_call["mmap", Pointer[UInt8, MutUntrackedOrigin]](
+            UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0)
+        )
         _ = f^  # close the fd; the mapping stays valid
         if Int(ptr) == 0 or Int(ptr) == -1:
             raise Error("Buffer.mmap_file: mmap failed for ", path)
@@ -623,9 +615,7 @@ struct Buffer[*, mut: Bool = False](
         for the lifetime of the Allocation.  `device_type()` is inferred from
         the context API (cuda→CUDA_HOST, hip→ROCM_HOST, otherwise CPU).
         """
-        var ptr = rebind[Pointer[UInt8, ImmUntrackedOrigin]](
-            host.unsafe_ptr()
-        )
+        var ptr = rebind[Pointer[UInt8, ImmUntrackedOrigin]](host.unsafe_ptr())
         return Buffer[mut=False](
             size=len(host),
             ptr=ptr,
@@ -646,9 +636,7 @@ struct Buffer[*, mut: Bool = False](
         `device_type()` is inferred from the context API (cuda→CUDA, hip→ROCM,
         metal→METAL).
         """
-        var ptr = rebind[Pointer[UInt8, ImmUntrackedOrigin]](
-            dev.unsafe_ptr()
-        )
+        var ptr = rebind[Pointer[UInt8, ImmUntrackedOrigin]](dev.unsafe_ptr())
         return Buffer[mut=False](
             size=size,
             ptr=ptr,
@@ -666,9 +654,7 @@ struct Buffer[*, mut: Bool = False](
         the device pointer so ``view()`` works without a separate ``device_view``
         call.
         """
-        var imm_ptr = rebind[Pointer[UInt8, ImmUntrackedOrigin]](
-            self._ptr
-        )
+        var imm_ptr = rebind[Pointer[UInt8, ImmUntrackedOrigin]](self._ptr)
         return Buffer[mut=False](
             size=self._size, ptr=imm_ptr, owner=self._owner^
         )
@@ -757,7 +743,9 @@ struct Buffer[*, mut: Bool = False](
         """Copy `count` elements of type T from `src` into self at `dst_offset`.
         """
         unsafe_memcpy(
-            dest=self._ptr.unsafe_mut_cast[True]().unsafe_bitcast[Scalar[T]]().unsafe_offset(dst_offset),
+            dest=self._ptr.unsafe_mut_cast[True]()
+            .unsafe_bitcast[Scalar[T]]()
+            .unsafe_offset(dst_offset),
             src=src._data,
             count=count,
         )
@@ -793,7 +781,9 @@ struct Buffer[*, mut: Bool = False](
         landing eight bytes away from the reads.
         """
         comptime output = Scalar[T]
-        self._ptr.unsafe_mut_cast[True]().unsafe_bitcast[output]()[unsafe_offset=index] = value
+        self._ptr.unsafe_mut_cast[True]().unsafe_bitcast[output]()[
+            unsafe_offset=index
+        ] = value
 
     # --- Read operations (both modes) ---
 
@@ -1112,9 +1102,7 @@ struct Bitmap[*, mut: Bool = False](
         If `length` is -1 (the default), the view extends to the end of the bitmap.
         """
         var n = length if length >= 0 else self._length - offset
-        var ptr = rebind[Pointer[UInt8, origin_of(self)]](
-            self._buffer._ptr
-        )
+        var ptr = rebind[Pointer[UInt8, origin_of(self)]](self._buffer._ptr)
         # TODO: consider aligning _data down to a 64-byte boundary here and
         # folding the sub-alignment into _offset (matching BitmapView.slice()),
         # so that the SIMD bulk path in apply() always starts on a cache-line.
@@ -1177,7 +1165,9 @@ struct Bitmap[*, mut: Bool = False](
         var byte_index = index // 8
         var bit_mask = UInt8(1 << (index % 8))
         var ptr = self._buffer._ptr.unsafe_mut_cast[True]()
-        ptr[unsafe_offset=byte_index] = ptr[unsafe_offset=byte_index] & ~bit_mask
+        ptr[unsafe_offset=byte_index] = (
+            ptr[unsafe_offset=byte_index] & ~bit_mask
+        )
 
     def test(self, raw_index: Int) -> Bool:
         """Return True if the bit at `raw_index` (not offset-adjusted) is set.
@@ -1237,17 +1227,25 @@ struct Bitmap[*, mut: Bool = False](
                 UInt8(0xFF) << UInt8(start_bit)
             )
             if value:
-                ptr[unsafe_offset=start_byte] = ptr[unsafe_offset=start_byte] | mask
+                ptr[unsafe_offset=start_byte] = (
+                    ptr[unsafe_offset=start_byte] | mask
+                )
             else:
-                ptr[unsafe_offset=start_byte] = ptr[unsafe_offset=start_byte] & ~mask
+                ptr[unsafe_offset=start_byte] = (
+                    ptr[unsafe_offset=start_byte] & ~mask
+                )
             return
 
         if start_bit != 0:
             var mask = UInt8(0xFF) << UInt8(start_bit)
             if value:
-                ptr[unsafe_offset=start_byte] = ptr[unsafe_offset=start_byte] | mask
+                ptr[unsafe_offset=start_byte] = (
+                    ptr[unsafe_offset=start_byte] | mask
+                )
             else:
-                ptr[unsafe_offset=start_byte] = ptr[unsafe_offset=start_byte] & ~mask
+                ptr[unsafe_offset=start_byte] = (
+                    ptr[unsafe_offset=start_byte] & ~mask
+                )
             start_byte += 1
 
         if end_bit != 0:
@@ -1255,10 +1253,14 @@ struct Bitmap[*, mut: Bool = False](
             if value:
                 ptr[unsafe_offset=end_byte] = ptr[unsafe_offset=end_byte] | mask
             else:
-                ptr[unsafe_offset=end_byte] = ptr[unsafe_offset=end_byte] & ~mask
+                ptr[unsafe_offset=end_byte] = (
+                    ptr[unsafe_offset=end_byte] & ~mask
+                )
 
         if end_byte > start_byte:
-            unsafe_memset(ptr.unsafe_offset(start_byte), fill, end_byte - start_byte)
+            unsafe_memset(
+                ptr.unsafe_offset(start_byte), fill, end_byte - start_byte
+            )
 
     def extend(
         mut self,
@@ -1289,9 +1291,13 @@ struct Bitmap[*, mut: Bool = False](
                 var d_bit = (dst_offset + i) & 7
                 var d_mask = UInt8(1 << d_bit)
                 if val:
-                    dst[unsafe_offset=d_byte] = dst[unsafe_offset=d_byte] | d_mask
+                    dst[unsafe_offset=d_byte] = (
+                        dst[unsafe_offset=d_byte] | d_mask
+                    )
                 else:
-                    dst[unsafe_offset=d_byte] = dst[unsafe_offset=d_byte] & ~d_mask
+                    dst[unsafe_offset=d_byte] = (
+                        dst[unsafe_offset=d_byte] & ~d_mask
+                    )
             return
 
         var src_bit = src_offset & 7
@@ -1306,9 +1312,9 @@ struct Bitmap[*, mut: Bool = False](
 
             if dst_bit != 0:
                 var keep_mask = UInt8((1 << dst_bit) - 1)
-                dst[unsafe_offset=dst_byte] = (dst[unsafe_offset=dst_byte] & keep_mask) | (
-                    src_ptr[unsafe_offset=src_byte] & ~keep_mask
-                )
+                dst[unsafe_offset=dst_byte] = (
+                    dst[unsafe_offset=dst_byte] & keep_mask
+                ) | (src_ptr[unsafe_offset=src_byte] & ~keep_mask)
                 src_byte += 1
                 dst_byte += 1
 
@@ -1322,9 +1328,9 @@ struct Bitmap[*, mut: Bool = False](
             if end_sub != 0:
                 var trail_byte_src = src_byte + (end_byte - dst_byte)
                 var keep_mask = UInt8(0xFF) << UInt8(end_sub)
-                dst[unsafe_offset=end_byte] = (dst[unsafe_offset=end_byte] & keep_mask) | (
-                    src_ptr[unsafe_offset=trail_byte_src] & ~keep_mask
-                )
+                dst[unsafe_offset=end_byte] = (
+                    dst[unsafe_offset=end_byte] & keep_mask
+                ) | (src_ptr[unsafe_offset=trail_byte_src] & ~keep_mask)
         else:
             var src_byte = src_offset >> 3
             var dst_byte_start = dst_offset >> 3
@@ -1337,16 +1343,20 @@ struct Bitmap[*, mut: Bool = False](
                 var keep_mask = UInt8((1 << dst_bit) - 1)
                 var shifted: UInt8
                 if delta > 0:
-                    shifted = (src_ptr[unsafe_offset=src_byte] >> UInt8(delta)) | (
+                    shifted = (
+                        src_ptr[unsafe_offset=src_byte] >> UInt8(delta)
+                    ) | (
                         src_ptr[unsafe_offset=src_byte + 1] << UInt8(8 - delta)
                     )
                 else:
                     shifted = src_ptr[unsafe_offset=src_byte] << UInt8(-delta)
                     if src_byte > 0:
-                        shifted |= src_ptr[unsafe_offset=src_byte - 1] >> UInt8(8 + delta)
-                dst[unsafe_offset=dst_byte_start] = (dst[unsafe_offset=dst_byte_start] & keep_mask) | (
-                    shifted & ~keep_mask
-                )
+                        shifted |= src_ptr[unsafe_offset=src_byte - 1] >> UInt8(
+                            8 + delta
+                        )
+                dst[unsafe_offset=dst_byte_start] = (
+                    dst[unsafe_offset=dst_byte_start] & keep_mask
+                ) | (shifted & ~keep_mask)
                 dst_byte_start += 1
 
             var src_bit_pos = src_offset + ((dst_byte_start << 3) - dst_offset)
@@ -1356,9 +1366,9 @@ struct Bitmap[*, mut: Bool = False](
                 if so == 0:
                     dst[unsafe_offset=j] = src_ptr[unsafe_offset=sb]
                 else:
-                    dst[unsafe_offset=j] = (src_ptr[unsafe_offset=sb] >> UInt8(so)) | (
-                        src_ptr[unsafe_offset=sb + 1] << UInt8(8 - so)
-                    )
+                    dst[unsafe_offset=j] = (
+                        src_ptr[unsafe_offset=sb] >> UInt8(so)
+                    ) | (src_ptr[unsafe_offset=sb + 1] << UInt8(8 - so))
                 src_bit_pos += 8
 
             if end_sub != 0:
@@ -1372,9 +1382,9 @@ struct Bitmap[*, mut: Bool = False](
                         src_ptr[unsafe_offset=sb + 1] << UInt8(8 - so)
                     )
                 var keep_mask = UInt8(0xFF) << UInt8(end_sub)
-                dst[unsafe_offset=end_byte] = (dst[unsafe_offset=end_byte] & keep_mask) | (
-                    shifted & ~keep_mask
-                )
+                dst[unsafe_offset=end_byte] = (
+                    dst[unsafe_offset=end_byte] & keep_mask
+                ) | (shifted & ~keep_mask)
 
     def extend(
         mut self, src: Bitmap[], dst_start: Int, length: Int

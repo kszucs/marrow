@@ -158,9 +158,13 @@ struct CompressionLibs(Movable):
         var sp = strm.unsafe_bitcast[UInt8]()
         unsafe_memset_zero(sp, 128)
         strm[unsafe_offset=0] = UInt64(Int(src.unsafe_ptr()))
-        (sp.unsafe_offset(8)).unsafe_bitcast[UInt32]()[unsafe_offset=0] = UInt32(len(src))
+        (sp.unsafe_offset(8)).unsafe_bitcast[UInt32]()[
+            unsafe_offset=0
+        ] = UInt32(len(src))
         strm[unsafe_offset=3] = UInt64(Int(dst))
-        (sp.unsafe_offset(32)).unsafe_bitcast[UInt32]()[unsafe_offset=0] = UInt32(out_size)
+        (sp.unsafe_offset(32)).unsafe_bitcast[UInt32]()[
+            unsafe_offset=0
+        ] = UInt32(out_size)
 
         var version = z.call[
             "zlibVersion", Pointer[UInt8, MutUntrackedOrigin]
@@ -204,9 +208,7 @@ struct CompressionLibs(Movable):
     # --- compress: return the codec's output bytes ---
 
     @staticmethod
-    def _take(
-        dst: Pointer[UInt8, MutUntrackedOrigin], n: Int
-    ) -> List[UInt8]:
+    def _take(dst: Pointer[UInt8, MutUntrackedOrigin], n: Int) -> List[UInt8]:
         """Copy `n` bytes out of a freshly-`alloc`'d compression scratch buffer,
         free the buffer, and return an owned List — the shared tail of every
         `*_compress` method."""
@@ -264,9 +266,17 @@ struct CompressionLibs(Movable):
         var sp = strm.unsafe_bitcast[UInt8]()
         unsafe_memset_zero(sp, 128)
         strm[unsafe_offset=0] = UInt64(Int(src.unsafe_ptr()))  # next_in @0
-        (sp.unsafe_offset(8)).unsafe_bitcast[UInt32]()[unsafe_offset=0] = UInt32(len(src))  # avail_in @8
+        (sp.unsafe_offset(8)).unsafe_bitcast[UInt32]()[
+            unsafe_offset=0
+        ] = UInt32(
+            len(src)
+        )  # avail_in @8
         strm[unsafe_offset=3] = UInt64(Int(dst))  # next_out @24
-        (sp.unsafe_offset(32)).unsafe_bitcast[UInt32]()[unsafe_offset=0] = UInt32(bound)  # avail_out @32
+        (sp.unsafe_offset(32)).unsafe_bitcast[UInt32]()[
+            unsafe_offset=0
+        ] = UInt32(
+            bound
+        )  # avail_out @32
 
         var version = z.call[
             "zlibVersion", Pointer[UInt8, MutUntrackedOrigin]

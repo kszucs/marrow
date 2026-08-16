@@ -534,7 +534,9 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if not mask and page.all_present():
             unsafe_memcpy(
-                dest=vptr.unsafe_offset(self.wpos), src=present, count=page.num_present
+                dest=vptr.unsafe_offset(self.wpos),
+                src=present,
+                count=page.num_present,
             )
             if self.has_bitmap:
                 self.bitmap.set_range(self.wpos, page.num_present, True)
@@ -562,7 +564,9 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                 self.dict.resize(unsafe_uninit_length=page.num_values)
                 unsafe_memcpy(
                     dest=self.dict.unsafe_ptr(),
-                    src=page.body.unsafe_ptr().unsafe_bitcast[Scalar[Self.store_dt]](),
+                    src=page.body.unsafe_ptr().unsafe_bitcast[
+                        Scalar[Self.store_dt]
+                    ](),
                     count=page.num_values,
                 )
             else:

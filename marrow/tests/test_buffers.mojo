@@ -117,12 +117,14 @@ def test_buffer_foreign_kind() raises:
     # Allocate 64 bytes with 64-byte alignment to satisfy Arrow alignment invariant.
     # Only the first sizeof(pointer) bytes are used to store the address of n_released.
     var raw = unsafe_alloc[UInt8](64, alignment=64)
-    raw.unsafe_bitcast[Pointer[Int, MutUntrackedOrigin]]()[unsafe_offset=0] = rebind[
-        Pointer[Int, MutUntrackedOrigin]
-    ](Pointer(to=n_released))
+    raw.unsafe_bitcast[Pointer[Int, MutUntrackedOrigin]]()[
+        unsafe_offset=0
+    ] = rebind[Pointer[Int, MutUntrackedOrigin]](Pointer(to=n_released))
 
     def count_and_free(ptr: Pointer[UInt8, MutUntrackedOrigin]) -> None:
-        var counter = ptr.unsafe_bitcast[Pointer[Int, MutUntrackedOrigin]]()[unsafe_offset=0]
+        var counter = ptr.unsafe_bitcast[Pointer[Int, MutUntrackedOrigin]]()[
+            unsafe_offset=0
+        ]
         counter[unsafe_offset=0] += 1
         ptr.unsafe_free()
 
@@ -442,7 +444,20 @@ def test_bitmap_count_set_bits_small_slice_in_large_bitmap() raises:
 def test_bitmap_count_set_bits_vs_naive() raises:
     """Exhaustive check of count_set_bits vs naive popcount across sizes/offsets/patterns.
     """
-    comptime sizes: List[Int] = [1, 7, 13, 63, 64, 65, 127, 512, 513, 1023, 1024, 4097]
+    comptime sizes: List[Int] = [
+        1,
+        7,
+        13,
+        63,
+        64,
+        65,
+        127,
+        512,
+        513,
+        1023,
+        1024,
+        4097,
+    ]
     comptime offsets: List[Int] = [0, 3, 7, 32 << 3, 96 << 3, 128 << 3]
 
     comptime for si in range(len(sizes)):

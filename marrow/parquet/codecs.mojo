@@ -205,12 +205,16 @@ struct Rle:
                         # compile-time constant or the SIMD lane-select is
                         # runtime.
                         comptime for j in range(8):
-                            dp[unsafe_offset=produced + j] = kp[unsafe_offset=Int(idxv[j])]
+                            dp[unsafe_offset=produced + j] = kp[
+                                unsafe_offset=Int(idxv[j])
+                            ]
                         produced += 8
                     else:
                         var take = count - produced
                         for j in range(take):
-                            dp[unsafe_offset=produced] = kp[unsafe_offset=Int(idxv[j])]
+                            dp[unsafe_offset=produced] = kp[
+                                unsafe_offset=Int(idxv[j])
+                            ]
                             produced += 1
                     g += 8
                 pos += num_groups * width

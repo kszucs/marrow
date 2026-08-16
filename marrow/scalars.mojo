@@ -79,7 +79,7 @@ from .dtypes import (
 # ---------------------------------------------------------------------------
 
 
-trait ArrowScalar(Copyable, Equatable, Deinitable, Movable, Writable):
+trait ArrowScalar(Copyable, Deinitable, Equatable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
     def type(self) -> DynType:

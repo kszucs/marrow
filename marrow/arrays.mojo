@@ -120,8 +120,8 @@ from .scalars import (
 
 trait Array(
     Copyable,
-    Equatable,
     Deinitable,
+    Equatable,
     Movable,
     Sized,
     Writable,

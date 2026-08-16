@@ -219,7 +219,8 @@ struct PyHelpers(Copyable, Movable):
             self.raise_on_error()
         return StringSlice[ImmutAnyOrigin](
             unsafe_from_utf8=Span[Byte, ImmutAnyOrigin](
-                unsafe_ptr=data_ptr.value().unsafe_bitcast[Byte](), length=Int(size)
+                unsafe_ptr=data_ptr.value().unsafe_bitcast[Byte](),
+                length=Int(size),
             )
         )
 

@@ -81,7 +81,9 @@ def load_word_le[
     wide word loads without calling `unsafe_ptr()` themselves. The caller
     guarantees 8 readable bytes at `byte_idx` (mmap has trailing bytes; the
     decompression scratch is padded)."""
-    return (data.unsafe_ptr().unsafe_offset(byte_idx)).unsafe_bitcast[UInt64]()[unsafe_offset=0]
+    return (data.unsafe_ptr().unsafe_offset(byte_idx)).unsafe_bitcast[UInt64]()[
+        unsafe_offset=0
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +222,7 @@ struct BufferView[
     @always_inline
     def store[
         W: Int
-    ](
-        self,
-        index: Int,
-        value: SIMD[Self.T, W],
-    ) where Self.mut:
+    ](self, index: Int, value: SIMD[Self.T, W],) where Self.mut:
         self._data.unsafe_mut_cast[True]().unsafe_store(index, value)
 
     @always_inline
@@ -237,11 +235,7 @@ struct BufferView[
     @always_inline
     def compressed_store[
         W: Int
-    ](
-        self,
-        value: SIMD[Self.T, W],
-        mask: SIMD[DType.bool, W],
-    ) where Self.mut:
+    ](self, value: SIMD[Self.T, W], mask: SIMD[DType.bool, W],) where Self.mut:
         """Compress-store via LLVM intrinsic: write only mask=True lanes,
         packed sequentially from the start of this view."""
         _compressed_store(value, self._data.unsafe_mut_cast[True](), mask)
@@ -395,14 +389,15 @@ struct BufferView[
         """Convert this byte view to a StringSlice with origin `self_o`."""
         return StringSlice(
             unsafe_from_utf8=Span[Byte](
-                unsafe_ptr=self._data.unsafe_bitcast[Byte](), length=self._length
+                unsafe_ptr=self._data.unsafe_bitcast[Byte](),
+                length=self._length,
             )
         )
 
     def copy_from(
         self,
         src: StringSlice[_],
-    ) where (Self.mut and Self.T == DType.uint8):
+    ) where Self.mut and Self.T == DType.uint8:
         """Copy bytes from a StringSlice into this view."""
         unsafe_memcpy(
             dest=self._data.unsafe_mut_cast[True]().unsafe_bitcast[Byte](),
@@ -421,7 +416,9 @@ struct BufferView[
         var i = 0
         while i + width <= self._length:
             var out = self._data.unsafe_mut_cast[True]()
-            out.unsafe_store(i, func[width](self._data.unsafe_load[width=width](i)))
+            out.unsafe_store(
+                i, func[width](self._data.unsafe_load[width=width](i))
+            )
             i += width
         while i < self._length:
             var out = self._data.unsafe_mut_cast[True]()
@@ -550,7 +547,9 @@ struct BitmapView[
         var i = byte_start + 1
         var end = byte_end - 1
         while i + width <= end:
-            if (ptr.unsafe_offset(i)).unsafe_load[width=width]().reduce_or() != 0:
+            if (ptr.unsafe_offset(i)).unsafe_load[
+                width=width
+            ]().reduce_or() != 0:
                 return True
             i += width
         while i < end:
@@ -655,7 +654,10 @@ struct BitmapView[
         """Test if the bit at ``index`` is set."""
         self._check_bounds(index)
         var bit_index = self._offset + index
-        return Bool((self._data[unsafe_offset=bit_index >> 3] >> UInt8(bit_index & 7)) & 1)
+        return Bool(
+            (self._data[unsafe_offset=bit_index >> 3] >> UInt8(bit_index & 7))
+            & 1
+        )
 
     @always_inline
     def load[W: Int](self, index: Int) -> SIMD[DType.bool, W]:
@@ -674,7 +676,11 @@ struct BitmapView[
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
 
-        var bits = (self._data.unsafe_offset(byte_idx)).unsafe_bitcast[UInt32]().unsafe_load[alignment=1]()
+        var bits = (
+            (self._data.unsafe_offset(byte_idx))
+            .unsafe_bitcast[UInt32]()
+            .unsafe_load[alignment=1]()
+        )
         bits >>= UInt32(bit_off)
 
         return (
@@ -695,7 +701,9 @@ struct BitmapView[
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
         var raw = (
-            (self._data.unsafe_offset(byte_idx)).unsafe_bitcast[Scalar[T]]().unsafe_load[alignment=1]()
+            (self._data.unsafe_offset(byte_idx))
+            .unsafe_bitcast[Scalar[T]]()
+            .unsafe_load[alignment=1]()
         )
         return raw >> Scalar[T](bit_off)
 
@@ -724,7 +732,9 @@ struct BitmapView[
         a time: `Scalar[DType.bool]` is a byte, so `[F, F, T]` is `0b100`, which
         answers `True` at element 0. Five fused bool lanes did exactly that and
         returned wrong rows (B29, fixed 2026-08-06)."""
-        return self._data.unsafe_bitcast[Scalar[T]]().unsafe_load[width=W, alignment=1](index)
+        return self._data.unsafe_bitcast[Scalar[T]]().unsafe_load[
+            width=W, alignment=1
+        ](index)
 
     # TODO: probably should be removed
     # TODO: could be good idea to use std.sys.intrinsics.masked_store
@@ -738,16 +748,14 @@ struct BitmapView[
         `load_bytes`, and the same caveats apply. For bit-addressed writes use
         `store[W]`.
         """
-        self._data.unsafe_mut_cast[True]().unsafe_bitcast[Scalar[T]]().unsafe_store[width=W](index, val)
+        self._data.unsafe_mut_cast[True]().unsafe_bitcast[
+            Scalar[T]
+        ]().unsafe_store[width=W](index, val)
 
     @always_inline
     def store[
         W: Int
-    ](
-        self,
-        bit_index: Int,
-        val: SIMD[DType.bool, W],
-    ) where Self.mut:
+    ](self, bit_index: Int, val: SIMD[DType.bool, W],) where Self.mut:
         """Bit-pack W bools and store into the bitmap at ``bit_index``.
 
         - W divisible by 8: single _pack_bools + bitcast store.
@@ -759,7 +767,9 @@ struct BitmapView[
 
         comptime if W % 8 == 0:
             var packed = _pack_bools(val).reduce_or()
-            var dst = self._data.unsafe_mut_cast[True]().unsafe_offset((bit_index >> 3))
+            var dst = self._data.unsafe_mut_cast[True]().unsafe_offset(
+                (bit_index >> 3)
+            )
             dst.unsafe_store(bitcast[DType.uint8, W // 8](packed))
         else:
             var abs_pos = self._offset + bit_index
@@ -769,9 +779,13 @@ struct BitmapView[
                 var byte_idx = p >> 3
                 var bit_off = UInt8(p & 7)
                 if val[i]:
-                    out[unsafe_offset=byte_idx] = out[unsafe_offset=byte_idx] | (UInt8(1) << bit_off)
+                    out[unsafe_offset=byte_idx] = out[
+                        unsafe_offset=byte_idx
+                    ] | (UInt8(1) << bit_off)
                 else:
-                    out[unsafe_offset=byte_idx] = out[unsafe_offset=byte_idx] & ~(UInt8(1) << bit_off)
+                    out[unsafe_offset=byte_idx] = out[
+                        unsafe_offset=byte_idx
+                    ] & ~(UInt8(1) << bit_off)
 
     # --- Slicing ---
 
@@ -803,7 +817,9 @@ struct BitmapView[
         ) if bit_end & 7 != 0 else UInt8(0)
 
         if nbytes == 1:
-            return (ptr[unsafe_offset=byte_start] | first_fill | last_fill) == 0xFF
+            return (
+                ptr[unsafe_offset=byte_start] | first_fill | last_fill
+            ) == 0xFF
 
         if (ptr[unsafe_offset=byte_start] | first_fill) != 0xFF:
             return False
@@ -813,7 +829,9 @@ struct BitmapView[
         var i = byte_start + 1
         var end = byte_end - 1
         while i + width <= end:
-            if (ptr.unsafe_offset(i)).unsafe_load[width=width]().reduce_and() != 0xFF:
+            if (ptr.unsafe_offset(i)).unsafe_load[
+                width=width
+            ]().reduce_and() != 0xFF:
                 return False
             i += width
         while i < end:
@@ -876,10 +894,16 @@ struct BitmapView[
             var acc1 = SIMD[DType.uint8, width](0)
             comptime for j in range(t1_iters):
                 acc0 += pop_count(
-                    ((ptr.unsafe_offset(i)).unsafe_offset((j * 2) * width)).unsafe_load[width=width]()
+                    (
+                        (ptr.unsafe_offset(i)).unsafe_offset((j * 2) * width)
+                    ).unsafe_load[width=width]()
                 )
                 acc1 += pop_count(
-                    ((ptr.unsafe_offset(i)).unsafe_offset((j * 2 + 1) * width)).unsafe_load[width=width]()
+                    (
+                        (ptr.unsafe_offset(i)).unsafe_offset(
+                            (j * 2 + 1) * width
+                        )
+                    ).unsafe_load[width=width]()
                 )
             var block_count = Int(
                 (
@@ -896,7 +920,11 @@ struct BitmapView[
         for i in range(t1_end, total_bytes, 64):
             var acc = SIMD[DType.uint8, width](0)
             comptime for j in range(t2_iters):
-                acc += pop_count(((ptr.unsafe_offset(i)).unsafe_offset(j * width)).unsafe_load[width=width]())
+                acc += pop_count(
+                    (
+                        (ptr.unsafe_offset(i)).unsafe_offset(j * width)
+                    ).unsafe_load[width=width]()
+                )
             var block_count = Int(acc.cast[DType.uint16]().reduce_add())
             if block_count > 0:
                 if first_byte == total_bytes:
@@ -912,7 +940,10 @@ struct BitmapView[
                 count -= Int(pop_count(ptr[unsafe_offset=i]))
             if lead_sub_byte:
                 count -= Int(
-                    pop_count(ptr[unsafe_offset=lead_bytes] & UInt8((1 << lead_sub_byte) - 1))
+                    pop_count(
+                        ptr[unsafe_offset=lead_bytes]
+                        & UInt8((1 << lead_sub_byte) - 1)
+                    )
                 )
         if trail_bits:
             var trail_bytes = trail_bits >> 3
@@ -920,7 +951,10 @@ struct BitmapView[
             var first_trail = total_bytes - trail_bytes
             if trail_sub_byte:
                 count -= Int(
-                    pop_count(ptr[unsafe_offset=first_trail - 1] >> UInt8(trail_sub_byte))
+                    pop_count(
+                        ptr[unsafe_offset=first_trail - 1]
+                        >> UInt8(trail_sub_byte)
+                    )
                 )
             for i in range(first_trail, total_bytes):
                 count -= Int(pop_count(ptr[unsafe_offset=i]))
@@ -994,7 +1028,9 @@ struct BitmapView[
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
         var out = self._data.unsafe_mut_cast[True]()
-        out[unsafe_offset=byte_index] = out[unsafe_offset=byte_index] & ~bit_mask
+        out[unsafe_offset=byte_index] = (
+            out[unsafe_offset=byte_index] & ~bit_mask
+        )
 
     @always_inline
     def toggle(self, index: Int) where Self.mut:
@@ -1582,7 +1618,12 @@ def apply[
             W: Int
         ](i: Int) {imm dst, imm data, imm byte_start,}:
             dst.store_bytes[DType.uint8, W](
-                i, op[W](((data.unsafe_offset(byte_start)).unsafe_offset(i)).unsafe_load[width=W]())
+                i,
+                op[W](
+                    (
+                        (data.unsafe_offset(byte_start)).unsafe_offset(i)
+                    ).unsafe_load[width=W]()
+                ),
             )
 
         vectorize[cpu_width](out_bytes, process_zero)
@@ -1597,8 +1638,14 @@ def apply[
         def process_shifted[
             W: Int
         ](i: Int) {imm dst, imm data, imm byte_start, imm rshift, imm lshift,}:
-            var lo = ((data.unsafe_offset(byte_start)).unsafe_offset(i)).unsafe_load[width=W]()
-            var hi = (((data.unsafe_offset(byte_start)).unsafe_offset(i)).unsafe_offset(1)).unsafe_load[width=W]()
+            var lo = (
+                (data.unsafe_offset(byte_start)).unsafe_offset(i)
+            ).unsafe_load[width=W]()
+            var hi = (
+                (
+                    (data.unsafe_offset(byte_start)).unsafe_offset(i)
+                ).unsafe_offset(1)
+            ).unsafe_load[width=W]()
             dst.store_bytes[DType.uint8, W](
                 i, op[W]((lo >> rshift) | (hi << lshift))
             )
@@ -1607,12 +1654,19 @@ def apply[
 
     # Last output byte: read hi only when the view's bits span into the next
     # source byte, avoiding a read past the end of source data.
-    var last_lo = ((data.unsafe_offset(byte_start)).unsafe_offset(bulk)).unsafe_load[width=1]()
+    var last_lo = (
+        (data.unsafe_offset(byte_start)).unsafe_offset(bulk)
+    ).unsafe_load[width=1]()
     var last_result = last_lo >> rshift
     var remaining_bits = src._length - bulk * 8
     if remaining_bits > 8 - bit_shift:
         last_result = last_result | (
-            (((data.unsafe_offset(byte_start)).unsafe_offset(bulk)).unsafe_offset(1)).unsafe_load[width=1]() << lshift
+            (
+                (
+                    (data.unsafe_offset(byte_start)).unsafe_offset(bulk)
+                ).unsafe_offset(1)
+            ).unsafe_load[width=1]()
+            << lshift
         )
     dst.store_bytes[DType.uint8, 1](bulk, op[1](last_result))
 
@@ -1666,8 +1720,12 @@ def apply[
             dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
-                    ((src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)).unsafe_load[width=W](),
-                    ((src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)).unsafe_load[width=W](),
+                    (
+                        (src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)
+                    ).unsafe_load[width=W](),
+                    (
+                        (src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)
+                    ).unsafe_load[width=W](),
                 ),
             )
 
@@ -1694,10 +1752,22 @@ def apply[
             imm rs_b,
             imm ls_b,
         }:
-            var lo_a = ((src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)).unsafe_load[width=W]()
-            var hi_a = (((src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)).unsafe_offset(1)).unsafe_load[width=W]()
-            var lo_b = ((src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)).unsafe_load[width=W]()
-            var hi_b = (((src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)).unsafe_offset(1)).unsafe_load[width=W]()
+            var lo_a = (
+                (src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)
+            ).unsafe_load[width=W]()
+            var hi_a = (
+                (
+                    (src_a.unsafe_offset(byte_start_a)).unsafe_offset(i)
+                ).unsafe_offset(1)
+            ).unsafe_load[width=W]()
+            var lo_b = (
+                (src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)
+            ).unsafe_load[width=W]()
+            var hi_b = (
+                (
+                    (src_b.unsafe_offset(byte_start_b)).unsafe_offset(i)
+                ).unsafe_offset(1)
+            ).unsafe_load[width=W]()
             dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
@@ -1710,17 +1780,31 @@ def apply[
 
     # Last output byte: read hi only when bits span into the next source byte.
     var remaining_bits = lhs._length - bulk * 8
-    var last_lo_a = ((src_a.unsafe_offset(byte_start_a)).unsafe_offset(bulk)).unsafe_load[width=1]()
-    var last_lo_b = ((src_b.unsafe_offset(byte_start_b)).unsafe_offset(bulk)).unsafe_load[width=1]()
+    var last_lo_a = (
+        (src_a.unsafe_offset(byte_start_a)).unsafe_offset(bulk)
+    ).unsafe_load[width=1]()
+    var last_lo_b = (
+        (src_b.unsafe_offset(byte_start_b)).unsafe_offset(bulk)
+    ).unsafe_load[width=1]()
     var result_a = last_lo_a >> rs_a
     var result_b = last_lo_b >> rs_b
     if remaining_bits > 8 - bit_shift_a:
         result_a = result_a | (
-            (((src_a.unsafe_offset(byte_start_a)).unsafe_offset(bulk)).unsafe_offset(1)).unsafe_load[width=1]() << ls_a
+            (
+                (
+                    (src_a.unsafe_offset(byte_start_a)).unsafe_offset(bulk)
+                ).unsafe_offset(1)
+            ).unsafe_load[width=1]()
+            << ls_a
         )
     if remaining_bits > 8 - bit_shift_b:
         result_b = result_b | (
-            (((src_b.unsafe_offset(byte_start_b)).unsafe_offset(bulk)).unsafe_offset(1)).unsafe_load[width=1]() << ls_b
+            (
+                (
+                    (src_b.unsafe_offset(byte_start_b)).unsafe_offset(bulk)
+                ).unsafe_offset(1)
+            ).unsafe_load[width=1]()
+            << ls_b
         )
     dst.store_bytes[DType.uint8, 1](bulk, op[1](result_a, result_b))
 

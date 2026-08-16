@@ -53,7 +53,7 @@ from .utils import variant_dispatch, variant_dispatch_raises
 # ---------------------------------------------------------------------------
 
 
-trait DataType(Copyable, Equatable, Deinitable, Movable, Writable):
+trait DataType(Copyable, Deinitable, Equatable, Movable, Writable):
     """A concrete Arrow type.
 
     Deliberately minimal: five inherited traits and one defaulted method, and
