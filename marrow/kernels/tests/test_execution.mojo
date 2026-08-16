@@ -11,6 +11,7 @@ reads past its scratch, and neither shows up as a compile error.
 from std.testing import assert_equal, assert_true, assert_false
 
 from ...execution import ExecContext
+from std.sys import CompilationTarget, has_accelerator
 
 
 # ---------------------------------------------------------------------------
@@ -160,12 +161,11 @@ def _stripes(
     var ends = List[Int](length=workers, fill=-1)
 
     @always_inline
-    @parameter
-    def record(wid: Int, start: Int, end: Int):
+    def record(wid: Int, start: Int, end: Int) {mut starts, mut ends, imm}:
         starts[wid] = start
         ends[wid] = end
 
-    ctx.stripe[record](length, align=align)
+    ctx.stripe(length, record, align=align)
     return (starts^, ends^)
 
 
@@ -254,11 +254,10 @@ def test_stripe_wid_indexes_within_stripe_workers() raises:
     var seen = List[Int](length=workers, fill=0)
 
     @always_inline
-    @parameter
-    def mark(wid: Int, start: Int, end: Int):
+    def mark(wid: Int, start: Int, end: Int) {mut seen, imm}:
         seen[wid] += 1
 
-    ctx.stripe[mark](1000)
+    ctx.stripe(1000, mark)
     # Exactly once each, not "at most once" — the weaker form would also pass if
     # no stripe ran at all.
     assert_equal(workers, 4)
@@ -271,9 +270,20 @@ def test_stripe_zero_length_visits_nothing() raises:
     var total = List[Int](length=1, fill=0)
 
     @always_inline
-    @parameter
-    def count(wid: Int, start: Int, end: Int):
+    def count(wid: Int, start: Int, end: Int) {mut total, imm}:
         total[0] += end - start
 
-    ExecContext.serial().stripe[count](0)
+    ExecContext.serial().stripe(0, count)
     assert_equal(total[0], 0)
+
+
+def test_has_accelerator_support() raises:
+    """`ExecContext.has_accelerator_support` answers for the build, not the box.
+
+    GPU codegen is opt-in, so without `-D MARROW_GPU=true` this is False
+    whatever hardware is present; float64 is supported on CUDA but not on Metal.
+    """
+    if has_accelerator() and not CompilationTarget.is_apple_silicon():
+        assert_true(ExecContext.has_accelerator_support[DType.float64]())
+    else:
+        assert_false(ExecContext.has_accelerator_support[DType.float64]())

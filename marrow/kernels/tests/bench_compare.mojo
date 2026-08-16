@@ -8,7 +8,7 @@ from std.benchmark import BenchMetric, keep
 from ...builders import arange
 from ...dtypes import Int32Type, Int64Type
 from ...kernels.numeric import EqKernel
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -22,11 +22,10 @@ def bench_equal_int32_10k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 10_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(EqKernel.apply[Int32Type](lhs, rhs)))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_equal_int32_100k(mut b: Benchmark) raises:
@@ -35,11 +34,10 @@ def bench_equal_int32_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(EqKernel.apply[Int32Type](lhs, rhs)))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_equal_int32_1m(mut b: Benchmark) raises:
@@ -48,11 +46,10 @@ def bench_equal_int32_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(EqKernel.apply[Int32Type](lhs, rhs)))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -66,11 +63,10 @@ def bench_equal_int64_10k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 10_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(EqKernel.apply[Int64Type](lhs, rhs)))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_equal_int64_100k(mut b: Benchmark) raises:
@@ -79,11 +75,10 @@ def bench_equal_int64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(EqKernel.apply[Int64Type](lhs, rhs)))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_equal_int64_1m(mut b: Benchmark) raises:
@@ -92,8 +87,7 @@ def bench_equal_int64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(EqKernel.apply[Int64Type](lhs, rhs)))
 
-    b.iter[call]()
+    b.iter(call)

@@ -212,12 +212,16 @@ class Array(_Wrapper):
 # ── RecordBatch ────────────────────────────────────────────────────────────────
 
 
-class RecordBatch(_Wrapper):
-    def __arrow_c_array__(self, requested_schema=None):
-        return self._binding.__arrow_c_array__(requested_schema)
+class _Tabular(_Wrapper):
+    """The surface RecordBatch and Table share.
 
-    def __arrow_c_record_batch__(self, requested_schema=None):
-        return self._binding.__arrow_c_record_batch__(requested_schema)
+    Both wrap a binding exposing the same schema, column-access and conversion
+    methods, so these were written out twice. Anything that differs — a
+    RecordBatch's mutation and join methods, a Table's chunking — stays on the
+    subclass.
+    """
+
+    __slots__ = ()
 
     def __arrow_c_schema__(self):
         return self._binding.__arrow_c_schema__()
@@ -268,6 +272,14 @@ class RecordBatch(_Wrapper):
             {name: cols[j][i].as_py() for j, name in enumerate(names)}
             for i in range(self.num_rows())
         ]
+
+
+class RecordBatch(_Tabular):
+    def __arrow_c_array__(self, requested_schema=None):
+        return self._binding.__arrow_c_array__(requested_schema)
+
+    def __arrow_c_record_batch__(self, requested_schema=None):
+        return self._binding.__arrow_c_record_batch__(requested_schema)
 
     def sort_by(self, by, null_placement=None, num_threads=0):
         return RecordBatch.wrap(self._binding.sort_by(by, null_placement, num_threads))
@@ -346,62 +358,12 @@ class RecordBatchGroupBy:
 # ── Table ──────────────────────────────────────────────────────────────────────
 
 
-class Table(_Wrapper):
-    def __arrow_c_schema__(self):
-        return self._binding.__arrow_c_schema__()
-
+class Table(_Tabular):
     def __arrow_c_stream__(self, requested_schema=None):
         return self._binding.__arrow_c_stream__(requested_schema)
 
-    def __str__(self):
-        return str(self._binding)
-
-    def __repr__(self):
-        return repr(self._binding)
-
-    def num_rows(self):
-        return self._binding.num_rows()
-
-    def num_columns(self):
-        return self._binding.num_columns()
-
-    def schema(self):
-        return self._binding.schema()
-
-    def column_names(self):
-        return self._binding.column_names()
-
-    def shape(self):
-        return self._binding.shape()
-
-    def column(self, key):
-        return Array.wrap(self._binding.column(key))
-
-    def columns(self):
-        return [Array.wrap(c) for c in self._binding.columns()]
-
-    def __eq__(self, other):
-        return self._binding.equals(other.unwrap())
-
-    def equals(self, other):
-        return self._binding.equals(other.unwrap())
-
     def to_batches(self):
         return [RecordBatch.wrap(b) for b in self._binding.to_batches()]
-
-    def to_pydict(self):
-        return {
-            name: col.to_pylist()
-            for name, col in zip(self.column_names(), self.columns())
-        }
-
-    def to_pylist(self):
-        names = list(self.column_names())
-        cols = self.columns()
-        return [
-            {name: cols[j][i].as_py() for j, name in enumerate(names)}
-            for i in range(self.num_rows())
-        ]
 
 
 # ── Factory functions ──────────────────────────────────────────────────────────

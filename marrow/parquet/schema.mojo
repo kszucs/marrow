@@ -134,7 +134,7 @@ struct SchemaNode(Copyable, Movable):
         self.leaf_index = leaf_index
         self.geom = geom^
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def first_leaf_index(self) -> Int:
@@ -765,7 +765,10 @@ struct SchemaMapping(Movable):
         val_node.field = dt.Field(
             "value", value_type.copy(), nullable=value_nullable
         )
-        var entries_fields = [key_node.field.copy(), val_node.field.copy()]
+        var entries_fields: List[dt.Field] = [
+            key_node.field.copy(),
+            val_node.field.copy(),
+        ]
         var entries_children = List[SchemaNode]()
         entries_children.append(key_node^)
         entries_children.append(val_node^)

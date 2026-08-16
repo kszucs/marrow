@@ -171,9 +171,9 @@ struct _FieldIpcInfo(Copyable, Movable):
         self.children = copy.children.copy()
 
     # Explicit (empty) destructor so this self-referential struct
-    # (`children: List[_FieldIpcInfo]`) is ImplicitlyDeletable; fields are still
+    # (`children: List[_FieldIpcInfo]`) is Deinitable; fields are still
     # destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     @staticmethod

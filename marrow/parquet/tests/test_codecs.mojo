@@ -9,7 +9,7 @@ from std.python import Python
 from std.os import remove
 from ...parquet import read_table
 from ...parquet.codecs import Rle, Compression
-from ...parquet.utils import CompressionLibs
+from ...utils import CompressionLibs
 
 
 # ---------------------------------------------------------------------------

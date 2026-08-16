@@ -83,7 +83,7 @@ struct Exhausted(TrivialRegisterPassable, Writable):
 # ---------------------------------------------------------------------------
 
 
-trait Processor(ImplicitlyDeletable, Movable):
+trait Processor(Deinitable, Movable):
     """The executing counterpart of a ``Relation`` node.
 
     Created by ``Relation.to_processor(ctx)``; owns all mutable execution state — scan
@@ -131,7 +131,7 @@ struct DynProcessor(Movable):
         self._virt_pull = Self._tramp_pull[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         self._virt_drop(self._data^)
 
     def schema(self) -> Schema:

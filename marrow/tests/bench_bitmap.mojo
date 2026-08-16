@@ -15,7 +15,7 @@ Run with: pixi run pytest marrow/tests/bench_bitmap.mojo --benchmark
 from std.benchmark import BenchMetric, keep
 
 from ..buffers import Bitmap, Buffer
-from ..testing import Benchmark
+from ..utils.testing import Benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +51,10 @@ def _bench_count_set_bits(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call():
+    def call() {imm}:
         keep(bm_view.count_set_bits())
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_count_set_bits_1k(mut b: Benchmark) raises:
@@ -92,11 +91,10 @@ def _bench_count_set_bits_aligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call():
+    def call() {imm}:
         keep(bm.count_set_bits())
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_count_set_bits_aligned_1k(mut b: Benchmark) raises:
@@ -133,11 +131,10 @@ def _bench_count_set_bits_unaligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call():
+    def call() {imm}:
         keep(bm.count_set_bits())
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_count_set_bits_unaligned_1k(mut b: Benchmark) raises:
@@ -177,11 +174,10 @@ def _bench_and(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(lhs_view & rhs_view))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(lhs))
     keep(len(rhs))
     keep(len(lhs_view))
@@ -225,11 +221,10 @@ def _bench_or(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(lhs_view | rhs_view))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(lhs))
     keep(len(rhs))
     keep(len(lhs_view))
@@ -271,11 +266,10 @@ def _bench_invert(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(~bitmap_view))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(bitmap))
     keep(len(bitmap_view))
 
@@ -314,12 +308,11 @@ def _bench_set_range(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call():
+    def call() {mut builder, imm}:
         builder.set_range(0, size, True)
         keep(builder.view().load_bytes[DType.uint8](0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_set_range_1k(mut b: Benchmark) raises:
@@ -356,11 +349,10 @@ def _bench_invert_cache_aligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(~bitmap))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(bitmap))
 
 
@@ -398,11 +390,10 @@ def _bench_invert_cache_unaligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(~bitmap))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(bitmap))
 
 
@@ -441,11 +432,10 @@ def _bench_and_cache_unaligned(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(lhs & rhs))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(lhs))
     keep(len(rhs))
 
@@ -485,11 +475,10 @@ def _bench_and_same_offset(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size - 8)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(lhs & rhs))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(lhs))
     keep(len(rhs))
 
@@ -529,11 +518,10 @@ def _bench_and_diff_offset(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size - 8)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(lhs & rhs))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(lhs))
     keep(len(rhs))
 
@@ -567,47 +555,49 @@ def bench_and_diff_offset_100m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
-    comptime W = 8
+def _bench_pack_bools[W: Int](mut b: Benchmark, size: Int) raises:
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
-    var pattern = SIMD[DType.bool, W](
-        True, False, True, False, True, False, True, False
-    )
+    # Alternating True/False, built rather than spelled out: the width-8, -32
+    # and -64 bodies were identical apart from the literal's length. Built once
+    # here, exactly like the literals it replaces — outside `b.iter`, so nothing
+    # about the measurement changes.
+    var pattern = SIMD[DType.bool, W](fill=False)
+    for i in range(0, W, 2):
+        pattern[i] = True
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call():
+    def call() {imm}:
         for i in range(0, size - W + 1, W):
             bv.store[W](i, pattern)
         keep(bv.load_bytes[DType.uint8](0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_pack_bools_w8_1k(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 1_000)
+    _bench_pack_bools[8](b, 1_000)
 
 
 def bench_pack_bools_w8_10k(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 10_000)
+    _bench_pack_bools[8](b, 10_000)
 
 
 def bench_pack_bools_w8_100k(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 100_000)
+    _bench_pack_bools[8](b, 100_000)
 
 
 def bench_pack_bools_w8_1m(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 1_000_000)
+    _bench_pack_bools[8](b, 1_000_000)
 
 
 def bench_pack_bools_w8_10m(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 10_000_000)
+    _bench_pack_bools[8](b, 10_000_000)
 
 
 def bench_pack_bools_w8_100m(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 100_000_000)
+    _bench_pack_bools[8](b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -615,78 +605,28 @@ def bench_pack_bools_w8_100m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_pack_bools_w32(mut b: Benchmark, size: Int) raises:
-    comptime W = 32
-    var bm = Bitmap.alloc_zeroed(size)
-    var bv = bm.view()
-    var pattern = SIMD[DType.bool, W](
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-    )
-    b.throughput(BenchMetric.elements, size)
-
-    @always_inline
-    @parameter
-    def call():
-        for i in range(0, size - W + 1, W):
-            bv.store[W](i, pattern)
-        keep(bv.load_bytes[DType.uint8](0))
-
-    b.iter[call]()
-
-
 def bench_pack_bools_w32_1k(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 1_000)
+    _bench_pack_bools[32](b, 1_000)
 
 
 def bench_pack_bools_w32_10k(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 10_000)
+    _bench_pack_bools[32](b, 10_000)
 
 
 def bench_pack_bools_w32_100k(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 100_000)
+    _bench_pack_bools[32](b, 100_000)
 
 
 def bench_pack_bools_w32_1m(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 1_000_000)
+    _bench_pack_bools[32](b, 1_000_000)
 
 
 def bench_pack_bools_w32_10m(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 10_000_000)
+    _bench_pack_bools[32](b, 10_000_000)
 
 
 def bench_pack_bools_w32_100m(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 100_000_000)
+    _bench_pack_bools[32](b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -694,110 +634,28 @@ def bench_pack_bools_w32_100m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_pack_bools_w64(mut b: Benchmark, size: Int) raises:
-    comptime W = 64
-    var bm = Bitmap.alloc_zeroed(size)
-    var bv = bm.view()
-    var pattern = SIMD[DType.bool, W](
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-    )
-    b.throughput(BenchMetric.elements, size)
-
-    @always_inline
-    @parameter
-    def call():
-        for i in range(0, size - W + 1, W):
-            bv.store[W](i, pattern)
-        keep(bv.load_bytes[DType.uint8](0))
-
-    b.iter[call]()
-
-
 def bench_pack_bools_w64_1k(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 1_000)
+    _bench_pack_bools[64](b, 1_000)
 
 
 def bench_pack_bools_w64_10k(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 10_000)
+    _bench_pack_bools[64](b, 10_000)
 
 
 def bench_pack_bools_w64_100k(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 100_000)
+    _bench_pack_bools[64](b, 100_000)
 
 
 def bench_pack_bools_w64_1m(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 1_000_000)
+    _bench_pack_bools[64](b, 1_000_000)
 
 
 def bench_pack_bools_w64_10m(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 10_000_000)
+    _bench_pack_bools[64](b, 10_000_000)
 
 
 def bench_pack_bools_w64_100m(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 100_000_000)
+    _bench_pack_bools[64](b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -818,13 +676,12 @@ def _bench_filter_bits(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         var res = src_view.filter(sel_view, sel_start, sel_end, out_len)
         keep(res[0])
         keep(res[1])
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(src))
     keep(len(sel))
     keep(len(src_view))
@@ -873,11 +730,10 @@ def _bench_filter_values(mut b: Benchmark, size: Int) raises:
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(src_view.filter(sel_view, sel_start, sel_end, out_len))
 
-    b.iter[call]()
+    b.iter(call)
     keep(len(buf))
     keep(len(sel))
     keep(len(src_view))

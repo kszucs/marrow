@@ -17,7 +17,6 @@ Method names follow Mojo's ``std.collections.bitset.BitSet`` conventions.
 
 from std.sys.info import simd_byte_width, simd_width_of
 from std.sys import size_of
-from marrow.utils import has_accelerator_support
 from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
@@ -26,9 +25,9 @@ from std.memory import bitcast, unsafe_memcpy
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
-from std.algorithm.backend.cpu.parallelize import sync_parallelize
-from std.algorithm.functional import elementwise
-from std.algorithm.reduction import _reduce_generator_wrapper
+from max.algorithm.functional import sync_parallelize
+from max.algorithm.functional import elementwise
+from max.algorithm.reduction import _reduce_generator_wrapper
 from std.math import ceildiv
 from std.utils.index import IndexList
 from std.utils.coord import Coord
@@ -61,27 +60,20 @@ def _pack_bools[
     uses ``.reduce_or()`` (for a single scalar result) or stores the
     per-lane shifted values directly.
 
-    Uses iota + shift which compiles to standard LLVM ops on all
-    backends including Metal/AIR (no x86-specific pmovmskb).
+    **Faster than `std.memory.pack_bits` here, and that is measured.**
+    `pack_bits` is a single `pop.bitcast` from `<W x i1>`, which looks
+    strictly better and is what an x86 `pmovmskb` compiles to. ARM has no
+    mask-move instruction, so the bitcast lowers to a worse sequence than
+    this one: swapping to it cost **+12-15% on all 18 `bench_pack_bools_*`
+    cases** (w8/w32/w64 x 1k..100m, Apple Silicon, 2026-08-16) with no case
+    improving. Do not "simplify" this to `pack_bits` without re-measuring on
+    the target you care about.
 
     W must be 8, 16, 32, or 64.
     """
     comptime T = _packed_uint_dtype[W]()
     var bits = mask.cast[T]()
     return bits << iota[T, W]()
-
-
-@always_inline
-def load_word_le[
-    mut: Bool, //, o: Origin[mut=mut]
-](data: Span[UInt8, o], byte_idx: Int) -> UInt64:
-    """Unaligned little-endian 64-bit load from a byte span.
-
-    Confined to views.mojo so decode kernels (e.g. Parquet bit-unpacking) can do
-    wide word loads without calling `unsafe_ptr()` themselves. The caller
-    guarantees 8 readable bytes at `byte_idx` (mmap has trailing bytes; the
-    decompression scratch is padded)."""
-    return (data.unsafe_ptr() + byte_idx).bitcast[UInt64]()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +105,7 @@ struct BufferView[
         origin: The lifetime origin tying this view to its backing buffer.
     """
 
-    var _data: UnsafePointer[Scalar[Self.T], Self.origin]
+    var _data: Pointer[Scalar[Self.T], Self.origin]
     var _length: Int
 
     # --- DevicePassable ---
@@ -135,7 +127,7 @@ struct BufferView[
     def __init__(
         out self,
         *,
-        ptr: UnsafePointer[Scalar[Self.T], Self.origin],
+        ptr: Pointer[Scalar[Self.T], Self.origin],
         length: Int,
     ):
         self._data = ptr
@@ -179,7 +171,7 @@ struct BufferView[
     @always_inline
     def __getitem__(self, index: Int) -> Scalar[Self.T]:
         self._check_bounds(index)
-        return self._data[index]
+        return self._data[unsafe_offset=index]
 
     @always_inline
     def __getitem__(self, slc: Slice) -> Self:
@@ -188,70 +180,62 @@ struct BufferView[
         var step: Int
         start, end, step = slc.indices(self._length)
         debug_assert(step == 1, "BufferView slice step must be 1")
-        return Self(ptr=self._data + start, length=end - start)
+        return Self(ptr=self._data.unsafe_offset(start), length=end - start)
 
     @always_inline
     def __contains__(self, value: Scalar[Self.T]) -> Bool:
         for i in range(self._length):
-            if self._data[i] == value:
+            if self._data[unsafe_offset=i] == value:
                 return True
         return False
 
     @always_inline
     def unsafe_get(self, index: Int) -> Scalar[Self.T]:
-        return self._data[index]
+        return self._data[unsafe_offset=index]
 
     @always_inline
     def unsafe_set(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         index: Int,
         value: Scalar[Self.T],
-    ):
-        self._data.store(index, value)
+    ) where Self.mut:
+        self._data.unsafe_mut_cast[True]().unsafe_store(index, value)
 
     # --- SIMD ---
 
     # TODO: could be good idea to use std.sys.intrinsics.masked_load
     @always_inline
     def load[W: Int](self, index: Int) -> SIMD[Self.T, W]:
-        return self._data.load[width=W](index)
+        return self._data.unsafe_load[width=W](index)
 
     # TODO: could be good idea to use std.sys.intrinsics.masked_store
     @always_inline
     def store[
         W: Int
-    ](
-        self: BufferView[mut=True, T=Self.T, origin=_],
-        index: Int,
-        value: SIMD[Self.T, W],
-    ):
-        self._data.store(index, value)
+    ](self, index: Int, value: SIMD[Self.T, W],) where Self.mut:
+        self._data.unsafe_mut_cast[True]().unsafe_store(index, value)
 
     @always_inline
     def gather[W: Int](self, offsets: SIMD[DType.int64, W]) -> SIMD[Self.T, W]:
         """SIMD gather: load W elements at positions given by `offsets`."""
-        return self._data.gather[width=W, alignment=1](offsets)
+        return self._data.unsafe_gather[width=W, alignment=1](offsets)
 
     # --- Compressed store ---
 
     @always_inline
     def compressed_store[
         W: Int
-    ](
-        self: BufferView[mut=True, T=Self.T, origin=_],
-        value: SIMD[Self.T, W],
-        mask: SIMD[DType.bool, W],
-    ):
+    ](self, value: SIMD[Self.T, W], mask: SIMD[DType.bool, W],) where Self.mut:
         """Compress-store via LLVM intrinsic: write only mask=True lanes,
         packed sequentially from the start of this view."""
-        _compressed_store(value, self._data, mask)
+        _compressed_store(value, self._data.unsafe_mut_cast[True](), mask)
 
     @always_inline
     def compressed_store_sparse(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         sel_bits: UInt64,
-    ):
+    ) where Self.mut:
         """CTZ scatter: write only set-bit positions. O(popcount).
 
         Best when few bits are set (low popcount).
@@ -265,10 +249,10 @@ struct BufferView[
 
     @always_inline
     def compressed_store_dense(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         sel_bits: UInt64,
-    ):
+    ) where Self.mut:
         """Byte-chunked branchless scatter. O(64).
 
         Processes the 64-bit mask one byte at a time, breaking the serial
@@ -290,10 +274,10 @@ struct BufferView[
     def compressed_store[
         sparse_threshold: Int = 24
     ](
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         sel_bits: UInt64,
-    ) -> Int:
+    ) -> Int where Self.mut:
         """Adaptive compressed store: dispatches to sparse or dense based on
         popcount vs threshold. Returns number of elements written."""
         var cnt = Int(pop_count(sel_bits))
@@ -308,30 +292,30 @@ struct BufferView[
     @always_inline
     def slice(self, offset: Int, length: Int = -1) -> Self:
         var actual = length if length >= 0 else self._length - offset
-        return Self(ptr=self._data + offset, length=actual)
+        return Self(ptr=self._data.unsafe_offset(offset), length=actual)
 
     # --- Raw pointer access ---
 
     # TODO: consider to remove this and let c_data to poke into _data directly
     # but other componenst shouldn't access unsafe_ptr()
     @always_inline
-    def unsafe_ptr(self) -> UnsafePointer[Scalar[Self.T], Self.origin]:
+    def unsafe_ptr(self) -> Pointer[Scalar[Self.T], Self.origin]:
         return self._data
 
     @always_inline
     def prefetch_at(self, offset: Int):
         """Prefetch the cache line at `offset` elements into L1 cache."""
-        prefetch(self._data + offset)
+        prefetch(self._data.unsafe_offset(offset))
 
     def copy_from(
-        self: BufferView[mut=True, T=Self.T, origin=_],
+        self,
         src: BufferView[Self.T, _],
         count: Int,
-    ):
+    ) where Self.mut:
         """Copy `count` elements from `src` into `self`."""
         unsafe_memcpy(
-            dest=self._data.bitcast[UInt8](),
-            src=src._data.bitcast[UInt8](),
+            dest=self._data.unsafe_mut_cast[True]().unsafe_bitcast[UInt8](),
+            src=src._data.unsafe_bitcast[UInt8](),
             count=count * size_of[Scalar[Self.T]](),
         )
 
@@ -395,17 +379,18 @@ struct BufferView[
         """Convert this byte view to a StringSlice with origin `self_o`."""
         return StringSlice(
             unsafe_from_utf8=Span[Byte](
-                unsafe_ptr=self._data.bitcast[Byte](), length=self._length
+                unsafe_ptr=self._data.unsafe_bitcast[Byte](),
+                length=self._length,
             )
         )
 
     def copy_from(
-        self: BufferView[mut=True, T=DType.uint8, origin=_],
+        self,
         src: StringSlice[_],
-    ):
+    ) where Self.mut and Self.T == DType.uint8:
         """Copy bytes from a StringSlice into this view."""
         unsafe_memcpy(
-            dest=self._data.bitcast[Byte](),
+            dest=self._data.unsafe_mut_cast[True]().unsafe_bitcast[Byte](),
             src=src.unsafe_ptr(),
             count=src.byte_length(),
         )
@@ -415,15 +400,19 @@ struct BufferView[
     # TODO: remove this in favor of the free-function apply with explicit SIMD function parameters
     def apply[
         func: def[W: Int](SIMD[Self.T, W]) thin -> SIMD[Self.T, W]
-    ](self: BufferView[mut=True, T=Self.T, origin=_]):
+    ](self) where Self.mut:
         """Apply a SIMD function in-place over all elements."""
         comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
         var i = 0
         while i + width <= self._length:
-            self._data.store(i, func[width](self._data.load[width=width](i)))
+            var out = self._data.unsafe_mut_cast[True]()
+            out.unsafe_store(
+                i, func[width](self._data.unsafe_load[width=width](i))
+            )
             i += width
         while i < self._length:
-            self._data[i] = func[1](self._data[i])
+            var out = self._data.unsafe_mut_cast[True]()
+            out[unsafe_offset=i] = func[1](self._data[unsafe_offset=i])
             i += 1
 
     def count[
@@ -435,13 +424,13 @@ struct BufferView[
         var i = 0
         while i + width <= self._length:
             total += Int(
-                func[width](self._data.load[width=width](i))
+                func[width](self._data.unsafe_load[width=width](i))
                 .cast[DType.uint8]()
                 .reduce_add()
             )
             i += width
         while i < self._length:
-            if func[1](self._data[i]):
+            if func[1](self._data[unsafe_offset=i]):
                 total += 1
             i += 1
         return total
@@ -480,7 +469,7 @@ struct BitmapView[
         origin: The lifetime origin tying this view to its backing buffer.
     """
 
-    var _data: UnsafePointer[UInt8, Self.origin]
+    var _data: Pointer[UInt8, Self.origin]
     var _offset: Int  # bit offset into _data
     var _length: Int  # number of logical bits
 
@@ -503,7 +492,7 @@ struct BitmapView[
     def __init__(
         out self,
         *,
-        ptr: UnsafePointer[UInt8, Self.origin],
+        ptr: Pointer[UInt8, Self.origin],
         offset: Int,
         length: Int,
     ):
@@ -516,6 +505,15 @@ struct BitmapView[
     @always_inline
     def __len__(self) -> Int:
         return self._length
+
+    @always_inline
+    def offset(self) -> Int:
+        """Bit offset of this view into its backing buffer.
+
+        Byte-level readers need it to derive a starting byte and a sub-byte
+        shift; every bit-addressed accessor here applies it for them.
+        """
+        return self._offset
 
     # --- Boolable (any bit set) ---
 
@@ -538,21 +536,23 @@ struct BitmapView[
         ) if bit_end & 7 != 0 else UInt8(0xFF)
 
         if nbytes == 1:
-            return (ptr[byte_start] & first_mask & last_mask) != 0
+            return (ptr[unsafe_offset=byte_start] & first_mask & last_mask) != 0
 
-        if (ptr[byte_start] & first_mask) != 0:
+        if (ptr[unsafe_offset=byte_start] & first_mask) != 0:
             return True
-        if (ptr[byte_end - 1] & last_mask) != 0:
+        if (ptr[unsafe_offset=byte_end - 1] & last_mask) != 0:
             return True
 
         var i = byte_start + 1
         var end = byte_end - 1
         while i + width <= end:
-            if (ptr + i).load[width=width]().reduce_or() != 0:
+            if (ptr.unsafe_offset(i)).unsafe_load[
+                width=width
+            ]().reduce_or() != 0:
                 return True
             i += width
         while i < end:
-            if ptr[i] != 0:
+            if ptr[unsafe_offset=i] != 0:
                 return True
             i += 1
 
@@ -592,7 +592,7 @@ struct BitmapView[
         """Return the bit offset into the backing buffer."""
         return self._offset
 
-    def unsafe_ptr(self) -> UnsafePointer[UInt8, Self.origin]:
+    def unsafe_ptr(self) -> Pointer[UInt8, Self.origin]:
         """Raw byte pointer to the first byte of this view's backing storage.
 
         Only for use at C FFI boundaries (c_data.mojo). Prefer load/store.
@@ -618,11 +618,11 @@ struct BitmapView[
 
     @always_inline
     def compressed_store(
-        self: BitmapView[mut=True, origin=_],
+        self,
         bit_offset: Int,
         bits: UInt64,
         count: Int,
-    ):
+    ) where Self.mut:
         """Deposit ``count`` LSBs from ``bits`` at ``bit_offset``.
 
         Uses OR — bitmap must be zero-initialized. Handles arbitrary bit
@@ -653,7 +653,10 @@ struct BitmapView[
         """Test if the bit at ``index`` is set."""
         self._check_bounds(index)
         var bit_index = self._offset + index
-        return Bool((self._data[bit_index >> 3] >> UInt8(bit_index & 7)) & 1)
+        return Bool(
+            (self._data[unsafe_offset=bit_index >> 3] >> UInt8(bit_index & 7))
+            & 1
+        )
 
     @always_inline
     def load[W: Int](self, index: Int) -> SIMD[DType.bool, W]:
@@ -672,7 +675,11 @@ struct BitmapView[
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
 
-        var bits = (self._data + byte_idx).bitcast[UInt32]().load[alignment=1]()
+        var bits = (
+            (self._data.unsafe_offset(byte_idx))
+            .unsafe_bitcast[UInt32]()
+            .unsafe_load[alignment=1]()
+        )
         bits >>= UInt32(bit_off)
 
         return (
@@ -693,7 +700,9 @@ struct BitmapView[
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
         var raw = (
-            (self._data + byte_idx).bitcast[Scalar[T]]().load[alignment=1]()
+            (self._data.unsafe_offset(byte_idx))
+            .unsafe_bitcast[Scalar[T]]()
+            .unsafe_load[alignment=1]()
         )
         return raw >> Scalar[T](bit_off)
 
@@ -722,30 +731,30 @@ struct BitmapView[
         a time: `Scalar[DType.bool]` is a byte, so `[F, F, T]` is `0b100`, which
         answers `True` at element 0. Five fused bool lanes did exactly that and
         returned wrong rows (B29, fixed 2026-08-06)."""
-        return self._data.bitcast[Scalar[T]]().load[width=W, alignment=1](index)
+        return self._data.unsafe_bitcast[Scalar[T]]().unsafe_load[
+            width=W, alignment=1
+        ](index)
 
     # TODO: probably should be removed
     # TODO: could be good idea to use std.sys.intrinsics.masked_store
     @always_inline
     def store_bytes[
         T: DType, W: Int = 1
-    ](self: BitmapView[mut=True, origin=_], index: Int, val: SIMD[T, W]):
+    ](self, index: Int, val: SIMD[T, W]) where Self.mut:
         """Store W elements of type T into the raw bitmap bytes at ``index``.
 
         **Byte-addressed, and it ignores ``_offset``** — the mirror of
         `load_bytes`, and the same caveats apply. For bit-addressed writes use
         `store[W]`.
         """
-        self._data.bitcast[Scalar[T]]().store[width=W](index, val)
+        self._data.unsafe_mut_cast[True]().unsafe_bitcast[
+            Scalar[T]
+        ]().unsafe_store[width=W](index, val)
 
     @always_inline
     def store[
         W: Int
-    ](
-        self: BitmapView[mut=True, origin=_],
-        bit_index: Int,
-        val: SIMD[DType.bool, W],
-    ):
+    ](self, bit_index: Int, val: SIMD[DType.bool, W],) where Self.mut:
         """Bit-pack W bools and store into the bitmap at ``bit_index``.
 
         - W divisible by 8: single _pack_bools + bitcast store.
@@ -757,22 +766,25 @@ struct BitmapView[
 
         comptime if W % 8 == 0:
             var packed = _pack_bools(val).reduce_or()
-            var dst = self._data + (bit_index >> 3)
-            dst.store(bitcast[DType.uint8, W // 8](packed))
+            var dst = self._data.unsafe_mut_cast[True]().unsafe_offset(
+                (bit_index >> 3)
+            )
+            dst.unsafe_store(bitcast[DType.uint8, W // 8](packed))
         else:
             var abs_pos = self._offset + bit_index
+            var out = self._data.unsafe_mut_cast[True]()
             comptime for i in range(W):
                 var p = abs_pos + i
                 var byte_idx = p >> 3
                 var bit_off = UInt8(p & 7)
                 if val[i]:
-                    self._data[byte_idx] = self._data[byte_idx] | (
-                        UInt8(1) << bit_off
-                    )
+                    out[unsafe_offset=byte_idx] = out[
+                        unsafe_offset=byte_idx
+                    ] | (UInt8(1) << bit_off)
                 else:
-                    self._data[byte_idx] = self._data[byte_idx] & ~(
-                        UInt8(1) << bit_off
-                    )
+                    out[unsafe_offset=byte_idx] = out[
+                        unsafe_offset=byte_idx
+                    ] & ~(UInt8(1) << bit_off)
 
     # --- Slicing ---
 
@@ -804,21 +816,25 @@ struct BitmapView[
         ) if bit_end & 7 != 0 else UInt8(0)
 
         if nbytes == 1:
-            return (ptr[byte_start] | first_fill | last_fill) == 0xFF
+            return (
+                ptr[unsafe_offset=byte_start] | first_fill | last_fill
+            ) == 0xFF
 
-        if (ptr[byte_start] | first_fill) != 0xFF:
+        if (ptr[unsafe_offset=byte_start] | first_fill) != 0xFF:
             return False
-        if (ptr[byte_end - 1] | last_fill) != 0xFF:
+        if (ptr[unsafe_offset=byte_end - 1] | last_fill) != 0xFF:
             return False
 
         var i = byte_start + 1
         var end = byte_end - 1
         while i + width <= end:
-            if (ptr + i).load[width=width]().reduce_and() != 0xFF:
+            if (ptr.unsafe_offset(i)).unsafe_load[
+                width=width
+            ]().reduce_and() != 0xFF:
                 return False
             i += width
         while i < end:
-            if ptr[i] != 0xFF:
+            if ptr[unsafe_offset=i] != 0xFF:
                 return False
             i += 1
 
@@ -826,7 +842,7 @@ struct BitmapView[
 
     def _aligned_byte_range(
         self,
-    ) -> Tuple[UnsafePointer[UInt8, Self.origin], Int, Int, Int]:
+    ) -> Tuple[Pointer[UInt8, Self.origin], Int, Int, Int]:
         """Return 64-byte-aligned pointer and byte range with boundary bits.
 
         Returns (ptr, total_bytes, lead_bits, trail_bits).
@@ -841,7 +857,7 @@ struct BitmapView[
         var lead_bits = self._offset - (aligned_start << 3)
         var trail_bits = (aligned_end - byte_end) * 8 + (bit_end & 7)
         return Tuple(
-            self._data + aligned_start,
+            self._data.unsafe_offset(aligned_start),
             aligned_end - aligned_start,
             lead_bits,
             trail_bits,
@@ -864,7 +880,7 @@ struct BitmapView[
         if self._length == 0:
             return (0, 0, 0)
 
-        ptr, total_bytes, lead_bits, trail_bits = self._aligned_byte_range()
+        var ptr, total_bytes, lead_bits, trail_bits = self._aligned_byte_range()
 
         var first_byte = total_bytes
         var last_byte = 0
@@ -877,10 +893,16 @@ struct BitmapView[
             var acc1 = SIMD[DType.uint8, width](0)
             comptime for j in range(t1_iters):
                 acc0 += pop_count(
-                    (ptr + i + (j * 2) * width).load[width=width]()
+                    (
+                        (ptr.unsafe_offset(i)).unsafe_offset((j * 2) * width)
+                    ).unsafe_load[width=width]()
                 )
                 acc1 += pop_count(
-                    (ptr + i + (j * 2 + 1) * width).load[width=width]()
+                    (
+                        (ptr.unsafe_offset(i)).unsafe_offset(
+                            (j * 2 + 1) * width
+                        )
+                    ).unsafe_load[width=width]()
                 )
             var block_count = Int(
                 (
@@ -897,7 +919,11 @@ struct BitmapView[
         for i in range(t1_end, total_bytes, 64):
             var acc = SIMD[DType.uint8, width](0)
             comptime for j in range(t2_iters):
-                acc += pop_count((ptr + i + j * width).load[width=width]())
+                acc += pop_count(
+                    (
+                        (ptr.unsafe_offset(i)).unsafe_offset(j * width)
+                    ).unsafe_load[width=width]()
+                )
             var block_count = Int(acc.cast[DType.uint16]().reduce_add())
             if block_count > 0:
                 if first_byte == total_bytes:
@@ -910,10 +936,13 @@ struct BitmapView[
             var lead_bytes = lead_bits >> 3
             var lead_sub_byte = lead_bits & 7
             for i in range(lead_bytes):
-                count -= Int(pop_count(ptr[i]))
+                count -= Int(pop_count(ptr[unsafe_offset=i]))
             if lead_sub_byte:
                 count -= Int(
-                    pop_count(ptr[lead_bytes] & UInt8((1 << lead_sub_byte) - 1))
+                    pop_count(
+                        ptr[unsafe_offset=lead_bytes]
+                        & UInt8((1 << lead_sub_byte) - 1)
+                    )
                 )
         if trail_bits:
             var trail_bytes = trail_bits >> 3
@@ -921,10 +950,13 @@ struct BitmapView[
             var first_trail = total_bytes - trail_bytes
             if trail_sub_byte:
                 count -= Int(
-                    pop_count(ptr[first_trail - 1] >> UInt8(trail_sub_byte))
+                    pop_count(
+                        ptr[unsafe_offset=first_trail - 1]
+                        >> UInt8(trail_sub_byte)
+                    )
                 )
             for i in range(first_trail, total_bytes):
-                count -= Int(pop_count(ptr[i]))
+                count -= Int(pop_count(ptr[unsafe_offset=i]))
 
         if count == 0:
             return (0, 0, 0)
@@ -937,7 +969,7 @@ struct BitmapView[
 
     def count_set_bits(self) -> Int:
         """Count set bits in the view."""
-        count, _, _ = self.count_set_bits_with_range()
+        var count, _, _ = self.count_set_bits_with_range()
         return count
 
     def unset_count(self) -> Int:
@@ -978,31 +1010,36 @@ struct BitmapView[
     # --- Write operations (mut=True only, BitSet-style) ---
 
     @always_inline
-    def set(self: BitmapView[mut=True, origin=_], index: Int):
+    def set(self, index: Int) where Self.mut:
         """Set the bit at ``index`` to 1."""
         self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
-        self._data[byte_index] = self._data[byte_index] | bit_mask
+        var out = self._data.unsafe_mut_cast[True]()
+        out[unsafe_offset=byte_index] = out[unsafe_offset=byte_index] | bit_mask
 
     @always_inline
-    def clear(self: BitmapView[mut=True, origin=_], index: Int):
+    def clear(self, index: Int) where Self.mut:
         """Set the bit at ``index`` to 0."""
         self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
-        self._data[byte_index] = self._data[byte_index] & ~bit_mask
+        var out = self._data.unsafe_mut_cast[True]()
+        out[unsafe_offset=byte_index] = (
+            out[unsafe_offset=byte_index] & ~bit_mask
+        )
 
     @always_inline
-    def toggle(self: BitmapView[mut=True, origin=_], index: Int):
+    def toggle(self, index: Int) where Self.mut:
         """Invert the bit at ``index``."""
         self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
-        self._data[byte_index] = self._data[byte_index] ^ bit_mask
+        var out = self._data.unsafe_mut_cast[True]()
+        out[unsafe_offset=byte_index] = out[unsafe_offset=byte_index] ^ bit_mask
 
     # --- Byte-level functors for the set operations above.  `apply` takes a
     # SIMD functor, and these are the five `BitmapView` needs; they live here
@@ -1197,59 +1234,154 @@ comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
 
 
 @always_inline
+def _cpu_striped[
+    Out: DType, Lane: def[W: Int](Int) -> None
+](length: Int, lane: Lane, ctx: ExecContext):
+    """Run ``lane(i)`` over ``[0, length)`` on the CPU, striped by ``ctx``.
+
+    One ``vectorize`` over a half-open range; ``ctx.stripe`` decides whether it
+    runs on the calling thread or across ``ctx.resolved_num_threads()``
+    workers. Thread count is owned by ``ctx`` — no Mojo-internal heuristic. No
+    ``align``: ``vectorize`` handles its own tail within each stripe.
+    """
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+
+    @always_inline
+    def span(wid: Int, start: Int, end: Int) {imm}:
+        @always_inline
+        def strip[
+            W: Int
+        ](i: Int) {imm start, imm lane,}:
+            lane[W](start + i)
+
+        vectorize[cpu_width](end - start, strip)
+
+    ctx.stripe(length, span)
+
+
+@always_inline
+def _cpu_serial[
+    In: DType, Lane: def[W: Int](Int) -> None
+](length: Int, lane: Lane):
+    """Run ``lane(i)`` over ``[0, length)`` on the calling thread only.
+
+    What a **bit-packed** destination requires: a whole-byte-aligned stride is
+    the only thing keeping parallel workers off each other's read-modify-write,
+    and striping does not preserve it. ``In`` — the *input* dtype — sizes the
+    lane, because a bitmap lane is one bit and cannot size anything.
+    """
+    comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
+
+    @always_inline
+    def whole[
+        W: Int
+    ](i: Int) {imm lane,}:
+        lane[W](i)
+
+    vectorize[cpu_width](length, whole)
+
+
+@always_inline
+def _gpu_launch[
+    Lane: (def[W: Int](Int) -> None) & RegisterPassable & ImplicitlyCopyable,
+    gpu_width: Int,
+](shape: Int, lane: Lane, ctx: ExecContext) raises:
+    """One grid launch of ``lane`` over ``[0, shape)``.
+
+    The only place in this module that talks to ``elementwise``, and therefore
+    the only place that pays for the ``Coord``-shaped, ``alignment``-carrying
+    signature it insists on. Everything upstream is written per element index.
+
+    The ``RegisterPassable & ImplicitlyCopyable`` bound is ``elementwise``'s,
+    and it is load-bearing: a lane closing over host state (an expression node,
+    a `RecordBatch`) satisfies neither, which is precisely the set of lanes
+    that cannot run on a device. Such lanes go straight to `_cpu_striped` /
+    `_cpu_serial` instead.
+    """
+
+    # `lane` is captured **by value**, not `imm`. An `imm` capture is a
+    # reference into the host stack frame; the kernel then dereferences a host
+    # address on the device and silently computes garbage — it did, and there
+    # is no diagnostic: six `test_views_gpu` cases simply returned wrong
+    # values. The `ImplicitlyCopyable` half of `_gpu_launch`'s bound is what
+    # makes the by-value capture legal.
+    var device_lane = lane
+
+    @always_inline
+    def process[
+        W: Int, alignment: Int = 1
+    ](coord: Coord) {var device_lane,} -> None:
+        device_lane[W](Int(coord[0].value()))
+
+    elementwise[simd_width=gpu_width, target="gpu"](
+        process, Coord(shape), ctx.device.value()
+    )
+
+
+@always_inline
 def _apply_dispatch[
     Out: DType,
     gpu_ok: Bool,
-    process: def[W: Int, alignment: Int = 1](Coord) capturing -> None,
-](length: Int, ctx: ExecContext) raises:
-    """Dispatch ``process`` to GPU or CPU (serial / parallel) based on ``ctx``.
+    Lane: (def[W: Int](Int) -> None) & RegisterPassable & ImplicitlyCopyable,
+](length: Int, lane: Lane, ctx: ExecContext) raises:
+    """Run ``lane(i)`` over ``[0, length)`` into a **buffer** destination.
 
-    ``gpu_ok`` is the caller's ``has_accelerator_support[...]`` check, passed
+    ``gpu_ok`` is the caller's ``ExecContext.has_accelerator_support[...]`` check, passed
     as a comptime ``Bool`` so the GPU branch is dead-code-eliminated when
     unsupported.
 
-    Two execution paths, picked from ``ctx``:
-
-    - **GPU** (``ctx.is_gpu()``) — single grid launch via ``elementwise``.
-    - **CPU** — one ``vectorize`` body handed to ``ctx.stripe``, which runs it
-      on the calling thread or across ``ctx.resolved_num_threads()`` workers.
-      Thread count is owned by ``ctx`` — no Mojo-internal heuristic involved.
+    For a bit-packed destination use `_apply_packed_dispatch`; for a host-only
+    lane call `_cpu_striped` directly.
     """
     if ctx.is_gpu():
         comptime if gpu_ok:
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](
-                Coord(length), ctx.device.value()
+            _gpu_launch[gpu_width=gpu_width](length, lane, ctx)
+        else:
+            raise Error("apply: no GPU accelerator available")
+        return
+
+    _cpu_striped[Out](length, lane, ctx)
+
+
+@always_inline
+def _apply_packed_dispatch[
+    In: DType,
+    gpu_ok: Bool,
+    Lane: (def[W: Int](Int) -> None) & RegisterPassable & ImplicitlyCopyable,
+](length: Int, lane: Lane, ctx: ExecContext) raises:
+    """Run ``lane(i)`` over ``[0, length)`` into a **bit-packed** (bitmap)
+    destination.
+
+    The GPU launch is rounded up to a full ``gpu_width`` chunk so every store
+    is a complete byte. Arrow's 64-byte padding makes the over-write safe; the
+    clamp keeps it inside that padding. The CPU arm is `_cpu_serial` — see
+    there for why it may not stripe.
+    """
+    if ctx.is_gpu():
+        comptime if gpu_ok:
+            comptime gpu_width = max(
+                8, simd_width_of[In, target=get_gpu_target()]()
+            )
+            comptime max_pad = 64 // size_of[Scalar[In]]()
+            _gpu_launch[gpu_width=gpu_width](
+                min(math.align_up(length, gpu_width), length + max_pad),
+                lane,
+                ctx,
             )
         else:
             raise Error("apply: no GPU accelerator available")
         return
 
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
-
-    # One `vectorize` over a half-open range; `ctx.stripe` decides whether it
-    # runs on the calling thread or across workers. No `align`: `vectorize`
-    # handles its own tail within each stripe, which is exactly what the
-    # hand-written pair did.
-    @always_inline
-    @parameter
-    def span(wid: Int, start: Int, end: Int):
-        @always_inline
-        def lane[
-            W: Int
-        ](i: Int) {imm start,}:
-            process[W](Coord(start + i))
-
-        vectorize[cpu_width](end - start, lane)
-
-    ctx.stripe[span](length)
+    _cpu_serial[In](length, lane)
 
 
 def apply[
     Out: DType,
-    op: def[W: Int](Int) capturing[_] -> SIMD[Out, W],
+    Op: def[W: Int](Int) -> SIMD[Out, W],
 ](
     dst: BufferView[mut=True, Out, _],
+    op: Op,
     ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Fill ``dst[i] = op(i)`` element-wise via the shared CPU serial/parallel
@@ -1260,20 +1392,21 @@ def apply[
     """
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](i))
 
-    _apply_dispatch[Out, False, process](length, ctx)
+    if ctx.is_gpu():
+        raise Error("apply: a producer lane closes over host state")
+    _cpu_striped[Out](length, lane, ctx)
 
 
 def apply[
     In: DType,
-    op: def[W: Int](Int) capturing[_] -> SIMD[DType.bool, W],
+    Op: def[W: Int](Int) -> SIMD[DType.bool, W],
 ](
     dst: BitmapView[mut=True, _],
+    op: Op,
     ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Bit-pack ``dst[i] = op(i)`` from the index — the bitmap counterpart of the
@@ -1285,19 +1418,13 @@ def apply[
     """
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](i))
 
-    comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
-
-    @always_inline
-    def lane[W: Int](i: Int):
-        process[W](Coord(i))
-
-    vectorize[cpu_width](length, lane)
+    if ctx.is_gpu():
+        raise Error("apply: a producer lane closes over host state")
+    _cpu_serial[In](length, lane)
 
 
 def apply[
@@ -1316,24 +1443,25 @@ def apply[
     """
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
     )
 
 
 def apply[
     In: DType,
     Out: DType,
-    op: def[W: Int](SIMD[In, W]) capturing[_] -> SIMD[Out, W],
+    Op: (def[W: Int](SIMD[In, W]) -> SIMD[Out, W])
+    & RegisterPassable
+    & ImplicitlyCopyable,
 ](
     src: BufferView[In, _],
     dst: BufferView[mut=True, Out, _],
+    op: Op,
     ctx: ExecContext = ExecContext.serial(),
 ) raises:
     """Like the type-mapping unary ``apply`` above, but ``op`` may *capture*
@@ -1341,14 +1469,12 @@ def apply[
     via ``ctx``, so a captured-state map still parallelizes and offloads."""
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
     )
 
 
@@ -1366,14 +1492,12 @@ def apply[
     """
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
     )
 
 
@@ -1397,40 +1521,13 @@ def apply[
     """
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[In]():
-            comptime gpu_width = max(
-                8, simd_width_of[In, target=get_gpu_target()]()
-            )
-            # Round up to a full gpu_width chunk so every store is a
-            # complete byte (no scalar read-modify-write race on GPU).
-            # Over-read/write is safe thanks to Arrow's 64-byte padding;
-            # clamp so we never exceed it.
-            comptime max_pad = 64 // size_of[Scalar[In]]()
-            var padded = min(
-                math.align_up(length, gpu_width),
-                length + max_pad,
-            )
-
-            elementwise[process, gpu_width, target="gpu"](
-                Coord(padded), ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
-
-        @always_inline
-        def lane[W: Int](i: Int):
-            process[W](Coord(i))
-
-        vectorize[cpu_width](length, lane)
+    _apply_packed_dispatch[In, ExecContext.has_accelerator_support[In]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1452,35 +1549,13 @@ def apply[
     """
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[In]():
-            comptime gpu_width = max(
-                8, simd_width_of[In, target=get_gpu_target()]()
-            )
-            comptime max_pad = 64 // size_of[Scalar[In]]()
-            var padded = min(
-                math.align_up(length, gpu_width),
-                length + max_pad,
-            )
-            elementwise[process, gpu_width, target="gpu"](
-                Coord(padded), ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
-
-        @always_inline
-        def lane[W: Int](i: Int):
-            process[W](Coord(i))
-
-        vectorize[cpu_width](length, lane)
+    _apply_packed_dispatch[In, ExecContext.has_accelerator_support[In]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1494,13 +1569,13 @@ def apply[
     """Apply a bool-to-Out unary op from a BitmapView into a BufferView."""
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1516,14 +1591,12 @@ def apply[
     """Apply a masked SIMD op element-wise: op(values, validity) into dst."""
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
-        length, ctx
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
     )
 
 
@@ -1539,13 +1612,13 @@ def apply[
     """Apply a masked bool-to-Out op: op(bits, validity) into dst."""
     var length = len(dst)
 
-    @parameter
     @always_inline
-    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
-        var i = Int(coord[0].value())
+    def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1562,12 +1635,11 @@ def apply[
     GPU support is not yet implemented; ctx is reserved for future use.
     """
     # TODO: GPU bitmap op
-    var byte_start = src._offset >> 3
-    var bit_shift = src._offset & 7
+    var byte_start = src.offset() >> 3
+    var bit_shift = src.offset() & 7
     var rshift = UInt8(bit_shift)
     var lshift = UInt8(8 - bit_shift)
-    var out_bytes = (src._length + 7) >> 3
-    var data = src._data
+    var out_bytes = (len(src) + 7) >> 3
     comptime cpu_width = simd_width_of[DType.uint8]()
 
     if out_bytes == 0:
@@ -1578,9 +1650,9 @@ def apply[
         @always_inline
         def process_zero[
             W: Int
-        ](i: Int) {imm dst, imm data, imm byte_start,}:
+        ](i: Int) {imm dst, imm src, imm byte_start,}:
             dst.store_bytes[DType.uint8, W](
-                i, op[W]((data + byte_start + i).load[width=W]())
+                i, op[W](src.load_bytes[DType.uint8, W](byte_start + i))
             )
 
         vectorize[cpu_width](out_bytes, process_zero)
@@ -1594,9 +1666,9 @@ def apply[
         @always_inline
         def process_shifted[
             W: Int
-        ](i: Int) {imm dst, imm data, imm byte_start, imm rshift, imm lshift,}:
-            var lo = (data + byte_start + i).load[width=W]()
-            var hi = (data + byte_start + i + 1).load[width=W]()
+        ](i: Int) {imm dst, imm src, imm byte_start, imm rshift, imm lshift,}:
+            var lo = src.load_bytes[DType.uint8, W](byte_start + i)
+            var hi = src.load_bytes[DType.uint8, W](byte_start + i + 1)
             dst.store_bytes[DType.uint8, W](
                 i, op[W]((lo >> rshift) | (hi << lshift))
             )
@@ -1605,12 +1677,11 @@ def apply[
 
     # Last output byte: read hi only when the view's bits span into the next
     # source byte, avoiding a read past the end of source data.
-    var last_lo = (data + byte_start + bulk).load[width=1]()
-    var last_result = last_lo >> rshift
-    var remaining_bits = src._length - bulk * 8
+    var last_result = src.load_bytes[DType.uint8](byte_start + bulk) >> rshift
+    var remaining_bits = len(src) - bulk * 8
     if remaining_bits > 8 - bit_shift:
         last_result = last_result | (
-            (data + byte_start + bulk + 1).load[width=1]() << lshift
+            src.load_bytes[DType.uint8](byte_start + bulk + 1) << lshift
         )
     dst.store_bytes[DType.uint8, 1](bulk, op[1](last_result))
 
@@ -1633,17 +1704,15 @@ def apply[
         raise Error("BitmapView lengths must match")
 
     # TODO: GPU bitmap op
-    var byte_start_a = lhs._offset >> 3
-    var bit_shift_a = lhs._offset & 7
-    var byte_start_b = rhs._offset >> 3
-    var bit_shift_b = rhs._offset & 7
+    var byte_start_a = lhs.offset() >> 3
+    var bit_shift_a = lhs.offset() & 7
+    var byte_start_b = rhs.offset() >> 3
+    var bit_shift_b = rhs.offset() & 7
     var rs_a = UInt8(bit_shift_a)
     var ls_a = UInt8(8 - bit_shift_a)
     var rs_b = UInt8(bit_shift_b)
     var ls_b = UInt8(8 - bit_shift_b)
-    var out_bytes = (lhs._length + 7) >> 3
-    var src_a = lhs._data
-    var src_b = rhs._data
+    var out_bytes = (len(lhs) + 7) >> 3
     comptime cpu_width = simd_width_of[DType.uint8]()
 
     if out_bytes == 0:
@@ -1656,16 +1725,16 @@ def apply[
             W: Int
         ](i: Int) {
             imm dst,
-            imm src_a,
+            imm lhs,
             imm byte_start_a,
-            imm src_b,
+            imm rhs,
             imm byte_start_b,
         }:
             dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
-                    (src_a + byte_start_a + i).load[width=W](),
-                    (src_b + byte_start_b + i).load[width=W](),
+                    lhs.load_bytes[DType.uint8, W](byte_start_a + i),
+                    rhs.load_bytes[DType.uint8, W](byte_start_b + i),
                 ),
             )
 
@@ -1683,19 +1752,19 @@ def apply[
             W: Int
         ](i: Int) {
             imm dst,
-            imm src_a,
+            imm lhs,
             imm byte_start_a,
-            imm src_b,
+            imm rhs,
             imm byte_start_b,
             imm rs_a,
             imm ls_a,
             imm rs_b,
             imm ls_b,
         }:
-            var lo_a = (src_a + byte_start_a + i).load[width=W]()
-            var hi_a = (src_a + byte_start_a + i + 1).load[width=W]()
-            var lo_b = (src_b + byte_start_b + i).load[width=W]()
-            var hi_b = (src_b + byte_start_b + i + 1).load[width=W]()
+            var lo_a = lhs.load_bytes[DType.uint8, W](byte_start_a + i)
+            var hi_a = lhs.load_bytes[DType.uint8, W](byte_start_a + i + 1)
+            var lo_b = rhs.load_bytes[DType.uint8, W](byte_start_b + i)
+            var hi_b = rhs.load_bytes[DType.uint8, W](byte_start_b + i + 1)
             dst.store_bytes[DType.uint8, W](
                 i,
                 op[W](
@@ -1707,18 +1776,16 @@ def apply[
         vectorize[cpu_width](bulk, process_shifted)
 
     # Last output byte: read hi only when bits span into the next source byte.
-    var remaining_bits = lhs._length - bulk * 8
-    var last_lo_a = (src_a + byte_start_a + bulk).load[width=1]()
-    var last_lo_b = (src_b + byte_start_b + bulk).load[width=1]()
-    var result_a = last_lo_a >> rs_a
-    var result_b = last_lo_b >> rs_b
+    var remaining_bits = len(lhs) - bulk * 8
+    var result_a = lhs.load_bytes[DType.uint8](byte_start_a + bulk) >> rs_a
+    var result_b = rhs.load_bytes[DType.uint8](byte_start_b + bulk) >> rs_b
     if remaining_bits > 8 - bit_shift_a:
         result_a = result_a | (
-            (src_a + byte_start_a + bulk + 1).load[width=1]() << ls_a
+            lhs.load_bytes[DType.uint8](byte_start_a + bulk + 1) << ls_a
         )
     if remaining_bits > 8 - bit_shift_b:
         result_b = result_b | (
-            (src_b + byte_start_b + bulk + 1).load[width=1]() << ls_b
+            rhs.load_bytes[DType.uint8](byte_start_b + bulk + 1) << ls_b
         )
     dst.store_bytes[DType.uint8, 1](bulk, op[1](result_a, result_b))
 
@@ -1758,13 +1825,13 @@ def _reduce_dispatch[
         # through to the CPU path, which is correct — the reducer reads host
         # data anyway).
         comptime if (
-            has_accelerator_support[T]()
+            ExecContext.has_accelerator_support[T]()
             and T != DType.float16
             and T != DType.bool
         ):
 
             @always_inline
-            @parameter
+            @__parameter
             def combine_capturing[
                 W: SIMDLength
             ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
@@ -1775,7 +1842,7 @@ def _reduce_dispatch[
 
             @always_inline
             @__copy_capture(dev_view)
-            @parameter
+            @__parameter
             def output_fn_gpu[
                 W: SIMDLength, rank: Int
             ](idx: IndexList[rank], val: SIMD[T, W]):
@@ -1888,7 +1955,7 @@ def reduce[
     """
 
     @always_inline
-    @parameter
+    @__parameter
     def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[Acc, W]:
         return src.load[W](idx[0]).cast[Acc]()
 
@@ -1913,7 +1980,7 @@ def reduce[
     when ``Acc == In``, the default)."""
 
     @always_inline
-    @parameter
+    @__parameter
     def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[Acc, W]:
         var i = idx[0]
         return bitmap.load[W](i).select(

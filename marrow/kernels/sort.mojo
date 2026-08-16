@@ -189,37 +189,33 @@ def _comparison_sort_indices[
         if ascending:
             if stable:
 
-                @parameter
-                def cmp_asc_stable(a: Int32, b: Int32) -> Bool:
+                def cmp_asc_stable(a: Int32, b: Int32) {imm values} -> Bool:
                     var va = values.unsafe_get(Int(a))
                     var vb = values.unsafe_get(Int(b))
                     return va < vb or (va == vb and a < b)
 
-                _sort_impl[cmp_asc_stable](idx_list)
+                _sort_impl(idx_list, cmp_asc_stable)
             else:
 
-                @parameter
-                def cmp_asc(a: Int32, b: Int32) -> Bool:
+                def cmp_asc(a: Int32, b: Int32) {imm values} -> Bool:
                     return values.unsafe_get(Int(a)) < values.unsafe_get(Int(b))
 
-                _sort_impl[cmp_asc](idx_list)
+                _sort_impl(idx_list, cmp_asc)
         else:
             if stable:
 
-                @parameter
-                def cmp_desc_stable(a: Int32, b: Int32) -> Bool:
+                def cmp_desc_stable(a: Int32, b: Int32) {imm values} -> Bool:
                     var va = values.unsafe_get(Int(a))
                     var vb = values.unsafe_get(Int(b))
                     return va > vb or (va == vb and a < b)
 
-                _sort_impl[cmp_desc_stable](idx_list)
+                _sort_impl(idx_list, cmp_desc_stable)
             else:
 
-                @parameter
-                def cmp_desc(a: Int32, b: Int32) -> Bool:
+                def cmp_desc(a: Int32, b: Int32) {imm values} -> Bool:
                     return values.unsafe_get(Int(a)) > values.unsafe_get(Int(b))
 
-                _sort_impl[cmp_desc](idx_list)
+                _sort_impl(idx_list, cmp_desc)
         for i in range(n):
             v.unsafe_set(i, idx_list[i])
     else:
@@ -237,18 +233,16 @@ def _comparison_sort_indices[
 
         if stable:
 
-            @parameter
             def cmp_pair_stable(a: _SortPair, b: _SortPair) -> Bool:
                 return a.key < b.key or (a.key == b.key and a.idx < b.idx)
 
-            _sort_impl[cmp_pair_stable](pairs)
+            _sort_impl(pairs, cmp_pair_stable)
         else:
 
-            @parameter
             def cmp_pair(a: _SortPair, b: _SortPair) -> Bool:
                 return a.key < b.key
 
-            _sort_impl[cmp_pair](pairs)
+            _sort_impl(pairs, cmp_pair)
         for i in range(n):
             v.unsafe_set(i, pairs[i].idx)
 
@@ -323,12 +317,11 @@ def _radix_sort_indices[
         # (shared with the radix partitioner, cf. ``radix_histogram``).
         var ka_h = key_a.view[DType.uint64](0, n)
 
-        @parameter
-        def bucket_of(i: Int) -> Int:
+        def bucket_of(i: Int) {imm} -> Int:
             return Int((ka_h.unsafe_get(i) >> shift) & mask)
 
-        var offsets = radix_histogram[bucket_of](
-            n, bucket_count, ctx, _PARALLEL_THRESHOLD
+        var offsets = radix_histogram(
+            n, bucket_count, bucket_of, ctx, _PARALLEL_THRESHOLD
         )
         var write_offsets = offsets[0].copy()
         ref bucket_start = offsets[1]
@@ -353,8 +346,9 @@ def _radix_sort_indices[
         var ib_s = idx_b.view[DType.int32](0, n)
 
         @always_inline
-        @parameter
-        def scatter_worker(t: Int, start: Int, end: Int):
+        def scatter_worker(
+            t: Int, start: Int, end: Int
+        ) {mut write_offsets, imm}:
             var base = t * bucket_count
             for i in range(start, end):
                 var b = Int((ka_s.unsafe_get(i) >> shift) & mask)
@@ -363,7 +357,7 @@ def _radix_sort_indices[
                 ib_s.unsafe_set(pos, ia_s.unsafe_get(i))
                 write_offsets[base + b] = pos + 1
 
-        ctx.stripe[scatter_worker](n, _PARALLEL_THRESHOLD)
+        ctx.stripe(n, scatter_worker, _PARALLEL_THRESHOLD)
 
         # Swap A ↔ B so the next pass always reads from "current A".
         var tmp_key = key_a^
@@ -428,8 +422,7 @@ struct SortIndices(Kernel):
             )
         elif dt.is_binary_like():
 
-            @parameter
-            def binarylike[T: BinaryLikeType](d: T) raises -> Int32Array:
+            def binarylike[T: BinaryLikeType](d: T) raises {imm} -> Int32Array:
                 return SortIndices.apply(
                     array.as_binary_like[T](),
                     ascending,
@@ -438,7 +431,7 @@ struct SortIndices(Kernel):
                     ctx,
                 )
 
-            result = dt.dispatch_binarylike[binarylike]()
+            result = dt.dispatch_binarylike(binarylike)
         elif dt.is_dictionary():
             # Order by the *decoded* values: dictionary index order is an
             # encoding artefact (`ordered=False` is the norm), not a value order.
@@ -460,13 +453,12 @@ struct SortIndices(Kernel):
             # `Decimal128Array` is `PrimitiveArray[Decimal128Type]`, so the
             # separate numeric/decimal128/decimal256 arms this replaces were
             # three more spellings of this one call.
-            @parameter
-            def primitive[T: PrimitiveType](d: T) raises -> Int32Array:
+            def primitive[T: PrimitiveType](d: T) raises {imm} -> Int32Array:
                 return SortIndices.apply(
                     array.as_primitive[T](), ascending, nulls_first, stable, ctx
                 )
 
-            result = dt.dispatch_primitive[primitive]()
+            result = dt.dispatch_primitive(primitive)
         else:
             raise Self.error(t"unsupported dtype {dt}")
 
@@ -758,24 +750,22 @@ struct SortIndices(Kernel):
 
         if n_valid > 1:
 
-            @parameter
-            def cmp_asc(a: Int32, b: Int32) -> Bool:
+            def cmp_asc(a: Int32, b: Int32) {imm arr} -> Bool:
                 return arr.unsafe_get(UInt(a)) < arr.unsafe_get(UInt(b))
 
-            @parameter
-            def cmp_desc(a: Int32, b: Int32) -> Bool:
+            def cmp_desc(a: Int32, b: Int32) {imm arr} -> Bool:
                 return arr.unsafe_get(UInt(b)) < arr.unsafe_get(UInt(a))
 
             if ascending:
                 if stable:
-                    _sort_impl[cmp_asc, stable=True](valid_list)
+                    _sort_impl[stable=True](valid_list, cmp_asc)
                 else:
-                    _sort_impl[cmp_asc](valid_list)
+                    _sort_impl(valid_list, cmp_asc)
             else:
                 if stable:
-                    _sort_impl[cmp_desc, stable=True](valid_list)
+                    _sort_impl[stable=True](valid_list, cmp_desc)
                 else:
-                    _sort_impl[cmp_desc](valid_list)
+                    _sort_impl(valid_list, cmp_desc)
 
         var out = Buffer.alloc_uninit[DType.int32](n)
         var ov = out.view[DType.int32](0, n)

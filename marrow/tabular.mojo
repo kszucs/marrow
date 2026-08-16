@@ -386,7 +386,7 @@ struct RecordBatch(
         )
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -586,7 +586,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         return True
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(

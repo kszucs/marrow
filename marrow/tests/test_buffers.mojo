@@ -1,5 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false
 from std.memory import ArcPointer
+from std.memory.alloc import unsafe_alloc
 
 from ..buffers import *
 from ..views import BufferView
@@ -115,20 +116,22 @@ def test_buffer_foreign_kind() raises:
     var n_released: Int = 0
     # Allocate 64 bytes with 64-byte alignment to satisfy Arrow alignment invariant.
     # Only the first sizeof(pointer) bytes are used to store the address of n_released.
-    var raw = alloc[UInt8](64, alignment=64)
-    raw.bitcast[UnsafePointer[Int, MutUntrackedOrigin]]()[0] = rebind[
-        UnsafePointer[Int, MutUntrackedOrigin]
-    ](UnsafePointer(to=n_released))
+    var raw = unsafe_alloc[UInt8](64, alignment=64)
+    raw.unsafe_bitcast[Pointer[Int, MutUntrackedOrigin]]()[
+        unsafe_offset=0
+    ] = rebind[Pointer[Int, MutUntrackedOrigin]](Pointer(to=n_released))
 
-    def count_and_free(ptr: UnsafePointer[UInt8, MutUntrackedOrigin]) -> None:
-        var counter = ptr.bitcast[UnsafePointer[Int, MutUntrackedOrigin]]()[0]
-        counter[0] += 1
-        ptr.free()
+    def count_and_free(ptr: Pointer[UInt8, MutUntrackedOrigin]) -> None:
+        var counter = ptr.unsafe_bitcast[Pointer[Int, MutUntrackedOrigin]]()[
+            unsafe_offset=0
+        ]
+        counter[unsafe_offset=0] += 1
+        ptr.unsafe_free()
 
-    var mut_ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](raw)
+    var mut_ptr = rebind[Pointer[UInt8, MutUntrackedOrigin]](raw)
     var keeper = ArcPointer(Allocation.foreign(mut_ptr, count_and_free))
     var buf = Buffer.from_foreign(
-        raw.bitcast[NoneType](),
+        raw.unsafe_bitcast[NoneType](),
         64,
         keeper,
     )
@@ -441,8 +444,21 @@ def test_bitmap_count_set_bits_small_slice_in_large_bitmap() raises:
 def test_bitmap_count_set_bits_vs_naive() raises:
     """Exhaustive check of count_set_bits vs naive popcount across sizes/offsets/patterns.
     """
-    comptime sizes = (1, 7, 13, 63, 64, 65, 127, 512, 513, 1023, 1024, 4097)
-    comptime offsets = (0, 3, 7, 32 << 3, 96 << 3, 128 << 3)
+    comptime sizes: List[Int] = [
+        1,
+        7,
+        13,
+        63,
+        64,
+        65,
+        127,
+        512,
+        513,
+        1023,
+        1024,
+        4097,
+    ]
+    comptime offsets: List[Int] = [0, 3, 7, 32 << 3, 96 << 3, 128 << 3]
 
     comptime for si in range(len(sizes)):
         comptime size = sizes[si]
@@ -474,8 +490,8 @@ def test_bitmap_count_set_bits_vs_naive() raises:
 def test_bitmap_count_set_bits_interior_slices() raises:
     """`count_set_bits` on slices ending before buffer end (trailing bytes with real data).
     """
-    comptime sizes = (1, 7, 13, 63, 64, 65, 127, 512, 513)
-    comptime offsets = (0, 3, 7, 32 << 3, 96 << 3, 128 << 3)
+    comptime sizes: List[Int] = [1, 7, 13, 63, 64, 65, 127, 512, 513]
+    comptime offsets: List[Int] = [0, 3, 7, 32 << 3, 96 << 3, 128 << 3]
     comptime extra = 512
 
     comptime for si in range(len(sizes)):

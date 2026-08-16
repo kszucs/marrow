@@ -22,7 +22,7 @@ from ...kernels.aggregate import (
 )
 
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _make_keys(n: Int, num_groups: Int) raises -> DynArray:
@@ -47,11 +47,10 @@ def _bench_group_by[
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(GroupBy(keys).aggregate[A](vals))
 
-    b.iter[call]()
+    b.iter(call)
     keep(keys)
     keep(vals)
 
@@ -133,11 +132,10 @@ def _bench_group_by_nulls[
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(GroupBy(keys).aggregate[A](vals))
 
-    b.iter[call]()
+    b.iter(call)
     keep(keys)
     keep(vals)
 
@@ -179,8 +177,3 @@ def bench_groupby_count_nulls_1m_g100k_aggstate(mut b: Benchmark) raises:
 
 def bench_groupby_count_nulls_1m_g100k_countagg(mut b: Benchmark) raises:
     _bench_group_by_nulls[CountAgg](b, 1_000_000, 100_000)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------

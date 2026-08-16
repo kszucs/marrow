@@ -45,11 +45,10 @@ def whole[F: AggFunction](value: DynArray) raises -> DynScalar:
     """
     var box = List[DynArray]()
 
-    @parameter
-    def run[A: Aggregation]() raises:
+    def run[A: Aggregation]() raises {mut box, imm}:
         box.append(A.whole(A.from_any(value)).to_dyn())
 
-    F.resolve[run](value.dtype())
+    F.resolve(value.dtype(), run)
     return box[0][0]
 
 

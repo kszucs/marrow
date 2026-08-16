@@ -678,7 +678,14 @@ def test_cross_check_temporal_pyarrow() raises:
     var pa = Python.import_module("pyarrow")
     var pc = Python.import_module("pyarrow.compute")
 
-    var raw = [0, 1_560_601_845, 1_582_934_400, 1_609_459_200, -1, 915_148_800]
+    var raw: List[Int] = [
+        0,
+        1_560_601_845,
+        1_582_934_400,
+        1_609_459_200,
+        -1,
+        915_148_800,
+    ]
     var pylist = Python.list()
     for v in raw:
         pylist.append(v)

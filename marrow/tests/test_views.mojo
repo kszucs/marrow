@@ -648,7 +648,7 @@ def test_bitmapview_count_set_bits_with_range_nonzero() raises:
     bm.set(5)
     bm.set(10)
     bm.set(60)
-    count, start, end = bm.view(0, 64).count_set_bits_with_range()
+    var count, start, end = bm.view(0, 64).count_set_bits_with_range()
     assert_equal(count, 3)
     assert_true(start <= 5)
     assert_true(end >= 61)
@@ -656,7 +656,7 @@ def test_bitmapview_count_set_bits_with_range_nonzero() raises:
 
 def test_bitmapview_count_set_bits_with_range_zero() raises:
     var bm = Bitmap.alloc_zeroed(64)
-    count, start, end = bm.view(0, 64).count_set_bits_with_range()
+    var count, start, end = bm.view(0, 64).count_set_bits_with_range()
     assert_equal(count, 0)
     assert_equal(start, 0)
     assert_equal(end, 0)
@@ -664,7 +664,7 @@ def test_bitmapview_count_set_bits_with_range_zero() raises:
 
 def test_bitmapview_count_set_bits_with_range_empty() raises:
     var bm = Bitmap.alloc_zeroed(8)
-    count, start, end = bm.view(0, 0).count_set_bits_with_range()
+    var count, start, end = bm.view(0, 0).count_set_bits_with_range()
     assert_equal(count, 0)
     assert_equal(start, 0)
     assert_equal(end, 0)

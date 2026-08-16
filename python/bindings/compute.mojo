@@ -77,15 +77,14 @@ def aggregate[
 ](array: DynArray, ctx: ExecContext) raises -> DynScalar:
     var box = List[DynScalar]()
 
-    @parameter
-    def run[A: Aggregation]() raises:
+    def run[A: Aggregation]() raises {mut box, imm}:
         box.append(
             # `ctx` whole, not `ctx.resolved_num_threads()` — destructuring
             # here dropped the device off a Python-supplied GPU context.
             A.whole(A.from_any(array), ctx).to_dyn()[0]
         )
 
-    F.resolve[run](array.dtype())
+    F.resolve(array.dtype(), run)
     return box[0].copy()
 
 

@@ -35,13 +35,15 @@ paths.  It is NOT stored inside DynArray.
 
 from std.memory import OwnedPointer
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.utils import Variant
 
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
+from std.builtin.rebind import downcast
+from std.os import abort
 from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
@@ -120,8 +122,8 @@ from .scalars import (
 
 trait Array(
     Copyable,
+    Deinitable,
     Equatable,
-    ImplicitlyDeletable,
     Movable,
     Sized,
     Writable,
@@ -325,7 +327,7 @@ struct ArrayData(Copyable, Movable):
             )
 
     # Explicit (empty) destructor so this self-referential struct
-    # (`children: List[ArrayData]`) is ImplicitlyDeletable; fields are still
+    # (`children: List[ArrayData]`) is Deinitable; fields are still
     # destroyed automatically after the body runs.
     def validity(
         ref self,
@@ -348,7 +350,7 @@ struct ArrayData(Copyable, Movable):
         else:
             return None
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
 
@@ -412,7 +414,7 @@ struct NullArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return null
@@ -494,7 +496,7 @@ struct BoolArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return bool_
@@ -507,9 +509,6 @@ struct BoolArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -738,7 +737,7 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return self.dtype.copy().to_dyn()
@@ -752,9 +751,6 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -976,7 +972,7 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -1005,9 +1001,6 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1190,7 +1183,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -1257,9 +1250,6 @@ struct ListLikeArray[T: ListLikeType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1366,7 +1356,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         var n = offsets.length - 1
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if m := mask^:
+        if var m := mask^:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -1403,7 +1393,7 @@ struct ListLikeArray[T: ListLikeType](Array):
         Matches PyArrow's ``MapArray.from_arrays(offsets, keys, items)``. The
         entries struct is built non-nullable with a required key, then the
         offsets fold it into a map (`ListArray.from_arrays(...).to_map()`)."""
-        var entry_fields = [
+        var entry_fields: List[Field] = [
             field("key", keys.dtype(), nullable=False),
             field("value", items.dtype(), nullable=True),
         ]
@@ -1504,7 +1494,7 @@ struct FixedSizeListArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -1555,9 +1545,6 @@ struct FixedSizeListArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1641,7 +1628,7 @@ struct FixedSizeListArray(Array):
         var n = values.length() // list_size if list_size > 0 else 0
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if m := mask^:
+        if var m := mask^:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -1720,7 +1707,7 @@ struct FixedSizeBinaryArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return FixedSizeBinaryType(self.byte_width).to_dyn()
@@ -1730,9 +1717,6 @@ struct FixedSizeBinaryArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1876,7 +1860,7 @@ struct StructArray(Array):
         return self.length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -1988,9 +1972,6 @@ struct StructArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -2036,7 +2017,7 @@ struct StructArray(Array):
         var n = children[0].length() if len(children) > 0 else 0
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if m := mask^:
+        if var m := mask^:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -2164,7 +2145,7 @@ struct DictionaryArray(Array):
         return self._length
 
     def __str__(self) -> String:
-        return String.write(self)
+        return String(self)
 
     def type(self) -> DynType:
         return self._dtype.copy()
@@ -2407,6 +2388,37 @@ struct DynArray(
 
     var _v: Self.VariantType
 
+    def _dispatch[
+        R: Movable, //, Func: def[T: Array](T) -> R
+    ](self, func: Func) -> R:
+        """Run `func` on the active variant member, narrowed to `Array`.
+
+        The one narrowing adapter for this type; the dispatch loop itself lives
+        in `variant_dispatch`. `Array` has to be named concretely here — a
+        closure type cannot be generic over its own trait bound.
+        """
+
+        def narrow[T: Movable](t: T) {imm} -> R:
+            comptime if conforms_to(T, Array):
+                return func(rebind[downcast[T, Array]](t))
+            else:
+                abort("DynArray._dispatch: member is not Array")
+
+        return variant_dispatch(self._v, narrow)
+
+    def _dispatch[
+        R: Movable, //, Func: def[T: Array](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Raising counterpart of `_dispatch`."""
+
+        def narrow[T: Movable](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, Array):
+                return func(rebind[downcast[T, Array]](t))
+            else:
+                raise Error("DynArray._dispatch: member is not Array")
+
+        return variant_dispatch_raises(self._v, narrow)
+
     # --- construction ---
 
     @implicit
@@ -2426,10 +2438,10 @@ struct DynArray(
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # Explicit (empty) destructor so this type is Deinitable despite
     # the `StructArray -> List[DynArray] -> DynArray` reference cycle; the
     # variant field is still destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -2456,11 +2468,10 @@ struct DynArray(
     # --- dispatch-based methods ---
 
     def length(self) -> Int:
-        @parameter
-        def f[T: Array](a: T) -> Int:
+        def f[T: Array](a: T) {imm} -> Int:
             return len(a)
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     comptime ScalarType = DynScalar
     """`Array`'s companion-scalar member. `DynScalar` conforms to `ArrowScalar`,
@@ -2478,25 +2489,22 @@ struct DynArray(
         return self.dtype()
 
     def dtype(self) -> DynType:
-        @parameter
-        def f[T: Array](a: T) -> DynType:
+        def f[T: Array](a: T) {imm} -> DynType:
             return a.type()
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def null_count(self) -> Int:
-        @parameter
-        def f[T: Array](a: T) -> Int:
+        def f[T: Array](a: T) {imm} -> Int:
             return a.null_count()
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def is_valid(self, index: Int) -> Bool:
-        @parameter
-        def f[T: Array](a: T) -> Bool:
+        def f[T: Array](a: T) {imm} -> Bool:
             return a.is_valid(index)
 
-        return variant_dispatch[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def is_null(self, index: Int) -> Bool:
         return not self.is_valid(index)
@@ -2507,12 +2515,11 @@ struct DynArray(
         Matches PyArrow's Array.slice(offset, length) API.
         """
 
-        @parameter
-        def f[T: Array](a: T) raises -> DynArray:
+        def f[T: Array](a: T) raises {imm} -> DynArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def view(self, var dtype: DynType) raises -> DynArray:
         """Reinterpret this array's buffers under a same-layout `dtype`.
@@ -2536,40 +2543,36 @@ struct DynArray(
         Not intended for hot paths — prefer typed downcast methods.
         """
 
-        @parameter
-        def f[T: Array](a: T) raises -> ArrayData:
+        def f[T: Array](a: T) raises {imm} -> ArrayData:
             return a.to_data()
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def to_device(self, ctx: DeviceContext) raises -> DynArray:
         """Upload this array to the GPU device."""
 
-        @parameter
-        def f[T: Array](a: T) raises -> DynArray:
+        def f[T: Array](a: T) raises {imm} -> DynArray:
             return a.to_device(ctx)
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def to_cpu(self, ctx: DeviceContext) raises -> DynArray:
         """Download this array from the GPU device to CPU memory."""
 
-        @parameter
-        def f[T: Array](a: T) raises -> DynArray:
+        def f[T: Array](a: T) raises {imm} -> DynArray:
             return a.to_cpu(ctx)
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     def to_dyn(deinit self) -> DynArray:
         """Returns this array as DynArray, transferring ownership."""
         return self^
 
     def write_to[W: Writer](self, mut writer: W):
-        @parameter
-        def f[T: Array](a: T):
+        def f[T: Array](a: T) {mut writer, imm}:
             a.write_to(writer)
 
-        variant_dispatch[Array, func=f](self._v)
+        self._dispatch(f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -2591,11 +2594,10 @@ struct DynArray(
                 t"index {index} out of bounds for length {self.length()}"
             )
 
-        @parameter
-        def f[T: Array](a: T) raises -> DynScalar:
+        def f[T: Array](a: T) raises {imm} -> DynScalar:
             return a[index].to_dyn()
 
-        return variant_dispatch_raises[Array, func=f](self._v)
+        return self._dispatch(f)
 
     # --- typed downcasts (zero-cost reference borrows) ---
 

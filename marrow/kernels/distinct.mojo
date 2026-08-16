@@ -109,17 +109,16 @@ def count_distinct(
         n = table.num_keys()
     else:
 
-        @parameter
         def count_partition(
             _pi: Int, _rows: Int32Array, part_hashes: UInt64Array
-        ) raises -> Int:
+        ) raises {imm} -> Int:
             var table = SwissHashTable[rapidhash]()
             _ = table.insert_hashes(part_hashes, grow_adaptively=True)
             return table.num_keys()
 
         var counts = RadixPartitioner(
             num_bits=6, ctx=ctx.copy()
-        ).map_partitions[Int, count_partition](hashes^)
+        ).map_partitions[Int](hashes^, count_partition)
         n = 0
         for i in range(len(counts)):
             n += counts[i]

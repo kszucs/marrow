@@ -1,11 +1,11 @@
 from std.testing import assert_equal, assert_true
 from std.python import Python
 from std.os import remove
-from ..parquet import read_table, write_table
-from ..tabular import Table, RecordBatch
-from ..arrays import DynArray, PrimitiveArray, StringArray
-from ..schema import Schema
-from ..dtypes import Field, int32, int64, float64, string
+from ...parquet import read_table, write_table
+from ...tabular import Table, RecordBatch
+from ...arrays import DynArray, PrimitiveArray, StringArray
+from ...schema import Schema
+from ...dtypes import Field, int32, int64, float64, string
 
 
 def _make_table() raises -> Table:
@@ -18,7 +18,7 @@ def _make_table() raises -> Table:
             z=pa.array(Python.list("a", "b", "c")),
         )
     )
-    from ..c_data import CArrowArrayStream
+    from ...c_data import CArrowArrayStream
 
     var capsule = py_table.__arrow_c_stream__(Python.none())
     return CArrowArrayStream.from_pycapsule(capsule).to_table()

@@ -1,5 +1,5 @@
 from std.testing import assert_equal, assert_false, assert_true
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.sys.info import CompilationTarget
 
 from ...builders import array, arange

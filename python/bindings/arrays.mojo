@@ -12,12 +12,13 @@ from std.python._cpython import (
     PyTypeObject,
     PyTypeObjectPtr,
 )
-from std.ffi import c_char, c_int, c_ssize_t, _CPointer
-from std.memory import ArcPointer, alloc, UnsafePointer
-from std.builtin.type_aliases import MutAnyOrigin
+from std.ffi import c_char, c_int, c_ssize_t
+from std.memory import ArcPointer, Pointer
+from std.memory.alloc import unsafe_alloc
 from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
+from std.builtin.rebind import downcast
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.execution import ExecContext
 from marrow.arrays import (
@@ -53,8 +54,8 @@ comptime _PyBytesAsStringAndSizeFn = ExternalFunction[
     "PyBytes_AsStringAndSize",
     def(
         PyObjectPtr,
-        UnsafePointer[_CPointer[c_char, ImmutAnyOrigin], MutAnyOrigin],
-        UnsafePointer[c_ssize_t, MutAnyOrigin],
+        Pointer[OptionalPointer[c_char, ImmutAnyOrigin], MutAnyOrigin],
+        Pointer[c_ssize_t, MutAnyOrigin],
     ) thin -> c_int,
 ]
 
@@ -85,18 +86,30 @@ struct PyHelpers(Copyable, Movable):
         self.py = Python()
         ref cpy = self.py.cpython()
         self.none_ptr = cpy.Py_None()
-        self._unicode_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyUnicode_Type"
-        ).value()
-        self._bytes_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyBytes_Type"
-        ).value()
-        self._list_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyList_Type"
-        ).value()
-        self._tuple_type = cpy.lib.get_symbol[PyTypeObject](
-            "PyTuple_Type"
-        ).value()
+        self._unicode_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyUnicode_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+        self._bytes_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyBytes_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+        self._list_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyList_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+        self._tuple_type = (
+            cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type")
+            .value()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
         self._dict_type = cpy.PyDict_Type()
         self._bytes_as_string_and_size_fn = _PyBytesAsStringAndSizeFn.load(
             cpy.lib.borrow()
@@ -153,7 +166,11 @@ struct PyHelpers(Copyable, Movable):
             var val = self.cpy().PyLong_AsSsize_t(ptr)
             if val == -1:
                 self.raise_on_error()
-            return Scalar[dtype](val != 0)
+            # `Bool` is `Intable`, and since Mojo 1.0 that constructor is
+            # selected for any integer scalar — it then rejects `bool` as
+            # non-integral. Go through the bool-typed conversion instead.
+            var flag: Scalar[DType.bool] = val != 0
+            return rebind[Scalar[dtype]](flag)
         elif dtype.is_floating_point():
             var val = self.cpy().PyFloat_AsDouble(ptr)
             if val == -1.0:
@@ -189,21 +206,22 @@ struct PyHelpers(Copyable, Movable):
     ) raises -> StringSlice[ImmutAnyOrigin]:
         """Return the raw bytes buffer of a Python bytes object as a StringSlice.
         """
-        var data_ptr = _CPointer[c_char, ImmutAnyOrigin]()
+        var data_ptr = OptionalPointer[c_char, ImmutAnyOrigin]()
         var size = c_ssize_t(0)
         # The CPython FFI signature pins `MutAnyOrigin`; the pointers to these
         # locals carry a concrete origin, so cast at the C boundary (the stricter
         # compiler no longer converts implicitly).
         var rc = self._bytes_as_string_and_size_fn(
             ptr,
-            UnsafePointer(to=data_ptr).unsafe_origin_cast[MutAnyOrigin](),
-            UnsafePointer(to=size).unsafe_origin_cast[MutAnyOrigin](),
+            Pointer(to=data_ptr).unsafe_origin_cast[MutAnyOrigin](),
+            Pointer(to=size).unsafe_origin_cast[MutAnyOrigin](),
         )
         if rc != 0:
             self.raise_on_error()
         return StringSlice[ImmutAnyOrigin](
             unsafe_from_utf8=Span[Byte, ImmutAnyOrigin](
-                unsafe_ptr=data_ptr.value().bitcast[Byte](), length=Int(size)
+                unsafe_ptr=data_ptr.value().unsafe_bitcast[Byte](),
+                length=Int(size),
             )
         )
 
@@ -313,8 +331,8 @@ struct PyInferrer(Copyable, Movable):
 
     # Explicit (empty) destructor so this self-referential struct
     # (`_list_child` / `_field_children` are `List[PyInferrer]`) is
-    # ImplicitlyDeletable; fields are still destroyed automatically.
-    def __del__(deinit self):
+    # Deinitable; fields are still destroyed automatically.
+    def __deinit__(deinit self):
         pass
 
     def visit(mut self, ptr: PyObjectPtr) raises -> Bool:
@@ -384,9 +402,9 @@ struct PyInferrer(Copyable, Movable):
         ref cpy = self.py.cpy()
         var n = self.py.length(dict_ptr)
         var pos = Int(0)
-        var key_raw = alloc[PyObjectPtr](1)
-        var val_raw = alloc[PyObjectPtr](1)
-        var pos_ptr = UnsafePointer(to=pos)
+        var key_raw = unsafe_alloc[PyObjectPtr](1)
+        var val_raw = unsafe_alloc[PyObjectPtr](1)
+        var pos_ptr = Pointer(to=pos)
         for _ in range(n):
             _ = cpy.PyDict_Next(
                 dict_ptr,
@@ -405,8 +423,8 @@ struct PyInferrer(Copyable, Movable):
                 self._field_order.append(String(name))
                 self._field_children.append(PyInferrer())
             _ = self._field_children[idx].visit(val_raw[])
-        key_raw.free()
-        val_raw.free()
+        key_raw.unsafe_free()
+        val_raw.unsafe_free()
 
     def _total_count(self) -> Int:
         return (
@@ -486,7 +504,7 @@ struct PyInferrer(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-trait PyConverter(ImplicitlyDeletable, Movable):
+trait PyConverter(Deinitable, Movable):
     def append(mut self, value: PyObjectPtr) raises:
         ...
 
@@ -535,10 +553,10 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
     def __init__(out self, *, copy: Self):
         self._v = copy._v.copy()
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # Explicit (empty) destructor so this type is Deinitable despite
     # the `PyStructConverter -> List[PyAnyConverter] -> PyAnyConverter` cycle;
     # the ArcPointer field is still destroyed automatically after the body.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def __init__(
@@ -591,18 +609,24 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
             raise Error("unsupported type: ", dtype)
 
     def append(mut self, value: PyObjectPtr) raises:
-        @parameter
-        def f[T: PyConverter](mut t: T) raises:
-            t.append(value)
+        def narrow[T: Movable](mut t: T) raises {imm}:
+            comptime if conforms_to(T, PyConverter):
+                ref c = rebind[downcast[T, PyConverter]](t)
+                c.append(value)
+            else:
+                raise Error("PyConverter dispatch: unsupported member")
 
-        dt.variant_dispatch_raises[PyConverter, func=f](self._v[])
+        dt.variant_dispatch_raises(self._v[], narrow)
 
     def extend(mut self, values: PyObjectPtr) raises:
-        @parameter
-        def f[T: PyConverter](mut t: T) raises:
-            t.extend(values)
+        def narrow[T: Movable](mut t: T) raises {imm}:
+            comptime if conforms_to(T, PyConverter):
+                ref c = rebind[downcast[T, PyConverter]](t)
+                c.extend(values)
+            else:
+                raise Error("PyConverter dispatch: unsupported member")
 
-        dt.variant_dispatch_raises[PyConverter, func=f](self._v[])
+        dt.variant_dispatch_raises(self._v[], narrow)
 
 
 # ---------------------------------------------------------------------------
@@ -931,10 +955,10 @@ struct PyStructConverter(PyConverter):
     var _field_keys: List[PythonObject]
     var py: PyHelpers
 
-    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite the
+    # Explicit (empty) destructor so this type is Deinitable despite the
     # `List[PyAnyConverter]` field (PyAnyConverter is recursive, so not
     # implicitly deletable); fields are still destroyed automatically.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def __init__(out self, builder: DynBuilder) raises:
@@ -999,7 +1023,7 @@ struct PyStructConverter(PyConverter):
 
 
 def arrow_c_array[
-    T: ImplicitlyDeletable, //, to_array_fn: def(T) thin -> DynArray
+    T: Deinitable, //, to_array_fn: def(T) thin -> DynArray
 ](py_self: PythonObject, requested_schema: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[T]()
     var arr = to_array_fn(ptr[])
@@ -1009,7 +1033,7 @@ def arrow_c_array[
 
 
 def arrow_c_schema[
-    T: ImplicitlyDeletable, //, type_fn: def(T) thin -> dt.DynType
+    T: Deinitable, //, type_fn: def(T) thin -> dt.DynType
 ](py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[T]()
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
@@ -1134,7 +1158,7 @@ def struct_array_from_arrays(
 
 def _any_array_str(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynArray]()
-    return PythonObject(String.write(ptr[]))
+    return PythonObject(String(ptr[]))
 
 
 def _array_to_device(self: DynArray, ctx: ExecContext) raises -> DynArray:

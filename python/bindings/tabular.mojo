@@ -15,8 +15,7 @@ from marrow.execution import ExecContext
 from marrow.schema import Schema
 from marrow.arrays import DynArray, ChunkedArray
 from marrow.dtypes import Field
-from std.memory import ArcPointer, UnsafePointer
-from std.builtin.type_aliases import MutAnyOrigin
+from std.memory import ArcPointer, Pointer
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.arrays import Int32Array
 from helpers import pymethod
@@ -495,12 +494,12 @@ def _record_batch_sort_by(
 
 def _record_batch_str(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return PythonObject(String.write(ptr[]))
+    return PythonObject(String(ptr[]))
 
 
 def _table_str(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
-    return PythonObject(String.write(ptr[]))
+    return PythonObject(String(ptr[]))
 
 
 # ---------------------------------------------------------------------------

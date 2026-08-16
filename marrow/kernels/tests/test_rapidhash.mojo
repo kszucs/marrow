@@ -13,9 +13,9 @@ from ...dtypes import int32, int64, uint64, Int32Type, Int64Type, UInt64Type
 from ...kernels.hashing import (
     RapidHash,
     rapidhash,
-    _rapidhash_fixed,
     NULL_HASH_SENTINEL,
 )
+from ...utils import RapidHash64
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ def test_scalar_matches_vectorized() raises:
     var h = RapidHash.apply(arr)
 
     for i in range(5):
-        var scalar_h = _rapidhash_fixed[8](UInt64(arr.unsafe_get(i)))
+        var scalar_h = RapidHash64.hash_fixed[8](UInt64(arr.unsafe_get(i)))
         var vec_h = UInt64(h.unsafe_get(i))
         if scalar_h != vec_h:
             raise Error("scalar/vectorized mismatch at index " + String(i))

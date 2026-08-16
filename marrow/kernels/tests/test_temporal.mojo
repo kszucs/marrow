@@ -274,7 +274,7 @@ def test_cross_check_pyarrow() raises:
     var pc = Python.import_module("pyarrow.compute")
 
     # A spread of second-resolution UTC timestamps.
-    var raw = [
+    var raw: List[Int] = [
         0,
         1_560_601_845,
         1_582_934_400,
@@ -327,7 +327,7 @@ def test_cross_check_date_trunc_pyarrow() raises:
     var pa = Python.import_module("pyarrow")
     var pc = Python.import_module("pyarrow.compute")
 
-    var raw = [1_560_601_845, 1_582_934_400, 0, 915_148_800]
+    var raw: List[Int] = [1_560_601_845, 1_582_934_400, 0, 915_148_800]
     var a = _ts(raw, timestamp(second))
     var pylist = Python.list()
     for v in raw:

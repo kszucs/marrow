@@ -5,7 +5,7 @@ from std.testing import (
     assert_raises,
 )
 from std.python import Python, PythonObject
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from ..c_data import *
 from ..tabular import Table
 from ..arrays import DynArray, BoolArray, PrimitiveArray, StringArray
@@ -1007,7 +1007,12 @@ def test_dictionary_to_pyarrow() raises:
     )
     assert_equal(fmt, "i")  # int32 index type format
     # dictionary schema pointer must be non-null
-    assert_true(UnsafePointer(to=c_schema.dictionary).bitcast[UInt64]()[0] != 0)
+    assert_true(
+        Pointer(to=c_schema.dictionary).unsafe_bitcast[UInt64]()[
+            unsafe_offset=0
+        ]
+        != 0
+    )
 
     # Round-trip the array back through CArrow and check values
     var c_array = CArrowArray.from_array(arr)

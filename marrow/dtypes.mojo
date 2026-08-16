@@ -45,6 +45,8 @@ from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 
 
+from std.builtin.rebind import downcast
+from std.os import abort
 from .utils import variant_dispatch, variant_dispatch_raises
 
 
@@ -53,7 +55,7 @@ from .utils import variant_dispatch, variant_dispatch_raises
 # ---------------------------------------------------------------------------
 
 
-trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
+trait DataType(Copyable, Deinitable, Equatable, Movable, Writable):
     """A concrete Arrow type.
 
     Deliberately minimal: five inherited traits and one defaulted method, and
@@ -730,7 +732,7 @@ struct DictionaryType(DataType):
     # Explicit (empty) destructor: `OwnedPointer[DynType]` is not implicitly
     # deletable, so the compiler cannot synthesize one. Fields are still
     # destroyed automatically after the body runs.
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
 
     def index_type(ref self) -> ref[self._index_type[]] DynType:
@@ -830,101 +832,169 @@ struct DynType(
     def __init__[T: DataType](out self, var value: T):
         self._v = Self.VariantType(value^)
 
-    def dispatch_primitive[
-        R: AnyType,
-        //,
-        func: def[T: PrimitiveType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve any runtime fixed-width dtype to its comptime type and run `func`.
+    def _dispatch[
+        R: Movable, //, Func: def[T: DataType](T) -> R
+    ](self, func: Func) -> R:
+        """Run `func` on the active variant member, narrowed to `DataType`.
 
-        The widest family — numeric, temporal, interval, and decimal. Prefer a
-        narrower member where one fits: this one instantiates `func` for every
-        fixed-width type in the variant.
+        The one narrowing adapter for this type; the dispatch loop itself lives
+        in `variant_dispatch`. `DataType` has to be named concretely here — a
+        closure type cannot be generic over its own trait bound.
         """
-        return variant_dispatch_raises[PrimitiveType, func=func](self._v)
+
+        def narrow[T: Movable](t: T) {imm} -> R:
+            comptime if conforms_to(T, DataType):
+                return func(rebind[downcast[T, DataType]](t))
+            else:
+                abort("DynType._dispatch: member is not DataType")
+
+        return variant_dispatch(self._v, narrow)
+
+    def _dispatch[
+        R: Movable, //, Func: def[T: DataType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Raising counterpart of `_dispatch`."""
+
+        def narrow[T: Movable](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, DataType):
+                return func(rebind[downcast[T, DataType]](t))
+            else:
+                raise Error("DynType._dispatch: member is not DataType")
+
+        return variant_dispatch_raises(self._v, narrow)
+
+    # --- per-dtype-family dispatch adapters ---
+    #
+    # Thin wrappers over `_dispatch` that narrow the trait to a dtype family, so
+    # a kernel's runtime dispatch reads as `array.dtype().dispatch_numeric(leaf)`
+    # instead of an 11-way `if dtype == int8 ... elif ...` cascade. `func`
+    # receives the runtime dtype resolved to its concrete comptime type `T`; the
+    # return type `R` is inferred from `func`. A dtype outside the family raises
+    # — the aggregate boundary relies on this to reject non-numeric columns
+    # catchably.
+    #
+    # One member per dtype family trait above, so a kernel never has to spell
+    # out its own ladder: adding a dtype to `DynType.VariantType` extends every
+    # family it conforms to at once. Pick the *narrowest* family that covers the
+    # leaf — each member instantiates `func` once per conforming variant arm, so
+    # `dispatch_primitive` costs roughly twice `dispatch_numeric` in code size.
+
+    def dispatch_primitive[
+        R: Movable, //, Func: def[T: PrimitiveType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_primitive` — see `_dispatch`."""
+
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, PrimitiveType):
+                return func(rebind[downcast[T, PrimitiveType]](t))
+            else:
+                raise Error("dispatch_primitive: dtype is not primitive")
+
+        return self._dispatch(narrow)
 
     def dispatch_numeric[
-        R: AnyType,
-        //,
-        func: def[T: NumericType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime numeric dtype to its comptime type and run `func`.
-        """
-        return variant_dispatch_raises[NumericType, func=func](self._v)
+        R: Movable, //, Func: def[T: NumericType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_numeric` — see `_dispatch`."""
+
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, NumericType):
+                return func(rebind[downcast[T, NumericType]](t))
+            else:
+                raise Error("dispatch_numeric: dtype is not numeric")
+
+        return self._dispatch(narrow)
 
     def dispatch_integer[
-        R: AnyType,
-        //,
-        func: def[T: IntegerType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime integer dtype to its comptime type and run `func`.
-        """
-        return variant_dispatch_raises[IntegerType, func=func](self._v)
+        R: Movable, //, Func: def[T: IntegerType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_integer` — see `_dispatch`."""
+
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, IntegerType):
+                return func(rebind[downcast[T, IntegerType]](t))
+            else:
+                raise Error("dispatch_integer: dtype is not integer")
+
+        return self._dispatch(narrow)
 
     def dispatch_floating[
-        R: AnyType,
-        //,
-        func: def[T: FloatingType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime floating dtype to its comptime type and run `func`.
-        """
-        return variant_dispatch_raises[FloatingType, func=func](self._v)
+        R: Movable, //, Func: def[T: FloatingType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_floating` — see `_dispatch`."""
+
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, FloatingType):
+                return func(rebind[downcast[T, FloatingType]](t))
+            else:
+                raise Error("dispatch_floating: dtype is not floating")
+
+        return self._dispatch(narrow)
 
     def dispatch_temporal[
-        R: AnyType,
-        //,
-        func: def[T: TemporalType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime date/time/timestamp/duration dtype to its comptime type
-            and run `func`.
+        R: Movable, //, Func: def[T: TemporalType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_temporal` — see `_dispatch`."""
 
-            Only needed when the *logical* type matters (unit, timezone). Kernels that
-            are value- or order-preserving should instead reinterpret the column through
-            the typed leaf directly — every kernel leaf is bound on
-        `PrimitiveType`, which the temporal types satisfy.
-        """
-        return variant_dispatch_raises[TemporalType, func=func](self._v)
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, TemporalType):
+                return func(rebind[downcast[T, TemporalType]](t))
+            else:
+                raise Error("dispatch_temporal: dtype is not temporal")
+
+        return self._dispatch(narrow)
 
     def dispatch_decimal[
-        R: AnyType,
-        //,
-        func: def[T: DecimalType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime decimal dtype to its comptime type and run `func`.
+        R: Movable, //, Func: def[T: DecimalType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_decimal` — see `_dispatch`."""
 
-        Only needed when the *logical* type matters (precision, scale) or when
-        the backing integer width drives the code — `T.native`. A kernel that
-        merely reads value bytes should go through `dispatch_primitive`, which
-        the decimal types satisfy.
-        """
-        return variant_dispatch_raises[DecimalType, func=func](self._v)
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, DecimalType):
+                return func(rebind[downcast[T, DecimalType]](t))
+            else:
+                raise Error("dispatch_decimal: dtype is not decimal")
+
+        return self._dispatch(narrow)
 
     def dispatch_stringlike[
-        R: AnyType,
-        //,
-        func: def[T: StringLikeType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime string-like dtype to its comptime type and run `func`.
-        """
-        return variant_dispatch_raises[StringLikeType, func=func](self._v)
+        R: Movable, //, Func: def[T: StringLikeType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_stringlike` — see `_dispatch`."""
+
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, StringLikeType):
+                return func(rebind[downcast[T, StringLikeType]](t))
+            else:
+                raise Error("dispatch_stringlike: dtype is not stringlike")
+
+        return self._dispatch(narrow)
 
     def dispatch_binarylike[
-        R: AnyType,
-        //,
-        func: def[T: BinaryLikeType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime binary-like dtype to its comptime type and run `func`.
-        """
-        return variant_dispatch_raises[BinaryLikeType, func=func](self._v)
+        R: Movable, //, Func: def[T: BinaryLikeType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_binarylike` — see `_dispatch`."""
+
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, BinaryLikeType):
+                return func(rebind[downcast[T, BinaryLikeType]](t))
+            else:
+                raise Error("dispatch_binarylike: dtype is not binarylike")
+
+        return self._dispatch(narrow)
 
     def dispatch_listlike[
-        R: AnyType,
-        //,
-        func: def[T: ListLikeType](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        """Resolve a runtime list/large_list/map dtype to its comptime type and run
-        `func`."""
-        return variant_dispatch_raises[ListLikeType, func=func](self._v)
+        R: Movable, //, Func: def[T: ListLikeType](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Value-taking `dispatch_listlike` — see `_dispatch`."""
+
+        def narrow[T: DataType](t: T) raises {imm} -> R:
+            comptime if conforms_to(T, ListLikeType):
+                return func(rebind[downcast[T, ListLikeType]](t))
+            else:
+                raise Error("dispatch_listlike: dtype is not listlike")
+
+        return self._dispatch(narrow)
 
     def to_dyn(deinit self) -> DynType:
         return self^
@@ -981,11 +1051,16 @@ struct DynType(
         if not self.is_primitive():
             return 0
 
-        @parameter
-        def f[T: PrimitiveType](t: T) -> Int:
+        def f[T: PrimitiveType](t: T) {imm} -> Int:
             return t.byte_width()
 
-        return variant_dispatch[PrimitiveType, func=f](self._v)
+        def narrow[T: DataType](t: T) {imm} -> Int:
+            comptime if conforms_to(T, PrimitiveType):
+                return f(rebind[downcast[T, PrimitiveType]](t))
+            else:
+                return 0
+
+        return self._dispatch(narrow)
 
     # --- convenience predicates ---
 
@@ -1243,11 +1318,10 @@ struct DynType(
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        @parameter
-        def f[T: DataType](t: T):
+        def f[T: DataType](t: T) {mut writer, imm}:
             t.write_to(writer)
 
-        variant_dispatch[DataType, func=f](self._v)
+        self._dispatch(f)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)

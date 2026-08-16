@@ -1,14 +1,17 @@
 from std.testing import assert_equal, assert_true, assert_raises
 
-from ...arrays import DynArray, NullArray, DictionaryArray
+from ...arrays import DynArray, NullArray, DictionaryArray, MapArray
 from ...builders import (
     array,
     FixedSizeBinaryBuilder,
     ListBuilder,
+    MapBuilder,
     StructBuilder,
     Int32Builder,
 )
 from ...dtypes import (
+    map_,
+    DynType,
     bool_,
     null,
     timestamp,
@@ -525,3 +528,37 @@ def test_dictionary_decode_then_cast() raises:
         values=values^,
     )
     assert_true(cast(d, int64).as_int64() == array([10, 20, 30, 20], int64))
+
+
+def test_cast_map_casts_the_entry_values() raises:
+    """V0. `cast` had no map arm, so `map<string, int64> -> map<string, int32>`
+    raised "unsupported cast".
+
+    A map needs no kernel of its own: physically it is a list whose single
+    child is the non-nullable `entries` struct, so `ListCast` casts that struct
+    and `StructCast` casts the fields. Only the *target child type* had to be
+    read differently — from `entries_field()` rather than `value_type()`.
+    """
+    var b = MapBuilder(map_(DynType(string), DynType(int64)))
+    var entries_any = b.entries()
+    ref entries = entries_any.as_struct()
+    var keys_any = entries.field_builder(0)
+    var values_any = entries.field_builder(1)
+    ref keys = keys_any.as_string()
+    ref values = values_any.as_int64()
+    keys.append("a")
+    values.append(Int64(7))
+    entries.append_valid()
+    b.append_valid()
+    var m = b.finish()
+
+    var target = map_(DynType(string), DynType(int32)).to_dyn()
+    var out = cast(m^.to_dyn(), target)
+
+    assert_true(out.dtype() == target)
+    assert_equal(len(out), 1)
+    ref got = out.as_type[MapArray]()
+    var got_entries = got.values().copy()
+    assert_equal(
+        got_entries.as_struct().field(1).as_int32()[0].value(), Int32(7)
+    )

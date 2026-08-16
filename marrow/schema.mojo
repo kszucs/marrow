@@ -47,9 +47,9 @@ struct Schema(
         self.fields = List[Field](copy=copy.fields)
         self.metadata = Dict[String, String](copy=copy.metadata)
 
-    def __init__(out self, *, deinit take: Self):
-        self.fields = take.fields^
-        self.metadata = take.metadata^
+    def __init__(out self, *, deinit move: Self):
+        self.fields = move.fields^
+        self.metadata = move.metadata^
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema

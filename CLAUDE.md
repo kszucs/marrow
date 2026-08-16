@@ -17,9 +17,12 @@ upgrade, https://docs.modular.com/mojo/changelog/.
 
 Dependencies (pinned in `pixi.toml`):
 
-- `mojo >=1.0.0b3.dev2026072406,<2` and `max ==26.5.0.dev2026072406` — MAX is
-  pinned to the matching version line because GPU codegen resolves
-  `max.package_root` since that Mojo release.
+- `mojo >=1.1.0.dev2026081605,<2` and `max ==26.6.0.dev2026081605` — MAX is
+  pinned to the matching version line, and is **load-bearing**: GPU codegen
+  resolves `max.package_root`, *and* `DeviceContext`/`DeviceBuffer`/
+  `HostBuffer` live in the `max.gpu.host` Mojo package while
+  `sync_parallelize`/`elementwise`/`_reduce_generator_wrapper` live in
+  `max.algorithm.*`. `get_gpu_target` and `vectorize` stayed in `std`.
 - `python >=3.14,<3.15` — Mojo nightlies are built against one CPython minor;
   bump it together with `mojo`.
 - `pyarrow >=23.0.1,<24` (dev/test only) — the PyPI wheel, not conda-forge; see
@@ -73,19 +76,6 @@ function`). Run it through `pytest`, which generates a driver for the selection.
 errors and 0 warnings rather than letting output accumulate until it is
 unreadable. Building is not passing: switch back to `pytest` once it compiles.
 
-**Never leave a `marrow.mojoc` where a runner can see it.** Such an artifact
-*shadows the entire `marrow/` source tree*, so every import resolves against the
-stale package instead of the files you just edited. Mojo puts a source file's own
-directory on the import search path, which makes **two** locations dangerous: the
-repo root (runners compile with `-I .`) and `.test_runners/`, where the generated
-driver lives. `precompile` therefore writes to `.precompile/`, which is on
-neither path. It used to write to `.test_runners/`, which silently broke every
-following `pytest` run — symptom (observed 2026-07-27): a case you just added
-reports `module 'test_<x>' does not contain 'test_<your_new_case>'` and the run
-fails in well under a second, because nothing is compiled at all. Stale artifacts
-fail differently again, with `unable to locate module 'tests'`. On either,
-`rm -f .test_runners/marrow.mojoc marrow.mojoc` first.
-
 ### Running tests
 
 Always go through `pytest` — never `mojo test`, `mojo run`, or a hand-written
@@ -118,52 +108,23 @@ session that runs Python tests — no manual `build_python` step needed.
 ### One selection = one compilation unit
 
 Compilation dominates, and almost all of it is elaborating **marrow**, not the
-test bodies. The compiler takes a single input file per invocation, so building
-per test file paid that elaboration once per file. The harness instead generates
-**one driver** for the whole selection — `.test_runners/_test_driver_<hash>.mojo`,
-which imports the selected cases and hands them to `TestSuite.run` as a tuple —
-and compiles that. The name is the hash of the driver's own source, so concurrent
-sessions with different selections never overwrite each other, while the same
-selection always resolves to the same path and the same cached artifact. Measured
-on `marrow/expr/tests` (9 files, 280 cases):
+test bodies. The harness generates **one driver** for the whole selection
+(`.test_runners/_test_driver_<hash>.mojo`, content-addressed) and compiles that.
+N files in one unit cost about what 1 file costs — measured on
+`marrow/expr/tests`: all 9 files together took 4 min 43 s / 17.0 GB peak, while
+`test_join.mojo` alone took 3 min 18 s / 19.6 GB.
 
-| | wall | peak RSS |
-|---|---|---|
-| one generated driver, all 9 files | 4 min 43 s | 17.0 GB |
-| separately: `test_aggregates.mojo` | 204 s | 11.7 GB |
-| separately: `test_join.mojo` | 198 s | 19.6 GB |
-
-Two files on their own cost more than all nine together, and the aggregate peaks
-*below* a single file — N files in one unit cost about what 1 file costs.
-
-- **Selecting fewer *files* is what saves time; selecting fewer *cases* is not.**
-  A single `::test_name` builds the same unit as its whole file.
-- **Blast radius is the selection — for compile *errors*.** A diagnostic fails
-  every case in the run, not just its file, because there is one unit.
-- **A compiler *crash* is different: the harness splits the unit and retries.**
-  The Mojo compiler dies (bug-report dump, no diagnostic) on some units simply
-  because of how much they elaborate — the same cases build in smaller units. On
-  a crash `MojoRunner.collect` halves the selection and compiles each half, down
-  to a single case; a case that still cannot be built reports the crash as *its
-  own* failure instead of failing everything selected alongside it. Ordinary
-  `error:` output never splits, since it would be identical in every half.
-- **Peak memory scales with the unit**, so a full-suite run is a single very
-  large compile. Narrow the selection if memory is tight.
-- **Optimization level follows the kind, not the session.** `bench_*.mojo` builds
-  at `-O3` in its own driver; `test_*.mojo` at `-O1` with `-D ASSERT=all`. They
-  cannot share a unit. `-O0` is not an option: the masked-gather intrinsic in
-  `filter`/`take` fails to lower.
-- **The driver is generated deterministically** (modules sorted, cases in source
-  order) so re-running an unchanged selection produces byte-identical source and
-  hits the Mojo compiler's own artifact cache. That cache only ever helps
-  *identical* rebuilds; it does nothing across different files.
-- Ordinary runs use **`mojo run`** — compile and execute in one step, no artifact
-  left behind. **`--asan` runs use `mojo build`**, because the sanitizer runtime
-  has to be linked into a real binary.
-- `pytest-xdist` does not help *within* a run: one selection is one unit, so each
-  worker would build a unit of its own. Several independent `pytest` invocations
-  concurrently are safe — drivers are content-addressed, so their files and
-  (under `--asan`) their binaries never collide.
+- **Selecting fewer *files* saves time; selecting fewer *cases* does not.**
+- **A compile error fails every case in the run**, since there is one unit.
+- **A compiler *crash* is different** — the harness halves the selection and
+  retries down to a single case, so the offending case reports the crash as its
+  own failure. Ordinary `error:` output never splits.
+- **Peak memory scales with the unit.** Narrow the selection if memory is tight.
+- **`bench_*.mojo` builds at `-O3` in its own driver**, `test_*.mojo` at `-O1`
+  with `-D ASSERT=all`; they cannot share a unit. `-O0` is not an option — the
+  masked-gather intrinsic in `filter`/`take` fails to lower.
+- `pytest-xdist` does not help *within* a run. Several concurrent `pytest`
+  invocations are safe — drivers are content-addressed.
 
 ### Writing Mojo tests
 
@@ -203,32 +164,36 @@ def bench_my_kernel(mut b: Benchmark) raises:
     var data = _prepare_data(N)
     b.throughput(BenchMetric.elements, N)
     @always_inline
-    @parameter
-    def call():
+    def call() {imm}:
         keep(my_kernel(data))
-    b.iter[call]()
+    b.iter(call)
     keep(data)  # prevent ASAP destruction — see below
 ```
 
-**`keep(data)` after `b.iter[call]()` is mandatory for non-trivial captures.**
-Mojo's ASAP destruction frees values as soon as the compiler believes their last
-use has passed. When a `@parameter` closure captures a variable and is handed to
-`b.iter[call]()`, ASAP may free it *after* the closure is registered but *before*
-it runs — a heap-use-after-free inside the iteration loop. This applies to
-`StructArray`, `PrimitiveArray[T]`, `SwissHashTable`, `HashJoin`, and friends.
+**`call` is a *unified closure passed by value*, so it carries an explicit
+capture list.** The list sits after the effects and before the return arrow:
+`def call() raises {imm}:`, `def call() {mut builder, imm}:`. `{imm}` is the
+default — it borrows every free outer name immutably, which is what a read-only
+benchmark body wants. A body that *mutates* outer state must name it
+(`{mut builder, imm}`); under a bare `{imm}` the compiler rejects the write
+rather than silently freezing it. Never reach for `@__parameter` to avoid
+writing the list.
 
-**Two rules that each cost a wrong conclusion on 2026-08-05:**
+**`keep(data)` after `b.iter(call)` is mandatory for non-trivial captures.**
+ASAP destruction can free a captured value after the closure is registered and
+before it runs — a heap-use-after-free inside the iteration loop.
 
-- **Read the unit on every row before comparing two numbers.** pytest-benchmark
-  scales each benchmark independently, so one row prints `Name (time in ns)`,
-  the next `(time in us)` and the next `(time in ms)`. Comparing the bare figures
-  reported a 25x speedup where there was a 40x slowdown, and the filed bug said
-  the opposite of the truth. Strip the colour codes and read the headers:
-  `sed 's/\x1b\[[0-9;]*m//g' out.log | grep -E "Name \(time|^bench_"`.
+Three rules, each of which has cost a wrong conclusion:
+
+- **Read the unit on every row.** pytest-benchmark scales each benchmark
+  independently, so adjacent rows may be ns / us / ms. Strip colour and read the
+  headers: `sed 's/\x1b\[[0-9;]*m//g' out.log | grep -E "Name \(time|^bench_"`.
+- **Normalise against untouched benchmarks before attributing a delta.** This
+  machine drifts up to ±8% per case and ~±5% per batch, so a whole run can read
+  as a uniform regression. Always include rows the change cannot touch and
+  subtract their median.
 - **An `assignment to 'x' was never used` warning on a value the closure *does*
-  use means the capture was not made** — the body reads garbage and the timing is
-  meaningless. Same tell as the `sync_parallelize` miscompile noted under
-  `ExecContext.stripe`. Add the missing `keep(x)` and re-measure; never report a
+  use means the capture was not made** — the body reads garbage. Never report a
   number from a run that emitted it.
 
 For multiple sizes, share a helper and add one thin wrapper per size:
@@ -314,8 +279,11 @@ Rules:
 
 - Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for
   computation. No naked pointer arithmetic in kernel or array code.
-- **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`, and
-  `c_data.mojo`.** Everything else goes through the view abstractions.
+- **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`,
+  `c_data.mojo` and the Parquet codec layer** (`parquet/utils.mojo`,
+  `parquet/reader.mojo`, `parquet/codecs.mojo`, which `dlopen` the C codecs
+  and hand them raw pointers). Everything else goes through the view
+  abstractions.
 - **Avoid `AnyOrigin` types (`MutAnyOrigin`, `ImmutAnyOrigin`) and
   `unsafe_origin_cast`.** Use parametric origins (`out_o: Origin[mut=True]`,
   `src_o: Origin[mut=False]`) and pass views directly.
@@ -337,9 +305,14 @@ There is **no visitor module**. Runtime dispatch is the `DynType.dispatch_*`
 family — `dispatch_primitive` / `dispatch_numeric` / `dispatch_integer` /
 `dispatch_floating` / `dispatch_temporal` / `dispatch_decimal` /
 `dispatch_stringlike` / `dispatch_binarylike` / `dispatch_listlike` — each
-resolving a runtime `DataType` to a comptime type parameter for a `capturing`
-job. `variant_dispatch*` (`marrow/utils.mojo`) is the comptime adapter over
-stdlib `Variant`.
+resolving a runtime `DataType` to a comptime type parameter and running a job
+passed **as a value**: `dt.dispatch_numeric(job)`, not `dt.dispatch_numeric[job]()`.
+
+All nine are narrowing adapters over one loop, `DynType._dispatch`, which is
+fixed to `DataType` because a closure type cannot be generic over its own trait
+bound (see the closure gotchas). `DynArray` and `DynScalar` have the same
+`_dispatch`; `DynBuilder` still goes through the comptime `variant_dispatch*`
+helpers in `marrow/utils.mojo`.
 
 ### Kernels
 
@@ -468,12 +441,7 @@ docs/                     # Quarto site, design documents, and backlog.md
 Tests and benchmarks sit **inside** the package, next to the code they cover.
 That works because they carry no `main()` — see "Writing Mojo tests".
 
-Its §0 carries the standing constraints and measurement traps — read them
-before planning anything, because each one invalidates an approach that looks
-obvious. Its status lines have been wrong before (an audit that day found 18
-wrong statuses across the files it replaced), so **verify by `grep`, not by
-reading a header** — and exclude `.claude/worktrees/`, which holds stale
-pre-refactor code that produces false positives from the repo root.
+---
 
 ## GPU Compute
 
@@ -493,35 +461,48 @@ mojo build -D MARROW_GPU=true ...      # opt in
 pixi run -e dev pytest --gpu           # the harness passes it for you
 ```
 
+**macOS needs the Metal toolchain installed separately.** Xcode 26 moved the
+Metal compiler out of the default install, so `xcrun metal` fails with
+*"cannot execute tool 'metal' due to missing Metal Toolchain"* and every GPU
+test dies at compile time with `Metal Compiler failed to compile metallib.
+Please submit a bug report.` — which reads like a Mojo bug and is not one. A
+marrow-free three-line `elementwise` program fails identically; that is the
+fastest way to tell the two apart. Fix:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
 Anything touching device code needs `comptime if GPU_ENABLED:` around it — a
 *runtime* `if ctx.is_gpu()` alone cannot be eliminated at elaboration time.
 
-This is the **largest single compile-time lever** in the tree. Cold builds (fresh
-`MODULAR_CACHE_DIR`; a repeated identical compile just hits the Mojo transform
-cache and measures nothing):
-
-| | GPU off (default) | GPU on |
-|---|---|---|
-| `cast`, numeric x numeric | **14.6 s** | 40.1 s |
-| `cast` + `sort_indices` | **43.7 s** | 85.0 s |
-
-**Both halves must be gated or you get none of it.** The allocations need
+This is the **largest single compile-time lever** in the tree: a cold `cast` +
+`sort_indices` build is 43.7 s with GPU off versus 85.0 s with it on. **Both
+halves must be gated or you get none of it** — the allocations need
 `comptime if GPU_ENABLED` *and* `has_accelerator_support` must answer False.
-Gating either alone measured as no change at all (45.2 s and 84.4 s against
-42.5 s / 84.1 s baselines) — which is why this looked like a dead end for a long
-time. It does not shed the `libmax`/AsyncRT runtime dependency, though: a binary
-built with GPU off still links it.
+Gating either alone measures as no change at all. It does not shed the
+`libmax`/AsyncRT runtime dependency: a GPU-off binary still links it.
 
 ### How device execution is wired
 
-One kernel serves both targets. `views._apply_dispatch[Out, gpu_ok, process]`
-picks the path from the `ExecutionContext`: `ctx.is_gpu()` takes a single grid
-launch via `elementwise` at the GPU SIMD width; otherwise one `vectorize` body is
-handed to `ctx.stripe`, which runs it on the calling thread or across
-`ctx.resolved_num_threads()` workers. Thread count is owned by `ctx` — no
-Mojo-internal heuristic. `gpu_ok` is the caller's
-`has_accelerator_support[In, Out]()` result, passed as a comptime `Bool` so the
-GPU branch is dead-code-eliminated when unsupported.
+One kernel serves both targets. Every `apply` overload writes a **lane** —
+`def lane[W: Int](i: Int)` — and hands it to one of five functions in
+`views.mojo`, each with a single job:
+
+| | |
+|---|---|
+| `_cpu_striped` | `vectorize` handed to `ctx.stripe` (calling thread or `ctx.resolved_num_threads()` workers; thread count is owned by `ctx`) |
+| `_cpu_serial` | `vectorize` on the calling thread only — what a bit-packed destination requires, since a whole-byte stride is the only thing keeping workers off each other's read-modify-write |
+| `_gpu_launch` | the only caller of `elementwise`, and the only place paying for its `Coord`-shaped signature |
+| `_apply_dispatch` | buffer destination: `_gpu_launch` or `_cpu_striped` |
+| `_apply_packed_dispatch` | bitmap destination: padded `_gpu_launch` or `_cpu_serial` |
+
+`gpu_ok` is the caller's `has_accelerator_support[In, Out]()` result, a comptime
+`Bool` so the GPU branch is dead-code-eliminated when unsupported. A lane that
+closes over host state (an expression node, a `RecordBatch`) cannot satisfy
+`elementwise`'s `RegisterPassable & ImplicitlyCopyable` bound — that is exactly
+the set of lanes that cannot run on a device, so those overloads call
+`_cpu_striped` / `_cpu_serial` directly instead of passing a false `gpu_ok`.
 
 Data movement is explicit and is a *kind change*, not a shadow copy: a `Buffer`
 is CPU/FOREIGN/HOST **or** DEVICE.
@@ -540,19 +521,12 @@ var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)
 
 ### Performance guidance
 
-Measured on Apple Silicon (M-series, Metal, unified memory). The numbers below
-come from a cosine-similarity kernel that no longer lives in the tree; the
-conclusions still hold.
-
-- **Low arithmetic intensity (element-wise add)**: CPU SIMD wins — transfer cost
-  dominates at ~1 FLOP per element. Do not GPU-accelerate these.
-- **High arithmetic intensity (~3×dim FLOPs per vector)**: GPU wins at scale,
-  *with data already resident*. Uploading per call is 2-3× slower than CPU even
-  for compute-heavy kernels.
-- **Crossover**: ~10K vectors at dim ≥ 384. At 500K-1M vectors, dim 768, a
-  preloaded GPU run was ~13× faster than CPU SIMD.
-- **Guideline**: upload once, run several kernels device-resident, download at
-  the end.
+Measured on Apple Silicon (Metal, unified memory), from a kernel no longer in
+the tree; the shape still holds. **Transfer cost dominates**: do not
+GPU-accelerate low-intensity element-wise work, and never upload per call —
+uploading is 2-3x slower than CPU even for compute-heavy kernels. Upload once,
+run several kernels device-resident, download at the end. Crossover was ~10K
+vectors at dim >= 384.
 
 ## Coding Guidelines
 
@@ -658,128 +632,70 @@ In addition:
   not evidence on its own. Verify without ASAN too, and confirm the tests
   actually ran rather than the build having died.
 
-### Associated types and traits (learned the hard way)
+### Closures
 
-Non-obvious compiler behaviours, each reproduced by a minimal example. They
-mostly bite generic trait hierarchies such as `marrow.expr.values`.
+Use **unified** closures — a value with an explicit capture list
+(`def body(i: Int) raises {mut out, imm} -> None`), passed as an argument.
+`@__parameter` / `capturing[_]` is the legacy comptime-parameter form; the two
+do not convert, so an API and its call sites flip together. Syntax and capture
+conventions are in the Mojo docs.
 
-- **A *chained* associated-type projection (`Self.OutType.ArrayType`) does not
-  reduce at a call/return site**, even when the concrete type is statically
-  determined. A *single* projection off a **direct trait-bound parameter**
-  (`T.ArrayType` for `T: SomeTrait`) *does* reduce. To return or consume a
-  concrete companion type without a `rebind` or a reducer helper, expose it as a
-  **direct associated member** of the trait (e.g. `Value.ArrayType`, which each
-  node fixes concretely), not as `Self.OtherAssoc.Member`.
-- **An associated-type *default* that references a sibling associated type**
-  (`comptime ArrayType = Foo[Self.OutType]`), together with a method returning it
-  (`def execute -> Self.ArrayType`), errors with `attempt to resolve a recursive
-  reference to declaration 'execute'`. A *concrete* default with no `Self.X`
-  reference (e.g. `= BoolArray`) does not recurse. Declare such members **per
-  concrete struct** instead.
-- **But composing an associated type out of *type parameters'* associated types
-  is fine** — the hazard above is specifically a reference to a sibling of
-  `Self`. Verified 2026-08-03: on a struct `Bin[L: Value, R: Value]`,
-  `comptime State = Tuple[Self.L.State, Self.R.State]` together with
-  `def prepare(self, …) raises -> Self.State` compiles, reduces, and composes to
-  at least depth 4 with mixed shapes — including a node whose `State` is an
-  owning container, and one such node nested inside another. It also survives
-  capture by a `@parameter` closure. The one non-obvious requirement: because
-  `prepare` raises, the associated type needs `ImplicitlyDeletable`
-  (`comptime State: Copyable & ImplicitlyDeletable`), else every call site fails
-  with *"abandoned without being explicitly destroyed"* on the throw path.
-- **Re-defaulting a base trait's abstract method in a sub-trait recurses** if that
-  method returns `Self.ArrayType` and a conforming node's `ArrayType` transitively
-  references another trait-member child (the compiler loops elaborating the
-  child's own copy of that method). The trigger is *the abstract-then-re-defaulted
-  method specifically* — a **differently named** sibling with the same body and
-  return type does **not** recurse. Fix: keep the base method abstract and have
-  each node override it with a one-liner delegating to a helper under a new name
-  (`NumericValue.execute` abstract → `NumericValue._fused`).
-- **A family-trait-provided associated-type default may not satisfy the base
-  trait's abstract requirement** for conforming structs (`does not implement all
-  requirements for <BaseTrait>`) — declare the member on each concrete struct even
-  if a parent trait "provides" it.
-- **A trait-level *default method* cannot return `Self.AssocType` unless that
-  associated type's bound is `ImplicitlyCopyable`.** Declaring `comptime
-  State: Copyable & ImplicitlyDeletable = DynArray` alongside a defaulted `def
-  state(self, …) -> Self.State` fails: the compiler will not reduce
-  `Self.State` to its own declared default at the return site (`cannot
-  implicitly convert 'DynArray' value to '_Self.State'`), and `rebind` cannot
-  bridge it — `rebind[Self.State](x)` reports *"value of type '_Self.State'
-  cannot be implicitly copied"*, since `rebind` itself requires
-  `ImplicitlyCopyable`. Transferring with `^` does not help, and widening the
-  bound is not available when the default is an array type, because `DynArray`
-  and friends deliberately are not implicitly copyable. **Consequence:** a
-  protocol whose associated type carries non-implicitly-copyable state cannot
-  be rolled out incrementally behind defaults — every conformer must implement
-  it in the same commit. Found 2026-08-05 attempting exactly that for A1; same
-  family as the conditional-type limitation below.
-- **A comptime *conditional type* is usable as a type, but carries no trait
-  conformance and does not reduce at a return site** — not even inside a
-  `comptime if` that has already selected the branch. `comptime C[To, V] = V
-  if (V.OutType.native == To.native) else Wrapper[To, V]` resolves fine as an
-  annotation, but a function returning `C[To, V]` cannot return either branch:
-  `cannot implicitly convert 'V' value to 'V if (…) else Wrapper[To, V]'`.
-  `rebind` does **not** help — `rebind[C[To, V]](x)` fails with `value of type
-  '<the conditional>' cannot be implicitly copied, it does not conform to
-  'ImplicitlyCopyable'`, because an unreduced conditional conforms to nothing
-  at all. Note `promote[L, R]` (`expr/values.mojo`) is the same shape and
-  works — the difference is that it is only ever *used* as an annotation,
-  never returned. Consequence: "wrap this operand only when it needs
-  converting" is not expressible; either always wrap, or do the selection
-  where the concrete type is known.
+Two project-specific traps, neither of which produces a diagnostic:
 
-### Reflection, packs, and comptime aliases
+- **A closure handed to a GPU kernel must be captured by value, never `{imm}`** —
+  an `imm` capture points into the host stack frame, so the device silently
+  computes garbage. `views._gpu_launch` copies before capturing.
+- **A closure type cannot be generic over its own trait bound.** Hence
+  `variant_dispatch` binds `func` on `Movable` and leaves narrowing to the
+  caller; see its module docstring.
 
-Each confirmed by triggering the actual compiler error on the pinned toolchain.
+### Associated types, traits, reflection
 
+Undocumented compiler limits, each hit here and each invalidating an approach
+that looks obvious. Terse on purpose — the reproductions are in git history.
+
+- A **chained** associated-type projection (`Self.OutType.ArrayType`) does not
+  reduce at a call/return site; a single projection off a direct trait-bound
+  parameter does. Expose companions as direct members (`Value.ArrayType`).
+- An associated-type **default referencing a sibling associated type**, plus a
+  method returning it, errors with *"recursive reference"*. Declare such members
+  per concrete struct. Composing out of *type parameters'* associated types is
+  fine (`Tuple[Self.L.State, Self.R.State]`) — but a raising `prepare` needs
+  `comptime State: Copyable & Deinitable`.
+- **Re-defaulting a base trait's abstract method in a sub-trait recurses** when
+  it returns `Self.ArrayType`. Keep the base abstract and override under a new
+  name (`NumericValue.execute` -> `_fused`).
+- **A trait-level default method cannot return `Self.AssocType`** unless that
+  type is `ImplicitlyCopyable` — and marrow's array types deliberately are not.
+  So a protocol carrying non-implicitly-copyable state cannot be rolled out
+  behind defaults; every conformer must implement it in the same commit.
+- **A comptime conditional type carries no trait conformance** and does not
+  reduce at a return site, even inside a `comptime if` that selected the branch.
+  `rebind` cannot bridge it. Usable as an annotation only — which is why
+  `promote[L, R]` works and "wrap this operand only when it needs converting"
+  does not.
 - **A reflected field type is opaque inside the generic function that reflects
-  it.** `reflect[T].field_at[i].T` reads as a type and works even when `T` is a
-  generic parameter, but a bare `FieldT()` call inside a `comptime for` over it
-  fails to resolve — during generic-mode checking the compiler sees only an
-  opaque type with no visible constructor. Route construction through a
-  *separately-instantiated* generic bound on the trait, so the zero-arg
-  constructor arrives via the trait witness: `def _construct_default[D:
-  Defaultable & DataType]() -> D: return D()` (`marrow/schema.mojo:12`). That
-  helper is what makes `Schema.from_struct[T]()` work.
-- **This is why `Table[T]` is deferred.** The `t.a` sugar needs a parametric
-  `comptime _dtype[name] = reflect[T].field[name].T`, which hits the same limit
-  (`marrow/expr/values.mojo:2416-2421`). `col("a", int64)` is the working API.
-- **The constraint solver refuses to evaluate a non-builtin function inside a
-  `where` clause.** `reflect[T].field_index[name]()` folds to a builtin KGEN
-  attribute and *can* be proven during overload selection; a recursive `def` over
-  a variadic pack cannot. This rules out pack-based schema surfaces that dispatch
-  numeric-versus-string columns. Returning a `comptime`-branched type from a
-  helper is likewise rejected ("dynamic type values not permitted yet").
-- **A `VariadicPack` captured by one function's `*args` cannot be forwarded to a
-  different function's variadic parameter** — `"assigning 1 operand to an
-  unresolvable variadic pack argument"`. `Tuple(a, b, c)` from fresh args is
-  fine; from an already-captured pack it is not. `Tuple`/`Variant`/`UnsafeUnion`
-  sidestep this by owning their pack storage with raw `__mlir_op` calls, which
-  this project restricts to `buffers.mojo`, `views.mojo` and `c_data.mojo`.
-  **Every "build a heterogeneous collection from variadic args and hand it to
-  another type" API here will hit this** — take the pre-built collection instead.
-- **A `comptime name: T` trait requirement does not resolve reliably when read as
-  `E.name` from a function generic over `E: SomeTrait`**, though `Self.name`
-  inside the concrete type's own method works. Expose the constant through a
-  method. Narrower than it sounds: `Self.K.name` on a *kernel parameter* does
-  resolve (`NumericCompare.prune`, `values.mojo:965`, branches on it at
-  elaboration). The failure is reading a trait-declared alias off an
-  externally-bound generic parameter.
-- **`comptime` is a reserved keyword and cannot be a module name** —
-  `import marrow.expr.comptime` fails to parse.
-- **A binding-compiler crash was once observed on mutually-recursive nested-type
-  static methods on a reflected kernel struct.** The construct was never pinned
-  down. The design avoids it by keeping recursive and nested ops *out* of kernel
-  structs — struct equality is a recursive `AND` over child comparisons and
-  belongs at the composition layer reusing `EqKernel.dispatch` for leaves, which
-  is what `equal_any` (`kernels/numeric.mojo`) is. Treat that as a layering rule
-  first and a crash workaround second.
-- There is **no runtime `__getattr__`** on ordinary structs. The compile-time
-  hook `__getattr_param__[name: StaticString]()` exists and its return type may
-  depend on the name, but a handle type is required (a real field shadows it — it
-  fires only for *missing* attributes) and `var` is mandatory on field
-  declarations.
+  it.** Route construction through a separately-instantiated generic bound on
+  the trait — `_construct_default[D: Defaultable & DataType]()`
+  (`marrow/schema.mojo:12`), which is what makes `Schema.from_struct[T]()` work.
+  The same limit is why **`Table[T]` is deferred**; `col("a", int64)` is the
+  working API.
+- **The constraint solver will not evaluate a non-builtin function in a `where`
+  clause**, ruling out pack-based schema surfaces that dispatch on column type.
+- **A `VariadicPack` captured by one function's `*args` cannot be forwarded to
+  another function's variadic parameter.** Every "build a heterogeneous
+  collection from variadic args and hand it on" API here hits this — take the
+  pre-built collection instead.
+- **A `comptime name: T` trait requirement does not resolve reliably as `E.name`
+  off an externally-bound generic parameter** (though `Self.name` inside the
+  concrete type works, and `Self.K.name` on a kernel parameter does resolve).
+  Expose the constant through a method.
+- **`comptime` is a reserved keyword and cannot be a module name.**
+- There is **no runtime `__getattr__`**; the comptime `__getattr_param__` hook
+  fires only for missing attributes and needs a handle type.
+- Keep recursive and nested ops **out of kernel structs** — a binding-compiler
+  crash was once observed on mutually-recursive nested-type static methods.
+  Struct equality belongs at the composition layer (`equal_any`).
 
 ## Releasing
 
@@ -797,11 +713,9 @@ release with both artifacts attached.
 
 ## Known Limitations
 
-1. **Type system**: Variant elements must be copyable; references and lifetimes
-   are still evolving.
-2. **Testing**: conformance testing leans on PyArrow until Mojo has a JSON
+1. **Testing**: conformance testing leans on PyArrow until Mojo has a JSON
    library.
-3. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
+2. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary,
    decimal (32/64/128/256) and temporal (date/time/timestamp/duration/interval)
    are implemented; union, run-end-encoded and view layouts are not. `map`'s
@@ -814,7 +728,7 @@ release with both artifacts attached.
    `interval` (YEAR_MONTH / DAY_TIME) is still skipped there, but that is a
    pyarrow limit: it has no type for either unit, and the harness bridges
    through pyarrow. Marrow consumes all three from the other implementations.
-4. **Scalar fidelity**: six types have no dedicated scalar — `binary`,
+3. **Scalar fidelity**: six types have no dedicated scalar — `binary`,
    `large_binary` and `large_string` collapse to `StringScalar`; `large_list`,
    `map` and `fixed_size_list` collapse to `ListScalar`. `StringScalar.type()`
    hard-returns `string` and `ListScalar.type()` hard-returns `list_(child)`.

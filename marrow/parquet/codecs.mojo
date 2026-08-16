@@ -11,7 +11,7 @@ right one, so the flat and nested reader paths share one decoder per layout:
 - `Plain` · `Dictionary` · `ByteStreamSplit` · `DeltaLengthByteArray` ·
   `DeltaByteArray` — the data-page value codecs `Encoding` dispatches to.
 - `Compression` — the page compression codec (dispatches onto `CompressionLibs`
-  in `utils.mojo`).
+  in `marrow.utils.compression`).
 
 RLE / bit-packed hybrid wire format (per the Parquet spec): a sequence of runs,
 each introduced by a ULEB128 header. `header & 1` selects the run kind:
@@ -32,9 +32,23 @@ from ..arrays import (
     FixedSizeBinaryArray,
 )
 from .. import dtypes as dt
-from ..utils import LittleEndian
-from ..views import load_word_le
-from .utils import CompressionLibs
+from ..utils import CompressionLibs, LittleEndian
+
+
+@always_inline
+def load_word_le[
+    mut: Bool, //, o: Origin[mut=mut]
+](data: Span[UInt8, o], byte_idx: Int) -> UInt64:
+    """Unaligned little-endian 64-bit load from a byte span.
+
+    Lives here rather than in `views.mojo` because bit-unpacking is its only
+    caller and this file is already inside the Parquet codec layer, where
+    CLAUDE.md permits raw pointers (it `dlopen`s the C codecs and hands them
+    pointers directly). The caller guarantees 8 readable bytes at `byte_idx`
+    (mmap has trailing bytes; the decompression scratch is padded)."""
+    return (data.unsafe_ptr().unsafe_offset(byte_idx)).unsafe_bitcast[UInt64]()[
+        unsafe_offset=0
+    ]
 
 
 struct Zigzag:
@@ -176,11 +190,11 @@ struct Rle:
         store on this path (a ~3x slowdown measured)."""
         if count == 0:
             return
-        var dp = dest.unsafe_ptr() + dest_offset
+        var dp = dest.unsafe_ptr().unsafe_offset(dest_offset)
         var kp = dict.unsafe_ptr()
         if width == 0:
             for i in range(count):
-                dp[i] = kp[0]
+                dp[unsafe_offset=i] = kp[unsafe_offset=0]
             return
         var byte_width = (width + 7) // 8
         var pos = 0
@@ -205,12 +219,16 @@ struct Rle:
                         # compile-time constant or the SIMD lane-select is
                         # runtime.
                         comptime for j in range(8):
-                            dp[produced + j] = kp[Int(idxv[j])]
+                            dp[unsafe_offset=produced + j] = kp[
+                                unsafe_offset=Int(idxv[j])
+                            ]
                         produced += 8
                     else:
                         var take = count - produced
                         for j in range(take):
-                            dp[produced] = kp[Int(idxv[j])]
+                            dp[unsafe_offset=produced] = kp[
+                                unsafe_offset=Int(idxv[j])
+                            ]
                             produced += 1
                     g += 8
                 pos += num_groups * width
@@ -221,7 +239,7 @@ struct Rle:
                 var idx = Int(val)
                 var take = min(run_len, count - produced)
                 for _ in range(take):
-                    dp[produced] = kp[idx]
+                    dp[unsafe_offset=produced] = kp[unsafe_offset=idx]
                     produced += 1
 
     @staticmethod
@@ -479,7 +497,7 @@ struct Plain:
         `off`, sign-extended from `width` bytes to the native width — the DECIMAL
         FLBA decode shared by the flat, leveled, and statistics read paths."""
         comptime FULL = size_of[Scalar[native]]()
-        var arr = InlineArray[UInt8, FULL](fill=0)
+        var arr = Array[UInt8, FULL](fill=0)
         if (span[off] & 0x80) != 0:  # negative -> sign-extend with 0xFF
             for i in range(FULL):
                 arr[i] = 0xFF
@@ -788,7 +806,7 @@ struct ByteStreamSplit:
     ](values: Span[UInt8, _], np: Int, mut out: List[Scalar[store]]) raises:
         comptime PW = size_of[Scalar[phys]]()
         for i in range(np):
-            var raw = InlineArray[UInt8, PW](fill=0)
+            var raw = Array[UInt8, PW](fill=0)
 
             comptime for k in range(PW):
                 raw[k] = values[k * np + i]

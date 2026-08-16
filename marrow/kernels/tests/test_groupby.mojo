@@ -562,16 +562,17 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     var values = List[DynArray]()
     values.append(vals.copy())
 
-    @parameter
-    def exact(_j: Int, groups: Grouping, col: DynArray) raises -> DynArray:
+    def exact(
+        _j: Int, groups: Grouping, col: DynArray
+    ) raises {imm} -> DynArray:
         return count_distinct_grouped(groups, col)
 
     var ctx = ExecContext.parallel(4)
     _assert_all_distinct_10(
-        GroupBy(sa, ctx, GROUP_SERIAL).aggregate_columns[exact](values)
+        GroupBy(sa, ctx, GROUP_SERIAL).aggregate_columns(values, exact)
     )
     _assert_all_distinct_10(
-        GroupBy(sa, ctx, GROUP_RADIX).aggregate_columns[exact](values)
+        GroupBy(sa, ctx, GROUP_RADIX).aggregate_columns(values, exact)
     )
 
 

@@ -767,7 +767,7 @@ trait Aggregation(Kernel):
     `DistinctAgg[exact]`. Which one a runtime dtype maps to is decided once, by
     `AggFunction.resolve`."""
 
-    comptime InArray: Copyable & ImplicitlyDeletable
+    comptime InArray: Copyable & Deinitable
     """The typed input column this aggregation consumes. `DynArray` for the two
     aggregations whose work *is* dtype-generic (validity scan, row hashing) —
     there is nothing to monomorphize on."""
@@ -851,6 +851,22 @@ trait Aggregation(Kernel):
         )
 
 
+# ---------------------------------------------------------------------------
+# AggFunction — an aggregate before its input type is known.
+#
+# The one dispatch left in the aggregate layer: map a *runtime input dtype* onto
+# the `Aggregation` that implements this aggregate for it, and hand that type to
+# a comptime `job`. Which dtypes an aggregate supports is stated by its own
+# `resolve` — a new aggregate cannot forget the rule, and no central ladder has
+# to know every aggregate that will ever exist.
+#
+# The functions themselves (`Sum`, `Min`, `Count`, …) are the frontend's
+# vocabulary and live in `marrow.expr.aggregates`, together with the one string
+# comparison that maps a runtime name onto them. Nothing in this package turns a
+# name into behaviour.
+# ---------------------------------------------------------------------------
+
+
 trait AggFunction(Kernel):
     """An aggregate *function*: a name plus the input dtypes it supports.
 
@@ -862,8 +878,8 @@ trait AggFunction(Kernel):
 
     @staticmethod
     def resolve[
-        job: def[A: Aggregation]() raises capturing[_] -> None
-    ](value_dtype: DynType) raises:
+        Job: def[A: Aggregation]() raises -> None
+    ](value_dtype: DynType, job: Job) raises:
         """Run `job[A]` with the `Aggregation` implementing this function over a
         `value_dtype` column. Raises if the aggregate is not defined for it."""
         ...
@@ -1175,19 +1191,3 @@ struct DistinctAgg[exact: Bool](Aggregation):
             return count_distinct(values, ctx).repeat(1)
         else:
             return approx_count_distinct(values, ctx).repeat(1)
-
-
-# ---------------------------------------------------------------------------
-# AggFunction — an aggregate before its input type is known.
-#
-# The one dispatch left in the aggregate layer: map a *runtime input dtype* onto
-# the `Aggregation` that implements this aggregate for it, and hand that type to
-# a comptime `job`. Which dtypes an aggregate supports is stated by its own
-# `resolve` — a new aggregate cannot forget the rule, and no central ladder has
-# to know every aggregate that will ever exist.
-#
-# The functions themselves (`Sum`, `Min`, `Count`, …) are the frontend's
-# vocabulary and live in `marrow.expr.aggregates`, together with the one string
-# comparison that maps a runtime name onto them. Nothing in this package turns a
-# name into behaviour.
-# ---------------------------------------------------------------------------

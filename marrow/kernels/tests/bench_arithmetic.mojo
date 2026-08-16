@@ -13,7 +13,7 @@ from ...builders import arange, PrimitiveBuilder
 from ...dtypes import Int32Type, Float64Type, NumericType
 from ...kernels.numeric import AddKernel
 from ...execution import ExecContext
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _make_array_with_nulls[
@@ -40,11 +40,10 @@ def bench_add_int32_1k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_int32_10k(mut b: Benchmark) raises:
@@ -53,11 +52,10 @@ def bench_add_int32_10k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 10_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_int32_100k(mut b: Benchmark) raises:
@@ -66,11 +64,10 @@ def bench_add_int32_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_int32_1m(mut b: Benchmark) raises:
@@ -79,11 +76,10 @@ def bench_add_int32_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -97,11 +93,10 @@ def bench_add_nulls_int32_1k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_nulls_int32_10k(mut b: Benchmark) raises:
@@ -110,11 +105,10 @@ def bench_add_nulls_int32_10k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 10_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_nulls_int32_100k(mut b: Benchmark) raises:
@@ -123,11 +117,10 @@ def bench_add_nulls_int32_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_nulls_int32_1m(mut b: Benchmark) raises:
@@ -136,11 +129,10 @@ def bench_add_nulls_int32_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +146,10 @@ def bench_add_float64_1k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_float64_10k(mut b: Benchmark) raises:
@@ -167,11 +158,10 @@ def bench_add_float64_10k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 10_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_float64_100k(mut b: Benchmark) raises:
@@ -180,11 +170,10 @@ def bench_add_float64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_float64_1m(mut b: Benchmark) raises:
@@ -193,11 +182,10 @@ def bench_add_float64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -211,11 +199,10 @@ def bench_add_nulls_float64_1k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_nulls_float64_10k(mut b: Benchmark) raises:
@@ -224,11 +211,10 @@ def bench_add_nulls_float64_10k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 10_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_nulls_float64_100k(mut b: Benchmark) raises:
@@ -237,11 +223,10 @@ def bench_add_nulls_float64_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_add_nulls_float64_1m(mut b: Benchmark) raises:
@@ -250,11 +235,10 @@ def bench_add_nulls_float64_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 # ---------------------------------------------------------------------------
@@ -272,11 +256,10 @@ def _bench_add_1m_ctx(mut b: Benchmark, ctx: ExecContext) raises:
     b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(AddKernel.apply[Int32Type](lhs, rhs, ctx).unsafe_get(0))
 
-    b.iter[call]()
+    b.iter(call)
     keep(lhs)
     keep(rhs)
 

@@ -609,18 +609,17 @@ struct HashJoin[
         for _ in range(p):
             tables.append(SwissHashTable[Self.hasher]())
 
-        @parameter
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
-        ) raises -> Tuple[StructArray, Int32Array]:
+        ) raises {mut tables, imm} -> Tuple[StructArray, Int32Array]:
             var k = Take.apply(left_keys, rows)
             tables[i].build_hashes(part_hashes)
             return (k^, rows.copy())
 
         var hashes = Self.hasher(left_keys, self._ctx.copy())
-        var parts = partitioner.map_partitions[
-            Tuple[StructArray, Int32Array], build_partition
-        ](hashes^)
+        var parts = partitioner.map_partitions[Tuple[StructArray, Int32Array]](
+            hashes^, build_partition
+        )
 
         var keys_out = List[StructArray](capacity=p)
         var rows_out = List[Int32Array](capacity=p)
@@ -656,10 +655,9 @@ struct HashJoin[
         # Per-partition probe: gather this partition's probe keys, look them up
         # in the matching build-side table `i` (same radix bits → same
         # partition), and remap partition-local indices to global row numbers.
-        @parameter
         def probe_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
-        ) raises -> IndexPairs:
+        ) raises {imm} -> IndexPairs:
             var probe_keys_i = Take.apply(right_keys, rows)
             var pairs = self._tables[i].probe(
                 self._left_partition_keys[i],
@@ -678,7 +676,7 @@ struct HashJoin[
         var pairs_per_partition = RadixPartitioner(
             num_bits=self._radix_bits,
             ctx=self._ctx.copy(),
-        ).map_partitions[IndexPairs, probe_partition](probe_hashes^)
+        ).map_partitions[IndexPairs](probe_hashes^, probe_partition)
 
         # 4. Concat per-partition pairs into a single IndexPairs.
         var p = len(pairs_per_partition)

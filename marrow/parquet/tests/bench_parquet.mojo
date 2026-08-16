@@ -7,7 +7,7 @@ Run with:
 from std.benchmark import BenchMetric, keep
 from std.python import Python
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 from ...parquet import read_table, write_table
 
 
@@ -48,11 +48,10 @@ def _bench_read(mut b: Benchmark, n: Int, compression: String) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(read_table(path))
 
-    b.iter[call]()
+    b.iter(call)
 
 
 def bench_read_snappy_100k(mut b: Benchmark) raises:
@@ -74,9 +73,8 @@ def bench_read_dict_1m(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(read_table(path))
 
-    b.iter[call]()
+    b.iter(call)
     keep(path)  # keep the captured path alive through the whole benchmark

@@ -59,7 +59,7 @@ def _scalar_repr(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynScalar]()
     if ptr[].is_null():
         return PythonObject("<marrow.Scalar: null>")
-    return PythonObject("<marrow.Scalar: " + String.write(ptr[]) + ">")
+    return PythonObject("<marrow.Scalar: " + String(ptr[]) + ">")
 
 
 def _scalar_bool(py_self: PythonObject) raises -> PythonObject:

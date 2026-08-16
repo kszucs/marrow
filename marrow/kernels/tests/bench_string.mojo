@@ -12,7 +12,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import StringArray
 from ...builders import StringBuilder
 from ...kernels.string import LikeKernel, ILikeKernel
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _urls(n: Int) raises -> StringArray:
@@ -48,11 +48,10 @@ def _bench_like_scalar(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(LikeKernel.apply(data, "%google%")))
 
-    b.iter[call]()
+    b.iter(call)
     keep(data)
 
 
@@ -79,11 +78,10 @@ def _bench_like_array(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(LikeKernel.apply(data, pattern)))
 
-    b.iter[call]()
+    b.iter(call)
     keep(data)
     keep(pattern)
 
@@ -110,11 +108,10 @@ def _bench_like_general(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(LikeKernel.apply(data, "http%google%search%")))
 
-    b.iter[call]()
+    b.iter(call)
     keep(data)
 
 
@@ -132,11 +129,10 @@ def _bench_ilike_scalar(mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(ILikeKernel.apply(data, "%GOOGLE%")))
 
-    b.iter[call]()
+    b.iter(call)
     keep(data)
 
 
@@ -150,10 +146,9 @@ def bench_ilike_array_100k(mut b: Benchmark) raises:
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(len(ILikeKernel.apply(data, pattern)))
 
-    b.iter[call]()
+    b.iter(call)
     keep(data)
     keep(pattern)

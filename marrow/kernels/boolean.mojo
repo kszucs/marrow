@@ -24,8 +24,7 @@ from ..dtypes import (
 )
 from ..views import apply
 from .core import Kernel
-from ..execution import ExecContext
-from ..utils import GPU_ENABLED
+from ..execution import ExecContext, GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +353,7 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
     def apply(
         arr: DynArray, ctx: ExecContext = ExecContext.serial()
     ) raises -> BoolArray:
-        @parameter
-        def leaf[T: FloatingType](d: T) raises -> BoolArray:
+        def leaf[T: FloatingType](d: T) raises {imm} -> BoolArray:
             ref prim = arr.as_primitive[T]()
             var n = len(prim)
             var result: Bitmap[mut=True]
@@ -382,7 +380,7 @@ trait ValuePredicateKernel(UnaryPredicateKernel):
                 buffer=result.to_immutable(),
             )
 
-        return arr.dtype().dispatch_floating[leaf]()
+        return arr.dtype().dispatch_floating(leaf)
 
 
 struct IsNullKernel(NullPredicateKernel):

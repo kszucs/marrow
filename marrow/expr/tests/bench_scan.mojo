@@ -13,7 +13,7 @@ little to parallelize per group); `wide` is the best case.
 from std.benchmark import BenchMetric, keep
 from std.python import Python
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 from ...dtypes import Field, int64, field
 from ...schema import Schema, schema
 from ...expr.relations import ParquetScan, DynRelation
@@ -58,15 +58,14 @@ def _bench_scan(
     b.throughput(BenchMetric.elements, n * ncols)
 
     @always_inline
-    @parameter
-    def call() raises:
+    def call() raises {imm}:
         keep(
             DynRelation(
                 ParquetScan(path=path, schema=Schema(copy=sch))
             ).execute()
         )
 
-    b.iter[call]()
+    b.iter(call)
     # Both captures must be kept alive across `iter` — ASAP destruction frees a
     # captured value as soon as its last *syntactic* use passes, which is before
     # the closure ever runs. Keeping only `sch` made every iteration fail
