@@ -18,7 +18,7 @@ from ...builders import (
 from ...dtypes import int64, Int64Type
 from ...kernels.filter import Filter, Take
 from ...execution import ExecContext
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 # ---------------------------------------------------------------------------

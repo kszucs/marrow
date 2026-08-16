@@ -16,7 +16,7 @@ from ...builders import (
 )
 from ...dtypes import PrimitiveType, int32, int64, Int32Type, Int64Type
 from ...kernels.hashing import RapidHash, rapidhash
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _make_int64(n: Int) raises -> Int64Array:

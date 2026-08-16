@@ -16,7 +16,7 @@ reference implementations in arrow-rs (`bloom_filter.rs`) and Arrow C++:
 
 from std.math import log
 
-from ..utils import LittleEndian
+from ..utils import LittleEndian, XxHash64
 from .format import (
     ThriftCompactWriter,
     ThriftCompactReader,
@@ -25,105 +25,6 @@ from .format import (
     TC_I32,
     TC_STRUCT,
 )
-
-
-# ---------------------------------------------------------------------------
-# XXH64 — the 64-bit xxHash (seed 0), the hash the Parquet bloom filter uses.
-# ---------------------------------------------------------------------------
-
-comptime _P1: UInt64 = 0x9E3779B185EBCA87
-comptime _P2: UInt64 = 0xC2B2AE3D27D4EB4F
-comptime _P3: UInt64 = 0x165667B19E3779F9
-comptime _P4: UInt64 = 0x85EBCA77C2B2AE63
-comptime _P5: UInt64 = 0x27D4EB2F165667C5
-
-
-struct XxHash64:
-    """XXH64 — the value hash for the Parquet split-block bloom filter.
-
-    A namespace, like `Crc32`. `xxh64` and its three round helpers were four
-    free functions here; three are private and meaningless apart from the
-    fourth, so grouping them makes the entry point obvious and stops
-    `_rotl`/`_round`/`_merge_round` reading as general utilities.
-    """
-
-    @always_inline
-    @staticmethod
-    def _rotl(x: UInt64, r: Int) -> UInt64:
-        return (x << UInt64(r)) | (x >> UInt64(64 - r))
-
-    @always_inline
-    @staticmethod
-    def _round(acc: UInt64, input: UInt64) -> UInt64:
-        var a = acc + input * _P2
-        a = Self._rotl(a, 31)
-        return a * _P1
-
-    @always_inline
-    @staticmethod
-    def _merge_round(acc: UInt64, val: UInt64) -> UInt64:
-        var v = Self._round(0, val)
-        var a = acc ^ v
-        return a * _P1 + _P4
-
-    @staticmethod
-    def hash(data: Span[UInt8, _], seed: UInt64 = 0) -> UInt64:
-        """The 64-bit xxHash of `data` (wrapping arithmetic throughout), matching the
-        canonical XXH64 — the value hash for the Parquet split-block bloom filter.
-        """
-        var n = len(data)
-        var h: UInt64
-        var p = 0
-        if n >= 32:
-            var v1 = seed + _P1 + _P2
-            var v2 = seed + _P2
-            var v3 = seed + 0
-            var v4 = seed - _P1
-            var limit = n - 32
-            while p <= limit:
-                v1 = Self._round(v1, LittleEndian.fixed[DType.uint64](data, p))
-                p += 8
-                v2 = Self._round(v2, LittleEndian.fixed[DType.uint64](data, p))
-                p += 8
-                v3 = Self._round(v3, LittleEndian.fixed[DType.uint64](data, p))
-                p += 8
-                v4 = Self._round(v4, LittleEndian.fixed[DType.uint64](data, p))
-                p += 8
-            h = (
-                Self._rotl(v1, 1)
-                + Self._rotl(v2, 7)
-                + Self._rotl(v3, 12)
-                + Self._rotl(v4, 18)
-            )
-            h = Self._merge_round(h, v1)
-            h = Self._merge_round(h, v2)
-            h = Self._merge_round(h, v3)
-            h = Self._merge_round(h, v4)
-        else:
-            h = seed + _P5
-
-        h += UInt64(n)
-
-        while p + 8 <= n:
-            var k1 = Self._round(0, LittleEndian.fixed[DType.uint64](data, p))
-            h ^= k1
-            h = Self._rotl(h, 27) * _P1 + _P4
-            p += 8
-        if p + 4 <= n:
-            h ^= UInt64(LittleEndian.fixed[DType.uint32](data, p)) * _P1
-            h = Self._rotl(h, 23) * _P2 + _P3
-            p += 4
-        while p < n:
-            h ^= UInt64(data[p]) * _P5
-            h = Self._rotl(h, 11) * _P1
-            p += 1
-
-        h ^= h >> 33
-        h *= _P2
-        h ^= h >> 29
-        h *= _P3
-        h ^= h >> 32
-        return h
 
 
 # ---------------------------------------------------------------------------

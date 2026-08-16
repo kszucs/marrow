@@ -17,7 +17,6 @@ Method names follow Mojo's ``std.collections.bitset.BitSet`` conventions.
 
 from std.sys.info import simd_byte_width, simd_width_of
 from std.sys import size_of
-from marrow.utils import has_accelerator_support
 from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
@@ -1327,7 +1326,7 @@ def _apply_dispatch[
 ](length: Int, lane: Lane, ctx: ExecContext) raises:
     """Run ``lane(i)`` over ``[0, length)`` into a **buffer** destination.
 
-    ``gpu_ok`` is the caller's ``has_accelerator_support[...]`` check, passed
+    ``gpu_ok`` is the caller's ``ExecContext.has_accelerator_support[...]`` check, passed
     as a comptime ``Bool`` so the GPU branch is dead-code-eliminated when
     unsupported.
 
@@ -1448,7 +1447,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1472,7 +1473,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1493,7 +1496,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1520,7 +1525,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    _apply_packed_dispatch[In, has_accelerator_support[In]()](length, lane, ctx)
+    _apply_packed_dispatch[In, ExecContext.has_accelerator_support[In]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1546,7 +1553,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_packed_dispatch[In, has_accelerator_support[In]()](length, lane, ctx)
+    _apply_packed_dispatch[In, ExecContext.has_accelerator_support[In]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1564,7 +1573,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[Out]()](length, lane, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1584,7 +1595,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[In, Out]()](length, lane, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[In, Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1603,7 +1616,9 @@ def apply[
     def lane[W: Int](i: Int) {imm} -> None:
         dst.store[W](i, op[W](src.load[W](i), validity.load[W](i)))
 
-    _apply_dispatch[Out, has_accelerator_support[Out]()](length, lane, ctx)
+    _apply_dispatch[Out, ExecContext.has_accelerator_support[Out]()](
+        length, lane, ctx
+    )
 
 
 def apply[
@@ -1810,7 +1825,7 @@ def _reduce_dispatch[
         # through to the CPU path, which is correct — the reducer reads host
         # data anyway).
         comptime if (
-            has_accelerator_support[T]()
+            ExecContext.has_accelerator_support[T]()
             and T != DType.float16
             and T != DType.bool
         ):

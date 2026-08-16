@@ -1,38 +1,33 @@
-"""Benchmark suite infrastructure mirroring TestSuite.
+"""The test and benchmark harness `pytest` drives.
 
-Provides `BenchSuite` for collecting, filtering, and executing benchmarks
-with automatic discovery of `bench_*` functions, `--only`/`--skip` CLI
-filtering, and structured JSON output consumable by pytest.
+`TestSuite` and `BenchSuite` are drop-in replacements for their `std.testing` /
+`std.benchmark` counterparts, adding the two flags the pytest plugin needs:
+`--list` (print case names as JSON) and `--json` (print results as JSON). The
+generated driver in `.test_runners/` imports one of them and hands it the
+selected cases.
 
-Example usage::
+This is one module because `CLIFlags` and `_print_json_array` were byte-identical
+in the two files it replaces (`marrow/testing/{test,bench}.mojo`) — the flags are
+one contract with the pytest plugin, and two copies could disagree about what
+`--json` means.
 
-    from std.benchmark import Bencher, BenchMetric, keep
-    from marrow.testing import BenchSuite, Benchmark
-
-    def bench_sum_1k(mut b: Benchmark) raises:
-        var arr = arange[Int64Type](0, 1_000)
-        b.throughput(BenchMetric.elements, 1_000)
-
-        @always_inline
-        def call() raises {imm}:
-            var r = SumKernel.dispatch(arr)
-            keep(r)
-
-        b.iter(call)
-
-    def main() raises:
-        var suite = BenchSuite.discover_benches[__functions_in_module()]()
-        suite.run()
+It lives under `marrow.utils` on the same terms as its siblings: it imports
+nothing from marrow, only `std`. It is the one submodule here that is tooling
+rather than a primitive, and it is deliberately **not** re-exported from
+`marrow/utils/__init__.mojo` — every module in the tree imports `marrow.utils`,
+and none of them should pull `std.benchmark` in behind it.
 """
 
-from std.collections import Set
 from std.benchmark import Bench, BenchConfig, Bencher, BenchMetric
+from std.collections import Set
 from std.reflection import get_function_name, call_location, SourceLocation
 from std.sys import argv
+from std.testing import TestSuite as _StdTestSuite
+from std.testing.suite import TestResult, TestSuiteReport
 
 
 struct CLIFlags:
-    """Parsed CLI flags for bench suites."""
+    """Parsed CLI flags for test suites."""
 
     var list_cases: Bool
     var json_output: Bool
@@ -61,7 +56,97 @@ def _print_json_array(names: List[String]):
     print("]")
 
 
-# ── Public types ───────────────────────────────────────────────────────────
+struct TestSuite:
+    """Drop-in replacement for ``std.testing.TestSuite``.
+
+    Adds ``--list`` (print case names as JSON) and ``--json`` (print
+    results as JSON) on top of the standard suite.
+    """
+
+    @staticmethod
+    def _collect_names[funcs: Tuple, prefix: StaticString]() -> List[String]:
+        """Collect function names matching *prefix* at compile time."""
+        var names = List[String]()
+        comptime for idx in range(len(funcs)):
+            comptime func = funcs[idx]
+            comptime if get_function_name[func]().startswith(prefix):
+                names.append(get_function_name[func]())
+        return names^
+
+    @staticmethod
+    def _strip_flags(flags: CLIFlags) -> List[StaticString]:
+        """Build cli_args with our flags stripped for std TestSuite."""
+        var cli_args = List[StaticString]()
+        for arg in flags.args:
+            if arg != "--list" and arg != "--json":
+                cli_args.append(arg)
+        return cli_args^
+
+    @staticmethod
+    def run[funcs: Tuple, /]() raises:
+        """Discover tests, optionally list them, and run.
+
+        Parameters:
+            funcs: Pass ``__functions_in_module__()``.
+        """
+        var flags = CLIFlags()
+
+        if flags.list_cases:
+            _print_json_array(Self._collect_names[funcs, "test_"]())
+            return
+
+        if flags.json_output:
+            var suite = _StdTestSuite.discover_tests[funcs](
+                cli_args=Self._strip_flags(flags)
+            )
+            var report: TestSuiteReport
+            try:
+                report = suite.generate_report()
+            finally:
+                suite^.abandon()
+
+            # Emit JSON results.
+            print("[")
+            for i in range(len(report.reports)):
+                ref r = report.reports[i]
+                var status: String
+                if r.result == TestResult.PASS:
+                    status = "PASS"
+                elif r.result == TestResult.FAIL:
+                    status = "FAIL"
+                else:
+                    status = "SKIP"
+                var error_str = String("")
+                if r.error:
+                    var raw = String(r.error.value())
+                    error_str = (
+                        raw.replace("\\", "\\\\")
+                        .replace('"', '\\"')
+                        .replace("\n", "\\n")
+                    )
+                var comma = "," if i < len(report.reports) - 1 else ""
+                print(
+                    '  {"name": "'
+                    + r.name
+                    + '", "status": "'
+                    + status
+                    + '", "duration_ns": '
+                    + String(r.duration_ns)
+                    + ', "error": "'
+                    + error_str
+                    + '"}'
+                    + comma
+                )
+            print("]")
+
+            if report.failures > 0:
+                raise Error(report^)
+            return
+
+        # Default: delegate to std TestSuite (human-readable output).
+        _StdTestSuite.discover_tests[funcs](
+            cli_args=Self._strip_flags(flags)
+        ).run()
 
 
 struct Benchmark:

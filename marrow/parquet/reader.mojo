@@ -39,7 +39,7 @@ from ..dtypes import (
     TemporalType,
 )
 
-from .utils import CompressionLibs
+from ..utils import CompressionLibs
 from .codecs import Encoding, Rle, Plain, Dictionary, Compression
 from ..utils import LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader

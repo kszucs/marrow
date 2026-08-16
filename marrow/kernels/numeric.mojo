@@ -47,8 +47,7 @@ from ..dtypes import (
 from .core import Kernel
 from .boolean import AndKernel
 from .string import StringEqKernel
-from ..execution import ExecContext
-from ..utils import GPU_ENABLED
+from ..execution import ExecContext, GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------

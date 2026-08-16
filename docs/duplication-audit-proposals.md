@@ -309,17 +309,10 @@ a legitimate choice.
 `CLIFlags` and `_print_json_array` byte-identical in `test.mojo:25, 46` and
 `bench.mojo:34, 55`.
 
-**Angle A — `marrow/testing/_cli.mojo`. (Recommended.)**
-Both import from it. `marrow/testing/__init__.mojo` exports only `TestSuite`,
-`Benchmark`, `BenchSuite`, so the new module stays private with no re-export
-churn.
-
-**Angle B — `bench.mojo` imports from `test.mojo`.**
-One fewer file, but makes the benchmark harness depend on the test harness for no
-reason.
-
-**What decides it:** nothing. A. This is the lowest-cost item in the audit and
-has no interactions with anything else.
+**Done 2026-08-16**, by a route neither angle anticipated: the whole
+`marrow/testing/` package collapsed into a single `marrow/utils/testing.mojo`, so
+there is one `CLIFlags` because there is one file. Both angles assumed the
+two-file split was fixed.
 
 ## §1.12 — tests: 32,526 lines, no shared fixtures
 
@@ -535,7 +528,6 @@ six orphaned banners. See `CHANGELOG.md`.
 
 | Item | Recommended | Gate | Independent? |
 |---|---|---|---|
-| §1.9 testing CLI | A — `_cli.mojo` | tests | yes |
 | §1.12 temp paths | suite-wide `mkstemp`, ~15 sites, or leave | tests | yes |
 | Part 4 — exec-test move | `kernels/tests/` → `marrow/tests/` | import check | yes |
 | §4 `trait Join` | A — delete | judgement | yes |

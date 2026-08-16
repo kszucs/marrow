@@ -23,7 +23,7 @@ from ...dtypes import (
     millisecond,
 )
 from ...kernels.cast import cast, NumericCast
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 # ---------------------------------------------------------------------------

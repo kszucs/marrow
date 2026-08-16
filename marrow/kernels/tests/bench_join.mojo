@@ -23,7 +23,7 @@ from ...builders import PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, Int64Type, struct_, Field
 from ...kernels.join import JOIN_INNER, JOIN_ALL
 from ...kernels.join import HashJoin, hash_join
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ Run with: pixi run pytest marrow/tests/bench_bitmap.mojo --benchmark
 from std.benchmark import BenchMetric, keep
 
 from ..buffers import Bitmap, Buffer
-from ..testing import Benchmark
+from ..utils.testing import Benchmark
 
 
 # ---------------------------------------------------------------------------

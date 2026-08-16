@@ -151,13 +151,13 @@ on [`CArrowSchema`:304-323](../marrow/c_data.mojo#L304-L323),
 [`CArrowArrayStream`:1563](../marrow/c_data.mojo#L1563). This is the double-free
 guard — the one place where three copies drifting is a memory-safety bug.
 
-### 1.9 `marrow/testing/` — 40 lines duplicated verbatim between two files
+### 1.9 `marrow/testing/` — resolved
 
-[`CLIFlags`](../marrow/testing/test.mojo#L25) and
-[`_print_json_array`](../marrow/testing/test.mojo#L46) are byte-identical in
-[bench.mojo:34](../marrow/testing/bench.mojo#L34)/[55](../marrow/testing/bench.mojo#L55).
-Zero risk to extract into `marrow/testing/_cli.mojo` — no generics, no size-gate
-exposure. **Lowest-cost item on this list.**
+`CLIFlags` and `_print_json_array` were byte-identical in the package's
+`test.mojo` and `bench.mojo`. Both files were merged into
+[`marrow/utils/testing.mojo`](../marrow/utils/testing.mojo), so there is one
+copy because there is one file — the flags are a single contract with the pytest
+plugin, and two copies could disagree about what `--json` means.
 
 ### 1.10 `parquet/format.mojo` — the Thrift field loop, 12 sites
 

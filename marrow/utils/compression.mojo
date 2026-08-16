@@ -1,11 +1,20 @@
-"""System-library loading for the Parquet codecs.
+"""System-library loading for the block compression codecs.
 
-The compression codecs are not reimplemented; instead the standard C libraries
-(`libzstd`, `libsnappy`, `liblz4`, `libz`) are `dlopen`-ed at runtime and their
-block APIs called directly — the same approach arrow-rs/duckdb take, just
+The codecs are not reimplemented; the standard C libraries (`libzstd`,
+`libsnappy`, `liblz4`, `libz`, `libbrotli`) are `dlopen`-ed at runtime and their
+block APIs called directly — the same approach arrow-rs and duckdb take, just
 without a link-time dependency. `CompressionLibs` is the lazily-opened,
-per-read/write handle pool plus the primitive block calls; `Compression` (in
-`codecs.mojo`) dispatches onto it.
+per-read/write handle pool plus the primitive block calls.
+
+**Nothing here is Parquet-specific**, which is why it lives in `marrow.utils`
+rather than in `marrow.parquet` where it started (as a second module named
+`utils`). The format-specific half — the Parquet `CompressionCodec` codes, the
+legacy Hadoop LZ4 frame tolerance, the scratch slack the bit-unpackers need — is
+`Compression` in `marrow.parquet.codecs`, which dispatches onto this.
+
+The other consumer is Arrow IPC, which currently *refuses* compressed bodies
+(`ipc.mojo`, "reading compressed IPC bodies (LZ4_FRAME / ZSTD) is not
+supported"). These bindings are what that needs.
 """
 
 from std.ffi import OwnedDLHandle, _try_find_dylib

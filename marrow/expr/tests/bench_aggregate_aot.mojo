@@ -29,7 +29,7 @@ same.
 
 from std.benchmark import BenchMetric, keep
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 from ...arrays import DynArray
 from ...builders import array, Int64Builder, StringBuilder
 from ...dtypes import DynType, Int64Type, int64, string, field

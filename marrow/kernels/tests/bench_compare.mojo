@@ -8,7 +8,7 @@ from std.benchmark import BenchMetric, keep
 from ...builders import arange
 from ...dtypes import Int32Type, Int64Type
 from ...kernels.numeric import EqKernel
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 # ---------------------------------------------------------------------------

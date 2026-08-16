@@ -4,6 +4,55 @@
 
 ### Refactors
 
+- **`marrow/utils.mojo` became a `marrow/utils/` package**, and the two other
+  modules that were really format-agnostic primitives moved into it.
+
+  The old file was four unrelated things behind one name — variant dispatch (its
+  documented purpose), byte order, CRC-32 and GPU capability — and
+  `marrow/parquet/utils.mojo` was a *second* module called `utils` holding the
+  codec bindings. Now: `dispatch` · `byteorder` · `checksum` · `hashing` ·
+  `compression` · `testing`, each depending on `std` alone. `__init__.mojo`
+  re-exports the names, so `from ..utils import LittleEndian` is unchanged at
+  every call site.
+
+  - **`CompressionLibs` moved out of `marrow/parquet/`.** Nothing in it is
+    Parquet-specific — it is `dlopen`ed zstd/snappy/lz4/zlib/brotli. The
+    format-specific half (codec codes, the legacy Hadoop LZ4 frame, the
+    bit-unpacker scratch slack) stays as `Compression` in `parquet/codecs.mojo`.
+    Arrow IPC is the waiting second consumer: it currently *refuses* compressed
+    bodies.
+  - **Both hash functions now live together** as `RapidHash64` and `XxHash64` in
+    `utils/hashing.mojo`, behind a `Hasher` trait (`name` + a static
+    `hash(span, seed) -> UInt64`) so the algorithm is swappable. `std.hashlib`
+    was surveyed first: it has `AHasher` and `Fnv1a` behind a *streaming*
+    `Hasher` protocol, and no CRC-32, XXH64, rapidhash or LEB128 anywhere — none
+    of these six is replaceable by std. rapidhash's six free functions and three
+    module-level secrets became `RapidHash64`'s static methods.
+  - **`GPU_ENABLED` and `has_accelerator_support` went to `marrow/execution.mojo`
+    instead**, the latter as `ExecContext.has_accelerator_support` — device
+    capability is `ExecContext`'s job, not a utility's. This also removed
+    `views.mojo`'s only absolute `from marrow.…` import.
+  - **`marrow/testing/` collapsed into `utils/testing.mojo`**, dropping the
+    byte-identical `CLIFlags` and `_print_json_array` the two files each carried.
+    It is the one submodule not re-exported from `__init__.mojo`: every module
+    imports `marrow.utils`, and none should pull `std.benchmark` in behind it.
+
+  **Measured, because rapidhash is on the group-by/join hot path.** Extracting
+  the primitives is free: **-0.03% median, range -1.36% to +0.36%** across the
+  nine `bench_rapidhash_*` cases, interleaved four rounds each against the
+  original inline version. A separate interleaved A/B put the struct wrapper
+  itself at **-0.07%**, so the encapsulation costs nothing. An earlier *nested*
+  baseline-then-change comparison showed +2% on int64 — that was the artifact
+  `docs/backlog.md` §0 warns nesting invents, and it disappeared under
+  interleaving.
+
+  New: 40 tests over `marrow/utils/tests/` and 12 benchmarks in
+  `utils/tests/bench_hashing.mojo`. The XXH64 vectors come from an independent
+  Python implementation of the canonical algorithm, validated against the two
+  values already pinned in `test_bloom.mojo` and covering every branch of `hash`;
+  CRC-32 is checked against `zlib.crc32`; and `mum_wide` is asserted equal to
+  `mum` lane for lane, which nothing previously covered.
+
 - **Cleared the unambiguous items from the duplication audit**
   (`docs/duplication-audit.md`), ~215 lines net.
 

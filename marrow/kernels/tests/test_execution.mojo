@@ -11,6 +11,7 @@ reads past its scratch, and neither shows up as a compile error.
 from std.testing import assert_equal, assert_true, assert_false
 
 from ...execution import ExecContext
+from std.sys import CompilationTarget, has_accelerator
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +275,15 @@ def test_stripe_zero_length_visits_nothing() raises:
 
     ExecContext.serial().stripe(0, count)
     assert_equal(total[0], 0)
+
+
+def test_has_accelerator_support() raises:
+    """`ExecContext.has_accelerator_support` answers for the build, not the box.
+
+    GPU codegen is opt-in, so without `-D MARROW_GPU=true` this is False
+    whatever hardware is present; float64 is supported on CUDA but not on Metal.
+    """
+    if has_accelerator() and not CompilationTarget.is_apple_silicon():
+        assert_true(ExecContext.has_accelerator_support[DType.float64]())
+    else:
+        assert_false(ExecContext.has_accelerator_support[DType.float64]())

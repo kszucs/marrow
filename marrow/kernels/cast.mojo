@@ -53,9 +53,8 @@ from ..dtypes import (
     int32,
 )
 from .core import Kernel
-from ..execution import ExecContext
+from ..execution import ExecContext, GPU_ENABLED
 from .filter import take
-from ..utils import GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------

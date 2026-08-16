@@ -32,6 +32,37 @@ from std.math import ceildiv
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.info import num_physical_cores
+from std.sys import has_accelerator, CompilationTarget, get_defined_bool
+
+
+# The single switch for GPU code generation across marrow.  **Off by default**:
+# GPU work is opt-in, so build with `-D MARROW_GPU=true` to get it.  With it
+# off, every device path is eliminated at elaboration time — device allocations
+# in the kernels, the accelerator arms of `_apply_dispatch`, and
+# `has_accelerator_support`, which answers False and so makes a GPU
+# `ExecContext` raise at the dispatch site rather than misbehave.  Applies
+# to `mojo build` / `mojo run`; `mojo precompile` rejects `-D` outright.
+#
+# This is marrow's largest single compile-time lever.  Cold builds (fresh
+# `MODULAR_CACHE_DIR` — the transform cache makes a repeated identical compile
+# useless as a measurement):
+#
+#                        GPU off (default)   GPU on
+#   cast, numeric x numeric      14.6s        40.1s
+#   cast + sort_indices          43.7s        85.0s
+#
+# **Both halves have to be gated to get any of it.** Device paths only vanish
+# when the allocations are wrapped in `comptime if GPU_ENABLED` *and*
+# `has_accelerator_support` answers False.  Gating either one alone measures as
+# no change at all (45.2s and 84.4s respectively against 42.5s / 84.1s
+# baselines), which is why this looked like a dead end for a long time.  So:
+# anything that touches device code needs a `comptime if GPU_ENABLED` around
+# it; a runtime `if ctx.is_gpu()` cannot be eliminated at elaboration time and
+# silently keeps the whole device path alive.
+#
+# It does not shed the MAX runtime, though — a binary built with the flag off
+# still links `libmax` / AsyncRT exactly as one built with it on.
+comptime GPU_ENABLED = get_defined_bool["MARROW_GPU", False]()
 
 
 struct ExecContext(
@@ -145,6 +176,48 @@ struct ExecContext(
         return Self(num_threads=num_threads, device=self.device.copy())
 
     # --- queries ------------------------------------------------------
+
+    @staticmethod
+    def has_accelerator_support[*dtypes: DType]() -> Bool:
+        """Check if there is accelerator support for all given dtypes.
+
+        For example Metal doesn't support float64 as of April 2026.
+
+        Must use `comptime if`, not runtime `if`: these guards have to eliminate
+        the accelerator branches at elaboration time, not at runtime.
+
+        Note `has_accelerator()` is itself `is_gpu() or _accelerator_arch() != ""`,
+        so on a machine reporting an accelerator this enables GPU codegen — which
+        since 1.0.0b3.dev2026072406 requires a MAX runtime (`lib/libmax.dylib`),
+        hence the `max` dependency pinned alongside `mojo` in `pixi.toml`.
+
+        A previous `_accelerator_arch()` check here validated the GPU architecture
+        string, working around a toolchain regression that reported a malformed
+        target (e.g. 'metal:2-metal4' on an M2 with the Metal 4 API). It has been
+        removed; reinstate it if that regression reappears.
+
+        GPU codegen is **opt-in**: this answers False unless the build passes
+        `-D MARROW_GPU=true` (see `GPU_ENABLED`). Without it a GPU
+        `ExecContext` raises at the dispatch site rather than misbehaving.
+        Applies to `mojo build`/`mojo run` only — `mojo precompile` rejects `-D`.
+
+        Answering False here is one half of eliminating GPU codegen; the other half
+        is the `comptime if GPU_ENABLED` guards around the kernels' device
+        allocations. Either half alone measures as no improvement whatsoever — this
+        call returning False while the allocations stay behind a runtime
+        `if ctx.is_gpu()` was 45.2s against a 42.5s baseline. Together they take the
+        same build to 14.6s. Do not "simplify" one side away.
+        """
+        comptime if not GPU_ENABLED:
+            return False
+        comptime if not has_accelerator():
+            return False
+        comptime if not CompilationTarget.is_apple_silicon():
+            return True
+        comptime for dtype in dtypes:
+            if dtype == DType.float64:
+                return False
+        return True
 
     def is_gpu(self) -> Bool:
         """True when work should be dispatched to the GPU."""

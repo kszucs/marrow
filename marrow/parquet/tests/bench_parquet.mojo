@@ -7,7 +7,7 @@ Run with:
 from std.benchmark import BenchMetric, keep
 from std.python import Python
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 from ...parquet import read_table, write_table
 
 

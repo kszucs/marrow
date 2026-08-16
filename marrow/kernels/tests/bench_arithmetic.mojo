@@ -13,7 +13,7 @@ from ...builders import arange, PrimitiveBuilder
 from ...dtypes import Int32Type, Float64Type, NumericType
 from ...kernels.numeric import AddKernel
 from ...execution import ExecContext
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _make_array_with_nulls[

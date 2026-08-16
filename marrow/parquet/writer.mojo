@@ -33,7 +33,7 @@ from .codecs import (
     ByteStreamSplit,
 )
 from ..utils import LittleEndian, Crc32
-from .utils import CompressionLibs
+from ..utils import CompressionLibs
 from .bloom import XxHash64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import (
     SchemaMapping,

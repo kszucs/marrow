@@ -23,7 +23,7 @@ from ...kernels.aggregate import (
     MinKernel,
     MaxKernel,
 )
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _make_array_with_nulls[

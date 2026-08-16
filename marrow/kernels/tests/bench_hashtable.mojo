@@ -13,7 +13,7 @@ from ...builders import PrimitiveBuilder, UInt64Builder
 from ...dtypes import uint64, UInt64Type, struct_, Field
 from ...kernels.hashtable import SwissHashTable
 from ...kernels.hashing import rapidhash
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _make_keys(n: Int) raises -> StructArray:

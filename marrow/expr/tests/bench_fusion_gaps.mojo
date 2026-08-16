@@ -11,7 +11,7 @@ rows whose `Name (time in ...)` header shows the same unit.
 
 from std.benchmark import BenchMetric, keep
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 from ...builders import StringBuilder, Int32Builder, Int64Builder
 from ...dtypes import int64, string, int32
 from ...tabular import record_batch, RecordBatch

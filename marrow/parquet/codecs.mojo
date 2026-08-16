@@ -11,7 +11,7 @@ right one, so the flat and nested reader paths share one decoder per layout:
 - `Plain` · `Dictionary` · `ByteStreamSplit` · `DeltaLengthByteArray` ·
   `DeltaByteArray` — the data-page value codecs `Encoding` dispatches to.
 - `Compression` — the page compression codec (dispatches onto `CompressionLibs`
-  in `utils.mojo`).
+  in `marrow.utils.compression`).
 
 RLE / bit-packed hybrid wire format (per the Parquet spec): a sequence of runs,
 each introduced by a ULEB128 header. `header & 1` selects the run kind:
@@ -32,8 +32,7 @@ from ..arrays import (
     FixedSizeBinaryArray,
 )
 from .. import dtypes as dt
-from ..utils import LittleEndian
-from .utils import CompressionLibs
+from ..utils import CompressionLibs, LittleEndian
 
 
 @always_inline

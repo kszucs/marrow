@@ -274,7 +274,7 @@ class MojoRunner:
         cached artifact).
         """
         suite = "TestSuite" if kind == "test" else "BenchSuite"
-        lines = [f"from marrow.testing import {suite}"]
+        lines = [f"from marrow.utils.testing import {suite}"]
         names = []
         for fspath in sorted(groups):
             cases = groups[fspath]
@@ -1454,7 +1454,7 @@ def test_write_driver_imports_every_selected_case(tmp):
     source = driver.read_text()
 
     assert driver.name.startswith("_test_driver_") and driver.suffix == ".mojo"
-    assert "from marrow.testing import TestSuite" in source
+    assert "from marrow.utils.testing import TestSuite" in source
     assert (
         "from marrow.tests.test_arrays import test_arrays_one, test_arrays_two"
         in source
@@ -1503,7 +1503,7 @@ def test_write_driver_bench_kind_uses_bench_suite(tmp):
 
     # Benchmarks get their own driver: they cannot share -O3 with -O1 tests.
     assert driver.name.startswith("_bench_driver_")
-    assert "from marrow.testing import BenchSuite" in source
+    assert "from marrow.utils.testing import BenchSuite" in source
     assert "BenchSuite.run[" in source
 
 

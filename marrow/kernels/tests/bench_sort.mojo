@@ -7,7 +7,7 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 from ...arrays import DynArray, StructArray
 from ...builders import (
     Int32Builder,

@@ -22,7 +22,7 @@ from ...kernels.aggregate import (
 )
 
 
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _make_keys(n: Int, num_groups: Int) raises -> DynArray:

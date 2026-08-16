@@ -12,7 +12,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import StringArray
 from ...builders import StringBuilder
 from ...kernels.string import LikeKernel, ILikeKernel
-from ...testing import Benchmark
+from ...utils.testing import Benchmark
 
 
 def _urls(n: Int) raises -> StringArray:

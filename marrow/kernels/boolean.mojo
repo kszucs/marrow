@@ -24,8 +24,7 @@ from ..dtypes import (
 )
 from ..views import apply
 from .core import Kernel
-from ..execution import ExecContext
-from ..utils import GPU_ENABLED
+from ..execution import ExecContext, GPU_ENABLED
 
 
 # ---------------------------------------------------------------------------
