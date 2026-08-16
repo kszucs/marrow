@@ -287,14 +287,19 @@ retired — `pymethod[DynScalar.is_valid]()` compiles again).
 Measured after Stage 6 by running `check_gate.py` on this branch and on the
 unmodified branch point `71f069c` in a separate worktree:
 
-| gate | `71f069c` | this branch | delta |
+| binary | `71f069c` | this branch | delta |
 |---|---|---|---|
-| `query_streaming` | 2,607,180 | 2,607,180 | **0** |
-| `query_join` | 2,341,108 | 2,341,108 | **0** |
-| `query_streaming_agg_fused` | 2,089,084 | 2,089,084 | **0** |
-| `query_streaming_agg` | 2,637,536 | 2,637,536 | **0** |
+| `query_streaming` * | 2,607,180 | 2,607,180 | **0** |
+| `query_join` * | 2,341,108 | 2,341,108 | **0** |
+| `query_streaming_agg_fused` * | 2,089,084 | 2,089,084 | **0** |
+| `query_streaming_agg` * | 2,637,536 | 2,637,536 | **0** |
+| `query_arith` | 2,614,400 | 2,614,400 | **0** |
+| `query_exprs` | 2,279,916 | 2,279,916 | **0** |
 
-Byte-identical. §2 quoted `8334bf0`'s recorded **+13,428 bytes** for *adding* the
+`*` = in the CI gate. `query_arith` and `query_exprs` are **not** gated but are
+the purest AOT-expression binaries, so they were measured too — the gate's four
+all carry scan/join/aggregate machinery that could mask a small expression-layer
+change. Byte-identical across all six. §2 quoted `8334bf0`'s recorded **+13,428 bytes** for *adding* the
 raising trait requirements and this plan banked on reclaiming it; that was a
 mistake in reasoning, not in execution. That figure was measured under
 `mojo 1.0.0b3`, and a `raises` on a trait requirement only costs anything at
