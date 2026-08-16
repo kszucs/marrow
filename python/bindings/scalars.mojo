@@ -27,27 +27,12 @@ def _scalar_as_py(py_self: PythonObject) raises -> PythonObject:
     return ptr[].as_py()
 
 
-# `is_valid` / `is_null` / `type` are wrapped explicitly rather than through
-# `pymethod[DynScalar.X]()`. Once `DynScalar` conforms to `ArrowScalar` those
-# three are trait members -- declared on the trait and overridden here -- and
-# resolving the resulting overload set crashes the compiler
-# (`CallParamInf::inferForCall`, `mojo 1.0.0b3`). Naming each call explicitly
-# sidesteps the inference. `pymethod` remains fine for non-trait methods.
-
-
-def _scalar_type(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[DynScalar]()
-    return ptr[].type().to_python_object()
-
-
-def _scalar_is_valid(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[DynScalar]()
-    return PythonObject(ptr[].is_valid())
-
-
-def _scalar_is_null(py_self: PythonObject) raises -> PythonObject:
-    var ptr = py_self.downcast_value_ptr[DynScalar]()
-    return PythonObject(ptr[].is_null())
+# `is_valid` / `is_null` / `type` go through `pymethod` like any other zero-arg
+# method. They used to be hand-wrapped: while `DynScalar` conformed to
+# `ArrowScalar` all three were trait members declared on the trait *and*
+# overridden here, and resolving that overload set crashed the compiler
+# (`CallParamInf::inferForCall`, `mojo 1.0.0b3`). The conformance is gone, so
+# there is one declaration each and inference resolves it.
 
 
 def _scalar_str(py_self: PythonObject) raises -> PythonObject:
@@ -107,9 +92,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     ref scalar_py = mb.add_type[DynScalar]("Scalar")
     _ = (
         scalar_py.def_method[_scalar_as_py]("as_py")
-        .def_method[_scalar_is_valid]("is_valid")
-        .def_method[_scalar_is_null]("is_null")
-        .def_method[_scalar_type]("type")
+        .def_method[pymethod[DynScalar.is_valid]()]("is_valid")
+        .def_method[pymethod[DynScalar.is_null]()]("is_null")
+        .def_method[pymethod[DynScalar.type]()]("type")
         .def_method[_scalar_str]("__str__")
         .def_method[_scalar_repr]("__repr__")
         .def_method[_scalar_bool]("__bool__")

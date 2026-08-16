@@ -561,18 +561,20 @@ struct DictionaryScalar(ArrowScalar):
 
 
 struct DynScalar(
-    ArrowScalar, ConvertibleToPython, Copyable, Equatable, Movable, Writable
+    ConvertibleToPython, Copyable, Equatable, Movable, Writable
 ):
     """Type-erased scalar container backed by a Variant.
 
     Wraps any typed scalar inline in a discriminated union.
     Runtime dispatch goes through the `_dispatch` helper.
 
-    **Conforms to `ArrowScalar` itself.** The erased scalar is a *peer* of the
-    typed ones rather than something above them, so generic code bound on
-    `ArrowScalar` accepts either and there is no separate erased overload set to
-    keep in step. `DynArray.ScalarType` is this, which is what lets `DynArray`
-    conform to `Array` in turn.
+    **Does not conform to `ArrowScalar`.** It exposes the same surface as its
+    own API. The conformance existed to satisfy `DynArray.ScalarType`, which in
+    turn existed to satisfy `DynBuilder.ArrayType` — a closed loop with no
+    consumer outside it, added in `8334bf0` for a lane unification that
+    `7d57398` then abandoned. Note `type()` keeps its name here: that is the
+    spelling all nine *typed* scalars use, and renaming only the box would
+    create the divergence this removal is undoing.
     """
 
     comptime VariantType = Variant[
