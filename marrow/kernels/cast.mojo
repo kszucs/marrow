@@ -908,9 +908,15 @@ struct DecimalCast(Kernel):
 
 
 struct ListCast(Kernel):
-    """Cast a list-like array (list / large_list) to another of the same kind by
-    recursively casting its child values to the target's value type; the offset
-    buffer and validity are shared unchanged."""
+    """Cast a list-like array (list / large_list / map) to another of the same
+    kind by recursively casting its child values to the target's value type; the
+    offset buffer and validity are shared unchanged.
+
+    `map` rides this path rather than needing its own kernel: physically it is a
+    list whose single child is the non-nullable `entries` struct, so casting a
+    `map<k1, v1>` to `map<k2, v2>` is casting that struct — which `StructCast`
+    then does field by field. Only the *target child type* differs, which is why
+    the three cases meet here and nowhere else."""
 
     comptime name = "list_cast"
 
@@ -920,13 +926,13 @@ struct ListCast(Kernel):
     ) raises -> DynArray:
         var data = array.to_data()
         var child = DynArray.from_data(data.children[0].copy())
-        var target = (
-            to.as_large_list()
-            .value_type()
-            .copy() if to.is_large_list() else to.as_list()
-            .value_type()
-            .copy()
-        )
+        var target: DynType
+        if to.is_map():
+            target = to.as_map().entries_field().dtype.copy()
+        elif to.is_large_list():
+            target = to.as_large_list().value_type().copy()
+        else:
+            target = to.as_list().value_type().copy()
         var new_child = cast(child, target, safe, ctx)
         return DynArray.from_data(
             ArrayData(
@@ -1042,8 +1048,10 @@ def cast(
         return BoolToNum.dispatch(array, to, ctx)  # bool → numeric
     elif src.is_temporal() or to.is_temporal():
         return TemporalCast.dispatch(array, to, ctx)
-    elif (src.is_list() and to.is_list()) or (
-        src.is_large_list() and to.is_large_list()
+    elif (
+        (src.is_list() and to.is_list())
+        or (src.is_large_list() and to.is_large_list())
+        or (src.is_map() and to.is_map())
     ):
         return ListCast.dispatch(array, to, safe, ctx)
     elif src.is_struct() and to.is_struct():

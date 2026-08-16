@@ -4,6 +4,14 @@
 
 ### Fixes
 
+- **`cast` had no map arm**, so `map<string, int64> → map<string, int32>` raised
+  "unsupported cast". It needed no kernel of its own: a map is physically a list
+  whose single child is the non-nullable `entries` struct, so `ListCast` casts
+  that struct and `StructCast` casts the fields. Only the *target child type*
+  had to be read differently — from `entries_field()` rather than
+  `value_type()`. No binary-size cost.
+
+
 - **A bit-packed mask was read byte-wise, so `mask1 & mask2` could return wrong
   rows.** `BitmapView.load[DType.bool, W]` bitcasts to `Scalar[DType.bool]` —
   which is a *byte* — so it walked a bit-packed validity/data mask one byte per
