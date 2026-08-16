@@ -1,31 +1,25 @@
 # Backlog
 
 The single source of truth for what is open. Verified against the code at
-**`b2e7dae` (2026-08-03)**, then re-verified item by item through **2026-08-05**
-as each was worked — not read off a header.
+**`b2e7dae` (2026-08-03)**, re-verified item by item as each was worked, and
+**pruned of everything resolved on 2026-08-16** — not read off a header.
 
 **Goal: marrow is a usable single-node columnar query engine.** Arrow-spec
 completeness is not the objective — layout and kernel gaps are scheduled only
-when a milestone query needs them. The deferred Arrow-parity list is §7.
+when a milestone query needs them. The deferred Arrow-parity list is §6.
 
-Resolved items are **deleted, not struck through** — git history has them.
-The exception is an item whose *diagnosis* turned out wrong: those are kept and
-marked `done`, because the correction is the part worth reading. B22 ("a core
-transfer defect, not a test bug" — it was a test bug), B24, Q7.5 and Q5.1 are all
-of that kind. A3 was cut down the same way and then removed outright.
+Resolved items are **deleted, not struck through** — git history and the
+CHANGELOG have them. What a resolved item taught survives only where it changes
+a future decision: a trap that invalidates an obvious approach goes to §0, a
+design that was written down and then not built goes to §7.
 
 > **Re-verify before trusting any status line here.** This file replaces seven
 > task documents that had drifted so far apart that a 2026-07-30 consolidation
 > pass still left the index and `tasks-code-quality.md` disagreeing about five
 > tasks. A 2026-08-03 audit found **18 wrong statuses**: eight tasks marked open
 > that were done, four marked done that were not, and six whose premise the
-> two-lane refactor had destroyed. Check with `grep`, not with a header.
->
-> It also replaces `execution-engine-roadmap.md` — a second living plan is the
-> same drift pattern one level up — and the four feature design docs
-> (`sort-design.md`, `joins-design.md`, `groupby-design.md`,
-> `decimal-type-design.md`). What each of those designed and the tree then built
-> differently is §8; what they designed and nobody built is §4 and §7.
+> two-lane refactor had destroyed. Check with `grep`, not with a header — and
+> exclude `.claude/worktrees/`, which holds stale pre-refactor code.
 
 ---
 
@@ -40,7 +34,10 @@ obvious. Read before planning anything.
    dispatchers, fused-only value boxes, closed per-dtype kernels. Gate on
    `pixi run binary_size`.
 2. **One engine, two drivers.** No feature may exist in only one lane. Windows
-   currently violate this (AOT-only) — see M2.3.
+   currently violate this (AOT-only) — see M2.3. Enforced by
+   `marrow/expr/tests/test_parity.mojo` across four axes — op names read off the
+   kernel, pruning, values, aggregates through a keyless plan — so a new op adds
+   its case there.
 3. **PyArrow-shaped naming** in the core types and the bindings.
 4. **Code quality is an acceptance criterion**, not a follow-up. Behaviour lives
    on the type or trait, not in free functions. A wave does not open until the
@@ -86,6 +83,12 @@ obvious. Read before planning anything.
 - **Benchmarks here vary 10–18% run to run.** Interleave repeats across refs
   (nesting them concentrates machine drift on whichever ref is measured last and
   *invents* regressions), use five or more, compare ranges.
+- **`views._reduce_dispatch` staying on `sync_parallelize` is deliberate, not an
+  unconverted leftover** — it is the fourth documented one, and its comment says
+  so. Routing it through `ctx.stripe` forces the serial arm to allocate a
+  one-slot partials buffer it does not need: `sumint64_1k` 0.19-0.20 → 0.30-0.32
+  µs, `sumfloat64_1k` 0.23-0.24 → 0.34-0.37 µs (five interleaved repeats,
+  disjoint ranges). A serial fold should not pay for the merge's scratch.
 - **A fixed per-call cost hides until you change how often the call happens.**
   `ParquetFile.read` built a `CompressionLibs` per worker and the first
   decompress `dlopen`s the codec library — invisible at one read per file, 4.7x
@@ -109,8 +112,7 @@ obvious. Read before planning anything.
   "assignment was never used" warnings on buffers the body writes.
 - **`origin_of(a, b)` is an origin union**, which is what lets a function return
   values borrowed from either of two storages.
-- **`.claude/worktrees/` contains two stale worktrees** (`docs-revamp`,
-  `q25-aggregates`) holding pre-Q2.5 `AGG_*` and `reinterpret_array` code.
+- **`.claude/worktrees/` contains two stale worktrees** (`docs-revamp`, `q25`) holding pre-Q2.5 `AGG_*` and `reinterpret_array` code.
   Exclude them from every grep or you will get false positives.
 
 ---
@@ -174,81 +176,34 @@ Defects that produce **wrong answers with no error**. These come first because
 the M1 gate is "results cross-checked against DuckDB": a wrong multi-key sort or
 an unpruned date predicate corrupts exactly the thing the milestone measures.
 
-**Every item opens with a failing test.** The remaining entries were found by
-reading code paths and are unverified until that test exists — write it and
-watch it fail before touching production code, because at least one of these
-turned out to behave differently from how it read. (B20's missing-column `-1`
-did not silently return the wrong column, as recorded: it tripped a bounds
-assert that killed the whole test binary, which also masked B14 and B15 until
-it was fixed.)
+**Every item opens with a failing test.** A card found by reading a code path is
+unverified until that test exists — write it and watch it fail before touching
+production code, because more than one card here turned out to behave
+differently from how it read.
 
-Two root causes account for most of this list, and fixing either collapses a
-group rather than a line:
+**The wave is nearly clear: what is left is one blocked fixture and one backend
+crash.** Two things it cleared are worth keeping in mind, because neither is
+structurally prevented:
 
 - **`offset` has two conventions** — views index logically from zero, owning
-  `Buffer`/`Bitmap` do not — and array code mixes them. **All of this group is
-  now fixed** (B11, B13, B16, B17); the convention split itself is not, so a new
-  array method that indexes a bitmap can still pick the wrong one.
+  `Buffer`/`Bitmap` do not — and array code mixes them. Every known instance is
+  fixed; the convention split is not, so a new array method that indexes a
+  bitmap can still pick the wrong one.
+- **A bounds assert kills the whole test binary, not one case**, so one bad card
+  can mask several others. That is how B20 hid B14 and B15.
 
 | ID | Defect | Evidence | Size |
 |---|---|---|---|
 | **B4** | **BIT_PACKED Parquet levels are mis-decoded.** `definition_level_encoding` / `repetition_level_encoding` are parsed (`format.mojo:576-578`) then never consulted — `_data_page_v1` (`reader.mojo:240-270`) applies `Rle.decode` unconditionally, and also reads RLE's 4-byte length prefix, which BIT_PACKED pages do not have. **Blocked on a fixture, not on the fix.** The guard is a few lines, but BIT_PACKED is deprecated: arrow-cpp never writes it and PyArrow exposes no option for it, so there is no reference writer to produce a test file. Doing this means hand-assembling a Parquet file with Thrift page headers declaring BIT_PACKED. Do not land the guard untested — a decode path that silently changes behaviour is exactly what this card is about. | as cited | S fix, M fixture |
-| **B23** | **CLOSED 2026-08-16.** marrow's half landed long ago: `--mojo-timeout` (default 1800) turns a hang into an ordinary failure, and the two `take` tests moved out of the join file, taking `test_join.mojo` from 7 hours to 48 s. The only thing left was filing the toolchain reproduction upstream, and upstream reports are out of scope by decision — the characterisation stays here for whoever picks it up: the deadlock is the *erased* `take(DynArray, Int32Array)`, ~10 lines, and counter-intuitively a **larger** compilation unit avoids it. | closed |
-| **B24** | **RESOLVED — deleted.** `is_fixed_size()` answered `is_bool() or is_primitive()`, so it covered neither `fixed_size_binary` nor `fixed_size_list`, the two dtypes its name promises. It had **zero production callers** — only tests and one docstring cross-reference. Arrow C++ spells the real predicate `is_fixed_width` = `is_primitive || is_dictionary || is_fixed_size_binary` (`type_traits.h:1400`), which notably excludes `FIXED_SIZE_LIST`; marrow's matched none of that. Removed rather than widened: adding dictionary/fsb coverage for no caller is speculative, and the two real uses are already spelled `is_bool() or is_primitive()` inline where they are needed (`ipc.mojo:1941`). `dtypes.mojo` now records Arrow's definition so anyone who needs it adds the right thing deliberately. | `dtypes.mojo` | done |
 | **B25** | **`test_views_gpu.mojo` fails 13 of 15 with a Metal codegen error**, and has for at least the whole of this branch. Every failure is `error: Metal Compiler failed to compile metallib. Please submit a bug report.` followed by `mojo: error: failed to run the pass manager` — a backend crash, not an assertion. Verified 2026-08-05 at both `d565c1a` and `3c747c0` (pre-block), so nothing in the Q7.4/Q7.3/B8 work caused it. `test_buffers_gpu.mojo` (4/4) and `test_arrays_gpu.mojo` (4/4) pass, so the accelerator itself works — it is these kernels. Compiling all three GPU files as one selection fails the same way, so it is not a combined-unit effect either. **This invalidates an earlier claim in this repo's history that `test_views_gpu` passes 15/15.** Needs: minimise which of the 13 cases trips the backend, then either work around it or file upstream. | `marrow/tests/test_views_gpu.mojo`; `views.mojo` `_apply_dispatch`/`reduce` | M |
-| **B26** | **RESOLVED.** `__eq__` compared the bitmaps themselves — presence against presence, then whole bitmap against whole bitmap — so an all-valid array carrying a bitmap was unequal to one carrying none, and two slices whose logical validity matched were unequal whenever their offsets differed. **Six** array types shared the shape, not just `PrimitiveArray`. New `_validity_equal(length, a, b)` compares null *positions* through offset-applied views; a missing bitmap means all-valid, which is a value rather than a distinguishing representation. This mattered beyond equality: CLAUDE.md tells you to write `assert_true(result == expected)` instead of an element loop, and every kernel that intersects validity emits an array with a bitmap while `array([...])` emits one without — so the recommended assertion was unreliable for exactly the outputs a kernel test checks. Found while writing Q2.3's test, which had to compare elementwise and has since been restored to `==`. | `arrays.mojo` `_validity_equal` + 6 `__eq__` | done |
-| **B28** | **FIXED 2026-08-06 by A1** — `a + 1` over 1M rows is now 70.9 µs against the 2.04 ms recorded below, and cost no longer scales with column-leaf count. Original diagnosis follows. **ROOT-CAUSED: the fused lane re-resolves its column leaves once per SIMD chunk.** `NumericColumn.vectorwise` runs `batch.columns[batch.schema.get_field_index(self._name)].as_primitive[T]().values().load[W](idx)` — a **string comparison over every field name**, a `Variant` `isa` + rebind, and a `BufferView` construction, all per chunk. At 1M rows and width 4 that is 250,000 of each. Measured 2026-08-05, 1M rows, units aligned: `a + 1` (one column leaf) **1.96 ms**; `a + a` (two) **3.89 ms**, exactly 2x; `a + (1 + 2)` (one leaf, extra arithmetic) **1.98 ms**, i.e. arithmetic is free. **Cost scales with the number of column leaves and nothing else.** Splitting it by hardcoding the index: `a + 1` 1.96 -> **1.21 ms**, `a + a` 3.89 -> **2.40 ms**, so the schema lookup is ~38% and the variant unwrap plus view construction is the rest. The floor is ~69 µs — what `LengthKernel.apply` achieves moving the same 8 MB — so the lane is **28x off**, and caching only the index would still leave it **17x off**. **Therefore the fix is not a lookup cache: the resolved typed view has to live outside the lane loop.** That is exactly A1 — `prepare` returns a typed `comptime State` holding the view, `vectorwise` receives it. A1 is no longer a tidiness refactor and should be scheduled against this number. A narrow index cache is available if a partial win is wanted, but note it means touching the `Context` positional-slot invariant by hand, which §9 calls the most dangerous thing in `marrow/expr`. | `expr/values.mojo` `NumericColumn.state`; fixed by A1 | done |
-| **B22** | **RESOLVED, and the diagnosis in this card was wrong.** The two failing cases in `test_buffers_gpu.mojo` were a *test* bug, not the "core transfer defect, not a test bug" this card asserted. `Buffer.unsafe_set[T]` infers `T` from its value argument, so a bare literal (`unsafe_set(1, 13)`) widens and strides by the wider type; `unsafe_get[T]` has no argument to infer from and defaults to `uint8`. The write landed at byte 8 and the read looked at byte 1 — hence "reads back 0 where 99 was written", and hence index 0 passing while index 1 failed, which is the tell nobody followed. Typing the literals makes all 4 pass. Verified 2026-08-05: the synchronization hypothesis was tested first and **refuted** — adding `ctx.synchronize()` to `to_device` and `alloc_host` changed nothing. `to_device`/`to_cpu` are fine. `unsafe_set` now documents the asymmetry. **What remains true and is now the real item:** CI passes `--no-gpu` on all four jobs, so the five `*_gpu.mojo` files never run there — see I-notes. | `marrow/tests/test_buffers_gpu.mojo`; `buffers.mojo` `unsafe_set` | done |
-
-**Also small and worth clearing in this wave:**
-
-
-
----
-
-### The integration suite now covers map and month_day_nano interval
-
-Run locally 2026-08-14 for the first time (CI has not run it since 2026-05-11).
-It passes, and `stop_on_error` is on, so the job carries signal rather than
-reporting unconditionally.
-
-Its `_UNSUPPORTED` list called `interval`, `interval_mdn`, `map` and
-`map_non_canonical` "not yet implemented in Marrow". That was wrong: un-skipped
-they scored **10/14 each**, and all four failures were `Mojo producing` — Marrow
-already *read* them back from C++, Rust and Go. The gap was in the harness.
-`_json_field_to_pa` returned `None` for those types, so `json_to_file` refused
-the case and Marrow's IPC writer was never reached.
-
-`map`, `map_non_canonical` and `interval_mdn` now build through the bridge and
-score **14/14**, which is the first check anywhere that Marrow *writes* them
-correctly — three reference implementations consuming the output. The writer
-turned out to be right; nothing in the library needed changing.
-
-**`interval` (YEAR_MONTH / DAY_TIME) stays skipped, and it is a pyarrow limit,
-not a Marrow one.** pyarrow 23 exposes `month_day_nano_interval` and has no type
-at all for the other two units, while this harness builds every column through
-pyarrow before bridging over the C Data Interface. Marrow handles all three —
-it consumes them from the other implementations. Same shape as the existing
-`nested_dictionary` skip. Lifting it means bypassing pyarrow for that one type.
-
-CLAUDE.md's Known Limitations claimed `map` did not go through IPC "in either
-direction" because "type code 17 is absent from `ipc.mojo`". `comptime
-_TYPE_MAP: UInt8 = 17` is right there; corrected.
 
 ---
 
 ## 2. Wave 2 — Infrastructure
 
 **CI has not run since 2026-05-11**, and on that last run everything except Lint
-was already failing. None of the work below is verified by anything but local
-runs. This wave is cheap and it is what makes every later wave believable.
-
-| ID | Item | Evidence | Size |
-|---|---|---|---|
-| **I2** | **RESOLVED.** All three of the card's claims held: the `ma.*` compute functions had moved to `marrow.compute`, `Array.is_valid()` is elementwise and takes no index, and `sort()` lost `ascending=` in favour of `sort_keys=`. Build goes from **7 failing pages to 0**, 15/15 rendered. Two things the card did not have: the `is_valid(index)` misuse was also in `guide/arrays.qmd`, not only `compute.qmd`; and `sorting.qmd` carried a stale `argsort`/plain-array `sort()` snippet, renamed to `sort_indices` back in `f043246`. The one remaining `cell-output-error` is a deliberate `#| error: true` demo in `guide/types.qmd`. Left alone and noted: `examples/datafusion.qmd`'s prose about a trailing `None` selecting CPU execution is a separate pre-existing inaccuracy on a page with `execute: enabled: false`. | done |
-| **I3** | **RESOLVED.** `.github/workflows/binary_size.yml` runs `check_gate.py`, which builds the four gate binaries and compares `__text` against a checked-in `benchmarks/binary_size/baseline.json` at a **0.5%** threshold — tighter than 1% on purpose, since B12's 0.63% is the regression that motivated this. Baseline is JSON rather than the `BASELINE.md` this card's sibling mentioned, so it is machine-updatable (`check_gate.py --update`) and cannot drift as prose — which is exactly I4's complaint. macOS-only, because `compare.py` reads `size -m`, which is Mach-O. Cannot be validated by pushing (CI is dark), so it was validated locally: the gate runs clean at 0.000% delta, and `--update` was exercised for real when `num_buffers`' always-on validation moved all four numbers. | done |
-| **I4** | **RESOLVED.** The machine-readable baseline is `benchmarks/binary_size/baseline.json`, regenerated by `check_gate.py --update` and enforced in CI, so prose numbers can no longer be the source of truth. The README's remaining stale figures were verified against a real sweep and corrected: 5 of 7 quantitative claims were wrong, including the whole current-baselines table, the `query_arith` demonstration, and the `query_dynvalue`/`query_runtime` comparison — whose **direction had flipped**, not just its magnitude (stripped files are now byte-identical while `__text` differs by 1,600 B). **This card's own premise was also stale**: the "7.6x / 7.8x / 12.8x table" it names no longer existed, having been replaced in `c72144d`; what was actually stale was the replacement. The ~5.27M -> ~4.08M drop in the erased binaries since 2026-07-29 is the interpreter deletion, a real shrink rather than drift. | done |
-| **I5** | **RESOLVED, with one claim found stale.** `benchmarks/binary_size/README.md` documented `query_comptime.mojo`, `query_erased_aot.mojo` and `query_hybrid.mojo`, plus `marrow/aot/relations.mojo` and `Planner.build()` — all verified genuinely absent, all removed. **The card's "`BASELINE.md` is referenced three times" was already false**: zero hits by grep. Stale docstrings in `compare.py` and `query_runtime.mojo` fixed alongside. | done |
+was already failing. Nothing here is verified by anything but local runs. This
+wave is cheap and it is what makes every later wave believable.
 
 **Every job was run locally on 2026-08-16** — the first time any of them has
 been exercised since 2026-05-11, and still with nothing pushed. Results:
@@ -260,7 +215,7 @@ been exercised since 2026-05-11, and still with nothing pushed. Results:
 | Docs | green, 15/15 pages — surfaced five compiler warnings in `python/bindings`, fixed |
 | Binary size | green, but see the standing note below |
 | ASAN (macos, arm64) | **could not pass as configured**; re-scoped to `test_asan_core` |
-| Integration | green, and it found four types skipped under a false reason |
+| Integration | green — `map`, `map_non_canonical` and `interval_mdn` were skipped under a false reason, un-skipped, and score **14/14** (`interval` YEAR_MONTH/DAY_TIME stays skipped: a pyarrow limit) |
 | Benchmarks, Wheels | **still never run** |
 
 **Still true:** GPU is never exercised (every job passes `--no-gpu`; five
@@ -272,9 +227,9 @@ of the above is local evidence only.
 
 > **Standing constraint, and it is now binding.** `query_streaming_agg_fused`
 > sits at **+0.449%** against the gate's 0.5% ceiling, up from 0.000% at the
-> start of this branch: A1 took it to +0.416%, Q4.1's `Grouping` parameter to
-> +0.449%. V0's `MapScalar` half was measured at +0.137% more — 0.586%, over
-> the line — and was reverted for that reason alone. **The next change touching
+> start of this branch: the A1 state refactor took it to +0.416%, the `Grouping`
+> parameter to +0.449%. V0's `MapScalar` half measured +0.137% more — 0.586%,
+> over the line — and was reverted for that reason alone. **The next change touching
 > the aggregate or compare/bool nodes will not fit.** Either shrink something
 > or re-baseline deliberately; do not discover this by having a gate fail.
 
@@ -305,36 +260,6 @@ the I/O**, restricted to six numeric columns and GROUP BY. Its own docstring
 concedes the restriction.
 
 This path is almost entirely sequential and is the whole critical path.
-
-### M1.0 — Widen the numeric dispatch bound — **DONE 2026-08-05**
-
-`NumericCompareKernel.apply` is bound on `PrimitiveType` but `dispatch` narrows
-to `NumericType` (`numeric.mojo:552` vs `:570`). Consequences, all live:
-
-- runtime-typed comparison on **timestamp, date, time, duration, interval,
-  decimal** raises;
-- `equal_any` (`numeric.mojo:602-605`) raises, so **hash joins and `nullif` on
-  those key types fail**;
-- `pruning.mojo:115-135` mirrors the bound, so **no row group or page is ever
-  pruned on a temporal or decimal predicate** — ClickBench Q's filtering on
-  `EventDate`/`EventTime` get no pushdown at all;
-- the same bound blocks decimal and temporal aggregates
-  (`aggregate.mojo:102`, `:864`).
-
-This is precisely the defect class CLAUDE.md's *"dispatch on the widest family
-the typed leaf accepts"* rule was written for. It is already fixed in
-`filter`/`take` (`filter.mojo:97`) and `sort` (`sort.mojo:433`).
-**Done.** `NumericCompareKernel.dispatch` now dispatches on `PrimitiveType`,
-and `pruning.mojo` with it — the card was right that pruning mirrored the bound,
-and fixing only the kernel would have left the headline benefit (date pushdown)
-unrealised. Arithmetic's own `dispatch_numeric` at `numeric.mojo:134` was left
-alone: adding two dates is not meaningful, and widening it is a separate
-question with its own semantics.
-
-Cost, caught by the new CI gate on its first real use: `query_streaming`
-+0.512%, `query_join` +1.154%, aggregates unchanged. That is comparison leaves
-being emitted for temporal, interval and decimal — the code that supports those
-dtypes — and the baseline was raised deliberately.
 
 ### M1.1 — Optimizer v1 — **L**
 
@@ -388,13 +313,15 @@ bypass the expression layer entirely today (`tabular.mojo`) — route through
 `execute(plan)` or stay documented eager shortcuts. Two divergent paths is the
 outcome to avoid; picking either deliberately is fine.
 
-### M1.4 — Kernel gaps M1 actually needs — **`date_trunc` DONE 2026-08-05**
+### M1.4 — Kernel gaps M1 actually needs — **open, scope from the queries**
 
-`date_trunc` now supports **month, quarter and year** alongside second/minute/hour/day, so ClickBench Q35/Q36 are no longer blocked. These are *calendar* units with no fixed length, so they cannot floor by dividing the tick count the way the others do; they go through `_civil_from_days`/`_days_from_civil`, the Hinnant algorithms the extraction kernels already use, so no new date arithmetic was added.
-
-Fixed on the way: `DateTruncKernel` short-circuited **every** unit for `date32` on the grounds that date32 is day-granular. True for units up to a day; for month/quarter/year it silently returned the input unchanged. Both expression lanes route through `CalendarUnit.parse`, so they picked the new units up without change.
-
-Whatever else this card lists is unaffected and still open.
+The five capabilities the 43 queries promoted out of M2 have all landed
+(min/max on string and date, `count_distinct` as a relational aggregate,
+`HAVING`, computed group keys and aggregate inputs, `date_trunc` down to
+month/quarter/year). What remains on this card is whatever M1.5 turns up when
+the queries are actually run: re-read the 43 against the kernel surface as part
+of that work and schedule the gaps here rather than guessing them now. Q29
+`REGEXP_REPLACE` is deferred to M2 by definition and is not one of them.
 
 ### M1.5 — ClickBench through the lazy plan — **M, the M1 sign-off**
 
@@ -402,13 +329,13 @@ Rewrite `clickbench.py` against the lazy frontend, all 42 queries, cross-checked
 against DuckDB, wall-clock compared to polars/duckdb on the same box, binary-size
 gate green.
 
-### M1.6 — AOT DSL docs — **stale API references FIXED 2026-08-05**
+### M1.6 — AOT DSL docs — **S, one runnable example**
 
-`docs/guide/expressions.qmd` documented a `Planner` type (**zero hits** in the tree), an `AnyValue` type (**zero hits**), and `from marrow.expr import execute` — `execute` is a *method* on the plan (`relations.mojo:394`), not a free function, so every example calling `execute(plan)` was wrong. All corrected, and the page now describes what the tree does: plans are immutable `Relation` trees and `.execute()` opens one into a processor tree, so a plan is a reusable template. The site still builds clean.
-
-These blocks are illustrative (plain ```python```, not executed), which is exactly why the errors survived I2 — the docs build cannot catch prose that names types that do not exist.
-
-**Still open on this card:** the runnable AOT example it also asks for.
+`docs/guide/expressions.qmd`'s prose is correct as of 2026-08-05; what it still
+lacks is a **runnable** AOT example. Its blocks are illustrative (plain
+```` ```python ````, not executed), which is why they could name types that did
+not exist and the docs build stayed green — an executed example is the only
+thing that keeps this page honest.
 
 
 ---
@@ -450,7 +377,7 @@ capabilities those two milestones require.
 | **M3.4** | **O(N) top-K.** `sort_indices(limit=…)` is a full sort then truncation; the docstring concedes it (`sort.mojo:379`). No `select_k_unstable`, no quickselect, no streaming heap. Directly relevant to every ORDER BY … LIMIT in ClickBench and TPC-H. | not started | M |
 | **M3.5** | **`Scan` trait above the file formats** (was L6). `RELATION_PARQUET_SCAN` is an IR discriminant; `execution.mojo:37-43` imports six symbols from `..parquet`; there is no `trait Scan`/`trait Source` — only `trait ByteSource`, a *byte*-level seam. `ParquetScanProcessor` does four jobs. **Do this before adding CSV or IPC sources, not after.** | not started | L |
 | **M3.6** | **`Table` and `ChunkedArray` are thin.** `ChunkedArray` has only `chunk()`/`combine_chunks()` — no `slice`/`__getitem__`/`null_count`/`filter`/`cast`/`take`; `Table` has no `slice`/`select`/`filter`/`sort`/`rename`/`concat_tables` — all of those are `RecordBatch`-only in the Mojo core too. The engine operates on tables, so columns have to behave like columns. | not started | M |
-| **M3.7** | **Decimal arithmetic.** Nothing was built: no `add`/`sub`/`mul`/`div`, no scale-alignment or result-precision rule, no 256-bit intermediate promotion. Rescale exists only inside `cast` (`cast.mojo:855-869`) and its up-scale multiply has **no overflow check**; precision is never validated, so `decimal32(40, 0)` constructs. TPC-H money math needs it, which is why it is here and not in §7. The result-type rules (`result_scale = max(s1, s2)`, `result_precision = max(p1-s1, p2-s2) + result_scale + 1`) and the scalar-loop constraint — there are no 128-bit SIMD lanes, so `vectorize`/`elementwise` does not apply — are stated here because they were the only parts of the deleted design doc worth carrying forward. | not started | M |
+| **M3.7** | **Decimal arithmetic.** Nothing was built: no `add`/`sub`/`mul`/`div`, no scale-alignment or result-precision rule, no 256-bit intermediate promotion. Rescale exists only inside `cast` (`cast.mojo:855-869`) and its up-scale multiply has **no overflow check**; precision is never validated, so `decimal32(40, 0)` constructs. TPC-H money math needs it, which is why it is here and not in §6. The result-type rules (`result_scale = max(s1, s2)`, `result_precision = max(p1-s1, p2-s2) + result_scale + 1`) and the scalar-loop constraint — there are no 128-bit SIMD lanes, so `vectorize`/`elementwise` does not apply — are stated here because they were the only parts of the deleted design doc worth carrying forward. | not started | M |
 | **M3.8** | **Late materialization / selection vectors on the scan** — decode the filter columns, filter, then decode only the survivors. DataFusion ships the equivalent *off* by default because it is subtle; sequence it after M2.8. Async/prefetch ranged reads for remote scans (M2.12) belong with it — the OpenDAL C ABI is blocking, so it needs several readers rather than one. | not started | L |
 
 ---
@@ -464,26 +391,20 @@ is done and has been deleted.
 | ID | What is left | Size |
 |---|---|---|
 | **Q0.5** | **ATTEMPTED 2026-08-05 and blocked on a real limit — read this before retrying.** The plan was to give `BoxedValue` a `dtype_hint()`: `Some` for a fused node, `None` for the runtime lane, so the 0-row probe only runs where the answer genuinely is not known. Telling the lanes apart is easy — `DynValue` is concrete, so `__init__(out self, value: DynValue)` is a more specific overload than the generic `__init__[V: Value]`, and that works. **The blocker is that a fused node knows its output dtype's *type* but not its *parameters*.** `V.OutType` is a comptime type; the dtype *value* for `decimal128(p, s)`, `timestamp(unit, tz)` or `fixed_size_binary(w)` carries fields the type does not, and nodes do not store a dtype instance — `NumericLiteral[T]` holds only `_value: Scalar[T.native]`. So `DynType(V.OutType())` fails to compile for parameterised dtypes and would silently report `decimal128(0, 0)` if it did. **This is also a second reason the probe exists**, alongside "keeps a caller-supplied schema honest": executing is how a parameterised dtype gets its parameters. Retrying means either giving all 37 nodes a dtype instance — which grows the fused structs, and they are size-gated — or restricting the hint to parameter-free dtypes and keeping the probe for the rest. Neither is obviously worth the claimed ~16 KB. | M, and less attractive than it looked |
-| **Q2.3** | **RESOLVED.** All three sites now build their output bitmap from offset-applied views: `numeric.mojo:95` (arithmetic), `numeric.mojo:502` (comparison) and `string.mojo:314` (`StringPredicateKernel.apply`). New `Bitmap.intersect_views(a, b)` takes two `Optional[BitmapView]` and handles the one-sided cases through `to_owned()` — `Bitmap.intersect`'s pass-through returned the lone operand raw, offset included, which is the case that looked safe and was not. Both overloads now document which to use where. `BinaryLikeArray` had no `validity()` at all — the only array type missing it, and the reason the string kernels reached for `.bitmap`; added. Red first: three cases in `test_arithmetic.mojo` failed on the parent's null positions leaking into a slice, then passed. | done |
-| **Q2.4** | **RESOLVED as miscounted — do NOT do what this card asked.** It said one `sync_parallelize` loop remained to convert, `views.mojo`'s `_reduce_dispatch`, with "the other three deliberate and documented". That loop is the *fourth* deliberate one, and its own comment says so with measurements: routing it through `ctx.stripe` forces the serial arm to allocate a one-slot partials buffer it does not need, costing ~55% on small reductions (`sumint64_1k` 0.19-0.20 -> 0.30-0.32 us, `sumfloat64_1k` 0.23-0.24 -> 0.34-0.37 us, five interleaved repeats, ranges disjoint). A reduce is a fold plus a merge, and a serial fold should not pay for the merge's scratch. Converting it would have been a measured regression shipped as a cleanup. | done |
-| **Q2.5** | Aggregates, remaining steps: **2b** — `AggState[K, V: NumericType]` was never widened to `PrimitiveType`, so temporal reductions do not work natively; **3** — `count_distinct`/`approx_count_distinct` (+`_grouped`) are still four free functions (`distinct.mojo:87,133,167,214`); **4** — `FusedAggregation` (single pass, AoS accumulator, comptime offsets, zero dispatch) has zero occurrences. Gated on Q6.1. Validate at `g100k`, never `g10`. **Re-scope in light of Q6.1 (2026-08-05):** the AOT aggregate path shows **no measurable runtime advantage** over the runtime-named one (under 2%, sign flips between cardinalities). So `FusedAggregation` should not be pitched as a speed win without a measurement that shows one — the demonstrated benefit is binary size. Validate any round of this against `bench_aggregate_aot.mojo` at g100k, and be prepared for the answer to be "no change". | L |
-| **Q4.1** | **DONE 2026-08-15.** `JoinIndex` landed earlier; `Grouping` is now the other half. `(gids: Int32Array, …, num_groups: Int)` was threaded through ~22 signatures across `groupby`, `aggregate`, `distinct`, `expr/aggregates` and `expr/execution`, which let a caller size a per-group accumulator from one grouping and index it with another's ids — an out-of-bounds scatter rather than a type error, and silent whenever the mismatched count was the larger one. `struct Grouping { ids, num_groups }` lives in `kernels/core.mojo`, neutral ground both `aggregate` and `distinct` can import without a cycle (`groupby` already imports `aggregate`). Three function *types* carried the pair too — `def(Int, Int32Array, DynArray, Int)` and two `def(Int32Array, DynArray, Int)` — and now name `Grouping`, so a mismatched callback cannot type-check either. **Size note:** `query_streaming_agg_fused` +0.449% against the 0.5% ceiling, up from +0.416%; the aggregate binaries are where this lands and the headroom is nearly gone. 2032 passed. | done |
-| **Q4.3** | **DONE 2026-08-15.** The Arrow-leaf → Parquet-physical-type mapping is now stated once, in `schema.mojo` (`physical_type`, `is_wide_decimal`, `flba_width`, `has_plain_physical`), and the three ladders that each restated it collapse onto `DynType.dispatch_*`: `writer._encode_values` 25 arms → 5, `writer._bloom_hashes` 25 → 5, `statistics.decode` 22 → 5. Net −54 lines, and the mapping can no longer drift between the encoder, the bloom hasher and the statistics decoder. `has_plain_physical` exists because `dispatch_primitive` covers `date64`, `duration` and the intervals, which this layer has never supported — widening a ladder into a dispatch must not silently start accepting them. The reader's 28-arm comptime-gated ladder is untouched, as the card says it should be. All four size gates unchanged; 2032 passed. | done |
-| **Q4.4** | `ipc.mojo` → package. Single file, 2,342 lines. | M |
-| **Q4.6** | **Localised 2026-08-05; no Q4.7-style single lever exists.** Current `__text`: `query_scan` **2,367,336**, `query_scan_typed` **1,839,632**, `query_streaming` **1,332,456** — so the 1.78x ratio in the original card still holds. The cost splits almost evenly in two, which is the useful finding: **~507 KB is the Parquet machinery itself** (scan_typed over streaming — `parquet::reader` 32 symbols, `codecs` 9, `schema` 18, `format` 15, plus dtypes +21 and arrays +34), and **~528 KB is the untyped fanout** (scan over scan_typed — reader 32 -> 107 symbols, codecs 9 -> 32). The second half is a scan that does not know its schema instantiating every dtype's decode path, i.e. the 28-arm comptime-gated ladder CLAUDE.md calls deliberate. **Checked and ruled out:** `kernels::cast` is no longer reachable from these binaries at all after Q4.7, and `marrow/parquet/` imports it nowhere — so the single-import trick that took 55-65% off the hashing binaries does not apply. ~7 KB per parquet symbol says the weight is in large monomorphised decode bodies, not symbol count. Reducing it is a design change to how the reader dispatches, not a lever to pull. Candidate: make the typed path (schema known at comptime) avoid instantiating the arms it cannot reach. | L, and genuinely L |
-| **Q4.7** | **RESOLVED, and it was far larger than the card estimated.** The card said `kernels::cast` is "roughly 20% of the fused binary". Measured: **55-65%**. `RapidHash.dispatch` decoded dictionary keys with `cast(keys, value_type)`, and that one call at `hashing.mojo:308` made the entire cast fanout reachable from every binary that hashes. But `DictionaryCast` (`cast.mojo:976-991`) *is* just normalise-indices + `take` + a re-cast that is a no-op when the target is the value type — which is the only way hashing ever called it. Doing the gather directly, with a narrow integer widening in place of the index cast, removes the import entirely. **query_join 3,860,660 -> 1,410,788 (-63.5%), agg_fused 3,786,228 -> 1,338,468 (-64.6%), agg 4,159,796 -> 1,858,644 (-55.3%)** — about 2.4 MB off each. `query_streaming` is unchanged, as it does not hash. Two tests added: the existing dictionary test used int32 indices, which take the fast path, so the widening branch had no coverage, and a null index had none either. | done |
-| **Q5.1** | **RESOLVED.** Fixed: `TagValue` -> `DynValue` (3 sites in `relations.mojo`/`pruning.mojo`); `faszom.mojo` -> `marrow/expr/values.mojo`; `arithmetic.mojo` -> `numeric.mojo` (2 sites — the card listed neither); `marrow.bitmap` -> "this module"; the `elementiwise` typo; `LengthKernel.core`'s claim that `StringLength` builds on it, when `StringLength` is a breaker calling `dispatch` (now says so, and points at Q7.1); `expr/__init__`'s "one-way `relations` -> `execution`", which is a cycle in both directions; and `Sort`/`Limit`, now re-exported. **The README claim is stale** — `README.md` already describes the two lanes correctly, and its `Filter`/`Project` mentions are *plan nodes*, which exist. Follow-up left open: the orphaned docstring at `values.mojo:581` asserting `NumericColumn[DynType]` is the erased column leaf is a dangling string expression between `OutShape` and `var _name`, and removing it is a code edit rather than a comment fix — folded into Q7.2, which already covers a dead parameter in that file. | done |
-| **Q6.1** | **RESOLVED, and the result contradicts the differentiator claim.** `marrow/expr/tests/bench_aggregate_aot.mojo` runs the AOT-resolved aggregate (`AggFunc.of[NumericAgg[K, V]]`) against the runtime-named one (`AggFunc("sum", …)`) on identical data, in **one binary** so the harness interleaves them. Measured 2026-08-05, 1M rows: at **g100k** fused 13.943 ms (sd 0.374) vs named 13.712 ms (sd 0.278); at **g1k** fused 11.219 ms (sd 0.240) vs named 11.312 ms (sd 0.163). **Under 2%, and the sign flips between cardinalities — there is no measurable runtime advantage.** That is explicable rather than surprising: an aggregate's identity is resolved once per plan execution, not once per row, so the interpretation cost is O(1) per query while the per-row work is the same `AggState` fold either way. **What the AOT path actually buys is binary size** (see the two gate binaries and Q4.7), not speed. Any doc or card asserting a *speed* differentiator for fused aggregates is unsupported and should say size instead. | done |
-| **B27** | **FIXED — and the original filing had the direction backwards.** It was filed as "`s.len()` is 25x slower than `s.len() + 1`". That came from comparing pytest-benchmark rows scaled in **different units** (µs against ms) — the real relationship was the opposite: `s.len()` 69.3 **µs**, `s.len() + 1` 2.75 **ms**, so adding a fused op was ~40x *slower*. `LengthKernel` was never slow: 68.8 µs for 1M rows is ~116 GB/s. **Root cause:** `Context.get[A]` ends in `.copy()`, an atomic ref-count bump, and `vectorwise` calls it **once per SIMD chunk** — 250,000 atomics at 1M rows and width 4, to re-read one array that never changes. `as_type` was already a borrow; only the copy was added. **Fix:** `Context.get_ref[A]`, a borrowing read, used by all 16 typed slot reads in fused lanes. `s.len() + 1` 2.75 -> **1.32 ms**, `s.len() + s.len()` 5.34 -> **2.60 ms** — ~2x on every fused expression over a breaker, and every breaker-backed lane benefits (`StringPredicate`, `BoolReduce`, `NullPredicate`, `StringToNum`, `DateTrunc`, …). All four size gates unchanged. This is the same shape as A1's "per-SIMD-chunk schema lookup", so A1 remains the structural fix; this removes the atomic from the hot loop now. | done |
-| **Q7.1** | **RESOLVED as not worth doing — measured 2026-08-05, after B27.** The card's framing is "`s.len() + a` is two passes, not one", which is true and turns out not to matter. Aligned units, 1M rows: `s.len()` (the materialise alone) **69.8 µs**; `s.len() + 1` **1.34 ms**; and the control — `a + 1` over a plain int32 column with **no breaker at all** — **1.99 ms**. The breaker version is *faster* than the breaker-free one, so the breaker is not the bottleneck: fusing `StringLength` could recover at most the 69.8 µs materialise, ~5% of the total, in exchange for changing `StringValue`'s trait surface, which the size gate watches. Not worth it. **What the measurement did find is bigger and is now B28**: a fused pass over 1M int32 doing one add costs ~2 ms, about 2 ns/element and roughly 6x off memory bandwidth — paid on every fused expression, breaker or not. That is the thing to fix, and it is A1's territory. | done, superseded by B28 |
-| **Q7.5** | **RESOLVED, with three of its claims corrected.** Removed: the five `JOIN_ALGO_*` hints, `JOIN_ASOF`, `RAPID_SECRET0/3/4/5/6`, `comptime lo32`, `_promote_operands`, `std.math as math` and `sync_parallelize` from `filter.mojo`, `sync_parallelize` from `sort.mojo`, `trait Partitioner` (one conformer, no generic consumer) and `NoPartition` (no caller, and `map_partitions:321` unwraps `row_indices` unconditionally so it would have crashed). **Corrections to the card:** (a) `JOIN_SINGLE` and `JOIN_CROSS` are no longer dead — `JoinKind.is_supported`/`write_to` name them, so they stayed; (b) of the four dtype imports in `filter.mojo`, only `int64` and `string` were unused — `uint8` (10 uses) and `uint64` (7) are live, and `int64`'s other hit was `DType.int64`, a different name; (c) the "Temporal reinterpret helpers" banner was not merely mistitled — it documented a reinterpret-through-signed-integer-backing design that the single `is_primitive()` dispatch arm replaced, so it was deleted rather than retitled. Follow-up left open: with `NoPartition` gone, `Partition.row_indices` has one construction site that always supplies it, so the `Optional` and its default are now dead too. | done |
-| **Q7.2** | **RESOLVED.** `NumericCompare`'s `S: StringPredicateKernel` parameter had **zero** `Self.S` references — dead since the erased arm went with `IsErased` — and is removed, along with the string-kernel argument from all six operator aliases (`Lt`/`Le`/`Gt`/`Ge`/`Eq`/`Ne`). The orphaned docstring at `values.mojo:581` went too: a dangling string between `OutShape` and `var _name`, asserting `NumericColumn[DynType]` is the erased column leaf, which stopped being true when `DynType` dropped its family conformances. | done |
-| **Q-NEW** | **`marrow.expr` now has three import cycles**, introduced by the two-lane refactor: `values ⟷ dynamic`, `values ⟷ relations`, `relations ⟷ execution`. Mojo resolves them, so this is a layering question, not a build break — but `tasks-expr-kernels-layering.md` asserted "zero cycles" and that is now false. Decide whether to restore the DAG or to document the cycles as intended. | S to decide |
-| **L2** | **ATTEMPTED 2026-08-05 and reverted — the blocker is the shared *name*, not the file.** `values.mojo` is 2,607 lines and the residue is real: the runtime-lane builders `col(String)`, `lit[T](Scalar)`, `if_else`, `coalesce`, `case_when` all return `DynValue` and sit at `values.mojo:2549` beneath the AOT `col[T]`/`lit[T]` overloads. Moving them to `dynamic.mojo` **compiles**, but `marrow/expr/__init__.mojo` must then re-export `col` and `lit` from two modules, and Mojo emits *"importing 'col' from multiple modules is deprecated; import 'col' from a single module"* — which violates the standing 0-warning rule. The lanes deliberately overload the same verb (`col("a")` runtime vs `col("a", int64)` fused), and an overload set cannot span modules. So the move costs either an API rename or dropping `marrow.expr.col("a")` from the public surface, for no functional gain. **Do not retry as a file move.** If `values.mojo`'s size is the actual concern, split it along a boundary that does not share a public name — the node families (numeric / bool / string / temporal) are candidates. Reverted cleanly; nine files were touched and all restored. | S to re-scope |
-| **V0** | **`cast` map arm DONE 2026-08-16; `MapScalar` BLOCKED on the size gate.** `cast` needed no map kernel: a map is physically a list whose single child is the non-nullable `entries` struct, so `ListCast` casts that struct and `StructCast` casts the fields — only the *target child type* had to come from `entries_field()` rather than `value_type()`. Free in binary size. **`MapScalar` is a different story.** The right fix is not a new scalar type but making `ListScalar` carry its own dtype instead of rebuilding `list_(child.dtype())` — that reconstruction reports the *shape*, so a `map` element answers `list<struct<key, value>>` and a `large_list` element answers `list<…>`; one field fixes all three. It works and is tested, but **a `DynType` field on `ListScalar` costs +0.137% on `query_streaming_agg_fused`, taking it from +0.449% to +0.586% and past the 0.5% ceiling** (measured 2026-08-16 by reverting that half alone). Reverted, not landed. Two ways forward: a 1-byte kind tag rebuilding `list_`/`large_list_`/`map_` from the child — cheaper, but loses `keysSorted` and the entries field name — or re-baselining the gate deliberately. That gate has been the binding constraint since Q4.1 and this is the second change to hit it. | `scalars.mojo` (open) | S, gated |
-| **FU-5** | **DONE 2026-08-14 — by B29, and the card's diagnosis was wrong.** It read "a breaker-composition/slot issue" on the fused path. There was never anything wrong with breaker composition: `IsIn`'s state is a `BoolArray`, and the fused bool lane read that bit-packed mask a *byte* at a time, so any bool binary over it answered from the wrong bits. Fixing the mask read (B29) fixed this; the test is re-enabled as `test_is_in_fuses_under_bool_logic` and passes. | done |
+| **Q2.5** | Aggregates, remaining steps: **2b** — `AggState[K, V: NumericType]` was never widened to `PrimitiveType`, so temporal reductions do not work natively; **3** — `count_distinct`/`approx_count_distinct` (+`_grouped`) are still four free functions (`distinct.mojo:87,133,167,214`); **4** — `FusedAggregation` (single pass, AoS accumulator, comptime offsets, zero dispatch) has zero occurrences. **Pitch it as a size play, not a speed one.** Q6.1 measured the AOT-resolved aggregate against the runtime-named one in one binary (1M rows: g100k 13.943 ms vs 13.712 ms, g1k 11.219 vs 11.312) — under 2%, sign flipping between cardinalities, which is what you expect when an aggregate's identity resolves once per plan and the per-row fold is the same `AggState` either way. Validate any round of this against `bench_aggregate_aot.mojo` at `g100k`, never `g10`, and be prepared for the answer to be "no change". | L |
+| **Q4.4** | `ipc.mojo` → package. Single file, 2,425 lines. | M |
+| **Q4.6** | **Localised 2026-08-05; no single lever exists here.** Current `__text`: `query_scan` **2,367,336**, `query_scan_typed` **1,839,632**, `query_streaming` **1,332,456** — so the 1.78x ratio in the original card still holds. The cost splits almost evenly in two, which is the useful finding: **~507 KB is the Parquet machinery itself** (scan_typed over streaming — `parquet::reader` 32 symbols, `codecs` 9, `schema` 18, `format` 15, plus dtypes +21 and arrays +34), and **~528 KB is the untyped fanout** (scan over scan_typed — reader 32 -> 107 symbols, codecs 9 -> 32). The second half is a scan that does not know its schema instantiating every dtype's decode path, i.e. the 28-arm comptime-gated ladder CLAUDE.md calls deliberate. **Checked and ruled out:** `kernels::cast` is no longer reachable from these binaries at all, and `marrow/parquet/` imports it nowhere — so the single-import trick that took 55-65% off the hashing binaries (removing one `cast` call from `RapidHash.dispatch`) does not apply here. ~7 KB per parquet symbol says the weight is in large monomorphised decode bodies, not symbol count. Reducing it is a design change to how the reader dispatches, not a lever to pull. Candidate: make the typed path (schema known at comptime) avoid instantiating the arms it cannot reach. | L, and genuinely L |
+| **Q-NEW** | **`marrow.expr` now has three import cycles**, introduced by the two-lane refactor: `values ⟷ dynamic`, `values ⟷ relations`, `relations ⟷ execution`. Mojo resolves them, so this is a layering question, not a build break. Decide whether to restore the DAG — §8 has the one move that breaks all three — or to document the cycles as intended. | S to decide |
+| **L2** | **ATTEMPTED 2026-08-05 and reverted — the blocker is the shared *name*, not the file.** `values.mojo` is 2,765 lines and the residue is real: the runtime-lane builders `col(String)`, `lit[T](Scalar)`, `if_else`, `coalesce`, `case_when` all return `DynValue` and sit at `values.mojo:2549` beneath the AOT `col[T]`/`lit[T]` overloads. Moving them to `dynamic.mojo` **compiles**, but `marrow/expr/__init__.mojo` must then re-export `col` and `lit` from two modules, and Mojo emits *"importing 'col' from multiple modules is deprecated; import 'col' from a single module"* — which violates the standing 0-warning rule. The lanes deliberately overload the same verb (`col("a")` runtime vs `col("a", int64)` fused), and an overload set cannot span modules. So the move costs either an API rename or dropping `marrow.expr.col("a")` from the public surface, for no functional gain. **Do not retry as a file move.** If `values.mojo`'s size is the actual concern, split it along a boundary that does not share a public name — the node families (numeric / bool / string / temporal) are candidates. Reverted cleanly; nine files were touched and all restored. | S to re-scope |
+| **V0** | **`MapScalar` — BLOCKED on the size gate.** (The `cast` map arm, V0's other half, landed 2026-08-16 and was free in binary size.) The right fix is not a new scalar type but making `ListScalar` carry its own dtype instead of rebuilding `list_(child.dtype())` — that reconstruction reports the *shape*, so a `map` element answers `list<struct<key, value>>` and a `large_list` element answers `list<…>`; one field fixes all three. It works and is tested, but **a `DynType` field on `ListScalar` costs +0.137% on `query_streaming_agg_fused`, taking it from +0.449% to +0.586% and past the 0.5% ceiling** (measured 2026-08-16 by reverting that half alone). Reverted, not landed. Two ways forward: a 1-byte kind tag rebuilding `list_`/`large_list_`/`map_` from the child — cheaper, but loses `keysSorted` and the entries field name — or re-baselining the gate deliberately. That gate has been the binding constraint since the `Grouping` change and this is the second change to hit it. `scalars.mojo`. | S, gated |
 | **FU-6** | `sort_indices` without key re-gather. `SortIndices.multi` exists but there is no public `sort_indices(StructArray, key_indices)`; `SortProcessor` still calls `sort_by_keys` and discards key fields, and `sort.mojo:507` re-gathers keys on every pass. | M |
-| **FU-7** | **(a) DONE 2026-08-15 — 1.85x on `coalesce(a,b) + 1` over 1M rows, 150.72 ms -> 81.31 ms.** `validity` and `state` were two independent calls, and for `coalesce`/`nullif`/`case_when`/string-parse each ran the whole kernel. The driver now asks `state_validity(batch, state)`, which a breaker answers off the array it already built. **The first attempt at this measured no gain at all (149.78 ms, inside noise) and the measurement is what caught it:** hooking only the breaker leaves the chain stopping at the first composite, because a fused parent's default `state_validity` falls back to `validity(batch)` and recurses straight back into the breaker's kernel. Validity has to ride the *same state tree* the lane does, so the four `Pair` binaries and eight delegating unaries propagate it too. Benchmark: `bench_fu7_coalesce_fused_1m`. **(b) re-sized 2026-08-16, and it is not S.** `IsIn._value_set: DynArray` is not a stray payload — it is a *runtime-dtype dispatch* (`IsInKernel.dispatch`) inside an otherwise comptime-typed lane. Removing it means parameterising `IsIn` over the value-set's type, while `IsIn[A: Value]` today accepts any family and is used for both numeric and string sets. That is a design change, **M–L**, not a cleanup. **(d)** `ConditionalBinary` is 2-ary and `CaseWhen` 1-branch/numeric-only while the kernels and runtime builders are variadic — L, open. | (a) done |
+| **FU-7** | **(b) re-sized 2026-08-16, and it is not S.** `IsIn._value_set: DynArray` is not a stray payload — it is a *runtime-dtype dispatch* (`IsInKernel.dispatch`) inside an otherwise comptime-typed lane. Removing it means parameterising `IsIn` over the value-set's type, while `IsIn[A: Value]` today accepts any family and is used for both numeric and string sets. That is a design change, **M–L**, not a cleanup. **(d)** `ConditionalBinary` is 2-ary and `CaseWhen` 1-branch/numeric-only while the kernels and runtime builders are variadic — L, open. | (b) M–L, (d) L |
+
+**One small leftover from the dead-code sweep (was Q7.5):** with `NoPartition`
+removed, `Partition.row_indices` (`partition.mojo:94`) has a single construction
+site that always supplies it, and `map_partitions:296` unwraps it
+unconditionally — so its `Optional`, its `None` default and the `if` at `:114`
+are dead. **XS.**
 
 **Test-coverage gaps worth closing alongside the above:** `test_utils.mojo` is
 **1 case / 12 lines** for all of `utils.mojo`; `test_tabular.mojo` is 9 cases for
@@ -506,61 +427,7 @@ status:
   join. Speculative; its own precondition (a GPU hash join existing) is unmet,
   and GPU is outside the engine-first scope.
 
-**Both-lane parity tests are missing entirely, and they are the only enforcement
-invariant 2 has.** For each operation, a fused `Value` result and the equivalent
-`DynValue` result must be asserted equal. The two-lane refactor removed the
-structural reason the lanes diverged; nothing currently stops them diverging
-again.
-
----
-
-## 6. One-time: documentation disposition
-
-Do this in a single commit. Seven task files, one roadmap and ten design docs are
-replaced or deleted by this page.
-
-**Delete** (superseded; git history keeps them):
-
-| File | Why |
-|---|---|
-| `tasks-code-quality.md`, `tasks-execution-engine.md`, `tasks-expr-kernels-layering.md`, `tasks-expr-simplification.md`, `tasks-type-coverage.md`, `tasks-aggregate-followups.md`, `tasks-backlog-status.md` | replaced by this file |
-| `dynamic-dispatch-design.md` | specifies fn-pointer vtables and a `DataTypeVisitor`; the tree uses inline `Variant` and there is no visitor module. ~0% implemented, actively misleading. |
-| `aot-query-compilation.md` | thesis shipped, **every named artifact is wrong**, and its central construct (`Binary[op: UInt8]` + `comptime if op == ADD`) is now a measured anti-pattern in this repo (+45.7% `__text`). Salvage two items into M1.1: predicate normalization at construction, and an `InlineArray`-backed `Schema`. |
-| `unified-plan-hierarchy.md` | its central mechanism — erase into a family trait via default type parameters — is exactly what `7d57398` proved **unsound** and deleted. `fn`/`alias` throughout. |
-| `expr-unification-plan.md` | completed-migration record; every identifier, path, layout and measurement stale. |
-| `ibis-fusion-design.md` | strict subset of `ibis-expression-design.md`; its opening premise ("nothing executes yet") is false; no inbound links. |
-| `lane-shape-window-skeleton.mojo` | 401 lines prototyping **three rejected designs** (the `Fusable`/`Value` split, `MatBinary`, a fn-ptr `DynValue` box). A *runnable* artifact of a rejected design is a live trap. |
-| `execution-engine-roadmap.md` | **Two living plans is the drift pattern this page exists to end** — it said so itself ("where the two disagree, `backlog.md` wins"), which is an admission that it could not be trusted alone. Everything load-bearing is folded in: the M1/M2/M3 definitions and their gates now head §3 and §4, the four invariants were already §0, the capability rows became §4 cards (M2.9–M2.13, M3.7, M3.8), and the **Won't** list is §7. Dropped: its §2 current-state inventory (`docs/architecture.md`'s job), its G1–G10 gap list (every gap is a card here), and its external reference-engine appendix. |
-| `sort-design.md`, `joins-design.md`, `groupby-design.md`, `decimal-type-design.md` | Feature specs whose designs the tree then diverged from. Each mixed three things: what shipped (belongs in docstrings and `architecture.md`, not here), what is still wanted (now §4 and §7), and what was designed then replaced (now §8). Keeping them as "specs" meant four documents describing algorithms the code does not use — `joins-design.md`'s `JoinHashTable`/`_chain_next` and `groupby-design.md`'s seven groupers do not exist at all. |
-
-**Rewrite:**
-
-| File | Action |
-|---|---|
-| `aot-relations-design.md` | **Split.** Extract §"Erased relations over fused values" into a short living architecture doc — it is the charter of the current code, and both `README.md:60` and `benchmarks/binary_size/README.md:231` link here. Cut the first-slice record (`Table[T]`, `Project[*Es]`, `marrow/aot/`, all deleted) to a paragraph of surviving compiler findings. Decide `Env`/`Param` in or out. |
-| `kernel-fusion-architecture.md` | Keep §1–§6 (the trait organization and "one core, two runners" thesis are load-bearing and validated); add the `Breaker`/`Context` staging model, which the doc predates entirely; demote §8–§10 to backlog items — no `Materialized` leaf adapter, `StringPredicate` still materializes a full `BoolArray`, `StringLength` is two passes not one, reductions still consume materialized arrays. |
-| `lane-shape-window-design.md` | **Split.** Rewrite §1–§5 to describe what shipped (`Value`/`Breaker` polarity, `Datum`, `OutShape`, `Context` staging, fuse-above-breaker) — corrected, it becomes the only doc covering the current execution model. Keep §7 as a forward spec, retitled "Window functions — design (unimplemented)"; it feeds M2.3. Delete §8–§9: their stated targets (delete `prepare`, no `Context`) are the **opposite** of what the codebase decided. |
-| `ibis-expression-design.md` | Reduce to a ~30-line record: the fusability taxonomy, the "bucket = which trait, never a runtime tag" rule, the `NumericValue`/`BoolValue` disjointness decision, and the fact that dual conditional conformance was probed and the per-family **fallback** shipped. As a spec it forbids editing the very file that implements it. |
-| `aggregate-kernel-inversion.md` | Keep — the most valuable of the design docs; §5's "three predictions, three misses" and §4's erased-box cost rule are hard-won measured facts. Three-line correction: `resolve_agg` is in `expr/aggregates.mojo:194` not `dynamic.mojo`; the `AggFunction` catalog is in `expr/aggregates.mojo:84-191` while the trait is in `kernels/aggregate.mojo:846`; §6's gate commands (`check_lib`, `check <file>`, `test_parallel`) no longer exist. |
-| `aot-jit-research-notes.md` | Keep as a **dated** record — the literature survey and the AOT-vs-JIT reasoning are the intellectual justification for the two-lane architecture and exist nowhere else. Header note: it describes `faszom.mojo` (→ `lane.mojo` → `values.mojo`), its reproduction command cannot run, and its 21× figure is superseded by 4.2×. |
-| `tasks-step3-expression-nodes.md` | If kept at all, it needs a **superseded-by banner**: its entire design rationale was reversed four days later. It argues the two lanes *do* share one node set, that the box implementing every family trait "is what lets the node bounds stay as they are", and that "the bet is the erased instantiation never reaches `vectorwise`". The bet lost. |
-
-**Keep unchanged:** `design-expression-evaluation.md` — written 2026-08-03, fully
-accurate, its gate number matches the CHANGELOG, and it is the actionable
-backlog for `values.mojo` internals (visitor-driven `traverse` to replace ~96
-hand-recursions, explicit slot binding, CSE, parallel stage scheduling).
-Pairs with L2.
-
-**One dangling reference is left behind and is not this page's to fix:**
-`marrow/kernels/join.mojo:105` points at `docs/joins-design.md`, and
-`todo/reflect-schema-from-struct.md:118` and
-`todo/warp-match-any-gpu-hash-join.md:65` cite `joins-design.md` /
-`groupby-design.md` as models. Redirect all three to `docs/architecture.md` and
-§8 below.
-
----
-
-## 7. Deferred — Arrow parity
+## 6. Deferred — Arrow parity
 
 Listed once so the gaps are known. **Not scheduled**: nothing here blocks M1,
 M2 or M3. Promote an item only when a milestone query needs it.
@@ -584,9 +451,8 @@ M2 or M3. Promote an item only when a milestone query needs it.
   trailing EOS marker; buffer alignment is 8, not 64.
 - **C-Data**: device-array *export* is not implemented (import-shaped struct
   only); `__arrow_c_device_array__` absent; stream `get_last_error` always returns
-  null. **Correct CLAUDE.md's "Known Limitation #2" — release callbacks *are*
-  implemented and invoked** (`c_data.mojo:221,834,820,1234` plus three PyCapsule
-  destructors); the double-free guard is the spec's null-release handshake.
+  null. Release callbacks are **not** a gap — they are implemented and invoked
+  (`c_data.mojo:221,834,820,1234` plus three PyCapsule destructors).
 - **Kernels with no marrow equivalent**: all bitwise ops (`bit_wise_and/or/xor/not`,
   `shift_left/right`); `tan`/`asin`/`acos`/`atan`/`atan2`/hyperbolics/`cbrt`;
   `list_flatten`, `list_parent_indices`, `list_slice`, `list_element`,
@@ -604,7 +470,7 @@ M2 or M3. Promote an item only when a milestone query needs it.
   factories.
 - **Group-by strategies designed but unbuilt**: `DirectMapGrouper`,
   `PackedKeyGrouper`, `RowEncodedGrouper` (+ `kernels/row.mojo`), sorted-input
-  run detection. The shipped strategy set is a different axis entirely — see §8.
+  run detection. The shipped strategy set is a different axis entirely — see §7.
 - **Sort features designed but unbuilt**: `SortOptions` with per-column
   `nulls_first` (today one `nulls_first: Bool` covers every key —
   `sort.mojo:449`), GPU radix, 4-byte string prefix comparison, scatter
@@ -633,7 +499,7 @@ Recorded so they stop being re-proposed. Each is a decision, not an oversight.
 
 ---
 
-## 8. Rejected and replaced designs
+## 7. Rejected and replaced designs
 
 Each row is a design that was written down, then **not** built — because the tree
 built something different and better, or because the premise turned out to be
@@ -667,7 +533,7 @@ replaces.
   native width exceeds the UInt64 radix key.
 - **`argsort` as a free function plus a `SortOptions` struct** became the
   `SortIndices` kernel struct (`sort.mojo:344`) with `dispatch`/`apply`/`multi`
-  and loose parameters. Per-column `nulls_first` is still wanted — §7.
+  and loose parameters. Per-column `nulls_first` is still wanted — §6.
 
 ### Group-by
 
@@ -727,7 +593,7 @@ replaces.
 
 ---
 
-## 9. Architectural debt
+## 8. Architectural debt
 
 From a three-package responsibility audit (2026-08-03), applying CLAUDE.md's
 own method: name each type's single responsibility; where one cannot be named,
@@ -747,99 +613,17 @@ pairs; `Breaker` as marker-by-conformance; and `BoxedValue` as an erasure
 boundary that is also the fusion boundary. `marrow/kernels` is a **verified DAG
 with no up-edges into `expr` or `tabular`**.
 
-### The highest-leverage fixes
-
-A2, A4 and A6 are done. A2 landed as B12 (eager recount at the slice
-boundary); A4 moved `ExecContext` to `marrow/execution.mojo`, so `marrow/kernels`
-no longer has an inbound edge from core; A6 added `worth_parallel`/`with_threads`
-and closed six sites where a GPU device was silently dropped.
-
-A1 landed on 2026-08-06 and is kept below for its numbers. A3 (`DataType.layout()`)
-was removed on 2026-08-06 without being started: research against both references
-showed the advertised win was not on offer — neither Arrow C++ nor arrow-rs drives
-its serializers from `layout()`, so the "17 dtype ladders across `c_data` + `ipc`"
-collapse it was scheduled for does not follow. What it would have bought —
-`ArrayData` construction and validation — is recorded under "Types carrying a second
-and third responsibility" below, to be picked up on its own merits if ever.
-
-| ID | Fix | What it removes |
-|---|---|---|
-| **A1** | **LANDED 2026-08-06.** `a + 1` over 1M rows: **2.04 ms -> 70.9 µs** (28.8x), against a hand-written hoisted floor of 69.2 µs, so within 2.4% of it. Cost no longer scales with column-leaf count: `a + a` is **70.4 µs**, the same as `a + 1`, where it used to be exactly double. `Context`, its positional slots, `prepare` and the `mut slot` threading are deleted; 27 structs carry a `comptime State` plus `state()`/`lane()`. `query_streaming` `__text` 1,332,456 -> 1,333,208 (**+0.056%**), inside the 0.5% gate. Suites: core+parquet+python **1145 passed**; expr+kernels green. The one test that failed on landing turned out to be **B29**, a pre-existing byte-wise bitmap read that A1 merely exposed; fixed the same day. Original card follows. **Validated end-to-end and de-risked, but it must land as ONE change — no incremental path exists.** Spike: `marrow/expr/tests/test_a1_spike.mojo`. A column leaf with `comptime State = Int32Array`, a `state()` that resolves once and a `lane()` that only loads, runs `a + 1` over 1M rows in **67.37 µs** against a hand-written ideal of **66.82 µs** and today's lane at **2.04 ms** — **30x**, within 1% of the floor. Three design fears are dead: no origin gymnastics, no `unsafe_origin_cast`, no parameterised associated types — `State` holding the *owned typed array* suffices, because the costs were the schema lookup and the `Variant` unwrap (both hoist into `state()`) while `.values()` is free per chunk. **The scheduling constraint, found 2026-08-05:** a defaulted `state()` returning `Self.State` does not compile when `State`'s bound is not `ImplicitlyCopyable`, and it cannot be — the natural default is `DynArray`, which deliberately is not. `rebind` cannot bridge it either (it requires `ImplicitlyCopyable` itself). So the "convert three nodes and measure" plan is **not available**: every `NumericValue` conformer must implement `State`/`state`/`lane` in the same commit. See the new CLAUDE.md gotcha. **Per-node State shapes** (the conversion is mechanical once started): column leaf -> its typed array; literal -> `NoneType`; binary -> `Tuple[L.State, R.State]`; unary -> `A.State`; breaker -> its materialised result, which *replaces* its `Context` slot. **Gate:** hold `query_streaming` `__text` at **1,332,456**. | L, one commit, highest value |
-
-### B29 — a bit-packed mask was read byte-wise (FIXED 2026-08-06)
-
-| ID | Defect | Where |
-|---|---|---|
-| **B29** | **`BitmapView.load[DType.bool, W]` reads *bytes*, not bits, so every fused bool lane over a materialized mask could answer wrongly.** `Scalar[DType.bool]` is a byte, so that spelling walks a bit-packed mask one byte per element and reports true for any non-zero byte. The mask `[F, F, T]` is the byte `0b100`, which reads as `True` at element 0 — which is why `And(StrLt(s, p), StrGt(s, p))` answered `[True, False, False]` where both operands say `False`. **Pre-existing, not introduced by A1:** the same five lanes used `ctx.get_ref[BoolArray](i).values().load[DType.bool, W](idx)` before the refactor, and three of the four regression tests added with the fix also fail when checked out against the pre-A1 tree. A1 only changed *which* expressions happened to hit it. **Fix:** `mask[W]`, the bit-wise reader that already existed beside it ("expand W consecutive bits starting at logical index"), in `NullPredicate`, `StringToBool`, `StringPredicate`, `IsIn` and `ListContains`. Scope of the wrong answers was any bool binary whose **two** operands were both materialized stages — `s.startswith(x) & s.endswith(y)`, `a.isin(…) & b.isin(…)`, `x.isnull() & y.isnull()`, and so on. Numeric breakers were never affected: they read a plain buffer, never a bitmap. Regression tests: `test_or_over_two_bool_breakers`, `test_and_over_two_isin_breakers`, `test_and_over_two_breakers_of_different_types`, `test_and_over_breaker_and_fused_unary`, plus the numeric control `test_add_over_two_numeric_breakers`. `BitmapView.load`'s docstring now warns against the `bool` instantiation. | `views.mojo` `BitmapView.load`; `expr/values.mojo` five bool lanes | done |
-
-### The `Context` positional-slot invariant — GONE (A1, 2026-08-06)
-
-**This was "the single most dangerous thing in `marrow/expr`", and A1 deleted the
-mechanism rather than mitigating it.** Correctness used to require that `prepare`
-(appending breaker results to `Context._slots`) and `vectorwise` (threading
-`mut slot: Int`, each breaker consuming one) walk the tree in **identical DFS
-order, per node, by hand**, across 15 `prepare` sites and 29 `vectorwise` ones,
-with nothing enforcing it. Its three failure modes were: order swapped with
-identical slot types → **the wrong column, silently**; order swapped with
-differing types → a run-time `Variant` trip; and a composite forgetting to
-override `prepare` → an out-of-bounds slot read. `DateTrunc` was latently in the
-third category, unreachable only because no temporal breaker existed to sit
-under it.
-
-A node's state is now its own typed value, keyed by *type* rather than by
-position, so there is no traversal to keep in step and no shared numbering to
-corrupt. The proposed debug-only ASSERT (that `prepare` appended as many slots as
-`vectorwise` consumed) is moot and was never needed.
-
-### Both-lane parity — A5 done 2026-08-13, and it found a live bug
-
-Invariant 2 ("no feature in only one lane") was enforced by hand-written cases
-in `test_parity.mojo`: 19 of 55 shared ops (35%) had a genuine cross-lane
-assertion. Two mechanical tests replace the hand-maintained half.
-
-**`test_op_names_agree_across_lanes`** enumerates the op set and reads every
-expected name *off the kernel* — it never spells one. It landed red on the eight
-pairs that had already drifted: `mod`/`modulo`, `pow_`/`power`, `neg`/`negate`,
-`abs_`/`abs`, `and_`/`and`, `or_`/`or`, `not_`/`not`, `log`/`ln`. Kernels now use
-the spelling Arrow uses, and the 47 runtime factories read `XKernel.name` rather
-than repeating a literal.
-
-**`test_string_predicate_prunes_in_both_lanes`** landed red on a real defect,
-not a naming one: `prune` and `bound_column` existed on `NumericColumn` alone,
-so in the fused lane a string predicate pruned nothing and a string column could
-not be a join key — while the runtime lane, keying on `_tag == "column"`
-regardless of dtype, pruned it. An AOT plan with a string predicate decoded
-every row group. Sound, so nothing failed; it was just slower, silently.
-
-The structural cause is fixed rather than patched: `prune` no longer dispatches
-on `Kernel.name` at all. The interval reading of each operator is its own kernel
-family in `marrow/kernels/interval.mojo`, and the node names it
-(`NumericCompare[LtKernel, LtInterval, L, R]`) — the same layering the removed
-`comptime StringKernel` established. Both string-match ladders are gone, so a
-rename can no longer silently disable pruning.
-
-**The value axis is now covered too** (2026-08-14): 25 cases for the ops that
-had no cross-lane assertion at all — `<= >= != ** ^`, `neg`/`abs`/`sign`/
-`floor`/`ceil`/`round`, `sqrt`/`exp`/`ln`, the seven string maps, `length`, and
-`startswith`/`endswith`/`contains`. All 25 passed on arrival, so unlike the
-naming and pruning axes this one found no divergence; its value is holding the
-invariant from here. That the assertions actually bite was checked by mutation
-— swapping the fused side of `ln` for `exp` and of `rstrip` for `lstrip` failed
-exactly those two cases and nothing else.
-
-**Aggregates are covered too** (2026-08-14), and they needed a different shape
-rather than a different case: `DynValue.sum()` returns a `DynAgg` (a group-by
-spec) while the fused `Sum(col)` is a scalar `Reduction`, so they converge only
-at `AggExpr` and parity has to be observed through a plan. Eight cases in
-`test_aggregates.mojo` run `sum`, `mean`, `min`, `max`, `product`, `count` and
-`count_distinct` through a **keyless** plan in each lane — no GROUP BY, so one
-output row, so the comparison cannot be confused by group order, which follows
-the key hash — plus one grouped `sum`, since the grouped path is a separate
-implementation from the whole-table fold. All passed on arrival; mutation-checked
-by swapping one fused `min` for `max` and one grouped `sum` for `max`, which
-failed exactly those two.
-
-**A5 is now complete across all four axes** — names, pruning, values, aggregates.
+**The A-series is closed.** A1 (per-node `comptime State`, which took `a + 1`
+over 1M rows from 2.04 ms to 70.9 µs and deleted the `Context` positional-slot
+invariant), A2 (eager recount at the slice boundary, landed as B12), A4
+(`ExecContext` to `marrow/execution.mojo`, removing `marrow/kernels`' inbound
+edge from core), A5 (both-lane parity, now four axes) and A6
+(`worth_parallel`/`with_threads`) all landed. A3 (`DataType.layout()`) was
+removed without being started: neither Arrow C++ nor arrow-rs drives its
+serializers from `layout()`, so the "17 dtype ladders across `c_data` + `ipc`"
+collapse it promised does not follow. What it *would* have bought —
+`ArrayData` construction and validation — survives as the array-codec bullet
+below, to be picked up on its own merits if ever.
 
 ### Types carrying a second and third responsibility
 
@@ -877,18 +661,6 @@ to change. Listed with the competing responsibilities, most costly first.
   why the card proposing it (A3) was removed rather than scheduled.
 - **`Value`** (`values.mojo:304`) is the union of four consumers' protocols —
   executor, printer, optimizer, pruner — and all 37 nodes pay for all four.
-
-### `ExecContext`'s vocabulary is one concept short — **A6, done**
-
-Closed. `worth_parallel(n, min)` is the missing predicate and `with_threads(n)`
-the missing derivation; every hand-rolled copy and every `num_threads: Int`
-boundary is gone. Two counts in the original card were low: the predicate had
-**four** copies, not three (`HashJoin.probe` was the fourth, and it *must* agree
-with `build`), and **five** API boundaries destructured to `Int`, not two —
-`tabular.join`/`group_by`/`sort_by` as well as `Aggregation.whole` and
-`GroupBy`. The one live defect was in the bindings: `compute.mojo` had a
-Python-supplied `ExecContext` and passed `ctx.resolved_num_threads()`, so
-`ma.compute.sum` on a GPU context ran on the CPU.
 
 ### The three `marrow.expr` import cycles
 
