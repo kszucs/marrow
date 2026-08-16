@@ -164,14 +164,16 @@ trait Array(
     def to_data(self) raises -> ArrayData:
         ...
 
-    def slice(self, offset: Int, length: Int) raises -> Self:
+    def slice(self, offset: Int, length: Int) -> Self:
         """A zero-copy slice.
 
-        `raises` because the erased implementation can fail: `DynArray.slice`
-        dispatches over its variant, and an uncovered member falls through. Every
-        *typed* implementation is non-raising and stays that way -- Mojo accepts
-        a non-raising body against a raising requirement, so typed call sites are
-        unaffected. Only generic code holding `[T: Array]` has to propagate.
+        Non-raising: every typed implementation is total. It was `raises` for as
+        long as `DynArray` conformed to this trait, because the erased
+        implementation dispatches over a variant and an uncovered member falls
+        through -- one box's failure mode widening the contract for all nine
+        typed arrays, at a recorded cost of +13,428 bytes of `__text`.
+        `DynArray.slice` keeps its own `raises`; it is no longer implementing
+        this.
         """
         ...
 

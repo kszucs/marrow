@@ -141,14 +141,12 @@ trait Builder(Deinitable, Movable, Sized):
     ) raises -> Self.ArrayType:
         ...
 
-    def reset(mut self) raises:
+    def reset(mut self) -> None:
         """Discard accumulated state and start over.
 
-        `raises` for the same reason `Array.slice` does: the erased
-        implementation dispatches over a variant and an uncovered member falls
-        through. Typed builders stay non-raising, and Mojo accepts a
-        non-raising body against a raising requirement, so their call sites are
-        unaffected.
+        Non-raising, for the same reason `Array.slice` is: it was `raises` only
+        to accommodate `DynBuilder`'s variant dispatch, which no longer
+        implements this trait. `DynBuilder.reset` keeps its own `raises`.
         """
         ...
 

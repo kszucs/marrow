@@ -394,8 +394,18 @@ def _drive_string[
 # their fused driver and the breakers override it with their stage result.
 # ---------------------------------------------------------------------------
 trait Value(Copyable, Deinitable, Movable):
-    comptime OutType: DataType
     comptime OutShape: Int  # 0 scalar, 1 columnar
+    """Whether this node yields one value or a column. Read generically by
+    `NullPredicate`, which propagates its operand's shape; the fused drivers
+    read it off the *family* traits.
+
+    `OutType` used to sit beside this and did not survive scrutiny: no
+    `[V: Value]` code ever read it. The three nodes bound on plain `Value`
+    (`NullPredicate`, `IsIn`, `WindowFunction`) each declare their own output
+    type, and every family trait redeclares `OutType` with a tighter bound. Its
+    only effect was to force `DynValue` to name one, which forced `DynType` to
+    conform to `DataType` — a requirement with no reader propping up a
+    conformance with no consumer."""
 
     def materialize(self, batch: RecordBatch) raises -> Datum:
         """Produce this node's result `Datum` — the family driver: a numeric `Buffer`,

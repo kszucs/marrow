@@ -246,14 +246,15 @@ which is why children arrive pre-evaluated as `List[DynArray]`.
 struct DynValue(Copyable, Movable, Value, Writable):
     """A runtime-built expression: a tag, its children, and an optional payload.
 
-    Conforms to `Value` and to nothing else. `Value`'s members are all runtime
-    methods, so erasing into it is honest — unlike the family traits, whose
-    comptime `OutType: NumericType`, `State` and `lane` this struct could only stub.
-    That distinction is the whole design: **erase into a trait of methods, never
-    into one with comptime members you cannot supply.**
+    Conforms to `Value` and to nothing else. `Value` is a trait of runtime
+    methods plus one comptime member, `OutShape`, which this struct can state
+    truthfully — `execute` returns a `DynArray` unconditionally, so the answer
+    is always "columnar". Contrast the family traits, whose comptime
+    `OutType: NumericType`, `State` and `lane` it could only stub. That
+    distinction is the whole design: **erase into a trait of methods, never into
+    one with comptime members you cannot supply.**
     """
 
-    comptime OutType = DynType
     comptime OutShape = 1
 
     var _tag: String
