@@ -769,22 +769,23 @@ struct DynType(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
-    DataType,
     Equatable,
     Movable,
     Writable,
 ):
-    comptime offset = DType.int32
-    """Placeholder, never read — see `native`.
+    """The type-erased dtype: a `Variant` over every concrete Arrow type.
 
-    Required by `BinaryLikeType`/`ListLikeType`, which `StringValue.OutType` is
-    bound on. An erased dtype does not know its offset width; the erased arm
-    resolves it at run time via `dispatch_binarylike`/`dispatch_listlike`."""
+    **Does not conform to `DataType`.** It exposes a superset of that trait's
+    surface as its own API. The conformance was held up entirely by
+    `DynValue.OutType = DynType` satisfying `Value.OutType: DataType` — a trait
+    member no generic code read, removed in the preceding commit. `7d57398`
+    had already stripped the eight *sub*-trait conformances (`NumericType`,
+    `StringLikeType`, …) as unsound; this removes the last one, which was merely
+    unused.
 
-    # `to_dyn` is overridden below rather than inherited, and that override is
-    # load-bearing: the trait's default body is `DynType(self^)`, which for
-    # `Self = DynType` would be `DynType(DynType)` — and `DynType` is
-    # deliberately not a member of its own variant.
+    `to_dyn` is still defined below rather than inherited. The trait's default
+    body was `DynType(self^)`, which for `Self = DynType` would ask the variant
+    to hold a `DynType` — and it deliberately does not list itself."""
 
     comptime VariantType = Variant[
         NullType,
@@ -1035,19 +1036,20 @@ struct DynType(
         """Physical byte width per element, or **0** if this is not a fixed-width
         type.
 
-        This *overrides* `PrimitiveType.byte_width`, and the override is
-        load-bearing: the inherited default is `size_of[Self.native]()`, and
-        `DynType.native` is the `bool` placeholder, so without this every erased
-        dtype would report width 1. It has to be **non-raising** to override at
-        all — a `raises` signature does not match the trait's, so the default
-        silently won instead and `DynType(int16).byte_width()` returned 1.
-        `test_byte_width` is what caught that.
+        Resolves the *runtime* dtype and asks it, rather than reading a comptime
+        `native` — an erased dtype has none. This used to be an override of
+        `PrimitiveType.byte_width`, needed because the inherited default was
+        `size_of[Self.native]()` and `DynType.native` was a `bool` placeholder,
+        so every erased dtype reported width 1 (`test_byte_width` caught it).
+        `DynType` conforms to neither `PrimitiveType` nor `DataType` now, and the
+        placeholder is gone, so this overrides nothing — but the body is what it
+        always should have been.
 
-        Returning 0 rather than raising is the cost of the override. Every caller
-        already establishes the type first and treats an unexpected width as an
-        error — `TemporalCast.dispatch` and `DateTruncKernel.apply` both reject
-        anything that is not 4 or 8 — so a 0 surfaces loudly there rather than
-        being mistaken for a real width."""
+        Returning 0 for a non-fixed-width type rather than raising keeps this
+        non-raising. Every caller establishes the type first and treats an
+        unexpected width as an error — `TemporalCast.dispatch` and
+        `DateTruncKernel.apply` both reject anything that is not 4 or 8 — so a 0
+        surfaces loudly there rather than being mistaken for a real width."""
         if not self.is_primitive():
             return 0
 
