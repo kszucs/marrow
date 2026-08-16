@@ -6,12 +6,25 @@ its implementation.
 
 Verified against the working tree at `f5226d5` + uncommitted changes
 (2026-08-16), over the 52 traits declared under `marrow/` and `python/bindings/`.
-**Nothing here has been changed** — this is a findings list, not a plan.
 
 Companion to `docs/duplication-audit.md` (repeated code) and
 `docs/duplication-audit-proposals.md`. This document asks a different question:
 not "is this written twice" but "does this type have one responsibility, and does
 its trait promise only what it can deliver".
+
+## Status
+
+Findings list, not a plan — **except** where marked. One finding has been acted
+on; the rest are open.
+
+| finding | status |
+|---|---|
+| §3 — the erased boxes' base-trait conformances | **DONE**, see `docs/dyn-conformance-removal.md` |
+| §1.2 — `Array.__init__(ArrayData)`, a requirement nothing invokes | **DONE** (removed with the `Array` conformance) |
+| §1.1 `write_repr_to`, §1.3 `to_device`, §1.4 `CastKernel`, §1.5–§1.14 | open |
+
+§3 has been rewritten in place to describe the outcome rather than the
+proposal. Everything else is as first written.
 
 ---
 
@@ -431,27 +444,33 @@ error so far from the cause that it forced the whole fluent surface into a
 
 Does the trait have comptime members, and can the box supply them **truthfully**?
 
-| trait | comptime members | box supplies | verdict |
-|---|---|---|---|
-| `DataType` | none | — | `DynType: DataType` **sound** |
-| `ArrowScalar` | none | — | `DynScalar: ArrowScalar` **sound** |
-| `Array` | `ScalarType: ArrowScalar` | `DynScalar` | **sound, and truthfully** — `DynArray[i]` really does return a `DynScalar` |
-| `Builder` | `ArrayType: Array` | `DynArray` | **sound**, same reason |
-| `Value` | `OutType: DataType`, `OutShape: Int` | `DynType`, `1` | **sound** — `DynType` is a real `DataType`, and the box really is columnar |
-| `PrimitiveType`/`NumericType`/… | `native: DType` | `bool` placeholder | **unsound** — reverted |
-| `BinaryLikeType`/`ListLikeType` | `offset: DType` | `int32` placeholder | **unsound** — reverted |
-| `NumericValue`/`BoolValue`/`StringValue` | `OutType`, `State`, `lane` | placeholder + stub returning zero | **unsound** — reverted |
+| trait | comptime members | box supplies | sound? | outcome |
+|---|---|---|---|---|
+| `DataType` | none | — | yes | **removed** — no consumer |
+| `ArrowScalar` | none | — | yes | **removed** — no consumer |
+| `Array` | `ScalarType: ArrowScalar` | `DynScalar` | yes | **removed** — no consumer |
+| `Builder` | `ArrayType: Array` | `DynArray` | yes | **removed** — no consumer |
+| `Value` | `OutShape: Int` | `1` | yes | **kept** — `BoxedValue` + the 3-node bridge |
+| `PrimitiveType`/`NumericType`/… | `native: DType` | `bool` placeholder | **no** | reverted by `7d57398` |
+| `BinaryLikeType`/`ListLikeType` | `offset: DType` | `int32` placeholder | **no** | reverted by `7d57398` |
+| `NumericValue`/`BoolValue`/`StringValue` | `OutType`, `State`, `lane` | placeholder + stub returning zero | **no** | reverted by `7d57398` |
 
-The pattern: **erasure is closed under the companion relation.**
-`DynArray.ScalarType = DynScalar`, `DynBuilder.ArrayType = DynArray`,
-`DynValue.OutType = DynType`. Each box's one comptime member is satisfied by the
-*other box at the neighbouring layer* — which is a true statement about what the
-method returns, not a stand-in. `scalars.mojo:571-575` says so directly:
-*"`DynArray.ScalarType` is this, which is what lets `DynArray` conform to `Array`
-in turn."*
+**Soundness turned out to be the floor, not the criterion.** The first four rows
+were all sound — nothing stubbed — and all four were removed anyway, because
+each was load-bearing only for the next box's companion member, in two closed
+loops with no external anchor:
 
-That closure is why the three conformances are honest, and it is also why they
-cannot be extended: there is no erased `NumericType` to point `native` at.
+```
+DynBuilder.ArrayType -> DynArray: Array -> DynArray.ScalarType -> DynScalar: ArrowScalar
+Value.OutType        -> DynValue.OutType = DynType -> DynType: DataType
+```
+
+`Value.OutType` was read by no generic `[V: Value]` code at all, which is what
+collapsed the second loop. Removing all four changed no behaviour and **no binary
+size** (0 bytes on all four gates). See `docs/dyn-conformance-removal.md`.
+
+What survives is the sharper rule: a conformance must be **honest** *and* have a
+consumer outside its own loop. `DynValue: Value` is the only one that does.
 
 ### 3.4 There are no "typed array traits" to conform to
 
@@ -463,31 +482,19 @@ scalar and builder side there is nothing further to conform to.
 The only place a sub-trait ladder exists is the **dtype** hierarchy — and that is
 exactly the ladder `DynType` climbed and fell off.
 
-### 3.5 One placeholder survived the revert, and it is dead
+### 3.5 One placeholder survived the revert — since removed
 
-`7d57398` deleted the eight conformances and the `native` placeholder but left:
+`7d57398` deleted the eight conformances and the `native` placeholder but left
+`comptime offset = DType.int32` ([dtypes.mojo:777](marrow/dtypes.mojo#L777)),
+whose docstring pointed at `native` and justified itself by conformances to
+`BinaryLikeType`/`ListLikeType` — all three deleted by that same commit.
+Measured dead (`precompile` clean without it), and removed alongside
+`DynType: DataType`.
 
-```mojo
-comptime offset = DType.int32
-"""Placeholder, never read — see `native`.
-
-Required by `BinaryLikeType`/`ListLikeType`, which `StringValue.OutType` is
-bound on. …"""
-```
-
-([dtypes.mojo:777](marrow/dtypes.mojo#L777)) — a docstring that points at
-`native`, deleted in that same commit, and justifies itself by conformances to
-`BinaryLikeType`/`ListLikeType`, also deleted in that same commit.
-
-**Verified: removed it and ran `pixi run -e dev precompile` — clean, 0 errors,
-0 warnings.** It is dead. (File restored; nothing changed.)
-
-`DynType.byte_width`'s docstring ([dtypes.mojo:1018-1034](marrow/dtypes.mojo#L1018))
-is stale for the same reason: it describes itself as a load-bearing override of
-`PrimitiveType.byte_width` and calls `DynType.native` "the `bool` placeholder".
-`DynType` conforms to neither `PrimitiveType` nor anything with a `native`, so it
-overrides nothing — it is a plain method, and its "returns 0 for non-fixed-width"
-contract now stands on its own.
+`DynType.byte_width`'s docstring was stale for the same reason — it described
+itself as a load-bearing override of `PrimitiveType.byte_width` and called
+`DynType.native` "the `bool` placeholder". Rewritten; the behaviour was always
+correct, only the explanation was wrong.
 
 ### 3.6 Where the tree does do "conform and raise" — and what it costs
 

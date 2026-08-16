@@ -622,16 +622,27 @@ that is a leaky abstraction; dependencies must form a one-directional tree.
 **What the audit confirmed as sound, and should be defended rather than
 "improved":** trait-derived family dispatch (`comptime if conforms_to` derives
 the nine `dispatch_*` families from the trait hierarchy, so adding a dtype
-extends every family it conforms to at once); peer erasure (`DynArray: Array`,
-so generic code takes either and there is no parallel erased overload set);
+extends every family it conforms to at once);
 parametric mutability on `Buffer`/`Bitmap` with a `comptime assert` making a
 mutable copy a *compile* error; `DevicePassable` views with logical zero-based
 indexing, which is what lets one kernel body serve CPU-serial, CPU-parallel and
 GPU; kernel-parameterized generic nodes (10 structs, ~45 operators);
 `Relation`-pure vs `Processor`-mutable, verified unviolated across all six
-pairs; `Breaker` as marker-by-conformance; and `BoxedValue` as an erasure
-boundary that is also the fusion boundary. `marrow/kernels` is a **verified DAG
-with no up-edges into `expr` or `tabular`**.
+pairs; and `BoxedValue` as an erasure boundary that is also the fusion boundary.
+`marrow/kernels` is a **verified DAG with no up-edges into `expr` or
+`tabular`**.
+
+Two items from that list did not survive later work and have been struck above.
+**Peer erasure** (`DynArray: Array`, `DynScalar: ArrowScalar`,
+`DynBuilder: Builder`, `DynType: DataType`) was removed: the premise "generic
+code takes either" was false — no generic code was ever bound on those traits
+outside the boxes' own dispatch, and the four conformances were load-bearing
+only for each other. See `docs/dyn-conformance-removal.md`. **`Breaker` as
+marker-by-conformance** was removed by `7d57398`; there is no `Breaker` trait,
+and a breaker is now simply a node whose `State` is its materialized column.
+`marrow/tabular` also has an up-edge into `marrow.expr.aggregates`, so the
+one-directional claim holds for `kernels` but not tree-wide — see
+`docs/organizational-audit.md` §1.7.
 
 **The A-series is closed.** A1 (per-node `comptime State`, which took `a + 1`
 over 1M rows from 2.04 ms to 70.9 µs and deleted the `Context` positional-slot
