@@ -2322,7 +2322,6 @@ struct ChunkedArray(Copyable, Movable, Writable):
 
 
 struct DynArray(
-    Array,
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
@@ -2332,6 +2331,13 @@ struct DynArray(
     Writable,
 ):
     """Type-erased, immutable array handle backed by an inline Variant.
+
+    **Does not conform to `Array`.** The surface is the same, but it is this
+    struct's own API rather than a trait implementation: every `[T: Array]`
+    bound in the tree lives inside the `_dispatch` closures below, so the
+    conformance had no consumer — while forcing `Array.slice` to be `raises`
+    for all nine typed arrays. It was added in `8334bf0` for a lane
+    unification that `7d57398` then abandoned.
 
     Wraps any `Array`-conforming type.  Copies are O(1) — typed arrays
     hold their data behind ref-counted `Buffer` / `Bitmap` handles, so
@@ -2425,16 +2431,6 @@ struct DynArray(
     def __init__[T: Array](out self, var array: T):
         self._v = Self.VariantType(array^)
 
-    def __init__(out self, data: ArrayData) raises:
-        """`Array`'s constructor-from-`ArrayData`, delegating to `from_data`.
-
-        The static factory stays the implementation and the primary spelling;
-        this exists so the trait is satisfied without moving 30-odd call sites.
-        No ambiguity with the `@implicit [T: Array]` constructor above:
-        `ArrayData` is only `Copyable, Movable` and does not conform to `Array`.
-        """
-        self = DynArray.from_data(data)
-
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
@@ -2472,21 +2468,6 @@ struct DynArray(
             return len(a)
 
         return self._dispatch(f)
-
-    comptime ScalarType = DynScalar
-    """`Array`'s companion-scalar member. `DynScalar` conforms to `ArrowScalar`,
-    which is what lets this conform to `Array` in turn — the two erasures line
-    up rather than each needing its own escape hatch."""
-
-    def type(self) -> DynType:
-        """`Array`'s spelling of `dtype()`.
-
-        Both names exist because both are load-bearing: `Array` requires
-        `type()`, while ~200 call sites and the `Builder` trait say `dtype()`.
-        Renaming either would be a large diff for no behaviour, so this is a
-        one-line forward and `dtype()` remains the one with the implementation.
-        """
-        return self.dtype()
 
     def dtype(self) -> DynType:
         def f[T: Array](a: T) {imm} -> DynType:
