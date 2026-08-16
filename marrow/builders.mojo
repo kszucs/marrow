@@ -158,8 +158,14 @@ trait Builder(Deinitable, Movable, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
+struct DynBuilder(ImplicitlyCopyable, Movable):
     """Type-erased builder container.
+
+    **Does not conform to `Builder`.** It exposes the same surface, but as its
+    own API rather than as a trait implementation: nothing in the tree is
+    generic over `Builder` except this struct's own `_dispatch` closures, so the
+    conformance constrained the typed builders without ever being used. It was
+    added in `8334bf0` for a lane unification that `7d57398` then abandoned.
 
     Wraps any `Builder`-conforming type in a Variant on the heap behind an
     `ArcPointer`. Copies are O(1) ref-count bumps (shared-mutation semantics).
@@ -381,11 +387,6 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
             b.extend(arr)
 
         self._dispatch_mut(f)
-
-    comptime ArrayType = DynArray
-    """`Builder`'s companion-array member. This is what `DynArray: Array`
-    unblocked: the trait requires `ArrayType: Array`, and until the erased array
-    conformed there was nothing for the erased builder to name."""
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
         def f[T: Builder](mut b: T) raises {imm} -> DynArray:
