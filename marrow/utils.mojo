@@ -310,24 +310,3 @@ def variant_dispatch_raises[
         if v.isa[T]():
             return func(v[T])
     raise Error("variant_dispatch: no arm matched the active variant type")
-
-
-# ---------------------------------------------------------------------------
-# Per-dtype-family dispatch adapters
-#
-# Thin wrappers over `variant_dispatch_raises` that fix the trait to a dtype
-# family, so a kernel's runtime dispatch reads as
-# `array.dtype().dispatch_numeric(leaf)` instead of an 11-way
-# `if dtype == int8 ... elif ...` cascade. `func` receives the runtime dtype
-# resolved to its concrete comptime type `T`; the return type `R` is inferred
-# from `func`. A dtype outside the family raises (the family trait bound filters
-# it out, so no arm matches) — the aggregate boundary relies on this to reject
-# non-numeric columns catchably.
-#
-# One member per dtype family trait in `dtypes.mojo`, so a kernel never has to
-# spell out its own ladder: adding a dtype to `DynType.VariantType` extends
-# every family it conforms to at once. Pick the *narrowest* family that covers
-# the leaf — each member instantiates `func` once per conforming variant arm, so
-# `DynType.dispatch_primitive` costs roughly twice `DynType.dispatch_numeric` in code
-# size.
-# ---------------------------------------------------------------------------

@@ -509,9 +509,6 @@ struct BoolArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -754,9 +751,6 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1007,9 +1001,6 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1259,9 +1250,6 @@ struct ListLikeArray[T: ListLikeType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1557,9 +1545,6 @@ struct FixedSizeListArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1732,9 +1717,6 @@ struct FixedSizeBinaryArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,
@@ -1990,9 +1972,6 @@ struct StructArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            # the parent's count says nothing about a sub-range; count this
-            # window. A parent with no nulls has a child with none, so the
-            # common case never touches the bitmap.
             nulls=_sliced_null_count(
                 self.nulls,
                 self.length,

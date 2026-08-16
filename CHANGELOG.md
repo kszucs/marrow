@@ -4,6 +4,31 @@
 
 ### Refactors
 
+- **Cleared the unambiguous items from the duplication audit**
+  (`docs/duplication-audit.md`), ~215 lines net.
+
+  - The three-line comment above all seven `_sliced_null_count` calls in
+    `arrays.mojo` is gone — `_sliced_null_count`'s own body comment already said
+    it, and the copies were most of the apparent `slice()` duplication.
+  - `python/marrow/__init__.py` gained a `_Tabular(_Wrapper)` base holding the
+    15 methods `RecordBatch` and `Table` had written out twice. It sits *between*
+    `_Wrapper` and the two classes, so `Array` and `Scalar` do not inherit a
+    tabular surface.
+  - `bench_bitmap.mojo`'s three `_bench_pack_bools_w{8,32,64}` helpers became one
+    `_bench_pack_bools[W]`; the alternating pattern is built rather than spelled
+    out as a 64-element literal. Built once in setup, so the timed closure is
+    unchanged.
+  - `marrow/tests/test_parquet.mojo` moved to `marrow/parquet/tests/`, beside the
+    nine other Parquet test files.
+  - `load_word_le` moved from `views.mojo` to its only caller,
+    `parquet/codecs.mojo` — which already uses raw pointers, so the "so decode
+    kernels need not call `unsafe_ptr()` themselves" rationale no longer applied.
+  - Six orphaned section banners: the `dispatch_*` family banner moved from the
+    end of `utils.mojo` into `DynType` where the adapters actually live; the
+    `AggFunction` banner moved from the end of `kernels/aggregate.mojo` up to the
+    trait it describes; four `# Main` banners left in `bench_*.mojo` from when
+    benches carried a `main()` deleted.
+
 - **Migrated 288 of 292 closures off parametric `@__parameter` onto
   value-taking unified closures.** `Benchmark.iter`, `ExecContext.stripe`, the
   `views.apply` family, `DynType.dispatch_*`, the erased

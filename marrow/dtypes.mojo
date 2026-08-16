@@ -863,6 +863,22 @@ struct DynType(
 
         return variant_dispatch_raises(self._v, narrow)
 
+    # --- per-dtype-family dispatch adapters ---
+    #
+    # Thin wrappers over `_dispatch` that narrow the trait to a dtype family, so
+    # a kernel's runtime dispatch reads as `array.dtype().dispatch_numeric(leaf)`
+    # instead of an 11-way `if dtype == int8 ... elif ...` cascade. `func`
+    # receives the runtime dtype resolved to its concrete comptime type `T`; the
+    # return type `R` is inferred from `func`. A dtype outside the family raises
+    # — the aggregate boundary relies on this to reject non-numeric columns
+    # catchably.
+    #
+    # One member per dtype family trait above, so a kernel never has to spell
+    # out its own ladder: adding a dtype to `DynType.VariantType` extends every
+    # family it conforms to at once. Pick the *narrowest* family that covers the
+    # leaf — each member instantiates `func` once per conforming variant arm, so
+    # `dispatch_primitive` costs roughly twice `dispatch_numeric` in code size.
+
     def dispatch_primitive[
         R: Movable, //, Func: def[T: PrimitiveType](T) raises -> R
     ](self, func: Func) raises -> R:

@@ -33,8 +33,23 @@ from ..arrays import (
 )
 from .. import dtypes as dt
 from ..utils import LittleEndian
-from ..views import load_word_le
 from .utils import CompressionLibs
+
+
+@always_inline
+def load_word_le[
+    mut: Bool, //, o: Origin[mut=mut]
+](data: Span[UInt8, o], byte_idx: Int) -> UInt64:
+    """Unaligned little-endian 64-bit load from a byte span.
+
+    Lives here rather than in `views.mojo` because bit-unpacking is its only
+    caller and this file is already inside the Parquet codec layer, where
+    CLAUDE.md permits raw pointers (it `dlopen`s the C codecs and hands them
+    pointers directly). The caller guarantees 8 readable bytes at `byte_idx`
+    (mmap has trailing bytes; the decompression scratch is padded)."""
+    return (data.unsafe_ptr().unsafe_offset(byte_idx)).unsafe_bitcast[UInt64]()[
+        unsafe_offset=0
+    ]
 
 
 struct Zigzag:

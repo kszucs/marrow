@@ -851,6 +851,22 @@ trait Aggregation(Kernel):
         )
 
 
+# ---------------------------------------------------------------------------
+# AggFunction — an aggregate before its input type is known.
+#
+# The one dispatch left in the aggregate layer: map a *runtime input dtype* onto
+# the `Aggregation` that implements this aggregate for it, and hand that type to
+# a comptime `job`. Which dtypes an aggregate supports is stated by its own
+# `resolve` — a new aggregate cannot forget the rule, and no central ladder has
+# to know every aggregate that will ever exist.
+#
+# The functions themselves (`Sum`, `Min`, `Count`, …) are the frontend's
+# vocabulary and live in `marrow.expr.aggregates`, together with the one string
+# comparison that maps a runtime name onto them. Nothing in this package turns a
+# name into behaviour.
+# ---------------------------------------------------------------------------
+
+
 trait AggFunction(Kernel):
     """An aggregate *function*: a name plus the input dtypes it supports.
 
@@ -1175,19 +1191,3 @@ struct DistinctAgg[exact: Bool](Aggregation):
             return count_distinct(values, ctx).repeat(1)
         else:
             return approx_count_distinct(values, ctx).repeat(1)
-
-
-# ---------------------------------------------------------------------------
-# AggFunction — an aggregate before its input type is known.
-#
-# The one dispatch left in the aggregate layer: map a *runtime input dtype* onto
-# the `Aggregation` that implements this aggregate for it, and hand that type to
-# a comptime `job`. Which dtypes an aggregate supports is stated by its own
-# `resolve` — a new aggregate cannot forget the rule, and no central ladder has
-# to know every aggregate that will ever exist.
-#
-# The functions themselves (`Sum`, `Min`, `Count`, …) are the frontend's
-# vocabulary and live in `marrow.expr.aggregates`, together with the one string
-# comparison that maps a runtime name onto them. Nothing in this package turns a
-# name into behaviour.
-# ---------------------------------------------------------------------------

@@ -555,13 +555,16 @@ def bench_and_diff_offset_100m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
-    comptime W = 8
+def _bench_pack_bools[W: Int](mut b: Benchmark, size: Int) raises:
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
-    var pattern = SIMD[DType.bool, W](
-        True, False, True, False, True, False, True, False
-    )
+    # Alternating True/False, built rather than spelled out: the width-8, -32
+    # and -64 bodies were identical apart from the literal's length. Built once
+    # here, exactly like the literals it replaces — outside `b.iter`, so nothing
+    # about the measurement changes.
+    var pattern = SIMD[DType.bool, W](fill=False)
+    for i in range(0, W, 2):
+        pattern[i] = True
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
@@ -574,27 +577,27 @@ def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
 
 
 def bench_pack_bools_w8_1k(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 1_000)
+    _bench_pack_bools[8](b, 1_000)
 
 
 def bench_pack_bools_w8_10k(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 10_000)
+    _bench_pack_bools[8](b, 10_000)
 
 
 def bench_pack_bools_w8_100k(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 100_000)
+    _bench_pack_bools[8](b, 100_000)
 
 
 def bench_pack_bools_w8_1m(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 1_000_000)
+    _bench_pack_bools[8](b, 1_000_000)
 
 
 def bench_pack_bools_w8_10m(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 10_000_000)
+    _bench_pack_bools[8](b, 10_000_000)
 
 
 def bench_pack_bools_w8_100m(mut b: Benchmark) raises:
-    _bench_pack_bools_w8(b, 100_000_000)
+    _bench_pack_bools[8](b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -602,77 +605,28 @@ def bench_pack_bools_w8_100m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_pack_bools_w32(mut b: Benchmark, size: Int) raises:
-    comptime W = 32
-    var bm = Bitmap.alloc_zeroed(size)
-    var bv = bm.view()
-    var pattern = SIMD[DType.bool, W](
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-    )
-    b.throughput(BenchMetric.elements, size)
-
-    @always_inline
-    def call() {imm}:
-        for i in range(0, size - W + 1, W):
-            bv.store[W](i, pattern)
-        keep(bv.load_bytes[DType.uint8](0))
-
-    b.iter(call)
-
-
 def bench_pack_bools_w32_1k(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 1_000)
+    _bench_pack_bools[32](b, 1_000)
 
 
 def bench_pack_bools_w32_10k(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 10_000)
+    _bench_pack_bools[32](b, 10_000)
 
 
 def bench_pack_bools_w32_100k(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 100_000)
+    _bench_pack_bools[32](b, 100_000)
 
 
 def bench_pack_bools_w32_1m(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 1_000_000)
+    _bench_pack_bools[32](b, 1_000_000)
 
 
 def bench_pack_bools_w32_10m(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 10_000_000)
+    _bench_pack_bools[32](b, 10_000_000)
 
 
 def bench_pack_bools_w32_100m(mut b: Benchmark) raises:
-    _bench_pack_bools_w32(b, 100_000_000)
+    _bench_pack_bools[32](b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -680,109 +634,28 @@ def bench_pack_bools_w32_100m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_pack_bools_w64(mut b: Benchmark, size: Int) raises:
-    comptime W = 64
-    var bm = Bitmap.alloc_zeroed(size)
-    var bv = bm.view()
-    var pattern = SIMD[DType.bool, W](
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-        True,
-        False,
-    )
-    b.throughput(BenchMetric.elements, size)
-
-    @always_inline
-    def call() {imm}:
-        for i in range(0, size - W + 1, W):
-            bv.store[W](i, pattern)
-        keep(bv.load_bytes[DType.uint8](0))
-
-    b.iter(call)
-
-
 def bench_pack_bools_w64_1k(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 1_000)
+    _bench_pack_bools[64](b, 1_000)
 
 
 def bench_pack_bools_w64_10k(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 10_000)
+    _bench_pack_bools[64](b, 10_000)
 
 
 def bench_pack_bools_w64_100k(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 100_000)
+    _bench_pack_bools[64](b, 100_000)
 
 
 def bench_pack_bools_w64_1m(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 1_000_000)
+    _bench_pack_bools[64](b, 1_000_000)
 
 
 def bench_pack_bools_w64_10m(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 10_000_000)
+    _bench_pack_bools[64](b, 10_000_000)
 
 
 def bench_pack_bools_w64_100m(mut b: Benchmark) raises:
-    _bench_pack_bools_w64(b, 100_000_000)
+    _bench_pack_bools[64](b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------

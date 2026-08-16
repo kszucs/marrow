@@ -177,8 +177,3 @@ def bench_groupby_count_nulls_1m_g100k_aggstate(mut b: Benchmark) raises:
 
 def bench_groupby_count_nulls_1m_g100k_countagg(mut b: Benchmark) raises:
     _bench_group_by_nulls[CountAgg](b, 1_000_000, 100_000)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
