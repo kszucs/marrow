@@ -115,6 +115,59 @@ obvious. Read before planning anything.
 
 ---
 
+## 0.5 Priority — MoSCoW against M1
+
+**The frame matters more than the labels.** These are prioritised against
+M1's own acceptance criteria, which the milestone section states as three
+things, not one: *results cross-checked against DuckDB*, *wall-clock
+competitive-or-better against polars and duckdb on the same box*, and *the
+binary-size gate green*. "Must" means M1 cannot be claimed without it. Anything
+whose absence would not stop that claim is Should or below, however appealing.
+
+### Must — M1 cannot ship without these
+
+| ID | Why it blocks M1 |
+|---|---|
+| **M1.1** Optimizer v1 | Head of a strictly sequential chain; nothing below it can start |
+| **M1.2** Python lazy bindings | No plan or expression type is bound today |
+| **M1.3** ibis-flavoured `Table`/`Column` | Blocked on M1.2 |
+| **M1.4** Kernel gaps M1 needs | Named by the 43 queries |
+| **M1.5** ClickBench through the lazy plan | *Is* the milestone |
+| **Size-gate resolution** | Acceptance says "gate green". `query_streaming_agg_fused` is at +0.449% of 0.5% and the next aggregate change will not fit. Shrink or re-baseline **deliberately** |
+| **Push, and run Benchmarks + Wheels** | Acceptance includes a *measured* wall-clock comparison and a green gate. Both currently rest on one unpushed laptop, ~580 commits ahead of `origin/main`. Those two jobs have never run at all |
+
+### Should — real value, M1 does not block on it
+
+| ID | Note |
+|---|---|
+| **V0** `MapScalar` | User-visible wrong type. Blocked only by the size gate, so it lands free once that is resolved |
+| **M2.11** `CoalesceBatches` | ClickBench is filter-heavy; morsel compaction feeds the wall-clock criterion |
+| **M3.4** O(N) top-K | Most queries are `GROUP BY … ORDER BY … LIMIT`. Grouped output is small, so this is not a blocker — but it is the obvious next perf lever |
+| **M3.3** `JoinProcessor` drops the exec context | S, and a silent correctness-of-configuration bug |
+| **FU-6** `sort_indices(StructArray, keys)` | Removes a re-gather |
+| **Q4.4** `ipc.mojo` → package | 2,342 lines |
+| **Q-NEW** three `marrow.expr` import cycles | A decision, then possibly nothing |
+| **L2** split `values.mojo` | Re-scope first; the blocker was the shared name |
+
+### Could — genuine, nothing depends on it
+
+`M2.1` Distinct/Union · `M2.2` unique/value_counts · `M2.4` statistical aggregates ·
+`M2.13` EXPLAIN · `M3.6` Table/ChunkedArray depth · `M3.7` decimal arithmetic ·
+`Q2.5` aggregates (a size play, and the size gate is the thing that is blocked) ·
+`Q4.6` Parquet untyped fanout · `Q0.5` · `FU-7(b)` · `FU-7(d)`
+
+### Won't — this cycle, with the reason
+
+| ID | Reason |
+|---|---|
+| **B4** | Needs a hand-assembled BIT_PACKED file; no reference writer emits them |
+| **B25** | Metal backend crash, and every CI job passes `--no-gpu`, so it is unobserved either way |
+| ASAN on Linux | `test.yml if: false`; the macOS job now carries the signal |
+| `interval` YEAR_MONTH/DAY_TIME in archery | pyarrow has no type for either unit and the harness bridges through pyarrow |
+| **M2.5** spill · **M3.1/M3.2** join completeness/reordering · **M3.8** late materialization | Post-M1 by construction — M2 and M3 milestones |
+
+---
+
 ## 1. Wave 1 — Correctness
 
 Defects that produce **wrong answers with no error**. These come first because
