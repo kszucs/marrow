@@ -394,18 +394,18 @@ def _drive_string[
 # their fused driver and the breakers override it with their stage result.
 # ---------------------------------------------------------------------------
 trait Value(Copyable, Deinitable, Movable):
-    comptime OutShape: Int  # 0 scalar, 1 columnar
-    """Whether this node yields one value or a column. Read generically by
-    `NullPredicate`, which propagates its operand's shape; the fused drivers
-    read it off the *family* traits.
+    """A node. Every member is a runtime method.
 
-    `OutType` used to sit beside this and did not survive scrutiny: no
-    `[V: Value]` code ever read it. The three nodes bound on plain `Value`
-    (`NullPredicate`, `IsIn`, `WindowFunction`) each declare their own output
-    type, and every family trait redeclares `OutType` with a tighter bound. Its
-    only effect was to force `DynValue` to name one, which forced `DynType` to
-    conform to `DataType` — a requirement with no reader propping up a
-    conformance with no consumer."""
+    Both comptime members this once carried are gone. `OutType` went first — no
+    `[V: Value]` code read it. `OutShape` followed: its real readers are the
+    numeric and string drivers, which reach it through the *family* traits, and
+    one node (`NullPredicate`) that propagated its operand's shape while always
+    materializing a column regardless. It is declared on `NumericValue`,
+    `BoolValue` and `StringValue` instead.
+
+    That leaves a trait of runtime methods only — exactly the property
+    `7d57398` requires of anything the boxes erase into, now with no
+    qualification."""
 
     def materialize(self, batch: RecordBatch) raises -> Datum:
         """Produce this node's result `Datum` — the family driver: a numeric `Buffer`,
@@ -501,6 +501,7 @@ trait Value(Copyable, Deinitable, Movable):
 
 
 trait NumericValue(Value):
+    comptime OutShape: Int  # 0 scalar, 1 columnar
     comptime OutType: NumericType
 
     comptime State: Copyable & Deinitable
@@ -970,6 +971,7 @@ comptime Ln = FloatUnary[LogKernel, _]
 # bit-packs a `Bitmap` (the one physical difference from the numeric lane).
 # ---------------------------------------------------------------------------
 trait BoolValue(Value):
+    comptime OutShape: Int  # 0 scalar, 1 columnar
     comptime NativeType: DType  # operand width (sizes the SIMD lane), not the output
 
     comptime State: Copyable & Deinitable
@@ -1307,7 +1309,10 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
     """
 
     comptime OutType = BoolType
-    comptime OutShape = Self.A.OutShape
+    comptime OutShape = 1
+    """Always columnar. `state` runs `into_array(..., batch.num_rows())`, so this
+    node materializes a length-N `BoolArray` whatever its operand's shape was —
+    propagating `Self.A.OutShape` claimed a scalar result it never produced."""
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     comptime State = BoolArray
     var a: Self.A
@@ -1495,6 +1500,7 @@ struct StringToBool[A: StringValue](BoolValue):
 # concat chain fuses without materializing intermediate string arrays.
 # ---------------------------------------------------------------------------
 trait StringValue(Value):
+    comptime OutShape: Int  # 0 scalar, 1 columnar
     comptime OutType: StringLikeType
 
     comptime State: Copyable & Deinitable
