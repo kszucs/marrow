@@ -2553,15 +2553,11 @@ def test_dictionary_array_eq_permuted_dictionary() raises:
     var vb1 = StringBuilder()
     vb1.append("x")
     vb1.append("y")
-    var d1 = DictionaryArray.from_arrays(
-        array([0, 1, 0], int8), vb1.finish()
-    )
+    var d1 = DictionaryArray.from_arrays(array([0, 1, 0], int8), vb1.finish())
     var vb2 = StringBuilder()
     vb2.append("y")
     vb2.append("x")
-    var d2 = DictionaryArray.from_arrays(
-        array([1, 0, 1], int8), vb2.finish()
-    )
+    var d2 = DictionaryArray.from_arrays(array([1, 0, 1], int8), vb2.finish())
     assert_true(d1 == d2)
 
 
