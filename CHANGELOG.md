@@ -80,6 +80,52 @@
   `write_repr_to`. And `def_method` fills `tp_dict`, not CPython slots, so
   operator dunders cannot work at the Mojo layer — `Expr` exposes named methods
   (`add`, `lt`, `and_`) and `Column` maps them onto the operators.
+- **Null handling reaches the runtime expression lane, and `fill_null` reaches
+  the AOT lane.** `DynValue` gained `is_null()`, `is_valid()`, `is_nan()`,
+  `is_inf()` and `fill_null(other)`. The three predicates share one
+  `_predicate[K: UnaryPredicateKernel]` evaluator, so a program still links only
+  the kernels its expressions name; `fill_null` widens mixed numeric operands
+  first, the same rule `_binary` and `_compare` already use, so
+  `col("x").fill_null(lit[Int64Type](0))` works over an int32 column.
+
+  The AOT lane needed no new node: `FillNullKernel` gained the `combine` that
+  `BinaryConditionalKernel` asks for, and `FillNull` is the existing
+  `ConditionalBinary` breaker under a new alias, beside `Coalesce` and `Nullif`.
+  `is_nan`/`is_inf`/`is_null`/`is_valid` were already expressible there.
+
+- **`count_star()`** (`marrow/expr/builders.mojo`) — `COUNT(*)`, the row count,
+  as distinct from `count(col)`, which skips nulls. It needs no new kernel: a
+  literal is valid on every row, so the valid-count of a constant column is the
+  row count. Verified against a nullable column rather than assumed. See
+  `docs/alpha-findings/a1-null-ops.md` §2 for why the implementation behind the
+  name should not stay this way.
+
+### Refactors
+
+- **The fluent null predicates follow PyArrow's spelling.** `isnull`/`notnull`
+  on `Value` and `isnan`/`isinf` on `NumericValue` are now
+  `is_null`/`is_valid`/`is_nan`/`is_inf` — the names PyArrow exposes, and the
+  ones the kernels' own `comptime name` strings already used.
+
+  `is_null`/`is_valid` also moved off the `Value` trait onto `DynValue`. As
+  trait defaults they returned the *fused* `NullPredicate`, which made the
+  erased lane's version unwritable — a struct method does not override a trait
+  default in Mojo, the two become competing overloads
+  (`ambiguous call to 'is_null'`). That mattered:
+  `col("a").is_null() | (col("b") > lit(1))` did not compile, because a
+  predicate that left the lane cannot be recombined with one that stayed. The
+  move costs nothing — every caller in the tree was already a `DynValue`, since
+  the AOT lane spells the node directly as `IsNull(col("a", int64))`.
+
+### Tests
+
+- 13 cases for the above across `test_runtime.mojo`, `test_parity.mojo` and
+  `test_aggregates.mojo`, including the cross-lane parity cases for `fill_null`,
+  `is_valid` and `is_nan`, and the five new ops added to the op-name axis.
+- `test_parity_coalesce` and `test_parity_nullif` now assert real cross-lane
+  parity. They used `assert_fused` — the one-lane placeholder for "ops the
+  runtime lane does not yet expose" — long after `DynValue.coalesce`/`.nullif`
+  shipped, so two live ops had no parity assertion at all.
 
 ### Fixes
 

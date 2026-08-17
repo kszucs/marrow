@@ -369,10 +369,14 @@ def nullif[
 # ---------------------------------------------------------------------------
 
 
-struct FillNullKernel(Kernel):
+struct FillNullKernel(BinaryConditionalKernel):
     """``a`` with its nulls replaced from a second array."""
 
     comptime name = "fill_null"
+
+    @staticmethod
+    def combine(la: DynArray, ra: DynArray) raises -> DynArray:
+        return Self.apply(la, ra, ExecContext.serial())
 
     @staticmethod
     def apply(a: DynArray, fill: DynArray, ctx: ExecContext) raises -> DynArray:

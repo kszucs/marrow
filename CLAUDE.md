@@ -725,6 +725,19 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   off an externally-bound generic parameter** (though `Self.name` inside the
   concrete type works, and `Self.K.name` on a kernel parameter does resolve).
   Expose the constant through a method.
+- **A struct method does not *override* a trait default** — the two become
+  competing overloads and every call reports `ambiguous call to 'x'`, at the
+  call site rather than at either definition. So a trait default that returns a
+  *concrete node type* dictates representation to every conformer. `Value`
+  carried `isnull`/`notnull` returning the fused `NullPredicate`, which made
+  `DynValue.is_null() -> Self` unwritable; they moved onto `DynValue`, whose
+  callers they all already were.
+- **A trait default method's parameter name must not collide with a
+  *conformer's* struct parameter**, or that struct fails with `name conflict
+  between parameter 'R' in the default trait method and a parameter in the
+  struct`. This is why every binary operator on `NumericValue` names its
+  parameter `Rhs`: `NumericBinary`/`FloatBinary`/`ConditionalBinary` already use
+  `L`/`R`.
 - **`comptime` is a reserved keyword and cannot be a module name.**
 - There is **no runtime `__getattr__`**; the comptime `__getattr_param__` hook
   fires only for missing attributes and needs a handle type.

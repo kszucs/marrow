@@ -58,7 +58,7 @@ from ...kernels.aggregate import (
 )
 from ...expr.aggregates import AggFunc
 from ...expr.values import AggExpr
-from ...expr.builders import col, lit
+from ...expr.builders import col, lit, count_star
 from ...expr.relations import DynRelation, in_memory_table
 from ...expr.values import BoxedValue
 from ...expr.builders import col as fused_col
@@ -584,3 +584,70 @@ def test_agg_parity_grouped_sum() raises:
             f.column(1).as_int64()[_row_for(f, region)].value(),
             d.column(1).as_int64()[_row_for(d, region)].value(),
         )
+
+
+# ---------------------------------------------------------------------------
+# COUNT(*) — row count, as distinct from count(col) which skips nulls
+# ---------------------------------------------------------------------------
+
+
+def _orders_with_nulls() raises -> RecordBatch:
+    """`_orders()` with two of the five amounts nulled, so `count(amount)`
+    (3) and `COUNT(*)` (5) cannot coincide."""
+    var region = array(["east", "west", "east", "west", "east"])
+    var b = PrimitiveBuilder[Int64Type](int64, 5)
+    b.append(Int64(10))
+    b.append_null()
+    b.append(Int64(30))
+    b.append_null()
+    b.append(Int64(50))
+    return record_batch(
+        [region.copy(), b.finish().to_dyn()], names=["region", "amount"]
+    )
+
+
+def test_count_star_probe_literal_counts_every_row() raises:
+    """`lit(1).count()` is `COUNT(*)`: a non-null literal is valid on every row,
+    so its valid-count is the row count even where the data column is null."""
+    var plan = in_memory_table(_orders_with_nulls()).aggregate(
+        keys=[col("region")],
+        aggs=[
+            lit[Int64Type](1).count().alias("n_star"),
+            col("amount").count().alias("n_amount"),
+        ],
+    )
+    var out = plan.execute()
+    var east = _row_for(out, "east")
+    var west = _row_for(out, "west")
+
+    # east has 3 rows, all amounts valid; west has 2 rows, both amounts null.
+    assert_equal(out.column(1).as_int64()[east].value(), 3)
+    assert_equal(out.column(2).as_int64()[east].value(), 3)
+    assert_equal(out.column(1).as_int64()[west].value(), 2)
+    assert_equal(out.column(2).as_int64()[west].value(), 0)
+
+
+def test_count_star_helper_matches_the_literal_form() raises:
+    """`count_star()` is that expression under the name SQL gives it."""
+    var plan = in_memory_table(_orders_with_nulls()).aggregate(
+        keys=[col("region")],
+        aggs=[count_star(), col("amount").count().alias("n_amount")],
+    )
+    var out = plan.execute()
+
+    assert_true(out.schema.fields[1].name == "count_star")
+    assert_equal(out.column(1).as_int64()[_row_for(out, "east")].value(), 3)
+    assert_equal(out.column(1).as_int64()[_row_for(out, "west")].value(), 2)
+    # and it is genuinely different from count(col) on a nullable column
+    assert_equal(out.column(2).as_int64()[_row_for(out, "west")].value(), 0)
+
+
+def test_count_star_ungrouped_is_the_table_row_count() raises:
+    """No keys — `SELECT COUNT(*) FROM orders`."""
+    var out = (
+        in_memory_table(_orders_with_nulls())
+        .aggregate(keys=List[BoxedValue](), aggs=[count_star()])
+        .execute()
+    )
+    assert_equal(out.num_rows(), 1)
+    assert_equal(out.column(0).as_int64()[0].value(), 5)

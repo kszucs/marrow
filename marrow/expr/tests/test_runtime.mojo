@@ -1,4 +1,5 @@
 from std.testing import assert_equal, assert_true, assert_false
+from std.utils.numerics import nan
 
 from ...arrays import (
     PrimitiveArray,
@@ -14,6 +15,8 @@ from ...dtypes import (
     float64,
     bool_ as bool_dt,
     Int64Type,
+    Int32Type,
+    Float64Type,
     int32,
     string,
     timestamp,
@@ -82,11 +85,11 @@ def _exec_length(expr: DynValue, batch: RecordBatch) raises -> Int32Array:
 def _exec_pred(expr: BoxedValue, batch: RecordBatch) raises -> BoolArray:
     """Helper: evaluate a predicate expression against the batch.
 
-    Takes the box, not `DynValue`: `isnull`/`notnull` are defaults on `Value`
-    itself, so they build a fused `NullPredicate` even over an erased operand —
-    the one place the runtime lane hands back something that is not a tag node.
-    `NullPredicate` is a breaker whose operand bound is `A: Value`, and it only
-    ever calls runtime methods on it, so that instantiation is sound."""
+    Takes the box rather than `DynValue` so a fused predicate and a tag
+    predicate can both be handed to it. `is_null`/`is_valid`/`is_nan` are
+    `DynValue`'s own methods and stay in the erased lane; the fused
+    `NullPredicate` (bound `A: Value`) still accepts an erased operand and
+    reaches this helper through the same implicit box."""
     var tmp = expr.execute(batch)
     return tmp.as_bool().copy()
 
@@ -299,9 +302,77 @@ def test_is_null() raises:
     """``is_null()`` is True for null elements, False for valid ones."""
     var a = array([1, 2, 3], int64)
     var result = _exec_pred(
-        col("c0").isnull(), record_batch([a^], names=["c0"])
+        col("c0").is_null(), record_batch([a^], names=["c0"])
     )
     assert_true(result == array([False, False, False]))
+
+
+def _nullable_c0() raises -> RecordBatch:
+    """One int64 column ``c0`` with nulls in positions 1 and 3."""
+    var a = array([1, None, 3, None], int64)
+    return record_batch([a^], names=["c0"])
+
+
+def test_dyn_is_null_sees_actual_nulls() raises:
+    """The tag node reads the validity bitmap, not the values."""
+    var result = _exec_pred(col("c0").is_null(), _nullable_c0())
+    assert_true(result == array([False, True, False, True]))
+
+
+def test_dyn_is_valid_is_the_complement() raises:
+    var result = _exec_pred(col("c0").is_valid(), _nullable_c0())
+    assert_true(result == array([True, False, True, False]))
+
+
+def test_dyn_null_predicate_stays_in_the_erased_lane() raises:
+    """The point of overriding the `Value` defaults.
+
+    A predicate that returned a fused `NullPredicate` could not be combined with
+    a predicate that stayed erased: `BoolValue.__or__` takes a `BoolValue` and a
+    `DynValue` is not one, so this expression would not compile at all. It is a
+    compile-time property, so merely building the tree is the assertion; the
+    result is checked to keep the test honest about what it ran."""
+    var expr = col("c0").is_null() | (col("c0") > lit[Int64Type](2))
+    var result = _exec_pred(expr, _nullable_c0())
+    # null -> True (is_null), 3 > 2 -> True; 1 is neither.
+    assert_true(result == array([False, True, True, True]))
+
+
+def test_dyn_is_nan_over_floats() raises:
+    """``is_nan()`` scans values, so it needs a real NaN to be worth anything.
+    """
+    var fb = PrimitiveBuilder[Float64Type](float64, 3)
+    fb.append(Float64(1.0))
+    fb.append(nan[DType.float64]())
+    fb.append(Float64(3.0))
+    var result = _exec_pred(
+        col("c0").is_nan(), record_batch([fb.finish().to_dyn()], names=["c0"])
+    )
+    assert_true(result == array([False, True, False]))
+
+
+def test_dyn_fill_null_from_literal() raises:
+    """Nulls take the literal, valid elements are untouched."""
+    var out = col("c0").fill_null(lit[Int64Type](0)).execute(_nullable_c0())
+    assert_true(out == array([1, 0, 3, 0], int64).to_dyn())
+
+
+def test_dyn_fill_null_widens_mixed_numeric_operands() raises:
+    """The column is int32 and the replacement int64.
+
+    `FillNullKernel` pins both operands to one dtype, so without the promotion
+    in `_fill_null` this raises on a mismatch the caller never wrote — the same
+    widening `_binary` and `_compare` already do."""
+    var b = PrimitiveBuilder[Int32Type](int32, 3)
+    b.append(Int32(1))
+    b.append_null()
+    b.append(Int32(3))
+    var out = (
+        col("c0")
+        .fill_null(lit[Int64Type](7))
+        .execute(record_batch([b.finish().to_dyn()], names=["c0"]))
+    )
+    assert_true(out == array([1, 7, 3], int64).to_dyn())
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +429,7 @@ def test_not_null_pred() raises:
     """
     var a = array([1, 2, 3], int64)
     var result = _exec_pred(
-        col("c0").notnull(), record_batch([a^], names=["c0"])
+        col("c0").is_valid(), record_batch([a^], names=["c0"])
     )
     assert_true(result == array([True, True, True]))
 
