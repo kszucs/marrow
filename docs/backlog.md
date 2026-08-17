@@ -106,6 +106,15 @@ obvious. Read before planning anything.
 - **A capturing closure's type is parameterised by its creating scope**, so it
   cannot be stored in a struct field and outlive that scope. Every stored
   callback must be `thin`.
+- **A narrow test selection can hang the compiler where a wide one does not**,
+  and the diagnostic advice for it is a trap. See §2 *`dispatch` hangs a narrow
+  unit*. Two things cost hours on 2026-08-17: `mojo run` leaves an **idle parent
+  process pinned at ~0:07.9 CPU** while a child does the real work, so
+  `pgrep -x mojo | head -1` (and the harness's own "compare elapsed against CPU
+  time" hint) reports a frozen CPU clock and looks exactly like a deadlock —
+  sum CPU across *all* mojo processes instead, and it climbs past 17 CPU-minutes.
+  And `ps -eo comm` prints `mojo` for the parent but the **full path** for the
+  child, so `awk '$2=="mojo"'` silently misses the one that matters.
 - **`ctx.stripe` bodies may not raise**, and widening it miscompiles: the
   parameter form of `sync_parallelize` that accepts a raising worker needs an
   implicitly-capturing closure whose captures are silently not made. Watch for
@@ -245,6 +254,72 @@ of the above is local evidence only.
 > over the line — and was reverted for that reason alone. **The next change touching
 > the aggregate or compare/bool nodes will not fit.** Either shrink something
 > or re-baseline deliberately; do not discover this by having a gate fail.
+
+---
+
+### `dispatch` hangs a narrow compilation unit — **open, blocks `test_distinct`**
+
+`RapidHashKernel.dispatch` (the 37-arm runtime dtype fan-out) hangs the Mojo
+toolchain when it is the *only* substantial thing in a compilation unit. Eight
+lines reproduce it:
+
+```mojo
+from marrow.arrays import DynArray
+from marrow.builders import array
+from marrow.dtypes import int32
+from marrow.kernels.hashing import RapidHashKernel
+
+def main() raises:
+    var a: DynArray = array([1, 2, 1], int32)
+    var h = RapidHashKernel.dispatch(a)      # never finishes
+    if len(h) != 3:
+        raise Error("bad")
+```
+
+Replace `dispatch(a)` with `apply(a)` on a typed array and it compiles in **10
+seconds**. `test_hash__dispatch` alone (its only distinguishing feature is the
+`dispatch` call) hangs; `test_hash__int32_deterministic` alone compiles in 10s.
+
+**The paradox, and the reason this is not simply "too much code":** the same
+case inside the full 27-case `test_hashing.mojo` driver compiles in **88 s from
+a cold cache** and passes. More code compiles *faster*. This is also why §2's
+2026-08-16 full-suite run went green at 2034 passed — a whole-suite unit
+compiles what a narrow one cannot.
+
+Ruled out on 2026-08-17, each by direct experiment rather than inference:
+
+| hypothesis | how it was tested | verdict |
+|---|---|---|
+| recent marrow changes | git worktrees at `5435f59` and `32d6b65` | predates all of it |
+| the pytest harness | plain `mojo build` / `mojo run` | no |
+| optimisation level | `-O0`, `-O1`, `-O3` | no |
+| `ASSERT=all` | with and without | no |
+| toolchain version | `dev2026081605` and `dev2026081705` | no |
+| the empty-array input | `[1, 2, 1]` hangs identically | no |
+| `print` / formatting | removed | no |
+| the artifact cache | `MODULAR_CACHE_DIR` to a fresh dir → 88 s, green | no |
+| driver size | N = 1, 4, 8, 16, 27 cases → all pass, 10-80 s | no |
+| CPU contention | retested on a clean process table | no |
+| `-j 1` (serial compile) | blocks earlier still, at 5.4 s CPU | no help |
+
+`SwissHashTable` + `insert_hashes`, and `RadixPartitioner.map_partitions` with a
+closure, each compile fine in isolation — the trigger is `dispatch` alone.
+
+Sampling the stuck process (`sample <pid>`) shows it reaches *execution*: eleven
+`🔥 Thread` runtime workers exist and every one, plus the main thread, is parked
+in `semaphore_wait_trap`. Under `-j 1` it stops earlier — three threads, no
+runtime, main thread in `mach_msg2_trap`.
+
+`test_distinct.mojo` on its own does **not** finish given 90 minutes
+(`--mojo-timeout 5400` → `✗ compiling 11 tests from 1 files — 5400s`), so this
+is a hang and not merely a slow compile.
+
+**Workaround:** do not run `test_distinct` (or a single `::case` that reaches
+`dispatch`) as its own selection; fold it into a wider one. **Next step:** confirm
+`pytest marrow/kernels/tests` (whole directory) goes green, which would make the
+workaround a rule rather than a guess, then file the eight-line repro upstream.
+Reducing `dispatch`'s instantiation footprint is the marrow-side fix if upstream
+is slow, and it would help the size gate too.
 
 ---
 
