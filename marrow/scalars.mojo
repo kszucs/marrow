@@ -6,7 +6,7 @@ length-1 arrays.
 Typed scalars:
   PrimitiveScalar[T]  — holds Scalar[T.native] (built-in) + Bool validity
   StringScalar        — holds String value + Bool validity
-  ListScalar          — holds DynArray (child values) + Bool validity
+  ListScalar          — holds DynArray (child values) + DataType + Bool validity
   StructScalar        — holds List[DynScalar] (one per field) + DataType + Bool validity
   DictionaryScalar    — holds integer index + decoded DynScalar value + DataType + Bool validity
 
@@ -36,7 +36,6 @@ from .arrays import (
 )
 from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
 from std.os import abort
-from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
     PrimitiveType,
@@ -70,7 +69,6 @@ from .dtypes import (
     YearMonthIntervalType,
     bool_,
     field,
-    list_,
     null,
     string,
 )
@@ -391,22 +389,36 @@ struct FixedSizeBinaryScalar(ArrowScalar):
 
 
 struct ListScalar(ArrowScalar):
-    """A single list value: holds an DynArray of child elements + validity flag.
+    """A single list value: holds its own type, an DynArray of child elements
+    and a validity flag.
+
+    The type is carried rather than rebuilt from the child, because rebuilding
+    it as `list_(child.dtype())` reports the *shape* and not the type: an
+    element of a `map` array would answer `list<struct<key, value>>` and an
+    element of a `large_list` array would answer `list<...>`. `ListScalar`
+    backs `list`, `large_list`, `map` and `fixed_size_list` alike, so the
+    parameters that distinguish them — `keysSorted`, the entries field name,
+    the fixed size — only survive by being stored.
     """
 
+    var _dtype: DynType
     var _value: OwnedPointer[DynArray]
     var _is_valid: Bool
 
-    def __init__(out self, *, var value: DynArray, is_valid: Bool):
+    def __init__(
+        out self, *, dtype: DynType, var value: DynArray, is_valid: Bool
+    ):
+        self._dtype = dtype.copy()
         self._value = OwnedPointer(value^)
         self._is_valid = is_valid
 
     def __init__(out self, *, copy: Self):
+        self._dtype = copy._dtype.copy()
         self._value = OwnedPointer(copy._value[].copy())
         self._is_valid = copy._is_valid
 
     def type(self) -> DynType:
-        return list_(self._value[].dtype())
+        return self._dtype.copy()
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -542,9 +554,12 @@ struct DictionaryScalar(ArrowScalar):
         return self._decoded[].copy()
 
     def __eq__(self, other: Self) -> Bool:
+        """Return True if both scalars decode to the same value.
+
+        The dictionary slot the value came from is not part of its identity.
+        """
         return (
             self._dtype == other._dtype
-            and self._index == other._index
             and self._decoded[] == other._decoded[]
         )
 
@@ -560,19 +575,19 @@ struct DictionaryScalar(ArrowScalar):
 # ---------------------------------------------------------------------------
 
 
-struct DynScalar(
-    ArrowScalar, ConvertibleToPython, Copyable, Equatable, Movable, Writable
-):
+struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     """Type-erased scalar container backed by a Variant.
 
     Wraps any typed scalar inline in a discriminated union.
     Runtime dispatch goes through the `_dispatch` helper.
 
-    **Conforms to `ArrowScalar` itself.** The erased scalar is a *peer* of the
-    typed ones rather than something above them, so generic code bound on
-    `ArrowScalar` accepts either and there is no separate erased overload set to
-    keep in step. `DynArray.ScalarType` is this, which is what lets `DynArray`
-    conform to `Array` in turn.
+    **Does not conform to `ArrowScalar`.** It exposes the same surface as its
+    own API. The conformance existed to satisfy `DynArray.ScalarType`, which in
+    turn existed to satisfy `DynBuilder.ArrayType` — a closed loop with no
+    consumer outside it, added in `8334bf0` for a lane unification that
+    `7d57398` then abandoned. Note `type()` keeps its name here: that is the
+    spelling all nine *typed* scalars use, and renaming only the box would
+    create the divergence this removal is undoing.
     """
 
     comptime VariantType = Variant[
@@ -616,31 +631,34 @@ struct DynScalar(
     ](self, func: Func) -> R:
         """Run `func` on the active variant member, narrowed to `ArrowScalar`.
 
-        The one narrowing adapter for this type; the dispatch loop itself lives
-        in `variant_dispatch`. `ArrowScalar` has to be named concretely here — a
-        closure type cannot be generic over its own trait bound.
+        The one narrowing adapter for this type. `ArrowScalar` is named concretely
+        because a closure type cannot be generic over its own trait bound, and
+        the `isa` ladder is written out here rather than delegated to a shared
+        helper: interposing a narrowing closure between the caller and the
+        ladder costs a fully inlined copy of the adapter in *every* arm.
+        Routing the four boxes through one generic `variant_dispatch` helper
+        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
+        `__text`. Duplicating five lines of `comptime for` per box is the price.
         """
 
-        def narrow[T: Movable](t: T) {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, ArrowScalar):
-                return func(rebind[downcast[T, ArrowScalar]](t))
-            else:
-                abort("DynScalar._dispatch: member is not ArrowScalar")
-
-        return variant_dispatch(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, ArrowScalar]](self._v[T]))
+        abort("DynScalar._dispatch: no arm matched")
 
     def _dispatch[
         R: Movable, //, Func: def[T: ArrowScalar](T) raises -> R
     ](self, func: Func) raises -> R:
         """Raising counterpart of `_dispatch`."""
 
-        def narrow[T: Movable](t: T) raises {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, ArrowScalar):
-                return func(rebind[downcast[T, ArrowScalar]](t))
-            else:
-                raise Error("DynScalar._dispatch: member is not ArrowScalar")
-
-        return variant_dispatch_raises(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, ArrowScalar]](self._v[T]))
+        raise Error("DynScalar._dispatch: no arm matched")
 
     # --- construction ---
 
@@ -707,17 +725,6 @@ struct DynScalar(
 
     def is_null(self) -> Bool:
         return not self.is_valid()
-
-    def to_dyn(deinit self) -> DynScalar:
-        """Already erased — hand back `self`.
-
-        Overriding this is not a convenience, it is required. The trait's
-        default body is `DynScalar(self^)`, which for `Self = DynScalar` would
-        ask the variant to hold a `DynScalar`; it deliberately does not list
-        itself, so the default would fail to instantiate. `DynType` and
-        `DynArray` override it for exactly the same reason.
-        """
-        return self^
 
     # --- typed downcasts ---
 

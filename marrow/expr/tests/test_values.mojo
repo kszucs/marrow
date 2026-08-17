@@ -34,9 +34,9 @@ from ...tabular import record_batch, RecordBatch
 from ...scalars import DynScalar
 from ...kernels.temporal import unit_day
 
+from ...expr.builders import col, lit
+from ...expr.core import into_array
 from ...expr.values import (
-    col,
-    lit,
     Add,
     Sub,
     Mul,
@@ -63,7 +63,6 @@ from ...expr.values import (
     WindowSpec,
     FrameBound,
     NumericValue,
-    into_array,
     Concat,
     Upper,
     StringLength,
@@ -97,8 +96,8 @@ from ...expr.values import (
     DayOfWeek,
     DayOfYear,
 )
-from ...expr.values import col as dyn_col
-from ...expr.relations import BoxedValue
+from ...expr.builders import col as dyn_col
+from ...expr.values import BoxedValue
 
 
 # instantiation is a COMPILE-TIME proof the operand is a fused `NumericValue` node

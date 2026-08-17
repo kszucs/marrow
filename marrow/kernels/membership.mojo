@@ -8,7 +8,7 @@ The set is built **once** from ``value_set`` and every value is probed against
 it, reusing the exact hashing / hash-table building blocks that group-by, join,
 and ``count_distinct`` use:
 
-- ``rapidhash`` (``hashing.mojo``) hashes both sides column-wise.
+- ``RapidHashKernel`` (``hashing.mojo``) hashes both sides column-wise.
 - ``SwissHashTable`` (``hashtable.mojo``) holds the set: ``build_hashes`` inserts
   the ``value_set`` hashes and builds the CSR row index; ``probe_hashes`` looks
   every ``values`` hash up (``single_match=True``) and reports which value rows
@@ -20,7 +20,7 @@ Membership is exact to the same 64-bit-hash basis the group-by / join dedup on
 Null handling matches PyArrow ``is_in``'s default (``null_matching_behavior=
 "match"``): the output is always valid (never null), and a null in ``values``
 is ``true`` iff ``value_set`` itself contains a null and ``false`` otherwise.
-This falls out for free from ``rapidhash`` mapping every null to a single
+This falls out for free from ``RapidHashKernel`` mapping every null to a single
 ``NULL_HASH_SENTINEL`` bucket — a null probes as ``true`` exactly when
 ``value_set`` inserted that sentinel bucket.
 """
@@ -29,7 +29,8 @@ from ..arrays import DynArray, Array, BoolArray
 from ..builders import BoolBuilder
 from .core import Kernel
 from ..execution import ExecContext
-from .hashing import rapidhash
+from .hashing import RapidHashKernel
+from ..utils import RapidHash64
 from .hashtable import SwissHashTable
 
 
@@ -38,8 +39,8 @@ struct IsInKernel(Kernel):
 
     Unlike the element-wise kernel families this one has **no typed leaves**:
     membership is decided entirely on the 64-bit hash, so every data type
-    ``rapidhash`` supports funnels through the same code. There is one
-    implementation, and a newly supported type is one ``rapidhash`` learns —
+    ``RapidHashKernel`` supports funnels through the same code. There is one
+    implementation, and a newly supported type is one ``RapidHashKernel`` learns —
     not one this kernel gains an overload for.
     """
 
@@ -57,10 +58,10 @@ struct IsInKernel(Kernel):
         shared ``NULL_HASH_SENTINEL`` bucket (see module docstring)."""
         var n = len(values)
 
-        var table = SwissHashTable[rapidhash]()
-        table.build_hashes(rapidhash(value_set, ctx))
+        var table = SwissHashTable[RapidHash64]()
+        table.build_hashes(RapidHashKernel.dispatch(value_set, ctx))
         var indices = table.probe_hashes(
-            rapidhash(values, ctx),
+            RapidHashKernel.dispatch(values, ctx),
             num_build_rows=len(value_set),
             single_match=True,
         )
@@ -106,7 +107,7 @@ def is_in(
     """Membership of each value in ``value_set``.
 
     ``values`` and ``value_set`` must share the same data type. Supports every
-    type ``rapidhash`` handles — numeric, bool, string, and the nested types —
+    type ``RapidHashKernel`` handles — numeric, bool, string, and the nested types —
     covering the ClickBench ``IN (...)`` case (int) and strings.
     """
     return IsInKernel.dispatch(values, value_set, ctx)

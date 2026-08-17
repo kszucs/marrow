@@ -2458,3 +2458,143 @@ def test_eq_still_separates_different_null_positions() raises:
     b2.append(Scalar[int32.native](2))
 
     assert_false(b1.finish() == b2.finish())
+
+
+# ---------------------------------------------------------------------------
+# S5 — validity equality, and dictionary slice/equality semantics
+# ---------------------------------------------------------------------------
+
+
+def test_validity_equal_all_valid_bitmap_vs_none() raises:
+    """B26: a missing bitmap means all-valid, which is a value, not a
+    representation. The slice excludes the only null but still carries the
+    parent's bitmap at an offset; the plain array has no bitmap at all."""
+    var sliced = array([None, 2, 3], int32).slice(1, 2)
+    var plain = array([2, 3], int32)
+    assert_equal(sliced.null_count(), 0)
+    assert_true(sliced == plain)
+    assert_true(plain == sliced)
+
+
+def test_validity_equal_slices_at_different_offsets() raises:
+    """Same logical validity reached from different offsets must compare equal —
+    the views are offset-applied, so the bit patterns line up."""
+    var a = array([1, None, 3, 4], int32).slice(1, 2)
+    var b = array([9, 9, None, 3], int32).slice(2, 2)
+    assert_true(a == b)
+
+
+def test_validity_equal_same_count_different_positions_word_path() raises:
+    """Equal null counts must still compare bit patterns. 100 elements puts a
+    full 64-bit word plus a tail through `BitmapView.__eq__`, which is the
+    word-level comparison that replaced the bit-by-bit loop."""
+    var ab = Int32Builder()
+    var bb = Int32Builder()
+    for i in range(100):
+        if i == 5:
+            ab.append_null()
+        else:
+            ab.append(Int32(i))
+        if i == 7:
+            bb.append_null()
+        else:
+            bb.append(Int32(i))
+    var a = ab.finish()
+    var b = bb.finish()
+    assert_equal(a.null_count(), b.null_count())
+    assert_false(a == b)
+
+
+def test_bool_array_eq_nulls_equal() raises:
+    var a = array([True, None, False])
+    var b = array([True, None, False])
+    assert_true(a == b)
+
+
+def test_bool_array_eq_nulls_mismatch_pattern() raises:
+    var a = array([None, True, False])
+    var b = array([True, None, False])
+    assert_false(a == b)
+
+
+def _dict_abc(var indices: DynArray) raises -> DictionaryArray:
+    """A dictionary over ["a", "b", "c"] with the given indices."""
+    var vb = StringBuilder()
+    vb.append("a")
+    vb.append("b")
+    vb.append("c")
+    var values: DynArray = vb.finish()
+    return DictionaryArray.from_arrays(indices^, values^)
+
+
+def test_dictionary_array_slice_recounts_nulls() raises:
+    """A slice must report its own sub-range's null count, not the parent's."""
+    var arr = _dict_abc(array([0, None, 1, None, 2], int8))
+    assert_equal(arr.null_count(), 2)
+    assert_equal(arr.slice(0, 2).null_count(), 1)
+    assert_equal(arr.slice(2, 3).null_count(), 1)
+    assert_equal(arr.slice(0, 1).null_count(), 0)
+    assert_equal(arr.slice(1, 1).null_count(), 1)
+    assert_equal(arr.slice(0, 5).null_count(), 2)
+
+
+def test_dictionary_array_eq_differing_offset() raises:
+    """Two different slices of one parent with equal length must not compare
+    equal. The old `__eq__` compared `_indices`/`_values` whole and never looked
+    at `_offset`, so this returned True."""
+    var arr = _dict_abc(array([0, 1, 2], int8))
+    assert_false(arr.slice(0, 1) == arr.slice(1, 1))
+    assert_true(arr.slice(1, 2) == arr.slice(1, 2))
+
+
+def test_dictionary_array_eq_permuted_dictionary() raises:
+    """Logical equality (arrow-rs), not representation (Arrow C++): the same
+    column encoded against differently ordered dictionaries is equal."""
+    var vb1 = StringBuilder()
+    vb1.append("x")
+    vb1.append("y")
+    var d1 = DictionaryArray.from_arrays(
+        array([0, 1, 0], int8), vb1.finish()
+    )
+    var vb2 = StringBuilder()
+    vb2.append("y")
+    vb2.append("x")
+    var d2 = DictionaryArray.from_arrays(
+        array([1, 0, 1], int8), vb2.finish()
+    )
+    assert_true(d1 == d2)
+
+
+def test_dictionary_array_eq_differing_values() raises:
+    var arr = _dict_abc(array([0, 1], int8))
+    var other = _dict_abc(array([0, 2], int8))
+    assert_false(arr == other)
+
+
+def test_dictionary_scalar_eq_permuted_dictionary() raises:
+    """The scalar makes the same call as the array: `_index` is where the value
+    was stored, not the value."""
+    var vb1 = StringBuilder()
+    vb1.append("x")
+    vb1.append("y")
+    var d1 = DictionaryArray.from_arrays(array([1], int8), vb1.finish())
+    var vb2 = StringBuilder()
+    vb2.append("y")
+    vb2.append("x")
+    var d2 = DictionaryArray.from_arrays(array([0], int8), vb2.finish())
+    assert_true(d1[0] == d2[0])
+    assert_equal(d1[0].index(), 1)
+    assert_equal(d2[0].index(), 0)
+
+
+def test_slice_default_length_null_count() raises:
+    """`slice(offset)` must count nulls over the slice's own range, not to the
+    end of the parent's bitmap. Every `slice` passed the raw `length` — `-1` on
+    this call — where `Bitmap.view` reads -1 as "to the end of the bitmap", so a
+    slice of a slice counted bits it does not own."""
+    var a = array([1, None, 3, 4, None], int32)
+    var b = a.slice(1, 3)  # [None, 3, 4]
+    assert_equal(b.null_count(), 1)
+    var c = b.slice(1)  # [3, 4] — bit 4 of the parent is null and not ours
+    assert_equal(len(c), 2)
+    assert_equal(c.null_count(), 0)

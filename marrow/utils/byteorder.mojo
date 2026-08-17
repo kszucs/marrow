@@ -7,7 +7,9 @@ little-endian bytes independent of the host byte order: the
 bytes numerically, so no host byteswap is needed.
 """
 
+from std.bit import byte_swap
 from std.sys import size_of
+from std.sys.info import is_big_endian
 
 
 struct LittleEndian:
@@ -18,12 +20,24 @@ struct LittleEndian:
     def fixed[T: DType](data: Span[UInt8, _], pos: Int) -> Scalar[T]:
         """Read a `T`-width little-endian scalar at byte `pos`. Not bounds-checked
         — callers validate `pos` (matches the raw span reads in the hot decode
-        paths)."""
-        comptime W = size_of[Scalar[T]]()
-        var arr = Array[UInt8, W](fill=0)
-        for i in range(W):
-            arr[i] = data[pos + i]
-        return SIMD[T, 1].from_bytes[big_endian=False](arr)
+        paths).
+
+        **One unaligned wide load, not a byte loop.** This used to copy `W`
+        bytes into an `Array` and call `SIMD.from_bytes`, which cost ~8 loads
+        and a stack temporary per 64-bit read — measured at 14-38x on the hash
+        kernel's string path against `std.hashlib`, which loads wide. Every
+        Parquet and IPC decode paid it too. The bitcast is why `unsafe_ptr` is
+        used here: this module is the byte-order abstraction, and confining the
+        raw load to it is what keeps it out of the decoders."""
+        var v = (
+            data.unsafe_ptr()
+            .unsafe_offset(pos)
+            .unsafe_bitcast[Scalar[T]]()[unsafe_offset=0]
+        )
+        comptime if is_big_endian():
+            return byte_swap(v)
+        else:
+            return v
 
     @staticmethod
     def checked[T: DType](data: Span[UInt8, _], pos: Int) raises -> Scalar[T]:

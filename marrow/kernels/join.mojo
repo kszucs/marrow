@@ -5,10 +5,6 @@ Public API
 ``hash_join``   — equijoin two StructArrays on positional key columns.
 ``HashJoin``    — hash join using SwissHashTable; reusable across morsels.
 
-Traits
-------
-``Join``        — abstract join algorithm (build + probe → IndexPairs).
-
 Internal types
 --------------
 ``IndexPairs``  — (left_indices, right_indices) result of a probe phase.
@@ -25,7 +21,8 @@ Supported strictness:
   JOIN_ALL    — default: return all matching pairs (Cartesian for multi-match)
   JOIN_ANY    — return at most one matching right row per left row
 
-Future join algorithms (implement the Join trait):
+Future join algorithms (see backlog M3.1); operators name the concrete
+algorithm, so a new one is a new struct, not a conformance:
   RadixHashJoin   — partitioned hash join (SwissHashTable + RadixPartitioner)
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)
 
@@ -128,7 +125,8 @@ from ..execution import ExecContext
 from .filter import Take, filter, take
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
-from .hashing import rapidhash
+from .hashing import HashKernel
+from ..utils import Hasher, RapidHash64
 
 # ---------------------------------------------------------------------------
 # Join kind constants — what rows appear in output
@@ -377,42 +375,6 @@ def _concat_int32(
 
 
 # ---------------------------------------------------------------------------
-# Join trait — abstract join algorithm
-# ---------------------------------------------------------------------------
-
-
-trait Join(Movable):
-    """Abstract join algorithm: build from left side, probe with right side.
-
-    All join algorithms (hash, radix-hash, sort-merge) implement this.
-    The trait is for static dispatch — operators use concrete types directly.
-    Runtime algorithm selection uses if/elif at the call site, not type erasure.
-    """
-
-    def build(mut self, data: StructArray, key_indices: List[Int]) raises:
-        """Build the join index from the left (build) side."""
-        ...
-
-    def probe(
-        self,
-        data: StructArray,
-        key_indices: List[Int],
-        kind: JoinKind,
-        strictness: UInt8,
-    ) raises -> StructArray:
-        """Probe with right (probe) side data.  Return assembled output."""
-        ...
-
-    def build_dtype(self) -> DynType:
-        """DataType of the build side (for output schema construction)."""
-        ...
-
-    def num_left_rows(self) -> Int:
-        """Number of build-side rows."""
-        ...
-
-
-# ---------------------------------------------------------------------------
 # HashJoin — hash join using SwissHashTable
 # ---------------------------------------------------------------------------
 
@@ -437,9 +399,7 @@ help cache locality but does reduce sync_parallelize dispatch overhead.
 and can be tuned per workload."""
 
 
-struct HashJoin[
-    hasher: def(StructArray, ExecContext) thin raises -> UInt64Array = rapidhash
-](Join):
+struct HashJoin[Hash: Hasher = RapidHash64]:
     """Hash join using SwissHashTable.
 
     Build phase: hash left-side key columns, insert rows into hash table.
@@ -476,10 +436,10 @@ struct HashJoin[
     var _left_rows: Int
 
     # Serial path state
-    var _table: SwissHashTable[Self.hasher]
+    var _table: SwissHashTable[Self.Hash]
 
     # Parallel path state (populated by build_parallel)
-    var _tables: List[SwissHashTable[Self.hasher]]
+    var _tables: List[SwissHashTable[Self.Hash]]
     """One SwissHashTable per partition (parallel path only)."""
     var _left_partition_keys: List[StructArray]
     """Per-partition build-side keys, used for equality verification."""
@@ -503,8 +463,8 @@ struct HashJoin[
         self._left_dtype = null
         self._left_data = None
         self._left_rows = 0
-        self._table = SwissHashTable[Self.hasher]()
-        self._tables = List[SwissHashTable[Self.hasher]]()
+        self._table = SwissHashTable[Self.Hash]()
+        self._tables = List[SwissHashTable[Self.Hash]]()
         self._left_partition_keys = List[StructArray]()
         self._left_partition_rows = List[Int32Array]()
         self._radix_bits = _DEFAULT_RADIX_BITS
@@ -605,9 +565,9 @@ struct HashJoin[
             ctx=self._ctx.copy(),
         )
         var p = partitioner.num_partitions()
-        var tables = List[SwissHashTable[Self.hasher]](capacity=p)
+        var tables = List[SwissHashTable[Self.Hash]](capacity=p)
         for _ in range(p):
-            tables.append(SwissHashTable[Self.hasher]())
+            tables.append(SwissHashTable[Self.Hash]())
 
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
@@ -616,7 +576,7 @@ struct HashJoin[
             tables[i].build_hashes(part_hashes)
             return (k^, rows.copy())
 
-        var hashes = Self.hasher(left_keys, self._ctx.copy())
+        var hashes = HashKernel[Self.Hash].apply(left_keys, self._ctx.copy())
         var parts = partitioner.map_partitions[Tuple[StructArray, Int32Array]](
             hashes^, build_partition
         )
@@ -672,7 +632,9 @@ struct HashJoin[
             )
 
         # 1. Hash probe side in parallel; 2-3. partition + parallel probe.
-        var probe_hashes = Self.hasher(right_keys, self._ctx.copy())
+        var probe_hashes = HashKernel[Self.Hash].apply(
+            right_keys, self._ctx.copy()
+        )
         var pairs_per_partition = RadixPartitioner(
             num_bits=self._radix_bits,
             ctx=self._ctx.copy(),
@@ -822,21 +784,6 @@ struct HashJoin[
             bitmap=None,
             children=out_cols^,
         )
-
-
-# struct SortMergeJoin(Join):
-#     """Sort-merge join.
-#
-#     Sorts both sides by key columns, then two-pointer linear merge.
-#     O(N log N + M log M) time, zero hash table memory.
-#
-#     Does NOT use HashTable — proves the Join trait is not hash-specific.
-#     """
-#     var _sort_order: Optional[Int32Array]
-#     var _sorted_keys: Optional[StructArray]
-#     var _build_dtype: DataType
-#     var _left_data: Optional[StructArray]
-#     var _num_rows: Int
 
 
 # ---------------------------------------------------------------------------

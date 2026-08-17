@@ -18,6 +18,13 @@ and the operands' runtime dtypes. Built by the untyped factories (``col(name)``,
 ``lit()``, ``if_else()``) for expressions whose types are not known where they
 are written.
 
+``core.mojo`` — the vocabulary the two lanes share: ``Datum`` and
+``into_array``. A leaf, so ``dynamic`` no longer imports ``values`` for them.
+
+``builders.mojo`` — the whole ``col``/``lit``/``if_else``/``coalesce``/
+``case_when`` overload set, both lanes together. It sits above both lanes
+because an overload set cannot span modules.
+
 ``relations.mojo`` — the **descriptive IR**: ``Relation`` nodes
 (``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``)
 that are pure, immutable, and cheaply copied, plus the plan-building API and
@@ -27,8 +34,14 @@ that are pure, immutable, and cheaply copied, plus the plan-building API and
 ``Relation.to_processor(ctx)`` builds (pull-based, owning all mutable state — offset,
 hash index, grouper, child processors), erased behind ``DynProcessor`` which
 drives ``collect()``. ``plan.execute()`` opens a plan into a fresh processor tree and
-drains it, so a plan is a reusable template. ``relations`` and ``execution`` import each other -- a cycle Mojo resolves,
-recorded here rather than claimed away (see backlog Q-NEW).
+drains it, so a plan is a reusable template. ``execution`` no longer imports
+``relations``: the ``BoxedValue`` both needed moved down beside ``Value``, which
+is what leaves ``relations -> execution`` a one-way edge.
+
+One cycle survives, ``values <-> dynamic``, and it is structural rather than a
+placement accident: ``DynValue`` conforms to ``Value``, ``Value`` defaults
+``count_distinct`` to an ``AggExpr``, and ``AggExpr`` carries an unresolved
+``DynValue``. Those three cannot be split across modules by moving code.
 
 Usage::
 
@@ -37,7 +50,8 @@ Usage::
 """
 
 from .dynamic import DynAgg, DynValue
-from .values import col, lit, if_else
+from .builders import col, lit, if_else
+from .values import BoxedValue
 from ..execution import ExecContext
 from .aggregates import AggFunc, FoldedAggregates
 from .execution import (
@@ -47,7 +61,6 @@ from .execution import (
     Exhausted,
 )
 from .relations import (
-    BoxedValue,
     # Descriptive IR nodes
     Relation,
     DynRelation,

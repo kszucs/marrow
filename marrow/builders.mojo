@@ -31,7 +31,6 @@ from .buffers import Buffer, Bitmap
 
 from std.builtin.rebind import downcast
 from std.os import abort
-from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
     BinaryLikeType,
@@ -141,14 +140,12 @@ trait Builder(Deinitable, Movable, Sized):
     ) raises -> Self.ArrayType:
         ...
 
-    def reset(mut self) raises:
+    def reset(mut self) -> None:
         """Discard accumulated state and start over.
 
-        `raises` for the same reason `Array.slice` does: the erased
-        implementation dispatches over a variant and an uncovered member falls
-        through. Typed builders stay non-raising, and Mojo accepts a
-        non-raising body against a raising requirement, so their call sites are
-        unaffected.
+        Non-raising, for the same reason `Array.slice` is: it was `raises` only
+        to accommodate `DynBuilder`'s variant dispatch, which no longer
+        implements this trait. `DynBuilder.reset` keeps its own `raises`.
         """
         ...
 
@@ -158,8 +155,14 @@ trait Builder(Deinitable, Movable, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
+struct DynBuilder(ImplicitlyCopyable, Movable):
     """Type-erased builder container.
+
+    **Does not conform to `Builder`.** It exposes the same surface, but as its
+    own API rather than as a trait implementation: nothing in the tree is
+    generic over `Builder` except this struct's own `_dispatch` closures, so the
+    conformance constrained the typed builders without ever being used. It was
+    added in `8334bf0` for a lane unification that `7d57398` then abandoned.
 
     Wraps any `Builder`-conforming type in a Variant on the heap behind an
     `ArcPointer`. Copies are O(1) ref-count bumps (shared-mutation semantics).
@@ -320,31 +323,34 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
     ](self, func: Func) -> R:
         """Run `func` on the active variant member, narrowed to `Builder`.
 
-        The one narrowing adapter for this type; the dispatch loop itself lives
-        in `variant_dispatch`. `Builder` has to be named concretely here — a
-        closure type cannot be generic over its own trait bound.
+        The one narrowing adapter for this type. `Builder` is named concretely
+        because a closure type cannot be generic over its own trait bound, and
+        the `isa` ladder is written out here rather than delegated to a shared
+        helper: interposing a narrowing closure between the caller and the
+        ladder costs a fully inlined copy of the adapter in *every* arm.
+        Routing the four boxes through one generic `variant_dispatch` helper
+        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
+        `__text`. Duplicating five lines of `comptime for` per box is the price.
         """
 
-        def narrow[T: Movable](t: T) {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Builder):
-                return func(rebind[downcast[T, Builder]](t))
-            else:
-                abort("DynBuilder._dispatch: member is not Builder")
-
-        return variant_dispatch(self._ptr[], narrow)
+                if self._ptr[].isa[T]():
+                    return func(rebind[downcast[T, Builder]](self._ptr[][T]))
+        abort("DynBuilder._dispatch: no arm matched")
 
     def _dispatch_mut[
         R: Movable, //, Func: def[T: Builder](mut T) raises -> R
     ](mut self, func: Func) raises -> R:
         """Mutating, raising counterpart of `_dispatch`."""
 
-        def narrow[T: Movable](mut t: T) raises {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Builder):
-                return func(rebind[downcast[T, Builder]](t))
-            else:
-                raise Error("DynBuilder._dispatch: member is not Builder")
-
-        return variant_dispatch_raises(self._ptr[], narrow)
+                if self._ptr[].isa[T]():
+                    return func(rebind[downcast[T, Builder]](self._ptr[][T]))
+        raise Error("DynBuilder._dispatch: no arm matched")
 
     def length(self) -> Int:
         def f[T: Builder](b: T) {imm} -> Int:
@@ -381,11 +387,6 @@ struct DynBuilder(Builder, ImplicitlyCopyable, Movable):
             b.extend(arr)
 
         self._dispatch_mut(f)
-
-    comptime ArrayType = DynArray
-    """`Builder`'s companion-array member. This is what `DynArray: Array`
-    unblocked: the trait requires `ArrayType: Array`, and until the erased array
-    conformed there was nothing for the erased builder to name."""
 
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> DynArray:
         def f[T: Builder](mut b: T) raises {imm} -> DynArray:

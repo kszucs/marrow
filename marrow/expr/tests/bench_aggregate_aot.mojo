@@ -37,9 +37,9 @@ from ...schema import schema
 from ...tabular import record_batch, RecordBatch
 from ...kernels.aggregate import NumericAgg, SumKernel, MinKernel
 from ...expr.aggregates import AggFunc
-from ...expr.values import col
+from ...expr.builders import col
+from ...expr.values import BoxedValue
 from ...expr.relations import (
-    BoxedValue,
     InMemoryTable,
     Aggregate,
     DynRelation,

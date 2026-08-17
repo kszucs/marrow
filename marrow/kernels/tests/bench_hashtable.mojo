@@ -12,7 +12,8 @@ from ...buffers import Bitmap
 from ...builders import PrimitiveBuilder, UInt64Builder
 from ...dtypes import uint64, UInt64Type, struct_, Field
 from ...kernels.hashtable import SwissHashTable
-from ...kernels.hashing import rapidhash
+from ...kernels.hashing import RapidHashKernel
+from ...utils import RapidHash64
 from ...utils.testing import Benchmark
 
 
@@ -43,7 +44,7 @@ def bench_hash_table_build_100k(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        var t = SwissHashTable[rapidhash]()
+        var t = SwissHashTable[RapidHash64]()
         t.build(keys)
         keep(t.num_keys())
 
@@ -56,7 +57,7 @@ def bench_hash_table_build_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        var t = SwissHashTable[rapidhash]()
+        var t = SwissHashTable[RapidHash64]()
         t.build(keys)
         keep(t.num_keys())
 
@@ -74,7 +75,7 @@ def bench_hash_table_insert_100k(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        var t = SwissHashTable[rapidhash]()
+        var t = SwissHashTable[RapidHash64]()
         var bids = t.insert(keys)
         keep(t.num_keys())
 
@@ -87,7 +88,7 @@ def bench_hash_table_insert_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        var t = SwissHashTable[rapidhash]()
+        var t = SwissHashTable[RapidHash64]()
         var bids = t.insert(keys)
         keep(t.num_keys())
 
@@ -102,7 +103,7 @@ def bench_hash_table_insert_1m(mut b: Benchmark) raises:
 
 def bench_hash_table_probe_100k(mut b: Benchmark) raises:
     var keys = _make_keys(100_000)
-    var table = SwissHashTable[rapidhash]()
+    var table = SwissHashTable[RapidHash64]()
     table.build(keys)
 
     @always_inline
@@ -117,7 +118,7 @@ def bench_hash_table_probe_100k(mut b: Benchmark) raises:
 
 def bench_hash_table_probe_1m(mut b: Benchmark) raises:
     var keys = _make_keys(1_000_000)
-    var table = SwissHashTable[rapidhash]()
+    var table = SwissHashTable[RapidHash64]()
     table.build(keys)
 
     @always_inline
@@ -137,7 +138,7 @@ def bench_hash_table_probe_1m(mut b: Benchmark) raises:
 
 def bench_hash_table_probe_semi_100k(mut b: Benchmark) raises:
     var keys = _make_keys(100_000)
-    var table = SwissHashTable[rapidhash]()
+    var table = SwissHashTable[RapidHash64]()
     table.build(keys)
 
     @always_inline
@@ -152,7 +153,7 @@ def bench_hash_table_probe_semi_100k(mut b: Benchmark) raises:
 
 def bench_hash_table_probe_semi_1m(mut b: Benchmark) raises:
     var keys = _make_keys(1_000_000)
-    var table = SwissHashTable[rapidhash]()
+    var table = SwissHashTable[RapidHash64]()
     table.build(keys)
 
     @always_inline

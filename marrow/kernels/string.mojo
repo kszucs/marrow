@@ -107,7 +107,7 @@ struct LengthKernel(Kernel):
     def dispatch(array: DynArray) raises -> DynArray:
         # Guard before dispatching so the diagnostic names *this kernel* and the
         # family it wanted. `dispatch_stringlike` would otherwise fall through to
-        # `variant_dispatch`'s generic "no arm matched", which says neither.
+        # `_dispatch`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
         if not dt.is_string_like():
             raise Self.error(t"expected a string array, got {dt}")
@@ -149,7 +149,7 @@ trait StringMapKernel(Kernel):
     def dispatch(array: DynArray) raises -> DynArray:
         # Guard before dispatching so the diagnostic names *this kernel* and the
         # family it wanted. `dispatch_stringlike` would otherwise fall through to
-        # `variant_dispatch`'s generic "no arm matched", which says neither.
+        # `_dispatch`'s generic "no arm matched", which says neither.
         var dt = array.dtype()
         if not dt.is_string_like():
             raise Self.error(t"expected a string array, got {dt}")

@@ -23,6 +23,9 @@
 - Decimal 32/64/128/256 and fixed-size binary, end to end.
 - Memory mapping is an allocation kind, so the Parquet and IPC readers
   map a file instead of copying it in.
+- `ListScalar` carries its own dtype, so `large_list`, `map` and
+  `fixed_size_list` elements report their own type rather than a
+  reconstructed one.
 
 ### Compute kernels
 

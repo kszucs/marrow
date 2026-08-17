@@ -58,10 +58,10 @@ from ...kernels.aggregate import (
 )
 from ...expr.aggregates import AggFunc
 from ...expr.values import AggExpr
-from ...expr.values import col, lit
+from ...expr.builders import col, lit
 from ...expr.relations import DynRelation, in_memory_table
-from ...expr.relations import BoxedValue
-from ...expr.values import col as fused_col
+from ...expr.values import BoxedValue
+from ...expr.builders import col as fused_col
 
 
 # ---------------------------------------------------------------------------

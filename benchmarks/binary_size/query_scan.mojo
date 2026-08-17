@@ -18,10 +18,11 @@ not run them.
     pixi run binary_size query_scan
 """
 
-from marrow.expr.relations import BoxedValue
+from marrow.expr.values import BoxedValue
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
-from marrow.expr.values import col, DynValue
+from marrow.expr.builders import col
+from marrow.expr.dynamic import DynValue
 from marrow.expr.relations import ParquetScan, Project, DynRelation
 
 

@@ -87,17 +87,17 @@ def radix_histogram[
 struct Partition(Copyable, Movable):
     """A subset of rows with pre-computed hashes.
 
-    ``row_indices = None`` means all rows in order (the unpartitioned case,
-    avoids allocating an identity index array).
+    ``row_indices`` maps each partition-local row back to the original input
+    row number it came from.
     """
 
-    var row_indices: Optional[Int32Array]
+    var row_indices: Int32Array
     var hashes: UInt64Array
 
     def __init__(
         out self,
         var hashes: UInt64Array,
-        var row_indices: Optional[Int32Array] = None,
+        var row_indices: Int32Array,
     ):
         self.hashes = hashes^
         self.row_indices = row_indices^
@@ -111,9 +111,7 @@ struct Partition(Copyable, Movable):
 
     def original_row(self, i: Int) -> Int:
         """Map partition-local index → original row index."""
-        if self.row_indices:
-            return Int(self.row_indices.value().unsafe_get(i))
-        return i
+        return Int(self.row_indices.unsafe_get(i))
 
 
 struct RadixPartitioner(Movable):
@@ -300,7 +298,7 @@ struct RadixPartitioner(Movable):
             try:
                 slots[i] = op(
                     i,
-                    partitions[i].row_indices.value().copy(),
+                    partitions[i].row_indices.copy(),
                     partitions[i].hashes.copy(),
                 )
 

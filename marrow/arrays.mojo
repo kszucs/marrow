@@ -44,7 +44,6 @@ from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from std.builtin.rebind import downcast
 from std.os import abort
-from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
     BinaryLikeType,
@@ -144,6 +143,12 @@ trait Array(
         ...
 
     def null_count(self) -> Int:
+        """How many elements are null.
+
+        Always known in O(1): a stored count, recounted when an array is
+        sliced, never resolved lazily. A null-free array need not carry a
+        validity bitmap at all.
+        """
         ...
 
     def is_valid(self, index: Int) -> Bool:
@@ -164,62 +169,21 @@ trait Array(
     def to_data(self) raises -> ArrayData:
         ...
 
-    def slice(self, offset: Int, length: Int) raises -> Self:
+    def slice(self, offset: Int, length: Int) -> Self:
         """A zero-copy slice.
 
-        `raises` because the erased implementation can fail: `DynArray.slice`
-        dispatches over its variant, and an uncovered member falls through. Every
-        *typed* implementation is non-raising and stays that way -- Mojo accepts
-        a non-raising body against a raising requirement, so typed call sites are
-        unaffected. Only generic code holding `[T: Array]` has to propagate.
+        Non-raising: every typed implementation is total. It was `raises` for as
+        long as `DynArray` conformed to this trait, because the erased
+        implementation dispatches over a variant and an uncovered member falls
+        through -- one box's failure mode widening the contract for all nine
+        typed arrays, at a recorded cost of +13,428 bytes of `__text`.
+        `DynArray.slice` keeps its own `raises`; it is no longer implementing
+        this.
         """
         ...
 
     def __getitem__(self, index: Int) raises -> Self.ScalarType:
         ...
-
-
-def _sliced_null_count(
-    parent_nulls: Int,
-    parent_length: Int,
-    bitmap: Optional[Bitmap[mut=False]],
-    offset: Int,
-    length: Int,
-) -> Int:
-    """The null count of a sub-range, derived from the parent's.
-
-    Computed eagerly at `slice()` rather than deferred behind a "not computed"
-    sentinel, because every lazy design needs somewhere to cache the answer:
-    Arrow C++ uses a `mutable std::atomic<int64_t>` (`kUnknownNullCount = -1`,
-    resolved in `GetNullCount`), polars a `RelaxedCell<u64>` inside `Bitmap`
-    (`u64::MAX` = unknown). Mojo has no interior mutability here and
-    `null_count()` is an immutable method, so a sentinel would re-count on every
-    call instead of once — strictly worse than counting once here.
-
-    arrow-rs makes the same choice for the same reason, keeping the count as an
-    invariant of the validity buffer rather than a cache. Polars, which slices
-    hardest, is lazy *inside* the bitmap but still forces the count at the array
-    boundary on every slice, so that a null-free slice can drop its bitmap
-    entirely and give downstream kernels an all-valid fast path.
-
-    Measured: the sentinel cost +12,980 bytes of `__text` on the AOT gate
-    against +8,452 for this, because both `slice()` and `null_count()` are
-    dispatched over a 37-member variant and the sentinel puts branching code in
-    both.
-
-    Not implemented, and worth having if slicing ever shows up in a profile:
-    polars counts only the *discarded* head and tail and subtracts, when the
-    slice keeps at least ~80% of the parent.
-    """
-    # Two exact answers without scanning, both of which every reference
-    # implementation carries: a null-free parent has a null-free child, and an
-    # all-null parent has an all-null child. On a streaming morsel path over
-    # NOT NULL columns the first arm carries essentially all the traffic.
-    if parent_nulls == 0 or not bitmap:
-        return 0
-    if parent_nulls == parent_length:
-        return length
-    return bitmap.value().view(offset, length).unset_count()
 
 
 # ---------------------------------------------------------------------------
@@ -354,41 +318,6 @@ struct ArrayData(Copyable, Movable):
         pass
 
 
-def _validity_equal[
-    ao: Origin[mut=False], bo: Origin[mut=False]
-](
-    length: Int,
-    a: Optional[BitmapView[ao]],
-    b: Optional[BitmapView[bo]],
-) -> Bool:
-    """Do two arrays mark the same *positions* null?
-
-    Equality is a question about null positions, not about how the validity is
-    stored. Two arrays are validity-equal when neither is null at a position the
-    other holds valid — so an all-valid array carrying a bitmap equals one
-    carrying none, and two slices agree whenever their logical validity does,
-    whatever offsets they were taken at.
-
-    `__eq__` used to compare the bitmaps themselves — presence against presence,
-    then whole bitmap against whole bitmap — and got both of those wrong (B26).
-    A missing bitmap means all-valid, which is a *value*, not a distinguishing
-    representation; and a whole-bitmap comparison ignores the offset that says
-    which bits belong to this array.
-    """
-    if not a and not b:
-        return True
-    if not a:
-        return b.value().count_set_bits() == length
-    if not b:
-        return a.value().count_set_bits() == length
-    ref av = a.value()
-    ref bv = b.value()
-    for i in range(length):
-        if av.test(i) != bv.test(i):
-            return False
-    return True
-
-
 # ---------------------------------------------------------------------------
 # BoolArray
 # ---------------------------------------------------------------------------
@@ -509,13 +438,9 @@ struct BoolArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=_sliced_null_count(
-                self.nulls,
-                self.length,
-                self.bitmap,
-                self.offset + offset,
-                length,
-            ),
+            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             buffer=self.buffer,
@@ -613,17 +538,22 @@ struct BoolArray(Array):
     def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and values.
         """
-        if (
-            self.length != other.length
-            or self.null_count() != other.null_count()
-        ):
+        if self.length != other.length:
             return False
-        for i in range(self.length):
-            var lv = self.is_valid(i)
-            var rv = other.is_valid(i)
-            if lv != rv:
+        # A nonzero null count implies a bitmap, so once the counts agree the
+        # two views can be compared directly. Note the converse does not hold:
+        # a slice that excludes every null still carries its parent's bitmap.
+        if self.null_count() != other.null_count():
+            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
                 return False
-            if lv and self[i] != other[i]:
+            if not (sv.value() == ov.value()):
+                return False
+        for i in range(self.length):
+            if self.is_valid(i) and self[i] != other[i]:
                 return False
         return True
 
@@ -751,13 +681,9 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=_sliced_null_count(
-                self.nulls,
-                self.length,
-                self.bitmap,
-                self.offset + offset,
-                length,
-            ),
+            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             buffer=self.buffer,
@@ -867,11 +793,18 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         """
         if self.length != other.length:
             return False
+        # A nonzero null count implies a bitmap, so once the counts agree the
+        # two views can be compared directly. Note the converse does not hold:
+        # a slice that excludes every null still carries its parent's bitmap.
         if self.null_count() != other.null_count():
             return False
-        # Positions, not representation — see `_validity_equal` (B26).
-        if not _validity_equal(self.length, self.validity(), other.validity()):
-            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
+                return False
+            if not (sv.value() == ov.value()):
+                return False
         # Compare only the valid length elements (buffer may be over-allocated
         # in filtered output, so full Buffer.__eq__ would read uninitialized bytes).
         for i in range(self.length):
@@ -1001,13 +934,9 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=_sliced_null_count(
-                self.nulls,
-                self.length,
-                self.bitmap,
-                self.offset + offset,
-                length,
-            ),
+            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
@@ -1075,11 +1004,18 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         """
         if self.length != other.length:
             return False
+        # A nonzero null count implies a bitmap, so once the counts agree the
+        # two views can be compared directly. Note the converse does not hold:
+        # a slice that excludes every null still carries its parent's bitmap.
         if self.null_count() != other.null_count():
             return False
-        # Positions, not representation — see `_validity_equal` (B26).
-        if not _validity_equal(self.length, self.validity(), other.validity()):
-            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
+                return False
+            if not (sv.value() == ov.value()):
+                return False
         for i in range(self.length):
             if self.is_valid(i):
                 if self.unsafe_get(UInt(i)) != other.unsafe_get(UInt(i)):
@@ -1241,7 +1177,9 @@ struct ListLikeArray[T: ListLikeType](Array):
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         return ListScalar(
-            value=self.unsafe_get(index), is_valid=self.is_valid(index)
+            dtype=self.dtype,
+            value=self.unsafe_get(index),
+            is_valid=self.is_valid(index),
         )
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -1250,13 +1188,9 @@ struct ListLikeArray[T: ListLikeType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=_sliced_null_count(
-                self.nulls,
-                self.length,
-                self.bitmap,
-                self.offset + offset,
-                length,
-            ),
+            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
@@ -1326,11 +1260,18 @@ struct ListLikeArray[T: ListLikeType](Array):
             return False
         if self.length != other.length:
             return False
+        # A nonzero null count implies a bitmap, so once the counts agree the
+        # two views can be compared directly. Note the converse does not hold:
+        # a slice that excludes every null still carries its parent's bitmap.
         if self.null_count() != other.null_count():
             return False
-        # Positions, not representation — see `_validity_equal` (B26).
-        if not _validity_equal(self.length, self.validity(), other.validity()):
-            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
+                return False
+            if not (sv.value() == ov.value()):
+                return False
         for i in range(self.length):
             if self.is_valid(i):
                 try:
@@ -1536,7 +1477,9 @@ struct FixedSizeListArray(Array):
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         return ListScalar(
-            value=self.unsafe_get(index), is_valid=self.is_valid(index)
+            dtype=self.dtype,
+            value=self.unsafe_get(index),
+            is_valid=self.is_valid(index),
         )
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -1545,13 +1488,9 @@ struct FixedSizeListArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=_sliced_null_count(
-                self.nulls,
-                self.length,
-                self.bitmap,
-                self.offset + offset,
-                length,
-            ),
+            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             values=self.child[].copy(),
@@ -1600,11 +1539,18 @@ struct FixedSizeListArray(Array):
             return False
         if self.length != other.length:
             return False
+        # A nonzero null count implies a bitmap, so once the counts agree the
+        # two views can be compared directly. Note the converse does not hold:
+        # a slice that excludes every null still carries its parent's bitmap.
         if self.null_count() != other.null_count():
             return False
-        # Positions, not representation — see `_validity_equal` (B26).
-        if not _validity_equal(self.length, self.validity(), other.validity()):
-            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
+                return False
+            if not (sv.value() == ov.value()):
+                return False
         for i in range(self.length):
             if self.is_valid(i):
                 try:
@@ -1717,13 +1663,9 @@ struct FixedSizeBinaryArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=_sliced_null_count(
-                self.nulls,
-                self.length,
-                self.bitmap,
-                self.offset + offset,
-                length,
-            ),
+            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
             offset=self.offset + offset,
             byte_width=self.byte_width,
             bitmap=self.bitmap,
@@ -1782,11 +1724,18 @@ struct FixedSizeBinaryArray(Array):
             return False
         if self.length != other.length:
             return False
+        # A nonzero null count implies a bitmap, so once the counts agree the
+        # two views can be compared directly. Note the converse does not hold:
+        # a slice that excludes every null still carries its parent's bitmap.
         if self.null_count() != other.null_count():
             return False
-        # Positions, not representation — see `_validity_equal` (B26).
-        if not _validity_equal(self.length, self.validity(), other.validity()):
-            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
+                return False
+            if not (sv.value() == ov.value()):
+                return False
         for i in range(self.length):
             if self.is_valid(i):
                 var ls = (self.offset + i) * self.byte_width
@@ -1972,13 +1921,9 @@ struct StructArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=_sliced_null_count(
-                self.nulls,
-                self.length,
-                self.bitmap,
-                self.offset + offset,
-                length,
-            ),
+            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            .view(self.offset + offset, actual_length)
+            .unset_count(),
             offset=self.offset + offset,
             bitmap=self.bitmap,
             children=self.children.copy(),
@@ -1991,11 +1936,18 @@ struct StructArray(Array):
             return False
         if self.length != other.length:
             return False
+        # A nonzero null count implies a bitmap, so once the counts agree the
+        # two views can be compared directly. Note the converse does not hold:
+        # a slice that excludes every null still carries its parent's bitmap.
         if self.null_count() != other.null_count():
             return False
-        # Positions, not representation — see `_validity_equal` (B26).
-        if not _validity_equal(self.length, self.validity(), other.validity()):
-            return False
+        if self.null_count() != 0:
+            var sv = self.validity()
+            var ov = other.validity()
+            if not sv or not ov:
+                return False
+            if not (sv.value() == ov.value()):
+                return False
         if len(self.children) != len(other.children):
             return False
         for i in range(len(self.children)):
@@ -2202,12 +2154,16 @@ struct DictionaryArray(Array):
 
     def slice(self, offset: Int, length: Int) -> Self:
         """Zero-copy slice: adjusts logical offset, shares indices and values.
+
+        The null count is recounted for the sub-range. A dictionary's validity
+        is its indices', so the count comes from slicing those.
         """
+        var start = self._offset + offset
         return Self(
             dtype=self._dtype.copy(),
             length=length,
-            nulls=self._nulls,
-            offset=self._offset + offset,
+            nulls=self._indices[].slice(start, length).null_count(),
+            offset=start,
             indices=self._indices[].copy(),
             values=self._values[].copy(),
         )
@@ -2233,12 +2189,29 @@ struct DictionaryArray(Array):
         )
 
     def __eq__(self, other: Self) -> Bool:
-        return (
-            self._dtype == other._dtype
-            and self._length == other._length
-            and self._indices[] == other._indices[]
-            and self._values[] == other._values[]
-        )
+        """Return True if both arrays decode to the same values, null for null.
+
+        Compares decoded values, not the encoding: two arrays holding the same
+        column against differently ordered dictionaries are equal.
+        """
+        if self._dtype != other._dtype:
+            return False
+        if self._length != other._length:
+            return False
+        if self.null_count() != other.null_count():
+            return False
+        for i in range(self._length):
+            var lv = self.is_valid(i)
+            var rv = other.is_valid(i)
+            if lv != rv:
+                return False
+            if lv:
+                try:
+                    if self[i].value() != other[i].value():
+                        return False
+                except:
+                    return False
+        return True
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -2322,7 +2295,6 @@ struct ChunkedArray(Copyable, Movable, Writable):
 
 
 struct DynArray(
-    Array,
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
@@ -2332,6 +2304,13 @@ struct DynArray(
     Writable,
 ):
     """Type-erased, immutable array handle backed by an inline Variant.
+
+    **Does not conform to `Array`.** The surface is the same, but it is this
+    struct's own API rather than a trait implementation: every `[T: Array]`
+    bound in the tree lives inside the `_dispatch` closures below, so the
+    conformance had no consumer — while forcing `Array.slice` to be `raises`
+    for all nine typed arrays. It was added in `8334bf0` for a lane
+    unification that `7d57398` then abandoned.
 
     Wraps any `Array`-conforming type.  Copies are O(1) — typed arrays
     hold their data behind ref-counted `Buffer` / `Bitmap` handles, so
@@ -2393,47 +2372,40 @@ struct DynArray(
     ](self, func: Func) -> R:
         """Run `func` on the active variant member, narrowed to `Array`.
 
-        The one narrowing adapter for this type; the dispatch loop itself lives
-        in `variant_dispatch`. `Array` has to be named concretely here — a
-        closure type cannot be generic over its own trait bound.
+        The one narrowing adapter for this type. `Array` is named concretely
+        because a closure type cannot be generic over its own trait bound, and
+        the `isa` ladder is written out here rather than delegated to a shared
+        helper: interposing a narrowing closure between the caller and the
+        ladder costs a fully inlined copy of the adapter in *every* arm.
+        Routing the four boxes through one generic `variant_dispatch` helper
+        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
+        `__text`. Duplicating five lines of `comptime for` per box is the price.
         """
 
-        def narrow[T: Movable](t: T) {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Array):
-                return func(rebind[downcast[T, Array]](t))
-            else:
-                abort("DynArray._dispatch: member is not Array")
-
-        return variant_dispatch(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, Array]](self._v[T]))
+        abort("DynArray._dispatch: no arm matched")
 
     def _dispatch[
         R: Movable, //, Func: def[T: Array](T) raises -> R
     ](self, func: Func) raises -> R:
         """Raising counterpart of `_dispatch`."""
 
-        def narrow[T: Movable](t: T) raises {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Array):
-                return func(rebind[downcast[T, Array]](t))
-            else:
-                raise Error("DynArray._dispatch: member is not Array")
-
-        return variant_dispatch_raises(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, Array]](self._v[T]))
+        raise Error("DynArray._dispatch: no arm matched")
 
     # --- construction ---
 
     @implicit
     def __init__[T: Array](out self, var array: T):
         self._v = Self.VariantType(array^)
-
-    def __init__(out self, data: ArrayData) raises:
-        """`Array`'s constructor-from-`ArrayData`, delegating to `from_data`.
-
-        The static factory stays the implementation and the primary spelling;
-        this exists so the trait is satisfied without moving 30-odd call sites.
-        No ambiguity with the `@implicit [T: Array]` constructor above:
-        `ArrayData` is only `Copyable, Movable` and does not conform to `Array`.
-        """
-        self = DynArray.from_data(data)
 
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
@@ -2473,21 +2445,6 @@ struct DynArray(
 
         return self._dispatch(f)
 
-    comptime ScalarType = DynScalar
-    """`Array`'s companion-scalar member. `DynScalar` conforms to `ArrowScalar`,
-    which is what lets this conform to `Array` in turn — the two erasures line
-    up rather than each needing its own escape hatch."""
-
-    def type(self) -> DynType:
-        """`Array`'s spelling of `dtype()`.
-
-        Both names exist because both are load-bearing: `Array` requires
-        `type()`, while ~200 call sites and the `Builder` trait say `dtype()`.
-        Renaming either would be a large diff for no behaviour, so this is a
-        one-line forward and `dtype()` remains the one with the implementation.
-        """
-        return self.dtype()
-
     def dtype(self) -> DynType:
         def f[T: Array](a: T) {imm} -> DynType:
             return a.type()
@@ -2509,13 +2466,13 @@ struct DynArray(
     def is_null(self, index: Int) -> Bool:
         return not self.is_valid(index)
 
-    def slice(self, offset: Int, length: Int = -1) raises -> DynArray:
+    def slice(self, offset: Int, length: Int = -1) -> DynArray:
         """Returns a zero-copy slice starting at offset with the given length.
 
         Matches PyArrow's Array.slice(offset, length) API.
         """
 
-        def f[T: Array](a: T) raises {imm} -> DynArray:
+        def f[T: Array](a: T) {imm} -> DynArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
 
@@ -2563,10 +2520,6 @@ struct DynArray(
             return a.to_cpu(ctx)
 
         return self._dispatch(f)
-
-    def to_dyn(deinit self) -> DynArray:
-        """Returns this array as DynArray, transferring ownership."""
-        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         def f[T: Array](a: T) {mut writer, imm}:

@@ -220,6 +220,22 @@ bumps.
 `var arr: DynArray = my_primitive_array` and
 `var prim: PrimitiveArray[Int64Type] = some_array` both work transparently.
 
+**The erased containers do not conform to the traits they erase.** `DynArray`,
+`DynScalar`, `DynBuilder` and `DynType` expose the same surface as `Array`,
+`ArrowScalar`, `Builder` and `DataType`, but as their own API — they are not
+substitutable for a typed value in generic code, and nothing in the tree asks
+them to be: every `[T: Array]`-style bound lives inside a box's own `_dispatch`.
+They did conform until the `Dyn*` conformance removal; the four were held up
+only by each other's companion members (`ArrayType` → `ScalarType`,
+`Value.OutType` → `DynType`), and dropping them changed no behaviour and no
+binary size. Keep it that way: a box may *hold* trait-bound values, it should
+not *be* one.
+
+The exception is `DynValue: Value`, and it earns it — `Value` is a trait of
+runtime methods plus `OutShape`, which `DynValue` answers truthfully, and the
+conformance is what lets a runtime leaf be an operand of the fused
+`NullPredicate`/`IsIn`/`WindowFunction` nodes.
+
 ### Arrays, builders, scalars
 
 **Arrays** (`marrow/arrays.mojo`):
@@ -280,10 +296,17 @@ Rules:
 - Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for
   computation. No naked pointer arithmetic in kernel or array code.
 - **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`,
-  `c_data.mojo` and the Parquet codec layer** (`parquet/utils.mojo`,
-  `parquet/reader.mojo`, `parquet/codecs.mojo`, which `dlopen` the C codecs
+  `c_data.mojo`, `utils/byteorder.mojo` and the Parquet codec layer**
+  (`parquet/reader.mojo`, `parquet/codecs.mojo`, which `dlopen` the C codecs
   and hand them raw pointers). Everything else goes through the view
-  abstractions.
+  abstractions. `utils/byteorder.mojo` joined the list on 2026-08-17:
+  `LittleEndian.fixed` is *the* byte-order primitive, and confining the
+  unaligned wide load to it is what keeps raw pointers out of every decoder
+  that reads a scalar. It had been copying `W` bytes into an `Array` one at a
+  time and calling `SIMD.from_bytes` — about 8 loads and a stack temporary per
+  64-bit read, which cost 14-38x on the hash kernel's string path and taxed
+  every Parquet and IPC decode. `marrow/parquet/utils.mojo` left the list
+  because it moved to `marrow/utils/compression.mojo`.
 - **Avoid `AnyOrigin` types (`MutAnyOrigin`, `ImmutAnyOrigin`) and
   `unsafe_origin_cast`.** Use parametric origins (`out_o: Origin[mut=True]`,
   `src_o: Origin[mut=False]`) and pass views directly.
@@ -308,11 +331,19 @@ family — `dispatch_primitive` / `dispatch_numeric` / `dispatch_integer` /
 resolving a runtime `DataType` to a comptime type parameter and running a job
 passed **as a value**: `dt.dispatch_numeric(job)`, not `dt.dispatch_numeric[job]()`.
 
-All nine are narrowing adapters over one loop, `DynType._dispatch`, which is
-fixed to `DataType` because a closure type cannot be generic over its own trait
-bound (see the closure gotchas). `DynArray` and `DynScalar` have the same
-`_dispatch`; `DynBuilder` still goes through the comptime `variant_dispatch*`
-helpers in `marrow/utils.mojo`.
+Each of the nine writes out its own `comptime for` over `DynType.VariantType.Ts`,
+guarded by `comptime if conforms_to(T, Family)`, and calls `func` directly.
+`DynArray`, `DynScalar` and `DynBuilder` each have one `_dispatch` of the same
+shape at their own trait.
+
+**This duplication is deliberate and measured.** Factoring the ladder into one
+generic `variant_dispatch(v, func)` helper needs a narrowing closure between the
+caller and the loop — a closure type cannot be generic over its own trait bound,
+so the helper must bind `func` on `Movable` and let the caller narrow. That
+adapter is inlined into *every* arm of *every* instantiation: it cost
+**+662,740 bytes (+31.9% of `__text`)** on `query_streaming_agg_fused`, and
+removing it is what recovered the regression. Prefer the local ladder; do not
+reintroduce the shared helper.
 
 ### Kernels
 
@@ -398,7 +429,7 @@ marrow/
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── execution.mojo        # ExecutionContext — threads, device, `stripe`
-├── utils.mojo            # variant_dispatch*, GPU_ENABLED, has_accelerator_support
+├── utils/                # byteorder, checksum, hashing, compression, testing
 ├── kernels/
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
 │   ├── boolean.mojo      # and/or/not/xor, is_null, is_nan, is_inf
@@ -645,9 +676,11 @@ Two project-specific traps, neither of which produces a diagnostic:
 - **A closure handed to a GPU kernel must be captured by value, never `{imm}`** —
   an `imm` capture points into the host stack frame, so the device silently
   computes garbage. `views._gpu_launch` copies before capturing.
-- **A closure type cannot be generic over its own trait bound.** Hence
-  `variant_dispatch` binds `func` on `Movable` and leaves narrowing to the
-  caller; see its module docstring.
+- **A closure type cannot be generic over its own trait bound.** So a shared
+  dispatch loop cannot name the caller's trait; it would have to bind `func` on
+  `Movable` and let the caller narrow through an extra closure. That adapter
+  inlines into every arm — measured at **+662,740 bytes** on one gate — which is
+  why each erased box writes its own `isa` ladder instead (`DynArray._dispatch`).
 
 ### Associated types, traits, reflection
 
@@ -718,9 +751,10 @@ release with both artifacts attached.
 2. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary,
    decimal (32/64/128/256) and temporal (date/time/timestamp/duration/interval)
-   are implemented; union, run-end-encoded and view layouts are not. `map`'s
-   remaining gaps are that it has no `MapScalar` (a scalar taken from a
-   `MapArray` reports `list<…>`) and `cast` has no arm for it. **This used to say
+   are implemented; union, run-end-encoded and view layouts are not. `map` has
+   no gaps left: `cast` gained its arm, and an element taken from a `MapArray`
+   now reports `map<…>` — `ListScalar` carries its own dtype rather than
+   rebuilding it (see §3). **This used to say
    `map` did not go through IPC "in either direction" because "type code 17 is
    absent from `ipc.mojo`" — that is false**: `comptime _TYPE_MAP: UInt8 = 17` is
    there, and the archery integration suite now runs `map`, `map_non_canonical` and
@@ -729,9 +763,14 @@ release with both artifacts attached.
    pyarrow limit: it has no type for either unit, and the harness bridges
    through pyarrow. Marrow consumes all three from the other implementations.
 3. **Scalar fidelity**: six types have no dedicated scalar — `binary`,
-   `large_binary` and `large_string` collapse to `StringScalar`; `large_list`,
-   `map` and `fixed_size_list` collapse to `ListScalar`. `StringScalar.type()`
-   hard-returns `string` and `ListScalar.type()` hard-returns `list_(child)`.
+   `large_binary` and `large_string` share `StringScalar`; `large_list`, `map`
+   and `fixed_size_list` share `ListScalar`. **Only the `StringScalar` half is
+   still a fidelity bug**: `StringScalar.type()` hard-returns `string`, so a
+   `binary` element reports `string`. `ListScalar` no longer has that problem —
+   it carries its own `DynType` instead of rebuilding `list_(child.dtype())`,
+   so `large_list`, `map` and `fixed_size_list` elements report their own type,
+   `keysSorted` and the entries field name included. Sharing a struct is not
+   the defect; reconstructing the type from the child was.
 
 Release callbacks in the C Data Interface **are** implemented and invoked — this
 was listed here as a Mojo limitation long after it stopped being true. See

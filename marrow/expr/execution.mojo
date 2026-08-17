@@ -13,9 +13,11 @@ yields morsels through ``pull()``.
   ``ProjectProcessor`` / ``AggregateProcessor`` / ``JoinProcessor`` — one per
   node kind.
 
-This layer depends only on the value box (``DynValue``) and the kernels; it does
-**not** import the ``Relation`` nodes, so the dependency is one-way
-(``relations`` → ``execution``).
+This layer depends only on the value box (``BoxedValue``) and the kernels; it
+does **not** import the ``Relation`` nodes, so the dependency is one-way
+(``relations`` → ``execution``). That claim used to be false — the box lived in
+``relations.mojo`` and this module imported it from there. It now lives beside
+the ``Value`` it erases, in ``values.mojo``, so the sentence is true as written.
 """
 
 from std.memory import ArcPointer
@@ -39,7 +41,7 @@ from ..kernels.join import (
     JOIN_SEMI,
     JoinKind,
 )
-from ..kernels.hashing import rapidhash
+from ..utils import RapidHash64
 from ..parquet.source import MappedFile
 from ..parquet import (
     LeafSet,
@@ -49,7 +51,7 @@ from ..parquet import (
     PageBounds,
 )
 from ..scalars import DynScalar
-from .relations import BoxedValue
+from .values import BoxedValue
 from ..kernels.core import Grouping
 from .pruning import PruneStats
 from ..execution import ExecContext
@@ -858,7 +860,7 @@ struct JoinProcessor(Processor):
     var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
-    var _index: Optional[HashJoin[rapidhash]]
+    var _index: Optional[HashJoin[RapidHash64]]
     var _exhausted: Bool
 
     def __init__(
@@ -911,7 +913,7 @@ struct JoinProcessor(Processor):
             raise Exhausted()
         if not self._index:
             var left_struct = self.left.collect().to_struct_array()
-            var index = HashJoin[rapidhash]()
+            var index = HashJoin[RapidHash64]()
             index.build(left_struct, self.left_key_indices)
             self._index = index^
 

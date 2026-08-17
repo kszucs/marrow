@@ -28,9 +28,10 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...expr.values import Gt, col
-from ...expr.relations import BoxedValue, DynRelation, Sort, in_memory_table
-from ...expr.values import col as dyn_col, lit, if_else, case_when
+from ...expr.values import BoxedValue, Gt
+from ...expr.builders import col
+from ...expr.relations import DynRelation, Sort, in_memory_table
+from ...expr.builders import col as dyn_col, lit, if_else, case_when
 
 
 def _batch() raises -> RecordBatch:

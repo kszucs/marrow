@@ -1063,7 +1063,7 @@ struct CountAgg(Aggregation):
     split to begin with. The two lanes deliberately run different code for
     numeric `count`, measured rather than assumed: `CountAgg.grouped` takes a
     `DynArray` and calls `values.is_valid(i)` per row, which routes through
-    `variant_dispatch` — a linear `comptime for` over 37 variant arms, with
+    `DynArray._dispatch` — a linear `comptime for` over 37 variant arms, with
     `Float64Array` at position 13 — paying roughly 13 sequential `isa[T]()`
     checks plus an indirect call *per row*, inside an already cache-hostile
     100k-group random-write loop. `AggState` pays one typed `bitmap.test()`

@@ -12,10 +12,18 @@ from ..builders import (
     BoolBuilder,
     StringBuilder,
     FixedSizeListBuilder,
+    LargeListBuilder,
+    ListBuilder,
+    MapBuilder,
     StructBuilder,
     Int32Builder,
 )
 from ..dtypes import (
+    DynType,
+    fixed_size_list_,
+    large_list_,
+    list_,
+    map_,
     int32,
     int64,
     float64,
@@ -224,6 +232,60 @@ def test_list_scalar_from_fixed_size_list_array() raises:
     assert_equal(s0.value().as_int32()[1].value(), 20)
     var s1 = arr[1]
     assert_false(s1.is_valid())
+
+
+# ---------------------------------------------------------------------------
+# ListScalar reports the array's own type, not the list-shaped reconstruction
+# ---------------------------------------------------------------------------
+
+
+def test_list_scalar_type_from_list_array() raises:
+    var lb = ListBuilder(Int32Builder())
+    lb.values().as_int32().append(1)
+    lb.values().as_int32().append(2)
+    lb.append_valid()
+    var arr = lb.finish()
+    assert_true(arr[0].type() == list_(DynType(int32)).to_dyn())
+
+
+def test_list_scalar_type_from_large_list_array() raises:
+    var lb = LargeListBuilder(Int32Builder())
+    lb.values().as_int32().append(1)
+    lb.values().as_int32().append(2)
+    lb.append_valid()
+    var arr = lb.finish()
+    assert_true(arr[0].type() == large_list_(DynType(int32)).to_dyn())
+
+
+def test_list_scalar_type_from_fixed_size_list_array() raises:
+    var fsl = FixedSizeListBuilder(Int32Builder(), 2)
+    fsl.values().as_int32().append(10)
+    fsl.values().as_int32().append(20)
+    fsl.append_valid()
+    var arr = fsl.finish()
+    assert_true(arr[0].type() == fixed_size_list_(DynType(int32), 2).to_dyn())
+
+
+def test_list_scalar_type_from_map_array() raises:
+    var mt = map_(DynType(string), DynType(int64), keys_sorted=True)
+    var b = MapBuilder(mt)
+    var entries_any = b.entries()
+    ref entries = entries_any.as_struct()
+    var keys_any = entries.field_builder(0)
+    var values_any = entries.field_builder(1)
+    keys_any.as_string().append("a")
+    values_any.as_int64().append(1)
+    entries.append_valid()
+    b.append_valid()
+    var arr = b.finish()
+    var s = arr[0]
+    # The shape-reconstructing `list_(child.dtype())` answered
+    # `list<struct<key, value>>` here.
+    assert_true(
+        s.type()
+        == map_(DynType(string), DynType(int64), keys_sorted=True).to_dyn()
+    )
+    assert_true(s.type().as_map().keys_sorted)
 
 
 # ---------------------------------------------------------------------------
