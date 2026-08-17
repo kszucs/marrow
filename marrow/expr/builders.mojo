@@ -18,6 +18,7 @@ package `__init__`.
 
 from ..dtypes import (
     FloatingType,
+    Int64Type,
     ListLikeType,
     NumericType,
     StringLikeType,
@@ -25,7 +26,7 @@ from ..dtypes import (
     TemporalType,
 )
 from ..scalars import PrimitiveScalar
-from .dynamic import DynValue
+from .dynamic import DynAgg, DynValue
 from .values import (
     ListColumn,
     NumericColumn,
@@ -97,6 +98,21 @@ def lit[T: NumericType](value: Scalar[T.native]) -> DynValue:
     A literal always knows its type where it is written; what is erased here is
     the *expression*, so the value goes in as a `DynScalar` payload."""
     return DynValue.literal(PrimitiveScalar[T](value))
+
+
+def count_star() -> DynAgg:
+    """`COUNT(*)` — how many rows each group has.
+
+    Not the same aggregate as `col("x").count()`, which counts the *non-null*
+    values of `x`; the two differ on any nullable column and `COUNT(*)` is what
+    ~30 of ClickBench's 43 queries ask for.
+
+    It needs no new kernel and no new aggregate. `CountKernel` counts valid
+    values, and a literal is valid on every row, so the valid-count of a
+    constant column *is* the row count. This is that expression — verified
+    against a nullable column by `test_count_star_probe_literal_counts_every_row`
+    — under the name SQL gives it, so callers stop rediscovering the trick."""
+    return lit[Int64Type](1).count().alias("count_star")
 
 
 def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:

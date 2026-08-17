@@ -27,11 +27,14 @@ the cause: no *family* node is parameterised on this struct, so nothing needs a
 relaxed bound, `IsErased` has nothing to propagate, and `NumericValue` carries
 its whole surface again.
 
-The one node that still takes this struct as an operand is `NullPredicate`
-(`isnull`/`notnull`), whose bound is `A: Value` and which calls only runtime
-methods on it — an honest bound, honestly satisfied, and the reason `Value` is
-the trait this erases into. Note the consequence: `col("x").isnull()` hands back
-a fused node, not a tag node, so it is the one operation that leaves this lane.
+`NullPredicate` (`is_null`/`is_valid`) can still take this struct as an operand:
+its bound is `A: Value` and it calls only runtime methods on it — an honest
+bound, honestly satisfied, and the reason `Value` is the trait this erases into.
+Those two arrive as defaults on `Value` and hand back a *fused* node, which is
+what a `[V: Value]` caller gets. This struct overrides them so that inside this
+lane a predicate stays a tag node: one that left the lane could not be combined
+with one that did not, since `BoolValue.__or__` takes a `BoolValue` and a
+`DynValue` is not one.
 
 **What is erased here is the type, not the operation.** This lane exists for
 expressions built where no *dtype* is available — a column named at run time,
@@ -93,15 +96,22 @@ from ..kernels.boolean import (
     AndKernel,
     BoolBinaryKernel,
     BoolUnaryKernel,
+    IsInfKernel,
+    IsNanKernel,
+    IsNullKernel,
     NotKernel,
+    NotNullKernel,
     OrKernel,
+    UnaryPredicateKernel,
     XorKernel,
 )
 from ..kernels.conditional import (
     BinaryConditionalKernel,
     CoalesceKernel,
+    FillNullKernel,
     NullifKernel,
     case_when as case_when_kernel,
+    fill_null as fill_null_kernel,
 )
 from ..kernels.numeric import (
     EqKernel,
@@ -408,6 +418,36 @@ struct DynValue(Copyable, Movable, Value, Writable):
         args: List[DynArray], payload: DynPayload, batch: RecordBatch
     ) raises -> DynArray:
         return K.dispatch(args[0].copy())
+
+    @staticmethod
+    def _predicate[
+        K: UnaryPredicateKernel
+    ](
+        args: List[DynArray], payload: DynPayload, batch: RecordBatch
+    ) raises -> DynArray:
+        """`is_null`/`is_valid`/`is_nan`/`is_inf` — `array -> bool` over any dtype.
+
+        Distinct from `_bool_unary`, whose kernels are `bool -> bool` and so
+        require a `BoolArray` operand. These read the validity bitmap (the null
+        predicates) or scan the values (the float predicates)."""
+        return K.dispatch(args[0].copy())
+
+    @staticmethod
+    def _fill_null(
+        args: List[DynArray], payload: DynPayload, batch: RecordBatch
+    ) raises -> DynArray:
+        """`a` with its nulls taken from `fill`.
+
+        `FillNullKernel` pins both operands to one dtype, and in this lane the
+        two arrive independently typed — `col("x").fill_null(lit[Int64Type](0))`
+        over an int32 column would raise on a mismatch the caller never wrote.
+        Numeric operands are widened first, the same rule `_binary` and
+        `_compare` use, so the two lanes agree on what the expression means."""
+        var a = args[0].copy()
+        var f = args[1].copy()
+        if not a.dtype().is_string_like():
+            _promote_operands(a, f)
+        return fill_null_kernel(a, f)
 
     @staticmethod
     def _binary[
@@ -826,6 +866,29 @@ struct DynValue(Copyable, Movable, Value, Writable):
 
     def nullif(self, o: Self) -> Self:
         return Self(NullifKernel.name, Self._conditional[NullifKernel], self, o)
+
+    def fill_null(self, o: Self) -> Self:
+        return Self(FillNullKernel.name, Self._fill_null, self, o)
+
+    # --- null / value predicates -------------------------------------------
+    #
+    # `Value` supplies `is_null`/`is_valid` as defaults returning the *fused*
+    # `NullPredicate`, and those are what a `[V: Value]` caller gets. This lane
+    # overrides them so the result is another tag node: a predicate that left the
+    # lane could not be combined with one that stayed in it —
+    # `col("a").is_null() | (col("b") > lit[Int64Type](1))` needs both sides to
+    # be the same type, and `BoolValue.__or__` will not take a `DynValue`.
+    def is_null(self) -> Self:
+        return Self(IsNullKernel.name, Self._predicate[IsNullKernel], self)
+
+    def is_valid(self) -> Self:
+        return Self(NotNullKernel.name, Self._predicate[NotNullKernel], self)
+
+    def is_nan(self) -> Self:
+        return Self(IsNanKernel.name, Self._predicate[IsNanKernel], self)
+
+    def is_inf(self) -> Self:
+        return Self(IsInfKernel.name, Self._predicate[IsInfKernel], self)
 
     def date_trunc(self, var unit: String) -> Self:
         var out = Self("date_trunc", Self._date_trunc, self)

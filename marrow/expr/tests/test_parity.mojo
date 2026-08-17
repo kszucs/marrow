@@ -21,6 +21,7 @@ runtime ``select``.
 """
 
 from std.testing import assert_true
+from std.utils.numerics import nan
 
 from ...arrays import DynArray, Int64Array
 from ...builders import array, PrimitiveBuilder
@@ -58,6 +59,9 @@ from ...expr.values import (
     NumericCast,
     BoolToNum,
     IsNull,
+    NotNull,
+    IsNan,
+    FillNull,
     StrLt,
     StrLe,
     StrGt,
@@ -127,7 +131,16 @@ from ...kernels.numeric import (
     ExpKernel,
     LogKernel,
 )
-from ...kernels.boolean import AndKernel, OrKernel, XorKernel, NotKernel
+from ...kernels.boolean import (
+    AndKernel,
+    OrKernel,
+    XorKernel,
+    NotKernel,
+    IsNullKernel,
+    NotNullKernel,
+    IsNanKernel,
+    IsInfKernel,
+)
 from ...kernels.string import StartsWithKernel, EndsWithKernel, ContainsKernel
 from ...kernels.temporal import (
     YearKernel,
@@ -140,7 +153,11 @@ from ...kernels.temporal import (
     DayOfWeekKernel,
     DayOfYearKernel,
 )
-from ...kernels.conditional import CoalesceKernel, NullifKernel
+from ...kernels.conditional import (
+    CoalesceKernel,
+    NullifKernel,
+    FillNullKernel,
+)
 
 from ...expr.dynamic import DynValue, _numeric_rank
 from ...expr.values import BoxedValue
@@ -403,8 +420,47 @@ def test_parity_cast_nulls() raises:
 def test_parity_isnull_never_null() raises:
     # an IS NULL result is itself always valid (no null bit set).
     assert_parity(
-        IsNull(fcol("a", int64)), dcol("a").isnull(), _nullable_ab_batch()
+        IsNull(fcol("a", int64)), dcol("a").is_null(), _nullable_ab_batch()
     )
+
+
+def test_parity_is_valid_over_nullable() raises:
+    # the complement of the above, and the other half of `NullPredicate`.
+    assert_parity(
+        NotNull(fcol("a", int64)), dcol("a").is_valid(), _nullable_ab_batch()
+    )
+
+
+def test_parity_fill_null_from_column() raises:
+    # `a` with its nulls taken from `b`. Both lanes now name the same kernel, so
+    # this is a real cross-lane case rather than an `assert_fused` placeholder.
+    assert_parity(
+        FillNull(fcol("a", int64), fcol("b", int64)),
+        dcol("a").fill_null(dcol("b")),
+        _nullable_ab_batch(),
+    )
+
+
+def test_parity_fill_null_from_literal() raises:
+    # the shape a dataframe user writes: replace nulls with a constant.
+    assert_parity(
+        FillNull(fcol("a", int64), flit(0, int64)),
+        dcol("a").fill_null(dlit[Int64Type](0)),
+        _nullable_ab_batch(),
+    )
+
+
+def test_parity_is_nan_over_floats() raises:
+    # `is_nan` reaches the erased lane through `UnaryPredicateKernel`, whereas
+    # the fused lane routes it through `NumericPredicate`'s per-lane SIMD `core`
+    # — two genuinely different paths that must agree.
+    var fb = PrimitiveBuilder[Float64Type](float64, 4)
+    fb.append(Float64(1.0))
+    fb.append(nan[DType.float64]())
+    fb.append(Float64(3.0))
+    fb.append(nan[DType.float64]())
+    var batch = record_batch([fb.finish().to_dyn()], names=["f"])
+    assert_parity(IsNan(fcol("f", float64)), dcol("f").is_nan(), batch)
 
 
 # ---------------------------------------------------------------------------
@@ -561,9 +617,17 @@ def test_parity_coalesce() raises:
     var a = array([1, None, None, 4], int64)
     var b = array([10, 20, None, 40], int64)
     var batch = record_batch([a^, b^], names=["a", "b"])
+    # Pinned against the literal expected array *and* against the runtime lane:
+    # `DynValue.coalesce` exists, so the `assert_fused` placeholder this used to
+    # be (docstring: "PENDING T2.2") was under-testing a shipped op.
     assert_fused(
         Coalesce(fcol("a", int64), fcol("b", int64)),
         array([1, 20, None, 4], int64).to_dyn(),
+        batch,
+    )
+    assert_parity(
+        Coalesce(fcol("a", int64), fcol("b", int64)),
+        dcol("a").coalesce(dcol("b")),
         batch,
     )
 
@@ -575,6 +639,11 @@ def test_parity_nullif() raises:
     assert_fused(
         Nullif(fcol("a", int64), fcol("b", int64)),
         array([1, None, None, 4], int64).to_dyn(),
+        batch,
+    )
+    assert_parity(
+        Nullif(fcol("a", int64), fcol("b", int64)),
+        dcol("a").nullif(dcol("b")),
         batch,
     )
 
@@ -1032,6 +1101,13 @@ def test_op_names_agree_across_lanes() raises:
     bad += _tag_mismatch[DayOfYearKernel](a.day_of_year().render())
     bad += _tag_mismatch[CoalesceKernel](a.coalesce(b).render())
     bad += _tag_mismatch[NullifKernel](a.nullif(b).render())
+
+    # null handling
+    bad += _tag_mismatch[FillNullKernel](a.fill_null(b).render())
+    bad += _tag_mismatch[IsNullKernel](a.is_null().render())
+    bad += _tag_mismatch[NotNullKernel](a.is_valid().render())
+    bad += _tag_mismatch[IsNanKernel](a.is_nan().render())
+    bad += _tag_mismatch[IsInfKernel](a.is_inf().render())
 
     assert_true(
         not bad,
