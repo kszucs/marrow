@@ -5,10 +5,6 @@ Public API
 ``hash_join``   — equijoin two StructArrays on positional key columns.
 ``HashJoin``    — hash join using SwissHashTable; reusable across morsels.
 
-Traits
-------
-``Join``        — abstract join algorithm (build + probe → IndexPairs).
-
 Internal types
 --------------
 ``IndexPairs``  — (left_indices, right_indices) result of a probe phase.
@@ -25,7 +21,8 @@ Supported strictness:
   JOIN_ALL    — default: return all matching pairs (Cartesian for multi-match)
   JOIN_ANY    — return at most one matching right row per left row
 
-Future join algorithms (implement the Join trait):
+Future join algorithms (see backlog M3.1); operators name the concrete
+algorithm, so a new one is a new struct, not a conformance:
   RadixHashJoin   — partitioned hash join (SwissHashTable + RadixPartitioner)
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)
 
@@ -378,42 +375,6 @@ def _concat_int32(
 
 
 # ---------------------------------------------------------------------------
-# Join trait — abstract join algorithm
-# ---------------------------------------------------------------------------
-
-
-trait Join(Movable):
-    """Abstract join algorithm: build from left side, probe with right side.
-
-    All join algorithms (hash, radix-hash, sort-merge) implement this.
-    The trait is for static dispatch — operators use concrete types directly.
-    Runtime algorithm selection uses if/elif at the call site, not type erasure.
-    """
-
-    def build(mut self, data: StructArray, key_indices: List[Int]) raises:
-        """Build the join index from the left (build) side."""
-        ...
-
-    def probe(
-        self,
-        data: StructArray,
-        key_indices: List[Int],
-        kind: JoinKind,
-        strictness: UInt8,
-    ) raises -> StructArray:
-        """Probe with right (probe) side data.  Return assembled output."""
-        ...
-
-    def build_dtype(self) -> DynType:
-        """DataType of the build side (for output schema construction)."""
-        ...
-
-    def num_left_rows(self) -> Int:
-        """Number of build-side rows."""
-        ...
-
-
-# ---------------------------------------------------------------------------
 # HashJoin — hash join using SwissHashTable
 # ---------------------------------------------------------------------------
 
@@ -438,7 +399,7 @@ help cache locality but does reduce sync_parallelize dispatch overhead.
 and can be tuned per workload."""
 
 
-struct HashJoin[Hash: Hasher = RapidHash64](Join):
+struct HashJoin[Hash: Hasher = RapidHash64]:
     """Hash join using SwissHashTable.
 
     Build phase: hash left-side key columns, insert rows into hash table.
@@ -823,21 +784,6 @@ struct HashJoin[Hash: Hasher = RapidHash64](Join):
             bitmap=None,
             children=out_cols^,
         )
-
-
-# struct SortMergeJoin(Join):
-#     """Sort-merge join.
-#
-#     Sorts both sides by key columns, then two-pointer linear merge.
-#     O(N log N + M log M) time, zero hash table memory.
-#
-#     Does NOT use HashTable — proves the Join trait is not hash-specific.
-#     """
-#     var _sort_order: Optional[Int32Array]
-#     var _sorted_keys: Optional[StructArray]
-#     var _build_dtype: DataType
-#     var _left_data: Optional[StructArray]
-#     var _num_rows: Int
 
 
 # ---------------------------------------------------------------------------

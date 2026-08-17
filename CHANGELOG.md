@@ -83,6 +83,17 @@
   one strongly connected component that no placement of `Value` or `AggExpr`
   can break, which is why neither moved and why `core.mojo` does not hold them.
 
+- **`trait Join` is gone; `HashJoin` is free-standing.** The kernel-side join
+  algorithm trait (`kernels/join.mojo`) declared four abstract methods over
+  exactly one conformer. Its own docstring said it carried no dispatch —
+  "operators use concrete types directly" — so it constrained nothing and the
+  compiler derives `HashJoin`'s `Movable` conformance without it. The
+  commented-out `SortMergeJoin` field list went with it: it existed only to
+  argue the trait was not hash-specific, and sort-merge join (backlog M3.1) will
+  be designed fresh. Unrelated to `struct Join(Relation)`, the plan node in
+  `expr/relations.mojo`, which is untouched. No behaviour, signature or binary
+  size change.
+
 - **The hashing kernel is pluggable, and the aHash string fallback is gone.**
 
   `marrow/kernels/hashing.mojo` hashed numeric columns with rapidhash and
