@@ -3,13 +3,20 @@
 Where code lives versus where its responsibility says it belongs: package layout,
 module boundaries, public surface, and the import edges that cross a layer.
 
-Verified against the working tree at `f5226d5` + uncommitted changes
-(2026-08-16). **Nothing here has been changed** — this is a findings list.
+Verified against the working tree at `f5226d5` (2026-08-16), then re-verified
+against `dd05e3d` (2026-08-17) when this branch rebased onto it.
 
 Companion to `docs/abstraction-audit.md` (trait hierarchies and leaks) and
-the duplication audit (uncommitted; may not be present on this branch). Three items are shared with the
-abstraction audit because a misplaced *type* and a leaky *abstraction* are the
-same defect seen from two sides; they are cross-referenced, not repeated.
+`docs/duplication-audit.md`. Three items are shared with the abstraction audit
+because a misplaced *type* and a leaky *abstraction* are the same defect seen
+from two sides; they are cross-referenced, not repeated.
+
+## Status
+
+**§1.5 is resolved** — independently, by `5b14bfa`, which landed while this
+branch was open. §1.6 is partly resolved by the same commit. Everything else
+below was re-checked against `dd05e3d` and still holds. Section 0's file counts
+predate the repackaging and are left as measured.
 
 ---
 
@@ -106,7 +113,7 @@ plan layer's hard dependency on `marrow.parquet` — a natural seam to break
 against: `expr` would depend on an `io` boundary rather than on one format's
 reader.
 
-### 1.5 `utils.mojo` is four unrelated things with four disjoint consumer sets
+### 1.5 `utils.mojo` is four unrelated things with four disjoint consumer sets — **RESOLVED**
 
 333 lines, no single responsibility. The consumer sets do not overlap at all:
 
@@ -130,12 +137,22 @@ There is precedent for exactly this move: `execution.mojo`'s own docstring recor
 that it used to live under `kernels/` and was moved out because *"filing it under
 `kernels/` was the tree's only `core -> kernels` import edge"*.
 
+> **Resolved by `5b14bfa`** (*"turn utils.mojo into a package of self-contained
+> primitives"*), which landed independently while this branch was open and made
+> all four splits: `marrow/utils/byteorder.mojo` (`LittleEndian`),
+> `marrow/utils/checksum.mojo` (`Crc32`), `marrow/utils/dispatch.mojo`
+> (`variant_dispatch`), and `GPU_ENABLED` / `has_accelerator_support` into
+> `marrow/execution.mojo` — the highest-value move, and the one that deletes the
+> absolute import flagged in §1.3. `marrow/utils.mojo` no longer exists.
+
 ### 1.6 `kernels/` holds four things that are not kernels
 
 - `hashtable.mojo` — `SwissHashTable`, a data structure
 - `partition.mojo` — `RadixPartitioner`, a data structure plus the shared
   hash → partition → parallel → merge skeleton
-- `hashing.mojo` — `rapidhash`, a hash function
+- `hashing.mojo` — **partly resolved** by `5b14bfa` / `e3a6cd0`: the hash
+  *primitives* moved to `marrow/utils/hashing.mojo`, and what remains under
+  `kernels/` is `HashKernel[H: Hasher]`, which is a genuine kernel
 - `core.mojo` — holds `Grouping`, a two-field data type, in the module whose
   docstring calls itself "the root of the kernel trait hierarchy"
 
