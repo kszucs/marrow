@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Features
+
+- **`DynRelation.with_columns` / `.drop` / `.rename` — the plan builder is
+  usable on a wide table now.** `project(names, values)` replaces the whole
+  output schema, so adding one derived column to a 105-column table meant
+  re-listing 105 columns; there was no way to remove or rename one at all.
+
+  - `with_columns(names, values)` appends the named expressions to the input
+    schema. A name already in the schema **replaces that column at its original
+    position** — polars `with_columns` and ibis `mutate` semantics, both checked
+    rather than assumed (polars empirically; ibis builds
+    `ops.Project(self, {**node.fields, **values})`, a position-preserving dict
+    merge). As in both, every expression in one call is evaluated against the
+    *input* batch, so a replacement is invisible to its siblings; chain two
+    calls for sequential semantics.
+  - `drop(names)` removes columns, raising on an unknown name.
+  - `rename(names, new_names)` renames by parallel lists — the shape the rest of
+    the file already uses — raising on an unknown name, a column renamed twice,
+    or a duplicate output name.
+
+  All three lower to the existing `Project` node; no new `Relation` node types.
+  Computed columns get their dtype probed against a 0-row batch exactly as
+  `project` does, while pass-through columns carry their input `Field` across
+  whole, so `nullable` and field metadata survive a `with_columns`, `drop` or
+  `rename` (`project` still drops both — recorded in
+  `docs/alpha-findings/a2-relations.md`).
+
 ### Fixes
 
 - **The Python extension builds again.** `python/bindings/arrays.mojo` still
