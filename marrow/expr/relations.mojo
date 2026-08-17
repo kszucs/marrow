@@ -28,6 +28,10 @@ expressions do not produce.
 ``in_memory_table(batch[, morsel_size])`` / ``parquet_scan(path, schema)`` — leaf sources.
 ``DynRelation.select(*names)``                   — project columns by name.
 ``DynRelation.project(names, values)``           — project computed expressions.
+``DynRelation.with_columns(names, values)``      — add/replace computed columns,
+keeping the rest (polars ``with_columns`` / ibis ``mutate`` semantics).
+``DynRelation.drop(names)`` / ``.rename(names, new_names)`` — schema-level
+rewrites; both lower to ``Project``, as ``with_columns`` does.
 ``DynRelation.filter(pred)``                     — filter rows by predicate.
 ``DynRelation.aggregate(keys, aggs)``            — grouped aggregation
 (``HAVING`` is a ``.filter(...)`` on top of it).
@@ -535,6 +539,222 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             Project(
                 input=self,
                 names=names.copy(),
+                values=values^,
+                schema=Schema(fields=fields^),
+            )
+        )
+
+    def with_columns(
+        self, names: List[String], values: List[BoxedValue]
+    ) raises -> DynRelation:
+        """Add computed columns, keeping every column already there.
+
+        This is ``project``'s usable half. ``project`` *replaces* the output
+        schema, so adding one derived column to a 105-column table means
+        re-listing 105 names; this lists only what changes:
+
+            rel.with_columns(names=["total"], values=[col("qty") * col("price")])
+
+        **Append-or-replace, replacement in place.** A name that is not in the
+        input schema is appended after the existing columns, in argument order.
+        A name that *is* in the input schema overwrites that column **at its
+        original position** rather than moving it to the end. That is polars
+        `with_columns` and ibis `mutate`, both verified rather than assumed:
+        polars keeps `['a', 'b', 'c']` after `with_columns(pl.col('b') * 2)`,
+        and ibis builds `ops.Project(self, {**node.fields, **values})`, a dict
+        merge, which by Python's insertion-order rule updates an existing key in
+        place. Matching them is the whole point — this verb is the most-used one
+        in both, so its surprises should be their surprises.
+
+        **Every expression sees the input, never a partially-updated output.**
+        The node lowered to is a single ``Project``, and ``ProjectProcessor``
+        evaluates all of its values against the same input morsel. So in
+        ``with_columns(["b", "c"], [col("a") + lit(1), col("b") * lit(2)])``,
+        ``c`` reads the *original* ``b``, not the one computed one slot earlier.
+        Again this is polars' and ibis' rule; chain two calls to get sequential
+        semantics.
+
+        Pass-through columns are `col(name)` references, exactly as ``select``
+        builds them, and keep their input ``Field`` whole — dtype, ``nullable``
+        and metadata. A pass-through *is* that field, so copying it is the
+        honest answer and strictly more informative than re-probing, which would
+        recover the dtype and silently drop the other two. Replaced and appended
+        columns get their dtype probed against a 0-row batch the way ``project``
+        does, for the reason given there: a declared dtype asserts the caller's
+        arithmetic rather than the plan's.
+
+        Raises:
+            Error: if the two lists differ in length, or a name is given twice
+                — the second would silently win, which is a typo, not an intent.
+        """
+        if len(names) != len(values):
+            raise Error("with_columns: len(names) != len(values)")
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                if names[i] == names[j]:
+                    raise Error(
+                        "with_columns: duplicate output column '"
+                        + names[i]
+                        + "'"
+                    )
+
+        var input_schema = self.schema()
+        var probe = RecordBatch.empty(input_schema)
+        var out_names = List[String]()
+        var out_values = List[BoxedValue]()
+        var fields = List[Field]()
+
+        # The input schema, in order: kept as a by-name reference, or
+        # overwritten in place by its replacement expression.
+        for ref f in input_schema.fields:
+            var repl = -1
+            for i in range(len(names)):
+                if names[i] == f.name:
+                    repl = i
+                    break
+            out_names.append(f.name.copy())
+            if repl >= 0:
+                fields.append(
+                    Field(f.name, values[repl].execute(probe).dtype())
+                )
+                out_values.append(values[repl].copy())
+            else:
+                fields.append(f.copy())
+                out_values.append(col(f.name.copy()))
+
+        # Then the genuinely new names, in argument order.
+        for i in range(len(names)):
+            if input_schema.get_field_index(names[i]) == -1:
+                out_names.append(names[i].copy())
+                fields.append(Field(names[i], values[i].execute(probe).dtype()))
+                out_values.append(values[i].copy())
+
+        return DynRelation(
+            Project(
+                input=self,
+                names=out_names^,
+                values=out_values^,
+                schema=Schema(fields=fields^),
+            )
+        )
+
+    def drop(self, names: List[String]) raises -> DynRelation:
+        """Remove the named columns, keeping the rest in their original order.
+
+        The complement of ``select``: say what goes, not what stays. Lowers to
+        the same ``Project`` of by-name column references that ``select`` builds
+        — this is a schema-level rewrite, so no expression is evaluated and each
+        surviving ``Field`` is carried over whole (dtype, ``nullable``,
+        metadata).
+
+        Repeating a name is harmless (the column is gone either way), so it is
+        not an error; naming a column that does not exist is, because it is
+        always a typo or a stale plan and silently dropping nothing would hide
+        it. Dropping every column is allowed and yields a 0-column relation, as
+        it does in polars.
+
+        Raises:
+            Error: if a name is not in the input schema.
+        """
+        var input_schema = self.schema()
+        for ref n in names:
+            if input_schema.get_field_index(n) == -1:
+                raise Error("drop: column '" + n + "' not found")
+
+        var out_names = List[String]()
+        var values = List[BoxedValue]()
+        var fields = List[Field]()
+        for ref f in input_schema.fields:
+            var dropped = False
+            for ref n in names:
+                if n == f.name:
+                    dropped = True
+                    break
+            if not dropped:
+                out_names.append(f.name.copy())
+                values.append(col(f.name.copy()))
+                fields.append(f.copy())
+
+        return DynRelation(
+            Project(
+                input=self,
+                names=out_names^,
+                values=values^,
+                schema=Schema(fields=fields^),
+            )
+        )
+
+    def rename(
+        self, names: List[String], new_names: List[String]
+    ) raises -> DynRelation:
+        """Rename columns, leaving order, dtypes and every other column alone.
+
+            rel.rename(names=["ts"], new_names=["event_time"])
+
+        **Signature.** Two parallel lists, old then new. Three shapes were
+        available and this one fits both the file and the problem:
+
+        - ``rename(names, new_names)`` — the shape every other verb here already
+          has (``project(names, values)``, ``sort(keys, ascending)``,
+          ``aggregate(keys, inputs, aggs, names)``). Mentions only the columns
+          that change.
+        - ``rename(mapping: Dict[String, String])`` — polars' spelling, and it
+          makes "renamed twice" unrepresentable, but it is the only dictionary
+          argument in the plan-building API and would read as the odd one out.
+        - ``rename_columns(names)`` taking a full-width list — PyArrow's, and
+          normally the tie-breaker here. Rejected: it re-lists all 105 columns to
+          change one, which is precisely the ergonomic failure ``with_columns``
+          exists to fix, and it makes a plain reorder or a dropped column look
+          like a rename.
+
+        Like ``drop``, this is a schema-level rewrite over a ``Project`` of
+        by-name references: no expression is evaluated, and dtype, ``nullable``
+        and metadata pass through untouched — only ``Field.name`` changes.
+
+        Raises:
+            Error: if the two lists differ in length; if an old name is not in
+                the input schema; if the same column is renamed twice; or if the
+                result would contain two columns with the same name (including a
+                collision with a column that was not renamed) — a duplicate
+                output name makes the relation unusable by name afterwards.
+        """
+        if len(names) != len(new_names):
+            raise Error("rename: len(names) != len(new_names)")
+
+        var input_schema = self.schema()
+        for i in range(len(names)):
+            if input_schema.get_field_index(names[i]) == -1:
+                raise Error("rename: column '" + names[i] + "' not found")
+            for j in range(i + 1, len(names)):
+                if names[i] == names[j]:
+                    raise Error(
+                        "rename: column '" + names[i] + "' renamed twice"
+                    )
+
+        var out_names = List[String]()
+        var values = List[BoxedValue]()
+        var fields = List[Field]()
+        for ref f in input_schema.fields:
+            var out = f.name.copy()
+            for i in range(len(names)):
+                if names[i] == f.name:
+                    out = new_names[i].copy()
+                    break
+            # Comparing against the names emitted so far catches every colliding
+            # pair, since one member of any pair is always the later one.
+            for ref prev in out_names:
+                if prev == out:
+                    raise Error("rename: duplicate output column '" + out + "'")
+            values.append(col(f.name.copy()))
+            fields.append(
+                Field(out, f.dtype.copy(), f.nullable, f.metadata.copy())
+            )
+            out_names.append(out^)
+
+        return DynRelation(
+            Project(
+                input=self,
+                names=out_names^,
                 values=values^,
                 schema=Schema(fields=fields^),
             )
