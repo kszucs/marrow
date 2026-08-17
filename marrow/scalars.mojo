@@ -6,7 +6,7 @@ length-1 arrays.
 Typed scalars:
   PrimitiveScalar[T]  — holds Scalar[T.native] (built-in) + Bool validity
   StringScalar        — holds String value + Bool validity
-  ListScalar          — holds DynArray (child values) + Bool validity
+  ListScalar          — holds DynArray (child values) + DataType + Bool validity
   StructScalar        — holds List[DynScalar] (one per field) + DataType + Bool validity
   DictionaryScalar    — holds integer index + decoded DynScalar value + DataType + Bool validity
 
@@ -69,7 +69,6 @@ from .dtypes import (
     YearMonthIntervalType,
     bool_,
     field,
-    list_,
     null,
     string,
 )
@@ -390,22 +389,36 @@ struct FixedSizeBinaryScalar(ArrowScalar):
 
 
 struct ListScalar(ArrowScalar):
-    """A single list value: holds an DynArray of child elements + validity flag.
+    """A single list value: holds its own type, an DynArray of child elements
+    and a validity flag.
+
+    The type is carried rather than rebuilt from the child, because rebuilding
+    it as `list_(child.dtype())` reports the *shape* and not the type: an
+    element of a `map` array would answer `list<struct<key, value>>` and an
+    element of a `large_list` array would answer `list<...>`. `ListScalar`
+    backs `list`, `large_list`, `map` and `fixed_size_list` alike, so the
+    parameters that distinguish them — `keysSorted`, the entries field name,
+    the fixed size — only survive by being stored.
     """
 
+    var _dtype: DynType
     var _value: OwnedPointer[DynArray]
     var _is_valid: Bool
 
-    def __init__(out self, *, var value: DynArray, is_valid: Bool):
+    def __init__(
+        out self, *, dtype: DynType, var value: DynArray, is_valid: Bool
+    ):
+        self._dtype = dtype.copy()
         self._value = OwnedPointer(value^)
         self._is_valid = is_valid
 
     def __init__(out self, *, copy: Self):
+        self._dtype = copy._dtype.copy()
         self._value = OwnedPointer(copy._value[].copy())
         self._is_valid = copy._is_valid
 
     def type(self) -> DynType:
-        return list_(self._value[].dtype())
+        return self._dtype.copy()
 
     def is_valid(self) -> Bool:
         return self._is_valid

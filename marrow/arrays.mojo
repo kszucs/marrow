@@ -1242,7 +1242,9 @@ struct ListLikeArray[T: ListLikeType](Array):
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         return ListScalar(
-            value=self.unsafe_get(index), is_valid=self.is_valid(index)
+            dtype=self.dtype,
+            value=self.unsafe_get(index),
+            is_valid=self.is_valid(index),
         )
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -1537,7 +1539,9 @@ struct FixedSizeListArray(Array):
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         return ListScalar(
-            value=self.unsafe_get(index), is_valid=self.is_valid(index)
+            dtype=self.dtype,
+            value=self.unsafe_get(index),
+            is_valid=self.is_valid(index),
         )
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:

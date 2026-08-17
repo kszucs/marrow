@@ -389,6 +389,27 @@
 
 ### Fixes
 
+- **A scalar taken from a `map`, `large_list` or `fixed_size_list` array
+  reported the wrong type.** `ListScalar` backs all four list-shaped layouts and
+  rebuilt its type as `list_(child.dtype())`, which reports the *shape* and not
+  the type: a `MapArray` element answered `list<struct<key, value>>`, a
+  `LargeListArray` element answered `list<…>`, and a `FixedSizeListArray`
+  element lost its size.
+
+  The fix is a `_dtype: DynType` field carrying the array's own type, set by
+  `ListLikeArray.__getitem__` and `FixedSizeListArray.__getitem__` — one field
+  for all three cases. A 1-byte kind tag rebuilding `list_`/`large_list_`/
+  `map_` from the child was considered and rejected: it cannot carry
+  `keysSorted` or the entries field name. Regression tests:
+  `test_list_scalar_type_from_{list,large_list,fixed_size_list,map}_array`.
+
+  This is the second and last half of `map` support (the `cast` arm below is the
+  first). It costs **+2,820 bytes of `__text` (+0.136%) on
+  `query_streaming_agg_fused`** — +2,756 on `query_streaming` and
+  `query_streaming_agg`, 0 on `query_join` — which is why it landed together
+  with the binary-size re-baseline recorded under Refactors. That reproduces the
+  +0.137% measured when the same change was written and reverted on 2026-08-16.
+
 - **`cast` had no map arm**, so `map<string, int64> → map<string, int32>` raised
   "unsupported cast". It needed no kernel of its own: a map is physically a list
   whose single child is the non-nullable `entries` struct, so `ListCast` casts

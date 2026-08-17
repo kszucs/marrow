@@ -753,9 +753,10 @@ release with both artifacts attached.
 2. **Layout coverage**: bool, numeric, string/large_string, binary/large_binary,
    fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary,
    decimal (32/64/128/256) and temporal (date/time/timestamp/duration/interval)
-   are implemented; union, run-end-encoded and view layouts are not. `map`'s
-   remaining gaps are that it has no `MapScalar` (a scalar taken from a
-   `MapArray` reports `list<…>`) and `cast` has no arm for it. **This used to say
+   are implemented; union, run-end-encoded and view layouts are not. `map` has
+   no gaps left: `cast` gained its arm, and an element taken from a `MapArray`
+   now reports `map<…>` — `ListScalar` carries its own dtype rather than
+   rebuilding it (see §3). **This used to say
    `map` did not go through IPC "in either direction" because "type code 17 is
    absent from `ipc.mojo`" — that is false**: `comptime _TYPE_MAP: UInt8 = 17` is
    there, and the archery integration suite now runs `map`, `map_non_canonical` and
@@ -764,9 +765,14 @@ release with both artifacts attached.
    pyarrow limit: it has no type for either unit, and the harness bridges
    through pyarrow. Marrow consumes all three from the other implementations.
 3. **Scalar fidelity**: six types have no dedicated scalar — `binary`,
-   `large_binary` and `large_string` collapse to `StringScalar`; `large_list`,
-   `map` and `fixed_size_list` collapse to `ListScalar`. `StringScalar.type()`
-   hard-returns `string` and `ListScalar.type()` hard-returns `list_(child)`.
+   `large_binary` and `large_string` share `StringScalar`; `large_list`, `map`
+   and `fixed_size_list` share `ListScalar`. **Only the `StringScalar` half is
+   still a fidelity bug**: `StringScalar.type()` hard-returns `string`, so a
+   `binary` element reports `string`. `ListScalar` no longer has that problem —
+   it carries its own `DynType` instead of rebuilding `list_(child.dtype())`,
+   so `large_list`, `map` and `fixed_size_list` elements report their own type,
+   `keysSorted` and the entries field name included. Sharing a struct is not
+   the defect; reconstructing the type from the child was.
 
 Release callbacks in the C Data Interface **are** implemented and invoked — this
 was listed here as a Mojo limitation long after it stopped being true. See
