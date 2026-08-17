@@ -30,11 +30,11 @@ from . import libmarrow as _ma
 from . import RecordBatch, _Wrapper
 
 try:  # Owned by the expression bindings; optional until they land.
-    from ._expr_column import Aggregate, Column
+    from ._expr_column import Aggregate, Column, col
 
     _HAVE_EXPRESSIONS = True
 except ImportError:  # pragma: no cover - exercised only pre-merge
-    Aggregate = Column = None
+    Aggregate = Column = col = None
     _HAVE_EXPRESSIONS = False
 
 
@@ -127,7 +127,7 @@ class LazyTable(_Wrapper):
     def __getitem__(self, name):
         """A column reference — ``t["price"]`` — for building predicates."""
         _require_expressions("t[name]")
-        return Column.wrap(_ma.col(name))
+        return col(name)
 
     def __repr__(self):
         return f"LazyTable\n{self._binding}"

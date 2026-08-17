@@ -37,6 +37,7 @@ from marrow.expr.relations import (
     parquet_scan as _parquet_scan,
 )
 from marrow.expr.values import AggExpr, BoxedValue
+from expressions import unwrap as _unwrap_expr, unwrap_agg as _unwrap_agg
 from marrow.kernels.join import JOIN_ALL, JOIN_ANY, JoinKind
 from marrow.parquet import ParquetFile
 from marrow.schema import Schema
@@ -53,7 +54,10 @@ def _boxed(obj: PythonObject) raises -> BoxedValue:
     var builtins = Python.import_module("builtins")
     if Bool(py=builtins.isinstance(obj, builtins.str)):
         return BoxedValue(col(String(py=obj)))
-    return BoxedValue(obj.downcast_value_ptr[DynValue]()[])
+    # `Expr` is a one-field box owned by `expressions.mojo` (a bare `DynValue`
+    # cannot be registered: deriving `Writable` for it reflects into its
+    # function-pointer field). Cross the box through its own accessor.
+    return BoxedValue(_unwrap_expr(obj))
 
 
 def _boxed_list(obj: PythonObject) raises -> List[BoxedValue]:
@@ -74,7 +78,7 @@ def _agg(obj: PythonObject) raises -> AggExpr:
         var func = String(py=obj[0])
         var input = DynValue.column(String(py=obj[1]))
         return AggExpr(DynAgg(func^, input^, String(py=obj[2])))
-    return AggExpr(obj.downcast_value_ptr[DynAgg]()[].copy())
+    return AggExpr(_unwrap_agg(obj))
 
 
 def _agg_list(obj: PythonObject) raises -> List[AggExpr]:
