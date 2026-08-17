@@ -17,7 +17,7 @@ def test_bool_type() raises:
     # which call bool primitive. marrow has something neither has: a
     # `PrimitiveType` *trait* that generic code dispatches on, which `BoolType`
     # cannot conform to because bool is bit-packed. `is_primitive()` exists to
-    # guard `variant_dispatch[PrimitiveType]`, so a True here is a trap — it
+    # guard `dispatch_primitive`, so a True here is a trap — it
     # aborted `byte_width()`. Do not "fix" this back.
     assert_false(t.is_primitive())
     assert_false(t.is_string())
@@ -148,7 +148,7 @@ def test_bool_byte_width_is_zero_not_an_abort() raises:
     """Bool has no byte width — it is one bit.
 
     This used to abort the process: `is_primitive()` answered True, so
-    `byte_width()` fell through to `variant_dispatch[PrimitiveType]`, which
+    `byte_width()` fell through to the `PrimitiveType` ladder, which
     `BoolType` cannot enter. `c_data.mojo:1001` is one branch-ordering mistake
     away from reaching it on the C Data import path.
     """

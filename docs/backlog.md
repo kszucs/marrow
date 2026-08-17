@@ -121,9 +121,12 @@ obvious. Read before planning anything.
   "assignment was never used" warnings on buffers the body writes.
 - **`origin_of(a, b)` is an origin union**, which is what lets a function return
   values borrowed from either of two storages.
-- **A closure type cannot be generic over its own trait bound**, so
-  `variant_dispatch` binds `func` on `Movable` and leaves narrowing to the
-  caller. Do not try to reintroduce a `Trait` parameter.
+- **A closure type cannot be generic over its own trait bound**, so a *shared*
+  dispatch loop would have to bind `func` on `Movable` and let the caller narrow
+  through an extra closure. That adapter inlines into every arm: it measured
+  **+662,740 bytes (+31.9% of `__text`)** on `query_streaming_agg_fused`. Each
+  erased box writes its own `isa` ladder instead — do not refactor them back
+  onto a common helper.
 - **Two closure arguments to the same call may not both capture mutably**, nor
   mut+imm over one origin. An API taking several closures over shared mutable
   state must thread that state through as an explicit `mut` parameter of each

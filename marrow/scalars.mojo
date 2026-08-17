@@ -36,7 +36,6 @@ from .arrays import (
 )
 from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
 from std.os import abort
-from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
     PrimitiveType,
@@ -560,9 +559,7 @@ struct DictionaryScalar(ArrowScalar):
 # ---------------------------------------------------------------------------
 
 
-struct DynScalar(
-    ConvertibleToPython, Copyable, Equatable, Movable, Writable
-):
+struct DynScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     """Type-erased scalar container backed by a Variant.
 
     Wraps any typed scalar inline in a discriminated union.
@@ -618,31 +615,34 @@ struct DynScalar(
     ](self, func: Func) -> R:
         """Run `func` on the active variant member, narrowed to `ArrowScalar`.
 
-        The one narrowing adapter for this type; the dispatch loop itself lives
-        in `variant_dispatch`. `ArrowScalar` has to be named concretely here — a
-        closure type cannot be generic over its own trait bound.
+        The one narrowing adapter for this type. `ArrowScalar` is named concretely
+        because a closure type cannot be generic over its own trait bound, and
+        the `isa` ladder is written out here rather than delegated to a shared
+        helper: interposing a narrowing closure between the caller and the
+        ladder costs a fully inlined copy of the adapter in *every* arm.
+        Routing the four boxes through one generic `variant_dispatch` helper
+        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
+        `__text`. Duplicating five lines of `comptime for` per box is the price.
         """
 
-        def narrow[T: Movable](t: T) {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, ArrowScalar):
-                return func(rebind[downcast[T, ArrowScalar]](t))
-            else:
-                abort("DynScalar._dispatch: member is not ArrowScalar")
-
-        return variant_dispatch(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, ArrowScalar]](self._v[T]))
+        abort("DynScalar._dispatch: no arm matched")
 
     def _dispatch[
         R: Movable, //, Func: def[T: ArrowScalar](T) raises -> R
     ](self, func: Func) raises -> R:
         """Raising counterpart of `_dispatch`."""
 
-        def narrow[T: Movable](t: T) raises {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, ArrowScalar):
-                return func(rebind[downcast[T, ArrowScalar]](t))
-            else:
-                raise Error("DynScalar._dispatch: member is not ArrowScalar")
-
-        return variant_dispatch_raises(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, ArrowScalar]](self._v[T]))
+        raise Error("DynScalar._dispatch: no arm matched")
 
     # --- construction ---
 

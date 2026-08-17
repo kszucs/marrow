@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **Erased dispatch no longer routes through a shared `variant_dispatch`,
+  recovering 662,740 bytes (−31.9% of `__text`) on `query_streaming_agg_fused`.**
+
+  The closure migration factored the four erased boxes' `isa` ladders into one
+  generic `variant_dispatch(v, func)` in `marrow/utils/dispatch.mojo`. Because a
+  closure type cannot be generic over its own trait bound, that helper has to
+  bind `func` on `Movable` and let each caller narrow through an extra `narrow`
+  closure — and *that adapter is inlined into every arm of every
+  instantiation*. It cost +739,316 bytes (+54.8%) on the fused-aggregation
+  gate, where `variant_dispatch` instantiations alone were 1,186,564 bytes,
+  57% of `__text`.
+
+  `DynArray`, `DynScalar`, `DynBuilder` and `DynType` now each write out their
+  own `comptime for` over `Self.VariantType.Ts`, and `DynType.dispatch_*` do the
+  same at their dtype family instead of layering over `_dispatch`. The helper
+  module is deleted; it had no other callers. **The value-taking closure form is
+  untouched** — every `func` is still a value with an explicit capture list, and
+  no `@__parameter` was reintroduced.
+
+  Attributed by single-variable A/B, `__text` on the gate:
+
+  | variant | `__text` | Δ |
+  |---|---:|---:|
+  | base (`84c8d4a`) | 2,077,396 | — |
+  | `R: Movable` → `R: AnyType` | 2,077,396 | 0 |
+  | in-loop `conforms_to` elision at the box trait | 2,077,396 | 0 |
+  | `dispatch_*` bypass `_dispatch` (one layer) | 1,974,972 | −102,424 |
+  | …plus elision at the dtype family | 1,972,628 | −2,344 |
+  | `DynArray._dispatch` ladder written out | 1,839,876 | −132,752 |
+  | all four boxes written out | 1,414,656 | −425,220 |
+
+  So the cost was the *interposed closure layer*, not the `Movable` return
+  bound (0 bytes) and not lost arm elision (2,344 bytes). `DynType.VariantType.Ts`
+  is reachable at comptime, which is what makes the local ladder writable.
+  Cold build of the gate also drops from ~45 s to ~29 s.
+
 ### Refactors
 
 - **The hashing kernel is pluggable, and the aHash string fallback is gone.**
@@ -200,8 +238,16 @@
   drifts up to ±8% per benchmark, so deltas were normalised against 24 untouched
   `count_set_bits`/`set_range` rows: median −0.0% over 30 sort/expr/scan
   benchmarks, worst +1.5% against a ±7.7% same-config floor, with
-  `bench_sort_int32_10k` a reproducible −25%. Binary size max +0.36%.
-  2033 tests pass, 15/15 on GPU.
+  `bench_sort_int32_10k` a reproducible −25%. 2033 tests pass, 15/15 on GPU.
+
+  **This entry claimed "binary size max +0.36%", and that was wrong.** The
+  sweep behind it did not cover the gate the change actually hit: measured
+  later by a single-variable A/B against the parent commit on the identical
+  pinned toolchain, `query_streaming_agg_fused` went 1,349,768 → 2,089,084
+  bytes of `__text` — **+739,316 (+54.8%)**. The cause was the shared
+  `variant_dispatch` helper introduced here, not the value-taking closure form;
+  see "Erased dispatch no longer routes through a shared `variant_dispatch`"
+  under Unreleased, which recovers 662,740 of it.
 
   Two changes were tried and reverted on evidence: **`std.memory.pack_bits`**
   (+12-15% on all 18 `bench_pack_bools_*` — ARM has no mask-move instruction;

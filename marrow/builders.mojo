@@ -31,7 +31,6 @@ from .buffers import Buffer, Bitmap
 
 from std.builtin.rebind import downcast
 from std.os import abort
-from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
     BinaryLikeType,
@@ -324,31 +323,34 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
     ](self, func: Func) -> R:
         """Run `func` on the active variant member, narrowed to `Builder`.
 
-        The one narrowing adapter for this type; the dispatch loop itself lives
-        in `variant_dispatch`. `Builder` has to be named concretely here — a
-        closure type cannot be generic over its own trait bound.
+        The one narrowing adapter for this type. `Builder` is named concretely
+        because a closure type cannot be generic over its own trait bound, and
+        the `isa` ladder is written out here rather than delegated to a shared
+        helper: interposing a narrowing closure between the caller and the
+        ladder costs a fully inlined copy of the adapter in *every* arm.
+        Routing the four boxes through one generic `variant_dispatch` helper
+        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
+        `__text`. Duplicating five lines of `comptime for` per box is the price.
         """
 
-        def narrow[T: Movable](t: T) {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Builder):
-                return func(rebind[downcast[T, Builder]](t))
-            else:
-                abort("DynBuilder._dispatch: member is not Builder")
-
-        return variant_dispatch(self._ptr[], narrow)
+                if self._ptr[].isa[T]():
+                    return func(rebind[downcast[T, Builder]](self._ptr[][T]))
+        abort("DynBuilder._dispatch: no arm matched")
 
     def _dispatch_mut[
         R: Movable, //, Func: def[T: Builder](mut T) raises -> R
     ](mut self, func: Func) raises -> R:
         """Mutating, raising counterpart of `_dispatch`."""
 
-        def narrow[T: Movable](mut t: T) raises {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Builder):
-                return func(rebind[downcast[T, Builder]](t))
-            else:
-                raise Error("DynBuilder._dispatch: member is not Builder")
-
-        return variant_dispatch_raises(self._ptr[], narrow)
+                if self._ptr[].isa[T]():
+                    return func(rebind[downcast[T, Builder]](self._ptr[][T]))
+        raise Error("DynBuilder._dispatch: no arm matched")
 
     def length(self) -> Int:
         def f[T: Builder](b: T) {imm} -> Int:

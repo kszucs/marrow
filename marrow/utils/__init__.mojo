@@ -6,7 +6,6 @@ out on its own:
 
 | module | what |
 |---|---|
-| `dispatch` | `variant_dispatch` — runtime dispatch over a `Variant` with no vtable |
 | `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
 | `checksum` | `Crc32` — the ISO-3309 / zlib / gzip checksum |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64` |
@@ -33,5 +32,4 @@ whether there is a device.
 from .byteorder import LittleEndian
 from .checksum import Crc32
 from .compression import CompressionLibs
-from .dispatch import variant_dispatch, variant_dispatch_raises
 from .hashing import AHash64, Hasher, RapidHash64, RapidSecret, XxHash64

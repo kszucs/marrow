@@ -206,7 +206,7 @@ trait TemporalExtractKernel(Kernel):
 
         The guard runs first so the diagnostic names this kernel and the family
         it wanted; `dispatch_temporal` alone would fall through to
-        `variant_dispatch`'s generic "no arm matched", which says neither.
+        `_dispatch`'s generic "no arm matched", which says neither.
 
         This used to be a five-arm ladder over date32/date64/timestamp/time32/
         time64 -- and it had already drifted: `DurationType` is a `TemporalType`

@@ -331,11 +331,19 @@ family — `dispatch_primitive` / `dispatch_numeric` / `dispatch_integer` /
 resolving a runtime `DataType` to a comptime type parameter and running a job
 passed **as a value**: `dt.dispatch_numeric(job)`, not `dt.dispatch_numeric[job]()`.
 
-All nine are narrowing adapters over one loop, `DynType._dispatch`, which is
-fixed to `DataType` because a closure type cannot be generic over its own trait
-bound (see the closure gotchas). `DynArray` and `DynScalar` have the same
-`_dispatch`; `DynBuilder` still goes through the comptime `variant_dispatch*`
-helpers in `marrow/utils.mojo`.
+Each of the nine writes out its own `comptime for` over `DynType.VariantType.Ts`,
+guarded by `comptime if conforms_to(T, Family)`, and calls `func` directly.
+`DynArray`, `DynScalar` and `DynBuilder` each have one `_dispatch` of the same
+shape at their own trait.
+
+**This duplication is deliberate and measured.** Factoring the ladder into one
+generic `variant_dispatch(v, func)` helper needs a narrowing closure between the
+caller and the loop — a closure type cannot be generic over its own trait bound,
+so the helper must bind `func` on `Movable` and let the caller narrow. That
+adapter is inlined into *every* arm of *every* instantiation: it cost
+**+662,740 bytes (+31.9% of `__text`)** on `query_streaming_agg_fused`, and
+removing it is what recovered the regression. Prefer the local ladder; do not
+reintroduce the shared helper.
 
 ### Kernels
 
@@ -421,7 +429,7 @@ marrow/
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── execution.mojo        # ExecutionContext — threads, device, `stripe`
-├── utils.mojo            # variant_dispatch*, GPU_ENABLED, has_accelerator_support
+├── utils/                # byteorder, checksum, hashing, compression, testing
 ├── kernels/
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
 │   ├── boolean.mojo      # and/or/not/xor, is_null, is_nan, is_inf
@@ -670,9 +678,11 @@ Two project-specific traps, neither of which produces a diagnostic:
 - **A closure handed to a GPU kernel must be captured by value, never `{imm}`** —
   an `imm` capture points into the host stack frame, so the device silently
   computes garbage. `views._gpu_launch` copies before capturing.
-- **A closure type cannot be generic over its own trait bound.** Hence
-  `variant_dispatch` binds `func` on `Movable` and leaves narrowing to the
-  caller; see its module docstring.
+- **A closure type cannot be generic over its own trait bound.** So a shared
+  dispatch loop cannot name the caller's trait; it would have to bind `func` on
+  `Movable` and let the caller narrow through an extra closure. That adapter
+  inlines into every arm — measured at **+662,740 bytes** on one gate — which is
+  why each erased box writes its own `isa` ladder instead (`DynArray._dispatch`).
 
 ### Associated types, traits, reflection
 

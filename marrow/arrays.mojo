@@ -44,7 +44,6 @@ from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from std.builtin.rebind import downcast
 from std.os import abort
-from .utils import variant_dispatch, variant_dispatch_raises
 from .dtypes import (
     DynType,
     BinaryLikeType,
@@ -2401,31 +2400,34 @@ struct DynArray(
     ](self, func: Func) -> R:
         """Run `func` on the active variant member, narrowed to `Array`.
 
-        The one narrowing adapter for this type; the dispatch loop itself lives
-        in `variant_dispatch`. `Array` has to be named concretely here — a
-        closure type cannot be generic over its own trait bound.
+        The one narrowing adapter for this type. `Array` is named concretely
+        because a closure type cannot be generic over its own trait bound, and
+        the `isa` ladder is written out here rather than delegated to a shared
+        helper: interposing a narrowing closure between the caller and the
+        ladder costs a fully inlined copy of the adapter in *every* arm.
+        Routing the four boxes through one generic `variant_dispatch` helper
+        measured **+662,740 bytes** on `query_streaming_agg_fused` — 31.9% of
+        `__text`. Duplicating five lines of `comptime for` per box is the price.
         """
 
-        def narrow[T: Movable](t: T) {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Array):
-                return func(rebind[downcast[T, Array]](t))
-            else:
-                abort("DynArray._dispatch: member is not Array")
-
-        return variant_dispatch(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, Array]](self._v[T]))
+        abort("DynArray._dispatch: no arm matched")
 
     def _dispatch[
         R: Movable, //, Func: def[T: Array](T) raises -> R
     ](self, func: Func) raises -> R:
         """Raising counterpart of `_dispatch`."""
 
-        def narrow[T: Movable](t: T) raises {imm} -> R:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, Array):
-                return func(rebind[downcast[T, Array]](t))
-            else:
-                raise Error("DynArray._dispatch: member is not Array")
-
-        return variant_dispatch_raises(self._v, narrow)
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, Array]](self._v[T]))
+        raise Error("DynArray._dispatch: no arm matched")
 
     # --- construction ---
 
