@@ -299,7 +299,12 @@ unmodified branch point `71f069c` in a separate worktree:
 `*` = in the CI gate. `query_arith` and `query_exprs` are **not** gated but are
 the purest AOT-expression binaries, so they were measured too — the gate's four
 all carry scan/join/aggregate machinery that could mask a small expression-layer
-change. Byte-identical across all six. §2 quoted `8334bf0`'s recorded **+13,428 bytes** for *adding* the
+change. Byte-identical across all six.
+
+The follow-up that moved `OutShape` off `Value` onto the fused family traits was
+measured the same way afterwards and is **also 0** on all four gates — same four
+figures to the byte. The drivers read the same value from the same place, so
+fused codegen is unchanged, as predicted. §2 quoted `8334bf0`'s recorded **+13,428 bytes** for *adding* the
 raising trait requirements and this plan banked on reclaiming it; that was a
 mistake in reasoning, not in execution. That figure was measured under
 `mojo 1.0.0b3`, and a `raises` on a trait requirement only costs anything at
