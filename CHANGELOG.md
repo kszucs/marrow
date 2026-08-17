@@ -4,6 +4,63 @@
 
 ### Fixes
 
+- **`cast()` no longer drops `safe` and `ctx` on the way to a kernel, and two
+  casts that silently corrupted data now raise (S4).**
+
+  `cast(array, to, safe, ctx)` delegated to fifteen kernels across **six
+  different signatures**, so its ladder handed each arm only the arguments that
+  arm happened to accept. Six kernels took no `ctx`; seven took no `safe`. Two
+  of those seven could genuinely fail, and did, under the default that promises
+  to raise:
+
+  - `cast(x, decimal128(38, 2), safe=True)` **wrapped on overflow**, and the
+    value did not survive — a test asserting the corruption positively passes
+    against the old code.
+  - `TemporalCast` — not previously reported — **discarded its remainder** on a
+    unit downscale and **overflowed int64** on an upscale, so 1500 ms became
+    1 s and 10^10 s became garbage. Arrow C++'s `ShiftTime` raises on both,
+    under `allow_time_truncate` and `allow_time_overflow`.
+
+  The suite encoded the temporal defect: `test_timestamp_unit_downscale`
+  asserted the truncation under the default and now passes `safe=False`.
+
+  All fifteen kernels conform to a new `trait CastKernel(Kernel)` with one
+  `dispatch(array, to, safe, ctx)`. The trait buys signature uniformity, not
+  code reuse and not a shared dispatcher — `cast()` stays a hand-written ladder,
+  because a closure generic over its own trait bound needs a narrowing adapter
+  that inlines into every arm (+662,740 bytes, measured previously).
+
+- **The decimal cast family is five kernels instead of one, removing 1,268,480
+  bytes (−20.7% of `__text`) from `query_dynvalue`.**
+
+  `DecimalCast` did decimal↔decimal, decimal↔float and decimal↔integer behind a
+  single `_convert[FromN, ToN]` that resolved *both* sides over "decimal or
+  numeric" — roughly 16 × 16 monomorphizations, every line inside stamped into
+  all of them. That stayed cheap only while the bodies were three-line unchecked
+  casts. Adding the checks `safe` requires cost **+371,584 bytes for 1,476 bytes
+  of source, a 250× multiplier** and 85% of the change's total size regression.
+
+  `DecimalRescale`, `IntToDecimal`, `DecimalToInt`, `FloatToDecimal` and
+  `DecimalToFloat` each dispatch only over the families they can see, with
+  `DecimalCast` kept as a router so `cast()` has one decimal arm. Two of the
+  five lose a runtime branch outright: an integer source is always scale 0, so
+  `IntToDecimal` only scales up, and an integer target is always scale 0, so
+  `DecimalToInt` only scales down — the fat kernel had to test `delta` on every
+  path. Net effect is 1.27 MB *below* the pre-change baseline.
+
+  Attribution, `__text` on `query_dynvalue`, single-variable A/B:
+
+  | variant | `__text` | Δ |
+  |---|---:|---:|
+  | base (`8cc9723`) | 6,139,636 | — |
+  | `_map`'s op made `raises` | 6,139,636 | 0 |
+  | trait + widened signatures + `TemporalCast` | 6,203,124 | +63,488 |
+  | + `DecimalCast` checks (fat kernel) | 6,574,708 | +435,072 |
+  | + the split (shipped) | 4,871,156 | **−1,268,480** |
+
+  Making the map's op raising is free; the error-message interpolation was only
+  54,912 bytes of the regression. The cross product was the whole story.
+
 - **`DynArray.slice` is no longer `raises`, which removes 46,164 bytes
   (−3.3% of `__text`) from `query_streaming_agg_fused`.** It was raising only
   for as long as `DynArray` conformed to `Array`, and outlived that conformance

@@ -20,6 +20,7 @@ from ...dtypes import (
     second,
     millisecond,
     microsecond,
+    nanosecond,
     int8,
     int16,
     int32,
@@ -36,6 +37,7 @@ from ...dtypes import (
     large_binary,
     large_string,
     fixed_size_binary_,
+    decimal32,
     decimal64,
     decimal128,
     list_,
@@ -240,9 +242,13 @@ def test_timestamp_unit_upscale() raises:
 
 
 def test_timestamp_unit_downscale() raises:
+    # `safe=False` is required: 1500 ms is not a whole number of seconds, and
+    # the default `safe=True` now raises rather than discarding the remainder.
+    # This case asserted the truncation under the default until S4 threaded
+    # `safe` through to `TemporalCast` — the suite encoded the defect.
     var i: DynArray = array([1500, 2500], int64)
     var ts_ms = cast(i, timestamp(millisecond))
-    var ts_s = cast(ts_ms, timestamp(second))  # // 1000 truncates
+    var ts_s = cast(ts_ms, timestamp(second), safe=False)  # // 1000 truncates
     assert_true(cast(ts_s, int64).as_int64() == array([1, 2], int64))
 
 
@@ -562,3 +568,84 @@ def test_cast_map_casts_the_entry_values() raises:
     assert_equal(
         got_entries.as_struct().field(1).as_int32()[0].value(), Int32(7)
     )
+
+
+# ---------------------------------------------------------------------------
+# S4 — `safe` must reach every kernel `cast()` delegates to.
+#
+# `cast()`'s ladder called `DecimalCast.dispatch(array, to)` and
+# `TemporalCast.dispatch(array, to, ctx)`, so the caller's `safe` flag was
+# dropped on both arms and neither kernel could honour it. Arrow C++ raises in
+# each case below (`CastOptions::Safe()` clears `allow_decimal_truncate`,
+# `allow_time_truncate` and `allow_time_overflow`).
+# ---------------------------------------------------------------------------
+
+
+def test_cast_float_to_decimal_overflow_raises_under_safe() raises:
+    """1e38 scaled by 10^2 is 1e40, far outside int128."""
+    var f: DynArray = array([1.0e38], float64)
+    with assert_raises():
+        _ = cast(f, decimal128(38, 2), safe=True)
+
+
+def test_cast_decimal_upscale_overflow_raises_under_safe() raises:
+    """12345 at scale 6 is 12_345_000_000, past decimal32's int32 backing."""
+    var i: DynArray = array([12345], int64)
+    with assert_raises():
+        _ = cast(i, decimal32(9, 6), safe=True)
+
+
+def test_cast_decimal_downscale_truncation_raises_under_safe() raises:
+    """1.234 at scale 3 cannot be held at scale 1 — the `34` is discarded."""
+    var f: DynArray = array([1.234], float64)
+    var d3 = cast(f, decimal64(18, 3), safe=False)
+    with assert_raises():
+        _ = cast(d3, decimal64(18, 1), safe=True)
+
+
+def test_cast_decimal_downscale_exact_passes_under_safe() raises:
+    """The truncation check must not fire when the rescale is lossless.
+
+    Read back through `float64` rather than `int64` — casting a decimal to an
+    integer rescales it to scale 0, so `12 @ scale 1` would read as `1`.
+    """
+    var f: DynArray = array([1.2], float64)
+    var d3 = cast(f, decimal64(18, 3), safe=False)
+    var d1 = cast(d3, decimal64(18, 1), safe=True)
+    assert_true(
+        cast(d1, float64, safe=False).as_float64() == array([1.2], float64)
+    )
+
+
+def test_cast_timestamp_downscale_raises_under_safe() raises:
+    """1500 ms is not a whole number of seconds."""
+    var i: DynArray = array([1500], int64)
+    var ts_ms = cast(i, timestamp(millisecond))
+    with assert_raises():
+        _ = cast(ts_ms, timestamp(second), safe=True)
+
+
+def test_cast_timestamp_upscale_overflow_raises_under_safe() raises:
+    """1e10 seconds is 1e19 nanoseconds, past int64's 9.22e18."""
+    var i: DynArray = array([10_000_000_000], int64)
+    var ts_s = cast(i, timestamp(second))
+    with assert_raises():
+        _ = cast(ts_s, timestamp(nanosecond), safe=True)
+
+
+def test_cast_timestamp_downscale_truncates_under_unsafe() raises:
+    """`safe=False` keeps the old truncating behaviour."""
+    var i: DynArray = array([1500, 2500], int64)
+    var ts_ms = cast(i, timestamp(millisecond))
+    var ts_s = cast(ts_ms, timestamp(second), safe=False)
+    assert_true(
+        cast(ts_s, int64, safe=False).as_int64() == array([1, 2], int64)
+    )
+
+
+def test_cast_timestamp_downscale_exact_passes_under_safe() raises:
+    """The truncation check must not fire on a whole number of seconds."""
+    var i: DynArray = array([1000, 2000], int64)
+    var ts_ms = cast(i, timestamp(millisecond))
+    var ts_s = cast(ts_ms, timestamp(second), safe=True)
+    assert_true(cast(ts_s, int64).as_int64() == array([1, 2], int64))
