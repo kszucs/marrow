@@ -379,6 +379,14 @@
     scalar constructs from an `Intable`, `Bool` is `Intable`, and that
     overload rejects `bool` as non-integral.
 
+- **`Partition.row_indices` is a plain `Int32Array`.** It had been an
+  `Optional[Int32Array]` defaulting to `None`, encoding "all rows in order" for
+  the unpartitioned case — but `NoPartition` was removed, so the only
+  construction site (`RadixPartitioner.partition`) always supplies the array and
+  `map_partitions` unwrapped it unconditionally. The `Optional`, its `None`
+  default and the `if` guard in `original_row` are gone; no behaviour or API
+  change.
+
 ### Fixes
 
 - **`cast` had no map arm**, so `map<string, int64> → map<string, int32>` raised

@@ -44,7 +44,7 @@ def _assert_covers_every_row(
         ref part = parts[p]
         total += len(part.hashes)
         for i in range(len(part.hashes)):
-            var row = Int(part.row_indices.value()[i].value())
+            var row = Int(part.row_indices[i].value())
             assert_true(row >= 0 and row < n)
             seen[row] += 1
             # The partition's hash at this slot is the hash of that row —
