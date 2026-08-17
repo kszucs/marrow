@@ -144,6 +144,13 @@
 
 ### Refactors
 
+- **`query_dynvalue` joins the binary-size gate.** The four gates it watched
+  link **zero** symbols from `marrow.kernels.cast` — checked with `nm -C` across
+  all eleven benchmark binaries — so the whole cast family was ungated, and a
+  change that added +7.09% to `query_dynvalue` measured 0.00% on every gate CI
+  actually reads. `query_runtime` and `query_sort` also link the ladder and stay
+  ungated; one gate was judged enough signal for the extra sweep time.
+
 - **`marrow.expr` is down from three import cycles to one, and the survivor is
   structural.** Pure code motion, no signature or API change: `col("a")` and
   `col("a", int64)` both still resolve from `marrow.expr`.
