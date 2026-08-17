@@ -608,25 +608,31 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         else:
             raise Error("unsupported type: ", dtype)
 
-    def append(mut self, value: PyObjectPtr) raises:
-        def narrow[T: Movable](mut t: T) raises {imm}:
-            comptime if conforms_to(T, PyConverter):
-                ref c = rebind[downcast[T, PyConverter]](t)
-                c.append(value)
-            else:
-                raise Error("PyConverter dispatch: unsupported member")
+    # The `isa` ladder is written out here rather than delegated to a shared
+    # helper, matching `DynArray._dispatch` and for the same measured reason:
+    # interposing a narrowing closure between the caller and the ladder costs a
+    # fully inlined copy of the adapter in every arm (+662,740 bytes on one
+    # gate, e5509c3). These two were the last callers of the helper that commit
+    # deleted, and were missed because CI has not run since 2026-05-11 -- the
+    # Python extension has not built since.
 
-        dt.variant_dispatch_raises(self._v[], narrow)
+    def append(mut self, value: PyObjectPtr) raises:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
+            comptime if conforms_to(T, PyConverter):
+                if self._v[].isa[T]():
+                    ref c = rebind[downcast[T, PyConverter]](self._v[][T])
+                    return c.append(value)
+        raise Error("PyConverter dispatch: no arm matched")
 
     def extend(mut self, values: PyObjectPtr) raises:
-        def narrow[T: Movable](mut t: T) raises {imm}:
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
             comptime if conforms_to(T, PyConverter):
-                ref c = rebind[downcast[T, PyConverter]](t)
-                c.extend(values)
-            else:
-                raise Error("PyConverter dispatch: unsupported member")
-
-        dt.variant_dispatch_raises(self._v[], narrow)
+                if self._v[].isa[T]():
+                    ref c = rebind[downcast[T, PyConverter]](self._v[][T])
+                    return c.extend(values)
+        raise Error("PyConverter dispatch: no arm matched")
 
 
 # ---------------------------------------------------------------------------

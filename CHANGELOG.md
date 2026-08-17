@@ -4,6 +4,15 @@
 
 ### Fixes
 
+- **The Python extension builds again.** `python/bindings/arrays.mojo` still
+  called `dt.variant_dispatch_raises`, which `e5509c3` deleted when it replaced
+  the shared dispatch helper with per-box `isa` ladders — so `libmarrow.so` had
+  not compiled, and `python/marrow/tests` had not run, for three commits. The
+  two call sites now write out the ladder like every other box. 416 passed.
+
+  Nothing reported this: the binary-size gate does not build the extension, and
+  CI has not run since 2026-05-11.
+
 - **`cast()` no longer drops `safe` and `ctx` on the way to a kernel, and two
   casts that silently corrupted data now raise (S4).**
 
