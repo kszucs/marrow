@@ -19,6 +19,7 @@ from std.hashlib._ahash import AHasher
 from ..hashing import (
     mul_fold,
     mul_wide,
+    mul_wide_portable,
     AHash64,
     Hasher,
     RapidHash64,
@@ -619,3 +620,38 @@ def test_three_hashers_are_distinct_and_reachable() raises:
     assert_true(r != a)
     assert_true(x != a)
     assert_equal(AHash64.name, StaticString("ahash64"))
+
+
+def test_mul_wide_paths_agree() raises:
+    """The `uint128` path and the 32-bit sub-product path must be identical.
+
+    `mul_wide` picks between them at comptime by target: CPU gets the widening
+    multiply, GPU gets the reconstruction because Metal has no 128-bit integer.
+    A divergence here would mean the same column hashed to different values on
+    CPU and GPU — silently, and only for values above 2^32.
+    """
+    var a = SIMD[DType.uint64, 8](
+        0,
+        1,
+        0xFFFFFFFF,
+        0x100000000,
+        0x0123456789ABCDEF,
+        0xFFFFFFFFFFFFFFFF,
+        0x8000000000000000,
+        0xDEADBEEFCAFEBABE,
+    )
+    var b = SIMD[DType.uint64, 8](
+        0xFFFFFFFFFFFFFFFF,
+        0xFFFFFFFFFFFFFFFF,
+        0xFFFFFFFF,
+        0x100000000,
+        0xFEDCBA9876543210,
+        0xFFFFFFFFFFFFFFFF,
+        2,
+        0x0123456789ABCDEF,
+    )
+    var fast = mul_wide[8](a, b)
+    var portable = mul_wide_portable[8](a, b)
+    for i in range(8):
+        assert_equal(fast[0][i], portable[0][i])
+        assert_equal(fast[1][i], portable[1][i])

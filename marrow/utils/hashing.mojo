@@ -45,6 +45,7 @@ implementations; neither is vendored.
 """
 
 from std.bit import pop_count, rotate_bits_left
+from std.sys.info import is_gpu
 from std.hashlib._ahash import AHasher
 
 from .byteorder import LittleEndian
@@ -56,13 +57,53 @@ def mul_wide[
 ](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> Tuple[
     SIMD[DType.uint64, W], SIMD[DType.uint64, W]
 ]:
-    """Per-lane 128-bit multiply returning `(lo, hi)`, built from four 32-bit
-    sub-products.
+    """Per-lane 128-bit multiply returning `(lo, hi)`.
 
     Belongs to no one algorithm — rapidhash's `mum`, aHash's `_folded_multiply`
     and the digest combiner are all this same operation, and each having its own
     copy meant picking `XxHash64` still pulled `RapidHash64` into the binary.
-    Avoiding `uint128` is what keeps it usable on Metal, which has no such type.
+
+    Two implementations, chosen at comptime by target:
+
+    - **CPU** widens to `uint128` and lets the backend emit one widening
+      multiply.
+    - **GPU** reconstructs the product from four 32-bit sub-products, because
+      Metal has no 128-bit integer type at all. The reconstruction is exact —
+      `tests/test_hashing.mojo` asserts the two agree lane for lane, which is
+      what stops the GPU and CPU paths from ever disagreeing about a hash.
+    """
+    comptime if is_gpu():
+        comptime MASK = SIMD[DType.uint64, W](0xFFFFFFFF)
+        var a_lo = a & MASK
+        var a_hi = a >> 32
+        var b_lo = b & MASK
+        var b_hi = b >> 32
+        var t0 = a_lo * b_lo
+        var t1 = a_lo * b_hi
+        var t2 = a_hi * b_lo
+        var t3 = a_hi * b_hi
+        var mid = (t0 >> 32) + (t1 & MASK) + (t2 & MASK)
+        var lo = (t0 & MASK) | (mid << 32)
+        var hi = t3 + (t1 >> 32) + (t2 >> 32) + (mid >> 32)
+        return (lo, hi)
+    else:
+        var r = a.cast[DType.uint128]() * b.cast[DType.uint128]()
+        return (
+            r.cast[DType.uint64](),
+            (r >> 64).cast[DType.uint64](),
+        )
+
+
+@always_inline
+def mul_wide_portable[
+    W: Int
+](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> Tuple[
+    SIMD[DType.uint64, W], SIMD[DType.uint64, W]
+]:
+    """`mul_wide`'s 32-bit sub-product path, unconditionally.
+
+    Exposed only so the tests can assert it against the `uint128` path on a CPU;
+    on a GPU `mul_wide` *is* this.
     """
     comptime MASK = SIMD[DType.uint64, W](0xFFFFFFFF)
     var a_lo = a & MASK
