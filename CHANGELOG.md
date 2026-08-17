@@ -38,7 +38,23 @@
   So the cost was the *interposed closure layer*, not the `Movable` return
   bound (0 bytes) and not lost arm elision (2,344 bytes). `DynType.VariantType.Ts`
   is reachable at comptime, which is what makes the local ladder writable.
-  Cold build of the gate also drops from ~45 s to ~29 s.
+
+  **Every gate improves, and the erasure-heavy ones improve most** — measured
+  base-vs-fix on the same machine and toolchain:
+
+  | gate | before | after | Δ |
+  |---|---:|---:|---:|
+  | `query_dynvalue` | 10,957,172 | 6,198,516 | −4,758,656 (−43.4%) |
+  | `query_runtime` | 10,956,020 | 6,197,300 | −4,758,720 (−43.4%) |
+  | `query_streaming` | 2,607,180 | 1,481,896 | −1,125,284 (−43.2%) |
+  | `query_exprs` | 2,268,196 | 1,558,948 | −709,248 (−31.3%) |
+  | `query_streaming_agg` | 2,625,876 | 1,929,648 | −696,228 (−26.5%) |
+  | `query_streaming_agg_fused` | 2,077,396 | 1,414,656 | −662,740 (−31.9%) |
+
+  Cold build times roughly halve with them (the fused gate ~45 s → ~29 s,
+  `query_dynvalue` ~189 s → ~91 s). `benchmarks/binary_size/baseline.json` is
+  left alone deliberately — it is owned by another branch and predates both
+  this and the Mojo 1.1 upgrade, so re-baselining is a separate step.
 
 ### Refactors
 
