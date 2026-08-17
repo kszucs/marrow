@@ -461,3 +461,9 @@ def read_ipc_stream_schema(path):
 # Imported last: `compute` pulls Array/Scalar/RecordBatch back out of this
 # module, so it can only be bound once those exist.
 from . import compute  # noqa: E402
+
+# The lazy relational frontend, for the same reason: `expr` pulls RecordBatch
+# and `_Wrapper` back out of this module. `LazyTable` is deliberately not
+# `Table` — that name is the eager, PyArrow-shaped one above.
+from . import expr  # noqa: E402
+from .expr import LazyTable, read_parquet, scan  # noqa: E402

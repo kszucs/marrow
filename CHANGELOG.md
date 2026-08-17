@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Features
+
+- **The relational plan layer is bound to Python, with a lazy `LazyTable` on
+  top.** `DynRelation` is exposed as the Python type `Plan`
+  (`python/bindings/plan.mojo`) with `select`/`project`/`filter`/`aggregate`/
+  `sort`/`limit`/`join`/`execute`/`schema`/`column_names` and a rendering
+  `__str__`/`__repr__`, plus the leaf constructors `in_memory_table` and
+  `parquet_scan`. Until now the plan engine had no Python bindings at all — no
+  Python user could build or run a query plan.
+
+  `python/marrow/expr.py` adds the ibis-flavoured lazy frontend (no `ibis`
+  dependency): `marrow.read_parquet(path)` and `marrow.scan(batch)` return a
+  `LazyTable` carrying `filter`/`select`/`drop`/`rename`/`project`/`aggregate`/
+  `order_by`/`limit`/`head`/`join`, executed by `collect()` or `to_pyarrow()`.
+  Grouped aggregation takes a keyword surface —
+  `t.aggregate(by=["k"], total=("sum", "v"))`.
+
+  The eager, PyArrow-shaped `marrow.Table` is unchanged; the lazy type is
+  deliberately a different name. See `docs/alpha-findings/b2-plan-bindings.md`
+  for the naming recommendation and for what binding this layer exposed about
+  the plan IR and the aggregate cluster — notably that `Relation` has no
+  `inputs()`, so a plan cannot be traversed, and that no node's `write_to`
+  renders its children, so there is no real EXPLAIN.
+
+  Marshalling accepts a plain `str` anywhere a bare column reference is wanted
+  (sort keys, join keys, select names), so the common path needs no expression
+  objects.
+
 ### Fixes
 
 - **The Python extension builds again.** `python/bindings/arrays.mojo` still
