@@ -4,6 +4,35 @@
 
 ### Fixes
 
+- **`DynArray.slice` is no longer `raises`, which removes 46,164 bytes
+  (−3.3% of `__text`) from `query_streaming_agg_fused`.** It was raising only
+  for as long as `DynArray` conformed to `Array`, and outlived that conformance
+  by several commits; every typed `slice` is total, so the erased one is too.
+  The cost was error-handling machinery threaded through a 37-variant ladder.
+
+- **Three null-counting and equality defects in `arrays.mojo`.**
+  - `DictionaryArray.slice` copied the *parent's* null count onto every
+    sub-range, so a 10-element slice of a 1000-element array with 500 nulls
+    reported 500 — a count larger than the length. A dictionary's validity is
+    its indices', so the count now comes from slicing those, which the previous
+    point makes possible in one non-raising call.
+  - Every `slice()` passed its raw `length` argument — `-1` on the defaulted
+    call — into the null count, where `Bitmap.view` reads `-1` as "to the end of
+    the bitmap". A slice of a slice therefore counted validity bits it does not
+    own, and was correct only when an array happened to own its whole bitmap.
+  - `DictionaryArray.__eq__` compared `_indices` and `_values` whole and never
+    looked at `_offset`, so two *different* slices of one parent with equal
+    length compared equal. It now compares decoded values, which also makes two
+    arrays encoding the same column against differently ordered dictionaries
+    equal. `DictionaryScalar.__eq__` stops comparing `_index` for the same
+    reason: the slot a value was read from is not part of its identity.
+
+- **Validity comparison in `__eq__` no longer scans.** The shared helper
+  popcounted to answer a question its callers had already settled in O(1), then
+  compared bitmaps bit by bit where `BitmapView.__eq__` does it word-at-a-time.
+  All seven implementations now compare null counts and, only when those are
+  nonzero, the two offset-applied views.
+
 - **Erased dispatch no longer routes through a shared `variant_dispatch`,
   recovering 662,740 bytes (−31.9% of `__text`) on `query_streaming_agg_fused`.**
 

@@ -554,9 +554,12 @@ struct DictionaryScalar(ArrowScalar):
         return self._decoded[].copy()
 
     def __eq__(self, other: Self) -> Bool:
+        """Return True if both scalars decode to the same value.
+
+        The dictionary slot the value came from is not part of its identity.
+        """
         return (
             self._dtype == other._dtype
-            and self._index == other._index
             and self._decoded[] == other._decoded[]
         )
 

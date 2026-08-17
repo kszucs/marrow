@@ -984,7 +984,11 @@ struct BitmapView[
     # --- Equality ---
 
     def __eq__(self, other: BitmapView[_]) -> Bool:
-        """Return True if both views have identical logical bit patterns."""
+        """Return True if both views have identical logical bit patterns.
+
+        Offsets are applied, so two views agree whenever the bits they each
+        span agree, whatever position they start at.
+        """
         if self._length != len(other):
             return False
         # Word-level XOR comparison.

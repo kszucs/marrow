@@ -149,6 +149,14 @@ obvious. Read before planning anything.
   wall blocks a `trait ValidityBuilder` default (needs `self._bitmap`) and a
   `CReleasable` trait for `c_data`'s release slot (needs `self.release`). These
   are language limits, not design debt — stop re-filing them as opportunities.
+  **Probed directly on 2026-08-17** for `validity()`, and it fails twice over:
+  declaring the requirement with a self-wide `origin_of(self)` is rejected
+  because Mojo does not widen an implementation's narrower origin at the
+  conformance site, and `NullArray` cannot implement it at all — it is all-null
+  with no bitmap, and `None` already means all-valid. Even with the origin
+  solved it would be a promise 2 of 9 conformers could not keep, which is the
+  `to_device` shape the abstraction audit called the tree's one leaky
+  abstraction.
 - **Erase into a trait whose members are all runtime methods**, and only where
   the conformance is *honest* **and** has a consumer outside its own loop. A
   comptime member has no execution point at which to raise, so a box can only
@@ -537,7 +545,6 @@ Three findings came out of the cross-read that no single document had:
 | **S2** | **`bound_column` and `prune` on `TemporalColumn` and `ListColumn`.** Verified absent 2026-08-17 (`values.mojo:2452`, `:2565`); both inherit the conservative defaults at `:449`/`:460`, so **a date predicate prunes nothing in the fused lane**. ClickBench's `hits` is date-filtered, so this is an M1 wall-clock item, not just a gap. For a list column "no information" may genuinely be right — add `bound_column` only if so. | dup §1.2 A | tests + `binary_size` | S |
 | **S3** | **Parity test for the operator↔interval-kernel pairing.** 20 pairings encoded by hand in the AOT lane and re-encoded as a name ladder at `dynamic.mojo:610-626`; a mismatch is silently wrong pruning, not an error. Assert name equality per pairing and both-directions coverage in `test_parity.mojo`. The associated-type fix (Angle A) is **not** scheduled — the test is most of the safety for none of the size risk. | dup §1.3 B | tests | S |
 | **S4** | **`CastKernel(Kernel)` family trait**, one `dispatch(array, to, safe, ctx)`. 15 structs across six signatures today, so `cast()`'s ladder drops the arguments an arm does not take: `cast(x, decimal128(38, 2), safe=True)` **wraps on overflow**, and four casts never see `ctx`. Largest open defect in the abstraction audit. | abs §1.4 | tests + `binary_size` | M |
-| **S5** | **`_validity_equal` rewrite and the two `DictionaryArray` bugs.** Rewrite around the eagerly-maintained null count (removes two popcounts and a bit-by-bit loop per `__eq__`; `Bitmap.__eq__` measured word-level XOR ~64x faster), fold `BoolArray` in as a seventh caller, fix `slice` not recounting nulls and `__eq__` ignoring `_offset`. **Order: the `slice` recount first — the rewrite depends on that invariant.** Two questions the card must settle, not skip: (a) how to recount `DictionaryArray`'s nulls on slice — it has no `bitmap` field, its validity lives in `_indices`, and `DynArray.slice` raises, so the options are accept `raises`, add a non-raising `null_count_in_range`, or recount at construction; (b) what correct dictionary equality *is* — comparing `_indices`/`_values` structurally is representation equality, the same mistake B26 fixed one level up, so settle it against Arrow C++/arrow-rs first. `DictionaryScalar.__eq__` (`scalars.mojo:544`) has the same shape and rides along with (b). | dup-1.4 §3 | tests | M |
 | **S6** | **Delete all 26 `write_repr_to`.** Verified 26 definitions, requirement of no trait, and `DynArray.write_repr_to` does not even dispatch — it calls `write_to`, so the 10 array implementations are unreachable through the only handle callers hold. Since the boxes conform to neither `Array` nor `ArrowScalar`, promoting it to a requirement can no longer reach them; deletion is the only remaining option. | abs §1.1 | tests | S |
 | **S8** | **`ExecContext.alloc_buffer[T](n)` / `.alloc_bitmap(n)`**, collapsing the 10-site GPU-or-host preamble in `numeric`/`cast`/`hashing`/`boolean`. `execution.mojo` already owns `GPU_ENABLED` after `5b14bfa`, and `views` already imports both modules, so no new cycle. | dup §1.5 B | tests | S |
 | **S9** | **`Bitmap.extend_validity`**, collapsing the 11-line reserve-then-propagate block at `builders.mojo:696, 827, 1022, 1229, 1370`. It is bitmap logic, not builder logic — it already calls `Bitmap.extend` and `set_range`. Not a hot path. | dup §1.7 B | tests | S |
@@ -552,8 +559,8 @@ Three findings came out of the cross-read that no single document had:
 
 **Order.** S1 landed first, 2026-08-17 — it was the conflict-heaviest change and
 every later `expr` edit would otherwise have been rebased onto it. Then the
-correctness group S5 → S2 → S3 → S4. Then the free subtraction batch —
-everything except S1–S5 and S17 — which is independent and can land in any
+correctness group S2 → S3 → S4. Then the free subtraction batch —
+everything except S2–S4 and S17 — which is independent and can land in any
 order. S17 last. Rows are deleted as they land, so the batch develops holes; do
 not read the remaining numbering as a range.
 
@@ -816,7 +823,9 @@ Every row is an approach that looks obvious and does not work.
   fix that was filed for `__eq__`'s five copies. Both die on §0's
   trait-cannot-name-a-field limit; the element loops are also genuinely different
   (three index types, and `unsafe_get` raises for some arrays and not others).
-  What *is* reachable is **S5**, which removes work rather than lines.
+  What was reachable landed instead (2026-08-17): the shared validity helper
+  was inlined into all seven `__eq__` bodies, which removed two popcounts and
+  a bit-by-bit loop rather than removing lines.
 - **An embedded `ArrayHeader` field** collapsing `length`/`nulls`/`offset`/
   `bitmap` across six arrays. Forbidden by §0's *Do not change* — array layout.
 - **`kernels/interval.mojo`'s placement — examined and upheld.** Consumed
