@@ -461,3 +461,12 @@ def read_ipc_stream_schema(path):
 # Imported last: `compute` pulls Array/Scalar/RecordBatch back out of this
 # module, so it can only be bound once those exist.
 from . import compute  # noqa: E402
+
+# Same reason — `_expr_column` needs `_Wrapper`, `Array` and `array`.
+from ._expr_column import (  # noqa: E402
+    Aggregate,
+    Column,
+    col,
+    if_else,
+    lit,
+)

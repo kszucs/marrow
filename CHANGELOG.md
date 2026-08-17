@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Features
+
+- **The expression system is reachable from Python.** `marrow.expr`'s runtime
+  lane now has bindings: `python/bindings/expressions.mojo` exposes `DynValue`
+  as the Python type `Expr` and `DynAgg` as `Agg`, and
+  `python/marrow/_expr_column.py` wraps them as `Column` / `Aggregate` with the
+  usual `_Wrapper` composition. `marrow.col`, `marrow.lit` and `marrow.if_else`
+  are the entry points:
+
+  ```python
+  from marrow import col, lit
+  ((col("a") > 10) & col("s").startswith("x")).execute(batch)
+  col("amount").sum().alias("total")
+  ```
+
+  Bound: arithmetic, comparison and boolean operators; `abs`/`sign`/`floor`/
+  `ceil`/`round`/`sqrt`/`exp`/`ln`; the string kernels including `like`/`ilike`;
+  the temporal extractors and `date_trunc`; `isin`/`cast`/`coalesce`/`nullif`/
+  `if_else`; the six aggregates plus `alias`; and `execute(batch)` for eager
+  evaluation. `is_null`/`is_valid`/`is_nan`/`fill_null` do not exist on
+  `DynValue` yet and carry a marked TODO.
+
+  Two constraints shaped the result and are documented in
+  `docs/alpha-findings/b1-expr-bindings.md`. `add_type[T]` derives `tp_repr`
+  by reflecting over `T`'s fields, which rejects `DynValue._eval_fn`
+  (a function pointer), so the binding owns two one-field boxes that override
+  `write_repr_to`. And `def_method` fills `tp_dict`, not CPython slots, so
+  operator dunders cannot work at the Mojo layer — `Expr` exposes named methods
+  (`add`, `lt`, `and_`) and `Column` maps them onto the operators.
+
 ### Fixes
 
 - **The Python extension builds again.** `python/bindings/arrays.mojo` still
