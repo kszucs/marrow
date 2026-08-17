@@ -7,7 +7,8 @@ from std.testing import assert_true, assert_equal
 from ...builders import StringBuilder
 from ...dtypes import string, int32
 from ...tabular import record_batch
-from ...expr.values import col, lit, into_array
+from ...expr.builders import col, lit
+from ...expr.core import into_array
 
 
 def test_like_with_literal_matches_like_with_column() raises:

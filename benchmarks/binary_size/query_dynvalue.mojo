@@ -11,13 +11,13 @@ boxes fused nodes, stays tiny. That delta is the unification's DCE proof.
     pixi run binary_size
 """
 
-from marrow.expr.relations import BoxedValue
+from marrow.expr.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.values import col
-from marrow.expr.values import DynValue
+from marrow.expr.builders import col
+from marrow.expr.dynamic import DynValue
 from marrow.expr.relations import InMemoryTable, Project, DynRelation
 
 

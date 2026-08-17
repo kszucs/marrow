@@ -9,11 +9,12 @@ from ...dtypes import int64, Int64Type, Field
 from ...schema import Schema
 from ...scalars import DynScalar, Int64Scalar
 from ...expr.pruning import PruneStats
-from ...expr.relations import BoxedValue
+from ...expr.values import BoxedValue
 from ...scalars import StringScalar
 from ...expr.dynamic import DynValue
-from ...expr.values import col, lit, StrGt
-from ...expr.values import col as dyn_col
+from ...expr.values import StrGt
+from ...expr.builders import col, lit
+from ...expr.builders import col as dyn_col
 
 # Both lanes are covered: the runtime `DynValue` cases first, the fused
 # `marrow.expr.values` cases below. A previous note here claimed fused pruning

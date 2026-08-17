@@ -13,9 +13,11 @@ yields morsels through ``pull()``.
   ``ProjectProcessor`` / ``AggregateProcessor`` / ``JoinProcessor`` — one per
   node kind.
 
-This layer depends only on the value box (``DynValue``) and the kernels; it does
-**not** import the ``Relation`` nodes, so the dependency is one-way
-(``relations`` → ``execution``).
+This layer depends only on the value box (``BoxedValue``) and the kernels; it
+does **not** import the ``Relation`` nodes, so the dependency is one-way
+(``relations`` → ``execution``). That claim used to be false — the box lived in
+``relations.mojo`` and this module imported it from there. It now lives beside
+the ``Value`` it erases, in ``values.mojo``, so the sentence is true as written.
 """
 
 from std.memory import ArcPointer
@@ -49,7 +51,7 @@ from ..parquet import (
     PageBounds,
 )
 from ..scalars import DynScalar
-from .relations import BoxedValue
+from .values import BoxedValue
 from ..kernels.core import Grouping
 from .pruning import PruneStats
 from ..execution import ExecContext

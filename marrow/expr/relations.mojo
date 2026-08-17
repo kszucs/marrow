@@ -47,19 +47,18 @@ Example
     var result = plan.execute()
 """
 
-from .values import Datum, Value, into_array
 from ..kernels.interval import Interval
 from .pruning import PruneStats
 from ..arrays import DynArray
 from std.builtin.rebind import rebind
 from .dynamic import DynValue
-from .values import AggExpr
+from .values import AggExpr, BoxedValue
 from std.memory import ArcPointer
 
 from ..dtypes import Field
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .values import col
+from .builders import col
 from ..execution import ExecContext
 from .aggregates import AggFunc
 from ..parquet import LeafSet
@@ -149,145 +148,6 @@ trait Relation(Deinitable, Movable):
 # ---------------------------------------------------------------------------
 # DynRelation — type-erased IR container + plan-building API
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# BoxedValue — the plan's expression handle
-# ---------------------------------------------------------------------------
-struct BoxedValue(Copyable, Movable, Writable):
-    """Erases a `Value` so a relational operator can hold one.
-
-    **This is a wrapper, not an interpreter.** `_exec_tramp[V]` calls `V.execute`
-    on the *concrete* node, so a fused expression stays monomorphized and its
-    SIMD loop is entered through one indirect call per morsel. That is what keeps
-    an AOT plan small: the constructor below is generic, but this struct is not,
-    so `Filter`/`Project`/`FilterProcessor` compile exactly **once** no matter how
-    many expression types exist. Parameterising the operators instead
-    (`Filter[P]`) would fuse just as well and duplicate the whole operator per
-    predicate — the +115,600-byte shape recorded in CLAUDE.md.
-
-    It boxes either lane: a fused node from `values.mojo`, or a `DynValue` for an
-    expression built from strings.
-
-    **It conforms to `Value` and nothing else.** It used to also claim
-    `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` so that a fused node
-    would accept it as an *operand* (`Add[DynValue, DynValue]`). That was
-    unsound — those traits promise a comptime `OutType: NumericType` and a
-    typed `State`/`lane` pair, and this struct could supply only a placeholder
-    and a stub returning zero. The compiler reported it as `attempt to resolve a
-    recursive reference to declaration 'DynValue.__gt__'`, which is what forced
-    the fluent surface into a `NumericOps` sub-trait. Boxing is sound; being an
-    operand never was."""
-
-    var _boxed: ArcPointer[NoneType]
-    var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> DynArray
-    var _prune_fn: def(ArcPointer[NoneType], PruneStats) thin raises -> Interval
-    var _name_fn: def(ArcPointer[NoneType]) thin -> String
-    var _write_fn: def(ArcPointer[NoneType]) thin -> String
-    var _referenced_columns_fn: def(ArcPointer[NoneType]) thin -> List[String]
-    var _bound_column_fn: def(ArcPointer[NoneType], Schema) thin raises -> Int
-    var _resolve_names_fn: def(
-        ArcPointer[NoneType], Schema
-    ) thin raises -> ArcPointer[NoneType]
-    """Bind `col("x")` references to positions against a schema.
-
-    Returns the **erased pointer**, not a `DynValue`: a field whose function type
-    mentions `DynValue` makes this struct recursive (`struct has recursive
-    reference to itself`) — the same failure `Relation.with_predicate` hits, and
-    the same fix. `resolve_names` below keeps its own trampolines and swaps only
-    the pointer, which is sound because resolving names never changes the node's
-    *type*.
-
-    Only the runtime lane has anything to bind — a fused column leaf looks its
-    name up in `materialize`, so it is already position-independent and its
-    trampoline hands back the pointer unchanged."""
-
-    # --- comptime fused `Value` box ----------------------------------------
-    @staticmethod
-    def _exec_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> DynArray:
-        # `materialize`, not `execute`: `DynValue` overrides the latter with a
-        # `DynArray` return, and the trampoline needs the `Datum` every node
-        # produces.
-        var d = rebind[ArcPointer[V]](ptr)[].materialize(batch)
-        return into_array(d, batch.num_rows())
-
-    @staticmethod
-    def _prune_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> Interval:
-        return rebind[ArcPointer[V]](ptr)[].prune(stats)
-
-    @staticmethod
-    def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-        return rebind[ArcPointer[V]](ptr)[].name()
-
-    @staticmethod
-    def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-        return rebind[ArcPointer[V]](ptr)[].render()
-
-    @staticmethod
-    def _referenced_columns_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType]) -> List[String]:
-        return rebind[ArcPointer[V]](ptr)[].referenced_columns()
-
-    @staticmethod
-    def _bound_column_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> Int:
-        return rebind[ArcPointer[V]](ptr)[].bound_column(schema)
-
-    @staticmethod
-    def _resolve_names_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> ArcPointer[NoneType]:
-        # Fused leaves resolve by name at execute time — nothing to bind.
-        return ptr.copy()
-
-    @implicit
-    def __init__[V: Value](out self, value: V):
-        var ptr = ArcPointer[V](value.copy())
-        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._execute = Self._exec_tramp[V]
-        self._prune_fn = Self._prune_tramp[V]
-        self._name_fn = Self._name_tramp[V]
-        self._write_fn = Self._write_tramp[V]
-        self._referenced_columns_fn = Self._referenced_columns_tramp[V]
-        self._bound_column_fn = Self._bound_column_tramp[V]
-        self._resolve_names_fn = Self._resolve_names_tramp[V]
-
-    def execute(self, batch: RecordBatch) raises -> DynArray:
-        """The column this expression produces — the relational engine's entry
-        point, called once per morsel."""
-        return self._execute(self._boxed, batch)
-
-    def prune(self, stats: PruneStats) raises -> Interval:
-        return self._prune_fn(self._boxed, stats)
-
-    def name(self) -> String:
-        return self._name_fn(self._boxed)
-
-    def render(self) -> String:
-        return self._write_fn(self._boxed)
-
-    def referenced_columns(self) -> List[String]:
-        return self._referenced_columns_fn(self._boxed)
-
-    def bound_column(self, schema: Schema) raises -> Int:
-        """This expression's column position, or -1 if it is not a bare column.
-        """
-        return self._bound_column_fn(self._boxed, schema)
-
-    def resolve_names(self, schema: Schema) raises -> BoxedValue:
-        """Bind name references against `schema`, keeping the same node type."""
-        var out = self.copy()
-        out._boxed = self._resolve_names_fn(self._boxed, schema)
-        return out^
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._write_fn(self._boxed))
 
 
 struct DynRelation(ImplicitlyCopyable, Movable, Writable):

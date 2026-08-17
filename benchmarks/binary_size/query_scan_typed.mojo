@@ -23,11 +23,12 @@ costs, with everything else held equal. See Q4.6.
     pixi run binary_size query_scan_typed query_scan
 """
 
-from marrow.expr.relations import BoxedValue
+from marrow.expr.values import BoxedValue
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.parquet import leaf_of
 from marrow.schema import schema
-from marrow.expr.values import col, DynValue
+from marrow.expr.builders import col
+from marrow.expr.dynamic import DynValue
 from marrow.expr.relations import ParquetScan, Project, DynRelation
 
 

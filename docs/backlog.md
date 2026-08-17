@@ -197,7 +197,7 @@ whose absence would not stop that claim is Should or below, however appealing.
 | **M3.4** O(N) top-K | Most queries are `GROUP BY … ORDER BY … LIMIT`. Grouped output is small, so this is not a blocker — but it is the obvious next perf lever |
 | **M3.3** `JoinProcessor` drops the exec context | S, and a silent correctness-of-configuration bug |
 | **FU-6** `sort_indices(StructArray, keys)` | Removes a re-gather |
-| **S1–S16** the simplification wave (§5) | Runs before feature work resumes. S1 is what M1.1 is built on top of; S2 is an M1 wall-clock item. **Subsumes Q-NEW and L2** |
+| **S2–S16** the simplification wave (§5) | Runs before feature work resumes. S2 is an M1 wall-clock item. S1 landed 2026-08-17 and subsumed Q-NEW and L2 |
 | **Q4.4** `ipc.mojo` → package | 2,342 lines. Deferred out of the wave — §5.1 |
 
 ### Could — genuine, nothing depends on it
@@ -513,12 +513,11 @@ The `Source` column cites the audit section an item came from. To read one:
 
 Three findings came out of the cross-read that no single document had:
 
-1. **§8's cycle fix contains the exact step L2 reverted.** §8 says move the five
-   untyped builders to `dynamic.mojo`; L2 records that doing so makes `col`/`lit`
-   re-export from two modules and trips the deprecation warning. Verified
-   2026-08-17: *all* the overloads — typed and untyped — live together at
-   `values.mojo:2671-2762`. The fix is to move the **whole overload set** to a new
-   module, not to split it. That is S1, and it is what makes L2 achievable.
+1. **§8's cycle fix contained the exact step L2 reverted**, and moving the whole
+   `col`/`lit` overload set to one new module instead of splitting it is what made
+   L2 achievable. **Landed 2026-08-17**; two of the three cycles are gone and the
+   third is structural — see §8 for the surviving one and why no placement breaks
+   it.
 2. **`5b14bfa` already landed half of a "take both or neither" pair.** The
    proposals doc pairs `ExecContext.alloc_*` with moving `GPU_ENABLED` out of
    `utils.mojo`; the second half landed independently, so S8 is now the cheap
@@ -530,7 +529,6 @@ Three findings came out of the cross-read that no single document had:
 
 | ID | Item | Source | Gate | Size |
 |---|---|---|---|---|
-| **S1** | **Break the three `marrow.expr` cycles.** Extract `expr/core.mojo` (`Value`, `Context`, `Datum`, `into_array`, `_union_columns`, `BoxedValue`); move the **entire** `col`/`lit`/`if_else`/`coalesce`/`case_when` overload set to a new `expr/builders.mojo`; move `AggExpr` to `aggregates.mojo`. `values.mojo` becomes a leaf. **Subsumes Q-NEW and L2** — do not work either separately. Highest conflict surface in the wave, so it lands first. | §8, Q-NEW, L2 | precompile 0-warning + `binary_size` | M |
 | **S2** | **`bound_column` and `prune` on `TemporalColumn` and `ListColumn`.** Verified absent 2026-08-17 (`values.mojo:2452`, `:2565`); both inherit the conservative defaults at `:449`/`:460`, so **a date predicate prunes nothing in the fused lane**. ClickBench's `hits` is date-filtered, so this is an M1 wall-clock item, not just a gap. For a list column "no information" may genuinely be right — add `bound_column` only if so. | dup §1.2 A | tests + `binary_size` | S |
 | **S3** | **Parity test for the operator↔interval-kernel pairing.** 20 pairings encoded by hand in the AOT lane and re-encoded as a name ladder at `dynamic.mojo:610-626`; a mismatch is silently wrong pruning, not an error. Assert name equality per pairing and both-directions coverage in `test_parity.mojo`. The associated-type fix (Angle A) is **not** scheduled — the test is most of the safety for none of the size risk. | dup §1.3 B | tests | S |
 | **S4** | **`CastKernel(Kernel)` family trait**, one `dispatch(array, to, safe, ctx)`. 15 structs across six signatures today, so `cast()`'s ladder drops the arguments an arm does not take: `cast(x, decimal128(38, 2), safe=True)` **wraps on overflow**, and four casts never see `ctx`. Largest open defect in the abstraction audit. | abs §1.4 | tests + `binary_size` | M |
@@ -549,12 +547,12 @@ Three findings came out of the cross-read that no single document had:
 | **S18** | **`Partition.original_row` is dead** — `kernels/partition.mojo:112`, zero callers repo-wide (the only other hit, `sort.mojo:146`, is a docstring mentioning `original_row_index`). Found while landing S15, which de-guarded the method rather than deleting it because removing a method is an API change and S15's card ruled that out. `Partition` is not re-exported from `kernels/__init__`, so the surface is internal and the deletion is safe. | S15 fallout | tests | XS |
 | **S17** | **Re-baseline the binary-size gate, deliberately, and land V0.** `query_streaming_agg_fused` sits at +0.449% of 0.5%; `MapScalar` measured +0.137% more and was reverted for that alone. **Runs last**, so the wave's own cost is measured against the current baseline first. Record the new ceiling and the reason in `benchmarks/binary_size/README.md`; the gate's job is catching drift, not vetoing correctness fixes. | §0.5 Must, V0 | `pixi run binary_size` | S |
 
-**Order.** S1 first — it is the conflict-heaviest change and every later `expr`
-edit would otherwise be rebased onto it. Then the correctness group S5 → S2 → S3
-→ S4. Then the free subtraction batch — everything except S1–S5 and S17 — which
-is independent and can land in any order. S17 last. Rows are deleted as they
-land, so the batch develops holes; do not read the remaining numbering as a
-range.
+**Order.** S1 landed first, 2026-08-17 — it was the conflict-heaviest change and
+every later `expr` edit would otherwise have been rebased onto it. Then the
+correctness group S5 → S2 → S3 → S4. Then the free subtraction batch —
+everything except S1–S5 and S17 — which is independent and can land in any
+order. S17 last. Rows are deleted as they land, so the batch develops holes; do
+not read the remaining numbering as a range.
 
 ### 5.1 Deliberately not scheduled
 
@@ -585,7 +583,7 @@ Recorded so the audits stop pulling. Each is real; none pays into M1.
   each, and each has a scheduled second conformer (M2.12, M2.3, the runtime list
   lane). Deleting them now would only have to be undone.
 - **`tabular → expr`, the one cross-layer import edge** (abs §1.7, org §1.7).
-  S1 does **not** fix this: it restructures inside `marrow.expr` and leaves
+  S1 did **not** fix this: it restructured inside `marrow.expr` and left
   `tabular.mojo:23`'s `from .expr.aggregates import FoldedAggregates` alone. The
   fix is to move the aggregate *catalog* (`Sum`, `Min`, `Count`, … and the fold)
   down to `kernels/aggregate.mojo`, which already owns `AggFunction` — nothing
@@ -611,8 +609,6 @@ is done and has been deleted.
 | **Q2.5** | Aggregates, remaining steps: **2b** — `AggState[K, V: NumericType]` was never widened to `PrimitiveType`, so temporal reductions do not work natively; **3** — `count_distinct`/`approx_count_distinct` (+`_grouped`) are still four free functions (`distinct.mojo:87,133,167,214`); **4** — `FusedAggregation` (single pass, AoS accumulator, comptime offsets, zero dispatch) has zero occurrences. **Pitch it as a size play, not a speed one.** Q6.1 measured the AOT-resolved aggregate against the runtime-named one in one binary (1M rows: g100k 13.943 ms vs 13.712 ms, g1k 11.219 vs 11.312) — under 2%, sign flipping between cardinalities, which is what you expect when an aggregate's identity resolves once per plan and the per-row fold is the same `AggState` either way. Validate any round of this against `bench_aggregate_aot.mojo` at `g100k`, never `g10`, and be prepared for the answer to be "no change". | L |
 | **Q4.4** | `ipc.mojo` → package. Single file, 2,425 lines. **Not scheduled in the simplification wave — see §5.1**: the seams are labelled, but there is no build-time argument and the diff is wide. | M |
 | **Q4.6** | **Localised 2026-08-05; no single lever exists here.** Current `__text`: `query_scan` **2,367,336**, `query_scan_typed` **1,839,632**, `query_streaming` **1,332,456** — so the 1.78x ratio in the original card still holds. The cost splits almost evenly in two, which is the useful finding: **~507 KB is the Parquet machinery itself** (scan_typed over streaming — `parquet::reader` 32 symbols, `codecs` 9, `schema` 18, `format` 15, plus dtypes +21 and arrays +34), and **~528 KB is the untyped fanout** (scan over scan_typed — reader 32 -> 107 symbols, codecs 9 -> 32). The second half is a scan that does not know its schema instantiating every dtype's decode path, i.e. the 28-arm comptime-gated ladder CLAUDE.md calls deliberate. **Checked and ruled out:** `kernels::cast` is no longer reachable from these binaries at all, and `marrow/parquet/` imports it nowhere — so the single-import trick that took 55-65% off the hashing binaries (removing one `cast` call from `RapidHash.dispatch`) does not apply here. ~7 KB per parquet symbol says the weight is in large monomorphised decode bodies, not symbol count. Reducing it is a design change to how the reader dispatches, not a lever to pull. Candidate: make the typed path (schema known at comptime) avoid instantiating the arms it cannot reach. | L, and genuinely L |
-| **Q-NEW** | **`marrow.expr` now has three import cycles**, introduced by the two-lane refactor: `values ⟷ dynamic`, `values ⟷ relations`, `relations ⟷ execution`. Mojo resolves them, so this is a layering question, not a build break. **Decided 2026-08-17: restore the DAG. Superseded by S1**, which corrects §8's move — the whole `col`/`lit` overload set goes to one new module rather than being split, which is what L2's blocker rules out. | superseded |
-| **L2** | **ATTEMPTED 2026-08-05 and reverted — the blocker is the shared *name*, not the file.** `values.mojo` is 2,765 lines and the residue is real: the runtime-lane builders `col(String)`, `lit[T](Scalar)`, `if_else`, `coalesce`, `case_when` all return `DynValue` and sit at `values.mojo:2549` beneath the AOT `col[T]`/`lit[T]` overloads. Moving them to `dynamic.mojo` **compiles**, but `marrow/expr/__init__.mojo` must then re-export `col` and `lit` from two modules, and Mojo emits *"importing 'col' from multiple modules is deprecated; import 'col' from a single module"* — which violates the standing 0-warning rule. The lanes deliberately overload the same verb (`col("a")` runtime vs `col("a", int64)` fused), and an overload set cannot span modules. So the move costs either an API rename or dropping `marrow.expr.col("a")` from the public surface, for no functional gain. **Do not retry as a file move.** If `values.mojo`'s size is the actual concern, split it along a boundary that does not share a public name — the node families (numeric / bool / string / temporal) are candidates. Reverted cleanly; nine files were touched and all restored. **Superseded by S1**: moving the *entire* overload set — typed and untyped, all of which sit together at `values.mojo:2671-2762` — to one new `expr/builders.mojo` keeps it in a single module, so the deprecation warning does not arise and no API is renamed. | superseded |
 | **V0** | **`MapScalar` — BLOCKED on the size gate.** (The `cast` map arm, V0's other half, landed 2026-08-16 and was free in binary size.) The right fix is not a new scalar type but making `ListScalar` carry its own dtype instead of rebuilding `list_(child.dtype())` — that reconstruction reports the *shape*, so a `map` element answers `list<struct<key, value>>` and a `large_list` element answers `list<…>`; one field fixes all three. It works and is tested, but **a `DynType` field on `ListScalar` costs +0.137% on `query_streaming_agg_fused`, taking it from +0.449% to +0.586% and past the 0.5% ceiling** (measured 2026-08-16 by reverting that half alone). Reverted, not landed. Two ways forward: a 1-byte kind tag rebuilding `list_`/`large_list_`/`map_` from the child — cheaper, but loses `keysSorted` and the entries field name — or re-baselining the gate deliberately. That gate has been the binding constraint since the `Grouping` change and this is the second change to hit it. **Unblocked by S17**, which re-baselines deliberately; land the `ListScalar` dtype field with it and drop the 1-byte kind tag, which loses `keysSorted` and the entries field name. `scalars.mojo`. | S, lands with S17 |
 | **FU-6** | `sort_indices` without key re-gather. `SortIndices.multi` exists but there is no public `sort_indices(StructArray, key_indices)`; `SortProcessor` still calls `sort_by_keys` and discards key fields, and `sort.mojo:507` re-gathers keys on every pass. | M |
 | **FU-7** | **(b) re-sized 2026-08-16, and it is not S.** `IsIn._value_set: DynArray` is not a stray payload — it is a *runtime-dtype dispatch* (`IsInKernel.dispatch`) inside an otherwise comptime-typed lane. Removing it means parameterising `IsIn` over the value-set's type, while `IsIn[A: Value]` today accepts any family and is used for both numeric and string sets. That is a design change, **M–L**, not a cleanup. **(d)** `ConditionalBinary` is 2-ary and `CaseWhen` 1-branch/numeric-only while the kernels and runtime builders are variadic — L, open. | (b) M–L, (d) L |
@@ -959,30 +955,51 @@ to change. Listed with the competing responsibilities, most costly first.
 - **`Value`** (`values.mojo:304`) is the union of four consumers' protocols —
   executor, printer, optimizer, pruner — and all 37 nodes pay for all four.
 
-### The three `marrow.expr` import cycles
+### The `marrow.expr` import cycles — two broken, one structural
 
-`values ⟷ dynamic`, `values ⟷ relations`, `relations ⟷ execution`. All three are
-accidents of file placement, and **one move breaks all three**: extract `Value`,
-`Breaker`, `Context`, `Datum`, `into_array`, `_union_columns` and `BoxedValue`
-into `marrow/expr/core.mojo`; move `AggExpr` to `aggregates.mojo`; move the five
-untyped builders (`col(String)`, `lit`, `if_else`, `coalesce`, `case_when`,
-`values.mojo:2476-2513`) to `dynamic.mojo`. Result:
+**Resolved as far as code motion reaches, 2026-08-17 (S1).** There were three:
+`values ⟷ dynamic`, `values ⟷ relations`, `relations ⟷ execution`. The last two
+were placement accidents and are gone; the first is not, and the reason is
+recorded here so it stops being re-filed.
+
+What landed: `expr/core.mojo` (a leaf) holds `Datum`, `into_array` and
+`_union_columns`; `expr/builders.mojo` holds the **entire** `col`/`lit`/
+`if_else`/`coalesce`/`case_when` overload set, typed and untyped together;
+`BoxedValue` moved from `relations.mojo` down to `values.mojo`, beside the
+`Value` it erases. Current graph:
 
 ```
-core        -> (kernels only)
+core        -> (arrays, scalars)          # leaf
 pruning     -> (leaf)
-values      -> core, pruning, kernels     # no longer imports dynamic or relations
-dynamic     -> core, pruning, kernels
-aggregates  -> core, kernels
-execution   -> core, aggregates, pruning
-relations   -> core, dynamic, aggregates, execution
+aggregates  -> (kernels only)             # no intra-expr imports
+values      -> core, pruning, aggregates, dynamic
+dynamic     -> core, pruning, values      # `Value` only
+builders    -> values, dynamic
+execution   -> core-free: values (BoxedValue), aggregates, pruning
+relations   -> values, dynamic, builders, aggregates, execution, pruning
 ```
 
-`values.mojo` — the 2,534-line file — becomes a **leaf**. Today, touching
-`relations.mojo` invalidates the AOT lane. This subsumes **L2**, whose stated
-definition of done was written before the two-lane split and is unachievable as
-worded. Note `execution.mojo:16-18` currently *denies* the cycle it participates
-in, and names the type `DynValue` rather than `BoxedValue`.
+**Why `values ⟷ dynamic` survives, and why moving `AggExpr` does not help.**
+The original plan was to extract `Value` into `core.mojo` and move `AggExpr` to
+`aggregates.mojo`. Neither is possible, because these three references close a
+loop that spans the modules whatever the placement:
+
+- `Value` defaults `count_distinct`/`approx_count_distinct` to an **`AggExpr`**,
+  and defaults `isnull`/`notnull` to the fused **`NullPredicate`** — so `Value`
+  cannot leave the node zoo, and `core.mojo` cannot hold it.
+- `AggExpr` converts implicitly from **`Reduction`** (`values.mojo`) and holds an
+  unresolved **`DynValue`** (`dynamic.mojo`), while `NumericValue.sum()` returns
+  a `Reduction` and `Reduction.alias()` returns an `AggExpr`.
+- `DynValue` **conforms to `Value`**.
+
+So `{Value, NumericValue, Reduction, AggExpr, DynValue}` is one strongly
+connected component. Putting `AggExpr` in `aggregates.mojo` only drags
+`aggregates` into it (a fresh `aggregates ⟷ values`); putting it in `core.mojo`
+drags in `core` and adds `core -> dynamic`. It stays in `values.mojo` because
+that is the placement with the fewest edges. Breaking this needs a design
+change — `Value` shedding its aggregate/null fluent defaults, or `AggExpr`
+holding a `BoxedValue` rather than a `DynValue` — not a file move. `Breaker` and
+`Context` no longer exist, so the original wording named two types that are gone.
 
 Two smaller, genuinely free ones: `views → buffers` exists only because
 `BufferView.filter` and `BitmapView.to_owned` *allocate* — they are kernels

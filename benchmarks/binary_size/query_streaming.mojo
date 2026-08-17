@@ -26,12 +26,13 @@ execution is unnecessary in principle (see Q0.5 in
 `docs/backlog.md`); if that lands, these can be converted.
 """
 
-from marrow.expr.relations import BoxedValue
+from marrow.expr.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.values import col, DynValue
+from marrow.expr.builders import col
+from marrow.expr.dynamic import DynValue
 from marrow.expr.relations import InMemoryTable, Project, DynRelation
 
 

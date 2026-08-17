@@ -62,7 +62,7 @@ from ...expr import (
     if_else,
 )
 
-from ...expr.values import coalesce, case_when
+from ...expr.builders import coalesce, case_when
 
 
 def _exec(expr: DynValue, batch: RecordBatch) raises -> Int64Array:

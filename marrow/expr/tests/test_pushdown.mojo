@@ -24,8 +24,8 @@ from ...expr.relations import (
     Filter,
     RELATION_PARQUET_SCAN,
 )
-from ...expr.values import col, lit
-from ...expr.relations import BoxedValue
+from ...expr.builders import col, lit
+from ...expr.values import BoxedValue
 from ...expr.pruning import PruneStats
 
 

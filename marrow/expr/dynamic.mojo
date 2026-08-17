@@ -136,7 +136,7 @@ from ..kernels.string import (
     StripKernel,
     UpperKernel,
 )
-from .values import Datum
+from .core import Datum
 from ..kernels.interval import (
     Interval,
     AndInterval,

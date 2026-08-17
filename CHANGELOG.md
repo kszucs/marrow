@@ -58,6 +58,31 @@
 
 ### Refactors
 
+- **`marrow.expr` is down from three import cycles to one, and the survivor is
+  structural.** Pure code motion, no signature or API change: `col("a")` and
+  `col("a", int64)` both still resolve from `marrow.expr`.
+
+  - **`expr/core.mojo`** (new, a leaf) holds `Datum`, `into_array` and
+    `_union_columns` — the vocabulary both lanes speak. `dynamic.mojo` no longer
+    imports `values.mojo` for `Datum`.
+  - **`expr/builders.mojo`** (new) holds the **entire** `col` / `lit` /
+    `if_else` / `coalesce` / `case_when` overload set, typed and untyped
+    together. An overload set cannot span modules — splitting it is what made
+    `__init__.mojo` re-export `col` from two places and trip *"importing 'col'
+    from multiple modules is deprecated"*.
+  - **`BoxedValue` moved from `relations.mojo` to `values.mojo`**, beside the
+    `Value` it erases. That is what kills both `values -> relations` and
+    `execution -> relations`.
+  - Removed an unused `_promote_operands` import in `values.mojo`.
+
+  `values <-> relations` and `relations <-> execution` are gone. `values <->
+  dynamic` remains and is not a placement accident: `DynValue` conforms to
+  `Value`, `Value` defaults `count_distinct` to an `AggExpr`, `Value` defaults
+  `isnull`/`notnull` to the fused `NullPredicate`, and `AggExpr` holds an
+  unresolved `DynValue` and converts implicitly from a `Reduction`. Those form
+  one strongly connected component that no placement of `Value` or `AggExpr`
+  can break, which is why neither moved and why `core.mojo` does not hold them.
+
 - **The hashing kernel is pluggable, and the aHash string fallback is gone.**
 
   `marrow/kernels/hashing.mojo` hashed numeric columns with rapidhash and
