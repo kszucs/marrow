@@ -1,6 +1,6 @@
 # Plan: remove the `Dyn*` base-trait conformances and their residue
 
-Follows `docs/abstraction-audit.md` §3. Every claim below was measured in the
+Follows the trait audit folded into `docs/backlog.md` §7-§8 (the audit itself is at `git show 26e85d3:docs/abstraction-audit.md`). Every claim below was measured in the
 worktree `.claude/worktrees/dyn-conformances`, branched from `71f069c`, by
 patching, running `pixi run -e dev precompile`, and restoring. **No source file
 is currently modified.**
