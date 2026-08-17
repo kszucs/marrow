@@ -6,9 +6,8 @@ from ...arrays import PrimitiveArray, DynArray, StructArray
 from ...buffers import Bitmap
 from ...builders import PrimitiveBuilder, UInt64Builder
 from ...dtypes import int32, uint64, struct_, Field, Int32Type, UInt64Type
+from ...utils import RapidHash64
 from ...kernels.hashtable import SwissHashTable
-from ...kernels.hashing import rapidhash
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,7 +55,7 @@ def _keys_range(n: Int, offset: Int = 0) raises -> StructArray:
 
 def test_insert_empty() raises:
     """Inserting zero keys returns an empty array."""
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     var bids = t.insert(_keys_range(0))
     assert_equal(len(bids), 0)
     assert_equal(t.num_keys(), 0)
@@ -64,7 +63,7 @@ def test_insert_empty() raises:
 
 def test_insert_unique() raises:
     """Each unique key gets a sequential bucket ID."""
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     var bids = t.insert(_keys(100, 200, 300))
     assert_equal(len(bids), 3)
     assert_equal(t.num_keys(), 3)
@@ -75,7 +74,7 @@ def test_insert_unique() raises:
 
 def test_insert_duplicates() raises:
     """Duplicate keys return their existing bucket ID."""
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     var bids = t.insert(_keys(100, 200, 100, 300, 200))
     assert_equal(len(bids), 5)
     assert_equal(t.num_keys(), 3)
@@ -88,7 +87,7 @@ def test_insert_duplicates() raises:
 
 def test_insert_all_same() raises:
     """All identical keys get the same bucket ID."""
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     var bids = t.insert(_keys(42, 42, 42, 42))
     assert_equal(t.num_keys(), 1)
     for i in range(4):
@@ -97,7 +96,7 @@ def test_insert_all_same() raises:
 
 def test_insert_incremental() raises:
     """Multiple insert calls accumulate buckets."""
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     var bids1 = t.insert(_keys(10, 20))
     assert_equal(t.num_keys(), 2)
 
@@ -116,7 +115,7 @@ def test_insert_high_bit_keys() raises:
     # Use keys that produce high-bit hashes. With rapidhash, any key
     # can produce a high-bit hash; we use a range and verify all are found.
     var keys = _keys_range(1000)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(keys)
     var pairs = t.probe(keys, keys, 1000)
     assert_equal(len(pairs[0]), 1000)
@@ -130,7 +129,7 @@ def test_insert_high_bit_keys() raises:
 def test_probe_empty_table() raises:
     """Probing an empty table returns no matches."""
     var build = _keys_range(0)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(build)
     var pairs = t.probe(build, _keys(100, 200), num_build_rows=0)
     assert_equal(len(pairs[0]), 0)
@@ -140,7 +139,7 @@ def test_probe_empty_table() raises:
 def test_probe_empty_keys() raises:
     """Probing with zero keys returns no matches."""
     var build = _keys(100, 200)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(build)
     var pairs = t.probe(build, _keys_range(0), num_build_rows=2)
     assert_equal(len(pairs[0]), 0)
@@ -150,7 +149,7 @@ def test_probe_empty_keys() raises:
 def test_probe_all_match() raises:
     """All probe keys match build keys (1:1 join)."""
     var keys = _keys(10, 20, 30)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(keys)
     var pairs = t.probe(keys, keys, num_build_rows=3)
 
@@ -163,7 +162,7 @@ def test_probe_all_match() raises:
 def test_probe_no_match() raises:
     """No probe keys match build keys."""
     var build = _keys(10, 20, 30)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(build)
     var pairs = t.probe(build, _keys(40, 50, 60), num_build_rows=3)
     assert_equal(len(pairs[0]), 0)
@@ -172,7 +171,7 @@ def test_probe_no_match() raises:
 def test_probe_partial_match() raises:
     """Some probe keys match, some don't."""
     var build = _keys(10, 20, 30)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(build)
     var pairs = t.probe(build, _keys(20, 40, 10), num_build_rows=3)
 
@@ -183,7 +182,7 @@ def test_probe_partial_match() raises:
 def test_probe_duplicate_build_keys() raises:
     """Duplicate build-side keys produce multiple matches per probe row."""
     var build = _keys(10, 20, 10)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(build)
     var pairs = t.probe(build, _keys(10), num_build_rows=3)
 
@@ -196,7 +195,7 @@ def test_probe_duplicate_build_keys() raises:
 def test_probe_single_match() raises:
     """With single_match=True, emit at most one match per probe row."""
     var build = _keys(10, 20, 10)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(build)
     var pairs = t.probe(build, _keys(10), num_build_rows=3, single_match=True)
 
@@ -212,7 +211,7 @@ def test_insert_large() raises:
     """Insert 100K unique keys."""
     var n = 100_000
     var keys = _keys_range(n)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     var bids = t.insert(keys)
     assert_equal(t.num_keys(), n)
     assert_equal(len(bids), n)
@@ -224,7 +223,7 @@ def test_build_probe_large() raises:
     """Build and probe with 100K rows, all matching."""
     var n = 100_000
     var keys = _keys_range(n)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(keys)
     var pairs = t.probe(keys, keys, num_build_rows=n)
     assert_equal(len(pairs[0]), n)
@@ -234,7 +233,7 @@ def test_build_probe_1m() raises:
     """Build and probe with 1M rows."""
     var n = 1_000_000
     var keys = _keys_range(n)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(keys)
     var pairs = t.probe(keys, keys, num_build_rows=n)
     assert_equal(len(pairs[0]), n)
@@ -244,7 +243,7 @@ def test_build_probe_10m() raises:
     """Build and probe with 10M rows."""
     var n = 10_000_000
     var keys = _keys_range(n)
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     t.build(keys)
     var pairs = t.probe(keys, keys, num_build_rows=n)
     assert_equal(len(pairs[0]), n)
@@ -256,11 +255,11 @@ def test_build_probe_10m() raises:
 
 
 def test_num_keys_empty() raises:
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     assert_equal(t.num_keys(), 0)
 
 
 def test_num_keys_after_insert() raises:
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable[RapidHash64]()
     _ = t.insert(_keys(1, 2, 3, 2, 1))
     assert_equal(t.num_keys(), 3)

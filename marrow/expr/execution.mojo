@@ -39,7 +39,7 @@ from ..kernels.join import (
     JOIN_SEMI,
     JoinKind,
 )
-from ..kernels.hashing import rapidhash
+from ..utils import RapidHash64
 from ..parquet.source import MappedFile
 from ..parquet import (
     LeafSet,
@@ -858,7 +858,7 @@ struct JoinProcessor(Processor):
     var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
-    var _index: Optional[HashJoin[rapidhash]]
+    var _index: Optional[HashJoin[RapidHash64]]
     var _exhausted: Bool
 
     def __init__(
@@ -911,7 +911,7 @@ struct JoinProcessor(Processor):
             raise Exhausted()
         if not self._index:
             var left_struct = self.left.collect().to_struct_array()
-            var index = HashJoin[rapidhash]()
+            var index = HashJoin[RapidHash64]()
             index.build(left_struct, self.left_key_indices)
             self._index = index^
 

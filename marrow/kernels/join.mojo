@@ -128,7 +128,8 @@ from ..execution import ExecContext
 from .filter import Take, filter, take
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
-from .hashing import rapidhash
+from .hashing import HashKernel
+from ..utils import Hasher, RapidHash64
 
 # ---------------------------------------------------------------------------
 # Join kind constants — what rows appear in output
@@ -437,9 +438,7 @@ help cache locality but does reduce sync_parallelize dispatch overhead.
 and can be tuned per workload."""
 
 
-struct HashJoin[
-    hasher: def(StructArray, ExecContext) thin raises -> UInt64Array = rapidhash
-](Join):
+struct HashJoin[Hash: Hasher = RapidHash64](Join):
     """Hash join using SwissHashTable.
 
     Build phase: hash left-side key columns, insert rows into hash table.
@@ -476,10 +475,10 @@ struct HashJoin[
     var _left_rows: Int
 
     # Serial path state
-    var _table: SwissHashTable[Self.hasher]
+    var _table: SwissHashTable[Self.Hash]
 
     # Parallel path state (populated by build_parallel)
-    var _tables: List[SwissHashTable[Self.hasher]]
+    var _tables: List[SwissHashTable[Self.Hash]]
     """One SwissHashTable per partition (parallel path only)."""
     var _left_partition_keys: List[StructArray]
     """Per-partition build-side keys, used for equality verification."""
@@ -503,8 +502,8 @@ struct HashJoin[
         self._left_dtype = null
         self._left_data = None
         self._left_rows = 0
-        self._table = SwissHashTable[Self.hasher]()
-        self._tables = List[SwissHashTable[Self.hasher]]()
+        self._table = SwissHashTable[Self.Hash]()
+        self._tables = List[SwissHashTable[Self.Hash]]()
         self._left_partition_keys = List[StructArray]()
         self._left_partition_rows = List[Int32Array]()
         self._radix_bits = _DEFAULT_RADIX_BITS
@@ -605,9 +604,9 @@ struct HashJoin[
             ctx=self._ctx.copy(),
         )
         var p = partitioner.num_partitions()
-        var tables = List[SwissHashTable[Self.hasher]](capacity=p)
+        var tables = List[SwissHashTable[Self.Hash]](capacity=p)
         for _ in range(p):
-            tables.append(SwissHashTable[Self.hasher]())
+            tables.append(SwissHashTable[Self.Hash]())
 
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
@@ -616,7 +615,7 @@ struct HashJoin[
             tables[i].build_hashes(part_hashes)
             return (k^, rows.copy())
 
-        var hashes = Self.hasher(left_keys, self._ctx.copy())
+        var hashes = HashKernel[Self.Hash].apply(left_keys, self._ctx.copy())
         var parts = partitioner.map_partitions[Tuple[StructArray, Int32Array]](
             hashes^, build_partition
         )
@@ -672,7 +671,9 @@ struct HashJoin[
             )
 
         # 1. Hash probe side in parallel; 2-3. partition + parallel probe.
-        var probe_hashes = Self.hasher(right_keys, self._ctx.copy())
+        var probe_hashes = HashKernel[Self.Hash].apply(
+            right_keys, self._ctx.copy()
+        )
         var pairs_per_partition = RadixPartitioner(
             num_bits=self._radix_bits,
             ctx=self._ctx.copy(),

@@ -40,6 +40,12 @@ binary_size = { cmd = "python3 benchmarks/binary_size/compare.py" }
 pytest = ">=9.0.2,<10"
 pytest-benchmark = ">=5.2.3,<6"
 pytest-xdist = ">=3,<4"
+# XXH64 oracle for `marrow/utils/tests/test_hashing.mojo`. The Parquet spec
+# mandates this exact hash for bloom filters, so the tests check marrow against
+# a real independent implementation rather than against vectors transcribed by
+# hand. There is no equivalent package for rapidhash; see that file for how it
+# is pinned instead.
+python-xxhash = ">=3.7.0,<4"
 
 [feature.dev.pypi-dependencies]
 # PyPI wheel is used instead of conda-forge: the conda-forge libarrow bundles

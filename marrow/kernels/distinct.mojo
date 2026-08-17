@@ -27,7 +27,8 @@ from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
 from ..execution import ExecContext
 from .core import Grouping
-from .hashing import rapidhash
+from .hashing import RapidHashKernel
+from ..utils import RapidHash64
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 
@@ -101,10 +102,10 @@ def count_distinct(
     and the total is the *sum* of per-partition distinct counts — no merge, the
     whole-array analogue of the grouped radix path.
     """
-    var hashes = rapidhash(array, ctx)
+    var hashes = RapidHashKernel.dispatch(array, ctx)
     var n: Int
     if not ctx.worth_parallel(len(array), _PARALLEL_DISTINCT_MIN_ROWS):
-        var table = SwissHashTable[rapidhash]()
+        var table = SwissHashTable[RapidHash64]()
         _ = table.insert_hashes(hashes, grow_adaptively=True)
         n = table.num_keys()
     else:
@@ -112,7 +113,7 @@ def count_distinct(
         def count_partition(
             _pi: Int, _rows: Int32Array, part_hashes: UInt64Array
         ) raises {imm} -> Int:
-            var table = SwissHashTable[rapidhash]()
+            var table = SwissHashTable[RapidHash64]()
             _ = table.insert_hashes(part_hashes, grow_adaptively=True)
             return table.num_keys()
 
@@ -142,7 +143,7 @@ def approx_count_distinct(
     comptime m = 1 << p
     var registers = List[UInt8](length=m, fill=0)
 
-    var hv = rapidhash(array, ctx).values()
+    var hv = RapidHashKernel.dispatch(array, ctx).values()
     var n = len(array)
     var has_null = array.null_count() > 0
 
@@ -189,8 +190,10 @@ def count_distinct_grouped(
         bitmap=None,
         children=children^,
     )
-    var table = SwissHashTable[rapidhash]()
-    var bids = table.insert_hashes(rapidhash(pairs, ctx), grow_adaptively=True)
+    var table = SwissHashTable[RapidHash64]()
+    var bids = table.insert_hashes(
+        RapidHashKernel.apply(pairs, ctx), grow_adaptively=True
+    )
 
     var seen = List[Bool](length=table.num_keys(), fill=False)
     var counts = List[Int64](length=groups.num_groups, fill=0)
@@ -222,7 +225,7 @@ def approx_count_distinct_grouped(
     comptime m = 1 << p
     var registers = List[UInt8](length=groups.num_groups * m, fill=0)
 
-    var hv = rapidhash(value, ctx).values()
+    var hv = RapidHashKernel.dispatch(value, ctx).values()
     var n = len(groups.ids)
     var has_null = value.null_count() > 0
     for i in range(n):

@@ -9,7 +9,7 @@ out on its own:
 | `dispatch` | `variant_dispatch` — runtime dispatch over a `Variant` with no vtable |
 | `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
 | `checksum` | `Crc32` — the ISO-3309 / zlib / gzip checksum |
-| `hashing` | `RapidHash64` (rapidhash v3) and `XxHash64` — neither is in std |
+| `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64` |
 | `compression` | `CompressionLibs` — `dlopen`ed zstd / snappy / lz4 / zlib / brotli |
 | `testing` | `TestSuite` / `BenchSuite` / `Benchmark` — the harness pytest drives |
 
@@ -34,4 +34,4 @@ from .byteorder import LittleEndian
 from .checksum import Crc32
 from .compression import CompressionLibs
 from .dispatch import variant_dispatch, variant_dispatch_raises
-from .hashing import RapidHash64, XxHash64
+from .hashing import AHash64, Hasher, RapidHash64, RapidSecret, XxHash64

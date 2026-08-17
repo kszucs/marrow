@@ -29,7 +29,8 @@ from ..dtypes import Field, struct_
 from .core import Grouping
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
-from .hashing import rapidhash
+from .hashing import RapidHashKernel
+from ..utils import RapidHash64
 from ..execution import ExecContext
 from .filter import Take, take
 from .concat import concat
@@ -53,11 +54,11 @@ struct HashGrouper(Movable):
     (typed/AOT path) and the expression layer (runtime path).
     """
 
-    var _table: SwissHashTable[rapidhash]
+    var _table: SwissHashTable[RapidHash64]
     var _key_builders: List[DynBuilder]
 
     def __init__(out self):
-        self._table = SwissHashTable[rapidhash]()
+        self._table = SwissHashTable[RapidHash64]()
         self._key_builders = List[DynBuilder]()
 
     def num_groups(self) -> Int:
@@ -113,7 +114,9 @@ struct HashGrouper(Movable):
             var empty = Int32Builder(0)
             return empty.finish()
 
-        var batch_hashes = hashes.value().copy() if hashes else rapidhash(keys)
+        var batch_hashes = (
+            hashes.value().copy() if hashes else RapidHashKernel.apply(keys)
+        )
         var grouped = self.consume_hashes(batch_hashes)
         if len(grouped[1]) > 0:
             self._register_new_groups(keys, grouped[1])
@@ -470,7 +473,7 @@ struct GroupBy(Movable):
         for i in range(s):
             idx.unsafe_append(Int32(i * stride))
         var sample = Take.apply(keys, idx.finish())
-        var table = SwissHashTable[rapidhash]()
+        var table = SwissHashTable[RapidHash64]()
         _ = table.insert(sample, grow_adaptively=True)
         return table.num_keys() * 2 > s
 
@@ -718,12 +721,14 @@ struct GroupBy(Movable):
             parts = RadixPartitioner(
                 num_bits=RADIX_BITS, ctx=ctx.copy()
             ).map_partitions[Tuple[Int32Array, List[DynArray]]](
-                rapidhash(keys, ctx), radix_partition
+                RapidHashKernel.apply(keys, ctx), radix_partition
             )
         else:
             var no_rows = Int32Builder(0)
             parts.append(
-                group_partition(no_rows.finish(), rapidhash(keys, ctx))
+                group_partition(
+                    no_rows.finish(), RapidHashKernel.apply(keys, ctx)
+                )
             )
 
         # The global unique-key set is the union of the partitions': concatenate

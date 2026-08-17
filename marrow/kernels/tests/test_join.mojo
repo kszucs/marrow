@@ -30,6 +30,7 @@ from ...dtypes import (
     Float64Type,
 )
 from ...tabular import record_batch
+from ...utils import Hasher
 from ...kernels.join import (
     hash_join,
     HashJoin,
@@ -536,21 +537,27 @@ def test_output_schema_column_name_collision() raises:
 # ---------------------------------------------------------------------------
 
 
-def _constant_hash(
-    keys: StructArray,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> UInt64Array:
-    """Degenerate hash function: all keys map to the same hash.
+struct ConstantHash(Hasher):
+    """Degenerate hash: every value maps to the same digest.
 
-    Forces every key into a single bucket — without key equality checks,
-    an inner join would produce N×M rows (all-pairs). With equality checks,
-    only actual matching keys produce output.
+    Forces every key into one bucket — without key-equality verification an
+    inner join would emit N x M rows. It is a `Hasher` rather than a function
+    because `HashJoin` takes the algorithm as a type; writing one is the
+    smallest demonstration that the parameter is genuinely open.
     """
-    var n = len(keys)
-    var b = UInt64Builder(capacity=n)
-    for _ in range(n):
-        b.unsafe_append(Scalar[uint64.native](42))
-    return b.finish()
+
+    comptime name = StaticString("constant")
+
+    @staticmethod
+    def hash(data: Span[UInt8, _], seed: UInt64 = 0) -> UInt64:
+        return 42
+
+    @staticmethod
+    @always_inline
+    def hash_lanes[
+        byte_width: Int, W: Int
+    ](values: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
+        return SIMD[DType.uint64, W](42)
 
 
 def test_collision_inner_join() raises:
@@ -580,7 +587,7 @@ def test_collision_inner_join() raises:
     var right = _int32_struct(rk, rv)
 
     # Use degenerate hash — all keys hash to 42.
-    var join = HashJoin[_constant_hash]()
+    var join = HashJoin[ConstantHash]()
     join.build(left, _left_on())
     var result = join.probe(right, _right_on(), JOIN_INNER, JOIN_ALL)
 
@@ -609,7 +616,7 @@ def test_collision_left_join() raises:
     rv.append(200)
     var right = _int32_struct(rk, rv)
 
-    var join = HashJoin[_constant_hash]()
+    var join = HashJoin[ConstantHash]()
     join.build(left, _left_on())
     var result = join.probe(right, _right_on(), JOIN_LEFT, JOIN_ALL)
 

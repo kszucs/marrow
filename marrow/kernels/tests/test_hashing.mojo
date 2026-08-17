@@ -35,7 +35,10 @@ from ...dtypes import Field, struct_
 from ...expr.aggregates import Sum
 from ...kernels.groupby import GroupBy
 
-from ...kernels.hashing import RapidHash, rapidhash, NULL_HASH_SENTINEL
+from ...arrays import UInt64Array
+from ...builders import Int64Builder
+from ...utils import RapidHash64
+from ...kernels.hashing import RapidHashKernel, NULL_HASH_SENTINEL
 
 
 def _children(ref a: DynArray, ref b: DynArray) -> List[DynArray]:
@@ -59,7 +62,7 @@ def _children1(ref a: DynArray) -> List[DynArray]:
 def test_hash__int32_deterministic() raises:
     """Same values produce same hashes."""
     var a = array([1, 2, 3, 1, 2], int32)
-    var h = RapidHash.apply(a)
+    var h = RapidHashKernel.apply(a)
     assert_equal(len(h), 5)
     assert_equal(h[0], h[3])  # both are value 1
     assert_equal(h[1], h[4])  # both are value 2
@@ -68,7 +71,7 @@ def test_hash__int32_deterministic() raises:
 def test_hash__int32_distinct() raises:
     """Different values produce different hashes (probabilistic)."""
     var a = array([1, 2, 3], int32)
-    var h = RapidHash.apply(a)
+    var h = RapidHashKernel.apply(a)
     assert_true(h[0] != h[1])
     assert_true(h[1] != h[2])
 
@@ -76,7 +79,7 @@ def test_hash__int32_distinct() raises:
 def test_hash__int32_nulls() raises:
     """Null elements hash to NULL_HASH_SENTINEL."""
     var a = array([1, None, 2, None], int32)
-    var h = RapidHash.apply(a)
+    var h = RapidHashKernel.apply(a)
     assert_equal(h[1].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
     assert_equal(h[3].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
     assert_true(h[0].value() != Scalar[uint64.native](NULL_HASH_SENTINEL))
@@ -84,13 +87,13 @@ def test_hash__int32_nulls() raises:
 
 def test_hash__empty() raises:
     var a = array(int32)
-    var h = RapidHash.apply(a)
+    var h = RapidHashKernel.apply(a)
     assert_equal(len(h), 0)
 
 
 def test_hash__float64() raises:
     var a = array([1.5, 2.5, 1.5], float64)
-    var h = RapidHash.apply(a)
+    var h = RapidHashKernel.apply(a)
     assert_equal(h[0], h[2])
 
 
@@ -107,7 +110,7 @@ def test_hash__string() raises:
     b.append("baz")
     var keys = b.finish()
 
-    var h = RapidHash.apply(keys)
+    var h = RapidHashKernel.apply(keys)
     assert_equal(len(h), 4)
     assert_equal(h[0], h[2])  # both "foo"
     assert_true(h[0] != h[1])  # "foo" != "bar"
@@ -120,7 +123,7 @@ def test_hash__string_nulls() raises:
     b.append("b")
     var keys = b.finish()
 
-    var h = RapidHash.apply(keys)
+    var h = RapidHashKernel.apply(keys)
     assert_equal(h[1].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
 
 
@@ -131,7 +134,7 @@ def test_hash__string_nulls() raises:
 
 def test_hash__dispatch() raises:
     var a: DynArray = array([1, 2, 1], int32)
-    var h = RapidHash.dispatch(a)
+    var h = RapidHashKernel.dispatch(a)
     assert_equal(len(h), 3)
     assert_equal(h[0], h[2])
 
@@ -142,7 +145,7 @@ def test_hash__dispatch_string() raises:
     b.append("x")
     var a: DynArray = b.finish()
 
-    var h = RapidHash.dispatch(a)
+    var h = RapidHashKernel.dispatch(a)
     assert_equal(h[0], h[1])
 
 
@@ -165,7 +168,7 @@ def test_hash_struct_two_fields() raises:
         bitmap=None,
         children=_children(a, b),
     )
-    var h = RapidHash.apply(sa)
+    var h = RapidHashKernel.apply(sa)
     assert_equal(len(h), 4)
     # (1,10) != (1,20)
     assert_true(h[0] != h[1])
@@ -178,7 +181,7 @@ def test_hash_struct_two_fields() raises:
 def test_hash_struct_single_field() raises:
     """Single-field struct matches direct array hash."""
     var a = array([1, 2, 3], int32)
-    var h1 = RapidHash.apply(a)
+    var h1 = RapidHashKernel.apply(a)
 
     var arr: DynArray = a^
     var sa = StructArray(
@@ -189,7 +192,7 @@ def test_hash_struct_single_field() raises:
         bitmap=None,
         children=_children1(arr),
     )
-    var h2 = RapidHash.apply(sa)
+    var h2 = RapidHashKernel.apply(sa)
     assert_equal(h1[0], h2[0])
     assert_equal(h1[1], h2[1])
     assert_equal(h1[2], h2[2])
@@ -209,7 +212,7 @@ def test_hash_dispatch_struct() raises:
         bitmap=None,
         children=_children(a, b),
     )
-    var h = RapidHash.apply(sa^)
+    var h = RapidHashKernel.apply(sa^)
     assert_equal(len(h), 3)
     # (1,3) == (1,3) but row 0 and 2 same
     assert_equal(h[0], h[2])
@@ -241,20 +244,20 @@ def _timestamp(var micros: List[Int]) raises -> DynArray:
 def test_hash_date32() raises:
     """A date32 column hashes as its int32 storage type."""
     var d = _date32([19000, 18500, 19000])
-    var h = RapidHash.dispatch(d)
+    var h = RapidHashKernel.dispatch(d)
     assert_equal(len(h), 3)
     assert_equal(h[0], h[2])
     assert_true(h[0] != h[1])
     # Identical to hashing the same days as plain int32 — the reinterpret path
     # must not perturb the hash.
     var i = array([19000, 18500, 19000], int32)
-    assert_true(RapidHash.apply(i) == h)
+    assert_true(RapidHashKernel.apply(i) == h)
 
 
 def test_hash_timestamp() raises:
     """A timestamp column (int64 storage) hashes and dedups by value."""
     var t = _timestamp([1_700_000_000_000_000, 1_600_000_000_000_000])
-    var h = RapidHash.dispatch(t)
+    var h = RapidHashKernel.dispatch(t)
     assert_equal(len(h), 2)
     assert_true(h[0] != h[1])
 
@@ -265,7 +268,7 @@ def test_hash_timestamp_nulls() raises:
     b.append_null()
     b.append(Scalar[int64.native](10))
     var t: DynArray = b.finish()
-    var h = RapidHash.dispatch(t)
+    var h = RapidHashKernel.dispatch(t)
     assert_equal(h[1].value(), Scalar[uint64.native](NULL_HASH_SENTINEL))
     assert_equal(h[0], h[2])
 
@@ -284,9 +287,9 @@ def test_hash_large_string() raises:
     sb.append("foo")
     var small: DynArray = sb.finish()
 
-    var h = RapidHash.dispatch(large)
+    var h = RapidHashKernel.dispatch(large)
     assert_equal(h[0], h[2])
-    assert_true(RapidHash.dispatch(small) == h)
+    assert_true(RapidHashKernel.dispatch(small) == h)
 
 
 def test_hash_decimal128_high_bits() raises:
@@ -297,7 +300,7 @@ def test_hash_decimal128_high_bits() raises:
     b.append(Scalar[DType.int128](1) << Scalar[DType.int128](70))
     b.append(Scalar[DType.int128](1))
     var d: DynArray = b.finish()
-    var h = RapidHash.dispatch(d)
+    var h = RapidHashKernel.dispatch(d)
     assert_equal(h[0], h[2])
     assert_true(h[0] != h[1])
 
@@ -319,9 +322,9 @@ def test_hash_dictionary_matches_decoded() raises:
         plain.append(s)
     var plain_arr: DynArray = plain.finish()
 
-    var h = RapidHash.dispatch(dict_arr)
+    var h = RapidHashKernel.dispatch(dict_arr)
     assert_equal(len(h), 4)
-    assert_true(RapidHash.dispatch(plain_arr) == h)
+    assert_true(RapidHashKernel.dispatch(plain_arr) == h)
 
 
 def test_hash_dictionary_with_narrow_indices() raises:
@@ -348,7 +351,10 @@ def test_hash_dictionary_with_narrow_indices() raises:
         plain.append(s)
     var plain_arr: DynArray = plain.finish()
 
-    assert_true(RapidHash.dispatch(plain_arr) == RapidHash.dispatch(dict_arr))
+    assert_true(
+        RapidHashKernel.dispatch(plain_arr)
+        == RapidHashKernel.dispatch(dict_arr)
+    )
 
 
 def test_hash_dictionary_with_null_index() raises:
@@ -363,7 +369,7 @@ def test_hash_dictionary_with_null_index() raises:
     var dict_arr: DynArray = DictionaryArray.from_arrays(
         ib.finish(), values.finish()
     )
-    var h = RapidHash.dispatch(dict_arr)
+    var h = RapidHashKernel.dispatch(dict_arr)
     assert_equal(len(h), 3)
     # The null row must not hash as "red" (index 0).
     assert_true(h[1].value() != h[2].value())
@@ -412,3 +418,126 @@ def test_groupby_large_string_key() raises:
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 4)
     assert_equal(s[1].value(), 6)
+
+
+# ===========================================================================
+# Reference vectors — folded in from the former test_rapidhash.mojo
+#
+# Generated by compiling and running rapidhash.h (v3) with the default seed and
+# secrets: https://github.com/Nicoshev/rapidhash
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _assert_hash_eq(h: UInt64Array, idx: Int, expected: UInt64) raises:
+    var got = UInt64(h.unsafe_get(idx))
+    if got != expected:
+        raise Error(
+            "rapidhash mismatch at index "
+            + String(idx)
+            + ": got 0x"
+            + hex(got)
+            + " expected 0x"
+            + hex(expected)
+        )
+
+
+# ---------------------------------------------------------------------------
+# int32 test vectors (4 bytes, seed=0)
+# ---------------------------------------------------------------------------
+
+
+def test_rapidhash_int32() raises:
+    """Validate vectorized rapidhash[Int32Type] against C reference."""
+    var b = Int32Builder(capacity=7)
+    b.append(Scalar[int32.native](0))
+    b.append(Scalar[int32.native](1))
+    b.append(Scalar[int32.native](-1))
+    b.append(Scalar[int32.native](42))
+    b.append(Scalar[int32.native](1000000))
+    b.append(Scalar[int32.native](2147483647))
+    b.append(Scalar[int32.native](-2147483648))
+    var arr = b.finish()
+    var h = RapidHashKernel.apply(arr)
+
+    _assert_hash_eq(h, 0, 0xBA8945AAEC02CEE2)
+    _assert_hash_eq(h, 1, 0x2B281F986C8B17D6)
+    _assert_hash_eq(h, 2, 0x60486C15260D35CD)
+    _assert_hash_eq(h, 3, 0x5EBDF38ED638F7A4)
+    _assert_hash_eq(h, 4, 0xA0069A3A9E41DC88)
+    _assert_hash_eq(h, 5, 0x90D336B991118909)
+    _assert_hash_eq(h, 6, 0x13890D5C06B3EEB0)
+
+
+# ---------------------------------------------------------------------------
+# int64 test vectors (8 bytes, seed=0)
+# ---------------------------------------------------------------------------
+
+
+def test_rapidhash_int64() raises:
+    """Validate vectorized rapidhash[Int64Type] against C reference."""
+    var b = Int64Builder(capacity=7)
+    b.append(Scalar[int64.native](0))
+    b.append(Scalar[int64.native](1))
+    b.append(Scalar[int64.native](-1))
+    b.append(Scalar[int64.native](42))
+    b.append(Scalar[int64.native](1000000))
+    b.append(Scalar[int64.native](9223372036854775807))
+    b.append(Scalar[int64.native](-9223372036854775808))
+    var arr = b.finish()
+    var h = RapidHashKernel.apply(arr)
+
+    _assert_hash_eq(h, 0, 0x9EFC171AEBCEA1F3)
+    _assert_hash_eq(h, 1, 0xBEC178309F44AFBC)
+    _assert_hash_eq(h, 2, 0x8A185FBD8550916D)
+    _assert_hash_eq(h, 3, 0x46007CEF671E1CDF)
+    _assert_hash_eq(h, 4, 0xBAE276403A287B35)
+    _assert_hash_eq(h, 5, 0x5A45FC0CE02F9D32)
+    _assert_hash_eq(h, 6, 0x772E91684DA5B145)
+
+
+# ---------------------------------------------------------------------------
+# Scalar matches vectorized
+# ---------------------------------------------------------------------------
+
+
+def test_scalar_matches_vectorized() raises:
+    """Scalar _rapidhash_fixed produces same output as vectorized rapidhash."""
+    var b = Int64Builder(capacity=5)
+    b.append(Scalar[int64.native](0))
+    b.append(Scalar[int64.native](42))
+    b.append(Scalar[int64.native](-1))
+    b.append(Scalar[int64.native](999999))
+    b.append(Scalar[int64.native](123456789))
+    var arr = b.finish()
+    var h = RapidHashKernel.apply(arr)
+
+    for i in range(5):
+        var scalar_h = RapidHash64.hash_lanes[8, 1](
+            SIMD[DType.uint64, 1](UInt64(arr.unsafe_get(i)))
+        )[0]
+        var vec_h = UInt64(h.unsafe_get(i))
+        if scalar_h != vec_h:
+            raise Error("scalar/vectorized mismatch at index " + String(i))
+
+
+# ---------------------------------------------------------------------------
+# Null sentinel
+# ---------------------------------------------------------------------------
+
+
+def test_null_produces_sentinel() raises:
+    """Null elements hash to NULL_HASH_SENTINEL."""
+    var b = Int64Builder(capacity=3)
+    b.append(Scalar[int64.native](42))
+    b.append_null()
+    b.append(Scalar[int64.native](7))
+    var arr = b.finish()
+    var h = RapidHashKernel.apply(arr)
+
+    assert_true(UInt64(h.unsafe_get(0)) != NULL_HASH_SENTINEL)
+    assert_equal(UInt64(h.unsafe_get(1)), NULL_HASH_SENTINEL)
+    assert_true(UInt64(h.unsafe_get(2)) != NULL_HASH_SENTINEL)

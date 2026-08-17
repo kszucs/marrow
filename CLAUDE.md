@@ -280,10 +280,17 @@ Rules:
 - Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for
   computation. No naked pointer arithmetic in kernel or array code.
 - **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`,
-  `c_data.mojo` and the Parquet codec layer** (`parquet/utils.mojo`,
-  `parquet/reader.mojo`, `parquet/codecs.mojo`, which `dlopen` the C codecs
+  `c_data.mojo`, `utils/byteorder.mojo` and the Parquet codec layer**
+  (`parquet/reader.mojo`, `parquet/codecs.mojo`, which `dlopen` the C codecs
   and hand them raw pointers). Everything else goes through the view
-  abstractions.
+  abstractions. `utils/byteorder.mojo` joined the list on 2026-08-17:
+  `LittleEndian.fixed` is *the* byte-order primitive, and confining the
+  unaligned wide load to it is what keeps raw pointers out of every decoder
+  that reads a scalar. It had been copying `W` bytes into an `Array` one at a
+  time and calling `SIMD.from_bytes` — about 8 loads and a stack temporary per
+  64-bit read, which cost 14-38x on the hash kernel's string path and taxed
+  every Parquet and IPC decode. `marrow/parquet/utils.mojo` left the list
+  because it moved to `marrow/utils/compression.mojo`.
 - **Avoid `AnyOrigin` types (`MutAnyOrigin`, `ImmutAnyOrigin`) and
   `unsafe_origin_cast`.** Use parametric origins (`out_o: Origin[mut=True]`,
   `src_o: Origin[mut=False]`) and pass views directly.

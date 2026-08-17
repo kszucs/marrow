@@ -21,7 +21,8 @@ from ..dtypes import int32, uint64
 from .numeric import EqKernel
 from ..execution import ExecContext
 from .filter import Take, Filter
-from .hashing import rapidhash
+from .hashing import HashKernel
+from ..utils import Hasher, RapidHash64
 
 
 # ---------------------------------------------------------------------------
@@ -39,14 +40,12 @@ comptime _PIPE_DEPTH: Int = 16
 """Number of probes pipelined in a single batch (prefetch window)."""
 
 
-struct SwissHashTable[
-    hasher: def(StructArray, ExecContext) thin raises -> UInt64Array = rapidhash
-](Copyable, Movable):
+struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
     """Swiss Table hash table with SIMD group matching.
 
     Open-addressing hash table using the Swiss Table design (abseil /
     Mojo Dict / hashbrown). Accepts ``StructArray`` key columns and
-    handles hashing internally via the ``hash_fn`` parameter.
+    handles hashing internally via `HashKernel[Hash]`.
 
     Provides two main operations:
 
@@ -104,8 +103,8 @@ struct SwissHashTable[
     Parameters
     ----------
     ``hash_fn``
-        Hash function mapping ``StructArray`` → ``UInt64Array``.
-        Defaults to ``rapidhash``.
+        The hash algorithm, as a type rather than a callable — the kernel is
+        `HashKernel[Hash]`. Defaults to `RapidHash64`.
     """
 
     comptime H = UInt64
@@ -557,7 +556,8 @@ struct SwissHashTable[
         rather than pre-sizing to the row count.
         """
         return self.insert_hashes(
-            Self.hasher(keys, ctx), grow_adaptively=grow_adaptively
+            HashKernel[Self.Hash].apply(keys, ctx),
+            grow_adaptively=grow_adaptively,
         )
 
     def build(
@@ -569,7 +569,7 @@ struct SwissHashTable[
 
         Must be called before ``probe()``.
         """
-        self.build_hashes(Self.hasher(keys, ctx))
+        self.build_hashes(HashKernel[Self.Hash].apply(keys, ctx))
 
     def probe(
         self,
@@ -606,8 +606,10 @@ struct SwissHashTable[
         Returns:
             ``(left_indices, right_indices)`` — verified matching row pairs.
         """
-        var resolved = hashes.value().copy() if hashes else Self.hasher(
-            probe_keys, ctx
+        var resolved = (
+            hashes.value()
+            .copy() if hashes else HashKernel[Self.Hash]
+            .apply(probe_keys, ctx)
         )
         var indices = self.probe_hashes(resolved, num_build_rows, single_match)
         ref build_indices = indices[0]

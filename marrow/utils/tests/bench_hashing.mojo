@@ -15,7 +15,7 @@ Run with: pixi run -e dev pytest marrow/utils/tests/bench_hashing.mojo --benchma
 
 from std.benchmark import BenchMetric, keep
 
-from ..hashing import RapidHash64, XxHash64
+from ..hashing import RapidHash64, XxHash64, mul_fold, mul_wide
 from ..testing import Benchmark
 
 
@@ -74,7 +74,9 @@ def _bench_rapidhash64_fixed[byte_width: Int](mut b: Benchmark, n: Int) raises:
     def call() {imm}:
         var acc = UInt64(0)
         for i in range(n):
-            acc ^= RapidHash64.hash_fixed[byte_width](UInt64(i))
+            acc ^= RapidHash64.hash_lanes[byte_width, 1](
+                SIMD[DType.uint64, 1](UInt64(i))
+            )[0]
         keep(acc)
 
     b.iter(call)
@@ -98,7 +100,7 @@ def bench_rapidhash64_mix_10k(mut b: Benchmark) raises:
     def call() {imm}:
         var acc = UInt64(0)
         for i in range(n):
-            acc = RapidHash64.mix(acc ^ UInt64(i), RapidHash64.SECRET1)
+            acc = RapidHash64.mix(acc ^ UInt64(i), UInt64(0x8BB84B93962EACC9))
         keep(acc)
 
     b.iter(call)
@@ -115,15 +117,13 @@ def bench_rapidhash64_mix_10k(mut b: Benchmark) raises:
 
 def _bench_rapidhash64_mix_wide[W: Int](mut b: Benchmark, n: Int) raises:
     b.throughput(BenchMetric.elements, n * W)
-    var secret = SIMD[DType.uint64, W](RapidHash64.SECRET1)
+    var secret = SIMD[DType.uint64, W](UInt64(0x8BB84B93962EACC9))
 
     @always_inline
     def call() {imm}:
         var acc = SIMD[DType.uint64, W](0)
         for i in range(n):
-            acc = RapidHash64.mix_wide[W](
-                acc ^ SIMD[DType.uint64, W](UInt64(i)), secret
-            )
+            acc = mul_fold[W](acc ^ SIMD[DType.uint64, W](UInt64(i)), secret)
         keep(acc)
 
     b.iter(call)
