@@ -22,10 +22,36 @@ on; the rest are open.
 |---|---|
 | §3 — the erased boxes' base-trait conformances | **DONE**, see `docs/dyn-conformance-removal.md` |
 | §1.2 — `Array.__init__(ArrayData)`, a requirement nothing invokes | **DONE** (removed with the `Array` conformance) |
-| §1.1 `write_repr_to`, §1.3 `to_device`, §1.4 `CastKernel`, §1.5–§1.14 | open |
+| §1.14 — `ArrayData` in the `Array` contract | **half done** — the dead half went with §1.2 |
+| §1.1 `write_repr_to`, §1.3 `to_device`, §1.4 `CastKernel`, §1.5–§1.13 | open |
 
-§3 has been rewritten in place to describe the outcome rather than the
-proposal. Everything else is as first written.
+§3 has been rewritten in place to describe the outcome rather than the proposal.
+
+### Follow-ups this changeset creates or changes
+
+Three open findings are no longer what they were when first written:
+
+1. **§1.1 `write_repr_to` — the choice narrowed to one option.** The fix used to
+   be "put it on `Array`/`ArrowScalar` and have `DynArray` dispatch it". The
+   boxes implement neither trait now, so a requirement would bind only the typed
+   types and leave the erased handles — the only ones callers hold — still
+   forwarding to `write_to`. Deleting all 26 is what remains.
+2. **§1.12 `Column` trait — became more valuable, not less.** `DynArray` now
+   conforms to nothing either, so the set wanting a shared vocabulary is
+   `Array` ∪ `ChunkedArray` ∪ `DynArray`, and all three can answer the same five
+   methods. This is the one place where *adding* a conformance is justified by
+   the same rule that removed four: it would have a consumer outside its own
+   loop.
+3. **`Value.OutShape` — the direct continuation.** After §3, `OutShape` is the
+   last comptime member on `Value` and its only generic reader is
+   `NullPredicate`'s `comptime OutShape = Self.A.OutShape`. Remove that
+   propagation and `Value` becomes a pure method trait, so `7d57398`'s rule —
+   "erase into a trait whose members are all runtime methods" — would hold with
+   no qualification. Tracked in `docs/dyn-conformance-removal.md` §5.
+
+§1.3 (`to_device`/`to_cpu`) and §1.4 (`CastKernel`) are untouched by this work
+and stand as first written. §1.4 is the largest open defect in this document:
+`safe=True` silently wraps on decimal casts.
 
 ---
 
@@ -36,8 +62,8 @@ lives, which is not always where its conformers live.
 
 | Group | Traits | Conformers |
 |---|---|---|
-| **Type system** (`dtypes.mojo`) | `DataType` → `PrimitiveType` → `NumericType` → `IntegerType`/`FloatingType`; `TemporalType`, `IntervalType`, `DecimalType`; `BinaryLikeType` → `StringLikeType`; `ListLikeType` | ~40 zero-size structs + `DynType` as a **peer** |
-| **Data** (`arrays`/`builders`/`scalars`) | `Array`, `Builder`, `ArrowScalar` | 9 / 37 / 9 typed + `DynArray`/`DynBuilder`/`DynScalar` |
+| **Type system** (`dtypes.mojo`) | `DataType` → `PrimitiveType` → `NumericType` → `IntegerType`/`FloatingType`; `TemporalType`, `IntervalType`, `DecimalType`; `BinaryLikeType` → `StringLikeType`; `ListLikeType` | ~40 zero-size structs (`DynType` **no longer conforms** — §3) |
+| **Data** (`arrays`/`builders`/`scalars`) | `Array`, `Builder`, `ArrowScalar` | 9 / 37 / 9 typed only — the `Dyn*` boxes **no longer conform** (§3) |
 | **Kernels** (`kernels/`) | `Kernel` → `BinaryKernel` → `BinaryNumericKernel`/`BinaryFloatKernel`; `UnaryKernel` → `UnaryNumericKernel`/`UnaryFloatKernel`; `NumericCompareKernel`, `BoolBinaryKernel`, `BoolUnaryKernel`, `UnaryPredicateKernel` → `NullPredicateKernel`/`ValuePredicateKernel`, `StringMapKernel`, `StringPredicateKernel`, `TemporalExtractKernel`, `BinaryConditionalKernel`, `IntervalKernel`, `AggKernel`, `WideningOp`, `MinMaxOp`, `BoolReduceKernel`, `Aggregation`, `AggFunction`, `ColumnAggregator`, `Join` | ~70 structs |
 | **Expression / plan** (`expr/`) | `Value` → `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue`/`ListValue`; `WindowKernel`; `Relation`, `Processor` | ~60 fused nodes, `DynValue`, ~12 relations/processors |
 | **IO** (`parquet/`, `python/bindings/`) | `ByteSource`, `LeafBuilder`, `LeveledSink`, `ThriftWritable`, `PyConverter` | 1 / 6 / 6 / ~20 / 8 |
@@ -79,9 +105,13 @@ Because it is a convention and not a requirement, nothing enforces it either: a
 new scalar type that omits `write_repr_to` breaks the build inside
 `scalars.mojo`'s dispatch closure, not at the new type.
 
-Either it is part of the display contract — in which case it belongs on `Array`
-and `ArrowScalar`, and `DynArray` must dispatch it — or it is not, and 26
-implementations go.
+Either it is part of the display contract or it is not. **The conformance
+removal (§3) settled which.** The old fix — put it on `Array` and `ArrowScalar`
+and have `DynArray` dispatch it — no longer reaches the boxes at all, since they
+implement neither trait. A trait requirement would now bind only the nine typed
+arrays and nine typed scalars, leaving the erased handles (the only ones callers
+hold) free to keep forwarding to `write_to`. So the remaining option is to
+delete all 26.
 
 ### 1.2 `Array.__init__(data: ArrayData)` is a requirement nothing invokes
 
@@ -102,11 +132,14 @@ test `__init__(ArrayData)` is dead weight carried by 9 structs, and
 
 ### 1.3 `Array.to_device` / `to_cpu` — a promise 6 of 9 conformers cannot keep
 
-[arrays.mojo:158-162](marrow/arrays.mojo#L158) gives both methods a
+The `Array` trait gives both methods a
 `raise Error("...: not supported for this array type")` default. Implemented by
-`BoolArray` (575), `PrimitiveArray` (834), `FixedSizeListArray` (1579) and
-`DynArray` (2572). `NullArray`, `BinaryLikeArray`, `ListLikeArray`,
-`FixedSizeBinaryArray`, `StructArray` and `DictionaryArray` inherit the raise.
+`BoolArray`, `PrimitiveArray` and `FixedSizeListArray`. `NullArray`,
+`BinaryLikeArray`, `ListLikeArray`, `FixedSizeBinaryArray`, `StructArray` and
+`DictionaryArray` inherit the raise — 6 of the 9 typed conformers.
+
+(`DynArray` also defines both, but since §3 it is a plain method rather than a
+trait implementation, so the box is no longer part of this count.)
 
 This is the textbook shape of a leaky abstraction: the interface promises
 something the abstraction cannot deliver, and the failure surfaces as a runtime
@@ -332,6 +365,13 @@ force `combine_chunks` first. A `Column` trait carrying only what both can answe
 — `dtype()`, `__len__`, `null_count()`, `slice()`, and iteration over chunks —
 would give the tabular layer one vocabulary.
 
+**§3 widened this.** `DynArray` now conforms to nothing either, so the set
+needing a shared vocabulary is `Array` ∪ `ChunkedArray` ∪ `DynArray` — and every
+member can answer exactly the five methods above. If any follow-up here is worth
+doing, this is the one the conformance removal made more valuable rather than
+less: it replaces a conformance that existed for its own sake with one that has
+a stated consumer.
+
 ### 1.13 `ExecContext` is a per-kernel accident, not a property of "a kernel"
 
 Occurrences of `ctx: ExecContext` per kernel module:
@@ -369,11 +409,10 @@ that cannot use it should say so where a reader will look.
   thing; `values.mojo:1899-1916` needs 18 lines of comment to explain that
   `Concat.OutShape` is `max(L, R)` and why that preserves a null invariant.
 - **`ArrayData` is in the `Array` contract but documented as an interop DTO.**
-  `to_data()` is a requirement and `__init__(ArrayData)` is a requirement (§1.2),
-  yet the struct's own docstring says it is "produced *on demand* by `to_data()`
-  for interop" and "not stored inside `DynArray`". Half of it is load-bearing
-  (`to_data()` has real callers in `c_data`, `ipc`, nested construction); half is
-  not.
+  **Half resolved:** `__init__(ArrayData)` was the dead half and went with §1.2.
+  `to_data()` remains a requirement and is load-bearing — real callers in
+  `c_data`, `ipc` and nested construction — so the contract now matches the
+  struct's own docstring ("produced *on demand* by `to_data()` for interop").
 - **`equal_any`** ([numeric.mojo:583](marrow/kernels/numeric.mojo#L583)) is the
   one place a runtime dtype selects between the numeric and string comparison
   families, and it lives in `numeric.mojo` — which is why `kernels.numeric`
