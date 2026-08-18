@@ -625,10 +625,6 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         """Tokenize `pattern` and classify it into a `_LIKE_*` shape."""
         var bytes = pattern.as_bytes()
         var n = len(bytes)
-        # Every byte contributes at most one token, so `n` is an exact upper
-        # bound -- reserving it turns the four geometric reallocations an
-        # eight-byte pattern used to pay into a single allocation.
-        self.tokens.reserve(n)
         var literal = List[UInt8](capacity=n)
         var leading_any = False  # pattern starts with '%'
         var trailing_any = False  # pattern ends with '%'
