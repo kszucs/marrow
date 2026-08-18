@@ -44,15 +44,21 @@ import time
 
 import clickbench as cb
 
-ENGINES = ("marrow", "polars", "duckdb")
+ENGINES = ("marrow", "marrow1", "polars", "duckdb")
+
+# `marrow1` is `marrow` with `collect(num_threads=1)` — bit-for-bit what every
+# lazy query did before `collect` took a worker count, since the old
+# `DynRelation.execute()` default was `ExecContext()`, forced serial. Keeping it
+# as a fourth *interleaved* engine is what makes before/after a comparison
+# rather than two runs on a box that drifts ±8% per case.
 
 
 # ── per-engine runners ─────────────────────────────────────────────────────
 
 
-def _marrow_runner():
+def _marrow_runner(num_threads=0):
     def run(q):
-        return q.marrow(cb.marrow_scan()).collect()
+        return q.marrow(cb.marrow_scan()).collect(num_threads=num_threads)
 
     return run
 
@@ -79,7 +85,7 @@ def _duckdb_runner():
 
 def runners():
     """``{engine: callable}`` for every engine present in this environment."""
-    out = {"marrow": _marrow_runner()}
+    out = {"marrow": _marrow_runner(), "marrow1": _marrow_runner(1)}
     if cb.HAS_POLARS:
         out["polars"] = _polars_runner()
     if cb.HAS_DUCKDB:
@@ -157,7 +163,7 @@ def report(medians, errors, engines, out=None):
         f"\n{'query':<6} {'ms: ' + header}   {'vs polars':>9} {'vs duckdb':>9}  note",
         file=out,
     )
-    print("-" * 88, file=out)
+    print("-" * 96, file=out)
 
     totals = {e: 0.0 for e in names}
     counted = 0
@@ -186,7 +192,7 @@ def report(medians, errors, engines, out=None):
             for e in names:
                 totals[e] += per[e]
 
-    print("-" * 88, file=out)
+    print("-" * 96, file=out)
     cells = "  ".join(f"{_fmt(totals[e]):>8}" for e in names)
     print(
         f"{'TOTAL':<6} {cells}   "
