@@ -822,14 +822,22 @@ struct BitmapView[
 
     @always_inline
     def load_bits[T: DType](self, index: Int) -> Scalar[T]:
-        """Load ``sizeof[T]*8`` bits starting at logical position ``index``,
-        still **packed** into a scalar.
+        """Load ``size_of[T]() * 8`` bits starting at logical position
+        ``index``, still **packed** into a scalar.
 
         Bit-addressed and ``_offset``-applying, like `load[W]` — the difference
         is the result shape: `load[W]` expands each bit into its own SIMD lane,
-        this returns the run as packed bits. Safe because Arrow buffers are
-        64-byte padded.
+        this returns the run as packed bits.
+
+        A sub-byte ``_offset`` (what any sliced array carries) pushes the run's
+        last ``_offset & 7`` bits into the byte *after* the ``size_of[T]()``
+        this loads, so a second byte is folded in from the top. Without it the
+        high bits came back as zeros: an offset-4 view read bits 60..63 as
+        unset regardless of the bitmap, which silently dropped rows from a
+        filter over a sliced column. The extra byte is fetched only when it is
+        inside the view, so a caller reading a short tail is not made worse.
         """
+        comptime NBITS = size_of[T]() * 8
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
@@ -838,7 +846,13 @@ struct BitmapView[
             .unsafe_bitcast[Scalar[T]]()
             .unsafe_load[alignment=1]()
         )
-        return raw >> Scalar[T](bit_off)
+        var result = raw >> Scalar[T](bit_off)
+        if bit_off > 0 and byte_idx + size_of[T]() < self._byte_extent():
+            var hi = Scalar[T](
+                self._data[unsafe_offset = byte_idx + size_of[T]()]
+            )
+            result = result | (hi << Scalar[T](NBITS - bit_off))
+        return result
 
     # TODO: could be good idea to use std.sys.intrinsics.masked_load
     # --- Raw byte access ---
