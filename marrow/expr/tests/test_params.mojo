@@ -2,8 +2,8 @@ from std.testing import assert_true, assert_false, assert_raises
 from std.memory import ArcPointer
 from ...builders import array
 from ...tabular import record_batch
-from ...dtypes import DynType, int64, string
-from ...scalars import Int64Scalar, StringScalar
+from ...dtypes import DynType, int64, second, string, timestamp
+from ...scalars import DynScalar, Int64Scalar, StringScalar, TimestampScalar
 from ..builders import col, param
 from ..values import BoxedValue
 from ..params import (
@@ -100,3 +100,29 @@ def test_string_param_default_is_used_when_unset() raises:
     var decls = drain_params()
     assert_true(decls[0].default.value().as_string().value() == "q")
     assert_false(decls[0].is_required())
+
+
+def test_temporal_param_binds_into_execute() raises:
+    _ = drain_params()
+    var batch = record_batch([array([1, 2], int64)], names=["a"])
+    var cutoff = param("cutoff", timestamp(second))
+    var decls = drain_params()
+    decls[0].cell[].set(
+        TimestampScalar(
+            Optional(Int64(1_560_601_845)), timestamp(second)
+        ).to_dyn()
+    )
+    var out = cutoff.execute(batch)
+    assert_true(out.isa[DynScalar]())
+    assert_true(out[DynScalar].as_timestamp().value() == 1_560_601_845)
+
+
+def test_temporal_param_default_converts_to_native_scalar() raises:
+    _ = drain_params()
+    _ = param("cutoff", timestamp(second), default=1_560_601_845)
+    var decls = drain_params()
+    assert_true(
+        decls[0].default.value().as_timestamp().value() == 1_560_601_845
+    )
+    assert_false(decls[0].is_required())
+
