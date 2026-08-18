@@ -14,6 +14,7 @@ The individual logs are the primary sources and carry the file:line detail:
 | [`b2-plan-bindings.md`](b2-plan-bindings.md) | binding `DynRelation` to Python |
 | [`d1-binding-delta.md`](d1-binding-delta.md) | binding the methods the first two deferred |
 | [`e1-clickbench.md`](e1-clickbench.md) | writing 43 real queries as the first user |
+| [`h1-clickbench-consolidation.md`](h1-clickbench-consolidation.md) | folding the five ClickBench files into one registry, and timing marrow against polars and duckdb |
 
 **Evidence tiers used below.** *Measured* — someone ran an experiment and has a
 number. *Reproduced* — someone triggered the defect from a test. *Argued* — a

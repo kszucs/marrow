@@ -145,6 +145,19 @@
 
 ### Tests
 
+- **The five ClickBench files are one query registry with three consumers.**
+  `python/marrow/tests/clickbench.py` now holds all 43 canonical queries exactly
+  once, each carrying its SQL (the docstring, which is also the DuckDB text
+  after the documented dataset rewrites), a marrow lazy-API thunk, a polars
+  thunk, and its declared status. `test_clickbench.py` checks marrow *and* every
+  polars thunk against the DuckDB reference; `bench_clickbench.py` times all
+  three engines lazily, interleaved per repeat, and reports medians with a
+  marrow/polars ratio column; `python clickbench.py` prints the PASS/FAIL report.
+  `clickbench_alpha.py` and `clickbench_reference.py` are deleted — the latter
+  existed only because of a false belief that duckdb and the marrow extension
+  needed separate environments, when `bench` is `["dev", "bench"]` and has both.
+  42/43 unchanged; see `docs/alpha-clickbench-coverage.md` and
+  `docs/alpha-findings/h1-clickbench-consolidation.md`.
 - 13 cases for the above across `test_runtime.mojo`, `test_parity.mojo` and
   `test_aggregates.mojo`, including the cross-lane parity cases for `fill_null`,
   `is_valid` and `is_nan`, and the five new ops added to the op-name axis.
