@@ -25,7 +25,7 @@ def batch():
 
 @pytest.fixture
 def lazy(batch):
-    return marrow.scan(batch)
+    return marrow.memtable(batch)
 
 
 # ── plan construction ──────────────────────────────────────────────────────
@@ -190,7 +190,7 @@ def test_join(batch):
             "label": marrow.array(["Alpha", "Beta"]).unwrap(),
         }
     )
-    out = marrow.scan(batch).join(marrow.scan(right), on="k").order_by("v").to_pyarrow()
+    out = marrow.memtable(batch).join(marrow.memtable(right), on="k").order_by("v").to_pyarrow()
     assert out.column("label").to_pylist() == [
         "Alpha",
         "Beta",
@@ -202,7 +202,7 @@ def test_join(batch):
 
 def test_join_needs_keys(batch):
     with pytest.raises(ValueError):
-        marrow.scan(batch).join(marrow.scan(batch))
+        marrow.memtable(batch).join(marrow.memtable(batch))
 
 
 # ── parquet ────────────────────────────────────────────────────────────────
@@ -298,7 +298,7 @@ def test_count_star_counts_rows_not_values():
         }
     )
     out = (
-        marrow.scan(batch)
+        marrow.memtable(batch)
         .aggregate(by=["k"], rows=marrow.count_star(), values=("count", "v"))
         .order_by("k")
         .to_pyarrow()

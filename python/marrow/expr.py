@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - exercised only pre-merge
     _HAVE_EXPRESSIONS = False
 
 
-__all__ = ["LazyTable", "read_parquet", "scan"]
+__all__ = ["LazyTable", "memtable", "read_parquet"]
 
 
 _DEFAULT_MORSEL_SIZE = 8192
@@ -333,11 +333,14 @@ def read_parquet(path, schema=None, morsel_size=_DEFAULT_MORSEL_SIZE):
     return LazyTable.wrap(binding)
 
 
-def scan(batch, morsel_size=_DEFAULT_MORSEL_SIZE):
+def memtable(batch, morsel_size=_DEFAULT_MORSEL_SIZE):
     """A lazy table over an in-memory :class:`marrow.RecordBatch`.
 
-    Named ``scan`` rather than ``table`` because ``marrow.table`` already builds
-    the eager, PyArrow-shaped table.
+    ``memtable`` is ibis's name for exactly this, and the pairing is the point:
+    the *verb* says which world you are in. Lazy is ``memtable`` /
+    ``read_parquet``, eager is ``table`` / ``record_batch`` -- each namespace
+    spelled consistently with the library it is modelled on, rather than
+    ``table`` and ``scan`` differing by a name nobody can rank.
     """
     return LazyTable.wrap(
         _ma.in_memory_table(
