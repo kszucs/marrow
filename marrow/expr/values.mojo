@@ -199,6 +199,7 @@ from .core import Datum, into_array, _union_columns
 from .pruning import PruneStats
 from .dynamic import DynAgg, DynValue
 from .aggregates import AggFunc
+from .params import ParamCell
 from ..kernels.cast import (
     cast as cast_array,
     NumericCast as NumericCastKernel,
@@ -856,6 +857,41 @@ struct NumericLiteral[T: NumericType](NumericValue):
         W: Int
     ](self, state: Self.State, idx: Int) -> SIMD[Self.OutType.native, W]:
         return SIMD[Self.OutType.native, W](self._value)
+
+
+@fieldwise_init
+struct NumericParam[T: NumericType](NumericValue):
+    """A numeric value supplied at run time, broadcast into every lane.
+
+    Structurally `NumericLiteral[T]` with the scalar behind a cell. Resolving
+    the cell in `state()` rather than `lane()` is what makes this free: the lane
+    splats a plain `Scalar`, byte-identical to a literal's, so a parameter costs
+    nothing per row."""
+
+    comptime OutType = Self.T
+    comptime OutShape = 0
+    comptime State = Scalar[Self.OutType.native]
+
+    var _cell: ArcPointer[ParamCell]
+
+    def render(self) -> String:
+        return String("param(", self._cell[].name_hint(), ")")
+
+    def referenced_columns(self) -> List[String]:
+        return List[String]()
+
+    def prune(self, stats: PruneStats) raises -> Interval:
+        var v = self._cell[].get()
+        return Interval.bounds(Optional(v.copy()), Optional(v^))
+
+    def state(self, batch: RecordBatch) raises -> Self.State:
+        return self._cell[].get().as_primitive[Self.T]().value()
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, state: Self.State, idx: Int) -> SIMD[Self.OutType.native, W]:
+        return SIMD[Self.OutType.native, W](state)
 
 
 @fieldwise_init

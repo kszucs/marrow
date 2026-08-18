@@ -1,7 +1,11 @@
 from std.testing import assert_true, assert_false, assert_raises
 from std.memory import ArcPointer
+from ...builders import array
+from ...tabular import record_batch
 from ...dtypes import DynType, int64, string
 from ...scalars import Int64Scalar, StringScalar
+from ..builders import col, param
+from ..values import BoxedValue
 from ..params import (
     ParamCell,
     ParamDecl,
@@ -51,3 +55,28 @@ def test_path_spec_cell_resolves() raises:
     var spec = PathSpec(cell)
     cell[].set(StringScalar(String("b.parquet")).to_dyn())
     assert_true(spec.resolve() == "b.parquet")
+
+
+def test_numeric_param_binds_into_a_fused_predicate() raises:
+    _ = drain_params()
+    var a = array([1, 5, 3, 8, 2], int64)
+    var batch = record_batch([a.copy()], names=["a"])
+
+    var min_a = param("min-a", int64)
+    var pred = col("a", int64) > min_a
+
+    var decls = drain_params()
+    assert_true(len(decls) == 1)
+    decls[0].cell[].set(Int64Scalar(3).to_dyn())
+
+    var out = BoxedValue(pred).execute(batch)
+    assert_true(out.as_bool() == array([False, True, False, True, False]))
+
+
+def test_numeric_param_unbound_raises_at_execute() raises:
+    _ = drain_params()
+    var a = array([1, 2], int64)
+    var batch = record_batch([a.copy()], names=["a"])
+    var pred = col("a", int64) > param("min-a", int64)
+    with assert_raises():
+        _ = BoxedValue(pred).execute(batch)

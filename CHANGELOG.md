@@ -22,6 +22,17 @@
   literal string or a cell resolved at execution time. No expression nodes
   yet — those land in later tasks.
 
+- **`NumericParam[T]` and `param()` — the first fused expression node for a
+  late-bound query parameter.** Structurally `NumericLiteral[T]` with the
+  scalar behind an `ArcPointer[ParamCell]`: the cell is resolved in `state()`,
+  once per batch, and `lane()` splats a plain `Scalar`, byte-identical to a
+  literal's — so a bound parameter costs nothing per row. `prune()` reads the
+  cell too, so a bound parameter prunes row groups exactly as a literal does;
+  reading an unbound cell raises, which is correct since pruning cannot run
+  before binding. `param("min-a", int64)` builds the node and registers a
+  `ParamDecl` in the same call, alongside `col`/`lit` in
+  `marrow/expr/builders.mojo`.
+
 - **`LazyTable.collect(num_threads=0)` — the lazy query path can ask for
   parallelism.** `ExecContext.__init__` defaults to `num_threads=1`, so
   `DynRelation.execute()`'s `ExecContext()` default was forced serial, and the

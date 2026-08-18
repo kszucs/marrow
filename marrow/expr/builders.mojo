@@ -16,7 +16,10 @@ So this module sits above both lanes and below `relations.mojo`: it imports
 package `__init__`.
 """
 
+from std.memory import ArcPointer
+
 from ..dtypes import (
+    DynType,
     FloatingType,
     Int64Type,
     ListLikeType,
@@ -25,12 +28,14 @@ from ..dtypes import (
     StringType,
     TemporalType,
 )
-from ..scalars import PrimitiveScalar
+from ..scalars import DynScalar, PrimitiveScalar
 from .dynamic import DynAgg, DynValue
+from .params import ParamCell, ParamDecl, register_param
 from .values import (
     ListColumn,
     NumericColumn,
     NumericLiteral,
+    NumericParam,
     StringColumn,
     StringLiteral,
     TemporalColumn,
@@ -71,6 +76,33 @@ def lit[T: FloatingType](value: Float64, dtype: T) -> NumericLiteral[T]:
     Without this overload the only spelling took an `Int`, so `lit(3.5,
     float64)` was unrepresentable: it truncated to 3."""
     return NumericLiteral[T](Scalar[T.native](value))
+
+
+def param[
+    T: NumericType
+](
+    var name: String,
+    dtype: T,
+    default: Optional[Int] = None,
+    var help: String = String(),
+) -> NumericParam[T]:
+    """A numeric value supplied at run time — `param("min-a", int64)`."""
+    var cell = ArcPointer(ParamCell(name.copy()))
+    var dflt = Optional[DynScalar](None)
+    if default:
+        dflt = Optional(
+            PrimitiveScalar[T](Scalar[T.native](default.value())).to_dyn()
+        )
+    register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=DynType(dtype),
+            help=help^,
+            default=dflt^,
+            cell=cell,
+        )
+    )
+    return NumericParam[T](cell)
 
 
 def lit(value: String) -> StringLiteral[StringType]:
