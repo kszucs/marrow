@@ -185,6 +185,28 @@
   row count. Verified against a nullable column rather than assumed. See
   `docs/alpha-findings/a1-null-ops.md` §2 for why the implementation behind the
   name should not stay this way.
+- **`LIKE`/`ILIKE` compile their pattern once per array, not once per row.**
+  `StringPredicateKernel.apply` (array x array) calls `predicate` per element,
+  and `LikeKernel.predicate` has to build a whole `LikePattern` -- a token
+  list, a literal buffer and a `String` -- before it can match. The runtime
+  expression lane evaluates a literal by `DynScalar.repeat(num_rows)`, so
+  `URL LIKE '%google%'` arrived as n identical right-hand rows and paid n
+  identical compilations. `LikeKernel`/`ILikeKernel` now override the array x
+  array `apply` with `_match_arrays`, which remembers the last pattern text and
+  recompiles only when it changes -- collapsing the constant case to one
+  compile without special-casing it, while a genuinely varying right operand
+  still works.
+
+  Measured on `bench_string.mojo`, min of 5 rounds, two runs per side, with
+  `length`, `contains`, `upper` and the scalar-pattern LIKE cases as drift
+  controls (all flat to within 5%): `bench_like_array_1m` **250.9 ms ->
+  12.0 ms (20.9x)**, `bench_like_array_dense_1m` 242.4 -> 9.8 ms,
+  `bench_like_array_sparse_1m` 239.2 -> 11.4 ms, `bench_ilike_array_100k`
+  38.1 -> 3.5 ms. End to end on ClickBench `hits_0.parquet` at `-O3`,
+  normalised against duckdb (flat to within 5% on the untouched q01/q13):
+  **q21 781 -> 92 ms, q22 807 -> 102 ms, q23 1659 -> 162 ms** -- 3.9x, 3.6x and
+  4.6x. q23 now runs faster than duckdb. See
+  `docs/alpha-findings/o3-string-alloc.md`.
 
 ### Refactors
 
