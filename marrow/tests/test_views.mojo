@@ -1,6 +1,6 @@
 import std.math as math
 
-from std.bit import pop_count
+from std.bit import count_trailing_zeros, pop_count
 from std.testing import assert_equal, assert_true, assert_false
 
 from ..buffers import Buffer, Bitmap
@@ -863,3 +863,419 @@ def test_reduce_all_null_returns_identity() raises:
         buf.view[DType.int32](), bm.view(), Int32(0)
     )
     assert_equal(result, Int32(0))
+
+
+# ---------------------------------------------------------------------------
+# View bounds matrix
+#
+# A computed destination size meeting an unchecked write is what produced the
+# heap overflow in `compressed_store_dense` (docs/alpha-findings/f1-*.md), and
+# it cost ~4 hours to trace because the crash named an innocent allocation.
+# Four tests is a regression guard, not coverage; these walk the axes that
+# decide whether the overflow is reachable — selection shape, the sparse/dense
+# threshold, element width, destination slack, word count — and check a
+# sentinel past the destination on every cell.
+# ---------------------------------------------------------------------------
+
+
+def _probe_compressed_store[
+    T: DType
+](sel_bits: UInt64, slack: Int, label: String) raises:
+    """One (dtype, selection, slack) cell of the compressed-store matrix.
+
+    Packs a 64-element source holding ``1..64`` through the adaptive
+    `BufferView.compressed_store` into a destination of ``popcount + slack``
+    elements, with a guard element immediately past it. Checks the packed
+    values *and* the guard: the dense path stores a lane before consulting its
+    selection bit, so every lane above the highest set bit lands on element
+    ``popcount``, which is out of bounds when ``slack`` is 0.
+    """
+    var cnt = Int(pop_count(sel_bits))
+    var dst_len = cnt + slack
+
+    var src_buf = Buffer.alloc_zeroed[T](64)
+    for i in range(64):
+        src_buf.unsafe_set[T](i, Scalar[T](i + 1))
+    var src = src_buf.view[T](0, 64)
+
+    var dst_buf = Buffer.alloc_zeroed[T](dst_len + 1)
+    dst_buf.unsafe_set[T](dst_len, Scalar[T](99))
+    var dst = dst_buf.view[T](0, dst_len)
+
+    var n = dst.compressed_store(src, sel_bits)
+    assert_true(n == cnt, String(label, ": returned ", n, ", want ", cnt))
+
+    var w = sel_bits
+    var k = 0
+    while w != 0:
+        var lane = Int(count_trailing_zeros(w))
+        var got = dst_buf.unsafe_get[T](k)
+        assert_true(
+            got == Scalar[T](lane + 1),
+            String(label, ": element ", k, " is ", got, ", want ", lane + 1),
+        )
+        w &= w - 1
+        k += 1
+
+    var guard = dst_buf.unsafe_get[T](dst_len)
+    assert_true(
+        guard == Scalar[T](99),
+        String(label, ": wrote past the destination — guard is ", guard),
+    )
+
+
+def _selection_words() -> List[UInt64]:
+    """Selection shapes that decide whether the dense path oversteps.
+
+    The two degenerate ends never could: an all-ones word writes its last lane
+    at index 63 *before* consuming bit 63, and a word whose highest bit is set
+    likewise has a real home for the trailing store. It is the middle — dense
+    enough to take the branchless path, with the top lanes clear — that lands
+    on element ``popcount``.
+    """
+    var words: List[UInt64] = [
+        UInt64(0),  # nothing selected
+        ~UInt64(0),  # everything selected
+        UInt64(1),  # only the lowest lane
+        UInt64(1) << 63,  # only the highest lane
+        UInt64(1) << 37,  # a single interior lane
+        UInt64(0x0000_0000_FFFF_FFFF),  # low half — F1's shape
+        UInt64(0x5555_5555_5555_5555),  # alternating, top lane clear
+        UInt64(0xAAAA_AAAA_AAAA_AAAA),  # alternating, top lane set
+        UInt64(0x0000_FFFF_FFFF_FFFF),  # 48 set, top 16 clear
+        UInt64(0x00FF_FFFF_0000_0000),  # a dense interior run
+    ]
+    return words^
+
+
+def test_bounds_compressed_store_selection_patterns() raises:
+    """Every selection shape, at zero and non-zero destination slack."""
+    var words = _selection_words()
+    for i in range(len(words)):
+        _probe_compressed_store[DType.int64](
+            words[i], 0, String("int64 word#", i, " slack=0")
+        )
+        _probe_compressed_store[DType.int64](
+            words[i], 1, String("int64 word#", i, " slack=1")
+        )
+
+
+def test_bounds_compressed_store_sparse_dense_threshold() raises:
+    """The 24-bit sparse/dense boundary is behaviour-critical after the fix.
+
+    At or below it the CTZ path runs and never oversteps; above it the
+    branchless path runs and needs a slack element, so `compressed_store` has
+    to demote to sparse when the destination has none. Pin 23 / 24 / 25 with
+    the top lanes clear, which is the shape the trailing store escapes on.
+    """
+    for bits in range(23, 26):
+        var sel = (UInt64(1) << UInt64(bits)) - 1
+        _probe_compressed_store[DType.int64](
+            sel, 0, String("threshold ", bits, " slack=0")
+        )
+        _probe_compressed_store[DType.int64](
+            sel, 1, String("threshold ", bits, " slack=1")
+        )
+
+
+def test_bounds_compressed_store_element_widths() raises:
+    """Element width decides how many elements fit a 64-byte block, and so
+    whether a destination sized to the popcount has any slack at all — the
+    original defect needed an ``int64`` length divisible by 8."""
+    var breaking = UInt64(0x0000_0000_FFFF_FFFF)
+    var alternating = UInt64(0x5555_5555_5555_5555)
+    var full = ~UInt64(0)
+    _probe_compressed_store[DType.int8](breaking, 0, "int8 low-half")
+    _probe_compressed_store[DType.int16](breaking, 0, "int16 low-half")
+    _probe_compressed_store[DType.int32](breaking, 0, "int32 low-half")
+    _probe_compressed_store[DType.int64](breaking, 0, "int64 low-half")
+    _probe_compressed_store[DType.float64](breaking, 0, "float64 low-half")
+    _probe_compressed_store[DType.int8](alternating, 0, "int8 alternating")
+    _probe_compressed_store[DType.int16](alternating, 0, "int16 alternating")
+    _probe_compressed_store[DType.int32](alternating, 0, "int32 alternating")
+    _probe_compressed_store[DType.int64](alternating, 0, "int64 alternating")
+    _probe_compressed_store[DType.float64](
+        alternating, 0, "float64 alternating"
+    )
+    _probe_compressed_store[DType.int8](full, 0, "int8 all-ones")
+    _probe_compressed_store[DType.int32](full, 0, "int32 all-ones")
+    _probe_compressed_store[DType.float64](full, 0, "float64 all-ones")
+
+
+def _probe_filter_zero_slack[T: DType](label: String) raises:
+    """`BufferView.filter` over two selection words, each with its low 32
+    lanes set: 64 elements out, so the destination is 64 / 128 / 256 / 512
+    bytes — always a 64-byte multiple, hence zero slack, which is the
+    condition that turned the dense path's one-past store into a heap
+    overflow rather than a harmless scribble on padding."""
+    var n = 128
+    var src_buf = Buffer.alloc_zeroed[T](n)
+    for i in range(n):
+        src_buf.unsafe_set[T](i, Scalar[T](i % 100))
+    var src = src_buf.view[T](0, n)
+
+    var sel = Bitmap.alloc_zeroed(n)
+    for i in range(32):
+        sel.set(i)
+        sel.set(64 + i)
+    var sel_view = sel.view()
+    var out_len, sel_start, sel_end = sel_view.count_set_bits_with_range()
+    assert_true(out_len == 64, String(label, ": out_len is ", out_len))
+
+    var out = src.filter(sel_view, sel_start, sel_end, out_len)
+    var out_view = out.view[T](0, out_len)
+    for i in range(32):
+        assert_true(
+            out_view[i] == Scalar[T](i % 100),
+            String(label, ": low word element ", i),
+        )
+        assert_true(
+            out_view[32 + i] == Scalar[T]((64 + i) % 100),
+            String(label, ": high word element ", i),
+        )
+
+
+def test_bounds_filter_zero_slack_all_widths() raises:
+    """The multi-word end-to-end shape, at every element width."""
+    _probe_filter_zero_slack[DType.int8]("filter int8")
+    _probe_filter_zero_slack[DType.int16]("filter int16")
+    _probe_filter_zero_slack[DType.int32]("filter int32")
+    _probe_filter_zero_slack[DType.int64]("filter int64")
+    _probe_filter_zero_slack[DType.float64]("filter float64")
+
+
+# --- BitmapView ------------------------------------------------------------
+
+
+def test_bounds_bitmapview_compressed_store_zero_slack() raises:
+    """Deposit into the last byte of a bitmap that has no slack behind it.
+
+    512 bits is exactly 64 bytes, and `Buffer._aligned_size` rounds up to a
+    64-byte multiple — which 64 already is — so the allocation ends at the
+    bitmap's final byte. `BitmapView.compressed_store` used to store 8 bytes
+    unconditionally and justify it with "Arrow buffers are 64-byte padded",
+    so this shape read-modify-wrote 7 bytes past the allocation.
+    """
+    var bm = Bitmap.alloc_zeroed(512)
+    var view = bm.view()
+    view.compressed_store(504, UInt64(0b1011_0011), 8)
+    for i in range(8):
+        assert_true(
+            view.test(504 + i) == Bool((0b1011_0011 >> i) & 1),
+            String("bit ", 504 + i),
+        )
+    for i in range(504):
+        assert_false(view.test(i), String("spill at bit ", i))
+
+
+def test_bounds_bitmapview_compressed_store_guard_bytes() raises:
+    """A deposit into a view's final byte must leave the bytes after it alone.
+
+    The view spans bits 0..511 (bytes 0..63) of a 1024-bit bitmap whose bits
+    512..575 are all set. Those bits are the guard; the wide store used to
+    read-modify-write straight through them.
+    """
+    var bm = Bitmap.alloc_zeroed(1024)
+    for i in range(512, 576):
+        bm.set(i)
+    var view = bm.view(0, 512)
+    view.compressed_store(505, UInt64(0b101), 3)
+    assert_true(view.test(505), "bit 505")
+    assert_false(view.test(506), "bit 506")
+    assert_true(view.test(507), "bit 507")
+    for i in range(512, 576):
+        assert_true(bm.test(i), String("guard bit ", i, " was cleared"))
+
+
+def test_bounds_bitmapview_compressed_store_nine_byte_straddle() raises:
+    """``count == 64`` at a non-zero bit offset genuinely needs a ninth byte —
+    the one case where the wide path is the right answer."""
+    var bm = Bitmap.alloc_zeroed(128)
+    var view = bm.view()
+    var bits = UInt64(0xF0F0_F0F0_0F0F_0F0F)
+    view.compressed_store(3, bits, 64)
+    for i in range(64):
+        assert_true(
+            view.test(3 + i) == Bool((bits >> UInt64(i)) & 1),
+            String("straddle bit ", i),
+        )
+    assert_false(view.test(0), "spill below the deposit")
+    assert_false(view.test(67), "spill above the deposit")
+
+
+def test_bounds_bitmapview_compressed_store_all_bit_offsets() raises:
+    """Every bit offset 0..7 crossed with counts 1..16.
+
+    This is the tapered narrow path (``nbytes < 8``), which is new code and is
+    exactly what the final block of a filter takes. Walk it exhaustively
+    rather than sampling, and assert nothing outside the deposited run is set.
+    """
+    for off in range(8):
+        for count in range(1, 17):
+            var bm = Bitmap.alloc_zeroed(128)
+            var view = bm.view()
+            var bits = UInt64(0xA53C_96D2_4B7E_1F08) & (
+                (UInt64(1) << UInt64(count)) - 1
+            )
+            view.compressed_store(off, bits, count)
+            for i in range(128):
+                var want = False
+                if off <= i and i < off + count:
+                    want = Bool((bits >> UInt64(i - off)) & 1)
+                assert_true(
+                    view.test(i) == want,
+                    String("off=", off, " count=", count, " bit ", i),
+                )
+
+
+def test_bounds_bitmapview_compressed_store_ragged_length() raises:
+    """A bitmap whose bit length is not a whole number of bytes.
+
+    517 bits occupy 65 bytes with the last holding 5 live bits, so the view's
+    byte extent rounds up to 65 and byte 65 is off-limits — the boundary the
+    tapered store has to respect.
+    """
+    var bm = Bitmap.alloc_zeroed(517)
+    var view = bm.view()
+    view.compressed_store(512, UInt64(0b10101), 5)
+    for i in range(5):
+        assert_true(
+            view.test(512 + i) == Bool((0b10101 >> i) & 1),
+            String("ragged bit ", 512 + i),
+        )
+    for i in range(512):
+        assert_false(view.test(i), String("ragged spill at ", i))
+
+
+def test_bounds_bitmapview_filter_zero_slack_output() raises:
+    """`BitmapView.filter` producing exactly 512 bits — 64 bytes, no slack.
+
+    Every 64-bit selection word keeps its low half, so the run-merge paths are
+    skipped and every block goes through `pext` + `compressed_store`, ending
+    on the destination's very last byte.
+    """
+    var n = 1024
+    var data = Bitmap.alloc_zeroed(n)
+    for i in range(0, n, 3):
+        data.set(i)
+    var sel = Bitmap.alloc_zeroed(n)
+    for w in range(16):
+        for i in range(32):
+            sel.set(w * 64 + i)
+
+    var sel_view = sel.view()
+    var out_len, sel_start, sel_end = sel_view.count_set_bits_with_range()
+    assert_true(out_len == 512, String("out_len is ", out_len))
+
+    var filtered, zeros = data.view().filter(
+        sel_view, sel_start, sel_end, out_len
+    )
+    var fv = filtered.view()
+    var k = 0
+    var expect_zeros = 0
+    for i in range(n):
+        if sel.test(i):
+            assert_true(fv.test(k) == data.test(i), String("filtered bit ", k))
+            if not data.test(i):
+                expect_zeros += 1
+            k += 1
+    assert_true(k == out_len, String("wrote ", k, " bits, want ", out_len))
+    assert_true(zeros == expect_zeros, String("zero_count is ", zeros))
+
+
+def test_bounds_bitmapview_load_bits_with_bit_offset() raises:
+    """`load_bits[uint64]` must answer for all 64 bits of a shifted view.
+
+    A view over a sliced array carries a sub-byte ``_offset``; the read is a
+    single unaligned 8-byte load shifted down by that offset, so the top
+    ``_offset`` bits of the result come from the ninth byte — the one the load
+    did not fetch.
+    """
+    var bm = Bitmap.alloc_zeroed(256)
+    for i in range(256):
+        if (i * 7) % 5 < 2:
+            bm.set(i)
+    var view = bm.view(4, 128)
+    var w = view.load_bits[DType.uint64](0)
+    for i in range(64):
+        assert_true(
+            Bool((w >> UInt64(i)) & 1) == view.test(i),
+            String("offset load_bits bit ", i),
+        )
+
+
+def test_bounds_bitmapview_filter_with_bit_offset() raises:
+    """Filter through views that carry a sub-byte bit offset — the shape a
+    sliced array hands to `Filter.apply`.
+
+    Both the selection and the data are read with `load_bits`, so an offset
+    that truncates the top of each 64-bit word drops rows from the answer.
+    """
+    var n = 300
+    var data = Bitmap.alloc_zeroed(n + 8)
+    var sel = Bitmap.alloc_zeroed(n + 8)
+    for i in range(n + 8):
+        if (i * 11) % 7 < 3:
+            data.set(i)
+        if (i * 5) % 4 < 2:
+            sel.set(i)
+
+    var data_view = data.view(5, n)
+    var sel_view = sel.view(5, n)
+    var out_len, sel_start, sel_end = sel_view.count_set_bits_with_range()
+
+    var expected = 0
+    for i in range(n):
+        if sel_view.test(i):
+            expected += 1
+    assert_true(
+        out_len == expected,
+        String("out_len is ", out_len, ", want ", expected),
+    )
+
+    var filtered, zeros = data_view.filter(
+        sel_view, sel_start, sel_end, out_len
+    )
+    var fv = filtered.view()
+    var k = 0
+    var expect_zeros = 0
+    for i in range(n):
+        if sel_view.test(i):
+            assert_true(
+                fv.test(k) == data_view.test(i),
+                String("offset filter bit ", k),
+            )
+            if not data_view.test(i):
+                expect_zeros += 1
+            k += 1
+    assert_true(k == out_len, String("wrote ", k, " bits, want ", out_len))
+    assert_true(zeros == expect_zeros, String("zero_count is ", zeros))
+
+
+def test_bounds_bufferview_filter_with_bit_offset() raises:
+    """The same offset shape through `BufferView.filter`, which reads the
+    selection with the same `load_bits`."""
+    var n = 300
+    var src_buf = Buffer.alloc_zeroed[DType.int32](n)
+    for i in range(n):
+        src_buf.unsafe_set[DType.int32](i, Int32(i))
+    var src = src_buf.view[DType.int32](0, n)
+
+    var sel = Bitmap.alloc_zeroed(n + 8)
+    for i in range(n + 8):
+        if (i * 5) % 4 < 2:
+            sel.set(i)
+    var sel_view = sel.view(5, n)
+    var out_len, sel_start, sel_end = sel_view.count_set_bits_with_range()
+
+    var out = src.filter(sel_view, sel_start, sel_end, out_len)
+    var out_view = out.view[DType.int32](0, out_len)
+    var k = 0
+    for i in range(n):
+        if sel_view.test(i):
+            assert_true(
+                out_view[k] == Int32(i),
+                String("offset filter element ", k, " is ", out_view[k]),
+            )
+            k += 1
+    assert_true(k == out_len, String("kept ", k, ", want ", out_len))

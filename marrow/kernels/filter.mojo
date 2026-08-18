@@ -294,7 +294,10 @@ struct Filter(Kernel):
         # entire 64-element span in one memcpy (run-merge for dense/clustered
         # masks); mixed words copy per element via CTZ (branch-free for random).
         var out_values = Buffer.alloc_uninit[DType.uint8](total_bytes)
-        var out_val_view = out_values.view[DType.uint8]()
+        # Explicit length: `view()` would default to the *padded* byte count
+        # (`Buffer._aligned_size` rounds up to 64), and a destination sized from
+        # a computed count wants the count, not the rounding.
+        var out_val_view = out_values.view[DType.uint8](0, total_bytes)
         var dst_byte_pos = 0
         var wb2 = 0
         while wb2 < n:
@@ -323,6 +326,13 @@ struct Filter(Kernel):
                     w &= w - 1
             wb2 += 64
 
+        debug_assert(
+            dst_byte_pos == total_bytes,
+            "Filter.apply(binary) copied ",
+            dst_byte_pos,
+            " bytes but sized its destination for ",
+            total_bytes,
+        )
         return BinaryLikeArray[T](
             length=out_len,
             nulls=null_count,
@@ -892,7 +902,8 @@ struct Take(Kernel):
         # Int32 buffer — no builder append / growth / null-bitmap overhead — then
         # gather the child in a single dispatched `take`.
         var child_idx_buf = Buffer.alloc_uninit[Int32Type.native](total)
-        var civ = child_idx_buf.view[Int32Type.native]()
+        # Explicit length — `view()` defaults to the padded element count.
+        var civ = child_idx_buf.view[Int32Type.native](0, total)
         var pos = 0
         for k in range(n):
             if has_null_idx and not indices.is_valid(k):
@@ -903,6 +914,13 @@ struct Take(Kernel):
                 for j in range(rng[0], rng[1]):
                     civ.unsafe_set(pos, Int32(j))
                     pos += 1
+        debug_assert(
+            pos == total,
+            "Take.apply(list) wrote ",
+            pos,
+            " child indices but sized its destination for ",
+            total,
+        )
         var child_indices = Int32Array(
             dtype=int32,
             length=total,
@@ -948,7 +966,8 @@ struct Take(Kernel):
         # bitmap (a null index expands to `size` null child slots); the common
         # no-null path skips that zeroed allocation entirely.
         var child_idx_buf = Buffer.alloc_uninit[Int32Type.native](total)
-        var civ = child_idx_buf.view[Int32Type.native]()
+        # Explicit length — `view()` defaults to the padded element count.
+        var civ = child_idx_buf.view[Int32Type.native](0, total)
         var child_bitmap: Optional[Bitmap[]] = None
         var child_nulls = 0
         var pos = 0

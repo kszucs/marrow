@@ -752,3 +752,75 @@ def test_take_null_index_produces_null_int32() raises:
     assert_equal(result.null_count(), 1)
     assert_false(result.is_valid(0))
     assert_true(result.is_valid(1))
+
+
+def test_filtersliced_multiword_offset() raises:
+    """Filter a sliced array long enough to span several selection words.
+
+    Every other sliced test here fits inside a single 64-bit tail block, where
+    the tail mask hides the top of the word. Past 64 elements the bulk loop
+    runs, and `BitmapView.load_bits` on a view carrying a sub-byte bit offset
+    used to return the run's top ``offset`` bits as zeros — silently dropping
+    rows from the answer rather than raising.
+    """
+    var n = 400
+    var vb = Int32Builder()
+    for i in range(n):
+        vb.append(Int32(i))
+    var a = vb.finish()
+
+    var start = 3  # a sub-byte bit offset on the sliced validity/data views
+    var length = n - start
+    var sliced = a.slice(start, length)
+    assert_equal(sliced.offset, start)
+
+    var mb = BoolBuilder()
+    var expected = List[Int32]()
+    for i in range(length):
+        var keep = (i * 7) % 5 < 2
+        mb.append(keep)
+        if keep:
+            expected.append(Int32(start + i))
+    var mask = mb.finish()
+
+    var result = Filter.apply(sliced, mask.values())
+    assert_equal(len(result), len(expected))
+    for i in range(len(expected)):
+        assert_equal(result[i].value(), expected[i])
+
+
+def test_filtersliced_multiword_offset_with_nulls() raises:
+    """The same shape with a validity bitmap, which is filtered through the
+    same `load_bits` path as the selection."""
+    var n = 400
+    var start = 5
+    var length = n - start
+
+    var b = Int32Builder()
+    for i in range(n):
+        if i % 3 == 0:
+            b.append_null()
+        else:
+            b.append(Int32(i))
+    var a = b.finish()
+    var sliced = a.slice(start, length)
+
+    var mb = BoolBuilder()
+    var expect_values = List[Int32]()
+    var expect_null = List[Bool]()
+    for i in range(length):
+        var keep = (i * 11) % 7 < 3
+        mb.append(keep)
+        if keep:
+            var src = start + i
+            expect_null.append(src % 3 == 0)
+            expect_values.append(Int32(src))
+    var mask = mb.finish()
+
+    var result = Filter.apply(sliced, mask.values())
+    assert_equal(len(result), len(expect_values))
+    for i in range(len(expect_values)):
+        if expect_null[i]:
+            assert_true(result.is_null(i))
+        else:
+            assert_equal(result[i].value(), expect_values[i])
