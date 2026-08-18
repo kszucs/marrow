@@ -130,11 +130,12 @@ comptime _CODEC_HANDLES = _Global["MARROW_CODEC_HANDLES", _open_codec_handles]
 `get_or_create_ptr()`, and never `dlclose`d before process teardown.
 
 This used to be per read/write, and it dominated any workload that opens the
-same file repeatedly: `dlopen` searches the whole path list, and the four to six
-*misses* before a hit cost far more than the one that succeeds, so a 1,000-row
-Snappy `read_table` spent 897 us of its 921 us opening and closing libraries it
-had already opened. Process-lifetime handles are what every library that
-`dlopen`s its dependencies does, and there is nothing to reclaim: the handles
+same file repeatedly. Nothing else in a marrow-only process holds these
+libraries, so the matching `dlclose` dropped the last reference and dyld really
+unmapped the image; the next read re-mapped, re-bound and re-initialised it, at
+roughly 0.9 ms a cycle. A 1,000-row Snappy `read_table` spent 897 us of its
+921 us there. Process-lifetime handles are what every library that `dlopen`s its
+optional dependencies does, and there is nothing to reclaim: six images that
 outlive every reader and writer by construction."""
 
 

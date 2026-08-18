@@ -204,6 +204,35 @@
 
 ### Fixes
 
+- **The Parquet codec libraries are opened once per process, not once per read
+  (O1).** `CompressionLibs` was built per read and per write, and its destructor
+  `dlclose`d whatever it had opened. Nothing else in a marrow-only process holds
+  `libsnappy` / `libzstd` / `liblz4` / `libbrotli*`, so that `dlclose` really
+  unmapped them and the next read re-mapped and re-linked them — about 0.9 ms of
+  pure set-up per `read_table`.
+
+  The handles now live in one process-wide `_CodecHandles` behind the stdlib's
+  `_Global`, opened on first codec use and never `dlclose`d before teardown.
+  They are immutable after initialization, so the workers a read dispatches
+  share a read-only structure; the mutable half — snappy's reused size
+  out-param — stays in the per-worker `CompressionLibs`, which is now just that
+  scratch plus the block calls. `ParquetFile.read` opens the set on the calling
+  thread before dispatching, and only when a chunk it is about to decode is
+  actually compressed, so an all-uncompressed program still loads no codec at
+  all (verified with `DYLD_PRINT_LIBRARIES`).
+
+  A `dlopen` that cannot find its library is recorded rather than raised — the
+  set is opened inside a global initializer that cannot raise — and re-raised
+  with the original text from the first page that needs that codec, so a box
+  without `libbrotlienc` still gets working zstd exactly as before.
+
+  New `bench_read_small_snappy` / `bench_read_small_uncompressed` isolate the
+  per-read set-up on a 1,000-row file: **921.4 us -> 31.7 us** (29x), against an
+  untouched uncompressed control that moved 24.0 -> 23.5 us. End to end,
+  ClickBench Q1 in a marrow-only process goes **9.25 ms -> 8.43 ms** (-8.9%,
+  three interleaved pairs at 300 repeats); queries that do real work absorb the
+  same fixed ~0.9 ms and do not move measurably.
+
 - **`filter` no longer writes one element past its output buffer (F1).** This is
   the SIGSEGV behind ClickBench Q11, Q12 and Q24 — a bare `exit -11` with no
   message, always reported from inside tcmalloc at some later, innocent
