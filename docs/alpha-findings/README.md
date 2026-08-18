@@ -14,6 +14,8 @@ The individual logs are the primary sources and carry the file:line detail:
 | [`b2-plan-bindings.md`](b2-plan-bindings.md) | binding `DynRelation` to Python |
 | [`d1-binding-delta.md`](d1-binding-delta.md) | binding the methods the first two deferred |
 | [`e1-clickbench.md`](e1-clickbench.md) | writing 43 real queries as the first user |
+| [`f1-distinct-segfault.md`](f1-distinct-segfault.md) | tracing the ClickBench Q11/Q12/Q24 SIGSEGV |
+| [`g1-buffer-invariants.md`](g1-buffer-invariants.md) | making the buffer padding invariant real and enforced |
 
 **Evidence tiers used below.** *Measured* — someone ran an experiment and has a
 number. *Reproduced* — someone triggered the defect from a test. *Argued* — a
