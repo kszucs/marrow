@@ -148,6 +148,45 @@ that batch and the next. Raw before/after ratios across those two batches are
 meaningless. All numbers above come from back-to-back runs on a quiet machine
 with controls that stayed within +/-1%.
 
+## A compiler wedge found on the way: `DynArray == DynArray`
+
+Worth its own section because it cost an hour and looks like nothing.
+
+The first version of these tests contained one line —
+`assert_true(out == cast(out, string))` — comparing two `DynArray` values. With
+it, the `test_cast.mojo` driver **never finished compiling**: `mojo` sat at 0%
+CPU with 18 s of CPU time consumed after 57 minutes, twice, with a
+`modular-crashpad-handler` alongside it. It does not error and it does not
+crash; it wedges.
+
+Everything around it stayed healthy, which is what made it hard to see:
+
+- `mojo precompile marrow` was clean, 0 errors and 0 warnings, in seconds.
+- An untouched file, `marrow/tests/test_dtypes.mojo`, compiled in **4 s**.
+- The same `test_cast.mojo` at the pristine `alpha` commit compiled in **84 s**.
+- The `bench_cast.mojo` driver, `-O3`, built and ran fine throughout.
+
+Bisected by putting each removed construct back one at a time, each probe a
+separate ~85 s compile:
+
+| construct | result |
+|---|---|
+| `BinaryBuilder` instantiated in the test file | 71 passed, 86 s |
+| `StringSlice(unsafe_from_utf8=Span(local))` appended to a builder | 71 passed, 85 s |
+| **`assert_true(out == cast(out, binary))`** — `DynArray` vs `DynArray` | **wedged, hit the 420 s timeout** |
+
+`DynArray.__eq__` has to resolve the active variant member on *both* sides, so
+it elaborates the ladder squared. One occurrence in one test case is enough.
+
+Practical consequence for anyone writing tests here: **compare a `DynArray`
+against a typed array, or compare `.dtype()` and elements, but do not compare
+two `DynArray`s.** `CLAUDE.md` already recommends `assert_true(result ==
+expected)` over element loops — that advice is sound for typed arrays such as
+`PrimitiveArray[T]`, and this is the exception to it.
+
+Note also that this is invisible to `precompile`, so "the tree compiles" is not
+evidence that a test file will build.
+
 ## Correction to the brief: Arrow C++ does not validate the buffer
 
 The task described Arrow C++ as validating "the buffer, not element by element."
