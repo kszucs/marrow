@@ -28,7 +28,7 @@ from ..dtypes import (
     StringType,
     TemporalType,
 )
-from ..scalars import DynScalar, PrimitiveScalar
+from ..scalars import DynScalar, PrimitiveScalar, StringScalar
 from .dynamic import DynAgg, DynValue
 from .params import ParamCell, ParamDecl, register_param
 from .values import (
@@ -38,7 +38,9 @@ from .values import (
     NumericParam,
     StringColumn,
     StringLiteral,
+    StringParam,
     TemporalColumn,
+    TemporalParam,
 )
 
 
@@ -109,6 +111,61 @@ def lit(value: String) -> StringLiteral[StringType]:
     """A string constant — `lit("suffix")`. Same verb as the numeric ones; the
     argument type picks the literal."""
     return StringLiteral[StringType](value)
+
+
+def param[
+    T: StringLikeType
+](
+    var name: String,
+    dtype: T,
+    default: Optional[String] = None,
+    var help: String = String(),
+) -> StringParam[T]:
+    """A string value supplied at run time — `param("src", string)`."""
+    var cell = ArcPointer(ParamCell(name.copy()))
+    var dflt = Optional[DynScalar](None)
+    if default:
+        dflt = Optional(StringScalar(default.value()).to_dyn())
+    register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=DynType(dtype),
+            help=help^,
+            default=dflt^,
+            cell=cell,
+        )
+    )
+    return StringParam[T](cell)
+
+
+def param[
+    T: TemporalType
+](
+    var name: String,
+    dtype: T,
+    default: Optional[Int] = None,
+    var help: String = String(),
+) -> TemporalParam[T]:
+    """A temporal value supplied at run time — `param("cutoff", timestamp(second))`.
+    """
+    var cell = ArcPointer(ParamCell(name.copy()))
+    var dflt = Optional[DynScalar](None)
+    if default:
+        dflt = Optional(
+            PrimitiveScalar[T](
+                Optional(Scalar[T.native](default.value())), dtype
+            ).to_dyn()
+        )
+    register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=DynType(dtype),
+            help=help^,
+            default=dflt^,
+            cell=cell,
+        )
+    )
+    return TemporalParam[T](cell)
 
 
 # ---------------------------------------------------------------------------

@@ -80,3 +80,23 @@ def test_numeric_param_unbound_raises_at_execute() raises:
     var pred = col("a", int64) > param("min-a", int64)
     with assert_raises():
         _ = BoxedValue(pred).execute(batch)
+
+
+def test_string_param_binds_into_a_fused_predicate() raises:
+    _ = drain_params()
+    var s = array(["p", "q", "p"])
+    var batch = record_batch([s.copy()], names=["s"])
+    var want = param("want", string)
+    var pred = col("s", string) == want
+    var decls = drain_params()
+    decls[0].cell[].set(StringScalar(String("p")).to_dyn())
+    var out = BoxedValue(pred).execute(batch)
+    assert_true(out.as_bool() == array([True, False, True]))
+
+
+def test_string_param_default_is_used_when_unset() raises:
+    _ = drain_params()
+    _ = param("want", string, default=String("q"))
+    var decls = drain_params()
+    assert_true(decls[0].default.value().as_string().value() == "q")
+    assert_false(decls[0].is_required())

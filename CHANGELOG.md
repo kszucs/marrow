@@ -33,6 +33,21 @@
   `ParamDecl` in the same call, alongside `col`/`lit` in
   `marrow/expr/builders.mojo`.
 
+- **`StringParam[T]`/`TemporalParam[T]` and their `param()` overloads — the
+  string and temporal counterparts of `NumericParam`.** `StringParam` mirrors
+  `NumericValue`'s fused-lane shape adapted to the string family: `State =
+  String`, resolved once per batch in `state()`; `lane()` returns a plain
+  `String` copy, no `[W]` — variable-width UTF-8 has no SIMD lane, same as
+  every other `StringValue` leaf. `param("src", string)` is what a Parquet
+  scan path will bind its file path against. `TemporalParam` is
+  materialize-only instead, matching `TemporalColumn`: the temporal family has
+  no fused lane at all (`TemporalValue` declares no `state`/`lane`), so
+  `materialize()` reads the cell once per pass rather than splatting through a
+  lane. Both add a `PrimitiveScalar`/`StringScalar`-typed `default` to
+  `param()`, and `StringScalar` gained `.value() -> String`, matching
+  `PrimitiveScalar.value()`, so a bound string default can be read back
+  without going through `.to_string()`.
+
 - **`LazyTable.collect(num_threads=0)` — the lazy query path can ask for
   parallelism.** `ExecContext.__init__` defaults to `num_threads=1`, so
   `DynRelation.execute()`'s `ExecContext()` default was forced serial, and the

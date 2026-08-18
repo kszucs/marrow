@@ -1850,6 +1850,39 @@ struct StringLiteral[T: StringLikeType](StringValue):
 
 
 @fieldwise_init
+struct StringParam[T: StringLikeType](StringValue):
+    """A string value supplied at run time, broadcast into every lane.
+
+    Structurally `StringLiteral[T]` with the scalar behind a cell. Resolving
+    the cell in `state()` rather than `lane()` is what makes this free: the
+    lane returns a plain `String` copy, byte-identical to a literal's, so a
+    parameter costs nothing per row."""
+
+    comptime OutType = Self.T
+    comptime OutShape = 0
+    comptime State = String
+
+    var _cell: ArcPointer[ParamCell]
+
+    def render(self) -> String:
+        return String("param(", self._cell[].name_hint(), ")")
+
+    def referenced_columns(self) -> List[String]:
+        return List[String]()
+
+    def prune(self, stats: PruneStats) raises -> Interval:
+        var v = self._cell[].get()
+        return Interval.bounds(Optional(v.copy()), Optional(v^))
+
+    def state(self, batch: RecordBatch) raises -> Self.State:
+        return self._cell[].get().as_string().value()
+
+    @always_inline
+    def lane(self, state: Self.State, idx: Int) -> String:
+        return state.copy()
+
+
+@fieldwise_init
 struct Concat[L: StringValue, R: StringValue](StringValue):
     """Fused elementwise concatenation — `col || "a" || "b"` builds each row once,
     no intermediate `StringArray` for `col || "a"`."""
@@ -2650,6 +2683,35 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
 
     def name(self) -> String:
         return self._name.copy()
+
+
+@fieldwise_init
+struct TemporalParam[T: TemporalType](TemporalValue):
+    """A temporal value supplied at run time.
+
+    Materialize-only, like `TemporalColumn` — the temporal family has no fused
+    lane (see the note above `TemporalValue`), so there is no `state()`/
+    `lane()` to resolve the cell through; `materialize()` reads it once per
+    pass instead, which is the equivalent guarantee: the cell is never read
+    more than once per batch."""
+
+    comptime OutType = Self.T
+    comptime OutShape = 0
+
+    var _cell: ArcPointer[ParamCell]
+
+    def render(self) -> String:
+        return String("param(", self._cell[].name_hint(), ")")
+
+    def referenced_columns(self) -> List[String]:
+        return List[String]()
+
+    def prune(self, stats: PruneStats) raises -> Interval:
+        var v = self._cell[].get()
+        return Interval.bounds(Optional(v.copy()), Optional(v^))
+
+    def materialize(self, batch: RecordBatch) raises -> Datum:
+        return self._cell[].get()
 
 
 @fieldwise_init
