@@ -910,3 +910,128 @@ def test_inner_join_binary_keys_collision_verified() raises:
     var right = _bytes_join_side[BinaryType](["b", "b", "c"], [10, 20, 30])
     var result = hash_join(left, right, _left_on(), _right_on())
     assert_equal(len(result), 5)
+
+
+# ---------------------------------------------------------------------------
+# serial vs partitioned probe — the two paths must be indistinguishable
+#
+# `build` picks the layout (single table vs one table per radix partition) and
+# `probe` must follow it. The two emit the same rows in different orders, so
+# these compare an order-insensitive fingerprint rather than the arrays: the
+# partitioned probe emits in partition order, the single-table probe in probe
+# order, and a regression here shows up as dropped or duplicated rows, which a
+# row count alone would miss whenever a drop and a duplicate cancel out.
+# ---------------------------------------------------------------------------
+
+
+def _join_side(n: Int, key_offset: Int, val_mul: Int) raises -> StructArray:
+    var ks = List[Int](capacity=n)
+    var vs = List[Int](capacity=n)
+    for i in range(n):
+        ks.append(i + key_offset)
+        vs.append(i * val_mul)
+    return _int32_struct(ks, vs)
+
+
+def _join_fingerprint(result: StructArray) raises -> String:
+    """Row count plus, per column, the sum of its values and its null count.
+
+    Order-insensitive by construction, and sensitive to exactly the failures
+    that matter: a dropped row moves the sum and the count, a duplicated row
+    moves both the other way, and a mis-slotted NULL moves the null count
+    without moving anything else.
+    """
+    var out = String(len(result))
+    for i in range(len(result.children)):
+        var col = result.field(i)
+        var total = 0
+        for j in range(len(col)):
+            if col.is_valid(j):
+                total += Int(col.as_int32()[j].value())
+        out += "|" + String(total) + ":" + String(col.null_count())
+    return out^
+
+
+def _probe_in_morsels(
+    left: StructArray,
+    right: StructArray,
+    var ctx: ExecContext,
+    kind: JoinKind,
+    morsel: Int,
+) raises -> String:
+    """Build with `ctx`, then probe `right` in `morsel`-row slices.
+
+    Mirrors how the plan layer drives a join: one build, many small probes.
+    Returns the concatenated per-morsel fingerprints, so a divergence is
+    localized to the morsel that caused it.
+    """
+    var j = HashJoin(ctx^)
+    j.build(left, _left_on())
+    var out = String("parallel=") + String(j.built_parallel())
+    var off = 0
+    while off < len(right):
+        var m = min(morsel, len(right) - off)
+        out += ";" + _join_fingerprint(
+            j.probe(right.slice(off, m), _right_on(), kind, JOIN_ALL)
+        )
+        off += m
+    return out^
+
+
+def _assert_join_paths_agree(kind: JoinKind, morsel: Int) raises:
+    """Same join, same data, both layouts — results must be identical.
+
+    `n` sits above `_PARALLEL_THRESHOLD` (100k) so the parallel context takes
+    the partitioned build, and the key offset overlaps the two sides by half
+    so LEFT/SEMI/ANTI all see matched *and* unmatched rows.
+    """
+    var n = 150_000
+    var left = _join_side(n, 0, 10)
+    var right = _join_side(n, n // 2, 100)
+
+    var par = HashJoin(ExecContext.parallel(4))
+    par.build(left, _left_on())
+    assert_true(
+        par.built_parallel(),
+        (
+            "expected the partitioned layout at 150k rows / 4 workers — without"
+            " it this test would compare the serial path against itself"
+        ),
+    )
+
+    var serial_fp = _probe_in_morsels(
+        left, right, ExecContext.serial(), kind, morsel
+    )
+    var parallel_fp = _probe_in_morsels(
+        left, right, ExecContext.parallel(4), kind, morsel
+    )
+    # Strip the layout tag: it is asserted above and is *expected* to differ.
+    var s_body = serial_fp[byte = serial_fp.find(";") :]
+    var p_body = parallel_fp[byte = parallel_fp.find(";") :]
+    assert_equal(s_body, p_body)
+
+
+def test_join_paths_agree_inner_morsels() raises:
+    _assert_join_paths_agree(JOIN_INNER, 8192)
+
+
+def test_join_paths_agree_left_morsels() raises:
+    _assert_join_paths_agree(JOIN_LEFT, 8192)
+
+
+def test_join_paths_agree_semi_morsels() raises:
+    _assert_join_paths_agree(JOIN_SEMI, 8192)
+
+
+def test_join_paths_agree_anti_morsels() raises:
+    _assert_join_paths_agree(JOIN_ANTI, 8192)
+
+
+def test_join_paths_agree_inner_single_probe() raises:
+    """One probe call above `_PROBE_STRIPE_THRESHOLD`, so the probe stripes
+    rather than taking the small-batch serial hashing path."""
+    _assert_join_paths_agree(JOIN_INNER, 150_000)
+
+
+def test_join_paths_agree_left_single_probe() raises:
+    _assert_join_paths_agree(JOIN_LEFT, 150_000)

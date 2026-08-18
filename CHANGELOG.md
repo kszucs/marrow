@@ -250,6 +250,42 @@
 
 ### Fixes
 
+- **Hash join sized its probe from the build side, so the plan layer's 8192-row
+  morsels each paid a full radix partitioning.** `HashJoin.probe` picked serial
+  vs partitioned by re-asking `worth_parallel` about `self._left_rows`, letting
+  one row count answer two unrelated questions: which layout `build` produced
+  (a correctness constraint) and whether *this call* is big enough to
+  parallelise (a throughput decision). `JoinProcessor` streams the probe side
+  in 8192-row morsels, so a 1M-row build sent ~122 tiny probes down the
+  partitioned path and the 1M join ran 1.7x slower than serial once
+  `ExecContext.auto()` became the plan default.
+
+  The layout is now recorded by `build` in `_built_parallel` and simply
+  followed. The throughput levers moved to where the per-call cost actually is:
+  `_probe_ctx` sizes the probe's hashing from that call's rows via
+  `worth_parallel` (which reads a forced thread count as a budget, not an
+  instruction — striping an 8192-row probe across 8 forced workers cost
+  ~1213 us against ~76 us on the calling thread), and `_DEFAULT_RADIX_BITS`
+  drops 6 -> 4. The 64-partition default came from a *one-shot* 10M sweep that
+  amortized partitioning over a single call; re-swept on the morselized shape,
+  16 partitions is the only setting that beats the serial baseline at every
+  size.
+
+  Measured (`marrow/kernels/tests/bench_join.mojo`, 1M build, 1M probe in
+  8192-row morsels, medians, normalised against an untouched `SumKernel`
+  control): **-35.4% / -37.5% / -34.9%** at 2 / 4 / 8 workers. Whole join
+  including build, 8 workers: 30.07 -> 16.84 ms at 1M, 93.54 -> 68.52 ms at 4M,
+  238.92 -> 181.13 ms at 10M, against a serial bar of 17.38 / 101.76 /
+  360.52 ms. One-shot big probes give up 8.9% at 8 workers to the smaller
+  fanout and remain 3.0x faster than serial.
+
+  No fan-out threshold was added: measurement showed fanning the partitions out
+  beats running them serially at every batch size tested, 8192 rows included,
+  so the expensive thing is the partitioning and not the `sync_parallelize`.
+  Details and the plan-layer morsel-size recommendation in
+  `docs/alpha-findings/o5-join-threshold.md`.
+
+
 - **`FilterProcessor` and `JoinProcessor` no longer drop the execution
   context.** `JoinProcessor` built its index with `HashJoin[RapidHash64]()`,
   falling through to that constructor's serial default, so a plan-driven join
