@@ -4,6 +4,42 @@
 
 ### Features
 
+- **Projection pushdown — a lazy query stops reading every column of a Parquet
+  file.** `ParquetScan`'s schema *is* its projection, but nothing ever narrowed
+  it, so `read_parquet(hits).aggregate(n=count_star())` decoded all 105 columns
+  of a 1M-row file to count rows. `DynRelation.optimize()` now walks the plan
+  from the root, carrying down the set of columns each node's parent actually
+  reads — widened at a `Filter` by its predicate, at a `Sort` by its keys, at an
+  `Aggregate` by its keys *and* aggregate inputs, and narrowed at a `Project` to
+  the outputs that survive — and rewrites the scan's schema to what is left.
+  `execute()` calls it, so every plan built through the verbs and every query
+  through the Python `LazyTable` gets it.
+
+  Measured on ClickBench `hits_0.parquet` (1M x 105), 5 interleaved repeats,
+  medians: the 41-query total went from **13 913 ms to 3 870 ms** and from
+  **17.7x polars to 5.0x**, with polars and duckdb steady to within 1.5% across
+  the two runs. `COUNT(*)` went 271 ms -> 9.9 ms; `GROUP BY URL` 317 ms ->
+  104 ms, which is 1.5x polars. `SELECT *` is unchanged, as it must be.
+
+  The rewrite never changes a plan's output schema or its rows: the root seeds
+  the column set with its own columns, so a node can only ever narrow to a
+  subset its parent asked for, and a plan that emits everything still reads
+  everything. A scan never narrows to *nothing* — `COUNT(*)` references no
+  column and a zero-column read yields zero-row batches, which the scan's
+  streaming loop reads as end-of-file — so the empty case keeps the narrowest
+  fixed-width column. `Join` is deliberately excluded: its key indices are
+  positions into its children's schemas, so pushing through one means
+  recomputing them, which is a separate rewrite.
+- **`Relation.children()` / `DynRelation.children()` — the plan IR is walkable.**
+  A plan could not be traversed at all, which is why the layer had two
+  incompatible ad-hoc rewrite mechanisms and no `EXPLAIN`. `children()` is the
+  read-only half (a *method* may mention the erased `DynRelation`; only a
+  *field* whose function type does makes the struct recursive), and
+  `with_projection` is the rewriting half, following the erased-pointer protocol
+  `with_predicate` established rather than inventing a third. It is
+  `children()`, not `inputs()`, because `Aggregate.inputs` already names the
+  aggregate value expressions.
+
 - **The Python expression and plan surface closes the gap the binding agents
   deferred: null handling, `COUNT(*)`, and `with_columns`/`drop`/`rename`.**
   Three `# TODO(alpha)` markers pointed at methods that did not exist when the
