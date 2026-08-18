@@ -251,3 +251,37 @@ def bench_upper_100k(mut b: Benchmark) raises:
 
     b.iter(call)
     keep(data)
+
+
+# ---------------------------------------------------------------------------
+# The shape ClickBench q21 actually executes.
+#
+# The runtime expression lane (`marrow.expr.dynamic`) evaluates a literal by
+# `DynScalar.repeat(num_rows)`, so `URL LIKE '%google%'` reaches the kernel as
+# array x array with n identical right-hand rows -- the `_bench_like_array`
+# shape, not the `_bench_like_scalar` one.  Dense and sparse variants of it
+# pin down whether the cost tracks the number of matches (compare-bound) or
+# the number of rows (per-row set-up).
+# ---------------------------------------------------------------------------
+
+
+def _bench_like_array_pattern(mut b: Benchmark, pattern: String, n: Int) raises:
+    var data = _urls(n)
+    var pat = _broadcast(pattern, n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(LikeKernel.apply(data, pat)))
+
+    b.iter(call)
+    keep(data)
+    keep(pat)
+
+
+def bench_like_array_dense_1m(mut b: Benchmark) raises:
+    _bench_like_array_pattern(b, "%http%", 1_000_000)
+
+
+def bench_like_array_sparse_1m(mut b: Benchmark) raises:
+    _bench_like_array_pattern(b, "%zqxjv%", 1_000_000)
