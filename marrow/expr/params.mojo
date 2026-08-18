@@ -289,7 +289,19 @@ def _parse_scalar(name: String, dtype: DynType, raw: String) raises -> DynScalar
     have no textual literal here and are rejected by name rather than
     silently misparsed."""
     if dtype.is_bool():
-        return BoolScalar(raw == "true" or raw == "1").to_dyn()
+        var lower = raw.lower()
+        if lower == "true" or lower == "1":
+            return BoolScalar(True).to_dyn()
+        elif lower == "false" or lower == "0":
+            return BoolScalar(False).to_dyn()
+        else:
+            raise Error(
+                "parse_params: '--"
+                + name
+                + "' expects a bool ('true'/'false'/'1'/'0'), got '"
+                + raw
+                + "'"
+            )
     if dtype.is_string_like():
         return StringScalar(raw).to_dyn()
     if dtype.is_integer():
@@ -377,13 +389,46 @@ def render_usage(decls: List[ParamDecl]) -> String:
     return out^
 
 
+comptime _HEX_DIGITS: StaticString = "0123456789abcdef"
+
+
+def _hex2(v: Int) -> String:
+    """Two lowercase hex digits, zero-padded — `v` must be 0-255."""
+    return String(
+        _HEX_DIGITS[byte = (v >> 4) & 0xF], _HEX_DIGITS[byte = v & 0xF]
+    )
+
+
 def _json_escape(s: String) -> String:
+    """Escape `s` for embedding inside a JSON string literal (RFC 8259 §7):
+    the two structural characters (`"`, `\\`), the named short escapes, and
+    the remaining C0 control range (0x00-0x1F) as `\\u00XX`.
+
+    `help` is free text a plan author writes, so a literal newline or tab
+    left unescaped would make `render_describe` emit syntactically invalid
+    JSON — the one output here meant as a machine-readable contract for
+    external tooling, unlike `render_usage`'s plain text."""
     var out = String()
-    for cp in s.codepoint_slices():
-        var c = String(cp)
-        if c == '"' or c == "\\":
-            out += "\\"
-        out += c
+    for cp in s.codepoints():
+        var v = Int(cp)
+        if v == ord('"'):
+            out += '\\"'
+        elif v == ord("\\"):
+            out += "\\\\"
+        elif v == ord("\n"):
+            out += "\\n"
+        elif v == ord("\r"):
+            out += "\\r"
+        elif v == ord("\t"):
+            out += "\\t"
+        elif v == 0x08:
+            out += "\\b"
+        elif v == 0x0C:
+            out += "\\f"
+        elif v < 0x20:
+            out += "\\u00" + _hex2(v)
+        else:
+            out += String(cp)
     return out^
 
 

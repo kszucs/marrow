@@ -2,7 +2,7 @@ from std.testing import assert_true, assert_false, assert_raises
 from std.memory import ArcPointer
 from ...builders import array
 from ...tabular import record_batch
-from ...dtypes import DynType, field, int64, second, string, timestamp
+from ...dtypes import DynType, bool_, field, int64, second, string, timestamp
 from ...schema import schema
 from ...scalars import DynScalar, Int64Scalar, StringScalar, TimestampScalar
 from ...parquet import LeafSet
@@ -16,6 +16,7 @@ from ..params import (
     drain_params,
     parse_params,
     register_param,
+    render_describe,
     render_usage,
 )
 
@@ -185,3 +186,54 @@ def test_render_usage_names_every_param() raises:
     assert_true("--src" in usage)
     assert_true("input" in usage)
 
+
+def test_parse_params_bool_binds_true_and_false() raises:
+    var decls = List[ParamDecl]()
+    decls.append(ParamDecl(name="verbose", dtype=DynType(bool_)))
+    parse_params(["--verbose", "TRUE"], decls)
+    assert_true(decls[0].cell[].get().as_bool().value())
+
+    var decls2 = List[ParamDecl]()
+    decls2.append(ParamDecl(name="verbose", dtype=DynType(bool_)))
+    parse_params(["--verbose", "0"], decls2)
+    assert_false(decls2[0].cell[].get().as_bool().value())
+
+
+def test_parse_params_bool_rejects_unrecognized_value() raises:
+    var decls = List[ParamDecl]()
+    decls.append(ParamDecl(name="verbose", dtype=DynType(bool_)))
+    with assert_raises():
+        parse_params(["--verbose", "yes"], decls)
+
+
+def test_render_describe_escapes_control_characters() raises:
+    var backslash = String("\\")
+    var quote = String('"')
+    var raw_help = String("line one") + "\n" + "line " + quote + "two" + quote
+
+    var decls = List[ParamDecl]()
+    decls.append(ParamDecl(name="src", dtype=DynType(string), help=raw_help))
+    var out = render_describe(decls)
+
+    var escaped_newline = "line one" + backslash + "n" + "line "
+    var escaped_quote = backslash + quote + "two" + backslash + quote
+    assert_true(escaped_newline in out)
+    assert_true(escaped_quote in out)
+    # The raw, unescaped help text (real newline, bare quotes) must not
+    # survive into the JSON: if either character came through unescaped,
+    # this exact substring would still be present.
+    assert_false(raw_help in out)
+
+
+def test_render_describe_shape_for_one_parameter() raises:
+    var decls = List[ParamDecl]()
+    decls.append(
+        ParamDecl(name="min-a", dtype=DynType(int64), help=String("cutoff"))
+    )
+    var out = render_describe(decls)
+    var want = String(
+        '[\n  {"name": "min-a", "dtype": "'
+        + String(DynType(int64))
+        + '", "help": "cutoff", "required": true}\n]'
+    )
+    assert_true(out == want)
