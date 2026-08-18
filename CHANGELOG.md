@@ -375,6 +375,46 @@
   sanitizer. It now writes exactly `ceildiv(bit_offset % 8 + count, 8)` bytes;
   the wide path still serves every full 64-bit block, so only the short final
   block changes.
+- **`binary` → `string` no longer re-validates UTF-8 one element at a time.**
+  Parquet `BYTE_ARRAY` columns arrive as `binary` and the string kernels are
+  bound on `StringLikeType`, so every string query casts — 28 of ClickBench's
+  105 columns. `BinaryLikeCast.apply` relabels with no allocation when the
+  offset widths match, so the cast itself is free; the whole cost was the
+  `safe` guard's `_check_utf8`, a scalar loop building a `StringSlice` per row
+  and calling `_is_valid_utf8` on it, over an immutable buffer it had already
+  validated. It ran at 4.2 GB/s on ASCII and 5.5 GB/s on ClickBench's `URL`.
+
+  `_check_utf8` now tries two whole-buffer conditions first. `_all_ascii` is a
+  four-accumulator SIMD OR-reduction — every byte `< 0x80` makes each element
+  valid however the offsets cut the bytes — reduced once per 4 KiB so a buffer
+  that fails bails near the first non-ASCII byte rather than after a full pass.
+  Failing that, `_validate_utf8_window` validates the window while skipping
+  pure-ASCII SIMD blocks, and the element starts are scanned for continuation
+  bytes. Both are sufficient conditions only: either failing falls through to
+  the original loop, so the accept/reject decision is unchanged. `safe=True`
+  stays the default and still rejects malformed input.
+
+  The block skipping is what makes this work on real data rather than only on
+  synthetic ASCII. ClickBench's `URL` is 4.5% non-ASCII by byte so it never
+  takes the all-ASCII path — but those bytes are clustered, and 92.7% of
+  16-byte blocks are pure ASCII. A pure-ASCII block cannot hold part of a
+  multi-byte sequence, so every region handed to `_is_valid_utf8` begins and
+  ends on a character boundary.
+
+  The boundary scan is load-bearing: `"é"` is `0xC3 0xA9`, and split across two
+  elements the concatenation validates while each half is malformed, so a
+  window-only check would be strictly weaker than the loop it replaces. So is
+  the fall-through — a null slot may hold arbitrary bytes, and falling back
+  rather than raising keeps that from becoming a false rejection. Both are
+  pinned by tests.
+
+  Measured through the Python API, rebuilding `libmarrow.so` per variant:
+  72.7 MB of pure ASCII **17.19 ms → 0.83 ms (x20.7)**, and ClickBench's 88.5 MB
+  `URL` column **16.01 ms → 6.14 ms (x2.6)**. End to end on `bench_clickbench.py`
+  with both builds run back to back, the 27 string-cast queries moved by a
+  median **-4.5%** while the 15 queries with no string cast — the drift control
+  — sat at +0.4%: **q21 346.5 → 328.7 ms (-5.1%)**, **q34 106.9 → 96.7 ms
+  (-9.5%)**, q28 -18.4%, q37 -13.3%, 41-query total 4 052 → 3 905 ms.
 
 - **`filter` no longer writes one element past its output buffer (F1).** This is
   the SIGSEGV behind ClickBench Q11, Q12 and Q24 — a bare `exit -11` with no
