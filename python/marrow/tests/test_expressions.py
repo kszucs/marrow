@@ -5,10 +5,12 @@ written) and that they *evaluate* (``Column.execute`` against a
 ``RecordBatch``). The plan layer is not involved.
 """
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 
 import marrow as ma
-from marrow import Aggregate, Column, col, if_else, lit
+from marrow import Aggregate, Column, col, count_star, if_else, lit
 
 
 @pytest.fixture
@@ -264,6 +266,95 @@ def test_cast_evaluates(batch):
     ]
 
 
+# ── null handling ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def nulls():
+    """One nullable integer column and one float column carrying NaN and inf."""
+    return ma.record_batch(
+        {
+            "n": ma.array([1, None, 3, None]),
+            "g": ma.array([1.0, float("nan"), float("inf"), None]),
+        }
+    )
+
+
+def _pa_column(batch, name):
+    """The same column, as PyArrow — for cross-checking a kernel's semantics."""
+    return pa.record_batch(batch).column(name)
+
+
+def test_is_null_and_is_valid_render():
+    assert col("a").is_null().render() == "is_null(a)"
+    assert col("a").is_valid().render() == "not_null(a)"
+    assert col("a").fill_null(lit(0)).render() == "fill_null(a, literal)"
+
+
+def test_is_null_evaluates(nulls):
+    got = col("n").is_null().execute(nulls).to_pylist()
+    assert got == [False, True, False, True]
+    assert got == pc.is_null(_pa_column(nulls, "n")).to_pylist()
+
+
+def test_is_valid_evaluates(nulls):
+    got = col("n").is_valid().execute(nulls).to_pylist()
+    assert got == [True, False, True, False]
+    assert got == pc.is_valid(_pa_column(nulls, "n")).to_pylist()
+
+
+def test_is_null_is_never_itself_null(nulls):
+    """A null predicate answers for every row, including the null ones."""
+    assert None not in col("n").is_null().execute(nulls).to_pylist()
+    assert None not in col("n").is_valid().execute(nulls).to_pylist()
+
+
+def test_is_nan_evaluates(nulls):
+    """NaN is not null and null is not NaN — the two predicates disagree, and
+    `is_nan` propagates the null rather than answering False."""
+    got = col("g").is_nan().execute(nulls).to_pylist()
+    assert got == [False, True, False, None]
+    assert got == pc.is_nan(_pa_column(nulls, "g")).to_pylist()
+
+
+def test_is_inf_evaluates(nulls):
+    got = col("g").is_inf().execute(nulls).to_pylist()
+    assert got == [False, False, True, None]
+    assert got == pc.is_inf(_pa_column(nulls, "g")).to_pylist()
+
+
+def test_fill_null_evaluates(nulls):
+    got = col("n").fill_null(0).execute(nulls).to_pylist()
+    assert got == [1, 0, 3, 0]
+    assert got == pc.fill_null(_pa_column(nulls, "n"), 0).to_pylist()
+
+
+def test_fill_null_takes_an_expression_not_only_a_scalar(nulls):
+    """The replacement is an expression, so it can be another column."""
+    assert col("n").fill_null(col("n") * 0 + 99).execute(nulls).to_pylist() == [
+        1,
+        None,
+        3,
+        None,
+    ]
+    # ...and a plain literal fills unconditionally, unlike a null-propagating one.
+    assert col("n").fill_null(lit(7)).execute(nulls).to_pylist() == [1, 7, 3, 7]
+
+
+def test_null_predicates_combine_with_the_boolean_operators(nulls):
+    """The runtime lane overrides `is_null`/`is_valid` so the result is another
+    `DynValue` — which is the whole point: it has to be combinable with an
+    ordinary comparison."""
+    both = col("n").is_valid() & (col("n") > 1)
+    assert both.execute(nulls).to_pylist() == [False, False, True, False]
+    assert (~col("n").is_null()).execute(nulls).to_pylist() == [
+        True,
+        False,
+        True,
+        False,
+    ]
+
+
 def test_execute_accepts_the_raw_binding(batch):
     """The plan layer hands raw bindings around; `execute` must accept one."""
     assert (col("a") + 1).execute(batch.unwrap()).to_pylist() == [2, 3, 4, 5]
@@ -301,6 +392,25 @@ def test_aggregate_input_is_a_column():
     agg = (col("a") + col("b")).sum()
     assert isinstance(agg.input(), Column)
     assert agg.input().render() == "add(a, b)"
+
+
+def test_count_star_is_an_aggregate_with_no_input_column():
+    """`COUNT(*)` counts rows, so it aggregates a constant rather than a column.
+
+    That is an implementation detail of the definition, but it is the *visible*
+    one: `input()` renders as a literal and `function()` is still `"count"`, so
+    a caller reading the plan sees `count(literal) as count_star`."""
+    agg = count_star()
+    assert isinstance(agg, Aggregate)
+    assert agg.name() == "count_star"
+    assert agg.function() == "count"
+    assert agg.input().render() == "literal"
+    assert agg.render() == "count(literal) as count_star"
+
+
+def test_count_star_alias_renames_the_output():
+    assert count_star(alias="n").name() == "n"
+    assert count_star().alias("rows").name() == "rows"
 
 
 def test_unknown_aggregate_is_accepted_until_the_plan_resolves_it():

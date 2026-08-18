@@ -28,7 +28,7 @@ Usage::
 from . import Array, RecordBatch, _Wrapper, array
 from . import libmarrow as _ma
 
-__all__ = ["Aggregate", "Column", "col", "if_else", "lit"]
+__all__ = ["Aggregate", "Column", "col", "count_star", "if_else", "lit"]
 
 
 def _expr(value):
@@ -312,8 +312,37 @@ class Column(_Wrapper):
         """Cast to `target_type`, a :class:`~marrow.DataType`."""
         return Column.wrap(self._binding.cast(target_type))
 
-    # TODO(alpha): is_null / is_valid / is_nan / fill_null land here once
-    # `DynValue` grows them; the binding has the matching TODO.
+    # ── null handling ───────────────────────────────────────────────────────
+
+    def is_null(self):
+        """True where this expression is null. Never null itself."""
+        return Column.wrap(self._binding.is_null())
+
+    def is_valid(self):
+        """True where this expression is *not* null — ``~is_null()``.
+
+        Spelled as PyArrow spells it. Polars calls it ``is_not_null``; that
+        name is not aliased here, because the Arrow spelling is the one the
+        rest of this package uses (``Array.is_valid``)."""
+        return Column.wrap(self._binding.is_valid())
+
+    def is_nan(self):
+        """True where this floating-point expression is NaN.
+
+        Null in, null out — a null is *not* a NaN, which is the difference from
+        :meth:`is_null`."""
+        return Column.wrap(self._binding.is_nan())
+
+    def is_inf(self):
+        """True where this floating-point expression is +/-infinity."""
+        return Column.wrap(self._binding.is_inf())
+
+    def fill_null(self, other):
+        """`other` wherever this is null, this expression elsewhere.
+
+        The same result as ``coalesce(other)`` for two operands; both are bound
+        because the Mojo lane has both and they carry different kernels."""
+        return Column.wrap(self._binding.fill_null(_expr(other)))
 
     # ── aggregation ─────────────────────────────────────────────────────────
 
@@ -394,6 +423,22 @@ def lit(value, type=None):
     if isinstance(value, Column):
         return value
     return Column.wrap(_ma.expr_literal(array([value], type)._binding))
+
+
+def count_star(*, alias=None):
+    """``COUNT(*)`` — how many rows, not how many non-null values.
+
+    A free function rather than a ``Column`` method, because it is the one
+    aggregate with no input column::
+
+        t.aggregate(by=["region"], n=marrow.count_star())
+
+    ``col("x").count()`` is the other thing SQL spells ``COUNT(x)``: it counts
+    the *valid* values of ``x``, so the two disagree on any nullable column.
+    Keyword aggregates rename the result to their keyword, exactly as they do
+    for ``col("x").sum()``, so ``alias`` is only needed positionally."""
+    agg = Aggregate.wrap(_ma.expr_count_star())
+    return agg.alias(alias) if alias is not None else agg
 
 
 def if_else(condition, if_true, if_false):

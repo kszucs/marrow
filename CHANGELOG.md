@@ -4,6 +4,32 @@
 
 ### Features
 
+- **The Python expression and plan surface closes the gap the binding agents
+  deferred: null handling, `COUNT(*)`, and `with_columns`/`drop`/`rename`.**
+  Three `# TODO(alpha)` markers pointed at methods that did not exist when the
+  bindings were written and do now.
+
+  - `Column.is_null()` / `.is_valid()` / `.is_nan()` / `.is_inf()` /
+    `.fill_null(other)` bind the runtime lane's own null predicates (not
+    `Value`'s fused defaults), so the result is another `Expr` and combines with
+    `&` / `|` / `~` like any other predicate. Cross-checked against
+    `pyarrow.compute`, null propagation included: `is_null` answers for every
+    row, `is_nan`/`is_inf` return null on a null input.
+  - `marrow.count_star()` exposes `expr.builders.count_star` as an `Aggregate`
+    with no input column — `t.aggregate(by=["k"], n=marrow.count_star())`. It is
+    a free function, not a `Column` method, because `COUNT(*)` counts rows while
+    `col("x").count()` counts non-null values; the two disagree on every
+    nullable column and ~30 of ClickBench's 43 queries want the former.
+  - `LazyTable.with_columns(**named)` (aliased `mutate`) is new to the Python
+    surface, and `LazyTable.drop`/`rename` now call the bound plan nodes instead
+    of rebuilding a full projection list in Python.
+- **`DynRelation.select(names: List[String])`** — a list overload beside the
+  variadic `select(*names: String)`, which a runtime frontend cannot splat into.
+  The Python `Plan.select` routed through `project` for want of it, and that is
+  a fidelity bug rather than a detour: `project` probes each expression's dtype
+  and builds a fresh `Field`, so selecting a non-nullable Parquet column widened
+  it to nullable and dropped its metadata. `select` copies the source field
+  whole.
 - **`DynRelation.with_columns` / `.drop` / `.rename` — the plan builder is
   usable on a wide table now.** `project(names, values)` replaces the whole
   output schema, so adding one derived column to a 105-column table meant

@@ -268,17 +268,40 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     # --- plan-building API ---
 
     def select(self, *names: String) raises -> DynRelation:
-        """Project columns by name, returning a new plan node."""
+        """Project columns by name, returning a new plan node.
+
+        The variadic spelling, for a call site that writes its columns out:
+        ``rel.select("x", "y")``. A caller holding the names in a list — every
+        frontend that builds a projection at runtime, the Python bindings
+        included — wants the `List[String]` overload below, because a Mojo
+        variadic cannot be splatted."""
+        var col_names = List[String]()
+        for i in range(len(names)):
+            col_names.append(names[i])
+        return self.select(col_names)
+
+    def select(self, names: List[String]) raises -> DynRelation:
+        """Project columns by name — the list spelling of the variadic above.
+
+        Both are pass-through projections and each surviving ``Field`` is
+        carried over **whole**: dtype, ``nullable`` and metadata. That is the
+        difference from ``project``, which probes each expression's dtype and
+        builds a fresh ``Field`` around it — correct for a computed column,
+        lossy for a pass-through, since a non-nullable input would come out
+        nullable.
+
+        Raises:
+            Error: if a name is not in the input schema.
+        """
         var schema = self.schema()
         var col_names = List[String]()
         var exprs = List[BoxedValue]()
         var fields = List[Field]()
-        for i in range(len(names)):
-            var name = names[i]
+        for ref name in names:
             var idx = schema.get_field_index(name)
             if idx == -1:
                 raise Error("select: column '" + name + "' not found")
-            col_names.append(name)
+            col_names.append(name.copy())
             exprs.append(col(schema.fields[idx].name.copy()))
             fields.append(schema.fields[idx].copy())
         return DynRelation(

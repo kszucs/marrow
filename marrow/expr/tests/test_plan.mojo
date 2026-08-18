@@ -12,7 +12,7 @@ only as ``downcast`` targets, which is the read-side API.
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import array
-from ...dtypes import field, int64, float64, Float64Type, Int64Type
+from ...dtypes import Field, field, int64, float64, Float64Type, Int64Type
 from ...parquet import LeafSet
 from ...schema import Schema, schema
 from ...tabular import RecordBatch, record_batch
@@ -164,6 +164,47 @@ def test_select_write_to() raises:
     `input(1)`; positional references were an interpreter artefact and the lane
     now resolves names at execution, like the fused one always has."""
     assert_equal(String(_scan().select("y")), "Project([y=y])")
+
+
+def test_select_list_preserves_field_nullable_and_metadata() raises:
+    """`select` carries each surviving `Field` over whole, both spellings.
+
+    A pass-through column *is* its input field, so `nullable` and metadata must
+    survive. `project` cannot promise this — it probes the expression's dtype
+    and builds a fresh `Field` around it, which widens a non-nullable column to
+    nullable and drops its metadata — and that is exactly why the Python
+    bindings needed the `List[String]` overload rather than routing `select`
+    through `project`."""
+    var meta = Dict[String, String]()
+    meta["unit"] = "usd"
+    var src = parquet_scan(
+        "t",
+        Schema(
+            fields=[
+                Field("x", int64, nullable=False, metadata=meta.copy()),
+                Field("y", float64),
+            ]
+        ),
+    )
+
+    # The list overload — what a runtime frontend calls.
+    var wanted: List[String] = ["x"]
+    var listed = src.select(wanted).schema()
+    assert_equal(len(listed), 1)
+    assert_equal(listed.fields[0].name, "x")
+    assert_equal(listed.fields[0].dtype, int64)
+    assert_false(listed.fields[0].nullable)
+    assert_equal(listed.fields[0].metadata["unit"], "usd")
+
+    # The variadic overload delegates to it, so it must agree field-for-field.
+    assert_true(src.select("x").schema().fields[0] == listed.fields[0])
+
+    # `project` of the same column is the lossy alternative this exists to
+    # avoid: right dtype, wrong nullability, no metadata.
+    var projected = src.project(names=["x"], values=[col("x")]).schema()
+    assert_equal(projected.fields[0].dtype, int64)
+    assert_true(projected.fields[0].nullable)
+    assert_equal(len(projected.fields[0].metadata), 0)
 
 
 # ---------------------------------------------------------------------------
