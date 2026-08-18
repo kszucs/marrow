@@ -30,17 +30,17 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - `FixedSizeBinaryArray` — fixed-width opaque byte blobs
 - `LargeBinaryArray`, `LargeStringArray`, `LargeListArray` — 64-bit offset variants
 - Temporal arrays: `Date32Array`, `Date64Array`, `Time32Array`, `Time64Array`, `TimestampArray`, `DurationArray`
-- `AnyArray` — type-erased immutable array container (O(1) copy via `ArcPointer`)
+- `DynArray` — type-erased immutable array container, an inline `Variant` dispatched with `isa[T]()` (O(1) copy — every buffer is refcounted)
 - `RecordBatch` — schema + column arrays, with slice, select, rename, add/remove/set column operations
 - `Table` — schema + chunked columns; `from_batches()`, `to_batches()`, `combine_chunks()`
 
 **Scalar types**
 - `PrimitiveScalar[T]`, `StringScalar`, `ListScalar`, `StructScalar` — typed scalars holding native values
-- `AnyScalar` — type-erased scalar backed by a length-1 `AnyArray`
+- `DynScalar` — type-erased scalar, an inline `Variant` over the typed scalars
 
 **Builders** — incrementally build immutable arrays
 - `PrimitiveBuilder[T]`, `StringBuilder`, `ListBuilder`, `FixedSizeListBuilder`, `StructBuilder`
-- `AnyBuilder` — type-erased builder using function-pointer vtable dispatch (O(1) copy via `ArcPointer`)
+- `DynBuilder` — type-erased builder, constructible from a runtime `DataType`; `finish()` returns a `DynArray` (O(1) copy via `ArcPointer`)
 
 **Compute kernels** (SIMD-vectorized, null-aware; names mirror `pyarrow.compute`)
 - Arithmetic: `add`, `subtract`, `multiply`, `divide`, `floordiv`, `mod`, `neg`, `abs_`, `min_element_wise`, `max_element_wise`
@@ -173,6 +173,76 @@ str(a)             # "Int64Array([1, 2, 3, NULL, 5])"
 structs.field(0)           # Int64Array — field "x"
 structs.field("y")         # Float64Array — field "y"
 ```
+
+## Lazy queries (Python)
+
+**New, and the reason this is an alpha.** Alongside the eager PyArrow-shaped
+API above, marrow has a lazy relational frontend: you build a query plan, and
+nothing executes until `collect()`.
+
+The two worlds are told apart by the entry point. Lazy is `memtable` /
+`read_parquet` (ibis spellings, which the frontend is modelled on); eager is
+`table` / `record_batch` (PyArrow spellings).
+
+```python
+import marrow as ma
+from marrow import col, lit
+
+t = ma.read_parquet("hits.parquet")     # lazy — reads footer metadata only
+t = ma.memtable(record_batch)           # lazy, over an in-memory batch
+
+top = (
+    t.filter(col("AdvEngineID") != lit(0))
+     .aggregate(by=["RegionID"], users=("count_distinct", "UserID"))
+     .order_by(("users", "descending"))
+     .head(10)
+)
+batch = top.collect()                   # now it runs
+```
+
+Every verb returns a new plan — the underlying description is immutable and
+copying it is a refcount bump, so a plan is a reusable template.
+
+```python
+t.select("a", "b")                      # project by name (keeps nullable + metadata)
+t.drop("a")  /  t.rename({"v": "value"})
+t.with_columns(total=col("qty") * col("price"))   # add/replace, keep the rest
+t.project(only=col("a") + lit(1))       # replace the projection entirely
+t.filter(col("url").cast(ma.string()).like("%google%"))
+t.aggregate(by=["k"], n=ma.count_star(), s=("sum", "v"))
+t.order_by(("c", "descending")).limit(10, offset=100)
+t.join(other, on="k", how="inner")
+t.collect()  /  t.to_pyarrow()
+```
+
+`aggregate` takes `sum`, `mean`, `min`, `max`, `product`, `count` and
+`count_distinct`; `ma.count_star()` is `COUNT(*)`, which differs from
+`("count", col)` on a nullable column. `HAVING` needs no special support —
+`t.aggregate(...).filter(...)` evaluates against the aggregate's output. Group
+keys may be arbitrary expressions, not just column names.
+
+Column expressions cover arithmetic and comparison operators, `&`/`|`/`~`,
+`abs`/`floor`/`ceil`/`round`/`sqrt`/`exp`/`ln`, `upper`/`lower`/`strip`/
+`length`/`startswith`/`endswith`/`contains`/`like`/`ilike`, the temporal
+extractors and `date_trunc`, plus `cast`, `isin`, `is_null`, `is_valid`,
+`fill_null`, `coalesce`, `nullif` and `if_else`.
+
+### Alpha status, honestly
+
+- **40 of the 43 [ClickBench](https://github.com/ClickHouse/ClickBench) queries**
+  run through this API against the 1M-row `hits` dataset, cross-checked against
+  DuckDB. Q29 needs `REGEXP_REPLACE`, which has no kernel; two more hit a
+  known segfault in grouped `COUNT(DISTINCT)`.
+- **String kernels require `string`, not `binary`.** Parquet `BYTE_ARRAY`
+  columns with no logical type arrive as `binary`, so `col("url").cast(ma.string())`
+  before `like`/`length`/`upper`. `BinaryType` is not a `StringLikeType`.
+- **`explain()` renders one node, not the tree** — `Relation` has no `inputs()`
+  yet, so there is no real EXPLAIN and no optimiser pass.
+- No window functions in this lane, no `distinct`/`union`, no statistical
+  aggregates, no regex, no decimal arithmetic.
+
+See `docs/alpha-clickbench-coverage.md` for the per-query table and
+`docs/alpha-findings/README.md` for the known structural issues.
 
 ## Mojo API
 
