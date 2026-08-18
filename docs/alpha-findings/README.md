@@ -55,23 +55,41 @@ intact and this does **not** leak into the comptime lane. The cost is confined
 to the runtime-lane targets (`query_dynvalue`/`query_runtime`, 3.4x the fused
 baseline), which are the interpreter by definition.
 
-`benchmarks/binary_size/check_gate.py` on the merged `alpha` — every gate
-*shrank*, and the runtime lane did not move at all:
+`benchmarks/binary_size/check_gate.py` on the merged `alpha` reports
+`OK: no gate grew more than 0.5%`, and four of five gates read as *shrinking*.
+**That reading is an artefact and it was reported here in error.** `check_gate.py`
+compares against the recorded `baseline.json`, **not** against the branch
+`alpha` forked from, and four of the five recorded values sit above the current
+tree on *both* branches — so the "shrink" measures distance from a stale
+high-water mark, not the cost of this work.
+
+Measured properly (G3, `__text`, `alpha` @ `557fc34` vs `mojo-1.0-upgrade` @
+`fb31b2d`, confirmed as the merge base), **every gate grew by roughly 16 KB**:
 
 ```
-gate                             baseline     measured      delta      pct
-query_streaming                 1,484,652    1,423,236    -61,416  -4.137%
-query_join                      1,507,836    1,454,504    -53,332  -3.537%
-query_streaming_agg_fused       1,417,476    1,371,312    -46,164  -3.257%
-query_streaming_agg             1,932,404    1,886,260    -46,144  -2.388%
-query_dynvalue                  4,871,156    4,871,156         +0  +0.000%
-OK: no gate grew more than 0.5%.
+gate                        base        alpha        delta        pct
+query_streaming          1,423,236    1,439,756    +16,520     +1.161%
+query_streaming_agg_fused 1,371,312   1,388,848    +17,536     +1.279%
+query_streaming_agg      1,886,260    1,903,988    +17,728     +0.940%
+query_join               1,454,504    1,464,616    +10,112     +0.695%
+query_dynvalue           4,871,156    4,887,476    +16,320     +0.335%
 ```
 
-So the whole alpha — six merged branches, the Python binding layer, three new
-plan verbs, five new null ops — cost **nothing** in the AOT lane and shrank four
-of five gates. This item is real and worth fixing on its own merits; it is
-**not** a release blocker, and nothing in the alpha made it worse.
+`query_dynvalue` is the one gate whose recorded baseline equals the base branch
+exactly, and it moved from ±0.000% to **+0.335%** — two thirds of the 0.5%
+budget on a single branch.
+
+**Attribution** (per-symbol `nm -n` diff, +16,544 attributed vs +16,520
+measured): **~15.3 KB is the C1 builder fix**, not the feature work.
+`DynBuilder::_dispatch_mut` +7,184, two new `BinaryLikeBuilder::extend(…,
+DynArray)` +4,800, and the typed `extend` going from two instantiations to a
+four-way `T`x`U` cross product, +3,312 net. The three new plan verbs and five
+null ops cost ~220 bytes between them; the F1 filter fix ~700 bytes.
+
+So the size cost is the price of fixing a process-killing abort, and the
+feature work is close to free. The lesson for this document is the method:
+**a gate that passes is not the same as no regression**, and only a
+branch-to-branch measurement answers the second question.
 
 ### 1.3 `AggExpr` is a two-variant sum type spelled as unenforced `Optional`s
 
