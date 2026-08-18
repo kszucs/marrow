@@ -36,17 +36,23 @@ every child column agreeing, which is how the hash table verifies key rows.
 
 import std.math as math
 
-from ..arrays import PrimitiveArray, DynArray, BoolArray, StructArray
+from ..arrays import (
+    PrimitiveArray,
+    BinaryLikeArray,
+    DynArray,
+    BoolArray,
+    StructArray,
+)
 from ..buffers import Buffer, Bitmap
 from ..views import apply
 from ..dtypes import (
     PrimitiveType,
     NumericType,
     FloatingType,
+    BinaryLikeType,
 )
 from .core import Kernel
 from .boolean import AndKernel
-from .string import StringEqKernel
 from ..execution import ExecContext, GPU_ENABLED
 
 
@@ -587,22 +593,81 @@ def equal_any(
 ) raises -> BoolArray:
     """Equality over any comparable dtype, picking the kernel family.
 
-    Numeric and string equality are separate kernels — SIMD over fixed-width
-    lanes versus an elementwise walk — and `NumericCompareKernel` deliberately
-    knows nothing about strings. Two callers nonetheless need equality as a
-    *primitive over an arbitrary dtype* rather than as an operator they are
-    interpreting: hash-join row verification, where a key row is an arbitrary
-    schema, and `nullif`, which is defined for any dtype with an equality. This
-    names that once instead of open-coding the same two-line branch at each.
+    Fixed-width and variable-width equality are separate kernels — SIMD over
+    fixed-width lanes versus an elementwise walk — and `NumericCompareKernel`
+    deliberately knows nothing about the latter. Two callers nonetheless need
+    equality as a *primitive over an arbitrary dtype* rather than as an operator
+    they are interpreting: hash-join row verification, where a key row is an
+    arbitrary schema, and `nullif`, which is defined for any dtype with an
+    equality. This names that once instead of open-coding the same two-line
+    branch at each.
+
+    The split is `binarylike` vs everything else, not `stringlike` vs
+    everything else: what decides the kernel is whether the payload is
+    variable-width, and `binary` is as variable-width as `string`.
 
     Not to be confused with the erased arm in `NumericCompare`, which answers a different
     question — which kernel the *user's* `==` meant — and lives in the
     expression layer for that reason.
     """
-    if left.dtype().is_string() or left.dtype().is_large_string():
-        return StringEqKernel.dispatch(left, right).as_bool().copy()
+    if left.dtype() != right.dtype():
+        # Checked before either arm, and before the downcast below: `leaf`
+        # resolves `T` from the *left* dtype and then reads `right` at that same
+        # `T`, so a mismatch here would be one more wrong `as_type` — the exact
+        # failure this function's binarylike arm was added to fix.
+        raise Error(
+            "equal: dtype mismatch, ", left.dtype(), " vs ", right.dtype()
+        )
+    elif left.dtype().is_binary_like():
+        # `is_binary_like`, not `is_string_like`. `binary` and `large_binary`
+        # are perfectly ordinary hash-join key columns, but they are *not*
+        # stringlike, so the old `is_string() or is_large_string()` test dropped
+        # them into the numeric arm and `dispatch_primitive` raised "dtype is
+        # not primitive" — joining on a `binary` key was impossible while the
+        # same join on `string` worked.
+        def leaf[T: BinaryLikeType](d: T) raises {imm} -> BoolArray:
+            return _bytes_equal(
+                left.as_binary_like[T](), right.as_binary_like[T]()
+            )
+
+        return left.dtype().dispatch_binarylike(leaf)
     else:
         return EqKernel.dispatch(left, right, ctx).as_bool().copy()
+
+
+def _bytes_equal[
+    T: BinaryLikeType
+](left: BinaryLikeArray[T], right: BinaryLikeArray[T]) raises -> BoolArray:
+    """Element-wise byte equality over a `binarylike` pair.
+
+    `StringEqKernel` computes exactly this for text, and its body is already
+    byte-level — but the whole `StringPredicateKernel` family is deliberately
+    bound on `StringLikeType`, because `LIKE`, `upper` and `startswith` *are*
+    text operations and their `is_string_like` guards exist to say so. Row
+    equality is not a text operation: `equal_any` has to compare whatever a key
+    column happens to hold. Widening the text family to reach `binary` would
+    have made `upper(binary)` type-check, so the byte-level bound lives here
+    instead, next to the one caller that needs it.
+
+    Null semantics match `StringPredicateKernel.apply`: null on either side
+    yields null out, and the data bit at a null position is left clear.
+    """
+    if len(left) != len(right):
+        raise Error("equal: length mismatch, ", len(left), " vs ", len(right))
+    var n = len(left)
+    var bm = Bitmap.intersect_views(left.validity(), right.validity())
+    var data = Bitmap.alloc_zeroed(n)
+    for i in range(n):
+        if left.is_valid(i) and right.is_valid(i):
+            if left.unsafe_get(UInt(i)) == right.unsafe_get(UInt(i)):
+                data.set(i)
+    return BoolArray(
+        length=n,
+        nulls=bm.value().unset_count() if bm else 0,
+        offset=0,
+        bitmap=bm,
+        buffer=data.to_immutable(),
+    )
 
 
 struct EqKernel(NumericCompareKernel):

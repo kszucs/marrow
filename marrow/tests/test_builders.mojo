@@ -15,6 +15,7 @@ from ..builders import (
     DynBuilder,
     BoolBuilder,
     PrimitiveBuilder,
+    BinaryLikeBuilder,
     StringBuilder,
     ListBuilder,
     FixedSizeListBuilder,
@@ -826,3 +827,88 @@ def test_any_builder_finish_dispatch_list() raises:
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
     assert_equal(len(arr.to_data().buffers[0]), 64)
+
+
+# ---------------------------------------------------------------------------
+# BinaryLikeBuilder.extend(DynArray) — dispatch on the source, not the builder
+#
+# The erased `extend` used to reconstruct the source array type from the
+# *builder's* offset width: `as_string()` for a 32-bit-offset builder,
+# `as_large_string()` otherwise. That names a `stringlike` type for a builder
+# whose family is `binarylike`, so feeding a `BinaryBuilder` a `binary` array
+# hit `DynArray.as_type` with the wrong variant member and aborted the process
+# — a release-build abort, since the `debug_assert` guarding it is compiled
+# out. These are the tightest tests for it; `concat` and the thread-local
+# group-by are the two callers that made it reachable.
+# ---------------------------------------------------------------------------
+
+
+def _extend_roundtrip[T: BinaryLikeType]() raises:
+    var src = BinaryLikeBuilder[T](3)
+    src.append("alpha")
+    src.append_null()
+    src.append("beta")
+    var arr: DynArray = src.finish()
+
+    var dst = BinaryLikeBuilder[T](3)
+    dst.append("zero")
+    dst.extend(arr)
+
+    var out = dst.finish()
+    assert_equal(out.length, 4)
+    assert_equal(out.null_count(), 1)
+    assert_equal(out[0].to_string(), "zero")
+    assert_equal(out[1].to_string(), "alpha")
+    assert_false(out.is_valid(2))
+    assert_equal(out[3].to_string(), "beta")
+
+
+def test_binary_builder_extend_from_dyn_binary() raises:
+    _extend_roundtrip[BinaryType]()
+
+
+def test_large_binary_builder_extend_from_dyn_large_binary() raises:
+    _extend_roundtrip[LargeBinaryType]()
+
+
+def test_string_builder_extend_from_dyn_string() raises:
+    _extend_roundtrip[StringType]()
+
+
+def test_large_string_builder_extend_from_dyn_large_string() raises:
+    _extend_roundtrip[LargeStringType]()
+
+
+def test_dyn_builder_extend_binary_matches_dtype() raises:
+    """A `DynBuilder` built from a runtime `binary` dtype must accept a `binary`
+    array and finish as `binary` — not silently become a string builder."""
+    var src = BinaryLikeBuilder[BinaryType](2)
+    src.append("ab")
+    src.append("cd")
+    var arr: DynArray = src.finish()
+
+    var dst = DynBuilder(binary, 2)
+    dst.extend(arr)
+    var out = dst.finish()
+    assert_true(out.dtype() == binary)
+    assert_equal(out.length(), 2)
+    ref typed = out.as_binary_like[BinaryType]()
+    assert_equal(typed[0].to_string(), "ab")
+    assert_equal(typed[1].to_string(), "cd")
+
+
+def test_binary_builder_extend_accepts_cross_offset_width() raises:
+    """The typed leaf accepts any `BinaryLikeType`, so the erased `extend` must
+    too: a `large_binary` source into a `binary` builder re-encodes offsets
+    rather than aborting."""
+    var src = BinaryLikeBuilder[LargeBinaryType](2)
+    src.append("wide")
+    src.append("er")
+    var arr: DynArray = src.finish()
+
+    var dst = BinaryLikeBuilder[BinaryType](2)
+    dst.extend(arr)
+    var out = dst.finish()
+    assert_equal(out.length, 2)
+    assert_equal(out[0].to_string(), "wide")
+    assert_equal(out[1].to_string(), "er")

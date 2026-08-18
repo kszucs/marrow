@@ -812,10 +812,35 @@ struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
                 self.append_null()
 
     def extend(mut self, arr: DynArray) raises:
-        comptime if Self.T.offset == DType.int32:
+        """Bulk-append an erased array, resolved to its own concrete type.
+
+        Resolved from the *source* dtype, across the whole `binarylike` family
+        the typed leaf below accepts — not by reconstructing the array type from
+        the *builder's* offset width. That shortcut (`as_string()` when
+        `Self.T.offset` was int32, `as_large_string()` otherwise) named a
+        `stringlike` type for a `binarylike` builder: feeding a `BinaryBuilder`
+        a `binary` array downcast the variant to `BinaryLikeArray[StringType]`
+        and aborted the process in `DynArray.as_type`. The offset width is the
+        builder's, and says nothing about whether the *source* holds text or
+        bytes.
+
+        An explicit ladder rather than `dispatch_binarylike`: capturing
+        `mut self` in the dispatch closure miscompiles for the builders (see
+        `ListLikeBuilder.extend`, where the same shape fails the pass manager
+        outright). `BinaryLikeType` is closed over exactly these four."""
+        var dt = arr.dtype()
+        if dt.is_string():
             self.extend(arr.as_string())
-        else:
+        elif dt.is_large_string():
             self.extend(arr.as_large_string())
+        elif dt.is_binary():
+            self.extend(arr.as_binary())
+        elif dt.is_large_binary():
+            self.extend(arr.as_large_binary())
+        else:
+            raise Error(
+                "BinaryLikeBuilder.extend: expected a binary-like, got ", dt
+            )
 
     def extend[U: BinaryLikeType](mut self, arr: BinaryLikeArray[U]) raises:
         """Bulk-append all elements from an existing BinaryLikeArray."""
@@ -1013,10 +1038,34 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
         self._length += 1
 
     def extend(mut self, arr: DynArray) raises:
-        comptime if Self.T.offset == DType.int32:
+        """Bulk-append an erased array, resolved to its own concrete type.
+
+        Resolved from the *source* dtype for the same reason
+        `BinaryLikeBuilder.extend` is: the builder's offset width does not
+        identify the source array. `MapType` is a 32-bit-offset `ListLikeType`
+        too, so picking `as_list()` off `Self.T.offset == int32` aborted on a
+        `map` source instead of reaching the typed leaf, which accepts any `U`.
+
+        Written as an explicit ladder rather than `dispatch_listlike`, unlike
+        its `binarylike` sibling. The closure form is what this module would
+        prefer, but capturing `mut self` here crashes the compiler backend —
+        `error: 'kgen.call' op callee argument #1 expected type ...` out of the
+        pass manager, because `ListLikeBuilder`'s child is a `DynBuilder`
+        (pointer + bool) and the generated thunk is typed for a bare pointer.
+        `mojo precompile` does not run codegen, so it reports this file clean;
+        only building a test driver surfaces it. `ListLikeType` is closed over
+        exactly these three, so the ladder is complete."""
+        var dt = arr.dtype()
+        if dt.is_list():
             self.extend(arr.as_list())
-        else:
+        elif dt.is_large_list():
             self.extend(arr.as_large_list())
+        elif dt.is_map():
+            self.extend(arr.as_map())
+        else:
+            raise Error(
+                "ListLikeBuilder.extend: expected a list-like, got ", dt
+            )
 
     def extend[U: ListLikeType](mut self, arr: ListLikeArray[U]) raises:
         """Bulk-append all elements from an existing ListLikeArray."""

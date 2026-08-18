@@ -19,6 +19,7 @@ from ...builders import (
     array,
     arange,
     PrimitiveBuilder,
+    BinaryLikeBuilder,
     StringBuilder,
     ListBuilder,
     FixedSizeListBuilder,
@@ -424,3 +425,81 @@ def test_combine_chunks_delegates() raises:
     assert_equal(result[2].value(), 30)
     assert_equal(result[3].value(), 40)
     assert_equal(result[4].value(), 50)
+
+
+# ---------------------------------------------------------------------------
+# concat — binary / large_binary
+#
+# `concat` is entirely `DynBuilder.extend`-driven, so it shared the abort that
+# surfaced through the thread-local group-by: `BinaryLikeBuilder`'s erased
+# `extend` resolved the *source* array type from the builder's offset width and
+# named a `stringlike` type for every 32-bit-offset builder. Nothing here had
+# binary coverage, which is how it shipped.
+# ---------------------------------------------------------------------------
+
+
+def _bytes_array[T: BinaryLikeType](values: List[String]) raises -> DynArray:
+    var b = BinaryLikeBuilder[T](len(values))
+    for v in values:
+        b.append(v)
+    var out: DynArray = b.finish()
+    return out^
+
+
+def _assert_bytes_concat[T: BinaryLikeType]() raises:
+    var arrs: List[DynArray] = [
+        _bytes_array[T](["a", "bb"]),
+        _bytes_array[T](["ccc"]),
+        _bytes_array[T](["", "dddd"]),
+    ]
+    var result = concat(arrs)
+    ref r = result.as_binary_like[T]()
+    assert_equal(r.length, 5)
+    assert_equal(r[0].to_string(), "a")
+    assert_equal(r[1].to_string(), "bb")
+    assert_equal(r[2].to_string(), "ccc")
+    assert_equal(r[3].to_string(), "")
+    assert_equal(r[4].to_string(), "dddd")
+    assert_true(result.dtype() == T().to_dyn())
+
+
+def test_concat_binary() raises:
+    _assert_bytes_concat[BinaryType]()
+
+
+def test_concat_large_binary() raises:
+    _assert_bytes_concat[LargeBinaryType]()
+
+
+def test_concat_binary_with_nulls() raises:
+    var a = BinaryLikeBuilder[BinaryType](2)
+    a.append("x")
+    a.append_null()
+    var b = BinaryLikeBuilder[BinaryType](2)
+    b.append_null()
+    b.append("y")
+    var arrs: List[DynArray] = [a.finish(), b.finish()]
+    var result = concat(arrs)
+    ref r = result.as_binary_like[BinaryType]()
+    assert_equal(r.length, 4)
+    assert_equal(r.null_count(), 2)
+    assert_equal(r[0].to_string(), "x")
+    assert_false(r.is_valid(1))
+    assert_false(r.is_valid(2))
+    assert_equal(r[3].to_string(), "y")
+
+
+def test_combine_chunks_binary() raises:
+    """`ChunkedArray.combine_chunks` routes through `concat`, so a binary
+    column in a `Table` aborted on combine too."""
+    var chunks: List[DynArray] = [
+        _bytes_array[BinaryType](["p", "q"]),
+        _bytes_array[BinaryType](["r"]),
+    ]
+    var ca = ChunkedArray(binary, chunks^)
+    var combined = ca^.combine_chunks()
+    ref r = combined.as_binary_like[BinaryType]()
+    assert_equal(r.length, 3)
+    assert_equal(r[0].to_string(), "p")
+    assert_equal(r[1].to_string(), "q")
+    assert_equal(r[2].to_string(), "r")
