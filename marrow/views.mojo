@@ -234,6 +234,7 @@ struct BufferView[
     # TODO: could be good idea to use std.sys.intrinsics.masked_load
     @always_inline
     def load[W: Int](self, index: Int) -> SIMD[Self.T, W]:
+        self._check_range(index, W)
         return self._data.unsafe_load[width=W](index)
 
     # TODO: could be good idea to use std.sys.intrinsics.masked_store
@@ -246,7 +247,18 @@ struct BufferView[
 
     @always_inline
     def gather[W: Int](self, offsets: SIMD[DType.int64, W]) -> SIMD[Self.T, W]:
-        """SIMD gather: load W elements at positions given by `offsets`."""
+        """SIMD gather: load W elements at positions given by `offsets`.
+
+        Every lane is an independent address, so one bad offset is a wild read
+        rather than a one-past overrun — worth the two SIMD compares that
+        `debug_assert` costs in a test build and nothing in a release one.
+        """
+        debug_assert(
+            Int(offsets.reduce_min()) >= 0
+            and Int(offsets.reduce_max()) < self._length,
+            "BufferView.gather offset out of bounds for length ",
+            self._length,
+        )
         return self._data.unsafe_gather[width=W, alignment=1](offsets)
 
     # --- Compressed store ---
@@ -257,6 +269,13 @@ struct BufferView[
     ](self, value: SIMD[Self.T, W], mask: SIMD[DType.bool, W],) where Self.mut:
         """Compress-store via LLVM intrinsic: write only mask=True lanes,
         packed sequentially from the start of this view."""
+        debug_assert(
+            Int(mask.cast[DType.uint8]().reduce_add()) <= self._length,
+            "BufferView.compressed_store writes ",
+            Int(mask.cast[DType.uint8]().reduce_add()),
+            " lanes into a view of length ",
+            self._length,
+        )
         _compressed_store(value, self._data.unsafe_mut_cast[True](), mask)
 
     @always_inline
@@ -269,6 +288,13 @@ struct BufferView[
 
         Best when few bits are set (low popcount).
         """
+        debug_assert(
+            Int(pop_count(sel_bits)) <= self._length,
+            "compressed_store_sparse writes ",
+            Int(pop_count(sel_bits)),
+            " elements into a view of length ",
+            self._length,
+        )
         var w = sel_bits
         var k = 0
         while w != 0:
@@ -296,6 +322,21 @@ struct BufferView[
         leave one element of slack; `compressed_store` below checks `len(self)`
         and picks the sparse path when they cannot.
         """
+        debug_assert(
+            self._length > Int(pop_count(sel_bits)),
+            (
+                "compressed_store_dense needs one element of slack past the"
+                " packed output: length "
+            ),
+            self._length,
+            " popcount ",
+            Int(pop_count(sel_bits)),
+        )
+        debug_assert(
+            len(src) >= 64,
+            "compressed_store_dense reads all 64 lanes; source has ",
+            len(src),
+        )
         var offset = 0
         comptime for i in range(8):
             var byte = (sel_bits >> UInt64(i * 8)) & 0xFF
@@ -635,11 +676,11 @@ struct BitmapView[
 
     @always_inline
     def _check_byte_range(self, byte_index: Int, byte_count: Int):
-        """Assert a raw byte access stays inside `_byte_extent`.
+        """Assert a raw byte **write** stays inside `_byte_extent`.
 
         Guards the byte-addressed accessors, which used to justify a wide
         unconditional load/store with "Arrow buffers are 64-byte padded". That
-        is false as an over-read licence: `Buffer._aligned_size` rounds the
+        is false as an overshoot licence: `Buffer._aligned_size` rounds the
         allocation up to a 64-byte multiple exactly as Arrow C++'s
         `RoundUpToMultipleOf64` does, so a bitmap whose byte length is already
         a multiple of 64 has **zero** slack past its last bit.
@@ -651,6 +692,41 @@ struct BitmapView[
             ", ",
             byte_index + byte_count,
             ") out of bounds for a view spanning ",
+            self._byte_extent(),
+            " bytes",
+        )
+
+    @always_inline
+    def _check_byte_read_range(self, byte_index: Int, byte_count: Int):
+        """Assert a raw byte **read** stays inside the backing allocation.
+
+        Looser than `_check_byte_range` on purpose. `load[W]` and `load_bits`
+        take a deliberately wide unconditional load — 4 and ``size_of[T]()``
+        bytes — so a read can legitimately run past the view's last live byte
+        into the allocation's padding, and every lane the caller consumes is
+        still inside the view. The bound that actually holds is the *allocation*
+        size, and for a marrow-owned buffer that is `align_up(bytes, 64)`.
+
+        Two things this deliberately does not paper over:
+
+        - A view whose byte extent is already a 64-byte multiple has **no**
+          padding, so a 512-bit bitmap still trips this — which is the case
+          worth catching.
+        - A FOREIGN buffer imported over the C Data Interface carries no
+          padding guarantee at all: the spec makes alignment "recommended, but
+          not required" and says nothing about padding. This bound is therefore
+          optimistic for imported data; see
+          docs/alpha-findings/g1-buffer-invariants.md.
+        """
+        debug_assert(
+            0 <= byte_index
+            and byte_index + byte_count
+            <= math.align_up(self._byte_extent(), 64),
+            "BitmapView byte read [",
+            byte_index,
+            ", ",
+            byte_index + byte_count,
+            ") runs past the padded extent of a view spanning ",
             self._byte_extent(),
             " bytes",
         )
@@ -798,8 +874,10 @@ struct BitmapView[
         SIMD bool vector — the bit-addressed counterpart of `store[W]`.
 
         Each lane j is True iff bit (index + j) is set. ``_offset`` is applied.
-        Loads a full UInt32 unconditionally — safe because Arrow buffers are
-        64-byte padded.
+        Loads a full UInt32 unconditionally, so it may read up to 3 bytes past
+        the view's last live byte; `_check_byte_range` pins that read to the
+        view, and every in-tree caller drives it from `vectorize`/`apply` over
+        a destination whose extent covers the source's.
 
         This is the default reader, and it mirrors `BufferView.load[W]`: both
         take a logical element index and return W elements. Reach for
@@ -808,6 +886,7 @@ struct BitmapView[
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
+        self._check_byte_read_range(byte_idx, size_of[UInt32]())
 
         var bits = (
             (self._data.unsafe_offset(byte_idx))
@@ -841,6 +920,7 @@ struct BitmapView[
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
+        self._check_byte_read_range(byte_idx, size_of[T]())
         var raw = (
             (self._data.unsafe_offset(byte_idx))
             .unsafe_bitcast[Scalar[T]]()
@@ -879,7 +959,7 @@ struct BitmapView[
         a time: `Scalar[DType.bool]` is a byte, so `[F, F, T]` is `0b100`, which
         answers `True` at element 0. Five fused bool lanes did exactly that and
         returned wrong rows (B29, fixed 2026-08-06)."""
-        self._check_byte_range(index * size_of[T](), W * size_of[T]())
+        self._check_byte_read_range(index * size_of[T](), W * size_of[T]())
         return self._data.unsafe_bitcast[Scalar[T]]().unsafe_load[
             width=W, alignment=1
         ](index)
@@ -915,6 +995,18 @@ struct BitmapView[
         ), "W must be divisible by 8 or less than 8"
 
         comptime if W % 8 == 0:
+            # The whole-byte path is byte-addressed and, unlike the sub-byte
+            # path below, does *not* apply `_offset` — see the audit note in
+            # docs/alpha-findings/g1-buffer-invariants.md.
+            debug_assert(
+                self._offset == 0,
+                (
+                    "BitmapView.store[W] with W % 8 == 0 ignores _offset; it"
+                    " needs an offset-0 destination, got "
+                ),
+                self._offset,
+            )
+            self._check_byte_range(bit_index >> 3, W // 8)
             var packed = _pack_bools(val).reduce_or()
             var dst = self._data.unsafe_mut_cast[True]().unsafe_offset(
                 (bit_index >> 3)
