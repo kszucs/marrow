@@ -155,6 +155,31 @@
 
 ### Fixes
 
+- **`filter` no longer writes one element past its output buffer (F1).** This is
+  the SIGSEGV behind ClickBench Q11, Q12 and Q24 — a bare `exit -11` with no
+  message, always reported from inside tcmalloc at some later, innocent
+  allocation.
+
+  `BufferView.compressed_store_dense` is branchless by design: it stores a lane
+  before it inspects that lane's selection bit, so an unselected lane writes a
+  value the next selected lane overwrites. Every lane *above* the highest set
+  bit has no next selected lane, so its write survives — at element index
+  `popcount(sel_bits)`, one past the packed output. `BufferView.filter` sizes
+  its destination to the pre-counted set-bit total, so on the last selection
+  word of a filter that element is outside the buffer, and
+  `Buffer._aligned_size` aligns to 64 bytes without padding beyond it — an
+  `int64` output of length divisible by 8 therefore has no slack at all and the
+  store lands in the neighbouring heap block, corrupting tcmalloc's freelist.
+
+  The adaptive `compressed_store` now takes the dense path only when the view is
+  longer than the popcount, which is false for exactly one word per `filter`
+  call. Over-allocating in `filter` instead was rejected: it would leave
+  `compressed_store_dense` a trap for the next caller.
+
+  Neither `COUNT(DISTINCT)`, the group-by, the aggregate layer nor Parquet page
+  skipping is involved, despite every crash report naming
+  `AggregateProcessor::pull`; see `docs/alpha-findings/f1-distinct-segfault.md`
+  for the bisection and the ruled-out list.
 - **Grouping, concatenating or joining on a `binary` key no longer aborts the
   process (C1).**
 
