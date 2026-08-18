@@ -14,7 +14,9 @@ from ..params import (
     ParamDecl,
     PathSpec,
     drain_params,
+    parse_params,
     register_param,
+    render_usage,
 )
 
 
@@ -139,4 +141,47 @@ def test_parquet_scan_accepts_a_param_path() raises:
     var decls = drain_params()
     decls[0].cell[].set(StringScalar(String("x.parquet")).to_dyn())
     assert_true(scan.path.resolve() == "x.parquet")
+
+
+def test_parse_params_binds_by_name() raises:
+    var decls = List[ParamDecl]()
+    decls.append(ParamDecl(name="min-a", dtype=DynType(int64)))
+    parse_params(["--min-a", "5"], decls)
+    assert_true(decls[0].cell[].get().as_int64().value() == 5)
+
+
+def test_parse_params_applies_defaults() raises:
+    var decls = List[ParamDecl]()
+    decls.append(
+        ParamDecl(
+            name="min-a",
+            dtype=DynType(int64),
+            default=Optional(Int64Scalar(9).to_dyn()),
+        )
+    )
+    parse_params(List[String](), decls)
+    assert_true(decls[0].cell[].get().as_int64().value() == 9)
+
+
+def test_parse_params_missing_required_raises() raises:
+    var decls = List[ParamDecl]()
+    decls.append(ParamDecl(name="src", dtype=DynType(string)))
+    with assert_raises():
+        parse_params(List[String](), decls)
+
+
+def test_parse_params_unknown_flag_raises() raises:
+    var decls = List[ParamDecl]()
+    with assert_raises():
+        parse_params(["--nope", "1"], decls)
+
+
+def test_render_usage_names_every_param() raises:
+    var decls = List[ParamDecl]()
+    decls.append(
+        ParamDecl(name="src", dtype=DynType(string), help=String("input"))
+    )
+    var usage = render_usage(decls)
+    assert_true("--src" in usage)
+    assert_true("input" in usage)
 

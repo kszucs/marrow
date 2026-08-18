@@ -10,6 +10,28 @@
 
 ### Features
 
+- **`DynRelation.execute_cli()` — argv binding, `--help`, `--describe`, and
+  the output contract for a compiled query binary.** The last call in a
+  `main()` that built a plan with `param(...)` cells: drains the parameter
+  registry, short-circuits to a rendered `--help`/`--describe` **before**
+  binding or executing (so a plan built with unbound cells never needs a
+  dummy value to satisfy them), then `params.parse_params()` binds every
+  cell from `--name value` pairs or applies its declared default (a named
+  error for a missing required parameter or an unrecognized flag), then
+  `execute(ctx)`, then writes the result: no `-o` pretty-prints to stdout
+  (unchanged from what `benchmarks/binary_size`'s gate programs already do),
+  `-o r.parquet` / `-o r.arrow` pick Parquet/IPC by extension, and
+  `--format parquet|ipc|table` overrides that. `parse_params` takes an
+  explicit `List[String]` rather than reading `argv` directly, so it is
+  tested without spawning a process; `execute_cli` is the only caller that
+  supplies the real `argv`. The two format writers
+  (`_write_parquet_output`/`_write_ipc_output` in `relations.mojo`) are each
+  one line calling into `marrow.parquet.write_table` /
+  `marrow.ipc.write_ipc_file`, kept separate from the dispatch that picks
+  between them so gating either behind a comptime flag later (if the
+  binary-size gate says linking them is expensive) touches only that one
+  function.
+
 - **`ParquetScan.path` accepts a late-bound `PathSpec`, not just a literal
   `String`.** `ParquetScan(path=param("src", string), ...)` now works: `PathSpec`
   gained a `StringParam[T]` constructor overload (`@implicit`, so the plan

@@ -39,6 +39,10 @@ rewrites; both lower to ``Project``, as ``with_columns`` does.
 (``.sort(...).limit(k)`` folds into the sort kernel's top-K path).
 ``DynRelation.join(right, left_on, right_on)``   — hash join.
 ``DynRelation.execute()``                        — drain to a single RecordBatch.
+``DynRelation.execute_cli()``                    — bind this plan's ``param()``
+declarations from ``argv``, execute, and write the result; the last call in a
+compiled query binary's ``main()``. ``--help`` / ``--describe`` short-circuit
+before execution.
 
 ``project`` and ``aggregate`` each have two overloads, one per expression lane:
 one taking runtime ``DynValue``s (names resolved against the input schema
@@ -57,16 +61,25 @@ from ..arrays import DynArray
 from std.builtin.rebind import rebind
 from .dynamic import DynValue
 from .values import AggExpr, BoxedValue
-from .params import PathSpec
+from .params import (
+    PathSpec,
+    drain_params,
+    parse_params,
+    render_describe,
+    render_usage,
+)
 from std.memory import ArcPointer
+from std.sys import argv
 
 from ..dtypes import Field
 from ..schema import Schema
-from ..tabular import RecordBatch
+from ..tabular import RecordBatch, Table
 from .builders import col
 from ..execution import ExecContext
 from .aggregates import AggFunc
 from ..parquet import LeafSet
+from ..parquet import write_table as _write_parquet_table
+from ..ipc import write_ipc_file as _write_ipc_file
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     DynProcessor,
@@ -223,6 +236,63 @@ def _referenced_by(values: List[BoxedValue]) -> List[String]:
     for ref v in values:
         _add_names(acc, v.referenced_columns())
     return acc^
+
+
+# ---------------------------------------------------------------------------
+# execute_cli() output writers
+#
+# Each format gets its own tiny function so that gating the Parquet/IPC
+# writers behind a comptime flag later — if the binary-size gate (Task 7,
+# spec open question 2) says linking them is expensive — is a one-line
+# `comptime if` added to exactly these two bodies, not a rewrite of
+# `execute_cli` or of the dispatch that picks between them.
+# ---------------------------------------------------------------------------
+
+
+def _write_parquet_output(batch: RecordBatch, path: String) raises:
+    _write_parquet_table(
+        Table.from_batches(batch.schema, [batch.copy()]), path
+    )
+
+
+def _write_ipc_output(batch: RecordBatch, path: String) raises:
+    _write_ipc_file(path, [batch.copy()])
+
+
+def _write_cli_output(
+    result: RecordBatch,
+    out_path: Optional[String],
+    format: Optional[String],
+) raises:
+    """The output half of `execute_cli`'s contract.
+
+    No `-o` pretty-prints to stdout — the same thing
+    `benchmarks/binary_size`'s gate programs do today with a bare
+    `print(...execute())`. `-o r.parquet` / `-o r.arrow` pick the writer by
+    extension; `--format parquet|ipc|table` overrides that."""
+    if not out_path:
+        print(result)
+        return
+
+    var path = out_path.value()
+    var fmt: String
+    if format:
+        fmt = format.value()
+    elif path.endswith(".parquet"):
+        fmt = String("parquet")
+    elif path.endswith(".arrow"):
+        fmt = String("ipc")
+    else:
+        fmt = String("table")
+
+    if fmt == "parquet":
+        _write_parquet_output(result, path)
+    elif fmt == "ipc":
+        _write_ipc_output(result, path)
+    elif fmt == "table":
+        print(result)
+    else:
+        raise Error("execute_cli: unknown --format '" + fmt + "'")
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +478,67 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         be executed repeatedly and concurrently."""
         var op = self.optimize().to_processor(ctx)
         return op.collect()
+
+    def execute_cli(self, ctx: ExecContext = ExecContext.auto()) raises:
+        """The last call in a compiled query binary's `main()`: bind this
+        plan's `param()` declarations from `argv`, execute, and write the
+        result.
+
+        Order is the whole design (see `params.mojo`'s module docstring for
+        the registry this drains):
+
+        1. **Drain the registry** — every `param(...)` call this plan's
+           construction made is now a `ParamDecl` here, not still sitting in
+           the module-level registry for some later, unrelated plan to pick
+           up.
+        2. **`--help` / `--describe` short-circuit before anything else
+           runs**, including before parameters are bound — this is what
+           removes any need for dummy values: the plan was built with
+           unbound cells, and a `--help` run simply never reaches
+           `execute()`.
+        3. `parse_params` binds every cell from the remaining flags (or
+           applies its declared default), raising a named error for a
+           missing required parameter or an unrecognized flag.
+        4. `execute(ctx)`.
+        5. Write the result — see `_write_cli_output`.
+        """
+        var decls = drain_params()
+
+        var raw = argv()
+        var args = List[String]()
+        for i in range(1, len(raw)):
+            args.append(String(raw[i]))
+
+        for ref a in args:
+            if a == "--help":
+                print(render_usage(decls))
+                return
+            if a == "--describe":
+                print(render_describe(decls))
+                return
+
+        var out_path = Optional[String](None)
+        var format_override = Optional[String](None)
+        var param_args = List[String]()
+        var i = 0
+        while i < len(args):
+            if args[i] == "-o":
+                if i + 1 >= len(args):
+                    raise Error("execute_cli: '-o' requires a value")
+                out_path = Optional(args[i + 1].copy())
+                i += 2
+            elif args[i] == "--format":
+                if i + 1 >= len(args):
+                    raise Error("execute_cli: '--format' requires a value")
+                format_override = Optional(args[i + 1].copy())
+                i += 2
+            else:
+                param_args.append(args[i].copy())
+                i += 1
+
+        parse_params(param_args, decls)
+        var result = self.execute(ctx)
+        _write_cli_output(result, out_path, format_override)
 
     # --- plan-building API ---
 

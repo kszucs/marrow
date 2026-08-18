@@ -48,8 +48,8 @@ from std.utils import Variant
 from std.memory import ArcPointer
 from std.ffi import _Global
 
-from ..dtypes import DynType, StringLikeType
-from ..scalars import DynScalar
+from ..dtypes import DynType, FloatingType, IntegerType, StringLikeType
+from ..scalars import BoolScalar, DynScalar, PrimitiveScalar, StringScalar
 from .values import StringParam
 
 # ---------------------------------------------------------------------------
@@ -272,3 +272,142 @@ struct PathSpec(Copyable, Movable):
             return String(
                 "param(", self._v[ArcPointer[ParamCell]][].name_hint(), ")"
             )
+
+
+# ---------------------------------------------------------------------------
+# argv binding — parse_params, render_usage, render_describe
+# ---------------------------------------------------------------------------
+
+
+def _parse_scalar(name: String, dtype: DynType, raw: String) raises -> DynScalar:
+    """Convert one CLI token into a `DynScalar` of `dtype`, for the parameter
+    named `name` (folded into the error message on an unsupported dtype).
+
+    Covers exactly the families a CLI token can spell unambiguously: bool,
+    every integer/float width (via `atol`/`atof`, both raising on a malformed
+    token) and every string-like type. Temporal, decimal and nested dtypes
+    have no textual literal here and are rejected by name rather than
+    silently misparsed."""
+    if dtype.is_bool():
+        return BoolScalar(raw == "true" or raw == "1").to_dyn()
+    if dtype.is_string_like():
+        return StringScalar(raw).to_dyn()
+    if dtype.is_integer():
+
+        def parse_int[T: IntegerType](d: T) raises {imm} -> DynScalar:
+            return PrimitiveScalar[T](Scalar[T.native](atol(raw))).to_dyn()
+
+        return dtype.dispatch_integer(parse_int)
+    if dtype.is_floating_point():
+
+        def parse_float[T: FloatingType](d: T) raises {imm} -> DynScalar:
+            return PrimitiveScalar[T](Scalar[T.native](atof(raw))).to_dyn()
+
+        return dtype.dispatch_floating(parse_float)
+    raise Error(
+        "parse_params: '--"
+        + name
+        + "' has an unsupported parameter dtype "
+        + String(dtype)
+    )
+
+
+def parse_params(args: List[String], decls: List[ParamDecl]) raises:
+    """Bind each declaration's cell from `--name value` pairs in `args`.
+
+    Every `--name` in `args` must match a declared parameter and is followed
+    by its value; a declaration `args` never mentions falls back to its
+    default. Raises a named error — naming the parameter, not just "missing
+    argument" — for a still-unbound required parameter, and a named error for
+    a `--flag` that matches no declaration. Does not touch `--help` /
+    `--describe`; `execute_cli` intercepts those before this ever runs."""
+    var by_name = Dict[String, Int]()
+    for i in range(len(decls)):
+        by_name[decls[i].name.copy()] = i
+
+    var bound = List[Bool](capacity=len(decls))
+    for _ in range(len(decls)):
+        bound.append(False)
+
+    var i = 0
+    while i < len(args):
+        var flag = args[i]
+        if not flag.startswith("--"):
+            raise Error(
+                "parse_params: expected a '--name' flag, got '" + flag + "'"
+            )
+        var name = String(flag.removeprefix("--"))
+        var found = by_name.get(name)
+        if not found:
+            raise Error("parse_params: unknown parameter '--" + name + "'")
+        if i + 1 >= len(args):
+            raise Error("parse_params: '--" + name + "' requires a value")
+        var idx = found.value()
+        decls[idx].cell[].set(
+            _parse_scalar(decls[idx].name, decls[idx].dtype, args[i + 1])
+        )
+        bound[idx] = True
+        i += 2
+
+    for j in range(len(decls)):
+        if not bound[j]:
+            if decls[j].default:
+                decls[j].cell[].set(decls[j].default.value().copy())
+            else:
+                raise Error(
+                    "parse_params: missing required parameter '--"
+                    + decls[j].name
+                    + "'"
+                )
+
+
+def render_usage(decls: List[ParamDecl]) -> String:
+    """Human-readable `--help` text: one line per declared parameter, its
+    dtype, whether it is required or its default, and its help text."""
+    var out = String("Parameters:\n")
+    for ref decl in decls:
+        out += "  --" + decl.name + " <" + String(decl.dtype) + ">"
+        if decl.is_required():
+            out += " (required)"
+        else:
+            out += " (default: " + String(decl.default.value().copy()) + ")"
+        if decl.help.byte_length() > 0:
+            out += "  " + decl.help
+        out += "\n"
+    return out^
+
+
+def _json_escape(s: String) -> String:
+    var out = String()
+    for cp in s.codepoint_slices():
+        var c = String(cp)
+        if c == '"' or c == "\\":
+            out += "\\"
+        out += c
+    return out^
+
+
+def render_describe(decls: List[ParamDecl]) -> String:
+    """`--describe` text: the same declarations `render_usage` renders, as a
+    JSON array — one object per parameter with `name`, `dtype`, `help`,
+    `required` and (when declared) `default`."""
+    var out = String("[\n")
+    for i in range(len(decls)):
+        ref decl = decls[i]
+        out += '  {"name": "' + _json_escape(decl.name) + '"'
+        out += ', "dtype": "' + _json_escape(String(decl.dtype)) + '"'
+        out += ', "help": "' + _json_escape(decl.help) + '"'
+        out += (
+            ', "required": true' if decl.is_required() else ', "required":'
+            " false"
+        )
+        if decl.default:
+            out += (
+                ', "default": "'
+                + _json_escape(String(decl.default.value().copy()))
+                + '"'
+            )
+        out += "}" + ("," if i < len(decls) - 1 else "")
+        out += "\n"
+    out += "]"
+    return out^
