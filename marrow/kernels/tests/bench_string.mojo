@@ -11,7 +11,13 @@ from std.benchmark import BenchMetric, keep
 
 from ...arrays import StringArray
 from ...builders import StringBuilder
-from ...kernels.string import LikeKernel, ILikeKernel
+from ...kernels.string import (
+    ContainsKernel,
+    ILikeKernel,
+    LengthKernel,
+    LikeKernel,
+    UpperKernel,
+)
 from ...utils.testing import Benchmark
 
 
@@ -152,3 +158,96 @@ def bench_ilike_array_100k(mut b: Benchmark) raises:
     b.iter(call)
     keep(data)
     keep(pattern)
+
+
+# ---------------------------------------------------------------------------
+# ClickBench q21 shape at scale: `URL LIKE '%google%'` over 1M rows, in a
+# matching-dense and a matching-sparse variant.
+#
+# The pair separates a compare-bound implementation from an allocation-bound
+# one: both scan every row, but the dense case makes ~every row a hit and the
+# sparse case ~none, so any per-hit or per-output allocation shows up as a gap
+# between the two.  `_urls` is ~25% hits, sitting between them.
+# ---------------------------------------------------------------------------
+
+
+def _bench_like_dense(mut b: Benchmark, n: Int) raises:
+    """`%http%` — every row matches (the substring is the scheme prefix)."""
+    var data = _urls(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(LikeKernel.apply(data, "%http%")))
+
+    b.iter(call)
+    keep(data)
+
+
+def bench_like_dense_1m(mut b: Benchmark) raises:
+    _bench_like_dense(b, 1_000_000)
+
+
+def _bench_like_sparse(mut b: Benchmark, n: Int) raises:
+    """`%zqxjv%` — no row matches, so the full length of every row is scanned."""
+    var data = _urls(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(LikeKernel.apply(data, "%zqxjv%")))
+
+    b.iter(call)
+    keep(data)
+
+
+def bench_like_sparse_1m(mut b: Benchmark) raises:
+    _bench_like_sparse(b, 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# Neighbouring kernels over the same data.
+#
+# `contains` is the same scan under a different entry point (it should track
+# `like_scalar`); `length` is offset arithmetic only and touches no character
+# data at all, so it is the drift control -- nothing done to the matching path
+# can move it.
+# ---------------------------------------------------------------------------
+
+
+def bench_contains_1m(mut b: Benchmark) raises:
+    var data = _urls(1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(ContainsKernel.apply_scalar(data, "google")))
+
+    b.iter(call)
+    keep(data)
+
+
+def bench_length_1m(mut b: Benchmark) raises:
+    var data = _urls(1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(LengthKernel.apply(data)))
+
+    b.iter(call)
+    keep(data)
+
+
+def bench_upper_100k(mut b: Benchmark) raises:
+    """A string -> string map: builds a whole new `StringArray`, so it is the
+    allocation-heavy control next to the predicates' single bitmap."""
+    var data = _urls(100_000)
+    b.throughput(BenchMetric.elements, 100_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(UpperKernel.apply(data)))
+
+    b.iter(call)
+    keep(data)
