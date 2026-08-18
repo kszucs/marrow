@@ -189,7 +189,7 @@ def bench_like_dense_1m(mut b: Benchmark) raises:
 
 
 def _bench_like_sparse(mut b: Benchmark, n: Int) raises:
-    """`%zqxjv%` — no row matches, so the full length of every row is scanned."""
+    """`%zqxjv%` — no row matches, so every row is scanned in full."""
     var data = _urls(n)
     b.throughput(BenchMetric.elements, n)
 
@@ -265,7 +265,9 @@ def bench_upper_100k(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_like_array_pattern(mut b: Benchmark, pattern: String, n: Int) raises:
+def _bench_like_array_pattern(
+    mut b: Benchmark, pattern: String, n: Int
+) raises:
     var data = _urls(n)
     var pat = _broadcast(pattern, n)
     b.throughput(BenchMetric.elements, n)
