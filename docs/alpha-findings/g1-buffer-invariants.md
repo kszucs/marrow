@@ -155,7 +155,8 @@ without it, so the expectation was no movement. Measured `__text` against
 | `query_streaming_agg` | 1,932,404 | 1,903,988 | −28,416 | **−1.47%** |
 | `query_dynvalue` | 4,871,156 | 4,891,764 | +20,608 | +0.42% |
 
-Four gates shrank and the fifth is inside the threshold. The baseline was reset
+`benchmarks/binary_size/check_gate.py` on the final tree: **`OK: no gate grew
+more than 0.5%.`** Four gates shrank and the fifth is inside the threshold. The baseline was reset
 at `0e552a7`, and `alpha` has moved since (F1's fix among others), so these
 deltas are not attributable to this change alone — the point is that the gate
 passes and nothing here grew it.
