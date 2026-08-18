@@ -80,6 +80,22 @@ struct Exhausted(TrivialRegisterPassable, Writable):
         writer.write("Exhausted")
 
 
+def _is_exhausted(e: Error) -> Bool:
+    """Whether `e` is the end-of-stream signal rather than a real failure.
+
+    **Mojo's `except` does not match on type.** `except Exhausted:` catches
+    every error, so the drain loops below used to treat a kernel raising
+    mid-morsel as "no more data" and return a silently truncated result: a
+    `filter` whose predicate raised `is_in: dtype mismatch` collected 0 rows
+    and reported success. Errors are matched on the message `Exhausted`
+    writes, which is the only discriminator the language gives us here.
+
+    Returning an `Optional[RecordBatch]` from `pull()` would remove the need
+    for a sentinel at all, and is the right shape; it changes the `Processor`
+    trait and every implementation, so it is not an alpha-week change."""
+    return String(e) == "Exhausted"
+
+
 # ---------------------------------------------------------------------------
 # Processor trait + DynProcessor
 # ---------------------------------------------------------------------------
@@ -148,7 +164,9 @@ struct DynProcessor(Movable):
         while True:
             try:
                 batches.append(self.pull())
-            except Exhausted:
+            except e:
+                if not _is_exhausted(e):
+                    raise e
                 break
         if len(batches) == 0:
             return RecordBatch(schema=self.schema(), columns=List[DynArray]())
@@ -795,7 +813,9 @@ struct AggregateProcessor(Processor):
                     gid_chunks.append(self._grouper.consume_keys(key_struct))
                 for i in range(len(self.inputs)):
                     value_chunks[i].append(self.inputs[i].execute(batch))
-            except Exhausted:
+            except e:
+                if not _is_exhausted(e):
+                    raise e
                 break
 
         if morsels == 0:
@@ -945,6 +965,8 @@ struct JoinProcessor(Processor):
             return RecordBatch(
                 schema=self._schema.copy(), columns=result.children.copy()
             )
-        except Exhausted:
+        except e:
+            if not _is_exhausted(e):
+                raise e
             self._exhausted = True
         raise Exhausted()

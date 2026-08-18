@@ -326,3 +326,24 @@ def test_getitem_without_expressions_explains_itself(lazy):
         pytest.skip("expression bindings are present")
     with pytest.raises(RuntimeError, match="_expr_column"):
         lazy["v"]
+
+
+def test_execution_errors_propagate_instead_of_truncating(lazy):
+    """A kernel raising mid-drain must surface, not read as end-of-stream.
+
+    `Processor.pull()` signals exhaustion by raising `Exhausted`, and the drain
+    loops caught it with `except Exhausted:`. Mojo's `except` does **not** match
+    on type, so that caught *every* error: a predicate that raised was
+    indistinguishable from "no more morsels", and `collect()` returned the
+    batches accumulated so far and reported success. Here the predicate raises
+    `is_in: dtype mismatch` on every morsel, so the old behaviour was a
+    confident, empty, wrong answer.
+    """
+    import marrow as ma
+
+    # int64 value set against an int16 column. `is_in` is decided on the 64-bit
+    # hash, so mismatched widths can never match -- the kernel is right to raise.
+    narrow = ma.array(pa.array([1, 2], type=pa.int8()))
+    predicate = lazy["v"].isin(narrow)
+    with pytest.raises(Exception, match="dtype mismatch"):
+        lazy.filter(predicate).collect()
