@@ -196,12 +196,12 @@ def report(medians, errors, engines, out=None):
         file=out,
     )
     print(
-        "\nmarrow's floor is the scan, not the kernels: `ParquetScan`'s schema is\n"
-        "its projection and nothing narrows it, so every lazy query reads all 105\n"
-        "columns. Eager `read_table(columns=['UserID'])` is 1.4 ms; eager\n"
-        "`read_table()` is 212.8 ms; the lazy one-column aggregate is 254.5 ms.\n"
-        "There is no projection pushdown. The ratio column therefore shrinks as\n"
-        "the real work grows — Q34 (group by URL) is the honest end of the range.",
+        "\nProjection pushdown narrows `ParquetScan`'s schema to the columns the\n"
+        "plan actually reads, so the flat ~270 ms floor (every query decoding all\n"
+        "105 columns, `COUNT(*)` included) is gone: the 41-query total went from\n"
+        "13 914 ms to 3 870 ms, 17.7x polars to 5.0x, with polars and duckdb\n"
+        "steady to within 1.5%. What is left is real work — Q24 is `SELECT *` and\n"
+        "must read every column, and Q30's 90 fused sums are compute-bound.",
         file=out,
     )
 

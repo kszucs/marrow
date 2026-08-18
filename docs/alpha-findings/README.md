@@ -15,6 +15,7 @@ The individual logs are the primary sources and carry the file:line detail:
 | [`d1-binding-delta.md`](d1-binding-delta.md) | binding the methods the first two deferred |
 | [`e1-clickbench.md`](e1-clickbench.md) | writing 43 real queries as the first user |
 | [`h1-clickbench-consolidation.md`](h1-clickbench-consolidation.md) | folding the five ClickBench files into one registry, and timing marrow against polars and duckdb |
+| [`p1-pushdown.md`](p1-pushdown.md) | closing H1's headline gap: projection pushdown into `ParquetScan`, and the plan traversal it needed (§2 below) |
 
 **Evidence tiers used below.** *Measured* — someone ran an experiment and has a
 number. *Reproduced* — someone triggered the defect from a test. *Argued* — a
@@ -142,6 +143,27 @@ one shallow label. D1 found and fixed a second-order version of this — `str()`
 a bound type silently returned the derived `repr` because `def_method` fills
 `tp_dict`, not the CPython `tp_str` slot, and **every existing assertion was a
 substring test, so nothing caught it**.
+
+> **Resolved for traversal and for one rewrite — see
+> [`p1-pushdown.md`](p1-pushdown.md).** `Relation.children()` makes a plan
+> walkable (it is `children()`, not `inputs()`, because `Aggregate.inputs`
+> already names the aggregate value expressions). The measured detail this
+> section could not have known: a trampoline **field** whose function type
+> mentions `DynRelation` is what Mojo rejects as recursive — a field returning
+> `List[DynRelation]` is fine, so read-only traversal costs one trampoline.
+>
+> The rewrite half is `with_projection`, which reuses `with_predicate`'s
+> erased-pointer protocol rather than adding the third mechanism this section
+> warns about. That was the deliberate call: `inputs()` alone cannot rewrite,
+> because erasure means a generic optimiser cannot rebuild a node whose type it
+> does not know, so the `inputs()`-driven design needs `inputs()` +
+> `with_inputs()` + a per-child `required_columns()` — three virtuals of which
+> the third *is* the rewrite. Cost at the size gate: +1 KB to +6.3 KB per gate,
+> at most +0.44%.
+>
+> Still open from this section: no node's `write_to` renders its children, so
+> `explain()` is still one shallow label. `children()` is the primitive that
+> makes a recursive renderer writable.
 
 ---
 

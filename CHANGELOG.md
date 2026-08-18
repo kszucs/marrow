@@ -15,6 +15,12 @@
   `execute()` calls it, so every plan built through the verbs and every query
   through the Python `LazyTable` gets it.
 
+  Measured on ClickBench `hits_0.parquet` (1M x 105), 5 interleaved repeats,
+  medians: the 41-query total went from **13 913 ms to 3 870 ms** and from
+  **17.7x polars to 5.0x**, with polars and duckdb steady to within 1.5% across
+  the two runs. `COUNT(*)` went 271 ms -> 9.9 ms; `GROUP BY URL` 317 ms ->
+  104 ms, which is 1.5x polars. `SELECT *` is unchanged, as it must be.
+
   The rewrite never changes a plan's output schema or its rows: the root seeds
   the column set with its own columns, so a node can only ever narrow to a
   subset its parent asked for, and a plan that emits everything still reads
