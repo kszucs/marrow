@@ -349,6 +349,26 @@
 
 ### Tests
 
+- **`benchmarks/binary_size/query_param.mojo` gates what a late-bound
+  parameter costs**, and the writer-gating decision it forced. Against
+  `query_scan_typed` (identical query, literal-bound scan and predicate,
+  `print(...execute())`), `query_param` — `param("src", string)` for the scan
+  path, `param("min-a", int64)` in the predicate, `plan.execute_cli()` for the
+  tail — first measured **+768,988 bytes** of `__text`, almost all of it the
+  Parquet writer, the IPC writer, and their codec layer, linked in
+  unconditionally by `_write_parquet_output`/`_write_ipc_output` even though
+  neither gate program calls either format. Both are now gated behind
+  `comptime CLI_WRITERS_ENABLED = get_defined_bool["MARROW_CLI_WRITERS",
+  False]()` in `marrow/expr/relations.mojo` — off by default, the same
+  posture as `GPU_ENABLED`: `-o out.parquet`/`-o out.arrow` raise unless the
+  binary is built with `-D MARROW_CLI_WRITERS=true`, `--format table`/stdout
+  is unaffected. Re-measured with the flag off: **+196,700 bytes**, all of it
+  `execute_cli`'s own argv/`--help`/`--describe`/`parse_params` machinery and
+  a second `DynArray`/`DynScalar` dispatch-ladder instantiation from
+  `_write_cli_output`'s `print(result)` being a different call site than
+  `query_scan_typed`'s inline `print(...execute())` — not writer linkage, and
+  out of scope for this task. See `benchmarks/binary_size/README.md` for the
+  full breakdown.
 - **The five ClickBench files are one query registry with three consumers.**
   `python/marrow/tests/clickbench.py` now holds all 43 canonical queries exactly
   once, each carrying its SQL (the docstring, which is also the DuckDB text

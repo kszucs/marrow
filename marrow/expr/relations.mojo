@@ -69,7 +69,7 @@ from .params import (
     render_usage,
 )
 from std.memory import ArcPointer
-from std.sys import argv
+from std.sys import argv, get_defined_bool
 
 from ..dtypes import Field
 from ..schema import Schema
@@ -242,21 +242,45 @@ def _referenced_by(values: List[BoxedValue]) -> List[String]:
 # execute_cli() output writers
 #
 # Each format gets its own tiny function so that gating the Parquet/IPC
-# writers behind a comptime flag later — if the binary-size gate (Task 7,
-# spec open question 2) says linking them is expensive — is a one-line
-# `comptime if` added to exactly these two bodies, not a rewrite of
-# `execute_cli` or of the dispatch that picks between them.
+# writers behind a comptime flag is a one-line `comptime if` added to exactly
+# these two bodies, not a rewrite of `execute_cli` or of the dispatch that
+# picks between them.
+#
+# The binary-size gate (Task 7) measured `query_param` (execute_cli, both
+# writers reachable) against `query_scan_typed` (bare `print(...execute())`)
+# and found the writers, not the parameters, were the cost: `__text` grew by
+# 768,988 bytes — the Parquet writer, the IPC writer, and the codec layer
+# behind them, none of which either gate program calls. Far past the ~20 KB
+# "near-zero" bar a parameter alone should cost, so both writers are gated
+# **off by default**, the same posture as `GPU_ENABLED`: build with
+# `-D MARROW_CLI_WRITERS=true` to get `-o out.parquet` / `-o out.arrow`
+# support in `execute_cli`. Without the flag those two formats raise instead
+# of writing, and the linker drops the writer path entirely — `--format
+# table` / no `-o` (stdout) always work, flag or no flag.
+comptime CLI_WRITERS_ENABLED = get_defined_bool["MARROW_CLI_WRITERS", False]()
 # ---------------------------------------------------------------------------
 
 
 def _write_parquet_output(batch: RecordBatch, path: String) raises:
-    _write_parquet_table(
-        Table.from_batches(batch.schema, [batch.copy()]), path
-    )
+    comptime if CLI_WRITERS_ENABLED:
+        _write_parquet_table(
+            Table.from_batches(batch.schema, [batch.copy()]), path
+        )
+    else:
+        raise Error(
+            "execute_cli: parquet output requires building with -D"
+            " MARROW_CLI_WRITERS=true"
+        )
 
 
 def _write_ipc_output(batch: RecordBatch, path: String) raises:
-    _write_ipc_file(path, [batch.copy()])
+    comptime if CLI_WRITERS_ENABLED:
+        _write_ipc_file(path, [batch.copy()])
+    else:
+        raise Error(
+            "execute_cli: ipc output requires building with -D"
+            " MARROW_CLI_WRITERS=true"
+        )
 
 
 def _write_cli_output(
