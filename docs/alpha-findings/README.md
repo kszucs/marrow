@@ -49,12 +49,29 @@ recording that string-tag dispatch cost `query_dynvalue` **+1,807,168 bytes
 (+45.7% of `__text`)** and was removed for exactly that reason. Same file, same
 mistake, opposite answers, undocumented.
 
-**Scope correction from measurement.** I ran `pixi run binary_size` on `alpha`:
-`marrow::expr::dynamic` contributes **0 symbols** to every fused/AOT target, so
-the closed-erasure DCE property is intact and this does **not** leak into the
-comptime lane. The cost is confined to the runtime-lane targets
-(`query_dynvalue`/`query_runtime`, 3.4x), which are the interpreter by
-definition. Real, worth fixing, **not** a release blocker.
+**Scope correction from measurement.** `marrow::expr::dynamic` contributes **0
+symbols** to every fused/AOT target, so the closed-erasure DCE property is
+intact and this does **not** leak into the comptime lane. The cost is confined
+to the runtime-lane targets (`query_dynvalue`/`query_runtime`, 3.4x the fused
+baseline), which are the interpreter by definition.
+
+`benchmarks/binary_size/check_gate.py` on the merged `alpha` — every gate
+*shrank*, and the runtime lane did not move at all:
+
+```
+gate                             baseline     measured      delta      pct
+query_streaming                 1,484,652    1,423,236    -61,416  -4.137%
+query_join                      1,507,836    1,454,504    -53,332  -3.537%
+query_streaming_agg_fused       1,417,476    1,371,312    -46,164  -3.257%
+query_streaming_agg             1,932,404    1,886,260    -46,144  -2.388%
+query_dynvalue                  4,871,156    4,871,156         +0  +0.000%
+OK: no gate grew more than 0.5%.
+```
+
+So the whole alpha — six merged branches, the Python binding layer, three new
+plan verbs, five new null ops — cost **nothing** in the AOT lane and shrank four
+of five gates. This item is real and worth fixing on its own merits; it is
+**not** a release blocker, and nothing in the alpha made it worse.
 
 ### 1.3 `AggExpr` is a two-variant sum type spelled as unenforced `Optional`s
 
