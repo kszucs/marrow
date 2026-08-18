@@ -146,7 +146,11 @@ def _ratio(a, b):
     return f"{a / b:5.1f}x"
 
 
-def report(medians, errors, engines, out=sys.stdout):
+def report(medians, errors, engines, out=None):
+    # `out=sys.stdout` as a *default* binds at import time, which under pytest is
+    # the capture object installed before `capsys.disabled()` restores the real
+    # one — the table then vanishes. Resolve it at call time.
+    out = out or sys.stdout
     names = [e for e in ENGINES if e in engines]
     header = "  ".join(f"{e:>8}" for e in names)
     print(
@@ -205,7 +209,8 @@ def report(medians, errors, engines, out=sys.stdout):
 # ── entry points ───────────────────────────────────────────────────────────
 
 
-def run(repeats=5, only=None, out=sys.stdout):
+def run(repeats=5, only=None, out=None):
+    out = out or sys.stdout
     engines = runners()
     queries = [q for n, q in cb.QUERIES.items() if not only or n in only]
     print(
