@@ -1,5 +1,0 @@
-build/
-*.parquet
-*.log
-asan_probe
-bt1.txt
