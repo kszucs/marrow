@@ -85,6 +85,7 @@
 - Aggregates written on the expression they aggregate --
   `col("amount", int64).sum().alias("total")` -- with GROUP BY,
   HAVING, computed keys and computed inputs.
+- `with_columns`, `drop` and `rename` on the plan layer.
 
 ### Query optimizer
 
@@ -142,6 +143,9 @@
   and the distinct counts.
 - `marrow.parquet` mirrors `pyarrow.parquet`: `pq.read_table(...)` and
   `pq.write_table(...)`.
+- A lazy query frontend: the plan layer is bound as `Plan`, the
+  expression lane as `Expr`/`Agg`, and `LazyTable` builds and collects
+  queries, with `num_threads` exposed on the collect path.
 
 ### Ahead-of-time compilation
 

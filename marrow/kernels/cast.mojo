@@ -13,12 +13,17 @@ directly by the AOT expression layer):
   per-element ``atol``/``atof`` parse or format (variable-length, builder-based).
 - ``NullCast`` — an all-null array of the target type.
 
-Each kernel exposes a ``dispatch`` static method that resolves the runtime dtypes
-of its family (the arithmetic-kernel pattern). The free ``cast`` function at the
-bottom picks the target family and delegates to the matching kernel's
-``dispatch``; ``safe`` is a plain runtime flag each kernel branches at its leaf
-``apply`` call. The fused AOT node in ``marrow.expr.values`` bypasses all of this
-and grabs ``NumericCast.core`` directly.
+Every kernel conforms to ``CastKernel`` and so exposes the **same**
+``dispatch(array, to, safe, ctx)``, resolving the runtime dtypes of its family
+(the arithmetic-kernel pattern). The free ``cast`` function at the bottom picks
+the target family and delegates to the matching kernel's ``dispatch``; ``safe``
+is a plain runtime flag each kernel branches at its leaf ``apply`` call. The
+fused AOT node in ``marrow.expr.values`` bypasses all of this and grabs
+``NumericCast.core`` directly.
+
+The uniform signature is the point of the trait, not code reuse: the ladder used
+to call six different shapes and silently dropped whichever argument the target
+arm did not accept. ``CastKernel``'s docstring has the detail.
 """
 
 from std.collections.string import atol, atof, StringSlice
@@ -41,13 +46,15 @@ from ..builders import (
     FixedSizeBinaryBuilder,
     PrimitiveBuilder,
 )
-from ..views import apply, apply_checked
+from ..views import apply, apply_checked, BufferView, BitmapView
 from ..dtypes import (
     DynType,
     BinaryLikeType,
     DType,
     NumericType,
     DecimalType,
+    IntegerType,
+    FloatingType,
     StringLikeType,
     TimeUnit,
     int32,
@@ -58,11 +65,53 @@ from .filter import take
 
 
 # ---------------------------------------------------------------------------
+# The family trait
+# ---------------------------------------------------------------------------
+
+
+trait CastKernel(Kernel):
+    """A cast kernel: one erased entry point, identical across the family.
+
+    Declared abstract rather than defaulted, because no two cast kernels share
+    a resolution strategy — the point of the trait is not code reuse, it is
+    that every arm takes the *same four arguments*, so `cast()`'s ladder cannot
+    hand one arm fewer than it hands another.
+
+    It could, and did. Six of the fifteen kernels had no `ctx` parameter and
+    seven no `safe`, so the ladder silently dropped whichever the target arm
+    did not accept: `cast(x, decimal128(38, 2), safe=True)` wrapped on overflow
+    and a millisecond→second cast discarded its remainder, both under the
+    default that promises to raise. Widening the signatures is what makes that
+    class of defect unrepresentable; the two kernels that had to *implement*
+    `safe` are the separate half of the fix.
+
+    An arm with nothing to do with an argument still takes it and says why in
+    its docstring — a total conversion cannot fail, so `safe` is inert there.
+    That is a deliberate wart: a uniform signature that is occasionally
+    redundant beats fifteen signatures nobody can check against the call site.
+
+    Note this trait buys signature uniformity and **not** a shared dispatcher.
+    `cast()` stays a hand-written ladder calling each struct by name: a closure
+    generic over its own trait bound needs a narrowing adapter that inlines
+    into every arm, measured at +662,740 bytes on one gate (§0).
+    """
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        ...
+
+
+# ---------------------------------------------------------------------------
 # NumericCast — numeric ↔ numeric
 # ---------------------------------------------------------------------------
 
 
-struct NumericCast(Kernel):
+struct NumericCast(CastKernel):
     """Numeric ↔ numeric cast: one ``pop.cast`` per SIMD lane."""
 
     comptime name = "numeric_cast"
@@ -157,7 +206,10 @@ struct NumericCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """Runtime numeric → numeric: resolve source and target over the numeric
         dtypes, branching ``safe`` into the checked / unchecked ``apply``."""
@@ -180,7 +232,7 @@ struct NumericCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct NumToBool(Kernel):
+struct NumToBool(CastKernel):
     """Numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
 
     comptime name = "num_to_bool"
@@ -191,8 +243,20 @@ struct NumToBool(Kernel):
         return a.ne(0)
 
     @staticmethod
-    def dispatch(array: DynArray, ctx: ExecContext) raises -> DynArray:
-        """Runtime numeric → bool over the numeric source dtypes."""
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """Runtime numeric → bool over the numeric source dtypes.
+
+        `to` is checked rather than assumed: `cast()` only routes here when it
+        is bool, but that was a positional invariant no reader of this kernel
+        could verify. `safe` is inert — `x != 0` is total.
+        """
+        if not to.is_bool():
+            raise Self.error(t"target must be bool, got {to}")
 
         def from_num[From: NumericType](s: From) raises {imm} -> DynArray:
             return Self.apply(array.as_primitive[From](), ctx).to_dyn()
@@ -223,7 +287,7 @@ struct NumToBool(Kernel):
         )
 
 
-struct BoolToNum(Kernel):
+struct BoolToNum(CastKernel):
     """Bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
 
     comptime name = "bool_to_num"
@@ -235,9 +299,16 @@ struct BoolToNum(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        """Runtime bool → numeric over the numeric target dtypes."""
+        """Runtime bool → numeric over the numeric target dtypes.
+
+        `safe` is inert: `True→1, False→0` is representable in every numeric
+        type, so this conversion cannot fail.
+        """
         var b = array.as_bool().copy()
 
         def to_num[To: NumericType](d: To) raises {imm} -> DynArray:
@@ -276,7 +347,7 @@ struct BoolToNum(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct TemporalCast(Kernel):
+struct TemporalCast(CastKernel):
     """Cast temporal ↔ integer / temporal ↔ temporal. Same physical width and
     resolution → a zero-copy relabel (``_reinterpret``); a differing unit → scale
     the underlying integers by the unit ratio (``_scale``)."""
@@ -285,7 +356,10 @@ struct TemporalCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var src = array.dtype()
         var data = array.to_data()
@@ -318,18 +392,18 @@ struct TemporalCast(Kernel):
         if src.byte_width() == 4:
             if to.byte_width() == 4:
                 return Self._scale[DType.int32, DType.int32](
-                    data, to, factor, up, ctx
+                    data, to, factor, up, safe, ctx
                 )
             return Self._scale[DType.int32, DType.int64](
-                data, to, factor, up, ctx
+                data, to, factor, up, safe, ctx
             )
         else:
             if to.byte_width() == 4:
                 return Self._scale[DType.int64, DType.int32](
-                    data, to, factor, up, ctx
+                    data, to, factor, up, safe, ctx
                 )
             return Self._scale[DType.int64, DType.int64](
-                data, to, factor, up, ctx
+                data, to, factor, up, safe, ctx
             )
 
     @staticmethod
@@ -362,6 +436,57 @@ struct TemporalCast(Kernel):
             return Self._unit_ns(dt.as_time64().unit)
         raise Error(t"cast: {dt} is not a temporal type")
 
+    @staticmethod
+    def _scale_checked[
+        SrcN: DType, DstN: DType
+    ](
+        data: ArrayData,
+        src: BufferView[SrcN, _],
+        dst: BufferView[mut=True, DstN, _],
+        factor: Int64,
+        up: Bool,
+    ) raises:
+        """Serial checked scale: raise on the first tick that cannot round-trip.
+
+        Serial by construction, not by preference — this raises, and an
+        exception cannot cross a `ctx.stripe` worker or a GPU kernel boundary
+        (§0). `NumericCast.apply`'s checked arm is serial for the same reason.
+
+        Null lanes are skipped: an invalid slot may hold arbitrary junk that
+        need not be representable, and failing on it would reject a perfectly
+        valid array."""
+        var n = data.length
+        var validity = Optional[BitmapView[origin_of(data.bitmap._value)]](None)
+        if data.bitmap and data.nulls > 0:
+            validity = data.bitmap.value().view(data.offset, n)
+        for i in range(n):
+            if validity and not validity.value()[i]:
+                dst.store[1](i, Scalar[DstN](0))
+                continue
+            var x = src.load[1](i).cast[DType.int64]()
+            var scaled: Int64
+            if up:
+                if x > Int64.MAX // factor or x < Int64.MIN // factor:
+                    raise Self.error(
+                        t"scaling {data.dtype} would overflow: tick {x} times"
+                        t" {factor} is out of range for the target unit"
+                    )
+                scaled = x * factor
+            else:
+                if x % factor != 0:
+                    raise Self.error(
+                        t"scaling {data.dtype} would lose data: tick {x} is"
+                        t" not a whole multiple of {factor}"
+                    )
+                scaled = x // factor
+            var out = scaled.cast[DstN]()
+            if out.cast[DType.int64]() != scaled:
+                raise Self.error(
+                    t"scaling {data.dtype} would overflow: {scaled} does not"
+                    t" fit the target's storage width"
+                )
+            dst.store[1](i, out)
+
     # TODO: remove this
     @staticmethod
     def _reinterpret(data: ArrayData, to: DynType) raises -> DynArray:
@@ -386,21 +511,34 @@ struct TemporalCast(Kernel):
         to: DynType,
         factor: Int64,
         up: Bool,
+        safe: Bool,
         ctx: ExecContext,
     ) raises -> DynArray:
         """Scale the underlying integers by ``factor`` (multiply if ``up``, else
         integer-divide), computing in int64 to avoid overflow, then narrow to
-        ``DstN`` and relabel as ``to``."""
+        ``DstN`` and relabel as ``to``.
+
+        Under ``safe`` a scale that cannot round-trip raises rather than
+        silently losing data: multiplying up can exceed int64 or the target
+        width, and dividing down discards any sub-tick remainder. Arrow C++'s
+        ``ShiftTime`` draws the same two lines, under ``allow_time_overflow``
+        and ``allow_time_truncate``."""
         var length = data.length
         var buf = Buffer.alloc_uninit[DstN](length)
         var src = data.buffers[0].view[SrcN](data.offset, length)
 
-        @always_inline
-        def scale[W: Int](v: SIMD[SrcN, W]) {imm} -> SIMD[DstN, W]:
-            var x = v.cast[DType.int64]()
-            return ((x * factor) if up else (x // factor)).cast[DstN]()
+        if safe:
+            Self._scale_checked[SrcN, DstN](
+                data, src, buf.view[DstN](0, length), factor, up
+            )
+        else:
 
-        apply[SrcN, DstN](src, buf.view[DstN](0, length), scale, ctx)
+            @always_inline
+            def scale[W: Int](v: SIMD[SrcN, W]) {imm} -> SIMD[DstN, W]:
+                var x = v.cast[DType.int64]()
+                return ((x * factor) if up else (x // factor)).cast[DstN]()
+
+            apply[SrcN, DstN](src, buf.view[DstN](0, length), scale, ctx)
         return DynArray.from_data(
             ArrayData(
                 dtype=to.copy(),
@@ -419,7 +557,7 @@ struct TemporalCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct StringToNum(Kernel):
+struct StringToNum(CastKernel):
     """Parse strings to a numeric type. ``safe`` is comptime: safe=True raises on
     an unparseable value, safe=False nulls it — the dead branch is elided."""
 
@@ -427,7 +565,10 @@ struct StringToNum(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         """Runtime string-like → numeric: resolve source string kind and numeric
         target, branching ``safe`` into the raising / nulling ``apply``."""
@@ -471,7 +612,7 @@ struct StringToNum(Kernel):
         return b.finish()
 
 
-struct StringToBool(Kernel):
+struct StringToBool(CastKernel):
     """Parse ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive) to bool.
     ``safe`` comptime: raise vs null on an unrecognized value."""
 
@@ -479,9 +620,17 @@ struct StringToBool(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, safe: Bool, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        """Runtime string-like → bool over the source string kinds."""
+        """Runtime string-like → bool over the source string kinds.
+
+        `to` is checked rather than assumed — see `NumToBool.dispatch`.
+        """
+        if not to.is_bool():
+            raise Self.error(t"target must be bool, got {to}")
 
         def on_str[From: StringLikeType](s: From) raises {imm} -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
@@ -513,15 +662,25 @@ struct StringToBool(Kernel):
         return b.finish()
 
 
-struct NumToString(Kernel):
+struct NumToString(CastKernel):
     """Format a numeric array to strings (per-element ``String(value)``)."""
 
     comptime name = "num_to_string"
 
     @staticmethod
-    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
         """Runtime numeric → string-like: resolve target string kind and numeric
-        source."""
+        source.
+
+        `safe` is inert (formatting a number is total) and `ctx` unused: this
+        builds through a `BinaryLikeBuilder`, one variable-length element at a
+        time, so there is no lane to stripe or upload.
+        """
 
         def on_target[To: StringLikeType](d: To) raises {imm} -> DynArray:
             def from_num[From: NumericType](s: From) raises {imm} -> DynArray:
@@ -544,14 +703,22 @@ struct NumToString(Kernel):
         return b.finish()
 
 
-struct BoolToString(Kernel):
+struct BoolToString(CastKernel):
     """Format a bool array to ``"true"``/``"false"`` strings."""
 
     comptime name = "bool_to_string"
 
     @staticmethod
-    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
-        """Runtime bool → string-like over the target string kinds."""
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """Runtime bool → string-like over the target string kinds.
+
+        `safe` and `ctx` are inert — see `NumToString.dispatch`.
+        """
         var b = array.as_bool().copy()
 
         def on_target[To: StringLikeType](d: To) raises {imm} -> DynArray:
@@ -577,7 +744,7 @@ struct BoolToString(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct BinaryLikeCast(Kernel):
+struct BinaryLikeCast(CastKernel):
     """Cast between the binary-like containers (binary, large_binary, utf8,
     large_utf8). Equal physical offset width → a zero-copy relabel that shares
     the offset and value buffers; differing width (32↔64-bit offsets) → a rebuild
@@ -587,9 +754,18 @@ struct BinaryLikeCast(Kernel):
     comptime name = "binary_like_cast"
 
     @staticmethod
-    def dispatch(array: DynArray, to: DynType, safe: Bool) raises -> DynArray:
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
         """Runtime bytes ↔ bytes: resolve the source and target binary-like kinds,
-        branching ``safe`` into the UTF-8-validating / trusting ``apply``."""
+        branching ``safe`` into the UTF-8-validating / trusting ``apply``.
+
+        `ctx` is unused: the equal-offset-width case is a pure relabel and the
+        differing-width case rebuilds through a builder.
+        """
 
         def on_src[From: BinaryLikeType](s: From) raises {imm} -> DynArray:
             var a = BinaryLikeArray[From](array.to_data())
@@ -645,7 +821,7 @@ struct BinaryLikeCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryCast(Kernel):
+struct FixedSizeBinaryCast(CastKernel):
     """Cast fixed-size-binary ↔ variable-length binary. ``to_binary`` derives the
     offset buffer from the fixed width and shares the data bytes; ``from_binary``
     packs each element into a fixed cell, raising when a length ≠ the width."""
@@ -653,8 +829,17 @@ struct FixedSizeBinaryCast(Kernel):
     comptime name = "fixed_size_binary_cast"
 
     @staticmethod
-    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
         """Runtime fixed_size_binary ↔ binary, in whichever direction applies.
+
+        `safe` is inert *by reference*, not by oversight: Arrow C++ has no flag
+        for a binary → fixed-size-binary width mismatch, so `from_binary`
+        raises on a wrong width unconditionally. `ctx` is unused (builder).
         """
         if array.dtype().is_fixed_size_binary():  # fsb → binary
             var fsb = array.as_fixed_size_binary().copy()
@@ -719,13 +904,23 @@ struct FixedSizeBinaryCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct NullCast(Kernel):
+struct NullCast(CastKernel):
     """Cast a null array to any target type: an all-null array of that type."""
 
     comptime name = "null_cast"
 
     @staticmethod
-    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        """Runtime null → any.
+
+        `safe` and `ctx` are inert: the output is all-null whatever the target,
+        so nothing can fail and there is nothing to parallelize.
+        """
         var n = len(array)
         var b = DynBuilder(to.copy(), capacity=n)
         for _ in range(n):
@@ -734,150 +929,337 @@ struct NullCast(Kernel):
 
 
 # ---------------------------------------------------------------------------
-# DecimalCast — decimal ↔ decimal (rescale) and decimal ↔ numeric
+# The decimal family — one struct per conversion, not one struct per dtype pair
 # ---------------------------------------------------------------------------
+#
+# These five were a single `DecimalCast` doing decimal↔decimal, decimal↔float
+# and decimal↔integer behind one `_convert[FromN, ToN]`. That function resolved
+# *both* sides over "decimal or numeric", so it was monomorphized across the
+# full cross product — roughly 16 x 16 pairs — and every line inside it was
+# stamped into all of them.
+#
+# It stayed cheap only while the bodies were three-line unchecked casts. Adding
+# the overflow and truncation checks `safe` requires cost **+371,584 bytes of
+# `__text` on `query_dynvalue`** for **1,476 bytes of source** — a 250x
+# multiplier, and 85% of that commit's whole size regression. The `comptime if`
+# ladder elided the dead *branches*; nothing shrank the *matrix*.
+#
+# Splitting by conversion narrows each kernel's dispatch to the families it can
+# actually see, and two of the five collapse a runtime branch outright: an
+# integer source is always scale 0, so `IntToDecimal` only ever scales *up*,
+# and an integer target is always scale 0, so `DecimalToInt` only ever scales
+# *down*. The fat version could not express that — it had to test `delta` at
+# runtime on every path.
 
 
-struct DecimalCast(Kernel):
-    """Cast decimal ↔ decimal (rescale) and decimal ↔ numeric.
+def _decimal_scale(dt: DynType) raises -> Int:
+    """The decimal scale, or 0 for a plain integer/numeric.
 
-    Both sides resolve uniformly to a scalar native and a scale — a decimal to its
-    backing integer (int32/64/128/256) and its scale, a plain numeric to its own
-    native at scale 0. One ``_convert[FromN, ToN]`` then covers every case: an
-    integer rescale by ``10^(to_scale − from_scale)`` (multiply up, truncating
-    integer-divide down) when neither side is float, else a divide/multiply by
-    ``10^scale`` in float64 — float16 ↔ int128/256 has no direct compiler-rt path
-    (``__fixhfti`` / ``__floattihf``), so float64 is the intermediary. Arithmetic
-    is unchecked (wrapping / truncating); validity is preserved."""
+    A `DynType` ladder rather than `dispatch_decimal` because it reads a
+    *field*, and traits cannot require fields. It is guarded by `is_decimal()`
+    so a decimal width the ladder does not know raises instead of silently
+    reporting scale 0 — an unscaled decimal would be off by a factor of
+    10^scale, with no error anywhere.
+    """
+    if not dt.is_decimal():
+        return 0
+    elif dt.is_decimal32():
+        return dt.as_decimal32().scale
+    elif dt.is_decimal64():
+        return dt.as_decimal64().scale
+    elif dt.is_decimal128():
+        return dt.as_decimal128().scale
+    elif dt.is_decimal256():
+        return dt.as_decimal256().scale
+    else:
+        raise Error("decimal_cast: no scale known for decimal type ", dt)
+
+
+def _pow10[T: DType](n: Int) -> Scalar[T]:
+    var r = Scalar[T](1)
+    for _ in range(n):
+        r = r * 10
+    return r
+
+
+def _map_decimal[
+    FromN: DType,
+    ToN: DType,
+    Op: def(Scalar[FromN]) raises -> Scalar[ToN],
+](data: ArrayData, to: DynType, op: Op) raises -> DynArray:
+    """Apply ``op`` to each element, writing a fresh ``ToN`` buffer relabelled
+    as ``to``. Scalar (int128/256 aren't reliably SIMD-vectorizable).
+
+    ``op`` raises so a checked conversion can report the offending value. That
+    costs nothing structurally — this was already a serial loop, so there is no
+    parallel or device boundary for the exception to cross, and it measured at
+    0 bytes.
+
+    Null lanes are skipped rather than mapped: an invalid slot may hold
+    arbitrary junk, and a checked ``op`` would reject an array whose every
+    *valid* element converts cleanly. ``NumericCast.apply`` masks its checked
+    lanes by validity for the same reason.
+    """
+    var n = data.length
+    var src = data.buffers[0].view[FromN](data.offset, n)
+    var out = Buffer.alloc_uninit[ToN](n)
+    var dst = out.view[ToN]()
+    var validity = Optional[BitmapView[origin_of(data.bitmap._value)]](None)
+    if data.bitmap and data.nulls > 0:
+        validity = data.bitmap.value().view(data.offset, n)
+    for i in range(n):
+        if validity and not validity.value()[i]:
+            dst.store[1](i, Scalar[ToN](0))
+        else:
+            dst.store[1](i, op(src.load[1](i)))
+    return DynArray.from_data(
+        ArrayData(
+            dtype=to.copy(),
+            length=n,
+            nulls=data.nulls,
+            offset=0,
+            bitmap=data.bitmap,
+            buffers=[out.to_immutable()],
+            children=[],
+        )
+    )
+
+
+def _rescale_up[
+    FromN: DType, ToN: DType
+](data: ArrayData, to: DynType, delta: Int, safe: Bool) raises -> DynArray:
+    """Multiply by 10^delta, widening the scale. Shared by `DecimalRescale` and
+    `IntToDecimal`, which is the only real overlap left between the five."""
+    var f = _pow10[ToN](delta)
+
+    def up(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
+        var v = x.cast[ToN]()
+        if safe:
+            # Two separate losses: narrowing to ToN, then the multiply.
+            # Checking only the second would miss a value that never fit the
+            # target's backing integer in the first place.
+            if v.cast[FromN]() != x:
+                raise Error("decimal_cast: value does not fit ", to)
+            if v > Scalar[ToN].MAX // f or v < Scalar[ToN].MIN // f:
+                raise Error("decimal_cast: rescaling overflows ", to)
+        return v * f
+
+    return _map_decimal[FromN, ToN](data, to, up)
+
+
+def _rescale_down[
+    FromN: DType, ToN: DType
+](data: ArrayData, to: DynType, delta: Int, safe: Bool) raises -> DynArray:
+    """Integer-divide by 10^-delta, narrowing the scale. Shared by
+    `DecimalRescale` and `DecimalToInt`."""
+    var f = _pow10[FromN](-delta)
+
+    def down(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
+        var q = x // f
+        if safe:
+            if x % f != 0:
+                raise Error(
+                    "decimal_cast: rescaling to ",
+                    to,
+                    " would discard a nonzero remainder",
+                )
+            if q.cast[ToN]().cast[FromN]() != q:
+                raise Error("decimal_cast: value does not fit ", to)
+        return q.cast[ToN]()
+
+    return _map_decimal[FromN, ToN](data, to, down)
+
+
+struct DecimalRescale(CastKernel):
+    """Decimal → decimal: an integer rescale by 10^(to_scale − from_scale).
+
+    The only member of the family whose direction is genuinely unknown until
+    runtime, so it is the only one that still branches on `delta`."""
+
+    comptime name = "decimal_rescale"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        var data = array.to_data()
+        var delta = _decimal_scale(to) - _decimal_scale(array.dtype())
+
+        def on_from[F: DecimalType](s: F) raises {imm} -> DynArray:
+            def on_to[T: DecimalType](d: T) raises {imm} -> DynArray:
+                if delta >= 0:
+                    return _rescale_up[F.native, T.native](
+                        data, to, delta, safe
+                    )
+                return _rescale_down[F.native, T.native](data, to, delta, safe)
+
+            return to.dispatch_decimal(on_to)
+
+        return array.dtype().dispatch_decimal(on_from)
+
+
+struct IntToDecimal(CastKernel):
+    """Integer → decimal. An integer is scale 0, so this only ever scales *up*
+    — the `delta < 0` arm the fat kernel carried here was unreachable."""
+
+    comptime name = "int_to_decimal"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        var data = array.to_data()
+        var delta = _decimal_scale(to)
+
+        def on_from[F: IntegerType](s: F) raises {imm} -> DynArray:
+            def on_to[T: DecimalType](d: T) raises {imm} -> DynArray:
+                return _rescale_up[F.native, T.native](data, to, delta, safe)
+
+            return to.dispatch_decimal(on_to)
+
+        return array.dtype().dispatch_integer(on_from)
+
+
+struct DecimalToInt(CastKernel):
+    """Decimal → integer. An integer target is scale 0, so this only ever
+    scales *down*, and the remainder check is the whole of `safe` here."""
+
+    comptime name = "decimal_to_int"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        var data = array.to_data()
+        var delta = -_decimal_scale(array.dtype())
+
+        def on_from[F: DecimalType](s: F) raises {imm} -> DynArray:
+            def on_to[T: IntegerType](d: T) raises {imm} -> DynArray:
+                if delta == 0:
+                    return _rescale_up[F.native, T.native](data, to, 0, safe)
+                return _rescale_down[F.native, T.native](data, to, delta, safe)
+
+            return to.dispatch_integer(on_to)
+
+        return array.dtype().dispatch_decimal(on_from)
+
+
+struct FloatToDecimal(CastKernel):
+    """Float → decimal: multiply by 10^scale in float64 and round.
+
+    float16/32 ↔ int128/256 has no direct compiler-rt path (`__fixhfti` /
+    `__floattihf`), so float64 is the intermediary for every source width."""
+
+    comptime name = "float_to_decimal"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        var data = array.to_data()
+        var scale = _decimal_scale(to)
+
+        def on_from[F: FloatingType](s: F) raises {imm} -> DynArray:
+            def on_to[T: DecimalType](d: T) raises {imm} -> DynArray:
+                comptime FromN = F.native
+                comptime ToN = T.native
+                var f = _pow10[DType.float64](scale)
+                # int128/256 do not round-trip through float64 exactly, so this
+                # bound is approximate at the last few ULPs. It guards against a
+                # value being out by orders of magnitude, not a precision claim.
+                var lo = Scalar[ToN].MIN.cast[DType.float64]()
+                var hi = Scalar[ToN].MAX.cast[DType.float64]()
+
+                def to_dec(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
+                    var scaled = round(x.cast[DType.float64]() * f)
+                    # NaN fails both comparisons, which is the intent.
+                    if safe and not (scaled >= lo and scaled <= hi):
+                        raise Error("decimal_cast: value out of range for ", to)
+                    return scaled.cast[ToN]()
+
+                return _map_decimal[FromN, ToN](data, to, to_dec)
+
+            return to.dispatch_decimal(on_to)
+
+        return array.dtype().dispatch_floating(on_from)
+
+
+struct DecimalToFloat(CastKernel):
+    """Decimal → float: divide by 10^scale in float64.
+
+    Unchecked on purpose. Decimal → float is inexact by construction and Arrow
+    permits it under `safe`, exactly as float → float is permitted
+    (`NumericCast.needs_check` answers False there too)."""
+
+    comptime name = "decimal_to_float"
+
+    @staticmethod
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
+    ) raises -> DynArray:
+        var data = array.to_data()
+        var scale = _decimal_scale(array.dtype())
+
+        def on_from[F: DecimalType](s: F) raises {imm} -> DynArray:
+            def on_to[T: FloatingType](d: T) raises {imm} -> DynArray:
+                comptime FromN = F.native
+                comptime ToN = T.native
+                var f = _pow10[DType.float64](scale)
+
+                def to_flt(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
+                    return (x.cast[DType.float64]() / f).cast[ToN]()
+
+                return _map_decimal[FromN, ToN](data, to, to_flt)
+
+            return to.dispatch_floating(on_to)
+
+        return array.dtype().dispatch_decimal(on_from)
+
+
+struct DecimalCast(CastKernel):
+    """Router for the decimal family: pick the kernel for this pair.
+
+    Kept so `cast()`'s ladder has one decimal arm rather than five, and so the
+    "which conversion is this?" question is answered in exactly one place. It
+    holds no conversion logic of its own."""
 
     comptime name = "decimal_cast"
 
     @staticmethod
-    def dispatch(array: DynArray, to: DynType) raises -> DynArray:
-        var data = array.to_data()
-        var from_scale = Self._scale(array.dtype())
-        var to_scale = Self._scale(to)
-
-        def on_from[FromN: DType]() raises {imm} -> DynArray:
-            def on_to[ToN: DType]() raises {imm} -> DynArray:
-                return Self._convert[FromN, ToN](data, from_scale, to_scale, to)
-
-            return Self._on_native(to, on_to)
-
-        return Self._on_native(array.dtype(), on_from)
-
-    @staticmethod
-    def _scale(dt: DynType) raises -> Int:
-        """The decimal scale, or 0 for a plain integer/numeric.
-
-        A `DynType` ladder rather than `dispatch_decimal` because it reads a
-        *field*, and traits cannot require fields. It is guarded by
-        `is_decimal()` so a decimal width the ladder does not know raises
-        instead of silently reporting scale 0 — an unscaled decimal would be
-        off by a factor of 10^scale, with no error anywhere.
-        """
-        if not dt.is_decimal():
-            return 0
-        elif dt.is_decimal32():
-            return dt.as_decimal32().scale
-        elif dt.is_decimal64():
-            return dt.as_decimal64().scale
-        elif dt.is_decimal128():
-            return dt.as_decimal128().scale
-        elif dt.is_decimal256():
-            return dt.as_decimal256().scale
-        else:
-            raise Self.error(t"no scale known for decimal type {dt}")
-
-    @staticmethod
-    def _on_native[
-        Func: def[N: DType]() raises -> DynArray
-    ](dt: DynType, func: Func) raises -> DynArray:
-        """Resolve a decimal to its backing integer, or a numeric to its own
-        native, then run ``func`` with that scalar ``DType``."""
-        if dt.is_decimal():
-
-            def by_dec[T: DecimalType](x: T) raises {imm} -> DynArray:
-                return func[T.native]()
-
-            return dt.dispatch_decimal(by_dec)
-        else:
-
-            def by_num[T: NumericType](x: T) raises {imm} -> DynArray:
-                return func[T.native]()
-
-            return dt.dispatch_numeric(by_num)
-
-    @staticmethod
-    def _convert[
-        FromN: DType, ToN: DType
-    ](
-        data: ArrayData, from_scale: Int, to_scale: Int, to: DynType
+    def dispatch(
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
-        """Per-element conversion for the resolved native pair."""
-        comptime if FromN.is_floating_point():  # float → decimal
-            var f = Self._pow10[DType.float64](to_scale)
-
-            def to_dec(x: Scalar[FromN]) {imm} -> Scalar[ToN]:
-                return round(x.cast[DType.float64]() * f).cast[ToN]()
-
-            return Self._map[FromN, ToN](data, to, to_dec)
-        elif ToN.is_floating_point():  # decimal → float
-            var f = Self._pow10[DType.float64](from_scale)
-
-            def to_flt(x: Scalar[FromN]) {imm} -> Scalar[ToN]:
-                return (x.cast[DType.float64]() / f).cast[ToN]()
-
-            return Self._map[FromN, ToN](data, to, to_flt)
-        else:  # integer rescale by 10^(to_scale − from_scale)
-            var delta = to_scale - from_scale
-            if delta >= 0:
-                var f = Self._pow10[ToN](delta)
-
-                def up(x: Scalar[FromN]) {imm} -> Scalar[ToN]:
-                    return x.cast[ToN]() * f
-
-                return Self._map[FromN, ToN](data, to, up)
-            else:
-                var f = Self._pow10[FromN](-delta)
-
-                def down(x: Scalar[FromN]) {imm} -> Scalar[ToN]:
-                    return (x // f).cast[ToN]()
-
-                return Self._map[FromN, ToN](data, to, down)
-
-    @staticmethod
-    def _pow10[T: DType](n: Int) -> Scalar[T]:
-        var r = Scalar[T](1)
-        for _ in range(n):
-            r = r * 10
-        return r
-
-    @staticmethod
-    def _map[
-        FromN: DType,
-        ToN: DType,
-        Op: def(Scalar[FromN]) -> Scalar[ToN],
-    ](data: ArrayData, to: DynType, op: Op) raises -> DynArray:
-        """Apply ``op`` to each element, writing a fresh ``ToN`` buffer relabelled
-        as ``to``. Scalar (int128/256 aren't reliably SIMD-vectorizable)."""
-        var n = data.length
-        var src = data.buffers[0].view[FromN](data.offset, n)
-        var out = Buffer.alloc_uninit[ToN](n)
-        var dst = out.view[ToN]()
-        for i in range(n):
-            dst.store[1](i, op(src.load[1](i)))
-        return DynArray.from_data(
-            ArrayData(
-                dtype=to.copy(),
-                length=n,
-                nulls=data.nulls,
-                offset=0,
-                bitmap=data.bitmap,
-                buffers=[out.to_immutable()],
-                children=[],
-            )
-        )
+        var src = array.dtype()
+        if src.is_decimal() and to.is_decimal():
+            return DecimalRescale.dispatch(array, to, safe, ctx)
+        elif src.is_decimal() and to.is_floating_point():
+            return DecimalToFloat.dispatch(array, to, safe, ctx)
+        elif src.is_decimal() and to.is_integer():
+            return DecimalToInt.dispatch(array, to, safe, ctx)
+        elif src.is_floating_point() and to.is_decimal():
+            return FloatToDecimal.dispatch(array, to, safe, ctx)
+        elif src.is_integer() and to.is_decimal():
+            return IntToDecimal.dispatch(array, to, safe, ctx)
+        else:
+            raise Self.error(t"unsupported decimal cast {src} -> {to}")
 
 
 # ---------------------------------------------------------------------------
@@ -885,7 +1267,7 @@ struct DecimalCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-struct ListCast(Kernel):
+struct ListCast(CastKernel):
     """Cast a list-like array (list / large_list / map) to another of the same
     kind by recursively casting its child values to the target's value type; the
     offset buffer and validity are shared unchanged.
@@ -900,7 +1282,10 @@ struct ListCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var data = array.to_data()
         var child = DynArray.from_data(data.children[0].copy())
@@ -925,7 +1310,7 @@ struct ListCast(Kernel):
         )
 
 
-struct StructCast(Kernel):
+struct StructCast(CastKernel):
     """Cast struct → struct by recursively casting each field to the target
     field's type (matched by position); the field counts must match."""
 
@@ -933,7 +1318,10 @@ struct StructCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         var data = array.to_data()
         ref fields = to.as_struct().fields
@@ -959,7 +1347,7 @@ struct StructCast(Kernel):
         )
 
 
-struct DictionaryCast(Kernel):
+struct DictionaryCast(CastKernel):
     """Decode a dictionary array — gather its values by index (``take``) — then
     cast the decoded values to the target type when it differs."""
 
@@ -967,7 +1355,10 @@ struct DictionaryCast(Kernel):
 
     @staticmethod
     def dispatch(
-        array: DynArray, to: DynType, safe: Bool, ctx: ExecContext
+        array: DynArray,
+        to: DynType,
+        safe: Bool = True,
+        ctx: ExecContext = ExecContext.serial(),
     ) raises -> DynArray:
         ref d = array.as_dictionary()
         var indices = cast(d.indices(), int32, False, ctx).as_int32().copy()
@@ -995,37 +1386,37 @@ def cast(
     if src == to:
         return array.copy()  # identity → zero-copy
     elif src.is_null():
-        return NullCast.dispatch(array, to)  # null → any
+        return NullCast.dispatch(array, to, safe, ctx)  # null → any
     elif src.is_dictionary():
         return DictionaryCast.dispatch(array, to, safe, ctx)  # decode first
     elif src.is_binary_like() and to.is_binary_like():
-        return BinaryLikeCast.dispatch(array, to, safe)  # bytes ↔ bytes
+        return BinaryLikeCast.dispatch(array, to, safe, ctx)  # bytes ↔ bytes
     elif (src.is_fixed_size_binary() and to.is_binary_like()) or (
         src.is_binary_like() and to.is_fixed_size_binary()
     ):
-        return FixedSizeBinaryCast.dispatch(array, to)
+        return FixedSizeBinaryCast.dispatch(array, to, safe, ctx)
     elif src.is_string() or src.is_large_string():  # string-like → numeric/bool
         if to.is_bool():
-            return StringToBool.dispatch(array, safe, ctx)
+            return StringToBool.dispatch(array, to, safe, ctx)
         elif to.is_numeric():
             return StringToNum.dispatch(array, to, safe, ctx)
         raise Error(t"cast: unsupported cast {src} -> {to}")
     elif to.is_string() or to.is_large_string():  # numeric/bool → string-like
         if src.is_bool():
-            return BoolToString.dispatch(array, to)
+            return BoolToString.dispatch(array, to, safe, ctx)
         elif src.is_numeric():
-            return NumToString.dispatch(array, to)
+            return NumToString.dispatch(array, to, safe, ctx)
         raise Error(t"cast: unsupported cast {src} -> {to}")
     elif src.is_decimal() or to.is_decimal():
-        return DecimalCast.dispatch(array, to)
+        return DecimalCast.dispatch(array, to, safe, ctx)
     elif src.is_numeric() and to.is_numeric():
         return NumericCast.dispatch(array, to, safe, ctx)
     elif to.is_bool():
-        return NumToBool.dispatch(array, ctx)  # numeric → bool
+        return NumToBool.dispatch(array, to, safe, ctx)  # numeric → bool
     elif src.is_bool():
-        return BoolToNum.dispatch(array, to, ctx)  # bool → numeric
+        return BoolToNum.dispatch(array, to, safe, ctx)  # bool → numeric
     elif src.is_temporal() or to.is_temporal():
-        return TemporalCast.dispatch(array, to, ctx)
+        return TemporalCast.dispatch(array, to, safe, ctx)
     elif (
         (src.is_list() and to.is_list())
         or (src.is_large_list() and to.is_large_list())

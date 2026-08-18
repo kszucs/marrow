@@ -150,6 +150,7 @@ from ..kernels.conditional import (
     case_when as case_when_kernel,
     BinaryConditionalKernel,
     CoalesceKernel,
+    FillNullKernel,
     NullifKernel,
 )
 from ..kernels.temporal import (
@@ -463,11 +464,20 @@ trait Value(Copyable, Deinitable, Movable):
     def approx_count_distinct(self) -> AggExpr:
         return AggExpr.of[DistinctAgg[False]](self.copy())
 
-    def isnull(self) -> IsNull[Self]:
-        return IsNull(self.copy())
-
-    def notnull(self) -> NotNull[Self]:
-        return NotNull(self.copy())
+    # `is_null`/`is_valid` are deliberately *not* here.
+    #
+    # They were, as defaults returning the fused `NullPredicate`. Every caller in
+    # the tree was a `DynValue`: the AOT lane always spells the node directly,
+    # `IsNull(col("a", int64))`, because that is what a fused tree reads like.
+    # Meanwhile the runtime lane needs the result to be another `DynValue` — a
+    # predicate that left the lane cannot be combined with one that stayed in it,
+    # since `BoolValue.__or__` takes a `BoolValue`.
+    #
+    # A struct method does not *override* a trait default in Mojo; the two become
+    # competing overloads and the call reports `ambiguous call to 'is_null'`. So
+    # the fluent spelling lives on `DynValue` alone and this trait keeps only the
+    # members every family genuinely shares. `NullPredicate[K, A: Value]` is
+    # untouched and still accepts any `Value`, `DynValue` included.
 
 
 # ---------------------------------------------------------------------------
@@ -706,11 +716,23 @@ trait NumericValue(Value):
     def round(self) -> Round[Self]:
         return Round(self.copy())
 
-    def isnan(self) -> IsNan[Self]:
+    def is_nan(self) -> IsNan[Self]:
         return IsNan(self.copy())
 
-    def isinf(self) -> IsInf[Self]:
+    def is_inf(self) -> IsInf[Self]:
         return IsInf(self.copy())
+
+    def fill_null[Rhs: NumericValue](self, o: Rhs) -> FillNull[Self, Rhs]:
+        """This value with its nulls taken from `o` — PyArrow's `fill_null`.
+
+        The parameter is `Rhs`, not `R`, and that is load-bearing: a trait
+        default method's parameter name may not collide with a *conformer's*
+        struct parameter, and `NumericBinary`/`FloatBinary`/`ConditionalBinary`
+        all name one `R`. Spelling it `R` fails them all with `name conflict
+        between parameter 'R' in the default trait method and a parameter in the
+        struct` — which is why every binary operator above already says `Rhs`.
+        """
+        return FillNull(self.copy(), o.copy())
 
     def sqrt(self) -> Sqrt[Self]:
         return Sqrt(self.copy())
@@ -2441,6 +2463,14 @@ struct ConditionalBinary[
 
 comptime Coalesce = ConditionalBinary[CoalesceKernel, _, _]
 comptime Nullif = ConditionalBinary[NullifKernel, _, _]
+comptime FillNull = ConditionalBinary[FillNullKernel, _, _]
+"""`fill_null(l, r)` — `l` with its nulls taken from `r`.
+
+No new node: `FillNullKernel` gained the `combine` that `BinaryConditionalKernel`
+asks for, so the existing conditional breaker covers it. For two operands this
+computes what `Coalesce` does; it is kept as its own name because that is the
+verb PyArrow and Polars users reach for, and because the kernel additionally
+pins the two operands to one dtype."""
 
 
 @fieldwise_init

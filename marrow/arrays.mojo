@@ -438,7 +438,8 @@ struct BoolArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
             .view(self.offset + offset, actual_length)
             .unset_count(),
             offset=self.offset + offset,
@@ -681,7 +682,8 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
             .view(self.offset + offset, actual_length)
             .unset_count(),
             offset=self.offset + offset,
@@ -934,7 +936,8 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
             .view(self.offset + offset, actual_length)
             .unset_count(),
             offset=self.offset + offset,
@@ -1188,7 +1191,8 @@ struct ListLikeArray[T: ListLikeType](Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
             .view(self.offset + offset, actual_length)
             .unset_count(),
             offset=self.offset + offset,
@@ -1488,7 +1492,8 @@ struct FixedSizeListArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
             .view(self.offset + offset, actual_length)
             .unset_count(),
             offset=self.offset + offset,
@@ -1663,7 +1668,8 @@ struct FixedSizeBinaryArray(Array):
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
             length=actual_length,
-            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
             .view(self.offset + offset, actual_length)
             .unset_count(),
             offset=self.offset + offset,
@@ -1921,7 +1927,8 @@ struct StructArray(Array):
         return Self(
             dtype=self.dtype.copy(),
             length=actual_length,
-            nulls=0 if self.nulls == 0 else self.bitmap.value()
+            nulls=0 if self.nulls
+            == 0 else self.bitmap.value()
             .view(self.offset + offset, actual_length)
             .unset_count(),
             offset=self.offset + offset,

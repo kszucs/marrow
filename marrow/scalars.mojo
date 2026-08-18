@@ -559,8 +559,7 @@ struct DictionaryScalar(ArrowScalar):
         The dictionary slot the value came from is not part of its identity.
         """
         return (
-            self._dtype == other._dtype
-            and self._decoded[] == other._decoded[]
+            self._dtype == other._dtype and self._decoded[] == other._decoded[]
         )
 
     def write_to[W: Writer](self, mut writer: W):
