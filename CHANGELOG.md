@@ -210,32 +210,40 @@
   105 columns. `BinaryLikeCast.apply` relabels with no allocation when the
   offset widths match, so the cast itself is free; the whole cost was the
   `safe` guard's `_check_utf8`, a scalar loop building a `StringSlice` per row
-  and calling `_is_valid_utf8` on it, on every query, over an immutable buffer
-  it had already validated. Profiling put 11.5% of q34 and 3.8% of q21 there.
+  and calling `_is_valid_utf8` on it, over an immutable buffer it had already
+  validated. It ran at 4.2 GB/s on ASCII and 5.5 GB/s on ClickBench's `URL`.
 
-  `_check_utf8` now tries two whole-buffer conditions before that loop. An
-  all-ASCII window (one four-accumulator SIMD OR-reduction) makes every element
-  valid no matter where the offsets cut the bytes; failing that, a window that
-  validates as a whole *and* whose element starts never land on a continuation
-  byte makes each element a whole number of characters. Both are sufficient
-  conditions only — either one failing falls through to the original loop — so
-  the accept/reject decision is unchanged and only the cost of reaching it
-  moves. `safe=True` remains the default and still rejects malformed input.
+  `_check_utf8` now tries two whole-buffer conditions first. `_all_ascii` is a
+  four-accumulator SIMD OR-reduction — every byte `< 0x80` makes each element
+  valid however the offsets cut the bytes — reduced once per 4 KiB so a buffer
+  that fails bails near the first non-ASCII byte rather than after a full pass.
+  Failing that, `_validate_utf8_window` validates the window while skipping
+  pure-ASCII SIMD blocks, and the element starts are scanned for continuation
+  bytes. Both are sufficient conditions only: either failing falls through to
+  the original loop, so the accept/reject decision is unchanged. `safe=True`
+  stays the default and still rejects malformed input.
 
-  The boundary scan is load-bearing rather than belt-and-braces: `"é"` is
-  `0xC3 0xA9`, and split across two elements the concatenation validates while
-  each half is malformed, so a window-only check would be strictly weaker than
-  the loop it replaces. The fall-through matters equally — a null slot may hold
-  arbitrary bytes, and falling back rather than raising is what keeps that from
-  becoming a false rejection. Both cases are pinned by tests.
+  The block skipping is what makes this work on real data rather than only on
+  synthetic ASCII. ClickBench's `URL` is 4.5% non-ASCII by byte so it never
+  takes the all-ASCII path — but those bytes are clustered, and 92.7% of
+  16-byte blocks are pure ASCII. A pure-ASCII block cannot hold part of a
+  multi-byte sequence, so every region handed to `_is_valid_utf8` begins and
+  ends on a character boundary.
 
-  Measured on `bench_cast.mojo`, normalised against fourteen untouched control
-  rows (the box moved x2.39 between batches under concurrent load, so raw
-  ratios overstate it): **x19.2 at 1M rows**, x17.5 at 100k, x11.7 at 10k —
-  824 us for 72 MB, or ~87 GB/s, against ~4.5 GB/s before. Non-ASCII data comes
-  out at x0.92, i.e. unchanged: the second path exists to absorb the first
-  path's failed probe rather than to speed that case up.
+  The boundary scan is load-bearing: `"é"` is `0xC3 0xA9`, and split across two
+  elements the concatenation validates while each half is malformed, so a
+  window-only check would be strictly weaker than the loop it replaces. So is
+  the fall-through — a null slot may hold arbitrary bytes, and falling back
+  rather than raising keeps that from becoming a false rejection. Both are
+  pinned by tests.
 
+  Measured through the Python API, rebuilding `libmarrow.so` per variant:
+  72.7 MB of pure ASCII **17.19 ms → 0.83 ms (x20.7)**, and ClickBench's 88.5 MB
+  `URL` column **16.01 ms → 6.14 ms (x2.6)**. End to end on `bench_clickbench.py`
+  with both builds run back to back, the 27 string-cast queries moved by a
+  median **-4.5%** while the 15 queries with no string cast — the drift control
+  — sat at +0.4%: **q21 346.5 → 328.7 ms (-5.1%)**, **q34 106.9 → 96.7 ms
+  (-9.5%)**, q28 -18.4%, q37 -13.3%, 41-query total 4 052 → 3 905 ms.
 
 - **`filter` no longer writes one element past its output buffer (F1).** This is
   the SIGSEGV behind ClickBench Q11, Q12 and Q24 — a bare `exit -11` with no
