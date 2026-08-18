@@ -60,8 +60,11 @@ def test_polars_thunk_matches_reference(reference, name):
     q = cb.QUERIES[name]
     if q.polars is None:
         pytest.skip("no polars spelling")
-    got = cb.polars_rows(q.polars(pl.scan_parquet(cb.HITS)).collect())
-    want, _ = reference.get(q.duckdb_sql)
+    df = q.polars_checked(pl.scan_parquet(cb.HITS)).collect()
+    if q.probe is not None:  # Q24 is `SELECT *`; the reference is narrowed
+        df = df.select(q.probe)
+    got = cb.polars_rows(df)
+    want, _ = reference.get(q.duckdb_verify_sql)
     reason = cb.compare(got, want)
     if reason is not None and q.tie_key is not None and got:
         assert cb.compare_tie(got, want, q.tie_key), reason

@@ -196,11 +196,17 @@ class Query:
         """
         return self.verify or self.fn
 
+    @property
+    def polars_checked(self):
+        """The polars variant used for *checking* — see :attr:`marrow_verify`."""
+        return self.polars_verify or self.polars
+
 
 def query(
     feature,
     *,
     polars=None,
+    polars_verify=None,
     deviation=None,
     unsupported=None,
     compare="rows",
@@ -241,6 +247,7 @@ def query(
             fn,
             feature=feature,
             polars=polars,
+            polars_verify=polars_verify,
             deviation=deviation,
             unsupported=unsupported,
             compare=compare,
@@ -692,8 +699,15 @@ def _q25(t, keep_key):
         "ORDER BY EventTime LIMIT 10"
     ),
     polars=lambda t: t.filter(ps("SearchPhrase") != "")
-    .select(ps("SearchPhrase"))
-    .sort(pl.col("EventTime"))
+    .select(ps("SearchPhrase"), pl.col("EventTime"))
+    .sort("EventTime")
+    .head(10)
+    .select("SearchPhrase"),
+    # `ORDER BY EventTime` ties, so the check needs the sort key projected —
+    # the polars mirror of `verify` / `verify_sql` above.
+    polars_verify=lambda t: t.filter(ps("SearchPhrase") != "")
+    .select(ps("SearchPhrase"), pl.col("EventTime"))
+    .sort("EventTime")
     .head(10),
 )
 def q25(t):
@@ -742,6 +756,10 @@ def _q27(t, keep_key):
     .sort("EventTime", "SearchPhrase")
     .head(10)
     .select("SearchPhrase"),
+    polars_verify=lambda t: t.filter(ps("SearchPhrase") != "")
+    .select(ps("SearchPhrase"), pl.col("EventTime"))
+    .sort("EventTime", "SearchPhrase")
+    .head(10),
 )
 def q27(t):
     """SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10;"""
@@ -1099,10 +1117,13 @@ def q40(t):
     deviation=(
         "`TraficSourceID IN (-1, 6)` is spelled "
         "`isin(ma.array([-1, 6], ma.int16()))`, not `isin([-1, 6])`. The list "
-        "form builds an int64 value set, and matching an int16 column against "
-        "it silently returns zero rows instead of raising — see "
-        "docs/alpha-findings/e1-clickbench.md, bug 1. Semantics are unchanged; "
-        "only the spelling is."
+        "form builds an int64 value set. It used to match an int16 column "
+        "against it and silently return zero rows "
+        "(docs/alpha-findings/e1-clickbench.md, bug 1); as of this measurement "
+        "it raises `is_in: dtype mismatch: int16 vs int64` instead — see the "
+        "`p_isin_untyped` probe. Still a deviation, because the plain list "
+        "spelling the SQL implies does not work; semantics are unchanged, only "
+        "the spelling is."
     ),
     polars=lambda t: t.filter(
         (pl.col("CounterID") == 62)
@@ -1200,7 +1221,12 @@ def q43(t):
     )
 
 
-# ── extra probes: known-wrong spellings, kept so regressions are visible ────
+# ── extra probes: spellings that do not work, kept so changes are visible ──
+#
+# These were all *silently wrong* when the alpha measured them. Two now raise
+# and one no longer aborts, which is why they stay in the report: the probe is
+# how that improvement was noticed. Each docstring records the old behaviour
+# next to the current one.
 
 PROBES = {}
 
@@ -1219,12 +1245,13 @@ def probe(name, note):
     return decorate
 
 
-@probe("p_binary_group_key", "GROUP BY a raw `binary` key (no cast) — known abort")
+@probe("p_binary_group_key", "GROUP BY a raw `binary` key, no cast")
 def p_binary_group_key(t):
     """SELECT SearchPhrase, COUNT(*) FROM hits GROUP BY SearchPhrase LIMIT 3;
 
-    Deliberately omits the `.cast(string)` every real query above applies, to
-    record the `_PARALLEL_ALWAYS_ROWS` abort in the report.
+    Deliberately omits the `.cast(string)` every real query above applies.
+    This used to hard-abort the process above `_PARALLEL_ALWAYS_ROWS` rows
+    (`arrays.mojo` `get: wrong variant type`). It now runs.
     """
     return t.aggregate(by=["SearchPhrase"], c=count_star()).limit(3)
 
@@ -1233,7 +1260,8 @@ def p_binary_group_key(t):
 def p_isin_untyped(t):
     """SELECT COUNT(*) FROM hits WHERE TraficSourceID IN (-1, 6);
 
-    The correct answer is the same as `p_isin_typed`. This spelling returns 0.
+    The correct answer is the same as `p_isin_typed`. This spelling used to
+    return 0 silently; it now raises `is_in: dtype mismatch: int16 vs int64`.
     """
     return t.filter(col("TraficSourceID").isin([-1, 6])).aggregate(
         by=[], c=count_star()
@@ -1252,7 +1280,8 @@ def p_isin_typed(t):
 def p_binary_literal_ne(t):
     """SELECT COUNT(*) FROM hits WHERE SearchPhrase <> '';
 
-    Correct answer 69354 (what the cast spelling returns). This returns 0.
+    Correct answer 69354 (what the cast spelling returns). This used to return
+    0 silently; it now raises `dispatch_primitive: dtype is not primitive`.
     """
     return t.filter(col("SearchPhrase") != lit(b"")).aggregate(by=[], c=count_star())
 
