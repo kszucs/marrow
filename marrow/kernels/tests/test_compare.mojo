@@ -1,9 +1,15 @@
-from std.testing import assert_equal, assert_true, assert_false
+from std.testing import (
+    assert_equal,
+    assert_true,
+    assert_false,
+    assert_raises,
+)
 
 from ...arrays import PrimitiveArray, DynArray
 from ...builders import (
     array,
     PrimitiveBuilder,
+    BinaryLikeBuilder,
     Int64Builder,
     Float64Builder,
     StringBuilder,
@@ -21,6 +27,10 @@ from ...dtypes import (
     decimal128,
     Date32Type,
     Decimal128Type,
+    BinaryLikeType,
+    BinaryType,
+    LargeBinaryType,
+    StringType,
 )
 from ...builders import Date32Builder, Decimal128Builder
 from ...kernels.cast import cast
@@ -34,6 +44,7 @@ from ...kernels.string import (
     StringGeKernel,
 )
 from ...kernels.numeric import (
+    equal_any,
     EqKernel,
     NeKernel,
     LtKernel,
@@ -388,3 +399,86 @@ def test_erased_compare_accepts_decimal128() raises:
     ref r = LtKernel.dispatch(ab.finish(), bb.finish()).as_bool()
     assert_true(r[0].value())
     assert_false(r[1].value())
+
+
+# ---------------------------------------------------------------------------
+# equal_any — the "equality over an arbitrary dtype" primitive
+#
+# Hash-join row verification and `nullif` are built on this. It used to pick
+# its kernel family with `is_string() or is_large_string()`, so `binary` fell
+# into the numeric arm and `dispatch_primitive` raised. The family test is
+# `is_binary_like()` now: what selects the kernel is whether the payload is
+# variable-width, not whether it is text.
+# ---------------------------------------------------------------------------
+
+
+def _bytes_pair[
+    T: BinaryLikeType
+](left: List[String], right: List[String]) raises -> Tuple[DynArray, DynArray]:
+    var lb = BinaryLikeBuilder[T](len(left))
+    for v in left:
+        lb.append(v)
+    var rb = BinaryLikeBuilder[T](len(right))
+    for v in right:
+        rb.append(v)
+    var la: DynArray = lb.finish()
+    var ra: DynArray = rb.finish()
+    return (la^, ra^)
+
+
+def _assert_equal_any_bytes[T: BinaryLikeType]() raises:
+    var pair = _bytes_pair[T](["a", "bb", "c"], ["a", "xx", "c"])
+    var r = equal_any(pair[0], pair[1])
+    assert_true(r[0].value())
+    assert_false(r[1].value())
+    assert_true(r[2].value())
+
+
+def test_equal_any_binary() raises:
+    _assert_equal_any_bytes[BinaryType]()
+
+
+def test_equal_any_large_binary() raises:
+    _assert_equal_any_bytes[LargeBinaryType]()
+
+
+def test_equal_any_string_unchanged() raises:
+    _assert_equal_any_bytes[StringType]()
+
+
+def test_equal_any_binary_nulls_propagate() raises:
+    """Null on either side yields null out — same rule the string path used."""
+    var lb = BinaryLikeBuilder[BinaryType](3)
+    lb.append("a")
+    lb.append_null()
+    lb.append("c")
+    var rb = BinaryLikeBuilder[BinaryType](3)
+    rb.append("a")
+    rb.append("b")
+    rb.append_null()
+    var r = equal_any(lb.finish(), rb.finish())
+    assert_equal(r.null_count(), 2)
+    assert_true(r.is_valid(0))
+    assert_true(r[0].value())
+    assert_false(r.is_valid(1))
+    assert_false(r.is_valid(2))
+
+
+def test_equal_any_mismatched_dtypes_raise() raises:
+    """`equal_any` resolves the comptime type from the *left* dtype and reads
+    the right operand at that same type, so mismatched dtypes must be rejected
+    before the downcast rather than reaching `as_type` with the wrong one."""
+    var sb = StringBuilder(1)
+    sb.append("a")
+    var bb = BinaryLikeBuilder[BinaryType](1)
+    bb.append("a")
+    with assert_raises():
+        _ = equal_any(sb.finish(), bb.finish())
+
+
+def test_equal_any_numeric_still_dispatches() raises:
+    """The non-binarylike arm is unchanged."""
+    var r = equal_any(array([1, 2, 3], int64), array([1, 9, 3], int64))
+    assert_true(r[0].value())
+    assert_false(r[1].value())
+    assert_true(r[2].value())

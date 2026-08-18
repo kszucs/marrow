@@ -26,6 +26,8 @@
 - `ListScalar` carries its own dtype, so `large_list`, `map` and
   `fixed_size_list` elements report their own type rather than a
   reconstructed one.
+- Every unchecked view and buffer access is bounds-checked under
+  `-D ASSERT=all` and compiles out in release.
 
 ### Compute kernels
 
@@ -91,6 +93,8 @@
 
 - Statistics-based pruning: predicates push into `ParquetScan` and skip
   row groups; the page index skips pages within a group.
+- Projection pushdown into `ParquetScan`, so a scan decodes only the
+  columns its parent reads.
 
 ### Parquet
 

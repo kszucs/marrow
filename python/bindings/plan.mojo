@@ -187,8 +187,22 @@ def _plan_column_names(py_self: PythonObject) raises -> PythonObject:
     return names
 
 
-def _plan_execute(py_self: PythonObject) raises -> PythonObject:
-    return _plan(py_self).execute().to_python_object()
+def _plan_execute(
+    py_self: PythonObject, num_threads: PythonObject
+) raises -> PythonObject:
+    """Run the plan under an `ExecContext` with the caller's worker budget.
+
+    ``num_threads`` is the eager surface's spelling and the eager surface's
+    sentinel set (`RecordBatch.group_by(..., num_threads=0)`): 0 auto, 1 serial,
+    N forced. Before this argument existed the call was `execute()` with no
+    context at all, so `DynRelation.execute`'s `ExecContext()` default made
+    every lazy query serial no matter how many cores the machine had — the
+    kernels' parallel strategies were unreachable from the query API."""
+    return (
+        _plan(py_self)
+        .execute(ExecContext.parallel(Int(py=num_threads)))
+        .to_python_object()
+    )
 
 
 def _plan_select(

@@ -2172,19 +2172,36 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
         for _ in range(total):
             grid.append(None)
 
-        # Per-worker codec handles, reused across calls. Constructing a
-        # `CompressionLibs` is cheap, but the first decompress for a codec
-        # `dlopen`s its library — and a streaming scan calls `read` once per
-        # row-group window, so building them fresh on every call re-paid that open on
-        # every window (measured: 4.7x on a Snappy 16-row-group scan). Workers
-        # touch disjoint slots and the list is grown before dispatch, so this
-        # keeps the "one `CompressionLibs` per worker" rule the handles need.
+        # Per-worker codec scratch, reused across calls. The `dlopen` handles
+        # are process-wide now (`_CodecHandles`), so what a `CompressionLibs`
+        # still owns is the size out-param snappy writes through — not
+        # shareable, hence one per worker. Workers touch disjoint slots and the
+        # list is grown before dispatch, which is what keeps that rule.
         # Shared ownership rather than a `mut self` field on purpose: `read`
         # must stay a borrow, since `_read_at` hands out spans whose origin is
         # `self` and `ColumnReader` requires an immutable one.
         var codecs = self._codecs
         while len(codecs[]) < nt:
             codecs[].append(CompressionLibs())
+
+        # Open the compression libraries here, on the calling thread, if any
+        # chunk about to be decoded is compressed. `_Global` vends its pointer
+        # without locking and promises nothing about racing *creation*, so the
+        # first touch must not be several workers at once; after this every
+        # worker's use of the handle set is a pure read. Guarded rather than
+        # unconditional so an all-uncompressed file still `dlopen`s nothing.
+        for rg_idx in rg_list:
+            var compressed = False
+            for orig in plan.decode_order:
+                if (
+                    self._meta.row_groups[rg_idx].columns[orig].meta_data.codec
+                    != 0
+                ):
+                    compressed = True
+                    break
+            if compressed:
+                CompressionLibs.preload()
+                break
 
         # One slot per worker, like the result slots above: a single shared
         # `Optional[Error]` would be written by every failing thread at once.

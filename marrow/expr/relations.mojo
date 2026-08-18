@@ -134,6 +134,42 @@ trait Relation(Deinitable, Movable):
         """
         return None
 
+    def with_projection(
+        self, needed: List[String]
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """This node rebuilt so its subtree reads only the columns it needs,
+        given that its parent reads only `needed` of *this* node's output — or
+        `None` to leave the subtree alone, which is the default.
+
+        Erased for the same reason `with_predicate` is: the rebuilt node has the
+        *same concrete type* as this one, so `DynRelation` keeps its trampolines
+        and swaps only the pointer. Returning `DynRelation` would put it inside
+        its own trampoline field type and Mojo rejects the struct as recursive.
+
+        A node implements this by widening `needed` with the columns its **own**
+        expressions read — a `Filter`'s predicate, a `Sort`'s keys, an
+        `Aggregate`'s keys *and* aggregate inputs — recursing into its input
+        through `DynRelation.with_projection`, and rebuilding itself around the
+        result. `ParquetScan` is where the recursion terminates and the only
+        node whose *own* data changes: its schema is its projection.
+
+        **The output schema of the plan root never changes**, because
+        `DynRelation.optimize` seeds `needed` with the root's own columns and a
+        schema-passthrough node (`Filter`/`Sort`/`Limit`) can only ever narrow to
+        a subset its parent asked for.
+        """
+        return None
+
+    def children(self) -> List[DynRelation]:
+        """This node's child relations, left to right; empty for a leaf.
+
+        The read-only half of plan traversal — what `explain`, a cost model, or
+        a test asserting a rewritten scan's schema needs, and what the layer
+        lacked. Unlike the rewriting virtuals above it can return `DynRelation`
+        directly: a *method* mentioning the erased type is fine, only a **field**
+        whose function type mentions it makes the struct recursive."""
+        return List[DynRelation]()
+
     def schema(self) -> Schema:
         ...
 
@@ -147,6 +183,45 @@ trait Relation(Deinitable, Movable):
     def kind(self) -> Int:
         """Node discriminant for plan rewrites; generic unless overridden."""
         return RELATION_GENERIC
+
+
+# ---------------------------------------------------------------------------
+# Column-set helpers used by the projection rewrite
+# ---------------------------------------------------------------------------
+
+
+def _add_names(mut acc: List[String], names: List[String]):
+    """Append the names not already in `acc`, order-preserving."""
+    for ref n in names:
+        var seen = False
+        for ref a in acc:
+            if a == n:
+                seen = True
+                break
+        if not seen:
+            acc.append(n.copy())
+
+
+def _has_name(names: List[String], name: String) -> Bool:
+    for ref n in names:
+        if n == name:
+            return True
+    return False
+
+
+def _schema_names(schema: Schema) -> List[String]:
+    var out = List[String](capacity=len(schema.fields))
+    for ref f in schema.fields:
+        out.append(f.name.copy())
+    return out^
+
+
+def _referenced_by(values: List[BoxedValue]) -> List[String]:
+    """The order-preserving deduped union of a list of expressions' columns."""
+    var acc = List[String]()
+    for ref v in values:
+        _add_names(acc, v.referenced_columns())
+    return acc^
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +249,28 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     var _virt_with_predicate: def(
         ArcPointer[NoneType], var BoxedValue
     ) thin raises -> Optional[ArcPointer[NoneType]]
+    var _virt_with_projection: def(
+        ArcPointer[NoneType], List[String]
+    ) thin raises -> Optional[ArcPointer[NoneType]]
+    var _virt_children: def(ArcPointer[NoneType]) thin -> List[DynRelation]
 
     @staticmethod
     def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> Int:
         return rebind[ArcPointer[T]](ptr)[].kind()
+
+    @staticmethod
+    def _tramp_with_projection[
+        T: Relation
+    ](ptr: ArcPointer[NoneType], needed: List[String]) raises -> Optional[
+        ArcPointer[NoneType]
+    ]:
+        return rebind[ArcPointer[T]](ptr)[].with_projection(needed)
+
+    @staticmethod
+    def _tramp_children[
+        T: Relation
+    ](ptr: ArcPointer[NoneType]) -> List[DynRelation]:
+        return rebind[ArcPointer[T]](ptr)[].children()
 
     @staticmethod
     def _tramp_with_predicate[
@@ -220,6 +313,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_drop = Self._tramp_drop[T]
         self._virt_kind = Self._tramp_kind[T]
         self._virt_with_predicate = Self._tramp_with_predicate[T]
+        self._virt_with_projection = Self._tramp_with_projection[T]
+        self._virt_children = Self._tramp_children[T]
 
     def __init__(out self, *, copy: Self):
         # O(1) share — nodes are immutable, so aliasing is safe.
@@ -230,6 +325,8 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_drop = copy._virt_drop
         self._virt_kind = copy._virt_kind
         self._virt_with_predicate = copy._virt_with_predicate
+        self._virt_with_projection = copy._virt_with_projection
+        self._virt_children = copy._virt_children
 
     def __deinit__(deinit self):
         self._virt_drop(self._data^)
@@ -248,21 +345,67 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     def downcast[T: Relation](self) -> ArcPointer[T]:
         return rebind[ArcPointer[T]](self._data.copy())
 
+    def children(self) -> List[DynRelation]:
+        """This node's children, left to right — the plan is walkable from here.
+        """
+        return self._virt_children(self._data)
+
+    # --- optimization ---
+
+    def with_projection(self, needed: List[String]) raises -> DynRelation:
+        """This plan rewritten so nothing below reads a column no one needs,
+        given that the caller reads only `needed` of this node's output.
+
+        Prefer `optimize()`, which seeds `needed` correctly for a root."""
+        var data = self._virt_with_projection(self._data, needed)
+        if data:
+            # Same concrete node type, so the trampolines still apply — copy
+            # them and swap in the rebuilt node's data (`with_predicate`'s rule).
+            var out = DynRelation(copy=self)
+            out._data = data.take()
+            return out^
+        return DynRelation(copy=self)
+
+    def optimize(self) raises -> DynRelation:
+        """This plan with projection pushdown applied, ready to execute.
+
+        Seeds the rewrite with the root's own columns, which is what makes the
+        result's schema identical to this one's: a node can only narrow to a
+        subset its parent asked for, and the root asks for everything it emits.
+
+        `execute()` calls this, so a plan built through the verbs is optimized
+        without the caller doing anything. It is public because a caller that
+        drives `to_processor` itself — or a test asserting *what* was pushed —
+        needs the rewritten plan in hand."""
+        return self.with_projection(_schema_names(self.schema()))
+
     # --- execution ---
 
     def to_processor(
-        self, ctx: ExecContext = ExecContext()
+        self, ctx: ExecContext = ExecContext.auto()
     ) raises -> DynProcessor:
         """Build the operator tree for this plan; the plan is left untouched."""
         return self._virt_to_processor(self._data, ctx)
 
-    def execute(self, ctx: ExecContext = ExecContext()) raises -> RecordBatch:
+    def execute(
+        self, ctx: ExecContext = ExecContext.auto()
+    ) raises -> RecordBatch:
         """Open this plan into a fresh operator tree and drain it into one
         `RecordBatch`.
 
-        The plan is a pure description and is never mutated, so it can be
-        executed repeatedly and concurrently."""
-        var op = self.to_processor(ctx)
+        The default is **auto**, not serial: each kernel the plan reaches picks
+        serial vs all-cores from its own row-count threshold. It used to be the
+        bare `ExecContext()` — `num_threads=1`, forced serial — which made every
+        plan-driven query single-threaded no matter what the caller had, and
+        made `GroupBy`'s and `HashJoin`'s parallel strategies unreachable from
+        the relational API. Pass `ExecContext.serial()` to get the old
+        behaviour.
+
+        The plan is optimized first (projection pushdown), which never changes
+        the schema or the rows — only how many Parquet column chunks are
+        decoded. The plan is a pure description and is never mutated, so it can
+        be executed repeatedly and concurrently."""
+        var op = self.optimize().to_processor(ctx)
         return op.collect()
 
     # --- plan-building API ---
@@ -932,6 +1075,47 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
         )
         return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
 
+    def with_projection(
+        self, needed: List[String]
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """Narrow the schema — and therefore the projection — to `needed`.
+
+        This is the whole point of the rewrite: the scan reads only the columns
+        its schema names, so a 105-column file queried for one column stops
+        decoding the other 104. Field order is the file's, not `needed`'s, so a
+        pushdown never silently reorders a scan's output.
+
+        **A scan never narrows to nothing.** A plan that reads no column at all
+        (`COUNT(*)` — `lit(1).count()` references none) still needs the scan to
+        report the file's row count, and a zero-column read yields zero-row
+        batches, which the streaming loop reads as end-of-file. So the empty case
+        keeps one column, and picks the narrowest fixed-width one available
+        (`byte_width()` is 0 for the variable-width types, which is exactly the
+        set to avoid here) — reading one `uint8` beats reading one `binary`.
+
+        Keeps `leaves` for the reason `with_predicate` does: `Self.leaves` is in
+        scope here and a downcast at the call site could not have named it."""
+        var fields = List[Field]()
+        for ref f in self._schema.fields:
+            if _has_name(needed, f.name):
+                fields.append(f.copy())
+        if len(fields) == 0 and len(self._schema.fields) > 0:
+            var best = 0
+            var best_width = self._schema.fields[0].dtype.byte_width()
+            for i in range(1, len(self._schema.fields)):
+                var w = self._schema.fields[i].dtype.byte_width()
+                if w > 0 and (best_width == 0 or w < best_width):
+                    best = i
+                    best_width = w
+            fields.append(self._schema.fields[best].copy())
+        var pushed = ParquetScan[Self.leaves](
+            path=self.path.copy(),
+            schema=Schema(fields=fields^),
+            morsel_size=self.morsel_size,
+            predicate=self.predicate.copy(),
+        )
+        return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
+
     def kind(self) -> Int:
         return RELATION_PARQUET_SCAN
 
@@ -982,9 +1166,27 @@ struct Filter(Relation):
     def schema(self) -> Schema:
         return self.input.schema()
 
+    def children(self) -> List[DynRelation]:
+        return [DynRelation(copy=self.input)]
+
+    def with_projection(
+        self, needed: List[String]
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """The predicate's columns are needed too — they are read here even when
+        nothing above reads them."""
+        var below = needed.copy()
+        _add_names(below, self.predicate.referenced_columns())
+        var pushed = Filter(
+            input=self.input.with_projection(below),
+            predicate=self.predicate.copy(),
+        )
+        return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
+
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return FilterProcessor(
-            input=self.input.to_processor(ctx), predicate=self.predicate.copy()
+            input=self.input.to_processor(ctx),
+            predicate=self.predicate.copy(),
+            ctx=ctx.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1016,6 +1218,43 @@ struct Project(Relation):
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
+
+    def children(self) -> List[DynRelation]:
+        return [DynRelation(copy=self.input)]
+
+    def with_projection(
+        self, needed: List[String]
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """Drop the output columns nobody reads, then ask the input only for
+        what the surviving expressions reference.
+
+        Dropping outputs is what makes the rewrite transitive: without it
+        `t.select("a", "b").aggregate(keys=[col("a")], ...)` still reads `b` off
+        disk, because the input set would be taken from *every* value here
+        rather than the ones that survive. Surviving columns keep this node's own
+        order, not `needed`'s, so a pushdown never reorders a projection."""
+        var out_names = List[String]()
+        var out_values = List[BoxedValue]()
+        var fields = List[Field]()
+        for i in range(len(self.names)):
+            if _has_name(needed, self.names[i]):
+                out_names.append(self.names[i].copy())
+                out_values.append(self.values[i].copy())
+                fields.append(self._schema.fields[i].copy())
+        if len(out_names) == 0 and len(self.names) > 0:
+            # A zero-column relation carries no row count, so a `COUNT(*)` above
+            # would see an empty stream. Keep one column, as the scan does.
+            out_names.append(self.names[0].copy())
+            out_values.append(self.values[0].copy())
+            fields.append(self._schema.fields[0].copy())
+        var below = _referenced_by(out_values)
+        var pushed = Project(
+            input=self.input.with_projection(below),
+            names=out_names^,
+            values=out_values^,
+            schema=Schema(fields=fields^),
+        )
+        return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return ProjectProcessor(
@@ -1049,6 +1288,20 @@ struct Limit(Relation):
 
     def schema(self) -> Schema:
         return self.input.schema()
+
+    def children(self) -> List[DynRelation]:
+        return [DynRelation(copy=self.input)]
+
+    def with_projection(
+        self, needed: List[String]
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """Reads no column of its own — `needed` passes straight through."""
+        var pushed = Limit(
+            input=self.input.with_projection(needed),
+            offset=self.offset,
+            length=self.length,
+        )
+        return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return LimitProcessor(
@@ -1107,6 +1360,31 @@ struct Sort(Relation):
     def kind(self) -> Int:
         return RELATION_SORT
 
+    def children(self) -> List[DynRelation]:
+        return [DynRelation(copy=self.input)]
+
+    def with_projection(
+        self, needed: List[String]
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """The sort keys are read here even when nothing above reads them."""
+        var below = needed.copy()
+        _add_names(below, _referenced_by(self.keys))
+        var input = self.input.with_projection(below)
+        # `Sort` stores its schema rather than deriving it, so it has to be
+        # re-read off the rewritten input — every other passthrough node here
+        # answers `self.input.schema()` and needs no such care.
+        var schema = input.schema()
+        var pushed = Sort(
+            input=input^,
+            keys=self.keys.copy(),
+            ascending=self.ascending.copy(),
+            nulls_first=self.nulls_first,
+            stable=self.stable,
+            limit=self.limit.copy(),
+            schema=schema^,
+        )
+        return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
+
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return SortProcessor(
             input=self.input.to_processor(ctx),
@@ -1163,6 +1441,30 @@ struct Aggregate(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
+    def children(self) -> List[DynRelation]:
+        return [DynRelation(copy=self.input)]
+
+    def with_projection(
+        self, needed: List[String]
+    ) raises -> Optional[ArcPointer[NoneType]]:
+        """`needed` is discarded: an aggregate's output columns are not its
+        input's, so what the input must supply is the group keys **and** the
+        aggregate input expressions — nothing else, however wide the input is.
+
+        Dropping an unread aggregate would be a separate rewrite and is not one:
+        `count(*)`'s column set is empty, so an aggregate list is not a safe
+        proxy for "reads nothing"."""
+        var below = _referenced_by(self.keys)
+        _add_names(below, _referenced_by(self.inputs))
+        var pushed = Aggregate(
+            input=self.input.with_projection(below),
+            keys=self.keys.copy(),
+            inputs=self.inputs.copy(),
+            aggs=self.aggs.copy(),
+            schema=Schema(copy=self._schema),
+        )
+        return Optional(rebind[ArcPointer[NoneType]](ArcPointer(pushed^)))
+
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return AggregateProcessor(
             input=self.input.to_processor(ctx),
@@ -1215,6 +1517,16 @@ struct Join(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
+    def children(self) -> List[DynRelation]:
+        return [DynRelation(copy=self.left), DynRelation(copy=self.right)]
+
+    # No `with_projection`: the join's key **indices** are positions into its
+    # children's schemas, fixed when the node was built, so narrowing a child
+    # would silently join on the wrong columns. Pushing a projection through a
+    # join means recomputing those indices and the output schema — a separate
+    # rewrite with its own correctness conditions, not a wider `needed` set. The
+    # inherited default leaves the whole subtree alone, which is the safe answer.
+
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return JoinProcessor(
             left=self.left.to_processor(ctx),
@@ -1224,6 +1536,7 @@ struct Join(Relation):
             join_kind=self.join_kind,
             strictness=self.strictness,
             schema=Schema(copy=self._schema),
+            ctx=ctx.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):

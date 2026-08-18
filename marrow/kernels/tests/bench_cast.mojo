@@ -9,20 +9,23 @@ against PyArrow/Polars in ``python/marrow/tests/bench_cast.py``.
 
 from std.benchmark import BenchMetric, keep
 
-from ...arrays import DynArray
-from ...builders import arange
+from ...arrays import BinaryArray, DynArray
+from ...builders import arange, StringBuilder
 from ...dtypes import (
+    BinaryType,
     Int32Type,
     Int64Type,
     Float64Type,
+    StringType,
     int8,
     int64,
     float64,
+    string,
     timestamp,
     second,
     millisecond,
 )
-from ...kernels.cast import cast, NumericCast
+from ...kernels.cast import cast, BinaryLikeCast, NumericCast
 from ...utils.testing import Benchmark
 
 
@@ -132,3 +135,161 @@ def bench_timestamp_upscale_100k(mut b: Benchmark) raises:
 
 def bench_timestamp_upscale_1m(mut b: Benchmark) raises:
     _bench_timestamp_upscale(b, 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# Binary → string — the ClickBench shape.
+#
+# Parquet `BYTE_ARRAY` columns arrive as `binary`, and the string kernels are
+# bound on `StringLikeType`, so every string query spells `.cast(string)`.
+# `BinaryLikeCast.apply` is a pure relabel when the offset widths match, which
+# `binary` → `string` satisfies — so the *entire* cost of these rows is the
+# `safe` UTF-8 validation guard. The three cases below separate that out:
+#
+#   binary → string, safe=True   validating   (the path ClickBench takes)
+#   binary → string, safe=False  pure relabel (the floor)
+#   string → string, safe=True   pure relabel (control: `bytes_to_text` is
+#                                False, so the guard is compiled out entirely)
+#
+# safe=True minus safe=False *is* the validation cost.
+# ---------------------------------------------------------------------------
+
+
+def _url_binary(n: Int) raises -> BinaryArray:
+    """`n` URL-shaped ASCII strings, relabelled to `binary` (a free relabel)."""
+    var b = StringBuilder(n)
+    for i in range(n):
+        b.append(
+            String(
+                "http://example.com/path/segment/",
+                i,
+                "?query=value&other=",
+                i * 7,
+                "#fragment",
+            )
+        )
+    return BinaryLikeCast.apply[StringType, BinaryType, False](b.finish())
+
+
+def _text_binary(n: Int) raises -> BinaryArray:
+    """`n` multi-byte UTF-8 strings, relabelled to `binary`.
+
+    The ASCII fast path cannot carry these, so this row measures the
+    non-ASCII branch rather than the branch ClickBench hits."""
+    var b = StringBuilder(n)
+    for i in range(n):
+        b.append(String("Здравствуйте, мир — строка ", i, " ünïcødé"))
+    return BinaryLikeCast.apply[StringType, BinaryType, False](b.finish())
+
+
+def _bench_binary_to_string_safe(mut b: Benchmark, n: Int) raises:
+    var src = _url_binary(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(BinaryLikeCast.apply[BinaryType, StringType, True](src)))
+
+    b.iter(call)
+    keep(src)
+
+
+def bench_binary_to_string_safe_10k(mut b: Benchmark) raises:
+    _bench_binary_to_string_safe(b, 10_000)
+
+
+def bench_binary_to_string_safe_100k(mut b: Benchmark) raises:
+    _bench_binary_to_string_safe(b, 100_000)
+
+
+def bench_binary_to_string_safe_1m(mut b: Benchmark) raises:
+    _bench_binary_to_string_safe(b, 1_000_000)
+
+
+def _bench_binary_to_string_unsafe(mut b: Benchmark, n: Int) raises:
+    var src = _url_binary(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(BinaryLikeCast.apply[BinaryType, StringType, False](src)))
+
+    b.iter(call)
+    keep(src)
+
+
+def bench_binary_to_string_unsafe_10k(mut b: Benchmark) raises:
+    _bench_binary_to_string_unsafe(b, 10_000)
+
+
+def bench_binary_to_string_unsafe_100k(mut b: Benchmark) raises:
+    _bench_binary_to_string_unsafe(b, 100_000)
+
+
+def bench_binary_to_string_unsafe_1m(mut b: Benchmark) raises:
+    _bench_binary_to_string_unsafe(b, 1_000_000)
+
+
+def _bench_binary_to_string_utf8_safe(mut b: Benchmark, n: Int) raises:
+    var src = _text_binary(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(BinaryLikeCast.apply[BinaryType, StringType, True](src)))
+
+    b.iter(call)
+    keep(src)
+
+
+def bench_binary_to_string_utf8_safe_100k(mut b: Benchmark) raises:
+    _bench_binary_to_string_utf8_safe(b, 100_000)
+
+
+def _bench_string_to_string_relabel(mut b: Benchmark, n: Int) raises:
+    """Control — `bytes_to_text` is False, so no guard is compiled in at all."""
+    var src = _url_binary(n)
+    var s = BinaryLikeCast.apply[BinaryType, StringType, False](src)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(BinaryLikeCast.apply[StringType, StringType, True](s)))
+
+    b.iter(call)
+    keep(s)
+    keep(src)
+
+
+def bench_string_to_string_relabel_100k(mut b: Benchmark) raises:
+    _bench_string_to_string_relabel(b, 100_000)
+
+
+def bench_string_to_string_relabel_1m(mut b: Benchmark) raises:
+    _bench_string_to_string_relabel(b, 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# Runtime-dispatch equivalent — what `col("URL").cast(ma.string())` actually
+# calls, so the row is comparable with the ClickBench end-to-end numbers.
+# ---------------------------------------------------------------------------
+
+
+def _bench_dispatch_binary_to_string(mut b: Benchmark, n: Int) raises:
+    var src: DynArray = _url_binary(n)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(cast(src, string, safe=True)))
+
+    b.iter(call)
+    keep(src)
+
+
+def bench_dispatch_binary_to_string_100k(mut b: Benchmark) raises:
+    _bench_dispatch_binary_to_string(b, 100_000)
+
+
+def bench_dispatch_binary_to_string_1m(mut b: Benchmark) raises:
+    _bench_dispatch_binary_to_string(b, 1_000_000)

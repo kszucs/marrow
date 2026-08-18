@@ -24,7 +24,7 @@ from ...expr.relations import (
     Filter,
     RELATION_PARQUET_SCAN,
 )
-from ...expr.builders import col, lit
+from ...expr.builders import col, count_star, lit
 from ...expr.values import BoxedValue
 from ...expr.pruning import PruneStats
 
@@ -244,4 +244,194 @@ def test_pushdown_prunes_all_groups() raises:
     )
     var result = plan.execute()
     assert_equal(result.num_rows(), 0)
+    remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Projection pushdown
+#
+# The assertions below are on the **rewritten scan's schema**, not on the rows:
+# a test that only checks answers passes even when nothing was pushed, because
+# reading a column nobody wants is slow rather than wrong. Each one therefore
+# walks the optimized plan down to its `ParquetScan` and names the columns that
+# survived — and a handful then also execute, so the rewrite is pinned to
+# producing the same rows as the plan it replaced.
+# ---------------------------------------------------------------------------
+
+
+def _scan_schema_of(plan: DynRelation) raises -> Schema:
+    """The schema of the first `ParquetScan` under `plan`, found by walking
+    `children()` — the traversal primitive this work added, used here instead of
+    a `downcast` chain that would have to name every intermediate node type."""
+    if plan.kind() == RELATION_PARQUET_SCAN:
+        return plan.schema()
+    for ref c in plan.children():
+        var found = _scan_schema_of(c)
+        if len(found.fields) > 0:
+            return found^
+    return Schema()
+
+
+def _scan_columns_of(plan: DynRelation) raises -> String:
+    """The scan's surviving column names, comma-joined, for a one-line assert.
+    """
+    var out = String()
+    for ref f in _scan_schema_of(plan).fields:
+        if out.byte_length() > 0:
+            out += ","
+        out += f.name
+    return out^
+
+
+def _wide_scan(path: String) raises -> DynRelation:
+    """A scan over the three-column file `_write_wide` builds."""
+    return parquet_scan(
+        path,
+        schema([field("x", int64), field("y", int64), field("s", string)]),
+    )
+
+
+def test_relation_children_walks_the_plan() raises:
+    """`children()` makes a plan walkable: root to leaf without a downcast."""
+    var sch = schema([field("x", int64), field("y", int64)])
+    var plan = (
+        parquet_scan("t", sch)
+        .filter(col("x") > lit[Int64Type](Int64(0)))
+        .select("y")
+    )
+    assert_equal(len(plan.children()), 1)  # Project -> Filter
+    var f = plan.children()[0].copy()
+    assert_equal(len(f.children()), 1)  # Filter -> ParquetScan
+    var scan = f.children()[0].copy()
+    assert_equal(scan.kind(), RELATION_PARQUET_SCAN)
+    assert_equal(len(scan.children()), 0)  # a leaf has none
+
+
+def test_projection_pushdown_narrows_scan_to_selected_column() raises:
+    """`select("y")` over a three-column scan reads only `y`."""
+    var plan = _wide_scan("t").select("y").optimize()
+    assert_equal(_scan_columns_of(plan), "y")
+
+
+def test_projection_pushdown_keeps_predicate_columns() raises:
+    """The predicate's columns are read even when the output drops them: the
+    `Filter` still evaluates `x > 0`, so `x` must survive alongside `y`."""
+    var plan = (
+        _wide_scan("t")
+        .filter(col("x") > lit[Int64Type](Int64(0)))
+        .select("y")
+        .optimize()
+    )
+    assert_equal(_scan_columns_of(plan), "x,y")
+
+
+def test_projection_pushdown_keeps_sort_keys() raises:
+    """Same rule for a `Sort`: `s` is ordered on but not emitted."""
+    var asc: List[Bool] = [True]
+    var plan = (
+        _wide_scan("t").sort(keys=[col("s")], ascending=asc).select("y")
+    ).optimize()
+    assert_equal(_scan_columns_of(plan), "y,s")
+
+
+def test_projection_pushdown_keeps_group_keys_and_agg_inputs() raises:
+    """An aggregate needs both halves — the key `s` and the summed `y` — and
+    nothing else, whatever its own output columns are called."""
+    var plan = (
+        _wide_scan("t")
+        .aggregate(keys=[col("s")], aggs=[col("y").aggregate("sum")])
+        .optimize()
+    )
+    assert_equal(_scan_columns_of(plan), "y,s")
+
+
+def test_projection_pushdown_is_transitive_through_project() raises:
+    """A `Project` drops the outputs nobody reads, so the scan below stops
+    reading their inputs too — `select("x", "y")` under a `sum(y)` reads only
+    `y`, not `x`."""
+    var plan = (
+        _wide_scan("t")
+        .select("x", "y")
+        .aggregate(keys=[], aggs=[col("y").aggregate("sum")])
+        .optimize()
+    )
+    assert_equal(_scan_columns_of(plan), "y")
+
+
+def test_projection_pushdown_leaves_full_scan_alone() raises:
+    """A plan that emits every column must still read every column — the root
+    seeds `needed` with its own schema, so nothing narrows."""
+    var plan = _wide_scan("t").filter(col("x") > lit[Int64Type](Int64(0)))
+    assert_equal(_scan_columns_of(plan.optimize()), "x,y,s")
+    # ... and the root's own schema is untouched by the rewrite.
+    assert_equal(String(plan.optimize().schema()), String(plan.schema()))
+
+
+def test_projection_pushdown_keeps_one_column_for_count_star() raises:
+    """`COUNT(*)` references no column at all, and a zero-column scan yields
+    zero-row batches — which the streaming loop reads as end-of-file. So the
+    empty case keeps exactly one column, the narrowest fixed-width one: `x` and
+    `y` are both int64 and `s` is variable-width, so `x` wins on order."""
+    var plan = _wide_scan("t").aggregate(keys=[], aggs=[count_star()])
+    assert_equal(_scan_columns_of(plan.optimize()), "x")
+
+
+def test_projection_pushdown_stops_at_a_join() raises:
+    """A join's key *indices* are positions into its children's schemas, so
+    narrowing a child would join on the wrong column. Both sides stay whole."""
+    var left = _wide_scan("l")
+    var right = parquet_scan("r", schema([field("x", int64)]))
+    var plan = left.join(right, left_on=[col("x")], right_on=[col("x")])
+    var optimized = plan.select("y").optimize()
+    var join = optimized.children()[0].copy()
+    assert_equal(len(join.children()), 2)
+    assert_equal(_scan_columns_of(join.children()[0].copy()), "x,y,s")
+    assert_equal(_scan_columns_of(join.children()[1].copy()), "x")
+
+
+def test_projection_pushdown_preserves_results() raises:
+    """End to end on a real file: the rewritten plan returns exactly the rows
+    and columns the un-rewritten one does."""
+    var path = String("/tmp/marrow_pd_projpush.parquet")
+    _write_wide(path, 2000, 500)  # 4 row groups, y = 10 * x
+    var plan = (
+        _wide_scan(path)
+        .filter(col("x") > lit[Int64Type](Int64(1996)))
+        .select("y")
+    )
+    assert_equal(_scan_columns_of(plan.optimize()), "x,y")
+    var result = plan.execute()
+    assert_equal(result.num_columns(), 1)
+    assert_equal(result.schema.fields[0].name, "y")
+    assert_equal(result.num_rows(), 3)  # x = 1997, 1998, 1999
+    assert_equal(result.columns[0].copy().as_int64()[0].value(), 19970)
+    remove(path)
+
+
+def test_projection_pushdown_count_star_counts_every_row() raises:
+    """The one-column fallback still sees every row: `COUNT(*)` over the whole
+    file is the file's row count, not the count of one decoded chunk."""
+    var path = String("/tmp/marrow_pd_countstar.parquet")
+    _write_wide(path, 2000, 500)
+    var plan = _wide_scan(path).aggregate(keys=[], aggs=[count_star()])
+    assert_equal(_scan_columns_of(plan.optimize()), "x")
+    var result = plan.execute()
+    assert_equal(result.num_rows(), 1)
+    assert_equal(result.columns[0].copy().as_int64()[0].value(), 2000)
+    remove(path)
+
+
+def test_projection_pushdown_groups_on_the_narrowed_scan() raises:
+    """A grouped aggregate over a wide file reads only its key and its input,
+    and still computes what the wide plan computes."""
+    var path = String("/tmp/marrow_pd_group.parquet")
+    _write_wide(path, 100, 50)
+    var plan = _wide_scan(path).aggregate(
+        keys=[], aggs=[col("y").aggregate("sum").alias("total")]
+    )
+    assert_equal(_scan_columns_of(plan.optimize()), "y")
+    var result = plan.execute()
+    assert_equal(result.num_rows(), 1)
+    # y = 10 * x for x in 0..99 -> 10 * (99 * 100 / 2)
+    assert_equal(result.columns[0].copy().as_int64()[0].value(), 49500)
     remove(path)

@@ -388,15 +388,42 @@ partitioning overhead dominates below ~100k rows on typical inputs."""
 # `RadixPartitioner.map_partitions` (partition.mojo); each call site supplies
 # only its per-partition op and its own merge.
 
-comptime _DEFAULT_RADIX_BITS = 6
-"""Default radix fanout for ``RadixPartitioner`` (64 partitions).
+comptime _PROBE_STRIPE_THRESHOLD = 32_768
+"""Below this *probe-call* row count the probe hashes on the calling thread.
 
-Sweep at 10M INNER join on Apple Silicon shows 32 / 64 / 128 partitions
-all land within ~1 ms of each other — the hash table per partition
-already exceeds L2 at these sizes, so reducing fanout further doesn't
-help cache locality but does reduce sync_parallelize dispatch overhead.
-64 is the default; fanout is a runtime parameter on ``RadixPartitioner``
-and can be tuned per workload."""
+`ExecContext.parallel(n)` is a forced count, and a forced count is an
+*instruction*: `stripe` splits a 1,000-row loop `n` ways because the caller
+asked for `n` workers. That is the right reading for a caller who sized the
+work, and the wrong one for a kernel splitting whatever batch it was handed —
+so the probe asks `worth_parallel`, which treats a forced count as a *budget*,
+about the rows in this call. Measured: an 8192-row probe hashed across 8
+forced workers costs ~1213 us against ~76 us on the calling thread.
+
+Set to `stripe`'s own default `min_parallel_size` — this is the same crossover,
+just asked about the probe batch rather than about a whole column."""
+
+comptime _DEFAULT_RADIX_BITS = 4
+"""Default radix fanout for ``RadixPartitioner`` (16 partitions).
+
+Was 6 (64 partitions), chosen from a sweep of a **one-shot** 10M INNER join
+where 32 / 64 / 128 all landed within ~1 ms: partitioning is a per-*call* cost,
+and one call over 10M rows amortizes any fanout. The plan layer streams the
+probe side in 8192-row morsels, so it pays that cost ~122 times at 1M rows
+instead of once, and the fanout stops being free.
+
+Re-swept on the morselized shape (build + 8192-row probes, 8 workers, Apple
+Silicon), times for the whole join:
+
+    bits   1M      4M       10M
+    3      20.3    61.7     158.9
+    4      16.8    68.5     181.1
+    6      30.1    93.5     238.9   (serial: 17.4 / 101.8 / 360.5)
+
+3 is faster at 4M and 10M but loses to the serial baseline at 1M; 4 is the
+only setting that beats serial at every size, and at 8 workers it is also the
+principled one — 2 partitions per worker, enough to balance skew without
+paying for 8x oversubscription. Fanout stays a runtime parameter on
+``RadixPartitioner`` and can be tuned per workload."""
 
 
 struct HashJoin[Hash: Hasher = RapidHash64]:
@@ -448,6 +475,16 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     numbers back to the original build-side row index after probe."""
     var _radix_bits: Int
 
+    var _built_parallel: Bool
+    """Which layout `build` produced — the *correctness* constraint.
+
+    `probe_serial` reads `_table`, `probe_parallel` reads `_tables`, and only
+    the matching `build_*` populates either. So the probe path is not a free
+    choice: it is dictated by what build did. This used to be re-derived by
+    asking `worth_parallel` about `_left_rows` a second time and trusting the
+    two calls to agree, which conflated it with the throughput decision below.
+    """
+
     def __init__(out self, var ctx: ExecContext = ExecContext()):
         """Create a HashJoin.
 
@@ -468,6 +505,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         self._left_partition_keys = List[StructArray]()
         self._left_partition_rows = List[Int32Array]()
         self._radix_bits = _DEFAULT_RADIX_BITS
+        self._built_parallel = False
 
     # ------------------------------------------------------------------
     # Public dispatchers — route to serial or parallel implementations.
@@ -486,12 +524,27 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         kind: JoinKind = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
-        # Must reach the same verdict as `build` — `probe_parallel` reads the
-        # per-partition tables that only `build_parallel` populates — so it asks
-        # the same predicate about the same row count.
-        if not self._ctx.worth_parallel(self._left_rows, _PARALLEL_THRESHOLD):
+        # Layout, not throughput: `probe_parallel` reads the per-partition
+        # tables that only `build_parallel` populates, and `probe_serial` reads
+        # the single table that only `build_serial` populates. Whichever build
+        # ran decides this, and nothing else may.
+        #
+        # Throughput is a separate question, and asking it here was the bug:
+        # `worth_parallel(self._left_rows, ...)` let one row count answer both,
+        # so a 1M-row build put every 8192-row morsel the plan layer streams
+        # through the partitioned path. The throughput levers live where the
+        # per-call cost actually is — `_DEFAULT_RADIX_BITS` (how much work each
+        # probe call must repeat) and `_probe_ctx` (whether a call is big
+        # enough to stripe) — and both are sized by the probe batch, never by
+        # the build side. Measurement says the partition *fan-out* itself is
+        # not a lever: it beats running the same partitions serially at every
+        # batch size tested, 8192 rows included.
+        if self._built_parallel:
+            return self.probe_parallel(
+                right, right_key_indices, kind, strictness
+            )
+        else:
             return self.probe_serial(right, right_key_indices, kind, strictness)
-        return self.probe_parallel(right, right_key_indices, kind, strictness)
 
     # ------------------------------------------------------------------
     # Serial path — one SwissHashTable over the whole build side.
@@ -504,8 +557,24 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         self._left_rows = left.length
         self._left_data = left.copy()
         self._left_key_indices = left_key_indices.copy()
+        self._built_parallel = False
         var ctx = self._ctx.copy()
         self._table.build(left.select(left_key_indices), ctx)
+
+    def _probe_ctx(self, probe_rows: Int) -> ExecContext:
+        """The context to spend on a probe call of `probe_rows` rows.
+
+        Splits the two questions a single `ExecContext` otherwise answers at
+        once: *how many workers may this join use* (the caller's budget, held
+        in `self._ctx`) versus *is this particular call big enough to spend
+        them* (a property of the batch, which only the call site knows).
+        `worth_parallel` is the right predicate because it reads a forced
+        thread count as a budget rather than as an instruction.
+        """
+        if self._ctx.worth_parallel(probe_rows, _PROBE_STRIPE_THRESHOLD):
+            return self._ctx.copy()
+        else:
+            return ExecContext.serial()
 
     def probe_serial(
         self,
@@ -516,12 +585,16 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
     ) raises -> StructArray:
         var left_keys = self._left_data.value().select(self._left_key_indices)
         var right_keys = right.select(right_key_indices)
+        # Sized by *this call's* probe rows, not by the build side and not by
+        # the raw worker count: `SwissHashTable.probe` spends `ctx` on hashing
+        # the probe keys, and striping 8192 of them across a forced 8 workers
+        # costs ~16x what hashing them on the calling thread does.
         var pairs = self._table.probe(
             left_keys,
             right_keys,
             self._left_rows,
             single_match=strictness == JOIN_ANY,
-            ctx=self._ctx.copy(),
+            ctx=self._probe_ctx(len(right)),
         )
         # `SwissHashTable.probe` still returns a bare tuple -- it cannot name
         # `JoinIndex`, since `join` imports `hashtable` and not the other way
@@ -590,6 +663,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         self._tables = tables^
         self._left_partition_keys = keys_out^
         self._left_partition_rows = rows_out^
+        self._built_parallel = True
 
     def probe_parallel(
         self,
@@ -726,6 +800,16 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
 
     def num_left_rows(self) -> Int:
         return self._left_rows
+
+    def built_parallel(self) -> Bool:
+        """Whether `build` produced the radix-partitioned layout.
+
+        Exposed so a test can prove it exercised the partitioned probe rather
+        than passing vacuously on the serial one — the two paths are supposed
+        to be indistinguishable in their results, which is exactly what makes
+        an accidental fallback invisible.
+        """
+        return self._built_parallel
 
     def output_dtype(self, probe: StructArray, kind: JoinKind) -> DynType:
         """Build the output struct DataType for a join result."""

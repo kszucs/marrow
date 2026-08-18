@@ -9,8 +9,10 @@ from ...arrays import (
 from ...builders import (
     array,
     PrimitiveBuilder,
+    BinaryLikeBuilder,
     StringBuilder,
     Int32Builder,
+    Int64Builder,
     Date32Builder,
     Float64Builder,
 )
@@ -34,6 +36,11 @@ from ...dtypes import (
     UInt32Type,
     Float64Type,
     DynType,
+    BinaryLikeType,
+    BinaryType,
+    LargeBinaryType,
+    StringType,
+    LargeStringType,
 )
 from ...arrays import Int32Array
 from ...execution import ExecContext
@@ -717,3 +724,100 @@ def test_grouped_count_implementations_agree_on_nulls() raises:
         if Int(gk[i].value()) == 2:
             assert_true(gc.is_valid(i))
             assert_equal(gc[i].value(), Int64(0))
+
+
+# ---------------------------------------------------------------------------
+# group_by — `binarylike` keys across all three strategies
+#
+# Regression: the thread-local strategy is the only one that materializes its
+# unique keys through a `DynBuilder` (`HashGrouper._register_new_groups`); the
+# serial and radix strategies gather theirs with `take`. `BinaryLikeBuilder`'s
+# erased `extend` used to pick the *source* array type from the builder's own
+# offset width, naming `BinaryLikeArray[StringType]` for any 32-bit-offset
+# builder — so a `binary` key column aborted the process inside the worker
+# threads. Forcing the strategy keeps these small: the row-count/cardinality
+# heuristic would otherwise need 200k rows to reach thread-local.
+# ---------------------------------------------------------------------------
+
+
+def _bytes_key_column[
+    T: BinaryLikeType
+](n: Int, groups: Int) raises -> DynArray:
+    """`n` rows of `binarylike` keys cycling through `groups` distinct values.
+    """
+    var kb = BinaryLikeBuilder[T](n)
+    for i in range(n):
+        kb.append("k" + String(i % groups))
+    var out: DynArray = kb.finish()
+    return out^
+
+
+def _check_bytes_keys[T: BinaryLikeType](strategy: UInt8) raises:
+    """Group 3000 rows by a `binarylike` key under a forced `strategy`.
+
+    Row `i` carries value `i` and lands in group `i % 50`, so group `g` sums to
+    `88500 + 60 * g` — the same arithmetic
+    `test_groupby_parallel_matches_serial` checks for int32 keys. Asserting the
+    per-group key↔sum *association* (not just the group count) is what catches
+    a wrong-typed key builder that yields the right shape and garbage bytes.
+    """
+    comptime N = 3000
+    comptime G = 50
+    var keys = _bytes_key_column[T](N, G)
+    var vb = Int64Builder(N)
+    for i in range(N):
+        vb.append(Scalar[int64.native](i))
+    var vals: DynArray = vb.finish()
+
+    var ctx = ExecContext.parallel(4)
+    var result = GroupBy(keys, ctx, strategy).apply[Sum](vals)
+
+    assert_equal(result.num_rows(), G)
+    ref ks = result.keys[0].as_binary_like[T]()
+    ref ss = result.aggregates[0].as_int64()
+    for g in range(G):
+        var want = "k" + String(g)
+        var found = False
+        for i in range(result.num_rows()):
+            if ks[i].to_string() == want:
+                assert_true(ss.is_valid(i), "null sum for group " + want)
+                assert_equal(ss[i].value(), Int64(88500 + 60 * g))
+                found = True
+                break
+        assert_true(found, "missing group " + want)
+
+
+def test_groupby_binary_keys_serial() raises:
+    _check_bytes_keys[BinaryType](GROUP_SERIAL)
+
+
+def test_groupby_binary_keys_thread_local() raises:
+    _check_bytes_keys[BinaryType](GROUP_THREAD_LOCAL)
+
+
+def test_groupby_binary_keys_radix() raises:
+    _check_bytes_keys[BinaryType](GROUP_RADIX)
+
+
+def test_groupby_large_binary_keys_serial() raises:
+    _check_bytes_keys[LargeBinaryType](GROUP_SERIAL)
+
+
+def test_groupby_large_binary_keys_thread_local() raises:
+    _check_bytes_keys[LargeBinaryType](GROUP_THREAD_LOCAL)
+
+
+def test_groupby_large_binary_keys_radix() raises:
+    _check_bytes_keys[LargeBinaryType](GROUP_RADIX)
+
+
+def test_groupby_large_string_keys_thread_local() raises:
+    """`large_string` shares the 64-bit-offset arm the old code reached by
+    accident; it must keep working now that dispatch is on the source dtype."""
+    _check_bytes_keys[LargeStringType](GROUP_THREAD_LOCAL)
+
+
+def test_groupby_string_keys_thread_local() raises:
+    """The case that always worked — the only one the offset-width shortcut
+    happened to name correctly. Guards against fixing binary by breaking it."""
+    _check_bytes_keys[StringType](GROUP_THREAD_LOCAL)

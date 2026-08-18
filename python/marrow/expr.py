@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - exercised only pre-merge
     _HAVE_EXPRESSIONS = False
 
 
-__all__ = ["LazyTable", "read_parquet", "scan"]
+__all__ = ["LazyTable", "memtable", "read_parquet"]
 
 
 _DEFAULT_MORSEL_SIZE = 8192
@@ -292,19 +292,35 @@ class LazyTable(_Wrapper):
 
     # -- execution --------------------------------------------------------
 
-    def collect(self):
+    def collect(self, num_threads=0):
         """Run the plan and return one eager :class:`marrow.RecordBatch`.
 
         The whole plan is drained, so a multi-row-group Parquet scan comes back
         complete rather than one row group at a time.
-        """
-        return RecordBatch.wrap(self._binding.execute())
 
-    def to_pyarrow(self):
+        ``num_threads`` is the CPU worker budget, spelled and defaulted exactly
+        as on the eager surface (``RecordBatch.group_by(..., num_threads=0)``,
+        ``RecordBatch.join(..., num_threads=0)``):
+
+        * ``0`` — **auto** (the default): each kernel picks serial vs all-cores
+          from its own row-count threshold, so a small query pays no worker
+          setup and a large one uses the machine.
+        * ``1`` — serial, forced.
+        * ``N >= 2`` — exactly ``N`` workers, forced, threshold bypassed.
+
+        It lives here rather than on the constructor or on a module-level
+        default because ``collect`` is the only place a plan actually *runs*: a
+        ``LazyTable`` is an immutable plan that every verb returns a fresh copy
+        of, and a stored worker count would have to survive ``join``, where two
+        tables with different settings have no defensible winner.
+        """
+        return RecordBatch.wrap(self._binding.execute(num_threads))
+
+    def to_pyarrow(self, num_threads=0):
         """Run the plan and hand the result to PyArrow (zero-copy, C Data)."""
         import pyarrow as pa
 
-        return pa.record_batch(self.collect())
+        return pa.record_batch(self.collect(num_threads))
 
     def explain(self):
         """The plan as text, without running it.
@@ -333,11 +349,14 @@ def read_parquet(path, schema=None, morsel_size=_DEFAULT_MORSEL_SIZE):
     return LazyTable.wrap(binding)
 
 
-def scan(batch, morsel_size=_DEFAULT_MORSEL_SIZE):
+def memtable(batch, morsel_size=_DEFAULT_MORSEL_SIZE):
     """A lazy table over an in-memory :class:`marrow.RecordBatch`.
 
-    Named ``scan`` rather than ``table`` because ``marrow.table`` already builds
-    the eager, PyArrow-shaped table.
+    ``memtable`` is ibis's name for exactly this, and the pairing is the point:
+    the *verb* says which world you are in. Lazy is ``memtable`` /
+    ``read_parquet``, eager is ``table`` / ``record_batch`` -- each namespace
+    spelled consistently with the library it is modelled on, rather than
+    ``table`` and ``scan`` differing by a name nobody can rank.
     """
     return LazyTable.wrap(
         _ma.in_memory_table(

@@ -78,3 +78,34 @@ def bench_read_dict_1m(mut b: Benchmark) raises:
 
     b.iter(call)
     keep(path)  # keep the captured path alive through the whole benchmark
+
+
+def _bench_read_small(
+    mut b: Benchmark, path: String, compression: String
+) raises:
+    """Per-*read* set-up cost, isolated.
+
+    A 1,000-row file read over and over: decoding three tiny pages is nearly
+    free, so what is left is the fixed cost every `read_table` pays — mmap,
+    footer parse, plan, and the codec handles the read allocates for its
+    workers. Pair the `snappy` case with the `none` case below: the second
+    never touches a compression library, so the difference between the two is
+    the codec set-up, and `none` doubles as a drift control for the box."""
+    var n = 1_000
+    _prepare(path, n, compression)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(read_table(path))
+
+    b.iter(call)
+    keep(path)
+
+
+def bench_read_small_snappy(mut b: Benchmark) raises:
+    _bench_read_small(b, "/tmp/marrow_bench_small_snappy.parquet", "snappy")
+
+
+def bench_read_small_uncompressed(mut b: Benchmark) raises:
+    _bench_read_small(b, "/tmp/marrow_bench_small_none.parquet", "none")

@@ -85,7 +85,13 @@ def record_sample(launch_cmd: list[str], out: Path, env: dict | None = None) -> 
 
 def main():
     parser = argparse.ArgumentParser(description="Profile a marrow workload with Instruments or sample")
-    parser.add_argument("script", help="Mojo (.mojo) or Python (.py) script to profile")
+    parser.add_argument(
+        "script",
+        help=(
+            "Mojo (.mojo) or Python (.py) script, or a ClickBench query named "
+            "`clickbench-q1` / `clickbench-q34` (see python/marrow/tests/clickbench.py)"
+        ),
+    )
     parser.add_argument("--sample", action="store_true",
                         help="Use macOS `sample` instead of xctrace (resolves Mojo frames)")
     parser.add_argument("--open", action="store_true", default=True,
@@ -93,7 +99,16 @@ def main():
     parser.add_argument("--no-open", action="store_true", help="Don't open the result")
     args = parser.parse_args()
 
-    script = Path(args.script).resolve()
+    # `clickbench-q1` is a shorthand for the shared query registry rather than a
+    # path, so the thing you profile is the same definition the correctness suite
+    # checks and the benchmark times -- there is no separate profiling copy to
+    # drift out of sync.
+    profile_query = None
+    if args.script.lower().startswith("clickbench-"):
+        profile_query = args.script.split("-", 1)[1]
+        script = ROOT / "python" / "marrow" / "tests" / "profile_clickbench.py"
+    else:
+        script = Path(args.script).resolve()
     if not script.exists():
         sys.exit(f"Script not found: {script}")
 
@@ -120,11 +135,20 @@ def main():
                 sys.exit("mojo build failed")
             launch_cmd = [str(PYTHON), str(script)]
             env = {"PYTHONPATH": str(ROOT / "python")}
+            if profile_query is not None:
+                env["MARROW_PROFILE_QUERY"] = profile_query
+                # The query is looped so the profiler samples the query itself
+                # rather than interpreter start-up; override for a long one.
+                env.setdefault(
+                    "MARROW_PROFILE_REPEATS",
+                    os.environ.get("MARROW_PROFILE_REPEATS", "20"),
+                )
         else:
             sys.exit(f"Unsupported file type: {script.suffix}")
 
         if args.sample:
-            dest = ROOT / f"{script.stem}.sample.txt"
+            stem = f"{script.stem}-{profile_query}" if profile_query else script.stem
+            dest = ROOT / f"{stem}.sample.txt"
             print(f"Recording sample for {script.name}...")
             record_sample(launch_cmd, dest, env)
             print(f"Sample saved to: {dest}")
@@ -134,7 +158,8 @@ def main():
             print(f"Recording trace for {script.name}...")
             trace_path = record_trace(launch_cmd, Path(tmp), env)
 
-            dest = ROOT / f"{script.stem}.trace"
+            stem = f"{script.stem}-{profile_query}" if profile_query else script.stem
+            dest = ROOT / f"{stem}.trace"
             if dest.exists():
                 shutil.rmtree(dest)
             shutil.move(str(trace_path), str(dest))

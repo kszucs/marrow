@@ -80,6 +80,22 @@ struct Exhausted(TrivialRegisterPassable, Writable):
         writer.write("Exhausted")
 
 
+def _is_exhausted(e: Error) -> Bool:
+    """Whether `e` is the end-of-stream signal rather than a real failure.
+
+    **Mojo's `except` does not match on type.** `except Exhausted:` catches
+    every error, so the drain loops below used to treat a kernel raising
+    mid-morsel as "no more data" and return a silently truncated result: a
+    `filter` whose predicate raised `is_in: dtype mismatch` collected 0 rows
+    and reported success. Errors are matched on the message `Exhausted`
+    writes, which is the only discriminator the language gives us here.
+
+    Returning an `Optional[RecordBatch]` from `pull()` would remove the need
+    for a sentinel at all, and is the right shape; it changes the `Processor`
+    trait and every implementation, so it is not an alpha-week change."""
+    return String(e) == "Exhausted"
+
+
 # ---------------------------------------------------------------------------
 # Processor trait + DynProcessor
 # ---------------------------------------------------------------------------
@@ -148,7 +164,9 @@ struct DynProcessor(Movable):
         while True:
             try:
                 batches.append(self.pull())
-            except Exhausted:
+            except e:
+                if not _is_exhausted(e):
+                    raise e
                 break
         if len(batches) == 0:
             return RecordBatch(schema=self.schema(), columns=List[DynArray]())
@@ -503,12 +521,18 @@ struct FilterProcessor(Processor):
 
     var input: DynProcessor
     var predicate: BoxedValue
+    var _ctx: ExecContext
 
     def __init__(
-        out self, *, var input: DynProcessor, var predicate: BoxedValue
+        out self,
+        *,
+        var input: DynProcessor,
+        var predicate: BoxedValue,
+        var ctx: ExecContext,
     ):
         self.input = input^
         self.predicate = predicate^
+        self._ctx = ctx^
 
     def schema(self) -> Schema:
         return self.input.schema()
@@ -520,7 +544,9 @@ struct FilterProcessor(Processor):
             var mask = self.predicate.execute(batch)
             var cols = List[DynArray]()
             for i in range(batch.num_columns()):
-                cols.append(filter(batch.columns[i].copy(), mask.copy()))
+                cols.append(
+                    filter(batch.columns[i].copy(), mask.copy(), self._ctx)
+                )
             var result = RecordBatch(schema=batch.schema.copy(), columns=cols^)
             if result.num_rows() > 0:
                 return result^
@@ -795,7 +821,9 @@ struct AggregateProcessor(Processor):
                     gid_chunks.append(self._grouper.consume_keys(key_struct))
                 for i in range(len(self.inputs)):
                     value_chunks[i].append(self.inputs[i].execute(batch))
-            except Exhausted:
+            except e:
+                if not _is_exhausted(e):
+                    raise e
                 break
 
         if morsels == 0:
@@ -860,6 +888,13 @@ struct JoinProcessor(Processor):
     var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
+    var _ctx: ExecContext
+    """The context this join builds and probes under.
+
+    It used to have none: `HashJoin[RapidHash64]()` fell through to the
+    constructor's `ExecContext()` default, so every plan-driven join ran serial
+    build + serial probe however many workers the caller had asked for. The
+    kernel's `build_parallel` / `probe_parallel` were unreachable from a plan."""
     var _index: Optional[HashJoin[RapidHash64]]
     var _exhausted: Bool
 
@@ -873,6 +908,7 @@ struct JoinProcessor(Processor):
         join_kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
+        var ctx: ExecContext,
     ):
         self.left = left^
         self.right = right^
@@ -881,6 +917,7 @@ struct JoinProcessor(Processor):
         self.join_kind = join_kind
         self.strictness = strictness
         self._schema = schema^
+        self._ctx = ctx^
         self._index = None
         self._exhausted = False
 
@@ -913,7 +950,7 @@ struct JoinProcessor(Processor):
             raise Exhausted()
         if not self._index:
             var left_struct = self.left.collect().to_struct_array()
-            var index = HashJoin[RapidHash64]()
+            var index = HashJoin[RapidHash64](self._ctx.copy())
             index.build(left_struct, self.left_key_indices)
             self._index = index^
 
@@ -945,6 +982,8 @@ struct JoinProcessor(Processor):
             return RecordBatch(
                 schema=self._schema.copy(), columns=result.children.copy()
             )
-        except Exhausted:
+        except e:
+            if not _is_exhausted(e):
+                raise e
             self._exhausted = True
         raise Exhausted()

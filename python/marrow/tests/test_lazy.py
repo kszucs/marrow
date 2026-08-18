@@ -25,7 +25,7 @@ def batch():
 
 @pytest.fixture
 def lazy(batch):
-    return marrow.scan(batch)
+    return marrow.memtable(batch)
 
 
 # ── plan construction ──────────────────────────────────────────────────────
@@ -190,7 +190,12 @@ def test_join(batch):
             "label": marrow.array(["Alpha", "Beta"]).unwrap(),
         }
     )
-    out = marrow.scan(batch).join(marrow.scan(right), on="k").order_by("v").to_pyarrow()
+    out = (
+        marrow.memtable(batch)
+        .join(marrow.memtable(right), on="k")
+        .order_by("v")
+        .to_pyarrow()
+    )
     assert out.column("label").to_pylist() == [
         "Alpha",
         "Beta",
@@ -202,7 +207,7 @@ def test_join(batch):
 
 def test_join_needs_keys(batch):
     with pytest.raises(ValueError):
-        marrow.scan(batch).join(marrow.scan(batch))
+        marrow.memtable(batch).join(marrow.memtable(batch))
 
 
 # ── parquet ────────────────────────────────────────────────────────────────
@@ -298,7 +303,7 @@ def test_count_star_counts_rows_not_values():
         }
     )
     out = (
-        marrow.scan(batch)
+        marrow.memtable(batch)
         .aggregate(by=["k"], rows=marrow.count_star(), values=("count", "v"))
         .order_by("k")
         .to_pyarrow()
@@ -326,3 +331,108 @@ def test_getitem_without_expressions_explains_itself(lazy):
         pytest.skip("expression bindings are present")
     with pytest.raises(RuntimeError, match="_expr_column"):
         lazy["v"]
+
+
+def test_execution_errors_propagate_instead_of_truncating(lazy):
+    """A kernel raising mid-drain must surface, not read as end-of-stream.
+
+    `Processor.pull()` signals exhaustion by raising `Exhausted`, and the drain
+    loops caught it with `except Exhausted:`. Mojo's `except` does **not** match
+    on type, so that caught *every* error: a predicate that raised was
+    indistinguishable from "no more morsels", and `collect()` returned the
+    batches accumulated so far and reported success. Here the predicate raises
+    `is_in: dtype mismatch` on every morsel, so the old behaviour was a
+    confident, empty, wrong answer.
+    """
+    import marrow as ma
+
+    # int64 value set against an int16 column. `is_in` is decided on the 64-bit
+    # hash, so mismatched widths can never match -- the kernel is right to raise.
+    narrow = ma.array(pa.array([1, 2], type=pa.int8()))
+    predicate = lazy["v"].isin(narrow)
+    with pytest.raises(Exception, match="dtype mismatch"):
+        lazy.filter(predicate).collect()
+
+
+# ── thread count must not change the answer ────────────────────────────────
+#
+# `collect(num_threads=)` reaches `GroupBy`'s thread-local / radix strategies
+# and `HashJoin`'s parallel build + probe. A race in any of them produces a
+# *wrong answer*, not an error, so these compare the whole result against the
+# serial one rather than a row count. Sizes are past `_PARALLEL_MIN_ROWS`
+# (60_000) and `_PARALLEL_ALWAYS_ROWS` (200_000) — below them every strategy
+# falls back to serial and the comparison proves nothing.
+
+_PARALLEL_ROWS = 250_000
+
+
+def _sorted_rows(batch, columns):
+    d = batch.to_pydict()
+    return sorted(zip(*(d[c] for c in columns)))
+
+
+@pytest.mark.parametrize("num_threads", [2, 4, 8])
+def test_group_by_answer_is_independent_of_thread_count(num_threads):
+    """Low *and* high cardinality: they pick different grouping strategies."""
+    n = _PARALLEL_ROWS
+    for groups in (100, n // 2):
+        src = marrow.record_batch(
+            pa.record_batch(
+                {
+                    "k": pa.array([i % groups for i in range(n)], type=pa.int32()),
+                    "v": pa.array(range(n), type=pa.float64()),
+                }
+            )
+        )
+        plan = marrow.memtable(src).aggregate(
+            by=["k"], total=("sum", "v"), n=("count", "v")
+        )
+        serial = pa.record_batch(plan.collect(num_threads=1))
+        parallel = pa.record_batch(plan.collect(num_threads=num_threads))
+        cols = ["k", "total", "n"]
+        assert serial.num_rows == groups
+        assert _sorted_rows(serial, cols) == _sorted_rows(parallel, cols)
+
+
+@pytest.mark.parametrize("num_threads", [2, 4, 8])
+def test_join_answer_is_independent_of_thread_count(num_threads):
+    n = _PARALLEL_ROWS
+    left = marrow.memtable(
+        marrow.record_batch(
+            pa.record_batch(
+                {
+                    "k": pa.array(range(n), type=pa.int64()),
+                    "v": pa.array(range(n), type=pa.int64()),
+                }
+            )
+        )
+    )
+    right = marrow.memtable(
+        marrow.record_batch(
+            pa.record_batch(
+                {
+                    "k": pa.array([(i * 7) % n for i in range(n)], type=pa.int64()),
+                    "w": pa.array(range(n), type=pa.int64()),
+                }
+            )
+        )
+    )
+    plan = left.join(right, on="k", how="inner")
+    serial = pa.record_batch(plan.collect(num_threads=1))
+    parallel = pa.record_batch(plan.collect(num_threads=num_threads))
+    cols = ["k", "v", "w"]
+    assert serial.num_rows == n
+    assert _sorted_rows(serial, cols) == _sorted_rows(parallel, cols)
+
+
+@needs_expressions
+def test_filter_answer_is_independent_of_thread_count():
+    n = _PARALLEL_ROWS
+    src = marrow.record_batch(
+        pa.record_batch({"v": pa.array(range(n), type=pa.int64())})
+    )
+    plan = marrow.memtable(src).filter(marrow.col("v") < marrow.lit(n // 3))
+    serial = pa.record_batch(plan.collect(num_threads=1)).to_pydict()
+    parallel = pa.record_batch(plan.collect(num_threads=8)).to_pydict()
+    assert len(serial["v"]) == n // 3
+    assert serial == parallel
