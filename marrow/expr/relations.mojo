@@ -57,6 +57,7 @@ from ..arrays import DynArray
 from std.builtin.rebind import rebind
 from .dynamic import DynValue
 from .values import AggExpr, BoxedValue
+from .params import PathSpec
 from std.memory import ArcPointer
 
 from ..dtypes import Field
@@ -1040,7 +1041,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     predicate exactly — so it is safe to carry a partial/over-approximate one.
     """
 
-    var path: String
+    var path: PathSpec
     var _schema: Schema
     var morsel_size: Int
     var predicate: Optional[BoxedValue]
@@ -1048,7 +1049,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     def __init__(
         out self,
         *,
-        var path: String,
+        var path: PathSpec,
         var schema: Schema,
         morsel_size: Int = DEFAULT_MORSEL_SIZE,
         var predicate: Optional[BoxedValue] = None,
@@ -1121,14 +1122,14 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return ParquetScanProcessor[Self.leaves](
-            path=self.path.copy(),
+            path=self.path.resolve(),
             schema=Schema(copy=self._schema),
             morsel_size=self.morsel_size,
             predicate=self.predicate.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"ParquetScan({self.path})")
+        writer.write(t"ParquetScan({self.path.describe()})")
 
 
 def parquet_scan[

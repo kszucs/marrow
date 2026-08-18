@@ -1864,6 +1864,12 @@ struct StringParam[T: StringLikeType](StringValue):
 
     var _cell: ArcPointer[ParamCell]
 
+    def cell(self) -> ArcPointer[ParamCell]:
+        """The shared cell backing this parameter, for callers outside the
+        fused lane that need to hold onto it too — e.g. `PathSpec`, which
+        stores it directly rather than re-deriving it from `render()`."""
+        return self._cell.copy()
+
     def render(self) -> String:
         return String("param(", self._cell[].name_hint(), ")")
 

@@ -10,6 +10,24 @@
 
 ### Features
 
+- **`ParquetScan.path` accepts a late-bound `PathSpec`, not just a literal
+  `String`.** `ParquetScan(path=param("src", string), ...)` now works: `PathSpec`
+  gained a `StringParam[T]` constructor overload (`@implicit`, so the plan
+  builder needs no explicit wrapping) that shares the parameter's
+  `ArcPointer[ParamCell]` rather than copying its value, so binding the
+  parameter after the plan is built — the whole point of a late-bound path —
+  is visible through the scan too. `StringParam` gained a public `cell()`
+  accessor so `PathSpec`, defined in a different module, can reach it without
+  touching its private field. Every internal read of the path now goes through
+  `PathSpec.resolve()` (raising, used from `to_processor()`, which runs after
+  parameters are bound) or the new non-raising `PathSpec.describe()` (used from
+  `write_to()`, which renders `param(name)` for an unresolved path exactly as
+  `StringParam.render()` does). Existing `ParquetScan(path=String(...))` call
+  sites are untouched — `PathSpec`'s `@implicit` `String` constructor already
+  covered them. Adding the `StringParam` overload to `PathSpec` makes
+  `params.mojo` and `values.mojo` import each other, an expected cycle within
+  the package (see `CLAUDE.md`).
+
 - **`DynValue.param()` / `param(name, DynType)` — the runtime lane's param
   leaf, at parity with the fused `NumericParam`/`StringParam`/`TemporalParam`.**
   Invariant 2 (no feature in only one lane) required a runtime-lane

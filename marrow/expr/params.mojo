@@ -36,18 +36,21 @@ the wrong plan. Registration is last-wins per name for the same reason: a
 name declared twice before a drain (deliberately or via a rebuilt plan)
 leaves `_LOOKUP` pointing at the most recent cell, not an arbitrary one.
 
-No expression node lives here yet — later tasks add nodes in `values.mojo` /
-`dynamic.mojo` that hold a `ParamDecl`/`ArcPointer[ParamCell]` and import this
-module. That is an expected cycle (this module does not import them back), not
-one to design around.
+No expression node lives here — nodes in `values.mojo` / `dynamic.mojo` hold a
+`ParamDecl`/`ArcPointer[ParamCell]` and import this module. `PathSpec` closes
+the loop: its `StringParam[T]` constructor overload imports `StringParam` back
+from `values.mojo` to share its cell, so the two modules import each other.
+That is an expected cycle in this package (see CLAUDE.md), not one to design
+around.
 """
 
 from std.utils import Variant
 from std.memory import ArcPointer
 from std.ffi import _Global
 
-from ..dtypes import DynType
+from ..dtypes import DynType, StringLikeType
 from ..scalars import DynScalar
+from .values import StringParam
 
 # ---------------------------------------------------------------------------
 # ParamCell
@@ -243,8 +246,29 @@ struct PathSpec(Copyable, Movable):
     def __init__(out self, cell: ArcPointer[ParamCell]):
         self._v = Self.VariantType(cell)
 
+    @implicit
+    def __init__[T: StringLikeType](out self, param: StringParam[T]):
+        """Build from a fused-lane string parameter — `ParquetScan(path=src,
+        ...)` for `src = param("src", string)`. Shares `param`'s cell rather
+        than copying its bound value, so binding the parameter after building
+        the plan (the whole point of a late-bound path) is visible here too.
+        """
+        self._v = Self.VariantType(param.cell())
+
     def resolve(self) raises -> String:
         if self._v.isa[String]():
             return self._v[String]
         else:
             return self._v[ArcPointer[ParamCell]][].get().as_string().to_string()
+
+    def describe(self) -> String:
+        """Non-raising rendering for plan display (`ParquetScan.write_to`):
+        the literal path, or `param(name)` for a still-unbound cell — mirrors
+        `StringParam.render()`, since `resolve()` cannot be called from a
+        non-raising `write_to`."""
+        if self._v.isa[String]():
+            return self._v[String]
+        else:
+            return String(
+                "param(", self._v[ArcPointer[ParamCell]][].name_hint(), ")"
+            )

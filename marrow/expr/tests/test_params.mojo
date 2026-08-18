@@ -2,9 +2,12 @@ from std.testing import assert_true, assert_false, assert_raises
 from std.memory import ArcPointer
 from ...builders import array
 from ...tabular import record_batch
-from ...dtypes import DynType, int64, second, string, timestamp
+from ...dtypes import DynType, field, int64, second, string, timestamp
+from ...schema import schema
 from ...scalars import DynScalar, Int64Scalar, StringScalar, TimestampScalar
+from ...parquet import LeafSet
 from ..builders import col, param
+from ..relations import ParquetScan
 from ..values import BoxedValue
 from ..params import (
     ParamCell,
@@ -125,4 +128,15 @@ def test_temporal_param_default_converts_to_native_scalar() raises:
         decls[0].default.value().as_timestamp().value() == 1_560_601_845
     )
     assert_false(decls[0].is_required())
+
+
+def test_parquet_scan_accepts_a_param_path() raises:
+    _ = drain_params()
+    var src = param("src", string)
+    var scan = ParquetScan[LeafSet.all()](
+        path=src, schema=schema([field("a", int64)])
+    )
+    var decls = drain_params()
+    decls[0].cell[].set(StringScalar(String("x.parquet")).to_dyn())
+    assert_true(scan.path.resolve() == "x.parquet")
 
