@@ -173,6 +173,26 @@ E1 ranks fixing it as gap #1 and notes it is partly nondeterministic, so a race
 or use-after-free rather than a pure dispatch mistake. Being fixed on its own
 branch. **This is the difference between 39/43 and 42/43.**
 
+> **Resolved, and it was *two* root causes, not one — see
+> [`f1-distinct-segfault.md`](f1-distinct-segfault.md).** The heading above is
+> wrong in the way that mattered most: the four symptoms shared a *reporting*
+> site, not a cause.
+>
+> - The clean `ABORT … get: wrong variant type` at `arrays.mojo:2572` was real
+>   and is fixed (C1): `BinaryLikeBuilder.extend(DynArray)` resolved the source
+>   array's type from the *builder's* offset width, and `equal_any` tested
+>   `is_string()` where it meant `is_binary_like()`.
+> - What was left after that — Q11, Q12 and Q24 — was a bare **SIGSEGV with no
+>   message**, and it is a one-element heap overflow in
+>   `BufferView.compressed_store_dense` (`views.mojo`), reachable from any
+>   `filter` over a primitive column. It never went through `as_type` at all.
+>   The two looked like one bug because a corrupt tcmalloc freelist kills the
+>   process at the *next* allocation, which in these plans is always inside
+>   `AggregateProcessor::pull`.
+>
+> ClickBench is now **42/43**; the remaining gap is Q29 (`REGEXP_REPLACE`), a
+> capability gap rather than a crash.
+
 A general form worth keeping (B1 §1.1): `add_type[T]` rejects any struct holding
 a function pointer, because deriving `Writable` reflects over every field. So
 **any marrow struct that grows a function-pointer field becomes silently

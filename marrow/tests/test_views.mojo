@@ -1,5 +1,6 @@
 import std.math as math
 
+from std.bit import pop_count
 from std.testing import assert_equal, assert_true, assert_false
 
 from ..buffers import Buffer, Bitmap
@@ -356,6 +357,73 @@ def test_bufferview_compressed_store_adaptive() raises:
     assert_equal(dst[0], 1)
     assert_equal(dst[1], 3)
     assert_equal(dst[2], 5)
+
+
+def test_bufferview_compressed_store_dense_stays_in_bounds() raises:
+    """The dense (branchless) path must not write past ``popcount`` elements.
+
+    ``compressed_store_dense`` stores *before* it knows whether the lane is
+    kept, so every lane above the highest set bit lands on element
+    ``popcount(sel_bits)`` — one past the packed output. When the destination
+    view is exactly ``popcount`` elements long that is an out-of-bounds write,
+    and marrow's buffers carry no slack whenever the byte size is already a
+    multiple of 64 (``Buffer._aligned_size`` aligns, it does not pad). This
+    guards the case with a sentinel element the store must never reach.
+    """
+    var src_buf = Buffer.alloc_zeroed[DType.int64](64)
+    var src = src_buf.view[DType.int64]()
+    for i in range(64):
+        src_buf.unsafe_set[DType.int64](i, Int64(i + 1))
+
+    # 32 of 64 lanes set, all in the low half: over the sparse threshold (so
+    # the dense path runs) and with every high lane clear (so the trailing
+    # stores pile onto element 32).
+    var sel_bits = UInt64(0x0000_0000_FFFF_FFFF)
+    var cnt = Int(pop_count(sel_bits))
+
+    var dst_buf = Buffer.alloc_zeroed[DType.int64](cnt + 1)
+    dst_buf.unsafe_set[DType.int64](cnt, Int64(-99))  # sentinel
+    # A view exactly as long as the packed output — what `BufferView.filter`
+    # hands to the last selection word of a filter.
+    var dst = dst_buf.view[DType.int64](0, cnt)
+
+    var n = dst.compressed_store(src, sel_bits)
+    assert_equal(n, cnt)
+    for i in range(cnt):
+        assert_equal(dst[i], Int64(i + 1))
+    assert_equal(dst_buf.view[DType.int64]().unsafe_get(cnt), Int64(-99))
+
+
+def test_bufferview_filter_last_word_stays_in_bounds() raises:
+    """``BufferView.filter`` packs correctly when the final word is dense.
+
+    The end-to-end shape of the overflow above — a selection whose *final*
+    64-bit word has popcount over the sparse threshold with its top lanes
+    clear — which is the case that now falls back to the sparse path. Values,
+    not memory safety: the one-past store wrote *correct* data one element too
+    far, so only the sentinel test above can catch the regression.
+    """
+    var n = 128
+    var src_buf = Buffer.alloc_zeroed[DType.int64](n)
+    for i in range(n):
+        src_buf.unsafe_set[DType.int64](i, Int64(i))
+    var src = src_buf.view[DType.int64]()
+
+    # Word 0: 32 low lanes set. Word 1: 32 low lanes set. 64 selected in all,
+    # so the output is 64 * 8 == 512 bytes — a multiple of 64, hence no slack.
+    var sel = Bitmap.alloc_zeroed(n)
+    for i in range(32):
+        sel.set(i)
+        sel.set(64 + i)
+    var sel_view = sel.view()
+    var out_len, sel_start, sel_end = sel_view.count_set_bits_with_range()
+    assert_equal(out_len, 64)
+
+    var out = src.filter(sel_view, sel_start, sel_end, out_len)
+    var out_view = out.view[DType.int64](0, out_len)
+    for i in range(32):
+        assert_equal(out_view[i], Int64(i))
+        assert_equal(out_view[32 + i], Int64(64 + i))
 
 
 def test_bufferview_copy_from() raises:

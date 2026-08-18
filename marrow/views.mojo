@@ -258,6 +258,14 @@ struct BufferView[
         Processes the 64-bit mask one byte at a time, breaking the serial
         dependency into 8 independent chains of depth 8 that the OoO engine
         can overlap.
+
+        **Writes `popcount(sel_bits) + 1` elements, not `popcount(sel_bits)`.**
+        Being branchless is exactly what costs the extra slot: the store fires
+        before the lane's bit is inspected, so every lane above the highest set
+        bit lands on element `popcount(sel_bits)` — a dead write that the next
+        set lane would overwrite, except there is no next set lane. Callers must
+        leave one element of slack; `compressed_store` below checks `len(self)`
+        and picks the sparse path when they cannot.
         """
         var offset = 0
         comptime for i in range(8):
@@ -279,9 +287,17 @@ struct BufferView[
         sel_bits: UInt64,
     ) -> Int where Self.mut:
         """Adaptive compressed store: dispatches to sparse or dense based on
-        popcount vs threshold. Returns number of elements written."""
+        popcount vs threshold. Returns number of elements written.
+
+        The dense path needs one element of slack past the packed output (see
+        `compressed_store_dense`), so it is taken only when this view is longer
+        than the popcount. The last selection word of a filter is exactly the
+        one that has no slack — `BufferView.filter` sizes its destination to the
+        pre-counted set-bit total — and it is the word whose extra store would
+        land outside the allocation, since `Buffer._aligned_size` aligns to 64
+        bytes without padding beyond it."""
         var cnt = Int(pop_count(sel_bits))
-        if cnt <= sparse_threshold:
+        if cnt <= sparse_threshold or self._length <= cnt:
             self.compressed_store_sparse(src, sel_bits)
         else:
             self.compressed_store_dense(src, sel_bits)
