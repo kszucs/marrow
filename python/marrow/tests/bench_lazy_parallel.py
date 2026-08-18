@@ -141,6 +141,39 @@ def test_join(benchmark, join_sides, threads):
     benchmark(_collect, t, threads)
 
 
+@pytest.fixture(scope="session")
+def join_sides_10m():
+    n = 10 * N
+    rng = np.random.default_rng(2)
+    left = ma.record_batch(
+        pa.record_batch(
+            {
+                "k": np.arange(n, dtype=np.int64),
+                "v": np.arange(n, dtype=np.float64),
+            }
+        )
+    )
+    right = ma.record_batch(
+        pa.record_batch(
+            {
+                "k": rng.integers(0, n, n).astype(np.int64),
+                "w": np.arange(n, dtype=np.float64),
+            }
+        )
+    )
+    return left, right
+
+
+@pytest.mark.benchmark(group="lazy_join_10m")
+def test_join_10m(benchmark, join_sides_10m, threads):
+    """10x the 1M case. `HashJoin`'s parallel build/probe loses at 1M — this is
+    where the crossover gets measured rather than assumed."""
+    left, right = join_sides_10m
+    benchmark.extra_info.update(threads=threads, rows=10 * N)
+    t = ma.memtable(left).join(ma.memtable(right), on="k", how="inner")
+    benchmark.pedantic(_collect, args=(t, threads), rounds=5, warmup_rounds=1)
+
+
 @pytest.mark.benchmark(group="lazy_sort")
 def test_sort(benchmark, high_card, threads):
     """`SortProcessor` already held an `ExecContext`; before this change the one

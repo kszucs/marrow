@@ -382,14 +382,24 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
     # --- execution ---
 
     def to_processor(
-        self, ctx: ExecContext = ExecContext()
+        self, ctx: ExecContext = ExecContext.auto()
     ) raises -> DynProcessor:
         """Build the operator tree for this plan; the plan is left untouched."""
         return self._virt_to_processor(self._data, ctx)
 
-    def execute(self, ctx: ExecContext = ExecContext()) raises -> RecordBatch:
+    def execute(
+        self, ctx: ExecContext = ExecContext.auto()
+    ) raises -> RecordBatch:
         """Open this plan into a fresh operator tree and drain it into one
         `RecordBatch`.
+
+        The default is **auto**, not serial: each kernel the plan reaches picks
+        serial vs all-cores from its own row-count threshold. It used to be the
+        bare `ExecContext()` — `num_threads=1`, forced serial — which made every
+        plan-driven query single-threaded no matter what the caller had, and
+        made `GroupBy`'s and `HashJoin`'s parallel strategies unreachable from
+        the relational API. Pass `ExecContext.serial()` to get the old
+        behaviour.
 
         The plan is optimized first (projection pushdown), which never changes
         the schema or the rows — only how many Parquet column chunks are
@@ -1174,7 +1184,9 @@ struct Filter(Relation):
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return FilterProcessor(
-            input=self.input.to_processor(ctx), predicate=self.predicate.copy()
+            input=self.input.to_processor(ctx),
+            predicate=self.predicate.copy(),
+            ctx=ctx.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1524,6 +1536,7 @@ struct Join(Relation):
             join_kind=self.join_kind,
             strictness=self.strictness,
             schema=Schema(copy=self._schema),
+            ctx=ctx.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):

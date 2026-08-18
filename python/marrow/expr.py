@@ -292,19 +292,35 @@ class LazyTable(_Wrapper):
 
     # -- execution --------------------------------------------------------
 
-    def collect(self):
+    def collect(self, num_threads=0):
         """Run the plan and return one eager :class:`marrow.RecordBatch`.
 
         The whole plan is drained, so a multi-row-group Parquet scan comes back
         complete rather than one row group at a time.
-        """
-        return RecordBatch.wrap(self._binding.execute())
 
-    def to_pyarrow(self):
+        ``num_threads`` is the CPU worker budget, spelled and defaulted exactly
+        as on the eager surface (``RecordBatch.group_by(..., num_threads=0)``,
+        ``RecordBatch.join(..., num_threads=0)``):
+
+        * ``0`` — **auto** (the default): each kernel picks serial vs all-cores
+          from its own row-count threshold, so a small query pays no worker
+          setup and a large one uses the machine.
+        * ``1`` — serial, forced.
+        * ``N >= 2`` — exactly ``N`` workers, forced, threshold bypassed.
+
+        It lives here rather than on the constructor or on a module-level
+        default because ``collect`` is the only place a plan actually *runs*: a
+        ``LazyTable`` is an immutable plan that every verb returns a fresh copy
+        of, and a stored worker count would have to survive ``join``, where two
+        tables with different settings have no defensible winner.
+        """
+        return RecordBatch.wrap(self._binding.execute(num_threads))
+
+    def to_pyarrow(self, num_threads=0):
         """Run the plan and hand the result to PyArrow (zero-copy, C Data)."""
         import pyarrow as pa
 
-        return pa.record_batch(self.collect())
+        return pa.record_batch(self.collect(num_threads))
 
     def explain(self):
         """The plan as text, without running it.

@@ -521,12 +521,18 @@ struct FilterProcessor(Processor):
 
     var input: DynProcessor
     var predicate: BoxedValue
+    var _ctx: ExecContext
 
     def __init__(
-        out self, *, var input: DynProcessor, var predicate: BoxedValue
+        out self,
+        *,
+        var input: DynProcessor,
+        var predicate: BoxedValue,
+        var ctx: ExecContext,
     ):
         self.input = input^
         self.predicate = predicate^
+        self._ctx = ctx^
 
     def schema(self) -> Schema:
         return self.input.schema()
@@ -538,7 +544,9 @@ struct FilterProcessor(Processor):
             var mask = self.predicate.execute(batch)
             var cols = List[DynArray]()
             for i in range(batch.num_columns()):
-                cols.append(filter(batch.columns[i].copy(), mask.copy()))
+                cols.append(
+                    filter(batch.columns[i].copy(), mask.copy(), self._ctx)
+                )
             var result = RecordBatch(schema=batch.schema.copy(), columns=cols^)
             if result.num_rows() > 0:
                 return result^
@@ -880,6 +888,13 @@ struct JoinProcessor(Processor):
     var join_kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
+    var _ctx: ExecContext
+    """The context this join builds and probes under.
+
+    It used to have none: `HashJoin[RapidHash64]()` fell through to the
+    constructor's `ExecContext()` default, so every plan-driven join ran serial
+    build + serial probe however many workers the caller had asked for. The
+    kernel's `build_parallel` / `probe_parallel` were unreachable from a plan."""
     var _index: Optional[HashJoin[RapidHash64]]
     var _exhausted: Bool
 
@@ -893,6 +908,7 @@ struct JoinProcessor(Processor):
         join_kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
+        var ctx: ExecContext,
     ):
         self.left = left^
         self.right = right^
@@ -901,6 +917,7 @@ struct JoinProcessor(Processor):
         self.join_kind = join_kind
         self.strictness = strictness
         self._schema = schema^
+        self._ctx = ctx^
         self._index = None
         self._exhausted = False
 
@@ -933,7 +950,7 @@ struct JoinProcessor(Processor):
             raise Exhausted()
         if not self._index:
             var left_struct = self.left.collect().to_struct_array()
-            var index = HashJoin[RapidHash64]()
+            var index = HashJoin[RapidHash64](self._ctx.copy())
             index.build(left_struct, self.left_key_indices)
             self._index = index^
 
