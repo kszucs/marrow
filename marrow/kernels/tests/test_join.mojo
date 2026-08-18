@@ -13,6 +13,7 @@ from ...execution import ExecContext
 from ...builders import (
     array,
     PrimitiveBuilder,
+    BinaryLikeBuilder,
     StringBuilder,
     Int32Builder,
     UInt64Builder,
@@ -28,6 +29,9 @@ from ...dtypes import (
     Int64Type,
     UInt64Type,
     Float64Type,
+    BinaryLikeType,
+    BinaryType,
+    LargeBinaryType,
 )
 from ...tabular import record_batch
 from ...utils import Hasher
@@ -855,3 +859,54 @@ def test_join_kind_writes_its_name() raises:
     assert_equal(String(JOIN_INNER), "inner")
     assert_equal(String(JOIN_LEFT), "left outer")
     assert_equal(String(JOIN_SEMI), "left semi")
+
+
+# ---------------------------------------------------------------------------
+# hash_join — binary / large_binary keys
+#
+# `SwissHashTable.probe` verifies hash-collision candidates with
+# `EqKernel.apply(StructArray, StructArray)`, which routes each key column
+# through `equal_any`. That picked its kernel family with
+# `is_string() or is_large_string()`, so a `binary` key column fell through to
+# the numeric arm and `dispatch_primitive` raised — joining on `binary` was
+# impossible while the identical join on `string` worked.
+# ---------------------------------------------------------------------------
+
+
+def _bytes_join_side[
+    T: BinaryLikeType
+](keys: List[String], vals: List[Int]) raises -> StructArray:
+    var kb = BinaryLikeBuilder[T](len(keys))
+    for k in keys:
+        kb.append(k)
+    var vb = Int32Builder(capacity=len(vals))
+    for v in vals:
+        vb.append(Scalar[int32.native](v))
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
+    return record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+
+def _assert_bytes_join[T: BinaryLikeType]() raises:
+    var left = _bytes_join_side[T](["a", "b", "c"], [1, 2, 3])
+    var right = _bytes_join_side[T](["b", "c", "d"], [20, 30, 40])
+    var result = hash_join(left, right, _left_on(), _right_on())
+    assert_equal(len(result), 2)
+
+
+def test_inner_join_binary_keys() raises:
+    _assert_bytes_join[BinaryType]()
+
+
+def test_inner_join_large_binary_keys() raises:
+    _assert_bytes_join[LargeBinaryType]()
+
+
+def test_inner_join_binary_keys_collision_verified() raises:
+    """Duplicate keys on both sides exercise the equality verification path
+    (not just the hash lookup): 2x2 matches on "b" plus 1x1 on "c"."""
+    var left = _bytes_join_side[BinaryType](["b", "b", "c", "x"], [1, 2, 3, 4])
+    var right = _bytes_join_side[BinaryType](["b", "b", "c"], [10, 20, 30])
+    var result = hash_join(left, right, _left_on(), _right_on())
+    assert_equal(len(result), 5)

@@ -155,6 +155,62 @@
 
 ### Fixes
 
+- **Grouping, concatenating or joining on a `binary` key no longer aborts the
+  process (C1).**
+
+  `BinaryLikeBuilder`'s erased `extend(DynArray)` reconstructed the *source*
+  array's type from the **builder's own offset width** — `as_string()` when
+  `Self.T.offset` was int32, `as_large_string()` otherwise. Offset width does
+  not identify a type: `BinaryType` and `StringType` are both 32-bit-offset
+  `BinaryLikeType`s. So a `BinaryBuilder` handed a `binary` array asked the
+  variant for `BinaryLikeArray[StringType]`, and since `DynArray.as_type`'s
+  `debug_assert` is compiled out under release, `Variant.__getitem__`
+  **aborted the process**: `get: wrong variant type`. The typed leaf one line
+  below already accepted any `U: BinaryLikeType`; only the erased wrapper was
+  narrow. Both it and `ListLikeBuilder.extend` (same defect — `MapType` is a
+  32-bit-offset `ListLikeType`) now resolve the concrete type from the
+  *source* dtype.
+
+  Both are explicit `is_…()` ladders rather than `dispatch_binarylike` /
+  `dispatch_listlike`, and have to be: capturing `mut self` in a dispatch
+  closure miscompiles here. `ListLikeBuilder`'s version fails the pass manager
+  (`'kgen.call' op callee argument #1 expected type …`) because its child is a
+  `DynBuilder`; `BinaryLikeBuilder`'s codegens and then crashes the binary at
+  startup. **`mojo precompile` reports both clean** — it elaborates without
+  running codegen — so only a real test-driver build catches them.
+
+  Two reachable callers:
+
+  - **`group_by` on a `binary` key**, but only above ~60,000 rows and only at
+    low cardinality. Of the three grouping strategies, `GROUP_THREAD_LOCAL` is
+    the only one that materializes unique keys through a builder — serial and
+    radix gather theirs with `take` — so the abort read as a size threshold
+    rather than a type bug. The expression layer's streaming group-by shares
+    the `HashGrouper` and shared the abort.
+  - **`concat()`**, which is entirely `DynBuilder.extend`-driven, and therefore
+    **`ChunkedArray.combine_chunks()`** — a `binary` column in a multi-chunk
+    `Table` aborted on combine, at any size.
+
+  Nothing caught it because the suite exercised `BinaryLikeBuilder` only
+  through `StringBuilder`, the alias that happens to work: `BinaryBuilder` and
+  `LargeBinaryBuilder` appeared in no test, and none of `test_concat.mojo`'s 16
+  cases used `binary`.
+
+  Found while auditing: **`equal_any` picked its kernel family with
+  `is_string() or is_large_string()`**, so `binary` fell into the numeric arm
+  and `dispatch_primitive` raised — hash-join row verification is built on
+  `equal_any`, so joining on a `binary` key was impossible while the identical
+  join on `string` worked. It now dispatches `binarylike` into a `_bytes_equal`
+  leaf. `StringPredicateKernel` is deliberately *not* widened: `LIKE`, `upper`
+  and `startswith` are text operations and their `is_string_like` guards should
+  keep rejecting `binary`.
+
+  `filter`, `take`, `sort`, `rapidhash`, `count_distinct` and the Parquet
+  writer were audited and are correct. Tests are now parameterized over
+  `binary` / `large_binary` / `string` / `large_string` rather than exercising
+  the shared generic through `StringBuilder` alone. Write-up in
+  `docs/alpha-findings/c1-binary-groupby.md`.
+
 - **The Python extension builds again.** `python/bindings/arrays.mojo` still
   called `dt.variant_dispatch_raises`, which `e5509c3` deleted when it replaced
   the shared dispatch helper with per-box `isa` ladders — so `libmarrow.so` had

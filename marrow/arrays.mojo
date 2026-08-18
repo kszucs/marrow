@@ -2565,7 +2565,25 @@ struct DynArray(
         """This array as the concrete `T` it holds — a borrow, no copy.
 
         The named accessors below are one-liners over it; generic code
-        (a fused node reading a typed slot) needs the parameterized form."""
+        (a fused node reading a typed slot) needs the parameterized form.
+
+        **A wrong `T` kills the process, and only says so in a debug build.**
+        The `debug_assert` — the one thing here that names the held dtype — is
+        compiled out under release, so a mismatch falls through to
+        `Variant.__getitem__` and aborts with a bare `get: wrong variant type`
+        naming this line and nothing else. Every array type shares this
+        accessor, so that message identifies neither the type held nor the type
+        asked for; from a `sync_parallelize` worker it also prints once per
+        thread. Diagnosing one costs an afternoon (see
+        `docs/alpha-findings/c1-binary-groupby.md`).
+
+        So: **only call this where the type has actually been proven** — inside
+        a `dispatch_*` arm, or off a `comptime` type the caller owns. Deriving
+        `T` from a property that merely correlates with the type is what caused
+        that incident: `BinaryLikeBuilder.extend` picked `StringType` vs
+        `LargeStringType` off the *builder's* offset width, which says nothing
+        about whether the *source* holds text or bytes, and a `binary` column
+        aborted every group-by that crossed into the thread-local path."""
         debug_assert(
             self._v.isa[T](), "as_type: wrong type, holds ", self.dtype()
         )
