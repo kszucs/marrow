@@ -13,6 +13,7 @@ from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import array
 from ...dtypes import Field, field, int64, float64, Float64Type, Int64Type
+from ...execution import ExecContext
 from ...parquet import LeafSet
 from ...schema import Schema, schema
 from ...tabular import RecordBatch, record_batch
@@ -500,3 +501,24 @@ def test_anyrelation_o1_copy() raises:
     var src = _scan()
     var copy = src  # O(1) ref-count bump
     assert_equal(copy.schema().fields[0].name, "x")
+
+
+def test_execute_defaults_to_auto_not_serial() raises:
+    """`execute()` with no context must not force serial execution.
+
+    It used to default to the bare `ExecContext()` — `num_threads=1` — so every
+    plan ran single-threaded and the kernels' parallel strategies were
+    unreachable from the relational API. The default is now `auto`, and the
+    answer is the same either way."""
+    var k = array([1, 2, 1, 2, 1], int64)
+    var v = array([10, 20, 30, 40, 50], int64)
+    var batch = record_batch([k^, v^], names=["k", "v"])
+    var plan = in_memory_table(batch).aggregate(
+        keys=[col("k")], aggs=[col("v").sum()]
+    )
+    var auto = plan.execute()
+    var serial = plan.execute(ExecContext.serial())
+    var forced = plan.execute(ExecContext.parallel(8))
+    assert_equal(auto.num_rows(), 2)
+    assert_true(auto.column(1).as_int64() == serial.column(1).as_int64())
+    assert_true(auto.column(1).as_int64() == forced.column(1).as_int64())

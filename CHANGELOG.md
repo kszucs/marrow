@@ -4,6 +4,30 @@
 
 ### Features
 
+- **`LazyTable.collect(num_threads=0)` — the lazy query path can ask for
+  parallelism.** `ExecContext.__init__` defaults to `num_threads=1`, so
+  `DynRelation.execute()`'s `ExecContext()` default was forced serial, and the
+  Python binding called `.execute()` with no context at all: every lazy query
+  ran single-threaded on every machine, and nothing in the Python surface could
+  say otherwise. `collect` (and `to_pyarrow`) now take `num_threads`, spelled
+  and defaulted exactly as on the eager surface — `0` auto, `1` serial, `N`
+  forced. `collect` rather than a constructor argument because it is the only
+  place a plan runs, and a plan is immutable and shared.
+
+  **The default changed**: `DynRelation.execute` / `to_processor` now default to
+  `ExecContext.auto()`. Pass `ExecContext.serial()` for the old behaviour.
+
+  Measured (`python/marrow/tests/bench_lazy_parallel.py`, 1M rows, medians, 1 →
+  8 threads): `sort` **2.16x**, `join` at 10M rows 1.14x, `join` at 1M rows
+  **0.77x — a regression**, `group_by` and `filter` unchanged. ClickBench moves
+  0.2%, i.e. not at all. The reasons are structural and are written up in
+  `docs/alpha-findings/o4-parallel-exec.md`: the Parquet reader takes no
+  `ExecContext` at all, `Value.execute(batch)` has nowhere to put one so every
+  projection and predicate is serial, and `AggregateProcessor` groups through
+  `HashGrouper`/`AggFunc.grouped` — neither of which takes a context — so the
+  `GroupBy` kernel's thread-local and radix strategies are not on the plan path.
+  In a morsel-at-a-time engine only the pipeline breakers have enough work in
+  hand to parallelise, which is why `sort` is the one that moved.
 - **Projection pushdown — a lazy query stops reading every column of a Parquet
   file.** `ParquetScan`'s schema *is* its projection, but nothing ever narrowed
   it, so `read_parquet(hits).aggregate(n=count_star())` decoded all 105 columns
@@ -204,6 +228,13 @@
 
 ### Fixes
 
+- **`FilterProcessor` and `JoinProcessor` no longer drop the execution
+  context.** `JoinProcessor` built its index with `HashJoin[RapidHash64]()`,
+  falling through to that constructor's serial default, so a plan-driven join
+  could never reach `build_parallel` / `probe_parallel` however many workers the
+  caller had asked for. `FilterProcessor` called `filter(col, mask)` and got the
+  kernel's `ExecContext.serial()` default the same way. Both now carry the
+  context `to_processor` was given.
 - **`filter` no longer writes one element past its output buffer (F1).** This is
   the SIGSEGV behind ClickBench Q11, Q12 and Q24 — a bare `exit -11` with no
   message, always reported from inside tcmalloc at some later, innocent
