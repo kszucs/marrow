@@ -501,10 +501,26 @@ guard rather than a detector for the reason given in §5.
 ## 8. Verification
 
 ```
-marrow/tests/test_views.mojo                                  82 passed
-marrow/tests/test_views.mojo + test_buffers.mojo             135 passed
-marrow/kernels/tests/test_filter.mojo                         54 passed
-marrow/kernels/tests/test_filter.mojo + test_boolean.mojo     65 passed
-marrow/tests/test_views.mojo + kernels/tests/test_sort.mojo  141 passed
-mojo precompile marrow                        0 errors, 0 warnings
+marrow/tests/test_views.mojo                                  82 passed in   8.20s
+marrow/tests/test_buffers.mojo                                66 passed in   6.29s
+marrow/tests/test_c_data.mojo                                 42 passed in  37.48s
+marrow/kernels/tests/test_filter.mojo                         54 passed in  37.50s
+marrow/kernels/tests/test_filter.mojo + test_boolean.mojo     65 passed in  42.60s
+marrow/tests/test_views.mojo + kernels/tests/test_sort.mojo  141 passed in 134.05s
+python/marrow/tests                            491 passed, 55 skipped in 2.36s
+                                               (after a 246 s libmarrow.so rebuild)
+mojo precompile marrow                                 0 errors, 0 warnings
+pixi run binary_size                                   gate green, see §2
 ```
+
+`test_c_data.mojo` and the Python suite are the ones that matter for §5.1: both
+drive **FOREIGN** buffers imported from pyarrow through the bitmap read paths,
+and `_check_byte_read_range` does not fire on either. That is evidence the
+optimistic bound is not being violated on the covered paths, not a proof that
+it cannot be.
+
+`marrow/tests/test_arrays.mojo` is the one file left unverified, and the reason
+is the pre-existing 1800 s harness ceiling documented in §3.4 — it does not fit,
+on `alpha` either. Its coverage of `BufferView.unsafe_get`/`unsafe_set` is
+indirect but real, so it should be run under `--mojo-timeout` before this is
+considered fully checked.
