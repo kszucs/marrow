@@ -625,6 +625,10 @@ struct LikePattern[ignore_case: Bool = False](Copyable, Movable):
         """Tokenize `pattern` and classify it into a `_LIKE_*` shape."""
         var bytes = pattern.as_bytes()
         var n = len(bytes)
+        # Every byte contributes at most one token, so `n` is an exact upper
+        # bound -- reserving it turns the four geometric reallocations an
+        # eight-byte pattern used to pay into a single allocation.
+        self.tokens.reserve(n)
         var literal = List[UInt8](capacity=n)
         var leading_any = False  # pattern starts with '%'
         var trailing_any = False  # pattern ends with '%'
@@ -741,6 +745,49 @@ def _match_pattern[
     )
 
 
+def _match_arrays[
+    L: StringLikeType, R: StringLikeType, ignore_case: Bool
+](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+    """Array x array ``LIKE``, compiling the right operand once per *run* of
+    equal patterns instead of once per row.
+
+    The inherited `StringPredicateKernel.apply` calls `predicate` per row, and
+    `LikeKernel.predicate` has to compile its pattern before it can match --
+    so an array x array LIKE rebuilt the whole `LikePattern` (a token list, a
+    literal buffer and a `String`) for every element. That is the shape the
+    runtime expression lane produces: `marrow.expr.dynamic` evaluates a
+    literal by `DynScalar.repeat(num_rows)`, so a constant pattern arrives as
+    n identical rows and every one of those n compiles was redundant.
+
+    Remembering the last pattern text collapses the constant case to a single
+    compile without special-casing it: a genuinely varying right operand still
+    recompiles, just only when the text actually changes, and the memo costs
+    one comparison against a string that is already in cache.
+    """
+    var n = len(left)
+    var bm = Bitmap.intersect_views(left.validity(), right.validity())
+    var data = Bitmap.alloc_zeroed(n)
+    var compiled = LikePattern[ignore_case]("")
+    var current = String()
+    var primed = False
+    for i in range(n):
+        if left.is_valid(i) and right.is_valid(i):
+            var pat = right.unsafe_get(UInt(i))
+            if not primed or StringSlice(current) != pat:
+                compiled = LikePattern[ignore_case](pat)
+                current = String(pat)
+                primed = True
+            if compiled.matches(left.unsafe_get(UInt(i))):
+                data.set(i)
+    return BoolArray(
+        length=n,
+        nulls=bm.value().unset_count() if bm else 0,
+        offset=0,
+        bitmap=bm,
+        buffer=data.to_immutable(),
+    )
+
+
 def _dispatch_pattern[
     ignore_case: Bool
 ](name: StringSlice, array: DynArray, pattern: StringSlice) raises -> DynArray:
@@ -775,6 +822,14 @@ struct LikeKernel(StringPredicateKernel):
 
     @staticmethod
     def apply[
+        L: StringLikeType, R: StringLikeType
+    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        # Overrides the trait default, which would compile the pattern per row.
+        Self.expect_same_length(len(left), len(right))
+        return _match_arrays[L, R, False](left, right)
+
+    @staticmethod
+    def apply[
         T: StringLikeType
     ](array: BinaryLikeArray[T], pattern: StringSlice) raises -> BoolArray:
         return _match_pattern(array, LikePattern[False](pattern))
@@ -803,6 +858,14 @@ struct ILikeKernel(StringPredicateKernel):
         o1: Origin, o2: Origin
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return LikePattern[True](pat).matches(s)
+
+    @staticmethod
+    def apply[
+        L: StringLikeType, R: StringLikeType
+    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        # Overrides the trait default, which would compile the pattern per row.
+        Self.expect_same_length(len(left), len(right))
+        return _match_arrays[L, R, True](left, right)
 
     @staticmethod
     def apply[
