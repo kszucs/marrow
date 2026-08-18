@@ -468,6 +468,7 @@ from ._expr_column import (  # noqa: E402
     Aggregate,
     Column,
     col,
+    count_star,
     if_else,
     lit,
 )

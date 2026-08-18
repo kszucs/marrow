@@ -196,17 +196,15 @@ def _plan_select(
 ) raises -> PythonObject:
     """Project columns by name.
 
-    Goes through `project` rather than `DynRelation.select`, which takes
-    `*names: String` — a Mojo variadic a runtime list cannot be splatted into.
-    The result is the same node: `project` names each output field and probes
-    its dtype off the expression, and `col(name)` probes to the input column's
-    own dtype.
+    Calls `DynRelation.select(List[String])`, the overload added for exactly
+    this call site — the other spelling is `*names: String`, and a Mojo
+    variadic cannot be splatted from a runtime list. This used to route through
+    `project` instead, which is *not* the same node: `project` probes each
+    expression's dtype and builds a fresh `Field`, so a non-nullable column came
+    out nullable and its metadata was dropped. `select` copies the input field
+    whole.
     """
-    var cols = _string_list(names)
-    var values = List[BoxedValue]()
-    for ref name in cols:
-        values.append(BoxedValue(col(name.copy())))
-    return _wrap(_plan(py_self).project(cols, values^))
+    return _wrap(_plan(py_self).select(_string_list(names)))
 
 
 def _plan_project(
@@ -214,6 +212,34 @@ def _plan_project(
 ) raises -> PythonObject:
     return _wrap(
         _plan(py_self).project(_string_list(names), _boxed_list(values))
+    )
+
+
+def _plan_with_columns(
+    py_self: PythonObject, names: PythonObject, values: PythonObject
+) raises -> PythonObject:
+    """Add or replace computed columns, keeping every other column.
+
+    `project`'s usable half — see `DynRelation.with_columns` for the
+    append-or-replace rule and why replacement happens in place."""
+    return _wrap(
+        _plan(py_self).with_columns(_string_list(names), _boxed_list(values))
+    )
+
+
+def _plan_drop(
+    py_self: PythonObject, names: PythonObject
+) raises -> PythonObject:
+    """Remove the named columns, keeping the rest in order."""
+    return _wrap(_plan(py_self).drop(_string_list(names)))
+
+
+def _plan_rename(
+    py_self: PythonObject, names: PythonObject, new_names: PythonObject
+) raises -> PythonObject:
+    """Rename columns — two parallel lists, old then new."""
+    return _wrap(
+        _plan(py_self).rename(_string_list(names), _string_list(new_names))
     )
 
 
@@ -281,9 +307,6 @@ def _plan_repr(py_self: PythonObject) raises -> PythonObject:
     return PythonObject("<marrow.Plan: " + String(_plan(py_self)) + ">")
 
 
-# TODO(alpha): bind with_columns/drop/rename once they land on `DynRelation`.
-
-
 # ---------------------------------------------------------------------------
 # Leaf constructors
 # ---------------------------------------------------------------------------
@@ -328,6 +351,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_execute]("execute")
         .def_method[_plan_select]("select")
         .def_method[_plan_project]("project")
+        .def_method[_plan_with_columns]("with_columns")
+        .def_method[_plan_drop]("drop")
+        .def_method[_plan_rename]("rename")
         .def_method[_plan_filter]("filter")
         .def_method[_plan_aggregate]("aggregate")
         .def_method[_plan_sort]("sort")

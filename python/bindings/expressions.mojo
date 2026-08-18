@@ -44,6 +44,7 @@ from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType
 from marrow.expr import DynAgg, DynValue
+from marrow.expr.builders import count_star as _count_star
 from marrow.tabular import RecordBatch
 
 
@@ -279,6 +280,17 @@ def expr_literal(value: PythonObject) raises -> PythonObject:
     return wrap_expr(DynValue.literal(arr[0]))
 
 
+def expr_count_star() raises -> PythonObject:
+    """``COUNT(*)`` — the row count, as an ``Agg`` with no input column.
+
+    A module-level constructor rather than a method, because it is the one
+    aggregate that is not *of* an expression: `col("x").count()` counts the
+    non-null values of ``x``, and those two differ on every nullable column.
+    `marrow.expr.builders.count_star` owns the definition — a valid literal
+    counted per row — so this binding adds nothing but the box."""
+    return wrap_agg(_count_star())
+
+
 def expr_if_else(
     cond: PythonObject, then_: PythonObject, else_: PythonObject
 ) raises -> PythonObject:
@@ -417,12 +429,22 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = (
         expr_py.def_method[_binary[DynValue.coalesce]()]("coalesce")
         .def_method[_binary[DynValue.nullif]()]("nullif")
+        .def_method[_binary[DynValue.fill_null]()]("fill_null")
         .def_method[_expr_isin]("isin")
         .def_method[_expr_cast]("cast")
     )
-    # TODO(alpha): bind is_null/is_valid/is_nan/fill_null once merged — they do
-    # not exist on `DynValue` on this branch (a `NullPredicate` node exists but
-    # is reachable only from the fused lane).
+
+    # null / value predicates. `is_null` and `is_valid` are the runtime lane's
+    # own overrides, not `Value`'s fused defaults — see `DynValue`'s comment on
+    # why: a predicate that left the lane could not be combined with one that
+    # stayed in it. Binding them here is what makes `Expr` closed under the
+    # boolean combinators.
+    _ = (
+        expr_py.def_method[_unary[DynValue.is_null]()]("is_null")
+        .def_method[_unary[DynValue.is_valid]()]("is_valid")
+        .def_method[_unary[DynValue.is_nan]()]("is_nan")
+        .def_method[_unary[DynValue.is_inf]()]("is_inf")
+    )
 
     # aggregations
     _ = (
@@ -459,3 +481,4 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[expr_column]("expr_column")
     mb.def_function[expr_literal]("expr_literal")
     mb.def_function[expr_if_else]("expr_if_else")
+    mb.def_function[expr_count_star]("expr_count_star")

@@ -130,10 +130,21 @@ class LazyTable(_Wrapper):
         return col(name)
 
     def __repr__(self):
-        return f"LazyTable\n{self._binding}"
+        return f"LazyTable\n{self._plan_text()}"
 
     def __str__(self):
-        return str(self._binding)
+        return self._plan_text()
+
+    def _plan_text(self):
+        """The bound plan's own ``__str__``, called explicitly.
+
+        ``str(binding)`` does *not* reach it: ``def_method`` fills the type's
+        ``tp_dict``, not the CPython ``tp_str`` slot, so ``str()`` finds the
+        derived ``repr`` and returns ``"<marrow.Plan: Sort(...)>"``. The
+        expression bindings documented that hazard; the plan surface was
+        printing the bracketed form through it.
+        """
+        return self._binding.__str__()
 
     # -- relational verbs -------------------------------------------------
 
@@ -144,18 +155,29 @@ class LazyTable(_Wrapper):
         return LazyTable.wrap(self._binding.select([str(n) for n in names]))
 
     def drop(self, *names):
-        """Every column except these — ``select`` of the complement."""
+        """Every column except these — ``t.drop("a", "b")``.
+
+        A real ``Drop`` lowering, not a ``select`` of the complement computed
+        here: the plan node keeps each surviving ``Field`` whole and raises on
+        an unknown name itself, so neither the column list nor the error has to
+        be reconstructed in Python.
+        """
         if len(names) == 1 and isinstance(names[0], (list, tuple)):
             names = tuple(names[0])
-        dropped = {str(n) for n in names}
-        missing = dropped - set(self.column_names)
-        if missing:
-            raise KeyError(f"drop: no such column(s): {sorted(missing)}")
-        return self.select(*[c for c in self.column_names if c not in dropped])
+        return LazyTable.wrap(self._binding.drop([str(n) for n in names]))
 
     def rename(self, mapping):
-        """Rename columns, leaving the rest untouched and in place."""
-        return self.project(**{mapping.get(c, c): c for c in self.column_names})
+        """Rename columns, leaving the rest untouched and in place.
+
+        ``t.rename({"v": "value"})`` — polars' spelling. The plan takes two
+        parallel lists (old, new) and mentions only the columns that change, so
+        the dict is unzipped here rather than expanded to full width.
+        """
+        return LazyTable.wrap(
+            self._binding.rename(
+                [str(k) for k in mapping], [str(v) for v in mapping.values()]
+            )
+        )
 
     def project(self, **named):
         """Computed columns — ``t.project(total=t["a"] + t["b"])``.
@@ -166,6 +188,26 @@ class LazyTable(_Wrapper):
         names = list(named)
         values = [_unwrap_expr(named[n]) for n in names]
         return LazyTable.wrap(self._binding.project(names, values))
+
+    def with_columns(self, **named):
+        """Add or replace computed columns, keeping every other one.
+
+            t.with_columns(total=t["qty"] * t["price"])
+
+        ``project``'s usable half, and the verb polars and ibis lean on hardest:
+        a new name is appended, an existing one is replaced **at its original
+        position**, and every expression sees the *input* columns rather than a
+        partially-updated output. Chain two calls for sequential semantics.
+
+        Keyword-only, matching :meth:`project` — the output name is always
+        written, never derived from the expression.
+        """
+        names = list(named)
+        values = [_unwrap_expr(named[n]) for n in names]
+        return LazyTable.wrap(self._binding.with_columns(names, values))
+
+    # ibis spells `with_columns` as `mutate`. Both work.
+    mutate = with_columns
 
     def filter(self, predicate):
         """Keep rows where ``predicate`` is true."""
@@ -265,8 +307,12 @@ class LazyTable(_Wrapper):
         return pa.record_batch(self.collect())
 
     def explain(self):
-        """The plan as text, without running it."""
-        return str(self._binding)
+        """The plan as text, without running it.
+
+        One line: no `Relation` node renders its children, so this names the
+        root operator only. See ``docs/alpha-findings/b2-plan-bindings.md``.
+        """
+        return self._plan_text()
 
 
 # ── Entry points ───────────────────────────────────────────────────────────
