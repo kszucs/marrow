@@ -10,6 +10,18 @@
 
 ### Features
 
+- **`marrow.expr.params` — late-bound query parameter cells and a registry.**
+  `ParamCell` is a shared, mutable box for a scalar that starts unbound and is
+  filled in after a plan is built; `ParamDecl` is the declaration (name,
+  dtype, optional help/default) plus the `ArcPointer[ParamCell]` expression
+  nodes will close over. `register_param`/`drain_params` are a module-level
+  registry rather than a `parameters()` trait method — the latter would need
+  40 implementations and a second recursive plan traversal, against a size
+  gate where one shared dispatch adapter already cost +662,740 bytes.
+  `PathSpec` is the first consumer: a `ParquetScan` path that is either a
+  literal string or a cell resolved at execution time. No expression nodes
+  yet — those land in later tasks.
+
 - **`LazyTable.collect(num_threads=0)` — the lazy query path can ask for
   parallelism.** `ExecContext.__init__` defaults to `num_threads=1`, so
   `DynRelation.execute()`'s `ExecContext()` default was forced serial, and the
