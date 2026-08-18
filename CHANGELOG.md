@@ -10,6 +10,24 @@
 
 ### Features
 
+- **`DynValue.param()` / `param(name, DynType)` — the runtime lane's param
+  leaf, at parity with the fused `NumericParam`/`StringParam`/`TemporalParam`.**
+  Invariant 2 (no feature in only one lane) required a runtime-lane
+  counterpart, but `DynPayload` is size-critical and gained no new variant for
+  it: the payload carries only the parameter's name, the same shape
+  `DynValue.column` already uses, and `_param` resolves the cell by name at
+  evaluate time via `params.lookup_param`. That needed a name-keyed registry
+  lookup, which did not exist — `_REGISTRY` only holds declarations
+  in-flight between a plan's construction and its drain, and is empty
+  afterwards, exactly when `_param` runs. `lookup_param` reads a second
+  module-level table, `_LOOKUP`, that `register_param` upserts into
+  (last-wins per name) and that `drain_params()` **repopulates** — not
+  clears — from exactly the declarations it just drained. That reset is
+  asymmetric on purpose: `_REGISTRY` empties so the next plan starts clean,
+  `_LOOKUP` repopulates so the runtime lane can still resolve a parameter by
+  name after the drain, while a later, unrelated plan's drain replaces the
+  scope rather than leaking an earlier plan's cells into it.
+
 - **`marrow.expr.params` — late-bound query parameter cells and a registry.**
   `ParamCell` is a shared, mutable box for a scalar that starts unbound and is
   filled in after a plan is built; `ParamDecl` is the declaration (name,

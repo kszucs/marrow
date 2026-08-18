@@ -189,6 +189,23 @@ def lit[T: NumericType](value: Scalar[T.native]) -> DynValue:
     return DynValue.literal(PrimitiveScalar[T](value))
 
 
+def param(var name: String, dtype: DynType) -> DynValue:
+    """A run-time parameter for the runtime lane — `param("min-a",
+    DynType(int64))`.
+
+    `dtype: DynType` is a concrete argument type, not one bound on
+    `NumericType`/`StringLikeType`/`TemporalType`, so this overload never
+    competes with the three fused `param[T: ...]` overloads above — `DynType`
+    conforms to none of those traits (see its docstring in `dtypes.mojo`).
+    Registration works the same as the fused lane's: last-wins by name (see
+    `params.mojo`), and the plan builder drains the registry once after
+    building the tree. Unlike the fused `param` overloads, this one keeps no
+    cell of its own — the returned `DynValue` carries only the name, and its
+    evaluator resolves the cell by name at execute time via `lookup_param`."""
+    register_param(ParamDecl(name=name.copy(), dtype=dtype.copy()))
+    return DynValue.param(name^)
+
+
 def count_star() -> DynAgg:
     """`COUNT(*)` — how many rows each group has.
 

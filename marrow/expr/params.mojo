@@ -16,6 +16,26 @@ the tree that referenced the declarations.
 `PathSpec` is the first consumer: a `ParquetScan` path that is either a literal
 string or a cell to be resolved at execution time.
 
+The fused lane's param nodes (`NumericParam`/`StringParam`/`TemporalParam` in
+`values.mojo`) hold their `ArcPointer[ParamCell]` directly, since they are
+built with a known dtype and can close over the cell at construction time. The
+runtime lane's `DynValue.param` leaf cannot: `DynPayload` is size-critical
+(see `dynamic.mojo`) and carries only the parameter's *name*, so its evaluator
+resolves the cell by name at execute time instead, via `lookup_param`.
+
+That name-keyed lookup is a **second module-level table** (`_LOOKUP`),
+separate from `_REGISTRY`, and the two are reset on an intentionally
+asymmetric schedule: **`drain_params()` empties `_REGISTRY` but
+*(re-)populates* `_LOOKUP`** with exactly the declarations it just drained.
+A plan's drain therefore opens that plan's own name-resolution scope for the
+runtime lane — `lookup_param` keeps working *after* the drain, which is the
+point, since `_param` runs at execute time, well after the tree was built —
+while a later, unrelated plan's drain replaces the scope rather than adding to
+it, so one process building two plans back-to-back never resolves a name from
+the wrong plan. Registration is last-wins per name for the same reason: a
+name declared twice before a drain (deliberately or via a rebuilt plan)
+leaves `_LOOKUP` pointing at the most recent cell, not an arbitrary one.
+
 No expression node lives here yet — later tasks add nodes in `values.mojo` /
 `dynamic.mojo` that hold a `ParamDecl`/`ArcPointer[ParamCell]` and import this
 module. That is an expected cycle (this module does not import them back), not
@@ -140,8 +160,27 @@ registry-as-side-effect API needs.
 """
 
 
+def _init_lookup() -> Dict[String, ArcPointer[ParamCell]]:
+    return Dict[String, ArcPointer[ParamCell]]()
+
+
+comptime _LOOKUP = _Global["MARROW_PARAM_LOOKUP", _init_lookup]
+"""The runtime lane's name-keyed parameter table.
+
+`register_param` upserts into this as well as into `_REGISTRY`, and
+`drain_params` rebuilds it from exactly the declarations it drains — see the
+module docstring for the asymmetry (registry empties, lookup repopulates).
+`lookup_param` is the only reader."""
+
+
 def register_param(var decl: ParamDecl):
-    """Append `decl` to the module-level registry."""
+    """Append `decl` to the module-level registry, and upsert its cell into
+    `_LOOKUP` under its name — last-wins, so a name declared twice before the
+    next drain points `lookup_param` at the most recently declared cell."""
+    try:
+        _LOOKUP.get_or_create_ptr()[][decl.name.copy()] = decl.cell.copy()
+    except:
+        pass
     try:
         _REGISTRY.get_or_create_ptr()[].append(decl^)
     except:
@@ -149,14 +188,40 @@ def register_param(var decl: ParamDecl):
 
 
 def drain_params() -> List[ParamDecl]:
-    """Return the registry's contents and empty it."""
+    """Return the registry's contents and empty it.
+
+    Also resets `_LOOKUP` to exactly the set just drained — see the module
+    docstring for why that reset is a *repopulation*, not a clear."""
     try:
         var ptr = _REGISTRY.get_or_create_ptr()
         var out = ptr[].copy()
         ptr[] = List[ParamDecl]()
+        try:
+            var lookup = _LOOKUP.get_or_create_ptr()
+            lookup[].clear()
+            for ref decl in out:
+                lookup[][decl.name.copy()] = decl.cell.copy()
+        except:
+            pass
         return out^
     except:
         return List[ParamDecl]()
+
+
+def lookup_param(name: String) raises -> ParamCell:
+    """Resolve a runtime-lane parameter by name, against `_LOOKUP` — the
+    table `drain_params()` last populated, not `_REGISTRY`, which is empty
+    between drains by design.
+
+    `DynValue.param`'s payload carries only the name (`DynPayload` gained no
+    new arm for parameters), so `DynValue._param` calls this once per batch,
+    at evaluate time, to find the cell a plan author bound after building the
+    tree."""
+    var found = _LOOKUP.get_or_create_ptr()[].get(name)
+    if found:
+        return found.value()[].copy()
+    else:
+        raise Error("unknown parameter: " + name)
 
 
 # ---------------------------------------------------------------------------

@@ -157,6 +157,7 @@ from ..kernels.interval import (
     GeInterval,
     EqInterval,
 )
+from .params import lookup_param
 from .pruning import PruneStats
 from .values import Value
 
@@ -339,6 +340,17 @@ struct DynValue(Copyable, Movable, Value, Writable):
         args: List[DynArray], payload: DynPayload, batch: RecordBatch
     ) raises -> DynArray:
         return payload[DynScalar].repeat(batch.num_rows())
+
+    @staticmethod
+    def _param(
+        args: List[DynArray], payload: DynPayload, batch: RecordBatch
+    ) raises -> DynArray:
+        """Resolve the payload's name against the module-level registry and
+        broadcast the bound scalar across the batch — the runtime-lane twin of
+        `NumericParam`/`StringParam`/`TemporalParam` in `values.mojo`. Same
+        shape as `_column`: the payload carries a name, not a value, so
+        `DynPayload` needed no new arm."""
+        return lookup_param(payload[String]).get().repeat(batch.num_rows())
 
     @staticmethod
     def _cast(
@@ -908,6 +920,14 @@ struct DynValue(Copyable, Movable, Value, Writable):
     @staticmethod
     def literal(var value: DynScalar) -> Self:
         return Self("literal", Self._literal, DynPayload(value^))
+
+    @staticmethod
+    def param(var name: String) -> Self:
+        """A run-time parameter for the runtime lane — resolved by name
+        against `lookup_param` at execute time, not bound to a cell here.
+        Invariant 2's runtime-lane leaf: the fused lane's equivalent is
+        `NumericParam`/`StringParam`/`TemporalParam` in `values.mojo`."""
+        return Self("param", Self._param, DynPayload(name^))
 
     @staticmethod
     def if_else(cond: Self, then_: Self, else_: Self) -> Self:

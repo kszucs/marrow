@@ -53,7 +53,9 @@ from ...dtypes import field
 from ...kernels.temporal import unit_day
 
 # Fused comptime algebra (values.mojo)
-from ...expr.builders import col as fcol, lit as flit
+from ...expr.builders import col as fcol, lit as flit, param
+from ...expr.params import drain_params
+from ...scalars import Int64Scalar
 from ...expr.values import (
     _rank,
     NumericCast,
@@ -1009,6 +1011,40 @@ def test_runtime_literal_and_cast() raises:
         fcol("a") + flit[Int64Type](3),
         batch,
     )
+
+
+def test_parity_param_lanes_resolve_independently() raises:
+    """Both lanes have a param leaf (invariant 2), and each resolves its own
+    cell by name rather than sharing state across an unrelated declare/drain
+    scope.
+
+    This is deliberately *not* `assert_parity` on a single shared binding:
+    binding both lanes to the same scalar would pass even if `lookup_param`
+    resolved every name to one stale cell, which is exactly the defect in the
+    registry-as-second-list design this test replaces. Instead each lane
+    declares its own `"min-a"` parameter in its own drain scope and binds it
+    to a *different* value — 3 for the fused lane, 6 for the runtime lane — so
+    a leaked or stale cell would make one lane compute the other's answer
+    and the assertions below would catch it.
+    """
+    var a = array([1, 5, 3, 8, 2], int64)
+    var batch = record_batch([a.copy()], names=["a"])
+
+    _ = drain_params()
+    var fused = fcol("a", int64) > param("min-a", int64)
+    var fused_decls = drain_params()
+    fused_decls[0].cell[].set(Int64Scalar(3).to_dyn())
+    var fused_out = BoxedValue(fused).execute(batch)
+    assert_true(fused_out.as_bool() == array([False, True, False, True, False]))
+
+    _ = drain_params()
+    var dyn = dcol("a") > param("min-a", DynType(int64))
+    var dyn_decls = drain_params()
+    dyn_decls[0].cell[].set(Int64Scalar(6).to_dyn())
+    var dyn_out = dyn.execute(batch)
+    assert_true(dyn_out.as_bool() == array([False, False, False, True, False]))
+
+    assert_true(not (fused_out.as_bool() == dyn_out.as_bool()))
 
 
 # ---------------------------------------------------------------------------
