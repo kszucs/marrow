@@ -4,6 +4,21 @@
 
 ### Features
 
+- **`BufferView` and `BitmapView` bounds are enforced by `debug_assert` instead
+  of asserted in prose.** Both views already carried a `_check_bounds` helper;
+  the unsafe and SIMD paths never called it, which is why `-D ASSERT=all`
+  stayed silent through the heap overflow in F1. `unsafe_get`/`unsafe_set`,
+  `load[W]`/`store[W]`, `gather[W]`, all three `compressed_store` overloads and
+  the bitmap byte accessors now check, and `BufferView.filter` /
+  `BitmapView.filter` assert that what they wrote equals what they allocated —
+  the postcondition that found the `load_bits` bug above. Reads and writes get
+  different bounds on purpose: a write must stay inside the view, while
+  `load[W]` and `load_bits` take a deliberately wide load and are bounded by the
+  allocation (`align_up(extent, 64)`). `debug_assert` compiles out in release,
+  and the full surface measured within noise on a fixed 141-case selection
+  (135.5 s -> 134.1 s, compilation-dominated). See
+  `docs/alpha-findings/g1-buffer-invariants.md`.
+
 - **The Python expression and plan surface closes the gap the binding agents
   deferred: null handling, `COUNT(*)`, and `with_columns`/`drop`/`rename`.**
   Three `# TODO(alpha)` markers pointed at methods that did not exist when the
@@ -145,6 +160,15 @@
 
 ### Tests
 
+- **A systematic bounds matrix for `BufferView`/`BitmapView`** — `test_views.mojo`
+  goes from 69 to 82 cases, varying selection shape (including the degenerate
+  ends that provably cannot overstep), the sparse/dense threshold at 23/24/25,
+  element width across int8..float64, destination slack, multi-word filters
+  sized to a 64-byte multiple, every bit offset 0-7 crossed with counts 1-16,
+  ragged bit lengths, and sub-byte-offset views. Each was verified to fail
+  against the pre-fix behaviour by reverting the three fixes in turn.
+  `test_filter.mojo` gains two multi-word sliced-array cases, the shape none of
+  its five existing sliced tests could reach.
 - 13 cases for the above across `test_runtime.mojo`, `test_parity.mojo` and
   `test_aggregates.mojo`, including the cross-lane parity cases for `fill_null`,
   `is_valid` and `is_nan`, and the five new ops added to the op-name axis.
@@ -154,6 +178,32 @@
   shipped, so two live ops had no parity assertion at all.
 
 ### Fixes
+
+- **`filter` over a *sliced* column silently dropped rows.**
+  `BitmapView.load_bits[T]` issues one unaligned `size_of[T]()`-byte load and
+  shifts it down by the view's sub-byte bit offset, so the run's top
+  `offset & 7` bits — which live in the byte after the load — came back as
+  zeros. Every `BitmapView` over a sliced array carries such an offset, and both
+  `BufferView.filter` and `BitmapView.filter` read their selection this way, so
+  a filter over a slice returned fewer rows than the predicate selected, with no
+  error. The five existing sliced-filter tests all used 3-5 element arrays,
+  which fit entirely inside `filter`'s tail block where the tail mask discards
+  the corrupted bits; reproducing it needs a slice longer than 64 elements.
+  `load_bits` now folds in the following byte when the offset is sub-byte and
+  that byte is inside the view — the `offset == 0` case short-circuits, so the
+  hot loop is unchanged.
+
+- **`BitmapView.compressed_store` no longer read-modify-writes up to 7 bytes
+  past the bitmap.** It always stored a full 8 bytes (plus a 9th when the run
+  straddled) and justified the overshoot with "Arrow buffers are 64-byte
+  padded". They are padded to a 64-byte *multiple*, which is not slack: a
+  512-bit bitmap is exactly 64 bytes, so the last block of a filter wrote 7
+  bytes of the neighbouring allocation. The written-back value was unchanged
+  (`x | 0`), so it never corrupted a heap, but it was a lost-update race between
+  threads filtering into adjacent allocations and an out-of-bounds write to any
+  sanitizer. It now writes exactly `ceildiv(bit_offset % 8 + count, 8)` bytes;
+  the wide path still serves every full 64-bit block, so only the short final
+  block changes.
 
 - **`filter` no longer writes one element past its output buffer (F1).** This is
   the SIGSEGV behind ClickBench Q11, Q12 and Q24 — a bare `exit -11` with no

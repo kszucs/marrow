@@ -929,7 +929,7 @@ struct BitmapView[
         var result = raw >> Scalar[T](bit_off)
         if bit_off > 0 and byte_idx + size_of[T]() < self._byte_extent():
             var hi = Scalar[T](
-                self._data[unsafe_offset = byte_idx + size_of[T]()]
+                self._data[unsafe_offset=byte_idx + size_of[T]()]
             )
             result = result | (hi << Scalar[T](NBITS - bit_off))
         return result
