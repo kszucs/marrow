@@ -374,7 +374,6 @@ struct Allocation(Movable):
 # ---------------------------------------------------------------------------
 
 
-# TODO: add assertions to ensure alignment and padding invariants hold
 struct Buffer[*, mut: Bool = False](
     ImplicitlyCopyable, Movable, Sized, Writable
 ):
@@ -407,7 +406,11 @@ struct Buffer[*, mut: Bool = False](
     """
 
     var _size: Int
-    """Buffer size in bytes (always 64-byte aligned)."""
+    """Buffer size in bytes — always a multiple of 64 (`_aligned_size`).
+
+    A multiple of 64 is *not* spare room: when the logical byte count is
+    already a multiple of 64 the allocation ends at the last live byte.
+    """
 
     var _owner: ArcPointer[Allocation]
     """Shared ownership handle.  Ref-count is 1 for `mut=True` (exclusive)."""
@@ -442,6 +445,24 @@ struct Buffer[*, mut: Bool = False](
 
     @staticmethod
     def _aligned_size[T: DType](length: Int) -> Int:
+        """Allocation size in bytes for ``length`` elements of ``T``.
+
+        This is Arrow's padding, and it is the same rule Arrow C++ applies —
+        `PoolBuffer::RoundCapacity` is `bit_util::RoundUpToMultipleOf64`, so
+        `AllocateBuffer(n)` allocates `align_up(n, 64)` bytes and zero-fills
+        the difference. The Columnar spec asks implementations to "pad
+        (overallocate) to a length that is a multiple of 8 or 64 bytes", and
+        that is exactly what rounding up to a multiple does.
+
+        **It is not slack.** When ``length * size_of[T]()`` is already a
+        multiple of 64 the allocation ends precisely at the last live byte —
+        an `int64` buffer of 8 elements is 64 bytes with nothing behind it. Any
+        code that reads or writes past the logical end "because Arrow buffers
+        are padded" is wrong, and one such write was a heap overflow that
+        corrupted tcmalloc's freelist (see `BufferView.compressed_store_dense`
+        and docs/alpha-findings/f1-distinct-segfault.md). The invariant this
+        upholds is *alignment of the size*, nothing more.
+        """
         return math.align_up(length * size_of[T](), 64)
 
     # --- Mutable factory methods (return Buffer[mut=True]) ---
@@ -591,9 +612,15 @@ struct Buffer[*, mut: Bool = False](
         keeper bump its ref-count on copy; when the last view drops, the keeper
         releases and the C callback fires automatically.
 
-        The logical size is rounded up to 64-byte alignment: Arrow's spec
-        guarantees all exported buffers are padded to multiples of 64 bytes,
-        but callers typically pass the un-padded logical size.
+        The logical size is rounded up to a 64-byte multiple so that `len()`
+        reads the same as it does for an owned buffer.
+
+        **That rounding is a convention, not a guarantee about the memory.**
+        The C Data Interface spec makes even *alignment* "recommended, but not
+        required" and says nothing at all about padding, so an imported buffer
+        may end exactly at its logical last byte. Nothing may read or write
+        past `size` on a FOREIGN buffer on the strength of this rounding; see
+        docs/alpha-findings/g1-buffer-invariants.md.
 
         Precondition: `owner` must have been created with `Allocation.foreign(...)`.
         """

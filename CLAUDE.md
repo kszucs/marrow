@@ -282,7 +282,18 @@ builder. Same alias scheme (`StringBuilder`, `ListBuilder`, `Int32Builder`, …)
 - Allocation kinds: CPU (owned heap), FOREIGN (external, with release callback),
   HOST (pinned GPU host memory), DEVICE (GPU memory). `is_cpu()` / `is_host()` /
   `is_device()` forward to `Allocation`.
-- All buffers are 64-byte aligned and padded.
+- All buffers are 64-byte aligned, and their **size** is rounded up to a
+  multiple of 64 — `Buffer._aligned_size` is `align_up(bytes, 64)`, the same
+  rule as Arrow C++'s `PoolBuffer::RoundCapacity`. **That is not slack.** When
+  the logical byte count is already a multiple of 64 the allocation ends at the
+  last live byte, so nothing may read or write past a buffer's logical end
+  "because Arrow buffers are padded". A one-element overrun on exactly that
+  boundary corrupted tcmalloc's freelist and cost ~4 hours to trace; the
+  bounds are now enforced by `debug_assert` on every `BufferView` /
+  `BitmapView` write path. FOREIGN (imported) buffers carry no padding
+  guarantee at all — the C Data Interface spec makes even alignment
+  "recommended, but not required". See
+  `docs/alpha-findings/g1-buffer-invariants.md`.
 
 **`Bitmap`** (also `marrow/buffers.mojo` — there is no `bitmap.mojo`): bit-packed
 validity wrapping a `Buffer`, same `mut` pair, same O(1) copies.

@@ -948,8 +948,8 @@ struct BitmapView[
 
         **Byte-addressed, and it ignores ``_offset``** — both unlike every other
         accessor here. ``index`` is in units of T (index=2 with T=uint32 reads
-        bytes 8–11) and the caller owns computing that address. Safe because
-        Arrow buffers are 64-byte padded.
+        bytes 8–11) and the caller owns computing that address. Bounded by
+        `_check_byte_read_range`, not by any padding guarantee.
 
         For bit-addressed reads use `load[W]` (W bits as SIMD bool), `test` (one
         bit) or `load_bits[T]` (a packed run of bits). This exists for whole-byte
@@ -1088,8 +1088,15 @@ struct BitmapView[
         """Return 64-byte-aligned pointer and byte range with boundary bits.
 
         Returns (ptr, total_bytes, lead_bits, trail_bits).
-        Arrow buffers are 64-byte aligned and zero-padded, so reading the
-        full range is always safe.
+
+        Widening to whole 64-byte blocks is safe *for a marrow-owned buffer*
+        and only there: `Buffer._aligned_size` rounds the allocation up to a
+        64-byte multiple, so `align_up(byte_end, 64)` can never exceed it, and
+        `align_down(byte_start, 64)` stays at or above the allocation's base
+        because that base is itself 64-byte aligned. The widened bytes are
+        *uninitialised*, not zero — `alloc_uninit` does not clear them — so the
+        caller must mask them off with `lead_bits`/`trail_bits` rather than
+        assume they read as 0.
         """
         var byte_start = self._offset >> 3
         var bit_end = self._offset + self._length
@@ -1608,8 +1615,11 @@ def _apply_packed_dispatch[
     destination.
 
     The GPU launch is rounded up to a full ``gpu_width`` chunk so every store
-    is a complete byte. Arrow's 64-byte padding makes the over-write safe; the
-    clamp keeps it inside that padding. The CPU arm is `_cpu_serial` — see
+    is a complete byte. The clamp keeps that over-write inside the destination
+    bitmap's allocation: `Bitmap` allocates `align_up(ceildiv(bits, 8), 64)`
+    bytes, and a length with no slack at that boundary is a multiple of 512
+    bits, which every power-of-two ``gpu_width`` divides — so `align_up` is a
+    no-op exactly when there is no room. The CPU arm is `_cpu_serial` — see
     there for why it may not stripe.
     """
     if ctx.is_gpu():
@@ -1768,7 +1778,7 @@ def apply[
 
     Compares W elements per call, packs the ``SIMD[bool, W]`` result
     into the output bitmap via ``BitmapView.store``.
-    Over-read on the tail is safe (Arrow 64-byte padding). CPU
+    The tail over-read is bounded by `BitmapView._check_byte_read_range`. CPU
     parallelism via ``ctx`` is not used here — bit-packed outputs need
     whole-byte-aligned stride to avoid scalar read-modify-write races
     between workers; threading support is future work.
@@ -1796,8 +1806,9 @@ def apply[
 
     Maps W elements per call, packs the ``SIMD[bool, W]`` result into the
     output bitmap via ``BitmapView.store``. Used e.g. for numeric→bool casts
-    (``op = {x => x.ne(0)}``). Over-read on the tail is safe (Arrow 64-byte
-    padding). CPU parallelism via ``ctx`` is not used here — bit-packed outputs
+    (``op = {x => x.ne(0)}``). The tail over-read is bounded by
+    `BitmapView._check_byte_read_range`. CPU parallelism via ``ctx`` is not
+    used here — bit-packed outputs
     need whole-byte-aligned stride to avoid scalar read-modify-write races
     between workers; threading support is future work.
     """
