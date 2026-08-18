@@ -143,8 +143,22 @@ padding would be affordable.** It exists, so it does not help.
 
 ### Binary size
 
-`pixi run binary_size` — see §6. `debug_assert` compiles out unless `-D ASSERT`
-is set, and the gates build without it, so the expectation was zero movement.
+`debug_assert` compiles out unless `-D ASSERT` is set and the gates build
+without it, so the expectation was no movement. Measured `__text` against
+`benchmarks/binary_size/baseline.json` (threshold 0.5%):
+
+| gate | baseline | measured | delta | pct |
+|---|---|---|---|---|
+| `query_streaming` | 1,484,652 | 1,444,196 | −40,456 | **−2.72%** |
+| `query_join` | 1,507,836 | 1,465,320 | −42,516 | **−2.82%** |
+| `query_streaming_agg_fused` | 1,417,476 | 1,388,848 | −28,628 | **−2.02%** |
+| `query_streaming_agg` | 1,932,404 | 1,903,988 | −28,416 | **−1.47%** |
+| `query_dynvalue` | 4,871,156 | 4,891,764 | +20,608 | +0.42% |
+
+Four gates shrank and the fifth is inside the threshold. The baseline was reset
+at `0e552a7`, and `alpha` has moved since (F1's fix among others), so these
+deltas are not attributable to this change alone — the point is that the gate
+passes and nothing here grew it.
 
 ---
 
@@ -243,6 +257,34 @@ Execution is ≈0.5 s in both; **compilation dominates completely** and the delt
 (−1.1%) is noise. Per-lane assertions in `load`/`store`/`gather` did not make
 the suite materially worse, so they were kept at the innermost loop rather than
 pushed out to the call boundary.
+
+A second, whole-library measurement agrees: a cold `mojo precompile marrow`
+(which builds every module under `marrow/`) is **15.45 s** with the assertions
+and **15.27 s** with the three changed files reverted to `alpha`, back to back
+under identical load. That one does not compile the assertion *bodies*
+(`mojo precompile` rejects `-D`), so the 141-case `-D ASSERT=all` figure above
+is the load-bearing number; this one bounds the elaboration cost of the added
+source.
+
+### The `test_arrays.mojo` timeout is pre-existing
+
+`marrow/tests/test_arrays.mojo` does **not** fit inside the harness's 1800 s
+default deadline, alone or paired with `test_buffers.mojo`, and reports every
+case as failed with an empty message when it blows through. I ran the
+single-variable A/B rather than assume, because a mass failure at exactly the
+deadline is easy to mistake for a real regression:
+
+```
+with G1's changes           165 failed in 1800.08s (0:30:00)
+alpha, three files reverted 165 failed in 1800.06s (0:30:00)
+```
+
+Identical. `git checkout 557fc34 -- marrow/views.mojo marrow/buffers.mojo
+marrow/kernels/filter.mojo` was the only variable. `test_buffers.mojo` on its
+own is 66 passed in 6.29 s, so the cost is entirely `test_arrays.mojo`. Use
+`--mojo-timeout` on that file. Worth raising separately: a core test file that
+cannot be run at the default deadline is a hole in the suite, and it is not
+this change's to fix.
 
 ---
 
