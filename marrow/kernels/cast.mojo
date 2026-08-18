@@ -28,7 +28,7 @@ arm did not accept. ``CastKernel``'s docstring has the detail.
 
 from std.collections.string import atol, atof, StringSlice
 from std.collections.string._utf8 import _is_valid_utf8
-from std.sys import bit_width_of
+from std.sys import bit_width_of, simd_width_of
 
 from ..arrays import (
     DynArray,
@@ -739,6 +739,47 @@ struct BoolToString(CastKernel):
         return b.finish()
 
 
+def _all_ascii(window: BufferView[DType.uint8, _]) -> Bool:
+    """True when every byte in `window` is < 0x80.
+
+    ASCII is a subset of UTF-8 that is closed under slicing, so an all-ASCII
+    buffer makes every element of *any* offset layout over it valid UTF-8 —
+    which is what lets `BinaryLikeCast._check_utf8` skip its per-element loop
+    on the columns that dominate real workloads (URLs, ids, codes).
+
+    Four accumulators rather than one: the loop is a pure load-and-OR chain, so
+    it is latency-bound on a single accumulator and bandwidth-bound on enough
+    of them to cover the load-to-use distance.
+    """
+    comptime W = simd_width_of[DType.uint8]()
+    var n = len(window)
+    var acc0 = SIMD[DType.uint8, W](0)
+    var acc1 = SIMD[DType.uint8, W](0)
+    var acc2 = SIMD[DType.uint8, W](0)
+    var acc3 = SIMD[DType.uint8, W](0)
+
+    var i = 0
+    while i + 4 * W <= n:
+        acc0 |= window.load[W](i)
+        acc1 |= window.load[W](i + W)
+        acc2 |= window.load[W](i + 2 * W)
+        acc3 |= window.load[W](i + 3 * W)
+        i += 4 * W
+    while i + W <= n:
+        acc0 |= window.load[W](i)
+        i += W
+
+    var high = ((acc0 | acc1) | (acc2 | acc3)).reduce_or() & 0x80
+    if high != 0:
+        return False
+
+    while i < n:
+        if window.unsafe_get(i) >= 0x80:
+            return False
+        i += 1
+    return True
+
+
 # ---------------------------------------------------------------------------
 # BinaryLikeCast — binary/large_binary/utf8/large_utf8 ↔ each other
 # ---------------------------------------------------------------------------
@@ -809,11 +850,76 @@ struct BinaryLikeCast(CastKernel):
 
     @staticmethod
     def _check_utf8[From: BinaryLikeType](array: BinaryLikeArray[From]) raises:
+        """Reject a binary array that does not hold valid UTF-8 in every
+        non-null element.
+
+        Two whole-buffer fast paths sit in front of the exact per-element loop.
+        Both are *sufficient* conditions only: whenever either one fails the
+        loop still runs, so the accept/reject decision is unchanged and only
+        the cost of reaching it moves.
+
+        1. **All-ASCII.** Every byte < 0x80 makes every element valid UTF-8 no
+           matter where the offsets cut the buffer, and no matter what a null
+           slot holds. One SIMD pass, memory-bandwidth bound.
+        2. **Valid window + element starts on character boundaries.** If the
+           whole byte window validates *and* no element begins on a
+           continuation byte (0b10xxxxxx), every element is a whole number of
+           characters and therefore validates on its own. The boundary scan is
+           what keeps this from being weaker than the loop: without it a
+           multi-byte character split across two elements would validate as a
+           concatenation while each half is individually malformed.
+
+        The fall-through matters as much as the fast paths. A null slot is
+        allowed to hold arbitrary bytes, so a whole-window check can fail on an
+        array the loop accepts; falling back rather than raising is what keeps
+        that from becoming a false rejection.
+
+        Arrow C++ validates per element too (`Utf8Validator::VisitValue` in
+        `scalar_cast_string.cc`) — its `ValidateUTF8Inline` is cheap enough per
+        call that it never needed a buffer-wide pre-check.
+        """
+        if len(array) == 0:
+            return
+
+        var start = Int(
+            array.offsets.unsafe_get[From.offset](array.offset)
+        )
+        var end = Int(
+            array.offsets.unsafe_get[From.offset](array.offset + array.length)
+        )
+        var window = array.values.view[DType.uint8](start, end - start)
+
+        if _all_ascii(window):
+            return
+        if _is_valid_utf8(window.as_span()) and Self._starts_on_boundaries(
+            array, start, end
+        ):
+            return
+
         for i in range(len(array)):
             if array.is_valid(i) and not _is_valid_utf8(
                 array.unsafe_get(UInt(i)).as_bytes()
             ):
                 raise Error("cast: invalid UTF-8 in binary → string cast")
+
+    @staticmethod
+    def _starts_on_boundaries[
+        From: BinaryLikeType
+    ](array: BinaryLikeArray[From], start: Int, end: Int) -> Bool:
+        """True when no element in the window begins on a UTF-8 continuation
+        byte, i.e. every offset cuts the buffer at a character boundary.
+
+        Element 0 starts at `start`, which is where validation began, so it is
+        a boundary by construction and is skipped. An offset sitting at `end`
+        belongs to a trailing empty element and has no byte to inspect."""
+        var window = array.values.view[DType.uint8](start, end - start)
+        for k in range(1, array.length):
+            var off = Int(
+                array.offsets.unsafe_get[From.offset](array.offset + k)
+            )
+            if off < end and (window.unsafe_get(off - start) & 0xC0) == 0x80:
+                return False
+        return True
 
 
 # ---------------------------------------------------------------------------

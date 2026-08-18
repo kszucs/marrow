@@ -204,6 +204,39 @@
 
 ### Fixes
 
+- **`binary` → `string` no longer re-validates UTF-8 one element at a time.**
+  Parquet `BYTE_ARRAY` columns arrive as `binary` and the string kernels are
+  bound on `StringLikeType`, so every string query casts — 28 of ClickBench's
+  105 columns. `BinaryLikeCast.apply` relabels with no allocation when the
+  offset widths match, so the cast itself is free; the whole cost was the
+  `safe` guard's `_check_utf8`, a scalar loop building a `StringSlice` per row
+  and calling `_is_valid_utf8` on it, on every query, over an immutable buffer
+  it had already validated. Profiling put 11.5% of q34 and 3.8% of q21 there.
+
+  `_check_utf8` now tries two whole-buffer conditions before that loop. An
+  all-ASCII window (one four-accumulator SIMD OR-reduction) makes every element
+  valid no matter where the offsets cut the bytes; failing that, a window that
+  validates as a whole *and* whose element starts never land on a continuation
+  byte makes each element a whole number of characters. Both are sufficient
+  conditions only — either one failing falls through to the original loop — so
+  the accept/reject decision is unchanged and only the cost of reaching it
+  moves. `safe=True` remains the default and still rejects malformed input.
+
+  The boundary scan is load-bearing rather than belt-and-braces: `"é"` is
+  `0xC3 0xA9`, and split across two elements the concatenation validates while
+  each half is malformed, so a window-only check would be strictly weaker than
+  the loop it replaces. The fall-through matters equally — a null slot may hold
+  arbitrary bytes, and falling back rather than raising is what keeps that from
+  becoming a false rejection. Both cases are pinned by tests.
+
+  Measured on `bench_cast.mojo`, normalised against fourteen untouched control
+  rows (the box moved x2.39 between batches under concurrent load, so raw
+  ratios overstate it): **x19.2 at 1M rows**, x17.5 at 100k, x11.7 at 10k —
+  824 us for 72 MB, or ~87 GB/s, against ~4.5 GB/s before. Non-ASCII data comes
+  out at x0.92, i.e. unchanged: the second path exists to absorb the first
+  path's failed probe rather than to speed that case up.
+
+
 - **`filter` no longer writes one element past its output buffer (F1).** This is
   the SIGSEGV behind ClickBench Q11, Q12 and Q24 — a bare `exit -11` with no
   message, always reported from inside tcmalloc at some later, innocent

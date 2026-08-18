@@ -1,8 +1,16 @@
 from std.testing import assert_equal, assert_true, assert_raises
 
-from ...arrays import DynArray, NullArray, DictionaryArray, MapArray
+from ...arrays import (
+    BinaryArray,
+    DynArray,
+    NullArray,
+    DictionaryArray,
+    MapArray,
+)
+from ...buffers import Bitmap
 from ...builders import (
     array,
+    BinaryBuilder,
     FixedSizeBinaryBuilder,
     ListBuilder,
     MapBuilder,
@@ -52,8 +60,10 @@ from ...dtypes import (
     Int8Type,
     UInt8Type,
     Int64Type,
+    StringType,
+    BinaryType,
 )
-from ...kernels.cast import cast, NumericCast
+from ...kernels.cast import cast, BinaryLikeCast, NumericCast
 
 
 # ---------------------------------------------------------------------------
@@ -649,3 +659,131 @@ def test_cast_timestamp_downscale_exact_passes_under_safe() raises:
     var ts_ms = cast(i, timestamp(millisecond))
     var ts_s = cast(ts_ms, timestamp(second), safe=True)
     assert_true(cast(ts_s, int64).as_int64() == array([1, 2], int64))
+
+
+# ---------------------------------------------------------------------------
+# binary → string UTF-8 validation.
+#
+# `_check_utf8` puts two whole-buffer fast paths in front of the per-element
+# loop (all-ASCII; valid-window + element starts on character boundaries).
+# Both are sufficient conditions that fall through to the loop, so the tests
+# below pin the accept/reject decision rather than the route taken to it —
+# a fast path that stops rejecting bad input is the failure mode they exist
+# to catch.
+# ---------------------------------------------------------------------------
+
+
+def _binary_from(var values: List[String]) raises -> BinaryArray:
+    """Relabel a built string array as `binary` — a free, layout-identical
+    cast, so the bytes reach `_check_utf8` exactly as written."""
+    var b = BinaryBuilder(len(values))
+    for v in values:
+        b.append(v)
+    return b.finish()
+
+
+def test_binary_to_string_invalid_utf8_raises_past_fast_path() raises:
+    # A lone 0xFF among enough ASCII to clear the SIMD block size: the
+    # all-ASCII path must not skip it, and the whole-window path must not
+    # accept it either.
+    var b = BinaryBuilder(600)
+    for i in range(600):
+        b.append(String("padding-element-", i))
+    var raw = List[UInt8]()
+    raw.append(0xFF)
+    b.append(StringSlice(unsafe_from_utf8=Span(raw)))
+    var bad: DynArray = b.finish()
+
+    with assert_raises():
+        _ = cast(bad, string)  # safe=True is the default
+
+
+def test_binary_to_string_split_character_raises() raises:
+    """The exact way a whole-buffer validator goes wrong.
+
+    "é" is 0xC3 0xA9. Split across two adjacent elements the *concatenation*
+    is valid UTF-8 while each element on its own is not — so a validator that
+    only looks at the byte window would accept it. The element-start boundary
+    scan is what makes this still raise."""
+    var lead = List[UInt8]()
+    lead.append(0xC3)
+    var trail = List[UInt8]()
+    trail.append(0xA9)
+
+    var b = BinaryBuilder(2)
+    b.append(StringSlice(unsafe_from_utf8=Span(lead)))
+    b.append(StringSlice(unsafe_from_utf8=Span(trail)))
+    var split: DynArray = b.finish()
+
+    with assert_raises():
+        _ = cast(split, string)
+
+
+def test_binary_to_string_valid_multibyte_passes() raises:
+    var src: DynArray = _binary_from(
+        ["Здравствуйте", "ünïcødé", "日本語", "ascii", ""]
+    )
+    var out = cast(src, string)
+    assert_true(out.dtype() == string)
+    assert_true(out == cast(out, string))
+    assert_equal(len(out), 5)
+    assert_equal(String(out.as_string()[0]), "Здравствуйте")
+    assert_equal(String(out.as_string()[2]), "日本語")
+
+
+def test_binary_to_string_ascii_fast_path_matches_loop() raises:
+    var src: DynArray = _binary_from(["a", "bc", "", "def"])
+    var out = cast(src, string)
+    assert_equal(len(out), 4)
+    assert_equal(String(out.as_string()[3]), "def")
+
+
+def test_binary_to_string_null_slot_bytes_are_not_validated() raises:
+    """A null slot may hold arbitrary bytes. The whole-window check fails on
+    them, and the fall-through to the per-element loop — which skips nulls —
+    is what keeps that from becoming a false rejection."""
+    var raw = List[UInt8]()
+    raw.append(0xFF)
+    var b = BinaryBuilder(3)
+    b.append("ok")
+    b.append(StringSlice(unsafe_from_utf8=Span(raw)))  # bytes stay in `values`
+    b.append("fine")
+    var built = b.finish()
+
+    # Mark element 1 null without disturbing its bytes.
+    var bm = Bitmap.alloc_zeroed(3)
+    bm.set(0)
+    bm.set(2)
+    var with_null = BinaryArray(
+        length=3,
+        nulls=1,
+        offset=0,
+        bitmap=bm^.to_immutable(length=3),
+        offsets=built.offsets.copy(),
+        values=built.values.copy(),
+    )
+
+    var out = BinaryLikeCast.apply[BinaryType, StringType, True](with_null)
+    assert_equal(len(out), 3)
+    assert_true(out.is_null(1))
+    assert_equal(String(out[0]), "ok")
+
+
+def test_binary_to_string_slice_validates_only_its_window() raises:
+    """Validation must read the sliced window, not the whole values buffer:
+    bad bytes outside the slice are none of this cast's business, and bad
+    bytes inside it must still raise."""
+    var raw = List[UInt8]()
+    raw.append(0xFF)
+    var b = BinaryBuilder(3)
+    b.append("good")
+    b.append("also-good")
+    b.append(StringSlice(unsafe_from_utf8=Span(raw)))
+    var src: DynArray = b.finish()
+
+    var head = src.slice(0, 2)  # excludes the bad element
+    assert_true(cast(head, string).dtype() == string)
+
+    var tail = src.slice(1, 2)  # includes it
+    with assert_raises():
+        _ = cast(tail, string)
