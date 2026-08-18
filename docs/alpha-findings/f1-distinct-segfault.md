@@ -62,7 +62,9 @@ def _aligned_size[T: DType](length: Int) -> Int:
 aligned; they are **not** padded. When `length * size_of[T]` is already a
 multiple of 64 there is no slack whatsoever, and the one-element store goes
 straight into the neighbouring allocation. For `int64` that is every output
-length divisible by 8 — one filter call in eight, on average.
+length divisible by 8 — roughly one filter call in eight has no slack at all,
+and a wider `T` needs a rarer length while a narrower one needs a rarer still
+(`int16` wants a multiple of 32).
 
 ### Why it is a SIGSEGV with no message rather than a clean abort
 
@@ -235,7 +237,29 @@ next person meets the discrepancy in writing rather than in a crash.
 
 ---
 
-## 5. Reproductions
+## 5. Verification
+
+```
+marrow/tests/test_views.mojo + test_buffers.mojo
+  + marrow/kernels/tests/test_filter.mojo      187 passed in 35.41s
+python/marrow/tests                            491 passed, 55 skipped in 1.17s
+```
+
+The new regression test fails on the pre-fix tree with the overflow value
+itself in the sentinel slot (`left: 64` is `src[63]`), and passes after.
+
+`python/marrow/tests/clickbench_alpha.py` goes from 40/43 to **42/43**: Q11,
+Q12 and Q24 all `PASS`. Q29 (`REGEXP_REPLACE`) is the only remainder and is a
+missing kernel, not a crash. Q11's and Q12's answers were cross-checked against
+PyArrow row for row (`repros/verify_q11.py`) — identical, including the
+`u = 12` tie between `N8-00` and `GT-P7300B` that the two order differently.
+
+Every predicate from the bisection table now returns the count PyArrow reports:
+19,643 / 27,160 / 433,099 / 256,201 / 69,354.
+
+---
+
+## 6. Reproductions
 
 The minimal synthetic reproduction is the unit test above; it needs no data
 file. The bisection drivers used against the real dataset are kept under
