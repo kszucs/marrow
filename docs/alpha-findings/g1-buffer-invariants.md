@@ -360,23 +360,35 @@ fraction of imported arrays.
 `c_data.mojo`, `utils/byteorder.mojo` and the Parquet codec layer. That was the
 search space, plus every `alloc_*` whose size is a computed count.
 
-**Finding A — `Buffer.view[T]()` with no explicit length defeats the new
+**Finding A — `Buffer.view[T]()` with no explicit length weakens the new
 assertions.** `view()` defaults `length` to `self._size // size_of[T]()`, i.e.
-the **padded** element count, not the logical one. So a two-pass
-count-then-fill destination viewed without an explicit length is bounds-checked
-against up to 63 bytes more than it owns. Confirmed sites:
-
-- `marrow/kernels/filter.mojo:297` — `out_values.view[DType.uint8]()` after
-  `alloc_uninit(total_bytes)`
-- `marrow/kernels/filter.mojo:895`, `:951` — `child_idx_buf.view[...]()` after
-  `alloc_uninit(total)`
-- `marrow/kernels/join.mojo:353`, `marrow/kernels/hashtable.mojo:453`,
-  `marrow/kernels/sort.mojo:571` — same shape
+the **padded** element count, not the logical one. A two-pass count-then-fill
+destination viewed without an explicit length is therefore bounds-checked
+against up to 63 bytes more than it owns.
 
 `BufferView.filter` gets this right (`buf.view[Self.T](0, out_len)`), which is
-why the assertion bites there. **Recommendation:** pass the logical length at
-every computed-count destination, and add a `pos == total` postcondition to the
-second pass. Low risk, mechanical; not done here to keep this change reviewable.
+why the assertion bites there — and so, on inspection, do
+`marrow/kernels/join.mojo:354` and `marrow/kernels/sort.mojo:572`, which I had
+expected to be offenders and are not. Fixed here, in the file with the history:
+
+- `marrow/kernels/filter.mojo` — the string/binary values destination
+  (`alloc_uninit(total_bytes)`) and both `child_idx_buf` destinations
+  (`alloc_uninit(total)`) now pass their computed length, plus two
+  `pos == total` / `dst_byte_pos == total_bytes` postconditions.
+
+Still open, reported rather than changed:
+
+- `marrow/kernels/filter.mojo:241`, `:369`, `:428`, `:826`, `:877` — offsets and
+  fixed-width destinations viewed without a length. Same mechanical fix.
+- `marrow/kernels/cast.mojo:873`, `:1006` — same shape; that file is owned by an
+  unmerged branch and was left alone.
+- `marrow/kernels/hashtable.mojo:453` writes its CSR rows through
+  `Buffer.unsafe_set` rather than a view. That method had **no bounds check at
+  all**, which is the `BufferView.unsafe_set` defect one layer down; it now
+  calls `Buffer._check_bounds[T]`, as does `Buffer.unsafe_get`. The bound is
+  the padded element count, so it catches gross overruns and not a one-element
+  overstep — the reason to pass explicit lengths to `view()` rather than rely
+  on it.
 
 **Finding B — `BitmapView.store[W]` is inconsistent about `_offset`.** The
 `W % 8 == 0` branch is byte-addressed and ignores `_offset`; the `W < 8` branch

@@ -806,7 +806,16 @@ struct Buffer[*, mut: Bool = False](
         This cost two GPU tests, which read back zeros and were filed as a
         device-transfer data-loss bug (B22) until the writes turned out to be
         landing eight bytes away from the reads.
+
+        The bound is checked by `debug_assert`, so it costs nothing in release —
+        "unsafe" promises no *runtime* check, not that a debug build should stay
+        quiet while the caller overruns. Note the bound is the buffer's
+        *allocated* element count, which `_aligned_size` rounds up to a 64-byte
+        multiple, so it is looser than a logical row count by up to 63 bytes.
+        Size a `view()` explicitly when the destination comes from a computed
+        count; see docs/alpha-findings/g1-buffer-invariants.md.
         """
+        self._check_bounds[T](index)
         comptime output = Scalar[T]
         self._ptr.unsafe_mut_cast[True]().unsafe_bitcast[output]()[
             unsafe_offset=index
@@ -820,6 +829,7 @@ struct Buffer[*, mut: Bool = False](
             self.is_cpu(),
             "cannot read device buffer, call to_cpu() first",
         )
+        self._check_bounds[T](index)
         comptime output = Scalar[T]
         return self._ptr.unsafe_bitcast[output]()[unsafe_offset=index]
 
