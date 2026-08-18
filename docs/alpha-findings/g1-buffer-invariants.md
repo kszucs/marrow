@@ -416,10 +416,11 @@ rule intends to permit.
 
 **Not a finding.** `views._apply_packed_dispatch` deliberately over-writes past
 `length` on the GPU arm, clamped to `length + 64 / size_of[In]`. It is safe and
-self-consistent: a `Bitmap` allocates `align_up(ceildiv(bits, 8), 64)` bytes,
-and a length with no slack at that boundary is a multiple of 512 bits, which
-every power-of-two `gpu_width` divides — so `align_up(length, gpu_width)` is a
-no-op exactly when there is no room. The docstring now says this instead of
+self-consistent, and for a reason that does not involve slack: the launch covers
+at most `align_up(length, gpu_width)` bits with `gpu_width` a power of two no
+wider than 64, and a `Bitmap` of `length` bits allocates
+`align_up(ceildiv(length, 8), 64)` bytes, which always covers
+`ceildiv(align_up(length, 64), 8)`. The docstring now says this instead of
 citing padding. `views.apply` for bitmaps (`_apply` unary/binary) computes its
 tail read bound exactly and was verified in-bounds by hand.
 

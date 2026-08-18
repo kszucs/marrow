@@ -1616,10 +1616,11 @@ def _apply_packed_dispatch[
 
     The GPU launch is rounded up to a full ``gpu_width`` chunk so every store
     is a complete byte. The clamp keeps that over-write inside the destination
-    bitmap's allocation: `Bitmap` allocates `align_up(ceildiv(bits, 8), 64)`
-    bytes, and a length with no slack at that boundary is a multiple of 512
-    bits, which every power-of-two ``gpu_width`` divides — so `align_up` is a
-    no-op exactly when there is no room. The CPU arm is `_cpu_serial` — see
+    bitmap's allocation: the launch covers at most `align_up(length, gpu_width)`
+    bits, `gpu_width` is a power of two no wider than 64, and a `Bitmap` of
+    `length` bits allocates `align_up(ceildiv(length, 8), 64)` bytes — which
+    always covers `ceildiv(align_up(length, 64), 8)`. Nothing here rests on
+    slack past the logical end. The CPU arm is `_cpu_serial` — see
     there for why it may not stripe.
     """
     if ctx.is_gpu():

@@ -16,7 +16,13 @@
   `load[W]` and `load_bits` take a deliberately wide load and are bounded by the
   allocation (`align_up(extent, 64)`). `debug_assert` compiles out in release,
   and the full surface measured within noise on a fixed 141-case selection
-  (135.5 s -> 134.1 s, compilation-dominated). See
+  (135.5 s -> 134.1 s, compilation-dominated). `Buffer.unsafe_set` and
+  `Buffer.unsafe_get` were unchecked one layer down and now call
+  `Buffer._check_bounds[T]` too. That bound is the *allocated* element count,
+  which `_aligned_size` rounds up to a 64-byte multiple, so `filter`/`take`
+  destinations sized from a computed count now pass their logical length to
+  `Buffer.view[T]()` instead of taking the padded default, with
+  `pos == total` postconditions behind them. See
   `docs/alpha-findings/g1-buffer-invariants.md`.
 
 - **The Python expression and plan surface closes the gap the binding agents
