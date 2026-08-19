@@ -64,6 +64,7 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - **AOT lane** — the comptime-typed algebra (`marrow/expr/values.mojo`), fully monomorphized: every operand is bound on a family trait, the output dtype is a comptime type, and a subtree fuses into one SIMD loop with no dispatch.
 - **One plan IR over both.** `BoxedValue` (`marrow/expr/relations.mojo`) is the single box both lanes erase into, so each relational operator compiles exactly once. Plan nodes `InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Limit`, `Sort`, `Aggregate`, `Join` chain via `.filter()`, `.select()`, `.aggregate()`, `.sort()`, `.limit()`, `.join()`; `plan.execute()` opens a pull-based processor tree. A `.filter` directly above a `ParquetScan` pushes its predicate into the scan for row-group and page pruning.
 - The AOT lane's whole point is that the closed world is dead-code-eliminable: the fused gate binary is several times smaller in `__text` than the runtime equivalent. `benchmarks/binary_size/` is the live gate — trust it over any ratio quoted in prose.
+- **Late-bound parameters, in both lanes.** `param("min-a", int64)` is a constant supplied at run time rather than compile time — structurally a literal whose value sits behind a cell resolved once per batch, so the fused inner loop is unchanged and a parameter costs nothing per row. `plan.execute_cli()` then binds them from `argv`, which is what makes a query compilable into a standalone binary — see **Compiled queries (AOT)** below.
 
 **Parquet I/O** (`marrow/parquet`) — a from-scratch reader/writer, no PyArrow at runtime
 - `read_table(path, columns=None)` — decode a Parquet file into a marrow `Table`, with optional column projection
@@ -243,6 +244,89 @@ extractors and `date_trunc`, plus `cast`, `isin`, `is_null`, `is_valid`,
 
 See `docs/alpha-clickbench-coverage.md` for the per-query table and
 `docs/alpha-findings/README.md` for the known structural issues.
+
+## Compiled queries (AOT)
+
+**The third frontend, and the one nothing else here can do.** A query written
+against the Mojo expression layer compiles to a standalone binary that carries
+no Python, no interpreter and no PyArrow — only the values it needs are
+supplied at run time.
+
+Where the lazy frontend above keeps the *whole* query runtime-flexible, this
+lane freezes the query **shape** at compile time and leaves only scalars and
+paths late-bound. `param()` sits beside `col()` and `lit()`: `col` reads from
+data, `lit` is a constant, `param` is a constant supplied later.
+
+```mojo
+from marrow.expr.builders import col, param
+from marrow.dtypes import int64, string
+
+def main() raises:
+    var plan = DynRelation(
+        ParquetScan[...](path=param("src", string, help=String("input parquet")),
+                         schema=sch)
+    ).filter(
+        BoxedValue(col("a", int64) > param("min-a", int64, default=0))
+    )
+    plan.execute_cli()
+```
+
+```bash
+marrow compile query.mojo -o query          # ~1-2 min, elaborates all of marrow at -O3
+./query --src data.parquet --min-a 4
+./query --src data.parquet -o result.parquet
+./query --help                              # rendered from the param() declarations
+./query --describe                          # the same, as JSON
+```
+
+`--help` and `--describe` are generated from the declarations themselves, so
+adding `help=` or `default=` in the source changes the CLI surface with no
+argument-parsing code:
+
+```
+Parameters:
+  --src <string> (required)  input parquet file
+  --min-a <int64> (default: 0)  exclusive lower bound on a
+```
+
+`marrow compile query.mojo -o query --bundle ./dist` emits a **relocatable
+directory** instead of a bare binary: the stripped executable, its transitive
+Mojo-runtime dylib closure, and the Parquet codecs marrow `dlopen`s, with the
+rpath rewritten to `@loader_path` / `$ORIGIN`. Zip it with `zip -ry` (plain
+`zip -r` dereferences the dedupe symlinks).
+
+### What it costs, measured
+
+| | |
+|---|---:|
+| stripped binary, one Parquet query | ~2.8 MB |
+| `--bundle` directory (binary + runtime + codecs) | ~8.8 MB |
+| compile time per invocation | ~1-2 minutes |
+
+Output writers are gated behind `-D MARROW_CLI_WRITERS=true`, which
+`marrow compile` passes by default so `-o result.parquet` works out of the
+box. Linking them costs **572,288 bytes** of `__text`; `marrow compile
+--no-writers` omits them for the minimum-size build, and `-o` then fails with
+a named error rather than silently writing nothing.
+
+### Honest limitations
+
+- **The query shape is frozen at compile time.** Only scalars and paths are
+  late-bound. If your shape varies, use the lazy frontend above.
+- **`pip install marrow[compile]` cannot resolve today.** The extra needs
+  `mojo>=1.1,<2`, marrow tracks a Mojo *nightly*, and PyPI's stable `mojo`
+  tops out at 1.0.0 — a wheel cannot force an `--extra-index-url`. `marrow
+  compile` checks the version up front and says so rather than emitting an
+  opaque compiler error.
+- **Static linking is not possible.** macOS ships no `libSystem.a`, `mojo
+  build` has no static-link flag, and the Mojo runtime ships only as
+  `.dylib`/`.so` — so a self-contained *directory* is the achievable artifact,
+  which is also the right shape for a zipped deployment unit.
+- **Bundle portability is verified for the snappy path on the build machine.**
+  The codec libraries' own `@rpath` entries are not rewritten, so a bundle
+  moved to another machine is not guaranteed for every codec.
+
+See [`docs/guide/compile.qmd`](docs/guide/compile.qmd) for the full guide.
 
 ## Mojo API
 
