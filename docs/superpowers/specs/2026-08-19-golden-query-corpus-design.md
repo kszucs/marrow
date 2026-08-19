@@ -196,11 +196,14 @@ Two bounds on it:
 - It seeds the **expression, filter and sort** areas only. Not one expressible
   query has a `GROUP BY` or an aggregate, and none has a join or meaningful
   null semantics. Everything else stays hand-written.
-- **Sample to roughly 150 cases, not all 944.** Every AOT twin shares one
-  compilation unit and peak memory scales with the unit — 9 files in
-  `marrow/expr/tests` already measured 17.0 GB. 944 fused expression trees in
-  one unit is not viable, and the queries are mechanical variations with steep
-  diminishing returns. Select for expression diversity.
+- **Sample it, but the bound is instantiations, not cases.** Every query in
+  this corpus runs over one schema of one dtype — `t1(a, b, c, d, e INTEGER)` —
+  which is the *best* case for instantiation reuse, so the seed is cheaper per
+  case than the hand-written areas that deliberately vary dtypes (cast,
+  temporal, decimal, string). Measure a ~20-case driver first and extrapolate
+  before fixing a corpus size. The queries are mechanical variations with steep
+  diminishing returns regardless, so select for expression diversity rather
+  than taking all 944.
 
 ## Both lanes run every case
 
@@ -210,11 +213,24 @@ cannot express is not an exemption — it is an invariant-2 violation, and the
 corpus is where it surfaces. Windows are the known instance today (AOT-only,
 backlog M2.3); the corpus will name it rather than let it stay implicit.
 
-**Compile cost forces the AOT runner's shape.** All AOT cases live in one tests
-directory so pytest generates a single driver: N files in one compilation unit
-cost roughly what 1 file costs — measured at 4m43s for all 9 `expr/tests` files
-against 3m18s for `test_join.mojo` alone. Per-case `marrow compile` binaries
-would cost minutes *each* and are not viable.
+**Compile cost is governed by the selection and by distinct instantiations —
+not by file count.** `MojoRunner.write_driver` (`conftest.py:258`) generates
+**one driver per pytest selection**, content-addressed by a hash of its source,
+so 150 cases across 10 files cost exactly what 150 cases in 1 file cost.
+Files are an organisation choice. Two things actually drive cost:
+
+- **Fixed:** elaborating marrow, roughly 3 minutes, paid once per selection.
+  This is why all 9 `expr/tests` files together measured 4m43s / 17.0 GB while
+  `test_join.mojo` alone measured 3m18s / 19.6 GB.
+- **Marginal:** each distinct fused instantiation — a new comptime type
+  combination. Cases sharing dtypes and shapes share instantiations.
+
+So the levers are: **narrow the selection** to cut peak memory (run areas as
+separate `pytest` invocations; concurrent ones are safe, drivers being
+content-addressed), and **vary values rather than types** to cut marginal cost.
+
+Per-case `marrow compile` binaries would cost minutes *each* and are not
+viable under any arrangement.
 
 ## Execution-configuration leg
 
