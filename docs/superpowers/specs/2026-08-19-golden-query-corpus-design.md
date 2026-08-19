@@ -270,7 +270,7 @@ the expectation key for both lanes, and reduces the lane-parity requirement to
 a set difference over collected names, which is itself a test.
 
 New code, in full: the `golden` fixture (~100 lines), `testpaths += golden` in
-`pytest.ini`, `golden/__init__.mojo`, four `addoption` entries (`--regenerate`,
+`pytest.ini`, four `addoption` entries (`--regenerate`,
 `--morsel-size`, `--num-threads`, `--no-optimize`), and a Mojo helper that
 loads a fixture plus an expectation so each AOT case stays about three lines.
 
@@ -301,7 +301,6 @@ lane only.
 
 ```
 golden/
-  __init__.mojo          # golden/ is a Mojo package, so its modules are importable
   conftest.py            # case discovery, comparison, --regenerate
   fixtures/*.arrow       # a handful of shared datasets, incl. sliced + chunked
   test_<area>.py         # areas: aggregate, filter, project, sort, limit, join,
@@ -309,15 +308,20 @@ golden/
   test_<area>.expected
 ```
 
-Four mechanics make a top-level directory work with the existing harness:
+Three mechanics make a top-level directory work with the existing harness:
 
 - **`testpaths = marrow python` in `pytest.ini` gains `golden`.** One line.
 - **Files must be named `test_*`.** `pytest_collect_file` (`conftest.py:804`)
   collects any `test_*.mojo` under rootdir — it is not restricted to `marrow/` —
   and `python_files = test_*.py bench_*.py` governs the Python side.
-- **`golden/` needs `__init__.mojo`.** `module_path` (`conftest.py:251`) turns
-  `golden/test_aggregate.mojo` into `golden.test_aggregate`, and the generated
-  driver imports that.
+- **No `__init__.mojo` is needed.** `module_path` (`conftest.py:251`) turns
+  `golden/test_aggregate.mojo` into `golden.test_aggregate`, and the driver
+  resolves it through the `-I .` the harness already passes
+  (`MojoRunner.flags`), with cwd at the repo root. Verified directly: a
+  top-level directory with no `__init__.mojo` imports from a driver in
+  `.test_runners/` under `-I .`, and fails without it. CLAUDE.md's
+  "each tests directory needs an `__init__.mojo`" governs subdirectories of
+  `marrow/`, which is compiled *as a package*; `golden/` is outside it.
 - **The Mojo cases use *absolute* `from marrow.x import ...`**, the opposite of
   the in-package rule, because they sit outside the package —
   `benchmarks/profiles/profile_join.mojo` already does exactly this.
