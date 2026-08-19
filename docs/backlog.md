@@ -685,6 +685,8 @@ capabilities those two milestones require.
 ### Simplification wave — scheduled, runs before feature work resumes
 
 **Verified card-by-card on 2026-08-17, and the schedule did not survive intact.**
+The verification document has been folded into this section and deleted; read the
+original with `git show f38f3c5:docs/simplification-wave-plan.md`.
 Five of the thirteen cards had a false or vacuous premise, two collide with
 designs §7 had already rejected, and one had already landed. **Read this table
 before acting on any `S` row below it** — the row text is the original filing,
