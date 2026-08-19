@@ -401,6 +401,25 @@
   4.6x. q23 now runs faster than duckdb. See
   `docs/alpha-findings/o3-string-alloc.md`.
 
+### Fixes
+
+- **`marrow compile <file> [out]` now works, matching the UX originally
+  requested for `marrow compile`.** The CLI had shipped with no `compile`
+  subcommand — the only working invocation was the bare `marrow query.mojo
+  -o query` — which the docs task caught and flagged rather than papering
+  over. `python/marrow/compile.py`'s argument parser is now built with
+  `argparse` subparsers (`_build_arg_parser` -> `_add_compile_subparser`),
+  so `marrow compile query.mojo`, `marrow compile query.mojo out` and every
+  existing flag (`-o/--output`, `--marrow-path`, `--bundle`, `--no-writers`,
+  `--fast`, `--no-strip`, `-v`) all keep working under the subcommand, and
+  `marrow --help` / `marrow compile --help` list them. The bare form
+  (`marrow query.mojo`) is no longer accepted: nothing outside this repo
+  depended on it (the CLI has never been released), and requiring the
+  subcommand is what avoids a file literally named `compile` becoming
+  ambiguous. `main()` now dispatches on `args.command` through a
+  `_SUBCOMMANDS` table, so a second subcommand is a new `_add_*_subparser`
+  plus a table entry, not another redesign.
+
 ### Refactors
 
 - **The fluent null predicates follow PyArrow's spelling.** `isnull`/`notnull`

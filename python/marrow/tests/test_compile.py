@@ -12,10 +12,12 @@ from pathlib import Path
 
 import pytest
 from marrow.compile import (
+    _build_arg_parser,
     build_command,
     bundle,
     check_mojo_version,
     dylib_closure,
+    main,
     resolve_marrow_path,
 )
 
@@ -26,6 +28,95 @@ def test_build_command_uses_o3_and_include_path(tmp_path):
     assert "-O3" in cmd and "-g0" in cmd
     assert cmd[cmd.index("-I") + 1] == str(tmp_path / "src")
     assert cmd[cmd.index("-o") + 1] == str(tmp_path / "q")
+
+
+# --- `marrow compile` subcommand ---------------------------------------------
+#
+# The UX contract is `marrow compile <file> [out]`. The bare form
+# (`marrow <file>`) is deliberately no longer accepted: nothing outside this
+# repo has ever depended on it, and requiring the subcommand keeps a file
+# literally named `compile` from becoming ambiguous with the subcommand
+# itself. `_run_compile`'s build-invoking behaviour is already covered by
+# the `build_command` tests above; these exercise the argparse wiring that
+# gets a parsed `Namespace` to it.
+
+
+def test_bare_form_is_no_longer_accepted():
+    parser = _build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["q.mojo"])
+
+
+def test_compile_subcommand_parses_file_and_output_flag():
+    parser = _build_arg_parser()
+    args = parser.parse_args(["compile", "q.mojo", "-o", "out"])
+    assert args.command == "compile"
+    assert args.file == Path("q.mojo")
+    assert args.output == Path("out")
+
+
+def test_compile_subcommand_parses_positional_out():
+    parser = _build_arg_parser()
+    args = parser.parse_args(["compile", "q.mojo", "out"])
+    assert args.file == Path("q.mojo")
+    assert args.out == Path("out")
+    assert args.output is None
+
+
+def test_compile_subcommand_help_lists_every_flag(capsys):
+    parser = _build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["compile", "--help"])
+    out = capsys.readouterr().out
+    for flag in (
+        "-o",
+        "--output",
+        "--marrow-path",
+        "--bundle",
+        "--no-writers",
+        "--fast",
+        "--no-strip",
+        "-v",
+    ):
+        assert flag in out
+
+
+def test_top_level_help_lists_compile_subcommand(capsys):
+    parser = _build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--help"])
+    out = capsys.readouterr().out
+    assert "compile" in out
+
+
+def test_main_compile_reaches_build_command_with_flag(tmp_path, monkeypatch):
+    src = tmp_path / "q.mojo"
+    src.write_text("")
+    marrow_dir = tmp_path / "src"
+    (marrow_dir / "marrow").mkdir(parents=True)
+
+    monkeypatch.setattr("marrow.compile.check_mojo_version", lambda: "1.1.0")
+    monkeypatch.setattr("marrow.compile.shutil.which", lambda name: None)
+
+    captured = {}
+
+    def fake_build_command(src, out, marrow_path, opt="-O3", writers=True):
+        captured["opt"] = opt
+        captured["marrow_path"] = marrow_path
+        return ["mojo", "build", opt]
+
+    monkeypatch.setattr("marrow.compile.build_command", fake_build_command)
+
+    def fake_run(cmd, check):
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("marrow.compile.subprocess.run", fake_run)
+
+    rc = main(["compile", str(src), "--marrow-path", str(marrow_dir), "--fast"])
+
+    assert rc == 0
+    assert captured["opt"] == "-O1"
+    assert captured["marrow_path"] == marrow_dir
 
 
 def test_resolve_marrow_path_prefers_explicit(tmp_path):

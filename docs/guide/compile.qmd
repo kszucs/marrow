@@ -106,7 +106,7 @@ by hand while writing this page:
 ```
 
 ```bash
-$ marrow benchmarks/binary_size/query_param.mojo -o q
+$ marrow compile benchmarks/binary_size/query_param.mojo -o q
 $ ./q --help
 Parameters:
   --src <string> (required)
@@ -125,11 +125,11 @@ reads back as exactly those two values.
 
 Installing marrow with the `compile` extra (`pip install marrow[compile]`)
 registers a `marrow` console script backed by `python/marrow/compile.py`.
-Despite the name of this page, there is no `compile` subcommand to type —
-the installed command *is* the compiler:
+`compile` is a subcommand of it, so more subcommands can join it later
+without another redesign:
 
 ```bash
-$ marrow query.mojo -o query
+$ marrow compile query.mojo -o query
 ```
 
 `marrow` resolves the `mojo` compiler on `PATH` (raising a named error,
@@ -145,9 +145,9 @@ query's size is directly comparable to the numbers in
 
 Useful flags:
 
-- **`-o OUTPUT`** (or the positional form, `marrow query.mojo out`) — where
-  to write the binary. Defaults to the source file's name without `.mojo`,
-  in the current directory.
+- **`-o OUTPUT`** (or the positional form, `marrow compile query.mojo out`)
+  — where to write the binary. Defaults to the source file's name without
+  `.mojo`, in the current directory.
 - **`--fast`** — build with `-O1` instead of `-O3`: a faster compile, a
   slower binary. Still on the order of a minute, since elaborating `marrow`
   dominates either way.
@@ -186,7 +186,7 @@ raises a named error rather than silently doing nothing.
 A compiled binary still dynamically links a handful of Mojo/MAX runtime
 `.dylib`/`.so` files, resolved through the local pixi environment's rpath —
 copying the bare binary to another machine will not run there.
-`marrow query.mojo -o query --bundle DIR` copies the binary plus the
+`marrow compile query.mojo -o query --bundle DIR` copies the binary plus the
 **transitive** closure of its non-system shared-library dependencies into
 `DIR` and
 rewrites the rpath to `@loader_path` (macOS) / `$ORIGIN` (Linux), so `DIR`
@@ -194,7 +194,7 @@ runs standalone — no pixi environment, no marrow install, on the build
 machine or any other with a compatible OS/arch:
 
 ```bash
-$ marrow query.mojo -o query --bundle ./dist
+$ marrow compile query.mojo -o query --bundle ./dist
 $ ./dist/query --src data.parquet --min-a 5
 ```
 

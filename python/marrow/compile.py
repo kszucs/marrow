@@ -371,9 +371,12 @@ def check_mojo_version() -> str:
     return version
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="marrow",
+def _add_compile_subparser(
+    subparsers: argparse._SubParsersAction,
+) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser(
+        "compile",
+        help="compile a marrow query (.mojo) into a standalone binary",
         description="Compile a marrow query (.mojo, ending in "
         "plan.execute_cli()) into a standalone binary.",
     )
@@ -434,10 +437,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv)
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="marrow",
+        description="marrow's command-line tools.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    _add_compile_subparser(subparsers)
+    return parser
 
+
+def _run_compile(args: argparse.Namespace) -> int:
     try:
         check_mojo_version()
     except RuntimeError as e:
@@ -493,6 +503,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"bundled: {bundled}")
 
     return 0
+
+
+_SUBCOMMANDS = {"compile": _run_compile}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    return _SUBCOMMANDS[args.command](args)
 
 
 if __name__ == "__main__":
