@@ -164,10 +164,11 @@ def test_something() raises:
 ### Writing Mojo benchmarks
 
 `bench_*.mojo` files sit beside their tests, follow the same rules (no `main()`,
-relative imports), and use `Benchmark` from `marrow.testing`:
+relative imports), and use `Benchmark` from `marrow.utils.testing`:
 
 ```mojo
-from marrow.testing import Benchmark, BenchMetric
+from ...utils.testing import Benchmark      # `..` from marrow/tests/
+from std.benchmark import BenchMetric, keep
 
 def bench_my_kernel(mut b: Benchmark) raises:
     var data = _prepare_data(N)
@@ -449,7 +450,8 @@ marrow/
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── execution.mojo        # ExecutionContext — threads, device, `stripe`
-├── utils/                # byteorder, checksum, hashing, compression, testing
+├── utils/                # byteorder, checksum, hashing, compression
+│   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
 │   ├── boolean.mojo      # and/or/not/xor, is_null, is_nan, is_inf
@@ -480,7 +482,6 @@ marrow/
 │   └── tests/
 ├── parquet/              # reader, writer, schema, format, codecs, bloom,
 │   └── tests/            # statistics, source
-├── testing/              # TestSuite + Benchmark used by the generated driver
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # Python package + bindings (python/marrow/libmarrow.so)
 └── marrow/tests/         # Python test_*.py and bench_*.py

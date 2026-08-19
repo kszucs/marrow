@@ -94,6 +94,33 @@ obvious. Read before planning anything.
   decompress `dlopen`s the codec library — invisible at one read per file, 4.7x
   at one read per row group.
 
+### Trait and compiler limits measured 2026-08-17
+
+Each is a hard error, and each rules out an approach that looks obvious.
+
+- **A trait default body cannot name a field of `Self`** —
+  `error: '_Self' value has no attribute 'a'`. The operand must be reached
+  through a by-value accessor requirement.
+- **A ref-returning accessor is not expressible at trait level** —
+  `cannot return 'self's origin, because it might expand to a RegisterPassable
+  type`. Same origin-widening wall as `arrays.validity()`; this is what forces
+  the `.copy()`.
+- **A sub-trait default returning `Self.State` does not recurse — it fails to
+  reduce**: `cannot implicitly convert '_Self.Operand.State' value to
+  '_Self.State'`. `rebind` cannot bridge it, because `rebind` takes its argument
+  by implicitly-copyable borrow and `State` is not. **This settles §5.1's
+  validity/state delegation question as impossible, not merely costly.**
+- **A struct parameter does not satisfy an associated-type requirement** —
+  `struct Neg[A: Leafy](UnaryDirect)` gives `required member 'A' is not
+  specified`. The trait needs a differently-named member the struct binds
+  explicitly.
+- **A trait default is size-free; the boilerplate is the cost.** Hoisting the 22
+  verbatim `referenced_columns` copies to a `UnaryValue` default compiles clean
+  and measures **+0 bytes on `query_streaming_agg_fused`, +128 on `query_exprs`**
+  — and the +128 is not the trait mechanism but +48 bytes per boxed
+  instantiation, from the forced `.copy()`. It is still not worth doing: the
+  dedup makes the file **58 lines longer**.
+
 ### Measurement traps found in the alpha wave (2026-08-18)
 
 Each of these produced a **confident wrong conclusion** before it was caught.
@@ -657,6 +684,59 @@ capabilities those two milestones require.
 
 ### Simplification wave — scheduled, runs before feature work resumes
 
+**Verified card-by-card on 2026-08-17, and the schedule did not survive intact.**
+Five of the thirteen cards had a false or vacuous premise, two collide with
+designs §7 had already rejected, and one had already landed. **Read this table
+before acting on any `S` row below it** — the row text is the original filing,
+kept so the correction is legible.
+
+| Card | The row says | Verified |
+|---|---|---|
+| **S2** | "a date predicate prunes nothing in the fused lane" | **Vacuous** — the fused lane cannot *express* a date predicate. The real defect is `bound_column`: a fused join on a temporal column **raises**. Re-scoped as A3 below. |
+| **S4** | 15 structs, "four casts never see `ctx`" | **Six** never see `ctx`, and there are **two** behavioural defects, not one — `TemporalCast` drops `safe` too. An existing test encodes the bug. *(Landed as A1.)* |
+| **S6** | "deletion is the only remaining option" | **Premise false.** `write_repr_to` is a stdlib `Writable` member whose default is field reflection, not `write_to`. Deleting all 26 is a user-visible Python regression. Re-scoped as C8. |
+| **S8** | "no new cycle" | **False** — it closes `execution → buffers → views → execution`. Resolved by D1 below. |
+| **S11** | two placement moves | The `equal_any` half **creates a `numeric ↔ compare` cycle**. Rejected as D2; only the `Grouping` half survives. |
+| **S13** | 17 submodules, 8 re-exported | **19 named, 7 re-exported**, and `interval.mojo` is missing from the docstring entirely. |
+| **S14** | ~15 paths, 4 files | **119 paths, 14 files**, and the fix is *not* `mkstemp` — Mojo tests cannot reach pytest's `tmp_path`. |
+| **S16** | scheduled | **Evaporated** — the card says so itself; its citations predate `5b14bfa`/`e3a6cd0`. |
+| **S17** | scheduled last | **Already landed** at `0e552a7`. |
+
+Four cards were promoted *into* the wave that the original schedule does not
+list, and one was demoted out:
+
+| New | Item |
+|---|---|
+| **A2** | **`is_in` never verifies key equality.** Membership is decided on the 64-bit hash alone, so a collision is a silent wrong answer (~2⁻⁶⁴, but wrong with no error) and Arrow's `is_in` is exact. Fix is the seven lines `SwissHashTable.probe` already pays (`hashtable.mojo:619-626`): a `Take` + `EqKernel` on probe hits only. See D3 for sequencing against B2. |
+| **A4** | **`RecordBatch`/`Table` validate nothing** — promoted from §8. |
+| **B1** | **Move the aggregate catalog down to `kernels/`** — S–M. |
+| **B2** | **Enforce `SwissHashTable`'s build→probe lifecycle** — XS. |
+| *demoted* | **The `DynRelation` planner split moves out of the wave and into M1.1**, as its *first commit* — M1.1 needs the binder callable from `optimize.mojo` or it will duplicate it. On its own it is tidying: 410 lines, two files, zero behaviour change, **0-byte** expected size delta, and nothing in M1.2–M1.6 unblocks. Prefer **Option B** (keep the fluent surface — invariant 3, and M1.3 is specified over it; extract only the binder). Option A costs ~174 call-site rewrites and partially reverts `53f7be3`, which moved `execute` *onto* the box deliberately. |
+
+**Decisions taken 2026-08-17**, each recorded with its alternative because each
+reverses or upholds something already written down:
+
+- **D1 — S8's allocation helper: `Buffer.alloc_for[T](ctx, n)` in `buffers.mojo`,
+  and §7 is amended.** The card's "no new cycle" reasoning is wrong:
+  `marrow/execution.mojo` imports *nothing* from marrow — it is a leaf — so
+  putting `Buffer`/`Bitmap` on `ExecContext` closes a cycle. The acyclic
+  alternative is the one §7 rejected for pointing the tree's lowest module at
+  device policy; that objection is aesthetic, the cycle is structural, and §8
+  tracks cycles as debt. The helper takes `ctx` as a *parameter*, so
+  `buffers.mojo` names the policy type without owning the policy. Two things ride
+  along: the 10 sites are **not one preamble** (7 buffer / 3 bitmap, two use
+  `alloc_zeroed`), so it is two helpers or a flag; and **the GPU arm of the two
+  `alloc_zeroed` sites calls `alloc_device`, which does not zero** — a latent bug
+  centralising would fix.
+- **D2 — `equal_any` does not move; `kernels/compare.mojo` is not created.** See §7.
+- **D3 — `is_in` gets the `EqKernel` verification** (A2 above), matching `join`.
+  **Sequencing matters:** B2's optional half deletes `probe()` and inlines those
+  seven lines into its two `join.mojo` callers. Do **A2 first** so B2's inlining
+  covers three call sites, or keep `probe()` and drop B2's optional half — the
+  other order writes A2 against a method B2 is about to delete. `membership` also
+  has no benchmark, so the verification's cost is unmeasurable until one exists:
+  a reason to write one, not to defer the correctness fix.
+
 Decided 2026-08-17 from a cross-read of the abstraction, organizational and
 duplication audits. **Those five documents have been folded into this one and
 deleted** — their open items are the `S`-IDs below, their traps are in §0, their
@@ -734,6 +814,7 @@ designs are in §7, and their defend-this findings are in §8. To read one:
 | **A-8** | **`BitmapView.load_bits` over-reads 3-7 bytes past a bitmap.** Benign for heap integrity today (out-of-range bytes are written back unchanged) and now assertion-bounded, but optimistic for FOREIGN buffers, which the producer allocated and which the spec does not require to be padded. Tapering costs a per-lane branch; recommendation is to copy imported bitmaps that land exactly on a 64-byte boundary. | `g1-buffer-invariants.md` | S |
 | **A-9** | **`test_groupby.mojo` cannot run whole.** All 41 cases together exceed the 1800s deadline; every subset passes (8 new binary-key cases in 58 s, 16 pre-existing in 192 s, one alone in 33-54 s). Distinct from the nested-equality hang in §2 — that one deadlocks at 0% CPU, this one is genuinely slow. Compile time scales with case count here, contradicting the documented "N files cost about what 1 file costs". | measured 2026-08-18 | M |
 | **A-10** | **The binary-size baseline is stale in both directions.** `check_gate.py` compares to `baseline.json`, not to the branch under test, and four of five recorded values sit above the current tree — so gates read as "shrinking" while the branch-to-branch measurement showed every gate **grew** ~16 KB (~15.3 KB of it C1's builder fix, i.e. the price of fixing a process-killing abort). A gate that passes is not the same as no regression. Re-record deliberately, as a decision, not as a side effect — an agent attempted the latter and it was reverted. | `g3-regression-check.md` | S |
+| **A-12** | **Stale citations to fix while landing anything nearby.** Verified 2026-08-17: `values.mojo:2452`/`:2565` → `:2561`/`:2674`; the conservative defaults `:449`/`:460` → `:419`/`:430`; §8's `relations.mojo:291`/`:406-736` → `:153`/`:266-576`; `docs/architecture.md:375-397` cites four stale lines; `aggregates.mojo:35` and `:306` say `resolve_agg` lives in `marrow.expr.dynamic` when it is at `:191` of that same file; §0's "both `cast_array` calls" is stale — `expr/dynamic.mojo` has **six** (`:176, :178, :192, :205, :207, :337`); and §8's module graph overstates `relations`' edges by two, because four imports in `relations.mojo` are dead (`Interval` :50, `PruneStats` :51, `DynArray` :52, `DynValue` :54 — `Interval`/`PruneStats` re-confirmed dead 2026-08-19). **Already fixed:** CLAUDE.md's benchmark example named `marrow.testing`, which does not exist — `Benchmark` is at `marrow/utils/testing.mojo` and `BenchMetric` comes from `std.benchmark`; the example also used an absolute `marrow.*` import, which CLAUDE.md's own rule forbids. | verified 2026-08-17 | XS |
 | **A-11** | **A3's temporal branch is held out of the alpha.** `worktree-agent-af8dec5bed6238e2e` adds working `uint16 -> date32` and ISO-8601 string<->temporal casts, but pushes `query_dynvalue` +113,472 bytes (+2.33%) against a 0.5% budget. Not on any ClickBench query's path. The residual is structural — `cast()` is one ladder reachable from `_promote_operands`, so any new cast kernel taxes every binary that promotes operands. Merge once that ladder is split (its own §1 finding). | `a3-temporal.md` | M |
 
 **Not ours:** `mojo-regex`'s optional-group defect is upstream and appears
@@ -897,6 +978,24 @@ built something different and better, or because the premise turned out to be
 wrong. They are here so nobody re-litigates them from a stale document. Every
 citation below was checked against the code, not copied from the design it
 replaces.
+
+### Simplification wave (2026-08-17)
+
+- **`equal_any` → a neutral `kernels/compare.mojo` — rejected (D2).**
+  `numeric.mojo:49` imports `StringEqKernel` solely for `equal_any`, so the move
+  *does* delete the `numeric → string` edge. But `EqKernel.apply(StructArray, …)`
+  (`:617-645`) calls `equal_any` twice and **cannot move**, because Mojo cannot
+  add a static method to `EqKernel` from another module. The result is a
+  `numeric ↔ compare` **cycle replacing an acyclic edge** — worse, immediately
+  after S1 finished removing cycles. Revisit only if the `StructArray`
+  row-equality relocates for an independent reason.
+- **Amended (D1): the rejection of `Buffer.alloc_for[T](ctx, n)` in
+  `buffers.mojo` is overruled.** The original row rejected it for pointing the
+  tree's lowest-level module at device policy. It was re-opened on 2026-08-17
+  because the `ExecContext` alternative turned out to close
+  `execution → buffers → views → execution`, which the original row did not know.
+  A rejected-designs list that is quietly contradicted is worse than no list, so
+  the reversal is recorded here rather than left implicit.
 
 ### Alpha wave (2026-08-18)
 
