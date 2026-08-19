@@ -376,8 +376,7 @@ def test_runtime_param_default_applies_when_the_flag_is_absent() raises:
     var decls = drain_params()
     parse_params(List[String](), decls)
     assert_true(
-        dyn.execute(batch).as_bool()
-        == array([False, True, False, True, False])
+        dyn.execute(batch).as_bool() == array([False, True, False, True, False])
     )
 
 
