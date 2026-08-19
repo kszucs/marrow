@@ -94,6 +94,56 @@ obvious. Read before planning anything.
   decompress `dlopen`s the codec library — invisible at one read per file, 4.7x
   at one read per row group.
 
+### Measurement traps found in the alpha wave (2026-08-18)
+
+Each of these produced a **confident wrong conclusion** before it was caught.
+Sources: `git show c0831f5^:docs/alpha-findings/<name>.md`.
+
+- **A sampled profile tells you where time goes *under the profiler*.** `sample`
+  and Instruments inflate image load/unload, so anything dominated by `dlopen`,
+  `dlclose` or loader work is over-weighted. Measured on one `-O1 -g` build:
+  **37.83 ms/run under the sampler, 7.85 ms/run without it** — a ~5x
+  over-attribution that produced the claim "80% of `COUNT(*)` is `dlopen`". The
+  real saving from fixing it was ~0.9 ms/query. Confirm a profile-derived
+  hypothesis with a wall-clock A/B before believing its percentage.
+  (`o1-codec-caching`)
+- **The profile build is `-O1`; the benchmark build is `-O3`.** `scripts/profile.py`
+  rebuilds with debug info because `-O3` inlines away the frames you are reading.
+  So a trace shows *where*, never *how much* — absolute numbers come from
+  `bench_clickbench.py`.
+- **Perturbing one `-O3` unit can move an unrelated kernel.** An exact-size
+  `self.tokens.reserve(n)` — an upper bound, apparently free — cost **+43% on
+  `bench_contains_1m`**, which shares no code with the changed type, plus +35%
+  and +21% on other untouched scan paths. Reproduced two runs per side; vanished
+  when the one line was removed. **Only the drift controls caught it**: without
+  benchmarks the change cannot touch, a 20.9x win would have shipped with a 40%
+  regression underneath. This is the concrete case for CLAUDE.md's "always
+  include rows the change cannot touch". (`o3-string-alloc`)
+- **A passing size gate is not "no regression".** `check_gate.py` compares to the
+  recorded `baseline.json`, **not** to the branch under test. Four of five
+  recorded values sat above the tree on *both* branches, so gates read as
+  shrinking 2.4-4.1% while the branch-to-branch measurement showed every gate
+  **grew** ~16 KB. Ask which question you are answering. (`g3-regression-check`)
+- **ASAN is not usable as evidence on this tree.** A deliberate-overflow probe
+  built with the harness's own flags **hangs before producing a report**. This is
+  stronger than CLAUDE.md's existing "ASAN can hide a heap bug": here it cannot
+  be run at all. (`f1-distinct-segfault`)
+- **`pixi run -e dev python script.py` does not rebuild `libmarrow.so`** — only
+  pytest's `conftest.py` does. The natural A/B (checkout old, run script,
+  checkout new, run script) therefore measures the *new* library twice. It
+  produced a confident "no improvement, revert it" on a change that was a 20.7x
+  win, and separately made an already-fixed bug still look broken. Rebuild with
+  `pixi run build_python` between variants, or drive the comparison through
+  pytest. (`o2-cast-utf8`)
+- **A mass failure at exactly the harness deadline is the harness, not your
+  change.** Five separate runs reported every case failed with empty messages at
+  precisely 1800.0s. It nearly caused a correct fix to be reverted. Distinguish
+  the two shapes: a *slow* unit burns CPU; a *wedged* one freezes — check that
+  accumulated CPU `time` is advancing, not just `%cpu`.
+- **A clean `mojo precompile marrow` is not evidence a test file will build.** It
+  compiles the library, not the test's instantiations. Both compiler hangs in §2
+  are invisible to it. (`o2-cast-utf8`, `h2-nested-equality-wedge`)
+
 ### Compiler and platform facts
 
 - **`Buffer` requires 64-byte pointer alignment**, so `read_at` cannot return a
@@ -662,8 +712,15 @@ not read the remaining numbering as a range.
 ### Alpha wave leftovers — open, 2026-08-18
 
 Found while building the Python lazy frontend and the optimisation wave. Each is
-diagnosed with a named cause; none is speculative. Sources are the per-agent logs
-in `docs/alpha-findings/` (start with its `README.md`).
+diagnosed with a named cause; none is speculative.
+
+The `Evidence` column cites the per-agent log it came from. Those twenty logs
+(5,201 lines) have been **folded into this file and deleted** — their open items
+are the `A`-IDs below, their measurement traps are in §0, their ruled-out
+designs are in §7, and their defend-this findings are in §8. To read one:
+`git show c0831f5:docs/alpha-findings/README.md` (likewise `a1-null-ops`,
+`c1-binary-groupby`, `f1-distinct-segfault`, `p1-pushdown`, `o1-codec-caching`
+… — the README indexes all twenty).
 
 | ID | Item | Evidence | Size |
 |---|---|---|---|
@@ -841,6 +898,52 @@ wrong. They are here so nobody re-litigates them from a stale document. Every
 citation below was checked against the code, not copied from the design it
 replaces.
 
+### Alpha wave (2026-08-18)
+
+- **`mojo-regex` — rejected on correctness, not on version drift.** It builds
+  against our pinned Mojo (13/14 of its own tests pass) so the expected blocker
+  was not the real one. It **never enters an optional group**: `(?:www\.)?` is
+  skipped, so Q29 returns `www.example.com` where pyarrow and CPython return
+  `example.com`; 10 of 25 `sub()` cases disagree with CPython. Minimal repro:
+  `sub("(?:foo)?bar", "B", "foobar") -> "fooB"`. It survived upstream because
+  their tests use `(?:` seventeen times and never with a trailing `?`. Adopting
+  it would have converted an honest 42/43 gap into a **silently wrong answer on
+  the majority of rows**, since `www.`-prefixed referers dominate `hits`. See
+  M2.6 for the replacement.
+- **A hand-written `extract_host` for Q29 — rejected.** It buys a DEVIATED row,
+  generalises to nothing, and gets deleted the moment real regex lands.
+- **Over-allocating buffers so "64-byte padded" becomes literally true —
+  rejected, and the premise was wrong anyway.** `Columnar.rst:264-273` says pad
+  "to a length that is a multiple of 8 or 64 bytes", i.e. *round the size up* —
+  exactly `align_up(bytes, 64)`, which is byte-for-byte Arrow C++'s
+  `PoolBuffer::RoundCapacity`. `arrow::AllocateBuffer(64)` allocates 64 bytes
+  with zero slack. Marrow was already conformant; the false step was inferring
+  that padding implies slack past the logical end. Over-allocating was rejected
+  because **it cannot deliver the invariant**: FOREIGN buffers come from the
+  producer, and pyarrow allocates exactly 64 bytes for a 512-row bitmap — the
+  guarantee would hold on half the buffers and make the other half harder to
+  find. Memory cost was explicitly *not* the deciding argument.
+- **Rewriting `DynArray.__eq__` to dispatch once — tried, reverted.** O(n) arms
+  instead of O(n²) and exactly as strict, and it compiles; but the hang in §2 is
+  recursion through `ListLikeArray.__eq__`, not the squared ladder, so it fixes
+  nothing. Not left in as an unmeasured change to a hot, size-gated file.
+- **A fan-out threshold on probe rows for the parallel join — tried, measured,
+  removed.** It would have *doubled* the regression: within the partitioned
+  layout, fanning out beats serial partitions at **every** size, 8192 rows
+  included (194 us vs 388 us). The expensive thing is the partitioning, not the
+  `sync_parallelize`. What fixed it was `_DEFAULT_RADIX_BITS` 6 -> 4 — the
+  64-partition default came from a *one-shot* 10M sweep, and morsel streaming
+  pays it per call.
+- **`inputs()`-based optimizer traversal — rejected for `children()` +
+  `with_projection()`.** See M1.1.
+- **Building a temporal literal through the storage integer and relabelling with
+  `relabel_array` — rejected on measurement.** It avoids six
+  `PrimitiveBuilder`/`PrimitiveArray` monomorphisations (+23,668 bytes on
+  `query_streaming`) but drags in `DynArray.from_data`'s 30-arm ladder that these
+  binaries do not otherwise link: **+106,276 bytes, 4.5x worse**. The trick is
+  right in `kernels.cast`, where `from_data` is reachable anyway; it is wrong in
+  `scalars.mojo`.
+
 ### Sort
 
 - **Permutation refinement (`getPermutation` / `updatePermutation` /
@@ -969,6 +1072,41 @@ Every row is an approach that looks obvious and does not work.
 ---
 
 ## 8. Architectural debt
+
+### Confirmed sound by the alpha wave — defend, do not "simplify"
+
+- **The `AggFunc` / `AggFold` / `FoldedAggregates` split is justified.** Two
+  agents checked it independently and both concluded the binary-size
+  measurements behind it are real (+3.2 MB / +1.2x on the aggregate gate if
+  collapsed). The complaint is only that **nothing in the names says so**. Do
+  not merge these. The genuinely redundant carriers are `DynAgg` and `AggExpr`
+  (§5, A-2).
+- **The closed-erasure / DCE property holds.** `marrow::expr::dynamic`
+  contributes **0 symbols** to every fused/AOT target, so building comptime
+  expressions still does not link the interpreter. `DynAgg`'s string-tag
+  dispatch (A-2) is confined to the runtime-lane targets, which are the
+  interpreter by definition.
+
+### Binding-layer constraints discovered 2026-08-18
+
+- **`add_type[T]` rejects any struct holding a function pointer.** It installs a
+  default `tp_repr` calling `repr()`, and deriving `Writable` reflects over every
+  field: *"Could not derive Writable for DynValue - member field `_eval_fn` does
+  not implement Writable"*. `DynRelation` fails identically through
+  `_virt_with_predicate`. So **any marrow struct that grows a function-pointer
+  field becomes silently un-bindable** — `AggFunc._grouped_fn` and all three
+  `AggFold` fields are already in that position. The binding layer works around
+  it with one-field boxes (`Expr`/`Agg`/`Plan`); a two-line `write_repr_to` on
+  each `Dyn*` box would delete all three.
+- **`def_method` fills `tp_dict`, not the CPython slots.** Measured on the built
+  `.so`: `e.__str__()` returns `'a'` while `str(e)` returns the derived repr. So
+  operator dunders defined at the Mojo layer are dead weight — this is why the
+  bindings expose named methods and pure-Python `Column` maps them onto dunders.
+  The hazard is latent in every bound type that registers `__str__`, and **a
+  substring assertion cannot detect it** (one shipped that way and was fixed).
+- **`DynScalar` is `ConvertibleToPython` but not `FromPython`**, so `lit(3)` has
+  to allocate a one-element Arrow array to reach a scalar.
+
 
 From a three-package responsibility audit (2026-08-03), applying CLAUDE.md's
 own method: name each type's single responsibility; where one cannot be named,

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+> **Entries below cite `docs/alpha-findings/*.md`.** Those twenty logs were
+> folded into `docs/backlog.md` and deleted — open items became its `A`-IDs,
+> measurement traps went to its §0, ruled-out designs to §7, and defend-this
+> findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
+> which indexes all twenty.
+
 ### Features
 
 - **`LazyTable.collect(num_threads=0)` — the lazy query path can ask for
