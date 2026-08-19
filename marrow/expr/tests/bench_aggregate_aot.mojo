@@ -66,11 +66,11 @@ def _plan(
 ) raises -> DynRelation:
     """`SELECT name, sum(a), min(b) FROM t GROUP BY name` over `funcs`."""
     var keys = List[BoxedValue]()
-    keys.append(BoxedValue(col("name", string)))
+    keys.append(col("name", string))
 
     var inputs = List[BoxedValue]()
-    inputs.append(BoxedValue(col("a", int64)))
-    inputs.append(BoxedValue(col("b", int64)))
+    inputs.append(col("a", int64))
+    inputs.append(col("b", int64))
 
     return DynRelation(
         Aggregate(
