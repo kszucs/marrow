@@ -16,8 +16,6 @@ So this module sits above both lanes and below `relations.mojo`: it imports
 package `__init__`.
 """
 
-from std.memory import ArcPointer
-
 from ..dtypes import (
     DynType,
     FloatingType,
@@ -30,7 +28,7 @@ from ..dtypes import (
 )
 from ..scalars import DynScalar, PrimitiveScalar, StringScalar
 from .dynamic import DynAgg, DynValue
-from .params import ParamCell, ParamDecl, register_param
+from .params import ParamDecl, register_param
 from .values import (
     ListColumn,
     NumericColumn,
@@ -87,21 +85,23 @@ def param[
     dtype: T,
     default: Optional[Int] = None,
     var help: String = String(),
-) -> NumericParam[T]:
-    """A numeric value supplied at run time — `param("min-a", int64)`."""
-    var cell = ArcPointer(ParamCell(name.copy()))
+) raises -> NumericParam[T]:
+    """A numeric value supplied at run time — `param("min-a", int64)`.
+
+    Raises when this name is already declared with a different dtype; a
+    redeclaration with the *same* dtype shares the first declaration's cell
+    (see `params.mojo`), so one `--min-a` flag drives every mention of it."""
     var dflt = Optional[DynScalar](None)
     if default:
         dflt = Optional(
             PrimitiveScalar[T](Scalar[T.native](default.value())).to_dyn()
         )
-    register_param(
+    var cell = register_param(
         ParamDecl(
             name=name.copy(),
             dtype=DynType(dtype),
             help=help^,
             default=dflt^,
-            cell=cell,
         )
     )
     return NumericParam[T](cell)
@@ -120,19 +120,19 @@ def param[
     dtype: T,
     default: Optional[String] = None,
     var help: String = String(),
-) -> StringParam[T]:
-    """A string value supplied at run time — `param("src", string)`."""
-    var cell = ArcPointer(ParamCell(name.copy()))
+) raises -> StringParam[T]:
+    """A string value supplied at run time — `param("src", string)`.
+
+    Same name/cell contract as the numeric overload above."""
     var dflt = Optional[DynScalar](None)
     if default:
         dflt = Optional(StringScalar(default.value()).to_dyn())
-    register_param(
+    var cell = register_param(
         ParamDecl(
             name=name.copy(),
             dtype=DynType(dtype),
             help=help^,
             default=dflt^,
-            cell=cell,
         )
     )
     return StringParam[T](cell)
@@ -145,10 +145,12 @@ def param[
     dtype: T,
     default: Optional[Int] = None,
     var help: String = String(),
-) -> TemporalParam[T]:
+) raises -> TemporalParam[T]:
     """A temporal value supplied at run time — `param("cutoff", timestamp(second))`.
-    """
-    var cell = ArcPointer(ParamCell(name.copy()))
+
+    `default` is the epoch integer in the dtype's own unit, which is also how
+    `parse_params` reads the `--cutoff` flag. Same name/cell contract as the
+    numeric overload above."""
     var dflt = Optional[DynScalar](None)
     if default:
         dflt = Optional(
@@ -156,13 +158,12 @@ def param[
                 Optional(Scalar[T.native](default.value())), dtype
             ).to_dyn()
         )
-    register_param(
+    var cell = register_param(
         ParamDecl(
             name=name.copy(),
             dtype=DynType(dtype),
             help=help^,
             default=dflt^,
-            cell=cell,
         )
     )
     return TemporalParam[T](cell)
@@ -189,7 +190,12 @@ def lit[T: NumericType](value: Scalar[T.native]) -> DynValue:
     return DynValue.literal(PrimitiveScalar[T](value))
 
 
-def param(var name: String, dtype: DynType) -> DynValue:
+def param(
+    var name: String,
+    dtype: DynType,
+    var default: Optional[DynScalar] = None,
+    var help: String = String(),
+) raises -> DynValue:
     """A run-time parameter for the runtime lane — `param("min-a",
     DynType(int64))`.
 
@@ -197,12 +203,23 @@ def param(var name: String, dtype: DynType) -> DynValue:
     `NumericType`/`StringLikeType`/`TemporalType`, so this overload never
     competes with the three fused `param[T: ...]` overloads above — `DynType`
     conforms to none of those traits (see its docstring in `dtypes.mojo`).
-    Registration works the same as the fused lane's: last-wins by name (see
+    `default` and `help` carry the same meaning as in the fused overloads —
+    `default` makes the flag optional and `help` is what `--help` /
+    `--describe` print — except that `default` is spelled as an already-erased
+    `DynScalar`, since there is no comptime dtype here to build one from.
+    Registration works the same as the fused lane's: one name is one cell (see
     `params.mojo`), and the plan builder drains the registry once after
     building the tree. Unlike the fused `param` overloads, this one keeps no
     cell of its own — the returned `DynValue` carries only the name, and its
     evaluator resolves the cell by name at execute time via `lookup_param`."""
-    register_param(ParamDecl(name=name.copy(), dtype=dtype.copy()))
+    _ = register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=dtype.copy(),
+            help=help^,
+            default=default^,
+        )
+    )
     return DynValue.param(name^)
 
 

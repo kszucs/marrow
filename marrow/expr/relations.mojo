@@ -63,6 +63,7 @@ from .dynamic import DynValue
 from .values import AggExpr, BoxedValue
 from .params import (
     PathSpec,
+    claim_cli_invocation,
     drain_params,
     parse_params,
     render_describe,
@@ -246,7 +247,7 @@ def _referenced_by(values: List[BoxedValue]) -> List[String]:
 # these two bodies, not a rewrite of `execute_cli` or of the dispatch that
 # picks between them.
 #
-# The binary-size gate (Task 7) measured `query_param` (execute_cli, both
+# The binary-size gate measured `query_param` (execute_cli, both
 # writers reachable) against `query_scan_typed` (bare `print(...execute())`)
 # and found the writers, not the parameters, were the cost: `__text` grew by
 # 768,988 bytes — the Parquet writer, the IPC writer, and the codec layer
@@ -283,7 +284,84 @@ def _write_ipc_output(batch: RecordBatch, path: String) raises:
         )
 
 
-def _write_cli_output(
+struct CliArgs(Copyable, Movable):
+    """`execute_cli`'s argv, split into the parameter tokens and the two
+    output flags — the result of `split_cli_args`."""
+
+    var param_args: List[String]
+    var out_path: Optional[String]
+    var format: Optional[String]
+
+    def __init__(
+        out self,
+        var param_args: List[String],
+        var out_path: Optional[String],
+        var format: Optional[String],
+    ):
+        self.param_args = param_args^
+        self.out_path = out_path^
+        self.format = format^
+
+
+def split_cli_args(args: List[String]) raises -> CliArgs:
+    """Pull `-o PATH` and `--format FMT` out of `args`, leaving the rest for
+    `parse_params`.
+
+    Split out of `execute_cli` for the same reason `parse_params` takes a
+    `List[String]` instead of reading `argv` itself: argv handling is the part
+    with the off-by-one risk, and it is only testable without spawning a
+    process if it is a function of a list. `--help` / `--describe` are *not*
+    handled here — `execute_cli` short-circuits on them before this runs.
+
+    Raises:
+        Error: if `-o` or `--format` is the last token, with no value after it.
+    """
+    var out_path = Optional[String](None)
+    var format_override = Optional[String](None)
+    var param_args = List[String]()
+    var i = 0
+    while i < len(args):
+        if args[i] == "-o":
+            if i + 1 >= len(args):
+                raise Error("execute_cli: '-o' requires a value")
+            out_path = Optional(args[i + 1].copy())
+            i += 2
+        elif args[i] == "--format":
+            if i + 1 >= len(args):
+                raise Error("execute_cli: '--format' requires a value")
+            format_override = Optional(args[i + 1].copy())
+            i += 2
+        else:
+            param_args.append(args[i].copy())
+            i += 1
+    return CliArgs(param_args^, out_path^, format_override^)
+
+
+def cli_output_format(path: String, format: Optional[String]) raises -> String:
+    """Which writer `-o path` names: `"parquet"`, `"ipc"` or `"table"`.
+
+    `--format` wins outright when given; otherwise the extension decides, and
+    anything unrecognized prints as a table rather than guessing a binary
+    format from a name. An explicit `--format` naming none of the three is an
+    error — a typo there must not silently fall back to stdout.
+    """
+    var fmt: String
+    if format:
+        fmt = format.value()
+    elif path.endswith(".parquet"):
+        fmt = String("parquet")
+    elif path.endswith(".arrow"):
+        fmt = String("ipc")
+    else:
+        fmt = String("table")
+
+    if fmt == "parquet" or fmt == "ipc" or fmt == "table":
+        return fmt^
+    else:
+        raise Error("execute_cli: unknown --format '" + fmt + "'")
+
+
+def write_cli_output(
     result: RecordBatch,
     out_path: Optional[String],
     format: Optional[String],
@@ -296,27 +374,15 @@ def _write_cli_output(
     extension; `--format parquet|ipc|table` overrides that."""
     if not out_path:
         print(result)
-        return
-
-    var path = out_path.value()
-    var fmt: String
-    if format:
-        fmt = format.value()
-    elif path.endswith(".parquet"):
-        fmt = String("parquet")
-    elif path.endswith(".arrow"):
-        fmt = String("ipc")
     else:
-        fmt = String("table")
-
-    if fmt == "parquet":
-        _write_parquet_output(result, path)
-    elif fmt == "ipc":
-        _write_ipc_output(result, path)
-    elif fmt == "table":
-        print(result)
-    else:
-        raise Error("execute_cli: unknown --format '" + fmt + "'")
+        var path = out_path.value()
+        var fmt = cli_output_format(path, format)
+        if fmt == "parquet":
+            _write_parquet_output(result, path)
+        elif fmt == "ipc":
+            _write_ipc_output(result, path)
+        else:
+            print(result)
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +574,11 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         plan's `param()` declarations from `argv`, execute, and write the
         result.
 
+        **Exactly once per process.** `claim_cli_invocation()` is the first
+        thing this does: a second call would drain an empty registry, bind
+        nothing, and silently re-execute against the first call's parameter
+        values, so it raises a named error instead.
+
         Order is the whole design (see `params.mojo`'s module docstring for
         the registry this drains):
 
@@ -526,6 +597,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         4. `execute(ctx)`.
         5. Write the result — see `_write_cli_output`.
         """
+        claim_cli_invocation()
         var decls = drain_params()
 
         var raw = argv()
@@ -541,28 +613,10 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
                 print(render_describe(decls))
                 return
 
-        var out_path = Optional[String](None)
-        var format_override = Optional[String](None)
-        var param_args = List[String]()
-        var i = 0
-        while i < len(args):
-            if args[i] == "-o":
-                if i + 1 >= len(args):
-                    raise Error("execute_cli: '-o' requires a value")
-                out_path = Optional(args[i + 1].copy())
-                i += 2
-            elif args[i] == "--format":
-                if i + 1 >= len(args):
-                    raise Error("execute_cli: '--format' requires a value")
-                format_override = Optional(args[i + 1].copy())
-                i += 2
-            else:
-                param_args.append(args[i].copy())
-                i += 1
-
-        parse_params(param_args, decls)
+        var split = split_cli_args(args)
+        parse_params(split.param_args, decls)
         var result = self.execute(ctx)
-        _write_cli_output(result, out_path, format_override)
+        write_cli_output(result, split.out_path, split.format)
 
     # --- plan-building API ---
 

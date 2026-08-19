@@ -76,6 +76,18 @@ def _exe_dir() -> String:
     `PATH` lookup, e.g. a bare `qp` after `install`) — callers then fall back
     to the original bare-soname candidates below, exactly as before this
     existed.
+
+    **`argv()[0]` is caller-supplied, not the true executable path.** It is
+    whatever the launching process put in `argv[0]`, so it can be spoofed and
+    it is not the same thing as `/proc/self/exe` or `_NSGetExecutablePath`. In
+    particular a `./qp` launch yields `.`, so the codec dylib candidates
+    become `./libsnappy.dylib` — i.e. resolved out of the **current working
+    directory**, which is not necessarily the directory the binary lives in.
+    That is a load-from-cwd surface for anyone who can write to the cwd a
+    marrow binary is run from. Recorded rather than fixed: the real fix is to
+    ask the OS for the executable path, and this module is on the restricted
+    `unsafe_ptr` list (see `CLAUDE.md`), so it is not the place to grow a new
+    platform-conditional syscall wrapper.
     """
     var args = argv()
     if len(args) == 0:

@@ -59,9 +59,23 @@ var min_a = param("min-a", int64, default=0)   # optional, falls back to 0
 
 `param()` is overloaded for numeric, string and temporal dtypes in the fused
 (AOT) lane, and there is a runtime-lane counterpart,
-`param(name, DynType)`, at parity with it — a compiled query is free to mix
-`param()` cells with plain `col()`/`lit()` expressions and runtime-typed
-(`DynValue`) ones in the same plan.
+`param(name, dtype, default=..., help=...)`, at parity with it — a compiled
+query is free to mix `param()` cells with plain `col()`/`lit()` expressions
+and runtime-typed (`DynValue`) ones in the same plan.
+
+**One name is one parameter.** Mentioning the same name twice — in both lanes,
+or twice in one — does not make two parameters: the second `param("min-a", …)`
+shares the cell the first one created, so the single `--min-a` flag binds
+every mention of it. Redeclaring a name with a *different* dtype is an error;
+`default` and `help` are taken from the first declaration, so write them at
+the first mention.
+
+A temporal parameter is spelled on the command line as its epoch integer in
+the dtype's own unit — the same spelling `default=` takes:
+
+```bash
+$ ./q --cutoff 1560601845     # param("cutoff", timestamp(second))
+```
 
 A `ParquetScan`'s `path` accepts a `param()` cell directly in place of a
 literal string, so the file a compiled binary reads is late-bound too, not
@@ -132,6 +146,19 @@ without another redesign:
 $ marrow compile query.mojo -o query
 ```
 
+::: {.callout-warning}
+## The `compile` extra does not resolve on PyPI today
+
+The extra pins `mojo>=1.1,<2`, and marrow needs a **nightly** Mojo build;
+PyPI's stable `mojo` package tops out at 1.0.0, so `pip install
+marrow[compile]` cannot satisfy it from PyPI alone. Install the nightly
+explicitly first — `pip install --pre mojo --extra-index-url
+https://whl.modular.com/nightly/simple/` — or work inside marrow's own pixi
+environment, which already has the pinned nightly (`pixi run -e dev mojo
+build ...`). `check_mojo_version` reports the same thing at run time if the
+stable wheel is what got installed.
+:::
+
 `marrow` resolves the `mojo` compiler on `PATH` (raising a named error,
 including the nightly-vs-stable-PyPI distinction, if it is missing or out of
 range) and the `marrow/` Mojo package to pass as `mojo build`'s `-I` — via
@@ -165,9 +192,9 @@ writes Arrow IPC, and `--format parquet|ipc|table` overrides the guess. With
 no `-o`, the result prints to stdout as a `RecordBatch`, same as
 `print(plan.execute())` in every other example in this guide.
 
-Linking those two writers into the binary is not free: Task 7's
-binary-size gate measured **572,288 bytes** of `__text` for Parquet + Arrow
-IPC output, against a `query_scan_typed` baseline of 2,025,432 bytes:
+Linking those two writers into the binary is not free: the binary-size gate
+measured **572,288 bytes** of `__text` for Parquet + Arrow IPC output, against
+a `query_scan_typed` baseline of 2,025,432 bytes:
 
 | Build | `__text` | Delta vs. baseline |
 |---|---|---|

@@ -99,9 +99,16 @@
   (`_write_parquet_output`/`_write_ipc_output` in `relations.mojo`) are each
   one line calling into `marrow.parquet.write_table` /
   `marrow.ipc.write_ipc_file`, kept separate from the dispatch that picks
-  between them so gating either behind a comptime flag later (if the
-  binary-size gate says linking them is expensive) touches only that one
-  function.
+  between them — and that separation is what let both be **gated behind
+  `-D MARROW_CLI_WRITERS`, which is off by default**, once the binary-size
+  gate measured them at 572,288 bytes of `__text`. So a plain
+  `mojo build` of a query binary raises on `-o r.parquet` / `-o r.arrow`
+  rather than writing; `--format table` and no-`-o` stdout output always
+  work. `marrow compile` passes the define, so the documented CLI contract
+  holds for a binary built through it. `execute_cli` runs **once per
+  process** (`claim_cli_invocation()`), and its argv splitting is
+  `split_cli_args()` — a `List[String]` in, a `CliArgs` out, testable without
+  spawning a process, the same factoring `parse_params` already had.
 
 - **`ParquetScan.path` accepts a late-bound `PathSpec`, not just a literal
   `String`.** `ParquetScan(path=param("src", string), ...)` now works: `PathSpec`
@@ -131,13 +138,15 @@
   lookup, which did not exist — `_REGISTRY` only holds declarations
   in-flight between a plan's construction and its drain, and is empty
   afterwards, exactly when `_param` runs. `lookup_param` reads a second
-  module-level table, `_LOOKUP`, that `register_param` upserts into
-  (last-wins per name) and that `drain_params()` **repopulates** — not
-  clears — from exactly the declarations it just drained. That reset is
-  asymmetric on purpose: `_REGISTRY` empties so the next plan starts clean,
-  `_LOOKUP` repopulates so the runtime lane can still resolve a parameter by
-  name after the drain, while a later, unrelated plan's drain replaces the
-  scope rather than leaking an earlier plan's cells into it.
+  module-level table, `_LOOKUP`, that `register_param` inserts into and that
+  `drain_params()` **repopulates** — not clears — from exactly the
+  declarations it just drained. That reset is asymmetric on purpose:
+  `_REGISTRY` empties so the next plan starts clean, `_LOOKUP` repopulates so
+  the runtime lane can still resolve a parameter by name after the drain,
+  while a later, unrelated plan's drain replaces the scope rather than leaking
+  an earlier plan's cells into it. An *empty* drain skips the repopulation
+  entirely, so re-entering the drain does not strand names already in the
+  table.
 
 - **`marrow.expr.params` — late-bound query parameter cells and a registry.**
   `ParamCell` is a shared, mutable box for a scalar that starts unbound and is
@@ -402,6 +411,57 @@
   `docs/alpha-findings/o3-string-alloc.md`.
 
 ### Fixes
+
+- **One parameter name is now one cell, so a name declared in both expression
+  lanes cannot give two different answers.** `register_param` appended to the
+  registry unconditionally while upserting `_LOOKUP` last-wins, so
+  `param("min-a", int64)` (fused) plus `param("min-a", DynType(int64))`
+  (runtime) in one plan produced *two* declarations with *two* cells;
+  `parse_params` keys by name, so only the last one received the CLI value and
+  the fused node silently read its default instead — or, with no default,
+  `--min-a 5` still aborted with `missing required parameter '--min-a'`.
+  `register_param` now deduplicates by name and **returns the authoritative
+  cell**, which the `param()` builders bind their node to, so every mention of
+  a name observes the one value its flag binds. Redeclaring a name with a
+  conflicting dtype raises naming both dtypes; `default`/`help` are first-wins
+  and documented as such. `test_parity.mojo`'s param case was rebuilt on the
+  corrected semantics — it now asserts the two lanes agree on a shared name
+  bound once **through `parse_params`**, which is exactly the path the old
+  hand-bound-cells test never exercised.
+
+- **A temporal parameter can be bound from the command line.**
+  `param("cutoff", timestamp(second))` was declarable but not bindable:
+  `_parse_scalar` handled bool / string-like / integer / floating only, and
+  `DynType.is_integer()` is variant-based so a timestamp never reached the
+  integer arm — a required temporal parameter always aborted and one with a
+  default could never be overridden. Added a `dispatch_temporal` arm taking
+  the epoch integer in the dtype's own unit, the same spelling `default=`
+  already used.
+
+- **The runtime lane's `param` leaf prunes row groups again.**
+  `DynValue.prune` had arms for `"column"` and `"literal"` but not `"param"`,
+  so it fell through to `Interval.unknown()` and a parameterised predicate
+  decoded every row group — while all three fused param nodes implement
+  `prune()` and skipped them. An invariant-2 divergence, now closed: a bound
+  parameter prunes as the point interval a literal of the same value does.
+
+- **The runtime lane's `param()` accepts `default` and `help`.** All three
+  fused overloads took them and `ParamDecl` already carried them, so a
+  runtime-lane parameter was unavoidably required and invisible to `--help` /
+  `--describe`. `default` is spelled as a `DynScalar` there, since there is no
+  comptime dtype to build one from.
+
+- **Re-entering the parameter registry no longer corrupts the runtime lane's
+  name table.** `drain_params()` cleared and repopulated `_LOOKUP` even when
+  the drained list was empty, so a second `execute_cli()` in one process left
+  fused cells bound while `lookup_param` raised `unknown parameter`. An empty
+  drain now leaves `_LOOKUP` alone, and `execute_cli` raises a named error if
+  invoked twice (`claim_cli_invocation()`) rather than re-executing against
+  the previous invocation's values. Two related limitations are now documented
+  in `params.mojo` rather than fixed: an undrained plan leaves its
+  declarations in the registry for the next plan's `--help` to list, and the
+  registry has no synchronisation, so concurrent plan *construction* is a data
+  race.
 
 - **`marrow compile --bundle DIR` now ships a Parquet file compressed with
   any of marrow's codecs, not just uncompressed ones.** Found by actually

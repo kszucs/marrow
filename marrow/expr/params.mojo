@@ -32,9 +32,36 @@ runtime lane — `lookup_param` keeps working *after* the drain, which is the
 point, since `_param` runs at execute time, well after the tree was built —
 while a later, unrelated plan's drain replaces the scope rather than adding to
 it, so one process building two plans back-to-back never resolves a name from
-the wrong plan. Registration is last-wins per name for the same reason: a
-name declared twice before a drain (deliberately or via a rebuilt plan)
-leaves `_LOOKUP` pointing at the most recent cell, not an arbitrary one.
+the wrong plan. A drain that finds the registry *empty* leaves `_LOOKUP`
+alone rather than clearing it — a second `execute_cli()`-shaped drain in one
+process would otherwise strand every already-bound runtime-lane name.
+
+**One name is one parameter is one cell.** `register_param` deduplicates by
+name against the declarations still in `_REGISTRY`: a second
+`param("min-a", ...)` in the same plan does not allocate a second cell and
+does not append a second declaration — it *returns the cell the first one
+made*, so both lanes read the value a single `--min-a` flag binds. Two rules
+fall out of that:
+
+- **Conflicting dtypes raise.** `param("x", int64)` followed by
+  `param("x", string)` is a plan-authoring bug, not a value to pick between,
+  and `register_param` raises naming both dtypes.
+- **`default` and `help` are first-wins.** The first declaration of a name
+  owns them; a later redeclaration's `default`/`help` are ignored, because a
+  cell is already shared by then and swapping the fallback under an
+  already-built node would make the result depend on construction order.
+  Declare the default once, at the first mention.
+
+Two honest limitations, neither fixed here:
+
+- **A plan built but never executed leaves its declarations in `_REGISTRY`.**
+  Nothing garbage-collects an undrained registration, so the *next* plan's
+  `--help` would list the abandoned plan's parameters too (and dedupe against
+  them). A compiled query binary builds one plan and drains it, which is the
+  only shape this registry is designed for.
+- **The registry has no synchronisation.** `_REGISTRY` and `_LOOKUP` are plain
+  process-wide globals, so building two plans concurrently on two threads is a
+  data race. Build plans on one thread; executing them is what parallelises.
 
 No expression node lives here — nodes in `values.mojo` / `dynamic.mojo` hold a
 `ParamDecl`/`ArcPointer[ParamCell]` and import this module. `PathSpec` closes
@@ -48,7 +75,13 @@ from std.utils import Variant
 from std.memory import ArcPointer
 from std.ffi import _Global
 
-from ..dtypes import DynType, FloatingType, IntegerType, StringLikeType
+from ..dtypes import (
+    DynType,
+    FloatingType,
+    IntegerType,
+    StringLikeType,
+    TemporalType,
+)
 from ..scalars import BoolScalar, DynScalar, PrimitiveScalar, StringScalar
 from .values import StringParam
 
@@ -157,9 +190,11 @@ the set a later `lookup_param(name)` name-keyed table gets reset to, since that
 table is rebuilt from the same drained `List[ParamDecl]`.
 
 `get_or_create_ptr()` only raises when `_Global`'s `on_error_msg` is set, which
-it is not here, so the `except` arms below are unreachable in practice; they
-exist so `register_param`/`drain_params` keep the non-raising signatures a
-registry-as-side-effect API needs.
+it is not here, so the `except` arms in `drain_params` are unreachable in
+practice; they exist so a drain — which every plan builder performs and which
+has nothing to report — keeps its non-raising signature. `register_param`
+raises on its own account (a conflicting dtype for an already-declared name),
+so it does not need them.
 """
 
 
@@ -170,42 +205,96 @@ def _init_lookup() -> Dict[String, ArcPointer[ParamCell]]:
 comptime _LOOKUP = _Global["MARROW_PARAM_LOOKUP", _init_lookup]
 """The runtime lane's name-keyed parameter table.
 
-`register_param` upserts into this as well as into `_REGISTRY`, and
+`register_param` inserts into this as well as into `_REGISTRY`, and
 `drain_params` rebuilds it from exactly the declarations it drains — see the
-module docstring for the asymmetry (registry empties, lookup repopulates).
-`lookup_param` is the only reader."""
+module docstring for the asymmetry (registry empties, lookup repopulates) and
+for why an empty drain leaves it alone. `lookup_param` is the only reader."""
 
 
-def register_param(var decl: ParamDecl):
-    """Append `decl` to the module-level registry, and upsert its cell into
-    `_LOOKUP` under its name — last-wins, so a name declared twice before the
-    next drain points `lookup_param` at the most recently declared cell."""
-    try:
-        _LOOKUP.get_or_create_ptr()[][decl.name.copy()] = decl.cell.copy()
-    except:
-        pass
-    try:
-        _REGISTRY.get_or_create_ptr()[].append(decl^)
-    except:
-        pass
+def _init_cli_guard() -> List[Bool]:
+    return [False]
+
+
+comptime _CLI_GUARD = _Global["MARROW_PARAM_CLI_GUARD", _init_cli_guard]
+"""Whether `DynRelation.execute_cli()` has already run in this process.
+
+A compiled query binary runs exactly one plan, and the registry is not built
+to be re-entered: a second drain would find an empty registry, so
+`parse_params` would bind nothing and the second run would silently reuse the
+first run's bound cells. `claim_cli_invocation` turns that into a named error
+at the entry point instead."""
+
+
+def claim_cli_invocation() raises:
+    """Mark `execute_cli` as running, raising if it already has.
+
+    See `_CLI_GUARD`. Called first thing in `DynRelation.execute_cli()`, before
+    the drain, so a second invocation fails loudly rather than executing the
+    plan against the first invocation's parameter values."""
+    var ptr = _CLI_GUARD.get_or_create_ptr()
+    if ptr[][0]:
+        raise Error(
+            "execute_cli: already invoked in this process — a compiled query"
+            " binary binds its parameters from argv exactly once"
+        )
+    ptr[][0] = True
+
+
+def register_param(var decl: ParamDecl) raises -> ArcPointer[ParamCell]:
+    """Register `decl` and return the cell every node of that name must share.
+
+    Deduplicating by name is the contract: a CLI flag `--min-a` is *one*
+    parameter, so every `param("min-a", ...)` in a plan — fused lane, runtime
+    lane, a `ParquetScan` path — has to observe the same bound value. When the
+    name is already in `_REGISTRY` this returns the existing cell and appends
+    nothing; `decl`'s own freshly-allocated cell is dropped.
+
+    `default` and `help` are first-wins on a redeclaration, and a conflicting
+    dtype raises rather than picking one — see the module docstring.
+
+    Returns:
+        The authoritative `ArcPointer[ParamCell]` for `decl.name`: `decl`'s own
+        cell for a first registration, the already-registered one otherwise.
+    """
+    var registry = _REGISTRY.get_or_create_ptr()
+    for ref existing in registry[]:
+        if existing.name == decl.name:
+            if existing.dtype != decl.dtype:
+                raise Error(
+                    "register_param: parameter '"
+                    + decl.name
+                    + "' is already declared as "
+                    + String(existing.dtype)
+                    + ", cannot redeclare it as "
+                    + String(decl.dtype)
+                )
+            return existing.cell.copy()
+
+    var cell = decl.cell.copy()
+    _LOOKUP.get_or_create_ptr()[][decl.name.copy()] = cell.copy()
+    registry[].append(decl^)
+    return cell^
 
 
 def drain_params() -> List[ParamDecl]:
     """Return the registry's contents and empty it.
 
     Also resets `_LOOKUP` to exactly the set just drained — see the module
-    docstring for why that reset is a *repopulation*, not a clear."""
+    docstring for why that reset is a *repopulation*, not a clear, and why an
+    empty drain skips it entirely instead of stranding every name already in
+    the table."""
     try:
         var ptr = _REGISTRY.get_or_create_ptr()
         var out = ptr[].copy()
         ptr[] = List[ParamDecl]()
-        try:
-            var lookup = _LOOKUP.get_or_create_ptr()
-            lookup[].clear()
-            for ref decl in out:
-                lookup[][decl.name.copy()] = decl.cell.copy()
-        except:
-            pass
+        if len(out) > 0:
+            try:
+                var lookup = _LOOKUP.get_or_create_ptr()
+                lookup[].clear()
+                for ref decl in out:
+                    lookup[][decl.name.copy()] = decl.cell.copy()
+            except:
+                pass
         return out^
     except:
         return List[ParamDecl]()
@@ -289,9 +378,17 @@ def _parse_scalar(
 
     Covers exactly the families a CLI token can spell unambiguously: bool,
     every integer/float width (via `atol`/`atof`, both raising on a malformed
-    token) and every string-like type. Temporal, decimal and nested dtypes
-    have no textual literal here and are rejected by name rather than
-    silently misparsed."""
+    token), every string-like type, and every temporal type as its **epoch
+    integer** — the same spelling `param("cutoff", timestamp(second),
+    default=1_560_601_845)` already takes for its default, so the flag and the
+    default are written the same way. Decimal and nested dtypes have no
+    textual literal here and are rejected by name rather than silently
+    misparsed.
+
+    The temporal arm cannot ride on the integer one: `DynType.is_integer()` is
+    variant-based, so a `timestamp` never reaches it, and the scalar has to
+    carry its unit — hence the separate `dispatch_temporal`, which hands the
+    concrete dtype instance to `PrimitiveScalar`."""
     if dtype.is_bool():
         var lower = raw.lower()
         if lower == "true" or lower == "1":
@@ -320,6 +417,14 @@ def _parse_scalar(
             return PrimitiveScalar[T](Scalar[T.native](atof(raw))).to_dyn()
 
         return dtype.dispatch_floating(parse_float)
+    if dtype.is_temporal():
+
+        def parse_temporal[T: TemporalType](d: T) raises {imm} -> DynScalar:
+            return PrimitiveScalar[T](
+                Optional(Scalar[T.native](atol(raw))), d
+            ).to_dyn()
+
+        return dtype.dispatch_temporal(parse_temporal)
     raise Error(
         "parse_params: '--"
         + name

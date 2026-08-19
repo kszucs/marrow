@@ -13,8 +13,19 @@ argv-binding and the output-writer dispatch are linked too.
 A parameter is structurally a literal plus a pointer dereference resolved once
 per batch (`NumericParam.state()` resolves the cell; `.lane()` splats a plain
 `Scalar`, byte-identical to a literal's), so the `__text` delta against
-`query_scan_typed` should be near-zero. See Task 7 / spec open question 2 for
-what "near-zero" means and what to do if it isn't.
+`query_scan_typed` was predicted to be near-zero. **It is not** — the
+parameters are free, the tail is not:
+
+    query_scan_typed                              2,025,432
+    query_param, writers gated out                2,222,132   +196,700
+    query_param, writers linked (default build)   2,794,420   +768,988
+
+The +196,700 is `execute_cli` itself — argv splitting, `parse_params`, the
+`--help`/`--describe` renderers and the registry — and the further +572,288 is
+the Parquet and Arrow IPC writers plus the codec layer behind them, which is
+why they are gated behind `-D MARROW_CLI_WRITERS=true`
+(`relations.CLI_WRITERS_ENABLED`). Build this gate both ways to reproduce the
+two rows.
 
     pixi run binary_size query_param query_scan_typed
 """
