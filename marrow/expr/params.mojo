@@ -259,7 +259,9 @@ struct PathSpec(Copyable, Movable):
         if self._v.isa[String]():
             return self._v[String]
         else:
-            return self._v[ArcPointer[ParamCell]][].get().as_string().to_string()
+            return (
+                self._v[ArcPointer[ParamCell]][].get().as_string().to_string()
+            )
 
     def describe(self) -> String:
         """Non-raising rendering for plan display (`ParquetScan.write_to`):
@@ -279,7 +281,9 @@ struct PathSpec(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-def _parse_scalar(name: String, dtype: DynType, raw: String) raises -> DynScalar:
+def _parse_scalar(
+    name: String, dtype: DynType, raw: String
+) raises -> DynScalar:
     """Convert one CLI token into a `DynScalar` of `dtype`, for the parameter
     named `name` (folded into the error message on an unsupported dtype).
 
@@ -394,9 +398,7 @@ comptime _HEX_DIGITS: StaticString = "0123456789abcdef"
 
 def _hex2(v: Int) -> String:
     """Two lowercase hex digits, zero-padded — `v` must be 0-255."""
-    return String(
-        _HEX_DIGITS[byte = (v >> 4) & 0xF], _HEX_DIGITS[byte = v & 0xF]
-    )
+    return String(_HEX_DIGITS[byte=(v >> 4) & 0xF], _HEX_DIGITS[byte=v & 0xF])
 
 
 def _json_escape(s: String) -> String:
@@ -443,8 +445,7 @@ def render_describe(decls: List[ParamDecl]) -> String:
         out += ', "dtype": "' + _json_escape(String(decl.dtype)) + '"'
         out += ', "help": "' + _json_escape(decl.help) + '"'
         out += (
-            ', "required": true' if decl.is_required() else ', "required":'
-            " false"
+            ', "required": true' if decl.is_required() else ', "required": false'
         )
         if decl.default:
             out += (

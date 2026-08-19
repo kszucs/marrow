@@ -38,9 +38,7 @@ def main() raises:
         ParquetScan[leaf_of[Int64Type]() | leaf_of[StringType]()](
             path=param("src", string), schema=sch
         )
-    ).filter(
-        BoxedValue(col("a", int64) > param("min-a", int64))
-    )
+    ).filter(BoxedValue(col("a", int64) > param("min-a", int64)))
 
     var values = List[BoxedValue]()
     values.append(BoxedValue(col("a", int64)))

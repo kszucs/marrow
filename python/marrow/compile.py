@@ -365,8 +365,7 @@ def check_mojo_version() -> str:
     major, minor, _patch = (int(g) for g in match.groups())
     if not (major == 1 and minor >= 1):
         raise RuntimeError(
-            f"marrow requires mojo {REQUIRED_RANGE}, found {version}.\n"
-            f"{_NIGHTLY_HELP}"
+            f"marrow requires mojo {REQUIRED_RANGE}, found {version}.\n{_NIGHTLY_HELP}"
         )
     return version
 
@@ -486,7 +485,9 @@ def _run_compile(args: argparse.Namespace) -> int:
     if not args.no_strip:
         strip = shutil.which("strip")
         if strip is None:
-            print("marrow: warning: `strip` not found on PATH, skipping", file=sys.stderr)
+            print(
+                "marrow: warning: `strip` not found on PATH, skipping", file=sys.stderr
+            )
         else:
             try:
                 subprocess.run([strip, str(out)], check=True)
