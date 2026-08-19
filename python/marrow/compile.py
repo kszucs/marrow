@@ -6,9 +6,9 @@ recipe ``benchmarks/binary_size/compare.py:build_and_strip`` uses to measure
 gate binaries: ``mojo build -O3 -g0 -I <marrow> <src> -o <out>``, then
 ``strip``.
 
-**Output writers are opt-in at the Mojo level, opt-out here.** Task 7 measured
-that linking the Parquet + Arrow IPC output writers into ``execute_cli`` costs
-572,288 bytes of ``__text`` — enough that they sit behind
+**Output writers are opt-in at the Mojo level, opt-out here.** Linking the
+Parquet + Arrow IPC output writers into ``execute_cli`` costs 572,288 bytes
+of ``__text`` — enough that they sit behind
 ``-D MARROW_CLI_WRITERS=true`` (``marrow/expr/relations.mojo``), off by
 default for anyone building with plain ``mojo build``. But the CLI's
 documented contract is that ``-o result.parquet`` / ``-o result.arrow`` work

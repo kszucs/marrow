@@ -58,9 +58,9 @@
   `mojo` is missing or out of range, naming marrow's pinned nightly and that
   PyPI's stable wheel cannot reach it (a wheel cannot force
   `--extra-index-url`), instead of letting an opaque compiler error surface.
-  **Passes `-D MARROW_CLI_WRITERS=true` by default** — Task 7 gated the
-  Parquet/IPC output writers behind that define since linking them costs
-  572,288 bytes of `__text`, but the CLI's documented `-o result.parquet` /
+  **Passes `-D MARROW_CLI_WRITERS=true` by default** — the Parquet/IPC output
+  writers are gated behind that define since linking them costs 572,288 bytes
+  of `__text`, but the CLI's documented `-o result.parquet` /
   `-o result.arrow` contract has to work out of the box; `--no-writers` opts
   back out for the ~572 KB smaller binary, with `-o` disabled in that build.
 

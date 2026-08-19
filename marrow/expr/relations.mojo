@@ -595,7 +595,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
            applies its declared default), raising a named error for a
            missing required parameter or an unrecognized flag.
         4. `execute(ctx)`.
-        5. Write the result — see `_write_cli_output`.
+        5. Write the result — see `write_cli_output`.
         """
         claim_cli_invocation()
         var decls = drain_params()

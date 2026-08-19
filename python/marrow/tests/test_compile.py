@@ -144,7 +144,7 @@ def test_resolve_marrow_path_reports_every_location(tmp_path, monkeypatch):
 
 # --- CLI_WRITERS define -----------------------------------------------------
 #
-# Task 7 gated the Parquet/IPC output writers behind
+# The Parquet/IPC output writers are gated behind
 # `-D MARROW_CLI_WRITERS=true` in `marrow/expr/relations.mojo` (off by
 # default at the Mojo level, since linking them costs 572,288 bytes of
 # `__text`). `marrow compile` has to pass that define by default so the
