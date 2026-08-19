@@ -627,15 +627,6 @@ Rewrite `clickbench.py` against the lazy frontend, all 42 queries, cross-checked
 against DuckDB, wall-clock compared to polars/duckdb on the same box, binary-size
 gate green.
 
-### M1.6 — AOT DSL docs — **S, one runnable example**
-
-`docs/guide/expressions.qmd`'s prose is correct as of 2026-08-05; what it still
-lacks is a **runnable** AOT example. Its blocks are illustrative (plain
-```` ```python ````, not executed), which is why they could name types that did
-not exist and the docs build stayed green — an executed example is the only
-thing that keeps this page honest.
-
-
 ---
 
 ## 4. Wave 4 — M2 and M3 enablers
@@ -783,6 +774,7 @@ Three findings came out of the cross-read that no single document had:
 | **S16** | **Re-verified 2026-08-17 and mostly evaporated — recommend dropping.** The audit's citations predate `5b14bfa` and `e3a6cd0`. What survives: `_format_ns` is still defined after its only caller, but at `utils/testing.mojo:542` → `:429`, not `testing/bench.mojo`; the three-helper chain in `kernels/string.mojo:523/536/546` is unmoved. What is **gone**: three of the four `hashing.mojo` helpers (`_rapid_mix_wide`, `_rapidhash_bool`, `_rapidhash_primitive_masked` — removed by the pluggable-hash and wide-multiply work), leaving only `_indices_as_int32` (`kernels/hashing.mojo:59` → `:228`). **`_rapidhash_bool_masked` — the one part of this card that could have been a real defect, "dead or a masked-hash gap for boolean columns" — is resolved by deletion; it has zero hits under `marrow/`.** The residue is three cosmetic inlines, and the string trio is named in two docstrings and a comment, which is the tell that it names a step rather than fragmenting one. | dup §3 B | tests | XS, or drop |
 | **S18** | **`Partition.original_row` is dead** — `kernels/partition.mojo:112`, zero callers repo-wide (the only other hit, `sort.mojo:146`, is a docstring mentioning `original_row_index`). Found while landing S15, which de-guarded the method rather than deleting it because removing a method is an API change and S15's card ruled that out. `Partition` is not re-exported from `kernels/__init__`, so the surface is internal and the deletion is safe. | S15 fallout | tests | XS |
 | **S17** | **Re-baseline the binary-size gate — the premise it was filed on was false, and V0 has landed.** The card said `query_streaming_agg_fused` sat at +0.449% of 0.5% and that V0's `MapScalar` (+0.137%) could not fit. Investigating before resetting anything showed the gate was actually **+55%**, and not from accumulated drift: `f5226d5`'s closure migration cost +739,316 bytes on this gate while its own commit message and CHANGELOG recorded "+0.36%". The Mojo 1.1 / MAX 26.6 upgrade accounted for +0.39% of it, GPU gating was intact. §0 has the attribution; the fix recovered 662,740 bytes (89.6%). **V0 landed 2026-08-17** at its measured +0.136%, so what is left is only the reset: regenerate `baseline.json` on the post-fix tree with `check_gate.py --update`, keep `threshold_pct` at **0.5** (do not raise it — it caught this), and write the history into the `_comment` in the style of the existing entries: what the old numbers were, that the reset absorbs the ~4.8% residue that is *not* attributable to `f5226d5`, and that the gate is not in CI, which is why a +55% regression survived for ten commits. Fixing that last part is the durable lesson, not the reset. | §0.5 Must | `pixi run binary_size` | S |
+| **S19** | **A GPU-off binary still links `libAsyncRTMojoBindings.dylib` in full, because 10 `_AsyncRT_*` symbols survive DCE.** Found 2026-08-19 during `marrow compile`'s static-linking investigation: every one of the 10 undefined `_AsyncRT_*` symbols in a **GPU-off** query binary is a `DeviceBuffer`/`DeviceContext` device call. CLAUDE.md already records the symptom ("[gating `GPU_ENABLED`] does not shed the `libmax`/AsyncRT runtime dependency: a GPU-off binary still links it") — this is the cause. Eliminating those 10 call sites from the GPU-off build (tighter `comptime if GPU_ENABLED` gating, or DCE-friendlier device-call sites) would let `-Xlinker -dead_strip_dylibs` drop `libAsyncRTMojoBindings.dylib` entirely: **1,156,592 bytes, 42% of the runtime dylib closure** measured by `marrow compile --bundle` on `query_param`, shrinking every bundled/relocatable artifact by that much. | marrow-compile spec §7 | `pixi run binary_size` + `marrow compile --bundle` | S |
 
 **Order.** S1 landed first, 2026-08-17 — it was the conflict-heaviest change and
 every later `expr` edit would otherwise have been rebased onto it. Then the

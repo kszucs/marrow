@@ -8,6 +8,28 @@
 > findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
 > which indexes all twenty.
 
+### Docs
+
+- **`docs/guide/compile.qmd` — a guide to `param()`, `execute_cli()` and
+  `marrow compile`, with a genuinely runnable example.** Closes backlog item
+  M1.6, which flagged that `docs/guide/expressions.qmd`'s AOT blocks were
+  illustrative only (plain ` ```python `, never executed) and could name
+  types that did not exist without the docs build ever going red. The new
+  page's example is `benchmarks/binary_size/query_param.mojo` — the same
+  file the binary-size gate compiles — pulled in verbatim with Quarto's
+  `include` shortcode rather than pasted, so the page cannot drift out of
+  sync with the source the way a copy could; the `mojo build` itself is not
+  run by the docs build (it takes 1-2 minutes and the `docs` pixi
+  environment carries no Mojo toolchain), so the page states plainly that
+  its transcript — `--help`, `--describe`, a filtered run, `-o
+  result.parquet` — was captured by hand rather than executed by Quarto.
+  Cross-linked from `expressions.qmd`. Filed a follow-up, S19 in
+  `docs/backlog.md`, for the static-linking finding from the same work: all
+  10 `_AsyncRT_*` symbols in a GPU-off binary are `DeviceBuffer`/
+  `DeviceContext` calls that survive DCE, which is why gating `GPU_ENABLED`
+  alone does not shed the AsyncRT dylib (`libAsyncRTMojoBindings.dylib`,
+  1,156,592 bytes — 42% of the runtime dylib closure).
+
 ### Features
 
 - **The wheel ships marrow's own Mojo source, so `marrow compile` works for a

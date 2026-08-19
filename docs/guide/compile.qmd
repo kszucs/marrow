@@ -1,0 +1,211 @@
+---
+title: "Compiling a query to a standalone binary"
+subtitle: "marrow compile — the AOT lane, exposed to users"
+execute:
+  enabled: false
+---
+
+Everything else in this guide runs through the Python bindings: build a plan,
+call `.execute()`, get a `RecordBatch` back, in the same process that built
+the plan. `marrow compile` is a different thing entirely — it turns a Mojo
+source file into a standalone binary that runs the query later, from the
+command line, with no marrow, no Mojo toolchain and no Python interpreter
+installed on the machine that runs it.
+
+::: {.callout-note}
+The code on this page is Mojo, compiled ahead of time — not the Python
+`marrow.expr` API the rest of this guide uses. See
+[Expression execution](expressions.qmd) for the lazy Python frontend.
+:::
+
+## When to reach for this instead of the lazy frontend
+
+The query *shape* — which relation nodes, in what order, over which columns
+— is frozen at compile time. Only **scalars and paths** are late-bound,
+through a new `param()` node that sits alongside `col()` and `lit()`. That is
+the whole trade:
+
+- A fixed report that runs against a different file and a different
+  threshold every day — `marrow compile` fits well. Ship one binary, run it
+  with different `--flag` values, no marrow install required on the target
+  machine.
+- A query whose *shape* varies — a different filter, a different set of
+  group-by keys, an ad hoc notebook session — wants the
+  [Python lazy frontend](expressions.qmd) instead. Reshaping a plan there is
+  a line of Python; reshaping a compiled binary is a rebuild.
+
+**State the cost up front, because it will not announce itself:** a
+`marrow compile` build takes roughly **1-2 minutes per invocation**, because
+`mojo build` elaborates the whole of `marrow` at `-O3` for every compile —
+there is no incremental build. That is fine for a binary you build once and
+run many times; it is a bad fit for an edit-compile-run loop.
+
+## `param()` — the late-bound value
+
+`param(name, dtype)` returns an expression node structurally identical to
+`lit(value)`, except the scalar behind it lives in a cell that starts unbound
+and is filled in from the command line after the plan is built. It composes
+with everything a literal does — comparisons, arithmetic, a `ParquetScan`
+path — and it costs nothing extra per row: the cell is resolved once per
+batch, not once per element.
+
+```mojo
+from marrow.expr.builders import col, param
+from marrow.dtypes import int64, string
+
+var src   = param("src", string)              # required, no default
+var min_a = param("min-a", int64, default=0)   # optional, falls back to 0
+```
+
+`param()` is overloaded for numeric, string and temporal dtypes in the fused
+(AOT) lane, and there is a runtime-lane counterpart,
+`param(name, DynType)`, at parity with it — a compiled query is free to mix
+`param()` cells with plain `col()`/`lit()` expressions and runtime-typed
+(`DynValue`) ones in the same plan.
+
+A `ParquetScan`'s `path` accepts a `param()` cell directly in place of a
+literal string, so the file a compiled binary reads is late-bound too, not
+just the predicate thresholds:
+
+```mojo
+ParquetScan[...](path=param("src", string), schema=sch)
+```
+
+## `plan.execute_cli()` — the compiled binary's entry point
+
+The last call in `main()`, once the plan is built, is `plan.execute_cli()`
+instead of `print(plan.execute())`. It:
+
+1. drains every `param()` declaration the plan's construction registered,
+2. checks `argv` for `--help` or `--describe` and short-circuits to a
+   rendered summary before binding or running anything — a `--help` run
+   never needs dummy values for the plan's parameters,
+3. otherwise binds each declared parameter from `--name value` pairs (or
+   applies its declared default), raising a named error for a missing
+   required parameter or an unrecognized flag,
+4. executes the plan, and
+5. writes the result: to stdout by default, or to a file when `-o` is given.
+
+## The runnable example
+
+The file below is `benchmarks/binary_size/query_param.mojo` in the repo — the
+same file `pixi run binary_size query_param query_scan_typed` compiles to
+measure what a late-bound parameter costs in `__text`. It is embedded here
+with Quarto's `include` shortcode rather than copied, so this page is
+byte-identical to the source file and cannot silently drift out of sync with
+it the way a pasted-in snippet could.
+
+It is **not executed by the docs build** — a `mojo build` here takes 1-2
+minutes and the `docs` pixi environment carries no Mojo toolchain, so
+running it as part of `pixi run -e docs docs` is not practical. What follows
+is instead the exact transcript of compiling and running this file, captured
+by hand while writing this page:
+
+```{.mojo filename="benchmarks/binary_size/query_param.mojo"}
+{{< include ../../benchmarks/binary_size/query_param.mojo >}}
+```
+
+```bash
+$ marrow benchmarks/binary_size/query_param.mojo -o q
+$ ./q --help
+Parameters:
+  --src <string> (required)
+  --min-a <int64> (required)
+$ ./q --src data.parquet --min-a 5
+RecordBatch(num_rows=2, schema=Schema(fields=[a: int64]))
+$ ./q --src data.parquet --min-a 5 -o result.parquet
+```
+
+`data.parquet` above was a five-row file with an `int64` column `a` holding
+`[1, 5, 10, 2, 7]`; `--min-a 5` keeps the two rows greater than 5 (`10` and
+`7`), matching the `RecordBatch(num_rows=2, ...)` above, and `result.parquet`
+reads back as exactly those two values.
+
+## `marrow compile` — building the binary
+
+Installing marrow with the `compile` extra (`pip install marrow[compile]`)
+registers a `marrow` console script backed by `python/marrow/compile.py`.
+Despite the name of this page, there is no `compile` subcommand to type —
+the installed command *is* the compiler:
+
+```bash
+$ marrow query.mojo -o query
+```
+
+`marrow` resolves the `mojo` compiler on `PATH` (raising a named error,
+including the nightly-vs-stable-PyPI distinction, if it is missing or out of
+range) and the `marrow/` Mojo package to pass as `mojo build`'s `-I` — via
+`--marrow-path`, the `MARROW_MOJO_PATH` environment variable, the copy
+bundled into the wheel, or by walking up from the current directory looking
+for a `marrow/` + `pixi.toml` pair, in that order. Then it runs the same
+recipe `benchmarks/binary_size/compare.py` uses to build the gate binaries —
+`mojo build -O3 -g0 -I <marrow> <src> -o <out>`, then `strip` — so a compiled
+query's size is directly comparable to the numbers in
+`benchmarks/binary_size/`.
+
+Useful flags:
+
+- **`-o OUTPUT`** (or the positional form, `marrow query.mojo out`) — where
+  to write the binary. Defaults to the source file's name without `.mojo`,
+  in the current directory.
+- **`--fast`** — build with `-O1` instead of `-O3`: a faster compile, a
+  slower binary. Still on the order of a minute, since elaborating `marrow`
+  dominates either way.
+- **`--no-writers`** — see below.
+- **`--bundle DIR`** — see below.
+- **`--marrow-path`, `-v`, `--no-strip`** — override package resolution,
+  print the underlying `mojo build` command, or skip stripping debug
+  symbols.
+
+### `-o` at run time: writing Parquet or Arrow IPC output
+
+The compiled binary's own `-o` flag (not `marrow compile`'s) picks an output
+writer by extension: `-o result.parquet` writes Parquet, `-o result.arrow`
+writes Arrow IPC, and `--format parquet|ipc|table` overrides the guess. With
+no `-o`, the result prints to stdout as a `RecordBatch`, same as
+`print(plan.execute())` in every other example in this guide.
+
+Linking those two writers into the binary is not free: Task 7's
+binary-size gate measured **572,288 bytes** of `__text` for Parquet + Arrow
+IPC output, against a `query_scan_typed` baseline of 2,025,432 bytes:
+
+| Build | `__text` | Delta vs. baseline |
+|---|---|---|
+| `query_scan_typed` (no `param()`, no `execute_cli()`) | 2,025,432 | — |
+| `query_param`, writers gated out (`--no-writers`) | 2,222,132 | +196,700 |
+| `query_param`, writers linked (the default) | 2,794,420 | +768,988 |
+
+`marrow compile` passes `-D MARROW_CLI_WRITERS=true` **by default**, so the
+documented `-o result.parquet` contract works out of the box. Pass
+`--no-writers` for the smaller binary if the query only ever needs to print
+or write to a pipe — a `-o result.parquet` against a `--no-writers` build
+raises a named error rather than silently doing nothing.
+
+### `--bundle` — a relocatable, self-contained directory
+
+A compiled binary still dynamically links a handful of Mojo/MAX runtime
+`.dylib`/`.so` files, resolved through the local pixi environment's rpath —
+copying the bare binary to another machine will not run there.
+`marrow query.mojo -o query --bundle DIR` copies the binary plus the
+**transitive** closure of its non-system shared-library dependencies into
+`DIR` and
+rewrites the rpath to `@loader_path` (macOS) / `$ORIGIN` (Linux), so `DIR`
+runs standalone — no pixi environment, no marrow install, on the build
+machine or any other with a compatible OS/arch:
+
+```bash
+$ marrow query.mojo -o query --bundle ./dist
+$ ./dist/query --src data.parquet --min-a 5
+```
+
+Measured on `query_param`: 4 dylibs (2 linked directly, 2 pulled in
+transitively), stripped binary plus dylibs together, **5.5 MB total**. The
+closure walks `otool -L` / `ldd` recursively rather than hardcoding a dylib
+list, because the set is not fixed — a `-D MARROW_GPU=true` build pulls in
+an additional GPU runtime library that a CPU-only build does not link.
+
+Static linking is not on the table for this on macOS — there is no
+`libSystem.a` to link against. It may be possible on Linux, where static
+linking is at least conceivable; that is untested here (no Linux development
+machine at hand) and is one of the open questions this feature shipped with,
+not a claim this page makes.

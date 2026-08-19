@@ -184,3 +184,13 @@ plan = (
 
 result = plan.execute()
 ```
+
+## Compiling a query ahead of time
+
+Everything on this page executes a plan in the same process that built it.
+The AOT (Mojo-native) lane can go further: `marrow compile` turns a `.mojo`
+file that builds a plan with late-bound `param()` values into a standalone
+binary, runnable from the command line with no marrow or Python install on
+the target machine. See [Compiling a query to a standalone
+binary](compile.qmd) — the query *shape* is fixed at compile time there, so
+it is a complement to this page's lazy frontend, not a replacement for it.
