@@ -1785,7 +1785,28 @@ def test_temporal_array_dtype_mismatch() raises:
             children=[],
         )
     )
-    assert_false(arr_date32^.to_dyn() == arr_date64^.to_dyn())
+    # Compared through their dtypes, not as two `DynArray`s.
+    #
+    # `assert_false(arr_date32^.to_dyn() == arr_date64^.to_dyn())` is the
+    # direct spelling and it **wedges the compiler**: `DynArray.__eq__` is
+    # `self._v == other._v`, so a `DynArray`-to-`DynArray` comparison resolves
+    # the active variant on *both* sides and elaborates the dispatch ladder
+    # squared. Measured: this one line made the whole 165-case file fail to
+    # compile -- six attempts, each sitting at 0% CPU until the harness
+    # deadline, which read as "165 failed" and looked like a harness capacity
+    # problem. It was one assertion. `mojo precompile marrow` stays clean
+    # throughout, because the library builds fine; only the test's
+    # instantiation does not.
+    #
+    # Dtype inequality is what this case is really about -- two temporal arrays
+    # over the same logical values whose *types* differ -- and it is the part
+    # `DynArray.__eq__` would have checked first anyway. See
+    # `docs/alpha-findings/o2-cast-utf8.md` and CLAUDE.md's Mojo Gotchas.
+    assert_false(arr_date32.type() == arr_date64.type())
+    assert_true(arr_date32.type() == date32().to_dyn())
+    assert_true(arr_date64.type() == date64().to_dyn())
+    _ = arr_date32^
+    _ = arr_date64^
 
 
 def test_temporal_array_to_any_roundtrip() raises:

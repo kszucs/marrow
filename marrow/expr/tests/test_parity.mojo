@@ -20,7 +20,7 @@ mask identity ``a*c + b*(1-c)`` (with ``c = (a > b)`` promoted to int via
 runtime ``select``.
 """
 
-from std.testing import assert_true
+from std.testing import assert_true, assert_false, assert_raises
 from std.utils.numerics import nan
 
 from ...arrays import DynArray, Int64Array
@@ -53,7 +53,9 @@ from ...dtypes import field
 from ...kernels.temporal import unit_day
 
 # Fused comptime algebra (values.mojo)
-from ...expr.builders import col as fcol, lit as flit
+from ...expr.builders import col as fcol, lit as flit, param
+from ...expr.params import drain_params, parse_params
+from ...scalars import DynScalar, Int64Scalar
 from ...expr.values import (
     _rank,
     NumericCast,
@@ -160,6 +162,7 @@ from ...kernels.conditional import (
 )
 
 from ...expr.dynamic import DynValue, _numeric_rank
+from ...expr.pruning import PruneStats
 from ...expr.values import BoxedValue
 
 # The runtime lane's own leaves — these build `DynValue` tag nodes
@@ -1009,6 +1012,92 @@ def test_runtime_literal_and_cast() raises:
         fcol("a") + flit[Int64Type](3),
         batch,
     )
+
+
+def _param_stats(lo: Int, hi: Int) raises -> PruneStats:
+    """One int64 column `a` bounded to `[lo, hi]`."""
+    var mins = List[Optional[DynScalar]]()
+    var maxs = List[Optional[DynScalar]]()
+    mins.append(Optional[DynScalar](Int64Scalar(Int64(lo))))
+    maxs.append(Optional[DynScalar](Int64Scalar(Int64(hi))))
+    return PruneStats(schema([field("a", int64)]), mins^, maxs^)
+
+
+def test_parity_param_lanes_share_one_cell() raises:
+    """Both lanes have a param leaf (invariant 2), and a name mentioned in
+    both is **one** parameter driven by **one** flag.
+
+    Bound the way a user binds it — through `parse_params`, from tokens that
+    could have come off `argv` — because that is the path the cross-lane
+    defect lived on: `register_param` used to append a second declaration per
+    repeated name while `parse_params` keyed by name, so only the last cell
+    ever received the CLI value and the other lane silently read its default.
+
+    Discriminating without pitting the lanes against each other: two
+    *distinct* names, `--min-a 3` and `--max-a 6`, are bound in the same
+    scope. A lane resolving the wrong cell computes the other threshold's
+    answer, which none of the three assertions below tolerate — and the
+    `len(decls) == 2` assertion is what fails if a repeated name ever
+    allocates a second cell again.
+    """
+    var a = array([1, 5, 3, 8, 2], int64)
+    var batch = record_batch([a.copy()], names=["a"])
+
+    _ = drain_params()
+    # `min-a` is declared in *both* lanes, deliberately.
+    var fused = fcol("a", int64) > param("min-a", int64)
+    var dyn = dcol("a") > param("min-a", DynType(int64))
+    var other = dcol("a") > param("max-a", DynType(int64))
+    var decls = drain_params()
+    assert_true(len(decls) == 2)
+
+    parse_params(["--min-a", "3", "--max-a", "6"], decls)
+
+    var fused_out = BoxedValue(fused).execute(batch)
+    var dyn_out = dyn.execute(batch)
+    assert_true(fused_out.as_bool() == array([False, True, False, True, False]))
+    assert_true(dyn_out.as_bool() == fused_out.as_bool())
+    assert_true(
+        other.execute(batch).as_bool()
+        == array([False, False, False, True, False])
+    )
+
+
+def test_parity_param_prunes_like_a_literal() raises:
+    """A bound parameter prunes exactly as a literal of the same value does,
+    in both lanes.
+
+    The runtime lane had no `"param"` arm in `DynValue.prune`, so it answered
+    `Interval.unknown()` and decoded every row group while the fused lane's
+    `NumericParam.prune` skipped them — a divergence that is invisible in
+    results and only shows up as lost work.
+    """
+    _ = drain_params()
+    var fused = fcol("a", int64) > param("min-a", int64)
+    var dyn = dcol("a") > param("min-a", DynType(int64))
+    var literal = dcol("a") > flit[Int64Type](Int64(100))
+    var decls = drain_params()
+    parse_params(["--min-a", "100"], decls)
+
+    var low = _param_stats(0, 50)
+    var high = _param_stats(0, 200)
+
+    assert_false(BoxedValue(fused).prune(low).maybe_true)
+    assert_false(dyn.prune(low).maybe_true)
+    assert_false(literal.prune(low).maybe_true)
+
+    assert_true(BoxedValue(fused).prune(high).maybe_true)
+    assert_true(dyn.prune(high).maybe_true)
+    assert_true(literal.prune(high).maybe_true)
+
+
+def test_parity_param_conflicting_dtype_raises() raises:
+    """One name cannot mean two dtypes — across the lanes least of all."""
+    _ = drain_params()
+    _ = fcol("a", int64) > param("min-a", int64)
+    with assert_raises():
+        _ = dcol("a") > param("min-a", DynType(string))
+    _ = drain_params()
 
 
 # ---------------------------------------------------------------------------

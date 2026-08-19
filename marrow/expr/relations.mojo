@@ -39,6 +39,10 @@ rewrites; both lower to ``Project``, as ``with_columns`` does.
 (``.sort(...).limit(k)`` folds into the sort kernel's top-K path).
 ``DynRelation.join(right, left_on, right_on)``   — hash join.
 ``DynRelation.execute()``                        — drain to a single RecordBatch.
+``DynRelation.execute_cli()``                    — bind this plan's ``param()``
+declarations from ``argv``, execute, and write the result; the last call in a
+compiled query binary's ``main()``. ``--help`` / ``--describe`` short-circuit
+before execution.
 
 ``project`` and ``aggregate`` each have two overloads, one per expression lane:
 one taking runtime ``DynValue``s (names resolved against the input schema
@@ -57,15 +61,26 @@ from ..arrays import DynArray
 from std.builtin.rebind import rebind
 from .dynamic import DynValue
 from .values import AggExpr, BoxedValue
+from .params import (
+    PathSpec,
+    claim_cli_invocation,
+    drain_params,
+    parse_params,
+    render_describe,
+    render_usage,
+)
 from std.memory import ArcPointer
+from std.sys import argv, get_defined_bool
 
 from ..dtypes import Field
 from ..schema import Schema
-from ..tabular import RecordBatch
+from ..tabular import RecordBatch, Table
 from .builders import col
 from ..execution import ExecContext
 from .aggregates import AggFunc
 from ..parquet import LeafSet
+from ..parquet import write_table as _write_parquet_table
+from ..ipc import write_ipc_file as _write_ipc_file
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     DynProcessor,
@@ -222,6 +237,152 @@ def _referenced_by(values: List[BoxedValue]) -> List[String]:
     for ref v in values:
         _add_names(acc, v.referenced_columns())
     return acc^
+
+
+# ---------------------------------------------------------------------------
+# execute_cli() output writers
+#
+# Each format gets its own tiny function so that gating the Parquet/IPC
+# writers behind a comptime flag is a one-line `comptime if` added to exactly
+# these two bodies, not a rewrite of `execute_cli` or of the dispatch that
+# picks between them.
+#
+# The binary-size gate measured `query_param` (execute_cli, both
+# writers reachable) against `query_scan_typed` (bare `print(...execute())`)
+# and found the writers, not the parameters, were the cost: `__text` grew by
+# 768,988 bytes — the Parquet writer, the IPC writer, and the codec layer
+# behind them, none of which either gate program calls. Far past the ~20 KB
+# "near-zero" bar a parameter alone should cost, so both writers are gated
+# **off by default**, the same posture as `GPU_ENABLED`: build with
+# `-D MARROW_CLI_WRITERS=true` to get `-o out.parquet` / `-o out.arrow`
+# support in `execute_cli`. Without the flag those two formats raise instead
+# of writing, and the linker drops the writer path entirely — `--format
+# table` / no `-o` (stdout) always work, flag or no flag.
+comptime CLI_WRITERS_ENABLED = get_defined_bool["MARROW_CLI_WRITERS", False]()
+# ---------------------------------------------------------------------------
+
+
+def _write_parquet_output(batch: RecordBatch, path: String) raises:
+    comptime if CLI_WRITERS_ENABLED:
+        _write_parquet_table(
+            Table.from_batches(batch.schema, [batch.copy()]), path
+        )
+    else:
+        raise Error(
+            "execute_cli: parquet output requires building with -D"
+            " MARROW_CLI_WRITERS=true"
+        )
+
+
+def _write_ipc_output(batch: RecordBatch, path: String) raises:
+    comptime if CLI_WRITERS_ENABLED:
+        _write_ipc_file(path, [batch.copy()])
+    else:
+        raise Error(
+            "execute_cli: ipc output requires building with -D"
+            " MARROW_CLI_WRITERS=true"
+        )
+
+
+struct CliArgs(Copyable, Movable):
+    """`execute_cli`'s argv, split into the parameter tokens and the two
+    output flags — the result of `split_cli_args`."""
+
+    var param_args: List[String]
+    var out_path: Optional[String]
+    var format: Optional[String]
+
+    def __init__(
+        out self,
+        var param_args: List[String],
+        var out_path: Optional[String],
+        var format: Optional[String],
+    ):
+        self.param_args = param_args^
+        self.out_path = out_path^
+        self.format = format^
+
+
+def split_cli_args(args: List[String]) raises -> CliArgs:
+    """Pull `-o PATH` and `--format FMT` out of `args`, leaving the rest for
+    `parse_params`.
+
+    Split out of `execute_cli` for the same reason `parse_params` takes a
+    `List[String]` instead of reading `argv` itself: argv handling is the part
+    with the off-by-one risk, and it is only testable without spawning a
+    process if it is a function of a list. `--help` / `--describe` are *not*
+    handled here — `execute_cli` short-circuits on them before this runs.
+
+    Raises:
+        Error: if `-o` or `--format` is the last token, with no value after it.
+    """
+    var out_path = Optional[String](None)
+    var format_override = Optional[String](None)
+    var param_args = List[String]()
+    var i = 0
+    while i < len(args):
+        if args[i] == "-o":
+            if i + 1 >= len(args):
+                raise Error("execute_cli: '-o' requires a value")
+            out_path = Optional(args[i + 1].copy())
+            i += 2
+        elif args[i] == "--format":
+            if i + 1 >= len(args):
+                raise Error("execute_cli: '--format' requires a value")
+            format_override = Optional(args[i + 1].copy())
+            i += 2
+        else:
+            param_args.append(args[i].copy())
+            i += 1
+    return CliArgs(param_args^, out_path^, format_override^)
+
+
+def cli_output_format(path: String, format: Optional[String]) raises -> String:
+    """Which writer `-o path` names: `"parquet"`, `"ipc"` or `"table"`.
+
+    `--format` wins outright when given; otherwise the extension decides, and
+    anything unrecognized prints as a table rather than guessing a binary
+    format from a name. An explicit `--format` naming none of the three is an
+    error — a typo there must not silently fall back to stdout.
+    """
+    var fmt: String
+    if format:
+        fmt = format.value()
+    elif path.endswith(".parquet"):
+        fmt = String("parquet")
+    elif path.endswith(".arrow"):
+        fmt = String("ipc")
+    else:
+        fmt = String("table")
+
+    if fmt == "parquet" or fmt == "ipc" or fmt == "table":
+        return fmt^
+    else:
+        raise Error("execute_cli: unknown --format '" + fmt + "'")
+
+
+def write_cli_output(
+    result: RecordBatch,
+    out_path: Optional[String],
+    format: Optional[String],
+) raises:
+    """The output half of `execute_cli`'s contract.
+
+    No `-o` pretty-prints to stdout — the same thing
+    `benchmarks/binary_size`'s gate programs do today with a bare
+    `print(...execute())`. `-o r.parquet` / `-o r.arrow` pick the writer by
+    extension; `--format parquet|ipc|table` overrides that."""
+    if not out_path:
+        print(result)
+    else:
+        var path = out_path.value()
+        var fmt = cli_output_format(path, format)
+        if fmt == "parquet":
+            _write_parquet_output(result, path)
+        elif fmt == "ipc":
+            _write_ipc_output(result, path)
+        else:
+            print(result)
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +568,55 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         be executed repeatedly and concurrently."""
         var op = self.optimize().to_processor(ctx)
         return op.collect()
+
+    def execute_cli(self, ctx: ExecContext = ExecContext.auto()) raises:
+        """The last call in a compiled query binary's `main()`: bind this
+        plan's `param()` declarations from `argv`, execute, and write the
+        result.
+
+        **Exactly once per process.** `claim_cli_invocation()` is the first
+        thing this does: a second call would drain an empty registry, bind
+        nothing, and silently re-execute against the first call's parameter
+        values, so it raises a named error instead.
+
+        Order is the whole design (see `params.mojo`'s module docstring for
+        the registry this drains):
+
+        1. **Drain the registry** — every `param(...)` call this plan's
+           construction made is now a `ParamDecl` here, not still sitting in
+           the module-level registry for some later, unrelated plan to pick
+           up.
+        2. **`--help` / `--describe` short-circuit before anything else
+           runs**, including before parameters are bound — this is what
+           removes any need for dummy values: the plan was built with
+           unbound cells, and a `--help` run simply never reaches
+           `execute()`.
+        3. `parse_params` binds every cell from the remaining flags (or
+           applies its declared default), raising a named error for a
+           missing required parameter or an unrecognized flag.
+        4. `execute(ctx)`.
+        5. Write the result — see `write_cli_output`.
+        """
+        claim_cli_invocation()
+        var decls = drain_params()
+
+        var raw = argv()
+        var args = List[String]()
+        for i in range(1, len(raw)):
+            args.append(String(raw[i]))
+
+        for ref a in args:
+            if a == "--help":
+                print(render_usage(decls))
+                return
+            if a == "--describe":
+                print(render_describe(decls))
+                return
+
+        var split = split_cli_args(args)
+        parse_params(split.param_args, decls)
+        var result = self.execute(ctx)
+        write_cli_output(result, split.out_path, split.format)
 
     # --- plan-building API ---
 
@@ -1040,7 +1250,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     predicate exactly — so it is safe to carry a partial/over-approximate one.
     """
 
-    var path: String
+    var path: PathSpec
     var _schema: Schema
     var morsel_size: Int
     var predicate: Optional[BoxedValue]
@@ -1048,7 +1258,7 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
     def __init__(
         out self,
         *,
-        var path: String,
+        var path: PathSpec,
         var schema: Schema,
         morsel_size: Int = DEFAULT_MORSEL_SIZE,
         var predicate: Optional[BoxedValue] = None,
@@ -1121,14 +1331,14 @@ struct ParquetScan[leaves: LeafSet = LeafSet.all()](Relation):
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         return ParquetScanProcessor[Self.leaves](
-            path=self.path.copy(),
+            path=self.path.resolve(),
             schema=Schema(copy=self._schema),
             morsel_size=self.morsel_size,
             predicate=self.predicate.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"ParquetScan({self.path})")
+        writer.write(t"ParquetScan({self.path.describe()})")
 
 
 def parquet_scan[

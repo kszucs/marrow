@@ -299,6 +299,10 @@ struct StringScalar(ArrowScalar):
     def is_valid(self) -> Bool:
         return self._is_valid
 
+    def value(self) -> String:
+        """Get the underlying value. Undefined if null."""
+        return self._value.copy()
+
     def repeat(self, times: Int) raises -> StringArray:
         """Broadcast this scalar into an array of length `times`.
 

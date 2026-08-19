@@ -54,7 +54,9 @@ def test_parquet_scan_write_to() raises:
 
 def test_parquet_scan_downcast() raises:
     """DynRelation wrapping a ParquetScan can be downcast to access path."""
-    assert_equal(_scan().downcast[ParquetScan[LeafSet.all()]]()[].path, "t")
+    assert_equal(
+        _scan().downcast[ParquetScan[LeafSet.all()]]()[].path.resolve(), "t"
+    )
 
 
 def test_in_memory_table_schema() raises:

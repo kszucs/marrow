@@ -17,6 +17,7 @@ package `__init__`.
 """
 
 from ..dtypes import (
+    DynType,
     FloatingType,
     Int64Type,
     ListLikeType,
@@ -25,15 +26,19 @@ from ..dtypes import (
     StringType,
     TemporalType,
 )
-from ..scalars import PrimitiveScalar
+from ..scalars import DynScalar, PrimitiveScalar, StringScalar
 from .dynamic import DynAgg, DynValue
+from .params import ParamDecl, register_param
 from .values import (
     ListColumn,
     NumericColumn,
     NumericLiteral,
+    NumericParam,
     StringColumn,
     StringLiteral,
+    StringParam,
     TemporalColumn,
+    TemporalParam,
 )
 
 
@@ -73,10 +78,95 @@ def lit[T: FloatingType](value: Float64, dtype: T) -> NumericLiteral[T]:
     return NumericLiteral[T](Scalar[T.native](value))
 
 
+def param[
+    T: NumericType
+](
+    var name: String,
+    dtype: T,
+    default: Optional[Int] = None,
+    var help: String = String(),
+) raises -> NumericParam[T]:
+    """A numeric value supplied at run time — `param("min-a", int64)`.
+
+    Raises when this name is already declared with a different dtype; a
+    redeclaration with the *same* dtype shares the first declaration's cell
+    (see `params.mojo`), so one `--min-a` flag drives every mention of it."""
+    var dflt = Optional[DynScalar](None)
+    if default:
+        dflt = Optional(
+            PrimitiveScalar[T](Scalar[T.native](default.value())).to_dyn()
+        )
+    var cell = register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=DynType(dtype),
+            help=help^,
+            default=dflt^,
+        )
+    )
+    return NumericParam[T](cell)
+
+
 def lit(value: String) -> StringLiteral[StringType]:
     """A string constant — `lit("suffix")`. Same verb as the numeric ones; the
     argument type picks the literal."""
     return StringLiteral[StringType](value)
+
+
+def param[
+    T: StringLikeType
+](
+    var name: String,
+    dtype: T,
+    default: Optional[String] = None,
+    var help: String = String(),
+) raises -> StringParam[T]:
+    """A string value supplied at run time — `param("src", string)`.
+
+    Same name/cell contract as the numeric overload above."""
+    var dflt = Optional[DynScalar](None)
+    if default:
+        dflt = Optional(StringScalar(default.value()).to_dyn())
+    var cell = register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=DynType(dtype),
+            help=help^,
+            default=dflt^,
+        )
+    )
+    return StringParam[T](cell)
+
+
+def param[
+    T: TemporalType
+](
+    var name: String,
+    dtype: T,
+    default: Optional[Int] = None,
+    var help: String = String(),
+) raises -> TemporalParam[T]:
+    """A temporal value supplied at run time — `param("cutoff", timestamp(second))`.
+
+    `default` is the epoch integer in the dtype's own unit, which is also how
+    `parse_params` reads the `--cutoff` flag. Same name/cell contract as the
+    numeric overload above."""
+    var dflt = Optional[DynScalar](None)
+    if default:
+        dflt = Optional(
+            PrimitiveScalar[T](
+                Optional(Scalar[T.native](default.value())), dtype
+            ).to_dyn()
+        )
+    var cell = register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=DynType(dtype),
+            help=help^,
+            default=dflt^,
+        )
+    )
+    return TemporalParam[T](cell)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +188,39 @@ def lit[T: NumericType](value: Scalar[T.native]) -> DynValue:
     A literal always knows its type where it is written; what is erased here is
     the *expression*, so the value goes in as a `DynScalar` payload."""
     return DynValue.literal(PrimitiveScalar[T](value))
+
+
+def param(
+    var name: String,
+    dtype: DynType,
+    var default: Optional[DynScalar] = None,
+    var help: String = String(),
+) raises -> DynValue:
+    """A run-time parameter for the runtime lane — `param("min-a",
+    DynType(int64))`.
+
+    `dtype: DynType` is a concrete argument type, not one bound on
+    `NumericType`/`StringLikeType`/`TemporalType`, so this overload never
+    competes with the three fused `param[T: ...]` overloads above — `DynType`
+    conforms to none of those traits (see its docstring in `dtypes.mojo`).
+    `default` and `help` carry the same meaning as in the fused overloads —
+    `default` makes the flag optional and `help` is what `--help` /
+    `--describe` print — except that `default` is spelled as an already-erased
+    `DynScalar`, since there is no comptime dtype here to build one from.
+    Registration works the same as the fused lane's: one name is one cell (see
+    `params.mojo`), and the plan builder drains the registry once after
+    building the tree. Unlike the fused `param` overloads, this one keeps no
+    cell of its own — the returned `DynValue` carries only the name, and its
+    evaluator resolves the cell by name at execute time via `lookup_param`."""
+    _ = register_param(
+        ParamDecl(
+            name=name.copy(),
+            dtype=dtype.copy(),
+            help=help^,
+            default=default^,
+        )
+    )
+    return DynValue.param(name^)
 
 
 def count_star() -> DynAgg:

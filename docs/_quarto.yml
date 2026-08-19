@@ -68,6 +68,8 @@ website:
             href: guide/tables.qmd
           - text: "Expressions"
             href: guide/expressions.qmd
+          - text: "Compiling queries"
+            href: guide/compile.qmd
           - text: "File I/O"
             href: guide/io.qmd
           - text: "GPU acceleration"

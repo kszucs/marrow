@@ -28,6 +28,12 @@ what that one feature costs:
 - **`query_runtime.mojo`** — the full type-erased entry point end to end:
   `marrow.expr`'s `in_memory_table(batch).filter(...).select(...)` then
   `plan.execute()`.
+- **`query_param.mojo`** — `query_scan_typed`'s exact query and plan, with the
+  scan path and the predicate's right operand late-bound (`param("src",
+  string)`, `param("min-a", int64)`) instead of literal, and
+  `plan.execute_cli()` in place of `print(...execute())`. Isolates what a
+  `param()` node plus the `execute_cli` entry point (argv parsing, `--help` /
+  `--describe`, output-format dispatch) cost over a literal-bound scan.
 
 There is no comptime-only / fully type-erased pair of binaries left to
 contrast against these any more (see "Read this before quoting a number
@@ -119,6 +125,48 @@ pixi run binary_size query_scan
 ```
 
 `query_streaming` is always built, since it is the ratio baseline.
+
+### `query_param` — what a late-bound parameter costs (2026-08-19)
+
+Measured with `pixi run binary_size query_param query_scan_typed` against a
+freshly rebuilt `query_scan_typed`, since the tree has drifted since
+2026-08-05 (`query_streaming` alone moved from 1,332,456 to 1,449,860 in that
+time) — the pair below is internally consistent (same build), not a diff
+against the stale table above.
+
+| gate | `__text` | Δ vs `query_scan_typed` |
+|---|---:|---:|
+| `query_scan_typed` (fresh) | 2,025,432 | — |
+| `query_param`, writers unconditional | 2,794,420 | +768,988 |
+| `query_param`, writers gated (`CLI_WRITERS_ENABLED`) | 2,222,132 | +196,700 |
+
+Far past the ~20 KB a parameter alone should cost (a `NumericParam`/
+`StringParam` node is structurally a literal plus a pointer dereference
+resolved once per batch — see `values.mojo`). Investigating the first number:
+`_write_parquet_output` / `_write_ipc_output` in `marrow/expr/relations.mojo`
+pulled in the Parquet writer, the IPC writer, and the codec layer behind them
+unconditionally, even though neither gate program calls either format. Both
+are now gated behind `comptime CLI_WRITERS_ENABLED =
+get_defined_bool["MARROW_CLI_WRITERS", False]()` — the same opt-in posture as
+`GPU_ENABLED` — which recovered 572,288 bytes and zeroed out the
+`marrow::parquet::writer` symbol bucket for the default (flag-off) build.
+`-o out.parquet` / `-o out.arrow` raise instead of writing unless the binary
+is built with `-D MARROW_CLI_WRITERS=true`; `--format table` / stdout is
+unaffected either way.
+
+The remaining +196,700 bytes is not writer-linkage — a symbol-level diff
+(`nm -n` address-delta) attributes it to `execute_cli`'s own body (22,672 B:
+the argv loop, `--help`/`--describe` short-circuit, `-o`/`--format` parsing),
+`parse_params` (13,728 B: `atol`/`atof` argv-to-scalar conversion), the
+`ParamCell`/`register_param`/`PathSpec` machinery (~7 KB), and — the largest
+single piece, ~87 KB — a **second instantiation** of the `DynArray`/
+`DynScalar` dispatch ladder and `SIMD.write_to`, because `_write_cli_output`'s
+`print(result)` is a different call site from `query_scan_typed`'s inline
+`print(...execute())` (see CLAUDE.md's closure-duplication note — each call
+site of a closure-taking dispatcher is its own specialization). That is the
+fixed cost of routing output through `execute_cli` at all, not a marginal
+per-parameter cost, and it is out of scope for the writer-gating decision this
+task exists to make; it was not gated further.
 
 ### Why the metric had to be fixed first
 

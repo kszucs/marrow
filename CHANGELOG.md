@@ -87,6 +87,11 @@
 - Aggregates written on the expression they aggregate --
   `col("amount", int64).sum().alias("total")` -- with GROUP BY,
   HAVING, computed keys and computed inputs.
+- Late-bound parameters in both lanes. `param("min-a", int64)` is a
+  literal whose value arrives at execution time through `Bindings`,
+  carried through the execution rather than substituted into a copy of
+  the plan, so two executions of one plan cannot interfere -- and the
+  fused inner loop is unchanged, so a parameter costs nothing per row.
 - `with_columns`, `drop` and `rename` on the plan layer.
 
 ### Query optimizer
@@ -156,6 +161,10 @@
 - The comptime lane exists so a query can be compiled to a small,
   self-contained binary: the closed world is dead-code-eliminable, so a
   program links only the kernels its expressions name.
+- `marrow compile` builds such a program and bundles the transitive
+  dylib closure with a relocatable rpath, staging the dlopen'd codec
+  libraries alongside it. Marrow's Mojo source ships in the wheel, so it
+  works from an installed package.
 
 ### Tooling
 

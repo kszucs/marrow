@@ -214,6 +214,9 @@ integration/arrow/
 .claude/skills/
 skills-lock.json
 
+# Claude Code session state and agent worktrees
+.claude/
+
 # Profiler output from scripts/profile.py
 *.sample.txt
 

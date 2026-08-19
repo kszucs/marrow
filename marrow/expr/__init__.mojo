@@ -21,9 +21,18 @@ are written.
 ``core.mojo`` — the vocabulary the two lanes share: ``Datum`` and
 ``into_array``. A leaf, so ``dynamic`` no longer imports ``values`` for them.
 
-``builders.mojo`` — the whole ``col``/``lit``/``if_else``/``coalesce``/
-``case_when`` overload set, both lanes together. It sits above both lanes
-because an overload set cannot span modules.
+``builders.mojo`` — the whole ``col``/``lit``/``param``/``if_else``/
+``coalesce``/``case_when`` overload set, both lanes together. It sits above
+both lanes because an overload set cannot span modules.
+
+``params.mojo`` — **late-bound query parameters**: ``ParamCell`` (a shared,
+mutable box for one scalar, bound after the plan is built), ``ParamDecl``
+(name, dtype, optional default/help, plus the cell), the module-level
+registry the ``param()`` builders append to and ``drain_params()`` empties,
+the name-keyed table the runtime lane's param leaf resolves against, the
+``argv`` binder (``parse_params``/``render_usage``/``render_describe``), and
+``PathSpec``, a ``ParquetScan`` path that is a literal string or a cell. One
+name is one parameter is one cell, across both lanes.
 
 ``relations.mojo`` — the **descriptive IR**: ``Relation`` nodes
 (``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``)

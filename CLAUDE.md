@@ -105,6 +105,15 @@ pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo   # narrower still
 `python/marrow/libmarrow.so` is rebuilt automatically by `conftest.py` before any
 session that runs Python tests — no manual `build_python` step needed.
 
+**Only `pytest` rebuilds it.** `pixi run -e dev python some_script.py` does
+**not** — it imports whatever `.so` is on disk. So the obvious way to measure a
+change (`git checkout` the old tree, run a script, `git checkout` back, run it
+again) measures the *new* library twice and reports no difference. This has
+produced a confident "no improvement, revert it" reading on a change that was
+in fact a 20x win, and separately made a fixed bug look unfixed. Rebuild
+explicitly with `pixi run build_python` between variants, or drive the
+comparison through `pytest`.
+
 ### One selection = one compilation unit
 
 Compilation dominates, and almost all of it is elaborating **marrow**, not the
@@ -155,10 +164,11 @@ def test_something() raises:
 ### Writing Mojo benchmarks
 
 `bench_*.mojo` files sit beside their tests, follow the same rules (no `main()`,
-relative imports), and use `Benchmark` from `marrow.testing`:
+relative imports), and use `Benchmark` from `marrow.utils.testing`:
 
 ```mojo
-from marrow.testing import Benchmark, BenchMetric
+from ...utils.testing import Benchmark      # `..` from marrow/tests/
+from std.benchmark import BenchMetric, keep
 
 def bench_my_kernel(mut b: Benchmark) raises:
     var data = _prepare_data(N)
@@ -439,7 +449,8 @@ marrow/
 ├── c_data.mojo           # Arrow C Data Interface
 ├── ipc.mojo              # Arrow IPC file / stream reader + writer
 ├── execution.mojo        # ExecutionContext — threads, device, `stripe`
-├── utils/                # byteorder, checksum, hashing, compression, testing
+├── utils/                # byteorder, checksum, hashing, compression
+│   └── testing.mojo      # TestSuite + Benchmark used by the generated driver
 ├── kernels/
 │   ├── numeric.mojo      # arithmetic + comparison kernels (Add/Sub/…/Eq/Lt/…)
 │   ├── boolean.mojo      # and/or/not/xor, is_null, is_nan, is_inf
@@ -470,7 +481,6 @@ marrow/
 │   └── tests/
 ├── parquet/              # reader, writer, schema, format, codecs, bloom,
 │   └── tests/            # statistics, source
-├── testing/              # TestSuite + Benchmark used by the generated driver
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # Python package + bindings (python/marrow/libmarrow.so)
 └── marrow/tests/         # Python test_*.py and bench_*.py
@@ -667,6 +677,14 @@ In addition:
   builtin `Scalar`; `BoolArray` resolving along one path and not another; a "fix"
   that took errors 2 → 10). All wildcards were replaced with explicit lists; keep
   it that way.
+- **`DynArray == DynArray` in a test can wedge the compiler.** A single
+  `assert_true(a == cast(a, string))` hung a test driver at 0% CPU
+  indefinitely (reproduced twice, ~57 min each) while `mojo precompile marrow`
+  stayed clean and neighbouring test files built in seconds. `__eq__` resolves
+  the active variant on *both* sides, so it elaborates the dispatch ladder
+  squared. Compare the typed values, or compare `to_pylist()`/lengths instead.
+  The general lesson: **`precompile` being clean is not evidence that a test
+  file will build** — it compiles the library, not the test's instantiations.
 - **ASAN can *hide* a heap bug rather than reveal it.** A one-byte `Variant`
   overflow (since fixed upstream) passed 35/35 under ASAN and failed without it,
   and a Mojo *build* failure emits no ASAN output at all — so a clean ASAN run is

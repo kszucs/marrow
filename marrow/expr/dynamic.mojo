@@ -157,6 +157,7 @@ from ..kernels.interval import (
     GeInterval,
     EqInterval,
 )
+from .params import lookup_param
 from .pruning import PruneStats
 from .values import Value
 
@@ -339,6 +340,17 @@ struct DynValue(Copyable, Movable, Value, Writable):
         args: List[DynArray], payload: DynPayload, batch: RecordBatch
     ) raises -> DynArray:
         return payload[DynScalar].repeat(batch.num_rows())
+
+    @staticmethod
+    def _param(
+        args: List[DynArray], payload: DynPayload, batch: RecordBatch
+    ) raises -> DynArray:
+        """Resolve the payload's name against the module-level registry and
+        broadcast the bound scalar across the batch — the runtime-lane twin of
+        `NumericParam`/`StringParam`/`TemporalParam` in `values.mojo`. Same
+        shape as `_column`: the payload carries a name, not a value, so
+        `DynPayload` needed no new arm."""
+        return lookup_param(payload[String]).get().repeat(batch.num_rows())
 
     @staticmethod
     def _cast(
@@ -623,8 +635,9 @@ struct DynValue(Copyable, Movable, Value, Writable):
         """What this expression's value can be, given per-column `[min, max]`.
 
         The tag twin of the `prune` overrides on the fused nodes — a column
-        reports its bounds, a literal a point interval, a comparison the
-        min/max rule its operator names, `and`/`or` the boolean combination.
+        reports its bounds, a literal (or a bound `param`) a point interval, a
+        comparison the min/max rule its operator names, `and`/`or` the boolean
+        combination.
         Every other tag falls through to "unknown", which is the conservative
         answer: a caller only ever skips data it has *proven* cannot match.
 
@@ -640,6 +653,17 @@ struct DynValue(Copyable, Movable, Value, Writable):
         elif t == "literal":
             var v = self._payload[DynScalar].copy()
             return Interval.bounds(Optional(v.copy()), Optional(v^))
+        elif t == "param":
+            # A bound parameter is a literal that arrived late, so it prunes
+            # like one — a point interval at its value. Without this arm a
+            # parameterised date filter read `Interval.unknown()` and decoded
+            # every row group, while the *fused* lane's `NumericParam.prune`
+            # skipped them: an invariant-2 divergence, not a missing feature.
+            # The cell is resolved here rather than at construction because
+            # that is the whole point of a parameter — `prune` runs inside
+            # `to_processor`/`collect`, after `parse_params` has bound it.
+            var pv = lookup_param(self._text()).get()
+            return Interval.bounds(Optional(pv.copy()), Optional(pv^))
         elif len(self._kids) == 2:
             # The rule for each operator is its interval kernel, shared with the
             # fused lane rather than restated here — and the tag is matched
@@ -908,6 +932,14 @@ struct DynValue(Copyable, Movable, Value, Writable):
     @staticmethod
     def literal(var value: DynScalar) -> Self:
         return Self("literal", Self._literal, DynPayload(value^))
+
+    @staticmethod
+    def param(var name: String) -> Self:
+        """A run-time parameter for the runtime lane — resolved by name
+        against `lookup_param` at execute time, not bound to a cell here.
+        Invariant 2's runtime-lane leaf: the fused lane's equivalent is
+        `NumericParam`/`StringParam`/`TemporalParam` in `values.mojo`."""
+        return Self("param", Self._param, DynPayload(name^))
 
     @staticmethod
     def if_else(cond: Self, then_: Self, else_: Self) -> Self:
