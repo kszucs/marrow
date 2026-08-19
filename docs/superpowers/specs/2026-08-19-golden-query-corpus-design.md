@@ -235,6 +235,45 @@ content-addressed), and **vary values rather than types** to cut marginal cost.
 Per-case `marrow compile` binaries would cost minutes *each* and are not
 viable under any arrangement.
 
+## Reusing the existing harness
+
+The corpus adds almost no test machinery; it is written to fit what
+`conftest.py` already does.
+
+**The Mojo lane needs nothing new.** `pytest_collect_file` (`:804`) collects any
+`test_*.mojo` under rootdir, `MojoTestFile.collect` (`:866`) finds every case
+with `_TEST_FN_RE = ^def\s+(test_\w+)\s*\(` (`:24`), and `MojoTestItem`
+(`:874`) batches the whole selection into one driver and reports per case. A
+golden AOT case is an ordinary `def test_...() raises:`.
+
+**The Python lane is plain pytest collection**, provided case functions are
+named `test_*`. The work goes in one fixture:
+
+```python
+def test_golden_agg_sum_by_key(golden):
+    """SELECT k, sum(v) AS total FROM t GROUP BY k ORDER BY k"""
+    t = golden.table("basic")
+    golden.check(t.aggregate(by=["k"], total=("sum", "v")).order_by("k"))
+```
+
+`golden.check()` keys the expectation off the node name, compares, and under
+`--regenerate` runs the docstring SQL through DuckDB.
+
+Inherited for free: `--mojo`/`--python` selection, the `mojo`/`python` markers,
+`--mojo-timeout`, `--asan`, the automatic `libmarrow.so` rebuild, and
+one-driver-per-selection batching.
+
+**Case names are the join key.** They must be unique across the entire suite —
+the runner maps results by name alone (`conftest.py:884`) — so cases carry an
+area prefix. Giving the Python and Mojo case the *same* name makes that name
+the expectation key for both lanes, and reduces the lane-parity requirement to
+a set difference over collected names, which is itself a test.
+
+New code, in full: the `golden` fixture (~100 lines), `testpaths += golden` in
+`pytest.ini`, `golden/__init__.mojo`, four `addoption` entries (`--regenerate`,
+`--morsel-size`, `--num-threads`, `--no-optimize`), and a Mojo helper that
+loads a fixture plus an expectation so each AOT case stays about three lines.
+
 ## Execution-configuration leg
 
 The same corpus, the same expectations, re-run with a different execution
