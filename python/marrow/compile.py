@@ -124,6 +124,18 @@ def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
     original binary's rpath. `@loader_path/...` and `@executable_path/...`
     are resolved directly against `loader`'s directory. An absolute path
     is returned as-is.
+
+    Deliberately **not** `.resolve()`d: a conda-forge library typically
+    installs as a chain of version symlinks (`libbrotlicommon.dylib` ->
+    `libbrotlicommon.1.dylib` -> `libbrotlicommon.1.2.0.dylib`), and the
+    dependency string names the *symlink* (`@rpath/libbrotlicommon.1.dylib`)
+    — collapsing that to the real file's name broke the copy `bundle()`
+    made: a Mach-O looks up its dependency by the exact name it recorded, so
+    shipping the file under the resolved `.1.2.0` name left the referenced
+    `.1.dylib` name missing at runtime. Returning the un-resolved candidate
+    keeps `.name` equal to what the dependent actually asks for; the caller
+    still dereferences the symlink when it copies the bytes
+    (`shutil.copy2`'s default `follow_symlinks=True`).
     """
     if dep.startswith("@rpath/"):
         name = dep.removeprefix("@rpath/")
@@ -133,14 +145,14 @@ def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
             )
             candidate = Path(base) / name
             if candidate.exists():
-                return candidate.resolve()
+                return candidate
         return None
     if dep.startswith("@loader_path/"):
         candidate = loader.parent / dep.removeprefix("@loader_path/")
-        return candidate.resolve() if candidate.exists() else None
+        return candidate if candidate.exists() else None
     if dep.startswith("@executable_path/"):
         candidate = loader.parent / dep.removeprefix("@executable_path/")
-        return candidate.resolve() if candidate.exists() else None
+        return candidate if candidate.exists() else None
     if dep.startswith("/"):
         return Path(dep)
     return None
@@ -218,25 +230,150 @@ def dylib_closure(binary: Path) -> list[Path]:
     return _dylib_closure_linux(binary)
 
 
+# --- Parquet compression codecs -------------------------------------------
+#
+# marrow's block codecs (zstd, snappy, lz4, zlib, brotli) are `dlopen`-ed at
+# runtime, not linked (see `marrow/utils/compression.mojo`), so `otool -L` /
+# `ldd` — and therefore `dylib_closure()` above — cannot see them: a bundle
+# built from those alone silently drops every compression codec, and snappy
+# is pyarrow's default, so that broke reading most real Parquet files.
+# `marrow/utils/compression.mojo` also tries an executable-relative
+# candidate before the bare soname now (see its `_exe_dir`/`_with_exe_dir`),
+# which is what makes a copy staged here actually get found at runtime —
+# copying alone is necessary but not sufficient.
+#
+# Keep this candidate table in sync with `compression.mojo`'s
+# `_ZSTD_PATHS`/`_SNAPPY_PATHS`/`_LZ4_PATHS`/`_ZLIB_PATHS`/
+# `_BROTLI_ENC_PATHS`/`_BROTLI_DEC_PATHS` — same names, same order.
+_CODEC_LIB_CANDIDATES: dict[str, list[str]] = {
+    "zstd": ["libzstd.dylib", "libzstd.1.dylib", "libzstd.so", "libzstd.so.1"],
+    "snappy": ["libsnappy.dylib", "libsnappy.so", "libsnappy.so.1"],
+    "lz4": ["liblz4.dylib", "liblz4.so", "liblz4.so.1"],
+    "zlib": ["libz.dylib", "libz.1.dylib", "libz.so", "libz.so.1"],
+    "brotlienc": ["libbrotlienc.dylib", "libbrotlienc.so", "libbrotlienc.so.1"],
+    "brotlidec": ["libbrotlidec.dylib", "libbrotlidec.so", "libbrotlidec.so.1"],
+}
+
+
+def codec_lib_dir() -> Path | None:
+    """The directory holding marrow's `dlopen`-ed codec libraries, resolved
+    from the active environment rather than a hardcoded pixi path.
+
+    Tries `$CONDA_PREFIX/lib` first — set by `pixi run`/`pixi shell` for
+    whichever environment is active — then falls back to two directories up
+    from `mojo` on `PATH` (`.../bin/mojo` -> `.../lib`), the same layout any
+    conda/pixi environment uses. Returns `None` if neither resolves, so the
+    caller can skip codec staging with a warning instead of guessing a path
+    that may not exist on this machine.
+    """
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        candidate = Path(conda_prefix) / "lib"
+        if candidate.is_dir():
+            return candidate
+    mojo = shutil.which("mojo")
+    if mojo:
+        candidate = Path(mojo).resolve().parent.parent / "lib"
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _find_codec_lib(lib_dir: Path, names: list[str]) -> Path | None:
+    """The first of `names` that exists in `lib_dir`, unresolved (a
+    version-symlink chain is dereferenced only when its bytes are copied,
+    not when picking the destination filename — see `_resolve_macos_dep`).
+    """
+    for name in names:
+        candidate = lib_dir / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def stage_codec_libs(lib_dir: Path | None) -> list[Path]:
+    """The compression-codec libraries marrow's Parquet reader can `dlopen`,
+    plus their own transitive dependency closure (`libbrotlienc.dylib` pulls
+    in `libbrotlicommon.dylib`, for instance).
+
+    A codec whose library is not installed in `lib_dir` — or `lib_dir`
+    itself unresolved — is skipped with a warning rather than raising: a
+    bundle missing one codec still reads every file compressed with the
+    others, and still reads uncompressed Parquet.
+    """
+    if lib_dir is None:
+        print(
+            "marrow: warning: could not resolve the codec library directory "
+            "(checked $CONDA_PREFIX/lib and the mojo binary's ../lib); "
+            "--bundle will ship with no zstd/snappy/lz4/zlib/brotli support",
+            file=sys.stderr,
+        )
+        return []
+    staged: dict[str, Path] = {}
+    for codec, names in _CODEC_LIB_CANDIDATES.items():
+        lib = _find_codec_lib(lib_dir, names)
+        if lib is None:
+            print(
+                f"marrow: warning: {codec} library not found in {lib_dir}, "
+                "skipping (--bundle will not support that codec)",
+                file=sys.stderr,
+            )
+            continue
+        staged.setdefault(lib.name, lib)
+        for dep in dylib_closure(lib):
+            staged.setdefault(dep.name, dep)
+    return list(staged.values())
+
+
+def _copy_deduped(staged: dict[str, Path], dest: Path) -> None:
+    """Copy `staged` (destination filename -> source path) into `dest`,
+    writing each distinct file's bytes exactly once.
+
+    A conda-forge codec library's un-resolved candidate names
+    (`_resolve_macos_dep`'s self-id-as-dependency case: `libzstd.dylib` and
+    `libzstd.1.dylib` both naming the same real file) would otherwise be
+    copied twice under `shutil.copy2` — harmless for correctness but doubled
+    the codec footprint. Every name past the first real copy of a given file
+    becomes a symlink to it instead.
+    """
+    by_real: dict[Path, list[str]] = {}
+    for name, src in staged.items():
+        by_real.setdefault(src.resolve(), []).append(name)
+    for real, names in by_real.items():
+        primary, *aliases = names
+        shutil.copy2(real, dest / primary)
+        for alias in aliases:
+            (dest / alias).symlink_to(primary)
+
+
 def bundle(binary: Path, dest: Path) -> Path:
-    """Copy `binary` and its dylib closure into `dest`, relocatably.
+    """Copy `binary`, its dylib closure, and marrow's compression codec
+    libraries into `dest`, relocatably.
 
     The binary's `LC_RPATH` (macOS) / `RUNPATH` (Linux) is rewritten to
-    `@loader_path` / `$ORIGIN` so it resolves its dylibs next to itself
-    instead of inside the local pixi environment — `dest` can then be
+    `@loader_path` / `$ORIGIN` so it resolves its link-time dylibs next to
+    itself instead of inside the local pixi environment — `dest` can then be
     zipped, copied to another machine, or shipped as a Lambda deployment
-    unit and run without the build machine's pixi environment present.
-    Returns the path to the copied binary inside `dest`.
+    unit and run without the build machine's pixi environment present. The
+    codec libraries (zstd, snappy, lz4, zlib, brotli — see `stage_codec_libs`)
+    are `dlopen`-ed rather than linked, so they need no rpath entry; they are
+    found via the executable-relative candidate `compression.mojo` now tries
+    before the bare soname. Returns the path to the copied binary inside
+    `dest`.
     """
     binary = binary.resolve()
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
-    deps = dylib_closure(binary)
+    staged: dict[str, Path] = {}
+    for dep in dylib_closure(binary):
+        staged.setdefault(dep.name, dep)
+    for lib in stage_codec_libs(codec_lib_dir()):
+        staged.setdefault(lib.name, lib)
+
     out_binary = dest / binary.name
     shutil.copy2(binary, out_binary)
-    for dep in deps:
-        shutil.copy2(dep, dest / dep.name)
+    _copy_deduped(staged, dest)
 
     if sys.platform == "darwin":
         for rpath in _otool_rpaths(out_binary):

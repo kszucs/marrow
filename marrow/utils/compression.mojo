@@ -160,7 +160,8 @@ struct _CodecHandles(Movable):
     var brotli_dec: _Library
 
     def __init__(out self):
-        var exe_dir = _exe_dir()  # resolved once, shared by every candidate list
+        # Resolved once, shared by every candidate list below.
+        var exe_dir = _exe_dir()
         self.zstd = _Library.open["zstd"](
             _with_exe_dir(exe_dir, materialize[_ZSTD_PATHS]())
         )

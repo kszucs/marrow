@@ -403,6 +403,53 @@
 
 ### Fixes
 
+- **`marrow compile --bundle DIR` now ships a Parquet file compressed with
+  any of marrow's codecs, not just uncompressed ones.** Found by actually
+  running a compiled binary against a snappy-compressed file (pyarrow's
+  default `pq.write_table` compression) — it raised `Failed to load snappy
+  from libsnappy.dylib or libsnappy.so or libsnappy.so.1`. Two independent
+  gaps, both needed:
+
+  - `marrow/utils/compression.mojo` opened its codecs with `dlopen` on a
+    bare soname (`"libsnappy.dylib"`), which the dynamic loader resolves
+    through its own default search paths, never `@loader_path` — so a copy
+    sitting right next to the binary was never found regardless of whether
+    it was bundled. `_exe_dir()`/`_with_exe_dir()` now derive the running
+    executable's own directory from `argv()[0]` and try
+    `<that dir>/<candidate>` before falling back to the original bare-name
+    list, so a bundled codec library is found without `DYLD_LIBRARY_PATH`,
+    `LD_LIBRARY_PATH`, or any other external state.
+  - `python/marrow/compile.py`'s `bundle()` only ever copied `binary`'s
+    *linked* dependencies (`dylib_closure`, from `otool -L`/`ldd`) — the
+    codecs are `dlopen`-ed, not linked, so they never appeared there at all.
+    `codec_lib_dir()` resolves the active pixi/conda environment's `lib/`
+    (via `$CONDA_PREFIX`, else two directories up from `mojo` on `PATH` —
+    never a hardcoded pixi path) and `stage_codec_libs()` copies zstd,
+    snappy, lz4, zlib and both brotli libraries (plus their own transitive
+    deps — `libbrotlienc`/`libbrotlidec` each pull in `libbrotlicommon`)
+    into the bundle. A codec missing from the environment is skipped with a
+    warning rather than failing the whole bundle.
+
+  Fixing the second gap surfaced a latent bug in `_resolve_macos_dep`: it
+  called `.resolve()` on every `@rpath`/`@loader_path`/`@executable_path`
+  dependency, collapsing a conda-forge version-symlink chain
+  (`libbrotlicommon.dylib` -> `.1.dylib` -> `.1.2.0.dylib`) down to the real
+  file's name — but the dependent Mach-O looks the library up by the
+  *symlink's* name (`@rpath/libbrotlicommon.1.dylib`), so the copy landed
+  under the wrong filename and `dlopen` of `libbrotlienc.dylib` failed at
+  the next hop. `_resolve_macos_dep` no longer resolves past the candidate
+  it found; `shutil.copy2`'s default `follow_symlinks=True` still
+  dereferences it for the actual bytes. The same un-resolved candidate list
+  now also surfaces the version-symlink itself as a same-content alias
+  (e.g. both `libzstd.dylib` and `libzstd.1.dylib` resolve to one real
+  file) — `_copy_deduped()` writes the real bytes once and symlinks every
+  other name to it, instead of doubling the codec footprint.
+
+  Bundle size grew from 5.5 MB (no codecs) to roughly 8.8 MB for
+  `query_param` with every codec present; see `docs/guide/compile.qmd`.
+
+### Fixes
+
 - **`marrow compile <file> [out]` now works, matching the UX originally
   requested for `marrow compile`.** The CLI had shipped with no `compile`
   subcommand — the only working invocation was the bare `marrow query.mojo

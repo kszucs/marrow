@@ -198,11 +198,34 @@ $ marrow compile query.mojo -o query --bundle ./dist
 $ ./dist/query --src data.parquet --min-a 5
 ```
 
-Measured on `query_param`: 4 dylibs (2 linked directly, 2 pulled in
+Measured on `query_param`: 4 runtime dylibs (2 linked directly, 2 pulled in
 transitively), stripped binary plus dylibs together, **5.5 MB total**. The
 closure walks `otool -L` / `ldd` recursively rather than hardcoding a dylib
 list, because the set is not fixed — a `-D MARROW_GPU=true` build pulls in
 an additional GPU runtime library that a CPU-only build does not link.
+
+**The bundle also includes marrow's Parquet compression codecs** — zstd,
+snappy, lz4, zlib and brotli. Those are `dlopen`-ed at runtime rather than
+linked (see `marrow/utils/compression.mojo`), so they are invisible to
+`otool -L`/`ldd` and need their own step: `--bundle` resolves the active
+pixi/conda environment's `lib/` directory (`$CONDA_PREFIX`, or two
+directories up from `mojo` on `PATH` — never a hardcoded pixi path) and
+copies whichever of the five it finds there, plus their own transitive
+dependencies (`libbrotlienc`/`libbrotlidec` each pull in
+`libbrotlicommon`). A codec that is not installed in the environment is
+skipped with a warning rather than failing the bundle. This matters because
+snappy is pyarrow's default Parquet compression — without it, the bundle
+could only read uncompressed files. `compression.mojo` tries an
+executable-relative path before the bare soname it otherwise `dlopen`s, which
+is what makes the staged copy actually get found at runtime; copying alone
+is not enough, since a bare `dlopen("libsnappy.dylib")` never searches
+`@loader_path`.
+
+Measured on `query_param` with every codec present: **8.8 MB total**
+(the codec libraries and their `libc++` dependency add roughly 3.3 MB over
+the runtime-only 5.5 MB above; same-content version aliases, e.g.
+`libzstd.dylib` and `libzstd.1.dylib`, are written once and symlinked rather
+than duplicated).
 
 Static linking is not on the table for this on macOS — there is no
 `libSystem.a` to link against. It may be possible on Linux, where static

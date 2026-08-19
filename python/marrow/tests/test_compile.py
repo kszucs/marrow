@@ -13,12 +13,17 @@ from pathlib import Path
 import pytest
 from marrow.compile import (
     _build_arg_parser,
+    _CODEC_LIB_CANDIDATES,
+    _copy_deduped,
+    _find_codec_lib,
     build_command,
     bundle,
     check_mojo_version,
+    codec_lib_dir,
     dylib_closure,
     main,
     resolve_marrow_path,
+    stage_codec_libs,
 )
 
 
@@ -250,3 +255,141 @@ def test_bundle_copies_closure_and_rewrites_rpath_to_loader_path(tmp_path):
     )
     assert "@loader_path" in result.stdout
     assert ".pixi" not in result.stdout
+
+
+# --- codec library staging ---------------------------------------------------
+#
+# marrow's Parquet compression codecs (zstd, snappy, lz4, zlib, brotli) are
+# `dlopen`-ed, not linked, so `dylib_closure()` above cannot see them — a
+# bundle built from that alone drops every codec, and snappy is pyarrow's
+# default, so real Parquet files failed to read from a bundled binary. These
+# tests cover the pure directory/filename logic (`codec_lib_dir`,
+# `_find_codec_lib`, `_copy_deduped`) with fakes, plus a couple that check
+# the real pixi `dev` environment actually has the libraries `compression.mojo`
+# tries to `dlopen` — no `mojo build` involved either way.
+
+
+def test_codec_lib_dir_prefers_conda_prefix(tmp_path, monkeypatch):
+    (tmp_path / "lib").mkdir()
+    monkeypatch.setenv("CONDA_PREFIX", str(tmp_path))
+    assert codec_lib_dir() == tmp_path / "lib"
+
+
+def test_codec_lib_dir_falls_back_to_mojo_location(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "bin").mkdir()
+    fake_mojo = tmp_path / "bin" / "mojo"
+    fake_mojo.write_text("")
+    monkeypatch.setattr(
+        "marrow.compile.shutil.which",
+        lambda name: str(fake_mojo) if name == "mojo" else None,
+    )
+    assert codec_lib_dir() == tmp_path / "lib"
+
+
+def test_codec_lib_dir_returns_none_when_unresolved(monkeypatch):
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.setattr("marrow.compile.shutil.which", lambda name: None)
+    assert codec_lib_dir() is None
+
+
+def test_find_codec_lib_returns_first_existing_candidate(tmp_path):
+    (tmp_path / "libfoo.so.1").write_bytes(b"stub")
+    found = _find_codec_lib(tmp_path, ["libfoo.dylib", "libfoo.so", "libfoo.so.1"])
+    assert found == tmp_path / "libfoo.so.1"
+
+
+def test_find_codec_lib_returns_none_when_missing(tmp_path):
+    assert _find_codec_lib(tmp_path, ["libfoo.dylib", "libfoo.so"]) is None
+
+
+def test_stage_codec_libs_none_dir_warns_and_returns_empty(capsys):
+    assert stage_codec_libs(None) == []
+    assert "codec library directory" in capsys.readouterr().err
+
+
+def test_stage_codec_libs_skips_missing_codec_with_warning(tmp_path, capsys):
+    # An empty directory: every codec candidate misses.
+    assert stage_codec_libs(tmp_path) == []
+    err = capsys.readouterr().err
+    for codec in _CODEC_LIB_CANDIDATES:
+        assert codec in err
+
+
+def test_stage_codec_libs_finds_a_present_codec_and_skips_the_rest(tmp_path, capsys):
+    (tmp_path / "libzstd.dylib").write_bytes(b"stub")
+    found = stage_codec_libs(tmp_path)
+    assert [p.name for p in found] == ["libzstd.dylib"]
+    err = capsys.readouterr().err
+    assert "zstd library not found" not in err  # zstd was found, not warned about
+    assert "snappy library not found" in err  # every other codec still warned
+
+
+def test_copy_deduped_writes_one_real_file_and_symlinks_aliases(tmp_path):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    real = src_dir / "libfoo.1.2.3.dylib"
+    real.write_bytes(b"payload")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+
+    staged = {"libfoo.dylib": real, "libfoo.1.dylib": real}
+    _copy_deduped(staged, dest)
+
+    names = sorted(p.name for p in dest.iterdir())
+    assert names == ["libfoo.1.dylib", "libfoo.dylib"]
+    real_files = [p for p in dest.iterdir() if not p.is_symlink()]
+    symlinks = [p for p in dest.iterdir() if p.is_symlink()]
+    assert len(real_files) == 1
+    assert len(symlinks) == 1
+    assert real_files[0].read_bytes() == b"payload"
+    assert symlinks[0].resolve().read_bytes() == b"payload"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: otool")
+def test_pixi_dev_env_has_every_codec_compression_mojo_dlopens():
+    """Not a fake: this is the actual environment `pixi run -e dev` builds
+    in. If a codec listed in `_CODEC_LIB_CANDIDATES` (kept in sync with
+    `compression.mojo`) goes missing from the `zstd`/`snappy`/`lz4-c`/
+    `brotli`/`zlib` conda dependencies, this is what would catch it before
+    a `--bundle` run does."""
+    lib_dir = codec_lib_dir()
+    if lib_dir is None:
+        pytest.skip("no active pixi/conda environment")
+    missing = [
+        codec
+        for codec, names in _CODEC_LIB_CANDIDATES.items()
+        if _find_codec_lib(lib_dir, names) is None
+    ]
+    assert missing == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: otool")
+def test_stage_codec_libs_includes_brotli_transitive_dependency():
+    lib_dir = codec_lib_dir()
+    if (
+        lib_dir is None
+        or _find_codec_lib(lib_dir, _CODEC_LIB_CANDIDATES["brotlienc"]) is None
+    ):
+        pytest.skip("brotli not present in this environment")
+    names = {p.name for p in stage_codec_libs(lib_dir)}
+    assert "libbrotlienc.dylib" in names
+    assert "libbrotlicommon.1.dylib" in names  # transitive, not a direct candidate
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: otool")
+def test_bundle_includes_codec_libraries(tmp_path):
+    if not _GATE_BINARY.exists():
+        pytest.skip("gate binary not built")
+    if codec_lib_dir() is None:
+        pytest.skip("no active pixi/conda environment")
+    dest = tmp_path / "bundled"
+
+    bundle(_GATE_BINARY, dest)
+
+    names = {p.name for p in dest.iterdir()}
+    for codec in ("zstd", "snappy", "lz4"):
+        assert any(n in names for n in _CODEC_LIB_CANDIDATES[codec]), (
+            f"{codec} missing from bundle: {names}"
+        )
