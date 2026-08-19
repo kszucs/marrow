@@ -17,7 +17,9 @@ checked on every run.
 
 - **Not a fuzzer.** Randomized query generation, metamorphic oracles and
   shrinking are deliberately deferred; see "Rejected and deferred".
-- **Not a SQL frontend.** marrow has none, and this design does not need one.
+- **Not a SQL frontend.** No runtime SQL support is added. The one-time
+  corpus transpile (see "Seeding from the SQLite corpus") is an offline script
+  whose *output* is committed; it is not a component of the suite.
 - **Not scan or format coverage.** Every case reads an **in-memory** source, so
   what is under test is the engine, not Parquet decode, row-group pruning or
   IPC. Those keep their own suites (`marrow/parquet/tests/`, `marrow/tests/`).
@@ -62,7 +64,7 @@ path-coverage on top; none makes randomized generation the primary mechanism.
 offline for queries is a different thing, and is adopted; see "Seeding from the
 SQLite corpus".)
 
-1. It needs a SQL frontend marrow does not have.
+1. Running it needs a SQL frontend *at test time*, which marrow does not have.
 2. Coverage is thin: a coarse screen of DataFusion's corpus for constructs
    marrow's IR cannot express (`arrow_cast`/`arrow_typeof`/`make_array` 22%,
    struct/list access 13%, `EXPLAIN` 12%, subqueries 10%, regex/temporal 6%,
