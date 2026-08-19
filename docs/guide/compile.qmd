@@ -227,6 +227,30 @@ the runtime-only 5.5 MB above; same-content version aliases, e.g.
 `libzstd.dylib` and `libzstd.1.dylib`, are written once and symlinked rather
 than duplicated).
 
+**Zipping the bundle: use `zip -ry`, not `zip -r`.** A plain `zip -r`
+dereferences symlinks, turning each deduplicated alias back into a full copy
+of the same bytes — the archive would carry the codec libraries' size twice
+over, and the 8.8 MB figure above would not survive the round trip.
+`zip -ry DIR.zip DIR` (the `-y` stores symlinks as symlinks) preserves the
+dedup; unzip on a machine of the same OS/arch to get the directory back
+exactly as built.
+
+**What "self-contained" has and has not been verified to mean.** The bundle's
+own binary has its rpath rewritten to `@loader_path`, and that path has been
+verified end to end: a snappy-compressed Parquet file reads correctly from a
+freshly built bundle run with no `DYLD_LIBRARY_PATH` or `CONDA_PREFIX` set,
+from a different working directory, via both a relative (`./query`) and an
+absolute-path invocation. What is **not** rewritten is the codec libraries'
+*own* `@rpath` entries — `bundle()` only rewrites the main binary's rpath, the
+same as it already did for the linked runtime-dylib closure before this
+change. In practice that means a codec with its own dependency (`libbrotlienc`
+depends on `libbrotlicommon`, for instance) resolves that dependency via the
+codec library's rpath as recorded on the *build* machine, which is not
+verified to carry over to a different machine. This mirrors the existing,
+unfixed behavior for the runtime-dylib closure, so it is not a new gap — full
+cross-machine portability of every codec remains an open question, not a
+claim this page makes.
+
 Static linking is not on the table for this on macOS — there is no
 `libSystem.a` to link against. It may be possible on Linux, where static
 linking is at least conceivable; that is untested here (no Linux development

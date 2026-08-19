@@ -448,8 +448,6 @@
   Bundle size grew from 5.5 MB (no codecs) to roughly 8.8 MB for
   `query_param` with every codec present; see `docs/guide/compile.qmd`.
 
-### Fixes
-
 - **`marrow compile <file> [out]` now works, matching the UX originally
   requested for `marrow compile`.** The CLI had shipped with no `compile`
   subcommand — the only working invocation was the bare `marrow query.mojo
