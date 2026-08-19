@@ -308,7 +308,7 @@ golden/
   test_<area>.expected
 ```
 
-Three mechanics make a top-level directory work with the existing harness:
+Four things govern how a top-level directory works with the harness:
 
 - **`testpaths = marrow python` in `pytest.ini` gains `golden`.** One line.
 - **Files must be named `test_*`.** `pytest_collect_file` (`conftest.py:804`)
