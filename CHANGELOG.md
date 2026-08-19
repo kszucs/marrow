@@ -10,6 +10,19 @@
 
 ### Features
 
+- **The wheel ships marrow's own Mojo source, so `marrow compile` works for a
+  pip-installed user.** `python/build.py`'s hatchling hook now walks
+  `marrow/**/*.mojo` and force-includes each file at `marrow/_mojo/marrow/...`
+  in the wheel — the layout `resolve_marrow_path`'s third resolution step
+  (the bundled-copy fallback) already looked for. Files under any `tests/`
+  directory and `bench_*.mojo`/`profile_*.mojo` files are excluded — 1.68 MB
+  of source (58 files) versus 5.6 MB for a precompiled `.mojoc`, and, unlike a
+  `.mojoc`, tolerant of a compiler version that has drifted from marrow's
+  exact pin (a `.mojoc` hard-errors on any skew). One wheel, not two: an
+  extra adds a dependency, not files, so gating this behind `compile` would
+  need a second `marrow-mojo` distribution — not justified by 1.68 MB on an
+  already multi-MB wheel.
+
 - **`marrow compile` — a CLI that compiles a `.mojo` query file (one ending
   in `plan.execute_cli()`) into a standalone binary.** `python/marrow/compile.py`,
   registered as the `marrow` console script (`python/pyproject.toml`'s
@@ -17,7 +30,7 @@
   Reuses `benchmarks/binary_size/compare.py:build_and_strip`'s recipe
   (`mojo build -O3 -g0 -I <marrow> <src> -o <out>`, then `strip`).
   `resolve_marrow_path` finds the `marrow/` package via `--marrow-path` ->
-  `$MARROW_MOJO_PATH` -> the (future) bundled `marrow/_mojo/` -> repo-root
+  `$MARROW_MOJO_PATH` -> the bundled `marrow/_mojo/` -> repo-root
   autodetection, raising `FileNotFoundError` listing all four when none
   resolve. `check_mojo_version` fails fast with an actionable message when
   `mojo` is missing or out of range, naming marrow's pinned nightly and that
@@ -436,6 +449,18 @@
   shipped, so two live ops had no parity assertion at all.
 
 ### Fixes
+
+- **`pixi run -e wheel wheel` failed on every invocation with `ValueError:
+  Readme path must be within the project directory: ../README.md`,
+  independent of and pre-existing this branch's changes** (confirmed by
+  reproducing the failure with the wheel-payload change stashed out). A
+  conda-forge `hatchling` bump (1.29.0 -> 1.32.0, see `pixi.lock`) added
+  strict validation that `project.readme` resolve inside the build root —
+  `python/pyproject.toml` pointed at `../README.md`, one level above
+  `python/`, which every prior hatchling version accepted. Fixed with
+  `python/README.md` as a symlink to `../README.md` (single source of truth
+  kept at the repo root) and `readme = "README.md"` in
+  `python/pyproject.toml`.
 
 - **Hash join sized its probe from the build side, so the plan layer's 8192-row
   morsels each paid a full radix partitioning.** `HashJoin.probe` picked serial
