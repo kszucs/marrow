@@ -438,11 +438,56 @@ concedes the restriction.
 
 This path is almost entirely sequential and is the whole critical path.
 
-### M1.1 — Optimizer v1 — **L**
+### M1.1 — Optimizer v1 — **partly landed 2026-08-18, remainder M**
 
-No `optimize.mojo` exists. Two ad-hoc rewrites live in the *builder* instead:
-predicate → `ParquetScan` (`relations.mojo:437-443`, non-recursive, fires only
-when `Filter` sits directly on the scan) and `Limit` → `Sort` top-K (`:723-735`).
+**Projection pushdown shipped** (`docs/alpha-findings/p1-pushdown.md`) and was
+the single largest performance change of the alpha: **17.7x -> 5.0x** vs polars,
+3.6x overall, with `COUNT(*)` 271 -> 9.9 ms. `DynRelation.optimize()` walks from
+the root carrying the columns each parent reads and rewrites `ParquetScan`'s
+schema — which *is* its projection. `execute()` calls it, so both the Mojo verbs
+and the Python `LazyTable` get it.
+
+Two design points from that work, worth not re-deriving:
+
+- **Traversal is `children()` + `with_projection()`, not `inputs()`.** Erasure
+  means a generic optimiser cannot rebuild a node whose type it does not know, so
+  `inputs()` alone would need `with_inputs()` *and* a per-child
+  `required_columns()` — three virtuals, of which the third *is* the rewrite.
+  `with_projection` collapses them into one and reuses `with_predicate`'s
+  existing erased-pointer protocol rather than adding a third incompatible
+  rewrite mechanism. A trampoline *field* mentioning `DynRelation` is what Mojo
+  rejects as recursive; a field returning `List[DynRelation]` compiles, so
+  read-only traversal costs one trampoline.
+- **Two guards carry the correctness**: `optimize()` seeds the required set with
+  the *root's own schema*, so a passthrough node can only narrow to a subset its
+  parent asked for and the plan's output schema is invariant; and a scan never
+  narrows to nothing, because `COUNT(*)` references no column and a zero-column
+  read yields zero-row batches the scan's loop reads as EOF.
+
+`Join` is deliberately excluded: its key indices are *positions* into its
+children's schemas, so narrowing a child would silently join on the wrong column.
+
+**Still open on this card:**
+
+- **projection pushdown through `Join`** — needs the key indices rewritten
+  alongside the narrowed schema, which is why it was skipped;
+- **recursive predicate pushdown.** Measured as worth nothing today (every
+  ClickBench query is already `read_parquet(...).filter(...)`) and two of the
+  three directions are unsafe: through `Limit` it changes what the limit counts
+  from, and through `Project` a rename can prune on another column's statistics —
+  a wrong answer, not an error. Only `Sort` and nested `Filter` are safe;
+- **conjunct splitting**, still the precondition for partial pushdown;
+- **limit pushdown** into the scan, and **constant folding**;
+- **a recursive `write_to`** — no node renders its children, so `explain()`
+  prints one shallow label rather than a tree. `children()` is now the primitive
+  that makes a real EXPLAIN possible; writing the renderer was out of P1's scope.
+
+---
+
+Original card, for the parts not yet done. No `optimize.mojo` existed; two ad-hoc
+rewrites lived in the *builder* instead: predicate → `ParquetScan`
+(`relations.mojo:437-443`, non-recursive, fires only when `Filter` sits directly
+on the scan) and `Limit` → `Sort` top-K (`:723-735`).
 
 Deliver a `DynRelation → DynRelation` rewrite pass with:
 
@@ -450,10 +495,9 @@ Deliver a `DynRelation → DynRelation` rewrite pass with:
   (`relations.mojo:866`), not a `List[BoxedValue]`; splitting `AND` is the
   precondition for partial pushdown;
 - **predicate pushdown** through `Project`/`Sort`/`Limit`, recursively;
-- **projection pushdown** — a `ParquetScan`'s schema *is* its projection, so this
-  is a schema rewrite. `referenced_columns()` is implemented on both lanes and
-  the box (`values.mojo:348`, `dynamic.mojo:532`, `relations.mojo:273`) and is
-  **currently called only by tests** — this is its consumer;
+- ~~**projection pushdown**~~ — **done**, see above. `referenced_columns()` was
+  implemented on both lanes and the box and called only by tests; it now has its
+  consumer;
 - **limit pushdown** into the scan;
 - constant folding.
 
