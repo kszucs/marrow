@@ -361,6 +361,57 @@ spending anything more on it.
 
 ---
 
+### Nested-array equality hangs the compiler — **open, blocks all 165 cases of `test_arrays.mojo`**
+
+Same family as the `dispatch` hang above, different trigger, and it is why
+`marrow/tests/test_arrays.mojo` has never run. Six attempts each sat at **0% CPU**
+until the harness deadline and reported `165 failed in 1800.0s` with empty
+messages, which reads as harness capacity. It is not.
+
+Measured 2026-08-18. The process accumulates ~9 s of CPU and then **stops**:
+`time` frozen at `0:08.99` across 30+ s of wall clock, 0% CPU, no children. A
+slow compile burns CPU; this deadlocks. Two orphaned `mojo` processes with the
+same signature were found on the box at 6 h and 20 h old.
+
+Bisection — ranges as their own compilation units:
+
+| tests | result |
+|---|---|
+| 1-40 / 41-80 / 81-90 | pass, 3-26 s |
+| **91-120** | never compile |
+
+Individually: `test_string_array_eq_sliced` (flat) **passes in 3.2 s**;
+`test_list_array_eq` and `test_struct_array_eq` each **fail to build alone**.
+
+**Cause — equality recurses through the erased box.** `DynArray.__eq__`
+(`arrays.mojo:2540`) is `self._v == other._v`, and `Variant.__eq__` resolves the
+active member on *both* sides, so it elaborates the ladder squared. Worse:
+`ListLikeArray.__eq__` (`:1260`) compares elements with `unsafe_get`, which
+**returns a `DynArray`** (`:1174`), and `StructArray.__eq__` (`:1939`) compares
+`DynArray` children — so nested equality re-enters the ladder, which contains the
+nested type, and recurses. This is the shape §0 already warns about for
+mutually-recursive nested-type methods.
+
+**Tried and reverted:** narrowing `self` once and reading `other` at that type
+(O(n) arms, not O(n²), and exactly as strict since `isa[T]()` answers a type
+mismatch before touching data). It compiles and is semantically identical but
+**fixes nothing** — the recursion is through `ListLikeArray.__eq__`, not the
+squared ladder. Not left in: an unmeasured change to a hot, size-gated file that
+buys nothing.
+
+**The fix worth trying:** compare nested arrays through their flat `ArrayData`
+(dtype, length, null count, bitmap, buffers, children) instead of recursing into
+typed element equality — equality of two `ListArray`s is equality of their
+offsets plus their children as buffers. A design change to a size-gated file, so
+it wants its own measurement.
+
+**Landed meanwhile:** `test_temporal_array_dtype_mismatch` held the one *direct*
+`DynArray == DynArray`; rewritten to compare dtypes, it now builds in 3.2 s and
+passes. The ~10 nested-equality cases in the 91-120 band remain unbuildable.
+Full write-up: `docs/alpha-findings/h2-nested-equality-wedge.md`.
+
+---
+
 ## 3. Wave 3 — M1, the ClickBench milestone
 
 **M1 = 42 of the 43 ClickBench queries** (Q29 `REGEXP_REPLACE` deferred to M2)
@@ -488,7 +539,7 @@ capabilities those two milestones require.
 | **M2.3** | **Real window functions.** Today: `row_number` only, **AOT lane only** (violating invariant 2), `WindowSpec` carries frame bounds but no PARTITION BY and no ORDER BY, `FrameBound.kind` is an untyped `UInt8` never read, `RowNumberKernel` ignores its `values` argument, and nothing outside `values.mojo` references any of it. Sequence: move to `marrow/kernels/window.mojo` → give `WindowSpec` `how`/`partition_by`/`order_by` → partition (reuse `groupby` hashing) + sort within partition (reuse `sort`) + scatter back → ranking family → navigation family (`Lag`/`Lead`/`NthValue`) → `RunningAgg[K: AggKernel]` → `.over()` on both lanes → wire through `relations.mojo`. `docs/window-functions.md` is the forward spec; this card owns the sequencing. | 2-node toy, `values.mojo:1975-2039` | L |
 | **M2.4** | **Statistical aggregates** — `variance`, `stddev`, `quantile`, `approximate_median`, `mode`, `first`, `last`. `resolve_agg` is a closed list of exactly 8 (`expr/aggregates.mojo:194-221`). TODOs already acknowledge the variance gap at `aggregate.mojo:563,574,589`. | not started | M |
 | **M2.5** | **Spill.** Zero occurrences of `spill` in the tree; no memory-budget tracking and no disk I/O anywhere. Required by H2O at 50 GB. Grace hash join, a spilling grouper, and a memory budget on `ExecContext` to trigger either. Note both blocking operators buffer unboundedly today: `AggregateProcessor` (`execution.mojo:699`) keeps every morsel's group ids and evaluated value columns, and `JoinProcessor` collects the whole left side. | not started | L |
-| **M2.6** | **String manipulation and regex — the single largest kernel hole.** There is no regex engine in the repo. Missing: `match_substring_regex`, `replace_substring(_regex)`, `extract_regex`, `split_pattern(_regex)`, `count_substring`, `find_substring`, `utf8_slice_codeunits`/substring, `lpad`/`rpad`, `binary_join`, the whole `utf8_is_*` classification family, trim-with-charset. Also: string kernels dispatch on `is_string_like()` only, so `binary`/`large_binary` are excluded from string comparison. | not started | L |
+| **M2.6** | **String manipulation and regex — the single largest kernel hole.** There is no regex engine in the repo. Missing: `match_substring_regex`, `replace_substring(_regex)`, `extract_regex`, `split_pattern(_regex)`, `count_substring`, `find_substring`, `utf8_slice_codeunits`/substring, `lpad`/`rpad`, `binary_join`, the whole `utf8_is_*` classification family, trim-with-charset. Also: string kernels dispatch on `is_string_like()` only, so `binary`/`large_binary` are excluded from string comparison. **Engine chosen 2026-08-18 (`docs/alpha-findings/g2-regex-evaluation.md`): `dlopen` PCRE2, on the pattern `parquet/codecs.mojo` already uses for zstd/snappy/lz4/brotli.** `mojo-regex` was evaluated and **rejected on correctness**, not on version drift — it builds fine against our pinned Mojo, but an optional group is never entered, so `(?:www\.)?` is skipped and ClickBench Q29 returns `www.example.com` where pyarrow and CPython return `example.com`; 10 of 25 `sub()` cases disagree with CPython (minimal repro `sub("(?:foo)?bar", "B", "foobar") -> "fooB"`). It is also on no conda channel (vendoring 15,433 lines) and costs +493,792 bytes of `__text`, +10.1% on `query_dynvalue` against a 0.5% gate. PCRE2 measured correct on every case, **10.6x faster** (5,850,314 vs 551,315 rows/s), **zero `__text`** since the engine lives in the shared library, and resolves from conda-forge for osx-arm64 and linux-64. Estimated 2-3 days: `utils/regex.mojo` FFI shim, `kernels/regex.mojo` typed-first kernels, runtime-lane-only wiring so the fused gates keep contributing zero symbols. Q29 is the forcing function, not the benefit — marrow has no regex kernel at all and PyArrow ships seven. | engine chosen, not started | L |
 | **M2.7** | **Temporal completeness** — `strftime`/`strptime` (and **string↔timestamp cast raises**, `cast.mojo:1028`), timezone-aware extraction (everything decomposes as UTC and a non-UTC `tz` is silently ignored, `temporal.mojo:36-39`), `week`/`iso_week`/`iso_year`, `millisecond`/`microsecond`/`nanosecond`, `is_leap_year`, `ceil_temporal`/`round_temporal`, and the `*_between` family. Temporal **arithmetic** belongs here too — date ± interval, `date_diff`, `now` — which H2O and TPC-H date logic both need and which nothing implements. | not started | M |
 | **M2.8** | **Multi-file / dataset scan.** `ParquetScan.path` is a single `String`. No glob, no dataset, no partition discovery, no fan-out. Also: **bloom filters are fully implemented in the reader and never consulted by the scan** (zero `bloom` hits in `marrow/expr/`) — cheapest remaining pruning tier, do it with this. Two known-safe-but-lossy behaviours ride along: predicate pruning switches *off* entirely for nested files rather than risk misaligning statistics with the projection, and Hive-style `col=val` directory discovery does not exist. | not started | M |
 | **M2.9** | **Join on computed keys.** Every join key must be a bare column reference; a computed expression raises at `relations.mojo:597` and `:606`. H2O and TPC-H both need it. | raises today | M |
@@ -563,6 +614,29 @@ correctness group S2 → S3 → S4. Then the free subtraction batch —
 everything except S2–S4 and S17 — which is independent and can land in any
 order. S17 last. Rows are deleted as they land, so the batch develops holes; do
 not read the remaining numbering as a range.
+
+### Alpha wave leftovers — open, 2026-08-18
+
+Found while building the Python lazy frontend and the optimisation wave. Each is
+diagnosed with a named cause; none is speculative. Sources are the per-agent logs
+in `docs/alpha-findings/` (start with its `README.md`).
+
+| ID | Item | Evidence | Size |
+|---|---|---|---|
+| **A-1** | **`project` drops `nullable` and field metadata.** It rebuilds a bare `Field`, so `select("x")` and `project(["x"], [col("x")])` produce *different schemas* for the same column — reproduced from Python (`nullable` False -> True). The immediate bug is closed (`select(List[String])` overload), the root cause is not. Fix: `project` copies the source field when `bound_column >= 0` — `BoxedValue.bound_column(schema)` already exists and `aggregate` already uses it for exactly this test. Collapses three of the four projecting verbs to name arithmetic. | `a2-relations.md`, `d1-binding-delta.md` | S |
+| **A-2** | **`DynAgg` duplicates `AggExpr` field-for-field.** Three agents flagged it independently. `AggExpr.__init__(var agg: DynAgg)` is a copy constructor that *also* re-applies "empty alias ⇒ use the function name" — a rule `DynAgg` does not apply itself, so the binding layer had to write it a **third** time. Delete `DynAgg`; have `DynValue.sum()` return `AggExpr` (the `values <-> dynamic` cycle is already acknowledged). | `a1`, `b1` §2.1, `b2` §5 | M |
+| **A-3** | **The second `aggregate` overload does not earn its complexity.** Best-evidenced item here: it was not argued, it was **tested** — both callers rewritten onto the first overload, 25 passing including the fused/dynamic parity test, then reverted. It is a third convergence point for a split already resolved twice below it, and contradicts overload 1's own docstring. | `a2-relations.md` §1 | S |
+| **A-4** | **`COUNT(*)` has no representation and materialises a column.** `count_star()` is `lit(1).count().alias("count_star")`, so `function()` returns `"count"` and the marker is a default alias the first `.alias()` erases — a plan cannot be inspected for it, so reading the row count from the Parquet footer is unavailable. Measured 5.4% of q1: it allocates an N-element array of `1` to count rows the grouper already counted. Root cause is A-2's shape — `DynAgg.input` is mandatory, so a nullary aggregate must lie about having one. | `a1`, `d1`, `alpha-perf-baseline.md` | S |
+| **A-5** | **`JoinProcessor` streams 8192-row morsels; probe cost flattens at ~256k.** Per-row probe falls **23.7 -> 3.3 ns/row** from 8192 to 262144 rows/call. Raising the morsel would cut per-row cost ~7x and erase the probe-only shortfall that remains after the radix fix. Plan-layer change, deliberately not made by the kernel agent. | `o5-join-threshold.md` | S |
+| **A-6** | **The runtime lane splats a constant string literal to n rows.** `DynValue._literal` builds an n-row copy of e.g. `"%google%"` per morsel (4.2% + 2.9% self). `dynamic.mojo::_string_binary` should detect a literal right operand and call `apply_scalar`, which every `StringPredicateKernel` already has and `values.mojo` already does. Helps `startswith`/`endswith`/`contains` and string comparison too. | `o3-string-alloc.md` §6 | S |
+| **A-7** | **`Column.cast` does not expose `safe=`.** The Mojo `cast` has it and the array-level `compute.cast(arr, target, safe=)` exposes it; the expression-level one does not, so a user who knows their data is UTF-8 cannot skip validation. Blocked on ownership during the wave, not on difficulty. | `o2-cast-utf8.md` | XS |
+| **A-8** | **`BitmapView.load_bits` over-reads 3-7 bytes past a bitmap.** Benign for heap integrity today (out-of-range bytes are written back unchanged) and now assertion-bounded, but optimistic for FOREIGN buffers, which the producer allocated and which the spec does not require to be padded. Tapering costs a per-lane branch; recommendation is to copy imported bitmaps that land exactly on a 64-byte boundary. | `g1-buffer-invariants.md` | S |
+| **A-9** | **`test_groupby.mojo` cannot run whole.** All 41 cases together exceed the 1800s deadline; every subset passes (8 new binary-key cases in 58 s, 16 pre-existing in 192 s, one alone in 33-54 s). Distinct from the nested-equality hang in §2 — that one deadlocks at 0% CPU, this one is genuinely slow. Compile time scales with case count here, contradicting the documented "N files cost about what 1 file costs". | measured 2026-08-18 | M |
+| **A-10** | **The binary-size baseline is stale in both directions.** `check_gate.py` compares to `baseline.json`, not to the branch under test, and four of five recorded values sit above the current tree — so gates read as "shrinking" while the branch-to-branch measurement showed every gate **grew** ~16 KB (~15.3 KB of it C1's builder fix, i.e. the price of fixing a process-killing abort). A gate that passes is not the same as no regression. Re-record deliberately, as a decision, not as a side effect — an agent attempted the latter and it was reverted. | `g3-regression-check.md` | S |
+| **A-11** | **A3's temporal branch is held out of the alpha.** `worktree-agent-af8dec5bed6238e2e` adds working `uint16 -> date32` and ISO-8601 string<->temporal casts, but pushes `query_dynvalue` +113,472 bytes (+2.33%) against a 0.5% budget. Not on any ClickBench query's path. The residual is structural — `cast()` is one ladder reachable from `_promote_operands`, so any new cast kernel taxes every binary that promotes operands. Merge once that ladder is split (its own §1 finding). | `a3-temporal.md` | M |
+
+**Not ours:** `mojo-regex`'s optional-group defect is upstream and appears
+unreported. Filing it would be a courtesy; nothing has been sent.
 
 ### 5.1 Deliberately not scheduled
 
