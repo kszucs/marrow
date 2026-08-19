@@ -29,6 +29,23 @@
   `-o result.arrow` contract has to work out of the box; `--no-writers` opts
   back out for the ~572 KB smaller binary, with `-o` disabled in that build.
 
+- **`marrow compile --bundle DIR` — turn a compiled query binary into a
+  self-contained, relocatable directory.** `dylib_closure(binary)` walks
+  `otool -L` (macOS) / `ldd` (Linux) **transitively** — not a hardcoded
+  list — since a marrow query binary links `libKGENCompilerRTShared.dylib`
+  and `libAsyncRTMojoBindings.dylib` directly but depends on
+  `libAsyncRTRuntimeGlobals.dylib` and `libMSupportGlobals.dylib`
+  transitively (a `-D MARROW_GPU=true` build would likely add
+  `libMGPRT.dylib` as a fifth); `/usr/lib`, `/System` and `/lib*` are
+  excluded as always-present on the target machine. `bundle(binary, dest)`
+  copies the binary and its closure into `dest` and rewrites the rpath to
+  `@loader_path` (macOS, `install_name_tool`) / `$ORIGIN` (Linux,
+  `patchelf`), so the directory runs without the build machine's pixi
+  environment on `LC_RPATH` — static linking is not possible on macOS
+  (`ld: library 'System' not found`; Apple ships no `libSystem.a`), so a
+  relocatable directory is the achievable self-contained artifact. The
+  Linux path is implemented but untested (no Linux dev machine available).
+
 - **`DynRelation.execute_cli()` — argv binding, `--help`, `--describe`, and
   the output contract for a compiled query binary.** The last call in a
   `main()` that built a plan with `param(...)` cells: drains the parameter
