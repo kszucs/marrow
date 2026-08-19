@@ -92,12 +92,15 @@ one `.sql` holding many queries beside one `.reference` holding their outputs;
 this follows it. An area holds as many cases as it needs.
 
 ```
-python/marrow/tests/golden/
-  aggregate.py         # N cases: marrow query in the body, SQL twin in the docstring
-  aggregate.expected   # N expectations, typed text, keyed by case name
-marrow/expr/tests/golden/
-  test_golden_aggregate.mojo   # the AOT twins for those same N cases
+golden/
+  test_aggregate.py         # runtime lane: query in the body, SQL twin in the docstring
+  test_aggregate.mojo       # AOT lane: the same cases, same names
+  test_aggregate.expected   # one expectation, read by both lanes
 ```
+
+All three share the stem `test_aggregate`, so they sort adjacently in one
+top-level **`golden/`** directory — the lanes are two renderings of one corpus, not two
+corpora.
 
 The SQL twin lives in the docstring, so the Python file is one artifact rather
 than two — the pattern `python/marrow/tests/clickbench.py` already uses for its
@@ -110,7 +113,7 @@ def sum_by_key(t):
     return t.aggregate(by=["k"], total=("sum", "v")).order_by("k")
 ```
 
-`aggregate.expected` is committed **as text** so expectation changes are
+`test_aggregate.expected` is committed **as text** so expectation changes are
 reviewable in a diff — that review is the guard this design depends on, and a
 binary blob would destroy it:
 
@@ -258,15 +261,31 @@ lane only.
 ## Directory structure
 
 ```
-python/marrow/tests/golden/
+golden/
+  __init__.mojo          # golden/ is a Mojo package, so its modules are importable
   conftest.py            # case discovery, comparison, --regenerate
   fixtures/*.arrow       # a handful of shared datasets, incl. sliced + chunked
-  <area>.py              # aggregate, filter, join, sort, project, limit, cast,
-  <area>.expected        # string, temporal, null_semantics
-marrow/expr/tests/golden/
-  __init__.mojo
-  test_golden_<area>.mojo   # AOT twins, all in one compilation unit
+  test_<area>.py         # areas: aggregate, filter, project, sort, limit, join,
+  test_<area>.mojo       #        cast, string, temporal, null_semantics
+  test_<area>.expected
 ```
+
+Four mechanics make a top-level directory work with the existing harness:
+
+- **`testpaths = marrow python` in `pytest.ini` gains `golden`.** One line.
+- **Files must be named `test_*`.** `pytest_collect_file` (`conftest.py:804`)
+  collects any `test_*.mojo` under rootdir — it is not restricted to `marrow/` —
+  and `python_files = test_*.py bench_*.py` governs the Python side.
+- **`golden/` needs `__init__.mojo`.** `module_path` (`conftest.py:251`) turns
+  `golden/test_aggregate.mojo` into `golden.test_aggregate`, and the generated
+  driver imports that.
+- **The Mojo cases use *absolute* `from marrow.x import ...`**, the opposite of
+  the in-package rule, because they sit outside the package —
+  `benchmarks/profiles/profile_join.mojo` already does exactly this.
+
+One trade-off this buys: `mojo precompile marrow` compiles `marrow/` only, so
+the golden Mojo cases fall outside the warning-clean gate. They are still
+compiled by every `pytest` run that selects them.
 
 ## Risks
 
@@ -275,7 +294,7 @@ marrow/expr/tests/golden/
   Python one, but it is hand-written. If the corpus ever becomes generated
   rather than hand-written, revisit: at that scale a spec IR plus one renderer
   per lane beats two hand-written artifacts.
-- **API churn breaks the `<area>.py` / `test_golden_<area>.mojo` files.**
+- **API churn breaks the `test_<area>.py` / `test_<area>.mojo` files.**
   Acceptable for a hand-written corpus of hundreds of cases across ~30 files; a
   mechanical sweep. Not acceptable at thousands, which is the same trigger as
   above.
