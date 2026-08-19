@@ -30,7 +30,7 @@ from std.python.bindings import PythonModuleBuilder
 
 from marrow.execution import ExecContext
 from marrow.expr.builders import col
-from marrow.expr.dynamic import DynAgg, DynValue
+from marrow.expr.dynamic import DynValue
 from marrow.expr.relations import (
     DynRelation,
     in_memory_table as _in_memory_table,
@@ -77,8 +77,8 @@ def _agg(obj: PythonObject) raises -> AggExpr:
     ):
         var func = String(py=obj[0])
         var input = DynValue.column(String(py=obj[1]))
-        return AggExpr(DynAgg(func^, input^, String(py=obj[2])))
-    return AggExpr(_unwrap_agg(obj))
+        return AggExpr(func^, input^).alias(String(py=obj[2]))
+    return _unwrap_agg(obj)
 
 
 def _agg_list(obj: PythonObject) raises -> List[AggExpr]:

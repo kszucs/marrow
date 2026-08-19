@@ -1,11 +1,14 @@
 """Python bindings for the runtime expression lane.
 
 Exposes `marrow.expr.dynamic.DynValue` as the Python type ``Expr`` and
-``DynAgg`` as ``Agg``. Only the *runtime* lane is bindable: the AOT lane's
-nodes are parameterised on comptime dtypes, so there is no single Mojo type a
-Python object could hold.
+`marrow.expr.values.AggExpr` as ``Agg``. Only the *runtime* lane is bindable:
+the AOT lane's nodes are parameterised on comptime dtypes, so there is no
+single Mojo type a Python object could hold. `AggExpr` is the exception, and
+deliberately so — it is the one aggregate type *both* lanes produce, carrying
+either a function name to resolve or an already-named `Aggregation`. Python
+only ever builds the former.
 
-**`DynValue` and `DynAgg` cannot be registered directly.** `add_type[T]`
+**`DynValue` and `AggExpr` cannot be registered directly.** `add_type[T]`
 installs a default `tp_repr` that calls `repr(value)`, which is
 `Writable.write_repr_to` — and *that* has a reflection-based default requiring
 every field to be `Writable`. `DynValue._eval_fn` is a function pointer:
@@ -13,15 +16,15 @@ every field to be `Writable`. `DynValue._eval_fn` is a function pointer:
     format/__init__.mojo:287: constraint failed: Could not derive Writable for
     DynValue - member field `_eval_fn` does not implement Writable
 
-`DynAgg` fails the same way through its `input` field. So this module owns two
-one-field boxes, `Expr` and `Agg`, which override `write_repr_to` and thereby
-skip the reflection. They are the Python types; `unwrap` / `unwrap_agg` /
-`wrap_expr` / `wrap_agg` are the seam any other binding module (the plan
-bindings) goes through to reach the `DynValue` inside.
+`AggExpr` fails the same way through `_of`, its optional resolver. So this
+module owns two one-field boxes, `Expr` and `Agg`, which override
+`write_repr_to` and thereby skip the reflection. They are the Python types;
+`unwrap` / `unwrap_agg` / `wrap_expr` / `wrap_agg` are the seam any other
+binding module (the plan bindings) goes through to reach the value inside.
 
-The alternative is a two-line `write_repr_to` on `DynValue`/`DynAgg` in
-`marrow/expr/dynamic.mojo`, which would delete both boxes. Worth doing once
-that file is free to edit.
+The alternative is a two-line `write_repr_to` on `DynValue` and `AggExpr` in
+`marrow/expr/`, which would delete both boxes. Worth doing once those files are
+free to edit.
 
 **Named methods, not operators.** ``Expr`` exposes ``add`` / ``lt`` / ``and_``
 rather than ``__add__`` / ``__lt__`` / ``__and__``, mirroring the stdlib
@@ -43,7 +46,8 @@ from std.python.bindings import PythonModuleBuilder
 
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType
-from marrow.expr import DynAgg, DynValue
+from marrow.expr import DynValue
+from marrow.expr.values import AggExpr
 from marrow.expr.builders import count_star as _count_star
 from marrow.tabular import RecordBatch
 
@@ -74,13 +78,13 @@ struct Expr(Copyable, Movable, Writable):
 
 
 struct Agg(Copyable, Movable, Writable):
-    """The Python type ``Agg`` — a `DynAgg` under an explicit
+    """The Python type ``Agg`` — an `AggExpr` under an explicit
     `write_repr_to`."""
 
-    var value: DynAgg
+    var value: AggExpr
 
     @implicit
-    def __init__(out self, var value: DynAgg):
+    def __init__(out self, var value: AggExpr):
         self.value = value^
 
     def write_to[W: Writer](self, mut writer: W):
@@ -100,8 +104,8 @@ def unwrap(py: PythonObject) raises -> DynValue:
     return py.downcast_value_ptr[Expr]()[].value.copy()
 
 
-def unwrap_agg(py: PythonObject) raises -> DynAgg:
-    """The `DynAgg` inside a Python ``Agg``."""
+def unwrap_agg(py: PythonObject) raises -> AggExpr:
+    """The `AggExpr` inside a Python ``Agg``."""
     return py.downcast_value_ptr[Agg]()[].value.copy()
 
 
@@ -111,7 +115,7 @@ def wrap_expr(var value: DynValue) raises -> PythonObject:
     return PythonObject(alloc=box^)
 
 
-def wrap_agg(var value: DynAgg) raises -> PythonObject:
+def wrap_agg(var value: AggExpr) raises -> PythonObject:
     """A Python ``Agg`` holding `value`."""
     var box = Agg(value^)
     return PythonObject(alloc=box^)
@@ -154,7 +158,7 @@ def _binary[
 
 
 def _reduce[
-    m: def(DynValue) raises thin -> DynAgg,
+    m: def(DynValue) raises thin -> AggExpr,
 ]() -> def(PythonObject) raises thin -> PythonObject:
     """Wrap ``Expr -> Agg``."""
 
@@ -170,9 +174,11 @@ def _reduce[
 # ---------------------------------------------------------------------------
 
 
-def _expr_cast(py_self: PythonObject, to: PythonObject) raises -> PythonObject:
+def _expr_cast(
+    py_self: PythonObject, to: PythonObject, safe: PythonObject
+) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Expr]()
-    return wrap_expr(ptr[].value.cast(DynType(py=to)))
+    return wrap_expr(ptr[].value.cast(DynType(py=to), Bool(py=safe)))
 
 
 def _expr_isin(
@@ -316,21 +322,30 @@ def _agg_alias(
 def _agg_function(py_self: PythonObject) raises -> PythonObject:
     """The aggregate function's name — ``"sum"``, ``"mean"``, …"""
     var ptr = py_self.downcast_value_ptr[Agg]()
-    return PythonObject(ptr[].value.func.copy())
+    return PythonObject(ptr[].value.function())
 
 
 def _agg_name(py_self: PythonObject) raises -> PythonObject:
-    """The output column name: the alias if one was set, else the function."""
+    """The output column name: the alias if one was set, else the function.
+
+    A plain read — `AggExpr` applies the "no alias ⇒ the function's name"
+    default where the name is first known. This used to re-apply it, the third
+    copy of a rule two structs disagreed about owning."""
     var ptr = py_self.downcast_value_ptr[Agg]()
-    if ptr[].value.out_name:
-        return PythonObject(ptr[].value.out_name.copy())
-    return PythonObject(ptr[].value.func.copy())
+    return PythonObject(ptr[].value.out_name.copy())
 
 
 def _agg_input(py_self: PythonObject) raises -> PythonObject:
-    """The expression being aggregated."""
+    """The expression being aggregated.
+
+    Only a runtime-lane aggregate has one as a `DynValue`; a fused aggregate's
+    input is comptime-typed. Python can only build the former, so `None` here
+    means a Mojo-built plan leaked through."""
     var ptr = py_self.downcast_value_ptr[Agg]()
-    return wrap_expr(ptr[].value.input.copy())
+    var input = ptr[].value.dyn_input()
+    if input:
+        return wrap_expr(input.take())
+    raise Error("Agg.input: a fused aggregate has no expression form")
 
 
 def _agg_str(py_self: PythonObject) raises -> PythonObject:

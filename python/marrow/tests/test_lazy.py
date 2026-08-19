@@ -95,12 +95,16 @@ def test_select_unknown_column_raises(lazy):
 
 @needs_expressions
 def test_select_preserves_the_source_field(tmp_path):
-    """`select` copies the input `Field`; `project` rebuilds one.
+    """A pass-through column keeps its whole `Field`, by whichever verb.
 
-    The plan routes `select` through `DynRelation.select(List[String])` for
-    exactly this reason — going through `project` widened a non-nullable column
-    to nullable. Parquet is the reachable source of a non-nullable field from
-    Python: `pa.field(..., nullable=False)` survives the round trip.
+    `select` always copied the input `Field`; `project` used to rebuild a bare
+    one from the probed dtype alone, so the same column came out with a
+    different schema depending on which verb asked for it — a non-nullable
+    input widened to nullable. `project` now copies the source `Field` when the
+    expression is a bare column reference, so the two agree.
+
+    Parquet is the reachable source of a non-nullable field from Python:
+    `pa.field(..., nullable=False)` survives the round trip.
     """
     path = tmp_path / "nn.parquet"
     schema = pa.schema(
@@ -110,8 +114,23 @@ def test_select_preserves_the_source_field(tmp_path):
 
     t = marrow.read_parquet(path)
     assert pa.schema(t.select("a").schema).field("a").nullable is False
-    # The lossy alternative, kept here so the difference stays visible.
-    assert pa.schema(t.project(a=t["a"]).schema).field("a").nullable is True
+    assert pa.schema(t.project(a=t["a"]).schema).field("a").nullable is False
+
+
+def test_project_still_probes_a_computed_column(tmp_path):
+    """Only a *pass-through* inherits its source field.
+
+    A computed column has no source `Field` to inherit, so its dtype is probed
+    and it is nullable — the arithmetic's answer, not the input's.
+    """
+    path = tmp_path / "nn2.parquet"
+    schema = pa.schema([pa.field("a", pa.int64(), nullable=False)])
+    pq.write_table(pa.table({"a": [1, 2]}, schema=schema), path)
+
+    t = marrow.read_parquet(path)
+    computed = pa.schema(t.project(a=t["a"] + 1).schema).field("a")
+    assert computed.nullable is True
+    assert computed.type == pa.int64()
 
 
 # ── execution ──────────────────────────────────────────────────────────────

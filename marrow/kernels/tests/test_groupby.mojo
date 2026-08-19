@@ -1,5 +1,7 @@
 from std.testing import assert_equal, assert_true, assert_false
 
+from ...utils.testing import assert_values_equal
+
 from ...arrays import (
     DynArray,
     PrimitiveArray,
@@ -715,8 +717,10 @@ def test_grouped_count_implementations_agree_on_nulls() raises:
         NumericAgg[CountKernel, Float64Type]
     ](NumericAgg[CountKernel, Float64Type].from_any(vals))
     var via_scan = GroupBy(keys).aggregate[CountAgg](CountAgg.from_any(vals))
-    assert_true(via_state.keys[0] == via_scan.keys[0])
-    assert_true(via_state.aggregates[0] == via_scan.aggregates[0])
+    # Two implementations, so two independently built layouts — the question
+    # is whether they agree on *values*, not on buffer offsets.
+    assert_values_equal(via_state.keys[0], via_scan.keys[0])
+    assert_values_equal(via_state.aggregates[0], via_scan.aggregates[0])
 
     ref gk = via_scan.keys[0].as_int32()
     ref gc = via_scan.aggregates[0].as_int64()

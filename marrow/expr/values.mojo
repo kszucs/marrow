@@ -197,7 +197,7 @@ from ..kernels.interval import (
 )
 from .core import Datum, into_array, _union_columns
 from .pruning import PruneStats
-from .dynamic import DynAgg, DynValue
+from .dynamic import DynValue
 from .aggregates import AggFunc
 from .params import ParamCell
 from ..kernels.cast import (
@@ -2291,16 +2291,21 @@ struct AggExpr(Copyable, Movable, Writable):
         split as `Reduction.alias`."""
         self = AggExpr.of[K.Grouped[In.OutType]](reduction.a.copy())
 
-    @implicit
-    def __init__(out self, var agg: DynAgg):
-        """From the dynamic lane: keep the name, resolve it at plan build."""
-        var out_name = agg.out_name.copy()
-        if not out_name:
-            out_name = agg.func.copy()
-        self.out_name = out_name^
-        self.input = agg.input.copy()
-        self._unresolved = agg.input.copy()
-        self._func = agg.func.copy()
+    def __init__(out self, var func: String, var input: DynValue):
+        """From the runtime lane: keep the function's *name*, resolve it
+        against the input's dtype at plan build.
+
+        The output column takes the function's own name until `alias` renames
+        it. That default used to be applied in three places, because this
+        constructor was a *copy* constructor from a second struct — `DynAgg` —
+        holding the same three fields and applying it neither in its own
+        `__init__` nor its own `alias`, so the binding layer wrote it a third
+        time. There is one struct now, and the default is applied where the
+        name is first known."""
+        self.out_name = func.copy()
+        self.input = input.copy()
+        self._unresolved = input^
+        self._func = func^
         self._of = None
 
     def __init__(
@@ -2331,6 +2336,18 @@ struct AggExpr(Copyable, Movable, Writable):
         out.out_name = name^
         return out^
 
+    def function(self) -> String:
+        """The aggregate function's name, e.g. ``sum`` or ``mean``.
+
+        Empty for a fused aggregate, which names its `Aggregation` at compile
+        time and so has no function name to carry."""
+        return self._func.copy()
+
+    def dyn_input(self) -> Optional[DynValue]:
+        """The runtime-lane input expression, or `None` for a fused aggregate,
+        whose input is comptime-typed and has no `DynValue` form."""
+        return self._unresolved.copy()
+
     def input_for(self, schema: Schema) raises -> BoxedValue:
         """The input expression, ready to execute against ``schema``."""
         if self._unresolved:
@@ -2344,9 +2361,14 @@ struct AggExpr(Copyable, Movable, Writable):
         return AggFunc(self._func, in_dtype)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._func if self._func else self.out_name, "(")
+        var func = self._func if self._func else self.out_name
+        writer.write(func, "(")
         self.input.write_to(writer)
         writer.write(")")
+        # Only when it says something the function name did not: an unaliased
+        # aggregate's output column *is* the function name.
+        if self.out_name != func:
+            writer.write(" as ", self.out_name)
 
 
 # ---------------------------------------------------------------------------

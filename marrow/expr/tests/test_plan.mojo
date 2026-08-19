@@ -170,14 +170,15 @@ def test_select_write_to() raises:
 
 
 def test_select_list_preserves_field_nullable_and_metadata() raises:
-    """`select` carries each surviving `Field` over whole, both spellings.
+    """Every projecting verb carries a pass-through `Field` over whole.
 
     A pass-through column *is* its input field, so `nullable` and metadata must
-    survive. `project` cannot promise this — it probes the expression's dtype
-    and builds a fresh `Field` around it, which widens a non-nullable column to
-    nullable and drops its metadata — and that is exactly why the Python
-    bindings needed the `List[String]` overload rather than routing `select`
-    through `project`."""
+    survive. `project` used to probe the expression's dtype and build a fresh
+    `Field` around it, which widened a non-nullable column to nullable and
+    dropped its metadata — so the same column came out with a different schema
+    depending on which verb asked for it. It now copies the source `Field`
+    whenever the expression is a bare column reference, so `select` and
+    `project` agree field-for-field."""
     var meta = Dict[String, String]()
     meta["unit"] = "usd"
     var src = parquet_scan(
@@ -202,12 +203,26 @@ def test_select_list_preserves_field_nullable_and_metadata() raises:
     # The variadic overload delegates to it, so it must agree field-for-field.
     assert_true(src.select("x").schema().fields[0] == listed.fields[0])
 
-    # `project` of the same column is the lossy alternative this exists to
-    # avoid: right dtype, wrong nullability, no metadata.
+    # `project` of the same column agrees field-for-field — this used to be
+    # the lossy alternative (right dtype, wrong nullability, no metadata).
     var projected = src.project(names=["x"], values=[col("x")]).schema()
-    assert_equal(projected.fields[0].dtype, int64)
-    assert_true(projected.fields[0].nullable)
-    assert_equal(len(projected.fields[0].metadata), 0)
+    assert_true(projected.fields[0] == listed.fields[0])
+
+    # A renamed pass-through inherits everything but the name.
+    var renamed = src.project(names=["z"], values=[col("x")]).schema()
+    assert_equal(renamed.fields[0].name, "z")
+    assert_equal(renamed.fields[0].dtype, int64)
+    assert_false(renamed.fields[0].nullable)
+    assert_equal(renamed.fields[0].metadata["unit"], "usd")
+
+    # Only a pass-through inherits. A computed column has no source `Field`, so
+    # its dtype is probed and it is nullable — the arithmetic's answer.
+    var computed = src.project(
+        names=["x"], values=[col("x") + lit[Int64Type](1)]
+    ).schema()
+    assert_equal(computed.fields[0].dtype, int64)
+    assert_true(computed.fields[0].nullable)
+    assert_equal(len(computed.fields[0].metadata), 0)
 
 
 # ---------------------------------------------------------------------------

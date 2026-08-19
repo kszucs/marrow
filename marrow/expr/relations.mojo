@@ -55,11 +55,7 @@ Example
     var result = plan.execute()
 """
 
-from ..kernels.interval import Interval
-from .pruning import PruneStats
-from ..arrays import DynArray
 from std.builtin.rebind import rebind
-from .dynamic import DynValue
 from .values import AggExpr, BoxedValue
 from .params import (
     PathSpec,
@@ -385,6 +381,30 @@ def write_cli_output(
             print(result)
 
 
+def _projected_field(
+    name: String, value: BoxedValue, input_schema: Schema, probe: RecordBatch
+) raises -> Field:
+    """The output ``Field`` for one projected expression, under ``name``.
+
+    A pass-through **is** its source field, so it is copied whole — dtype,
+    ``nullable`` and metadata — and only renamed. Anything computed has its
+    dtype probed against a 0-row batch, because a declared dtype would assert
+    the caller's arithmetic rather than the plan's.
+
+    Probing a pass-through recovers the dtype and silently drops the other two,
+    which is how ``select("x")`` and ``project(["x"], [col("x")])`` came to
+    produce *different schemas for the same column* — reproduced from Python
+    with ``nullable`` False becoming True. ``select`` and ``drop`` carried
+    their fields over whole already; this is the same rule stated once, where
+    all three projecting verbs reach it."""
+    var pos = value.bound_column(input_schema)
+    if pos >= 0:
+        ref src = input_schema.fields[pos]
+        return Field(name, src.dtype.copy(), src.nullable, src.metadata.copy())
+    else:
+        return Field(name, value.execute(probe).dtype())
+
+
 # ---------------------------------------------------------------------------
 # DynRelation — type-erased IR container + plan-building API
 # ---------------------------------------------------------------------------
@@ -637,11 +657,10 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         """Project columns by name — the list spelling of the variadic above.
 
         Both are pass-through projections and each surviving ``Field`` is
-        carried over **whole**: dtype, ``nullable`` and metadata. That is the
-        difference from ``project``, which probes each expression's dtype and
-        builds a fresh ``Field`` around it — correct for a computed column,
-        lossy for a pass-through, since a non-nullable input would come out
-        nullable.
+        carried over **whole**: dtype, ``nullable`` and metadata. ``project``
+        does the same for the columns of *its* input that are pass-throughs, so
+        ``select("x")`` and ``project(["x"], [col("x")])`` agree — see
+        `_projected_field`.
 
         Raises:
             Error: if a name is not in the input schema.
@@ -702,7 +721,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         ``col("ts").date_trunc("month")``, ``case_when(...)``).
 
         Both expression lanes are accepted, and they mix: ``col("x").sum()`` on
-        a ``DynAgg`` carries the function's *name* until this call resolves it
+        an ``AggExpr`` carries the function's *name* until this call resolves it
         against the input's dtype, while the same call on a fused node
         (``col("x", int64).sum()``) already names its ``Aggregation`` and
         resolves nothing.
@@ -760,54 +779,6 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
                 keys=key_exprs^,
                 inputs=input_exprs^,
                 aggs=resolved^,
-                schema=Schema(fields=fields^),
-            )
-        )
-
-    def aggregate(
-        self,
-        var keys: List[BoxedValue],
-        var inputs: List[BoxedValue],
-        var aggs: List[AggFunc],
-        names: List[String],
-    ) raises -> DynRelation:
-        """Grouped aggregation from an already-resolved aggregate spec — the
-        fused counterpart of the ``keys``/``aggs`` overload above.
-
-        ``aggs[j]`` carries a *comptime* ``Aggregation`` (built with
-        ``AggFunc.of[A]``) and applies to ``inputs[j]``, so there is no function
-        name to interpret and nothing is resolved here. ``names`` covers the
-        output columns in schema order — one per key, then one per aggregate.
-
-        The output schema is derived, never supplied: key dtypes are probed the
-        same way ``project`` probes, and each aggregate's dtype is read off the
-        aggregation itself. A caller-written schema would assert the caller's
-        own type algebra rather than the plan's."""
-        if len(names) != len(keys) + len(aggs):
-            raise Error(
-                "aggregate: len(names) != len(keys) + len(aggs), got "
-                + String(len(names))
-                + " for "
-                + String(len(keys))
-                + " keys and "
-                + String(len(aggs))
-                + " aggregates"
-            )
-        if len(inputs) != len(aggs):
-            raise Error("aggregate: len(inputs) != len(aggs)")
-
-        var probe = RecordBatch.empty(self.schema())
-        var fields = List[Field]()
-        for i in range(len(keys)):
-            fields.append(Field(names[i], keys[i].execute(probe).dtype()))
-        for j in range(len(aggs)):
-            fields.append(Field(names[len(keys) + j], aggs[j].out_dtype.copy()))
-        return DynRelation(
-            Aggregate(
-                input=self,
-                keys=keys^,
-                inputs=inputs^,
-                aggs=aggs^,
                 schema=Schema(fields=fields^),
             )
         )
@@ -888,7 +859,9 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         Unlike ``select`` (column pass-through), each value is an expression
         evaluated per morsel — e.g. ``col("x") + lit(1)``, a literal, or a
         renamed column. The output dtype of each column is the expression's own,
-        probed rather than declared (see below).
+        probed rather than declared (see below) — except for a value that *is*
+        a bare column reference, whose ``Field`` is carried over whole exactly
+        as ``select`` carries it, so the two verbs agree on the same column.
 
         Both expression lanes are accepted, exactly as ``filter`` accepts both,
         and — also as in ``filter`` — column references bind by name when the
@@ -902,15 +875,18 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             raise Error("project: len(names) != len(values)")
 
         var input_schema = self.schema()
-        # Probe each expression's output dtype by evaluating it against a 0-row
-        # batch of the input schema — general for computed columns (``x + 1``,
-        # literals, CASE) where a purely static dtype rule would be incomplete.
-        # It is also the only thing that keeps the declared schema honest: a
-        # caller-supplied one asserts the caller's arithmetic, not the plan's.
+        # Per column: carry a pass-through's ``Field`` over whole, and probe a
+        # computed one's dtype against a 0-row batch of the input schema —
+        # general for ``x + 1``, literals and CASE, where a purely static dtype
+        # rule would be incomplete, and the only thing that keeps the declared
+        # schema honest, since a caller-supplied one asserts the caller's
+        # arithmetic rather than the plan's. See `_projected_field`.
         var probe = RecordBatch.empty(input_schema)
         var fields = List[Field]()
         for i in range(len(values)):
-            fields.append(Field(names[i], values[i].execute(probe).dtype()))
+            fields.append(
+                _projected_field(names[i], values[i], input_schema, probe)
+            )
         return DynRelation(
             Project(
                 input=self,
@@ -991,7 +967,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             out_names.append(f.name.copy())
             if repl >= 0:
                 fields.append(
-                    Field(f.name, values[repl].execute(probe).dtype())
+                    _projected_field(f.name, values[repl], input_schema, probe)
                 )
                 out_values.append(values[repl].copy())
             else:
@@ -1002,7 +978,9 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
         for i in range(len(names)):
             if input_schema.get_field_index(names[i]) == -1:
                 out_names.append(names[i].copy())
-                fields.append(Field(names[i], values[i].execute(probe).dtype()))
+                fields.append(
+                    _projected_field(names[i], values[i], input_schema, probe)
+                )
                 out_values.append(values[i].copy())
 
         return DynRelation(
@@ -1072,8 +1050,7 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
 
         - ``rename(names, new_names)`` — the shape every other verb here already
           has (``project(names, values)``, ``sort(keys, ascending)``,
-          ``aggregate(keys, inputs, aggs, names)``). Mentions only the columns
-          that change.
+          ``aggregate(keys, aggs)``). Mentions only the columns that change.
         - ``rename(mapping: Dict[String, String])`` — polars' spelling, and it
           makes "renamed twice" unrepresentable, but it is the only dictionary
           argument in the plan-building API and would read as the odd one out.

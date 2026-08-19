@@ -414,7 +414,7 @@ def test_count_star_alias_renames_the_output():
 
 
 def test_unknown_aggregate_is_accepted_until_the_plan_resolves_it():
-    """`DynAgg` only carries the name; resolution happens at plan build."""
+    """`AggExpr` only carries the name; resolution happens at plan build."""
     assert col("a").aggregate("nonesuch").function() == "nonesuch"
 
 

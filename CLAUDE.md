@@ -680,12 +680,20 @@ In addition:
   builtin `Scalar`; `BoolArray` resolving along one path and not another; a "fix"
   that took errors 2 → 10). All wildcards were replaced with explicit lists; keep
   it that way.
-- **`DynArray == DynArray` in a test can wedge the compiler.** A single
-  `assert_true(a == cast(a, string))` hung a test driver at 0% CPU
-  indefinitely (reproduced twice, ~57 min each) while `mojo precompile marrow`
-  stayed clean and neighbouring test files built in seconds. `__eq__` resolves
-  the active variant on *both* sides, so it elaborates the dispatch ladder
-  squared. Compare the typed values, or compare `to_pylist()`/lengths instead.
+- **An `__eq__` that compares *elements* of an erased container deadlocks the
+  compiler.** Fixed 2026-08-19; recorded because the shape recurs. Comparing a
+  nested array element by element materialises a `DynArray` per element, so
+  `DynArray.__eq__` and the nested arrays' `__eq__` become mutually recursive
+  at instantiation, and the elaborator never resolves it: ~9 s of CPU, then
+  parked in `semaphore_wait_trap` at **0% CPU** forever with no diagnostic.
+  That is a *deadlock*, not an infinite loop — a runaway recursion burns CPU
+  and grows memory, so `%cpu=0.0` with flat RSS is the tell. It kept all 165
+  cases of `test_arrays.mojo` from ever compiling.
+  **Equality compares fields, never elements** — dtype, length, null count,
+  validity views, buffers, children — and element-wise value comparison lives
+  in `EqKernel`. Two narrower fixes were measured and neither works: narrowing
+  `DynArray.__eq__` to one `isa` (O(N) arms instead of `Variant.__eq__`'s O(N²))
+  and `@no_inline` on it. The cycle has to be removed, not made cheaper.
   The general lesson: **`precompile` being clean is not evidence that a test
   file will build** — it compiles the library, not the test's instantiations.
 - **ASAN can *hide* a heap bug rather than reveal it.** A one-byte `Variant`

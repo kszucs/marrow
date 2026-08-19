@@ -44,7 +44,7 @@ from ...kernels.string import (
     StringGeKernel,
 )
 from ...kernels.numeric import (
-    equal_any,
+    equal,
     EqKernel,
     NeKernel,
     LtKernel,
@@ -402,7 +402,7 @@ def test_erased_compare_accepts_decimal128() raises:
 
 
 # ---------------------------------------------------------------------------
-# equal_any — the "equality over an arbitrary dtype" primitive
+# equal — the "equality over an arbitrary dtype" primitive
 #
 # Hash-join row verification and `nullif` are built on this. It used to pick
 # its kernel family with `is_string() or is_large_string()`, so `binary` fell
@@ -426,27 +426,27 @@ def _bytes_pair[
     return (la^, ra^)
 
 
-def _assert_equal_any_bytes[T: BinaryLikeType]() raises:
+def _assert_equal_bytes[T: BinaryLikeType]() raises:
     var pair = _bytes_pair[T](["a", "bb", "c"], ["a", "xx", "c"])
-    var r = equal_any(pair[0], pair[1])
+    var r = equal(pair[0], pair[1])
     assert_true(r[0].value())
     assert_false(r[1].value())
     assert_true(r[2].value())
 
 
-def test_equal_any_binary() raises:
-    _assert_equal_any_bytes[BinaryType]()
+def test_equal_binary() raises:
+    _assert_equal_bytes[BinaryType]()
 
 
-def test_equal_any_large_binary() raises:
-    _assert_equal_any_bytes[LargeBinaryType]()
+def test_equal_large_binary() raises:
+    _assert_equal_bytes[LargeBinaryType]()
 
 
-def test_equal_any_string_unchanged() raises:
-    _assert_equal_any_bytes[StringType]()
+def test_equal_string_unchanged() raises:
+    _assert_equal_bytes[StringType]()
 
 
-def test_equal_any_binary_nulls_propagate() raises:
+def test_equal_binary_nulls_propagate() raises:
     """Null on either side yields null out — same rule the string path used."""
     var lb = BinaryLikeBuilder[BinaryType](3)
     lb.append("a")
@@ -456,7 +456,7 @@ def test_equal_any_binary_nulls_propagate() raises:
     rb.append("a")
     rb.append("b")
     rb.append_null()
-    var r = equal_any(lb.finish(), rb.finish())
+    var r = equal(lb.finish(), rb.finish())
     assert_equal(r.null_count(), 2)
     assert_true(r.is_valid(0))
     assert_true(r[0].value())
@@ -464,8 +464,8 @@ def test_equal_any_binary_nulls_propagate() raises:
     assert_false(r.is_valid(2))
 
 
-def test_equal_any_mismatched_dtypes_raise() raises:
-    """`equal_any` resolves the comptime type from the *left* dtype and reads
+def test_equal_mismatched_dtypes_raise() raises:
+    """`equal` resolves the comptime type from the *left* dtype and reads
     the right operand at that same type, so mismatched dtypes must be rejected
     before the downcast rather than reaching `as_type` with the wrong one."""
     var sb = StringBuilder(1)
@@ -473,12 +473,12 @@ def test_equal_any_mismatched_dtypes_raise() raises:
     var bb = BinaryLikeBuilder[BinaryType](1)
     bb.append("a")
     with assert_raises():
-        _ = equal_any(sb.finish(), bb.finish())
+        _ = equal(sb.finish(), bb.finish())
 
 
-def test_equal_any_numeric_still_dispatches() raises:
+def test_equal_numeric_still_dispatches() raises:
     """The non-binarylike arm is unchanged."""
-    var r = equal_any(array([1, 2, 3], int64), array([1, 9, 3], int64))
+    var r = equal(array([1, 2, 3], int64), array([1, 9, 3], int64))
     assert_true(r[0].value())
     assert_false(r[1].value())
     assert_true(r[2].value())

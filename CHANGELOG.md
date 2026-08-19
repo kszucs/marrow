@@ -24,13 +24,117 @@
   its transcript — `--help`, `--describe`, a filtered run, `-o
   result.parquet` — was captured by hand rather than executed by Quarto.
   Cross-linked from `expressions.qmd`. Filed a follow-up, S19 in
-  `docs/backlog.md`, for the static-linking finding from the same work: all
-  10 `_AsyncRT_*` symbols in a GPU-off binary are `DeviceBuffer`/
-  `DeviceContext` calls that survive DCE, which is why gating `GPU_ENABLED`
-  alone does not shed the AsyncRT dylib (`libAsyncRTMojoBindings.dylib`,
-  1,156,592 bytes — 42% of the runtime dylib closure).
+  `docs/backlog.md`, for the static-linking finding from the same work.
+  **That finding has since been re-measured and the saving is not available**
+  — see the Fixes section below.
+
+### Fixes
+
+- **Array equality compares fields, not elements — which is what let
+  `marrow/tests/test_arrays.mojo` compile for the first time.** All 167 cases
+  now pass in 49 s; the file had never built. The cause was a compiler
+  *deadlock*, not a slow compile or an infinite loop: `ListLikeArray.__eq__`
+  compared elements via `unsafe_get(i)`, which returns a `DynArray`, so
+  `DynArray.__eq__` (`self._v == other._v`, resolving the active variant member
+  on *both* sides) and the nested arrays' `__eq__` were mutually recursive at
+  instantiation time. The elaborator burned ~9 s of CPU and then parked in
+  `semaphore_wait_trap` at 0% CPU indefinitely with no diagnostic. Because the
+  cycle is in the *type* graph, it needed no nested data — a `list<int64>`
+  whose child is a plain leaf deadlocked identically, and it took down all 165
+  cases in the file, not just the nested ones.
+
+  `ArrayData` is now `Equatable` and owns the comparison — dtype, length, null
+  count, validity views, children, value buffers — recursing through
+  `List[ArrayData]`, a concrete self-recursive type with no generic
+  instantiation behind it. `DynArray.__eq__` no longer touches the variant
+  ladder; it compares fields through one `to_data()` per array, never per
+  element. `ListLikeArray` and `FixedSizeListArray` compare their child array
+  once as a whole. Value buffers are compared by each array's own type through
+  the *dtype* ladder, which has no path back to `DynArray.__eq__` — chosen over
+  comparing `Buffer`s directly because `Buffer.__eq__` compares whole
+  allocations, and an array's buffer is neither exactly sized (filtered output
+  is over-allocated) nor read from the start (a slice has an offset).
+
+  Element-wise value comparison belongs to `EqKernel` and stays there. Two
+  narrower fixes were measured and neither works, so neither should be retried:
+  narrowing `DynArray.__eq__` to a single `isa` (O(N) arms instead of
+  `Variant.__eq__`'s O(N²)) still deadlocks, and so does `@no_inline` on it.
+  Nested dictionaries reached through the erased path are now compared
+  structurally (indices plus dictionary) rather than decoded, because
+  `DictionaryArray.__eq__` compares `DynScalar`s whose `ListScalar` arm holds a
+  `DynArray` and re-enters the cycle; a direct `DictionaryArray` comparison is
+  unchanged and still treats permuted dictionaries as equal. Two cases were
+  added for nulls inside a list's *child*, which nothing covered.
+
+- **`project` no longer drops `nullable` and metadata on a pass-through
+  column (A-1).** It rebuilt a bare `Field` from the probed dtype for every
+  output column, so `select("x")` and `project(["x"], [col("x")])` produced
+  *different schemas for the same column* — reproduced from Python, with a
+  non-nullable Parquet field coming back nullable. A new `_projected_field`
+  helper copies the source `Field` whole when the expression is a bare column
+  reference (`bound_column >= 0`) and probes only genuinely computed columns;
+  `with_columns` routes its two probe sites through it as well, so all four
+  projecting verbs now agree. `test_select_preserves_the_source_field`
+  previously asserted the lossy behaviour on purpose and now pins the fix,
+  alongside a new `test_project_still_probes_a_computed_column` confirming a
+  computed column is still probed and still nullable.
+
+### Refactors
+
+- **`DynAgg` is deleted; the runtime lane returns `AggExpr` directly (A-2).**
+  `DynAgg` duplicated `AggExpr` field for field, and `AggExpr.__init__(DynAgg)`
+  was a copy constructor that *also* applied the "empty alias ⇒ use the
+  function name" rule — a rule `DynAgg` applied in neither its own `__init__`
+  nor its own `alias`, so the binding layer's `_agg_name` wrote it a **third**
+  time. `DynValue.sum()`/`mean()`/`aggregate(name)`/… now return `AggExpr`,
+  which already carried both shapes (a name to resolve, or a comptime
+  `Aggregation`); the default is applied once, where the name is first known,
+  and `_agg_name` is a plain field read. `AggExpr` gains `function()` and
+  `dyn_input()` for the binding layer, and its `write_to` now appends
+  `" as <name>"` only when the output name says something the function name
+  did not — so every rendering is byte-identical to before. Python-visible
+  behaviour is unchanged: `render()`, `repr()`, `name()`, `function()` and
+  `input()` all verified against the existing assertions.
+
+- **The second `DynRelation.aggregate` overload is gone (A-3).** The
+  `(keys, inputs, aggs, names)` spelling was a third convergence point for a
+  split already resolved by `AggExpr`, contradicted overload 1's own
+  docstring, and had exactly two callers — both tests, both rewritten onto
+  `aggregate(keys, aggs)` with `AggExpr.of[A](...)`. Nothing in the library,
+  the benchmarks or the bindings used it.
+
+- **`marrow.kernels`' re-export boundary is stated, and the compute surface
+  completed (S13).** The package docstring promised direct use of every
+  submodule while seven of nineteen were re-exported, so `mk.cast` worked and
+  `mk.concat` did not with nothing saying why. The element-wise kernels,
+  folds and free-function verbs are now all re-exported — `boolean`, `string`,
+  `temporal`, `conditional`, `nested`, `concat`, the unary/transcendental
+  half of `numeric`, `CountKernel`, `Kernel`, `Grouping`. Two things stay
+  behind their submodule and the docstring now says why: the hash/partition
+  machinery and the pruning `interval` algebra, which are not kernels a caller
+  applies to an array; and `MinKernel`/`MaxKernel`, because the name means two
+  different things — `numeric.MinKernel` is an element-wise binary minimum,
+  `aggregate.MinKernel` is `MinMax[MinOp]`, a whole-array fold — so a flat
+  namespace cannot hold both and neither is re-exported.
+
+- **`Partition.original_row` deleted (S18).** Zero callers repo-wide;
+  `Partition` is not re-exported from `kernels/__init__`, so the surface was
+  internal.
+
+- **Four dead imports removed from `expr/relations.mojo` (A-12).** `Interval`,
+  `PruneStats`, `DynArray` and `DynValue` each had exactly one occurrence in
+  the file — the import itself — and were overstating the module's dependency
+  edges in the backlog's §8 graph.
 
 ### Features
+
+- **`safe=` on the expression-level cast (A-7).** `marrow.kernels.cast` and
+  the array-level `compute.cast` both took it; the expression-level one did
+  not, so a caller who knew their data could not skip validation.
+  `DynValue.cast(to, safe=True)` selects between two evaluators rather than
+  widening `DynPayload` with a `Bool` arm — the payload is size-critical, and
+  the node name stays `"cast"` either way, so no parity entry changes.
+  Surfaced as `Column.cast(target_type, *, safe=True)` in Python.
 
 - **The wheel ships marrow's own Mojo source, so `marrow compile` works for a
   pip-installed user.** `python/build.py`'s hatchling hook now walks

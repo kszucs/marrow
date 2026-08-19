@@ -1,7 +1,7 @@
 """The Python expression surface — ``Column`` and ``Aggregate``.
 
 ``marrow.libmarrow`` exposes two binding types from the runtime expression
-lane: ``Expr`` (Mojo ``DynValue``) and ``Agg`` (Mojo ``DynAgg``). Both are
+lane: ``Expr`` (Mojo ``DynValue``) and ``Agg`` (Mojo ``AggExpr``). Both are
 deliberately spartan — named methods only, one required argument each, no
 coercion. This module is the other half: the composition wrappers that own the
 operator dunders, scalar coercion, keyword arguments and ``__repr__``.
@@ -308,9 +308,15 @@ class Column(_Wrapper):
             value_set = array(list(values))._binding
         return Column.wrap(self._binding.isin(value_set))
 
-    def cast(self, target_type):
-        """Cast to `target_type`, a :class:`~marrow.DataType`."""
-        return Column.wrap(self._binding.cast(target_type))
+    def cast(self, target_type, *, safe=True):
+        """Cast to `target_type`, a :class:`~marrow.DataType`.
+
+        With ``safe=True`` (the default) a lossy conversion raises; with
+        ``safe=False`` the raw truncating/wrapping conversion is used, except
+        for string parsing, which nulls the unparseable value. Same flag,
+        default and meaning as :func:`marrow.compute.cast`, which casts an
+        array rather than an expression."""
+        return Column.wrap(self._binding.cast(target_type, safe))
 
     # ── null handling ───────────────────────────────────────────────────────
 
@@ -371,7 +377,7 @@ class Column(_Wrapper):
 
 
 class Aggregate(_Wrapper):
-    """An aggregate over an expression — the Python face of ``DynAgg``.
+    """An aggregate over an expression — the Python face of ``AggExpr``.
 
     Produced by :meth:`Column.sum` and friends, consumed by the plan layer's
     ``group_by(...).aggregate([...])``, which calls :meth:`unwrap`."""

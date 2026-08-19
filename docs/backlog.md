@@ -70,8 +70,10 @@ obvious. Read before planning anything.
   (+45.7%)** on `query_dynvalue`, because every arm became reachable from every
   node. The fn-pointer `EvalFn` (`dynamic.mojo:209`) exists for this reason.
 - **Reachability intuitions about erased paths are usually wrong; stub and
-  measure.** Stubbing both `cast_array` calls out of the expression layer left
-  the gate binary byte-identical.
+  measure.** Stubbing the `cast_array` calls out of the expression layer left
+  the gate binary byte-identical. (The card that recorded this said "both";
+  `expr/dynamic.mojo` has **seven** — `:187, :189, :203, :216, :218, :359,
+  :373` — so re-count before repeating the experiment.)
 - **An operator with no benchmark has no performance.** T2.4's per-row-group scan
   shipped a **4.7x** regression that every test passed through, because nothing
   benched the scan operator.
@@ -438,57 +440,6 @@ spending anything more on it.
 
 ---
 
-### Nested-array equality hangs the compiler — **open, blocks all 165 cases of `test_arrays.mojo`**
-
-Same family as the `dispatch` hang above, different trigger, and it is why
-`marrow/tests/test_arrays.mojo` has never run. Six attempts each sat at **0% CPU**
-until the harness deadline and reported `165 failed in 1800.0s` with empty
-messages, which reads as harness capacity. It is not.
-
-Measured 2026-08-18. The process accumulates ~9 s of CPU and then **stops**:
-`time` frozen at `0:08.99` across 30+ s of wall clock, 0% CPU, no children. A
-slow compile burns CPU; this deadlocks. Two orphaned `mojo` processes with the
-same signature were found on the box at 6 h and 20 h old.
-
-Bisection — ranges as their own compilation units:
-
-| tests | result |
-|---|---|
-| 1-40 / 41-80 / 81-90 | pass, 3-26 s |
-| **91-120** | never compile |
-
-Individually: `test_string_array_eq_sliced` (flat) **passes in 3.2 s**;
-`test_list_array_eq` and `test_struct_array_eq` each **fail to build alone**.
-
-**Cause — equality recurses through the erased box.** `DynArray.__eq__`
-(`arrays.mojo:2540`) is `self._v == other._v`, and `Variant.__eq__` resolves the
-active member on *both* sides, so it elaborates the ladder squared. Worse:
-`ListLikeArray.__eq__` (`:1260`) compares elements with `unsafe_get`, which
-**returns a `DynArray`** (`:1174`), and `StructArray.__eq__` (`:1939`) compares
-`DynArray` children — so nested equality re-enters the ladder, which contains the
-nested type, and recurses. This is the shape §0 already warns about for
-mutually-recursive nested-type methods.
-
-**Tried and reverted:** narrowing `self` once and reading `other` at that type
-(O(n) arms, not O(n²), and exactly as strict since `isa[T]()` answers a type
-mismatch before touching data). It compiles and is semantically identical but
-**fixes nothing** — the recursion is through `ListLikeArray.__eq__`, not the
-squared ladder. Not left in: an unmeasured change to a hot, size-gated file that
-buys nothing.
-
-**The fix worth trying:** compare nested arrays through their flat `ArrayData`
-(dtype, length, null count, bitmap, buffers, children) instead of recursing into
-typed element equality — equality of two `ListArray`s is equality of their
-offsets plus their children as buffers. A design change to a size-gated file, so
-it wants its own measurement.
-
-**Landed meanwhile:** `test_temporal_array_dtype_mismatch` held the one *direct*
-`DynArray == DynArray`; rewritten to compare dtypes, it now builds in 3.2 s and
-passes. The ~10 nested-equality cases in the 91-120 band remain unbuildable.
-Full write-up: `docs/alpha-findings/h2-nested-equality-wedge.md`.
-
----
-
 ## 3. Wave 3 — M1, the ClickBench milestone
 
 **M1 = 42 of the 43 ClickBench queries** (Q29 `REGEXP_REPLACE` deferred to M2)
@@ -686,7 +637,7 @@ kept so the correction is legible.
 | Card | The row says | Verified |
 |---|---|---|
 | **S2** | "a date predicate prunes nothing in the fused lane" | **Vacuous** — the fused lane cannot *express* a date predicate. The real defect is `bound_column`: a fused join on a temporal column **raises**. Re-scoped as A3 below. |
-| **S4** | 15 structs, "four casts never see `ctx`" | **Six** never see `ctx`, and there are **two** behavioural defects, not one — `TemporalCast` drops `safe` too. An existing test encodes the bug. *(Landed as A1.)* |
+| **S4** | 15 structs, "four casts never see `ctx`" | **Six** never see `ctx`, and there are **two** behavioural defects, not one — `TemporalCast` drops `safe` too. An existing test encodes the bug. **Landed 2026-08-17 in `17488cd`** — `trait CastKernel(Kernel)` (`cast.mojo:72`) gives all 20 kernels one `dispatch(array, to, safe, ctx)` and `cast()` hands every arm all four. The scheduled row below was left behind and has now been deleted. |
 | **S6** | "deletion is the only remaining option" | **Premise false.** `write_repr_to` is a stdlib `Writable` member whose default is field reflection, not `write_to`. Deleting all 26 is a user-visible Python regression. Re-scoped as C8. |
 | **S8** | "no new cycle" | **False** — it closes `execution → buffers → views → execution`. Resolved by D1 below. |
 | **S11** | two placement moves | The `equal_any` half **creates a `numeric ↔ compare` cycle**. Rejected as D2; only the `Grouping` half survives. |
@@ -760,9 +711,8 @@ Three findings came out of the cross-read that no single document had:
 
 | ID | Item | Source | Gate | Size |
 |---|---|---|---|---|
-| **S2** | **`bound_column` and `prune` on `TemporalColumn` and `ListColumn`.** Verified absent 2026-08-17 (`values.mojo:2452`, `:2565`); both inherit the conservative defaults at `:449`/`:460`, so **a date predicate prunes nothing in the fused lane**. ClickBench's `hits` is date-filtered, so this is an M1 wall-clock item, not just a gap. For a list column "no information" may genuinely be right — add `bound_column` only if so. | dup §1.2 A | tests + `binary_size` | S |
+| **S2** | **`bound_column` and `prune` on `TemporalColumn` and `ListColumn`.** Verified absent, re-checked 2026-08-19 (`values.mojo:2688`, `:2830`); both inherit the conservative defaults at `:421`/`:432`, so **a date predicate prunes nothing in the fused lane**. ClickBench's `hits` is date-filtered, so this is an M1 wall-clock item, not just a gap. For a list column "no information" may genuinely be right — add `bound_column` only if so. | dup §1.2 A | tests + `binary_size` | S |
 | **S3** | **Parity test for the operator↔interval-kernel pairing.** 20 pairings encoded by hand in the AOT lane and re-encoded as a name ladder at `dynamic.mojo:610-626`; a mismatch is silently wrong pruning, not an error. Assert name equality per pairing and both-directions coverage in `test_parity.mojo`. The associated-type fix (Angle A) is **not** scheduled — the test is most of the safety for none of the size risk. | dup §1.3 B | tests | S |
-| **S4** | **`CastKernel(Kernel)` family trait**, one `dispatch(array, to, safe, ctx)`. 15 structs across six signatures today, so `cast()`'s ladder drops the arguments an arm does not take: `cast(x, decimal128(38, 2), safe=True)` **wraps on overflow**, and four casts never see `ctx`. Largest open defect in the abstraction audit. | abs §1.4 | tests + `binary_size` | M |
 | **S6** | **Delete all 26 `write_repr_to`.** Verified 26 definitions, requirement of no trait, and `DynArray.write_repr_to` does not even dispatch — it calls `write_to`, so the 10 array implementations are unreachable through the only handle callers hold. Since the boxes conform to neither `Array` nor `ArrowScalar`, promoting it to a requirement can no longer reach them; deletion is the only remaining option. | abs §1.1 | tests | S |
 | **S8** | **`ExecContext.alloc_buffer[T](n)` / `.alloc_bitmap(n)`**, collapsing the 10-site GPU-or-host preamble in `numeric`/`cast`/`hashing`/`boolean`. `execution.mojo` already owns `GPU_ENABLED` after `5b14bfa`, and `views` already imports both modules, so no new cycle. | dup §1.5 B | tests | S |
 | **S9** | **`Bitmap.extend_validity`**, collapsing the 11-line reserve-then-propagate block at `builders.mojo:696, 827, 1022, 1229, 1370`. It is bitmap logic, not builder logic — it already calls `Bitmap.extend` and `set_range`. Not a hot path. | dup §1.7 B | tests | S |
@@ -774,7 +724,7 @@ Three findings came out of the cross-read that no single document had:
 | **S16** | **Re-verified 2026-08-17 and mostly evaporated — recommend dropping.** The audit's citations predate `5b14bfa` and `e3a6cd0`. What survives: `_format_ns` is still defined after its only caller, but at `utils/testing.mojo:542` → `:429`, not `testing/bench.mojo`; the three-helper chain in `kernels/string.mojo:523/536/546` is unmoved. What is **gone**: three of the four `hashing.mojo` helpers (`_rapid_mix_wide`, `_rapidhash_bool`, `_rapidhash_primitive_masked` — removed by the pluggable-hash and wide-multiply work), leaving only `_indices_as_int32` (`kernels/hashing.mojo:59` → `:228`). **`_rapidhash_bool_masked` — the one part of this card that could have been a real defect, "dead or a masked-hash gap for boolean columns" — is resolved by deletion; it has zero hits under `marrow/`.** The residue is three cosmetic inlines, and the string trio is named in two docstrings and a comment, which is the tell that it names a step rather than fragmenting one. | dup §3 B | tests | XS, or drop |
 | **S18** | **`Partition.original_row` is dead** — `kernels/partition.mojo:112`, zero callers repo-wide (the only other hit, `sort.mojo:146`, is a docstring mentioning `original_row_index`). Found while landing S15, which de-guarded the method rather than deleting it because removing a method is an API change and S15's card ruled that out. `Partition` is not re-exported from `kernels/__init__`, so the surface is internal and the deletion is safe. | S15 fallout | tests | XS |
 | **S17** | **Re-baseline the binary-size gate — the premise it was filed on was false, and V0 has landed.** The card said `query_streaming_agg_fused` sat at +0.449% of 0.5% and that V0's `MapScalar` (+0.137%) could not fit. Investigating before resetting anything showed the gate was actually **+55%**, and not from accumulated drift: `f5226d5`'s closure migration cost +739,316 bytes on this gate while its own commit message and CHANGELOG recorded "+0.36%". The Mojo 1.1 / MAX 26.6 upgrade accounted for +0.39% of it, GPU gating was intact. §0 has the attribution; the fix recovered 662,740 bytes (89.6%). **V0 landed 2026-08-17** at its measured +0.136%, so what is left is only the reset: regenerate `baseline.json` on the post-fix tree with `check_gate.py --update`, keep `threshold_pct` at **0.5** (do not raise it — it caught this), and write the history into the `_comment` in the style of the existing entries: what the old numbers were, that the reset absorbs the ~4.8% residue that is *not* attributable to `f5226d5`, and that the gate is not in CI, which is why a +55% regression survived for ten commits. Fixing that last part is the durable lesson, not the reset. | §0.5 Must | `pixi run binary_size` | S |
-| **S19** | **A GPU-off binary still links `libAsyncRTMojoBindings.dylib` in full, because 10 `_AsyncRT_*` symbols survive DCE.** Found 2026-08-19 during `marrow compile`'s static-linking investigation: every one of the 10 undefined `_AsyncRT_*` symbols in a **GPU-off** query binary is a `DeviceBuffer`/`DeviceContext` device call. CLAUDE.md already records the symptom ("[gating `GPU_ENABLED`] does not shed the `libmax`/AsyncRT runtime dependency: a GPU-off binary still links it") — this is the cause. Eliminating those 10 call sites from the GPU-off build (tighter `comptime if GPU_ENABLED` gating, or DCE-friendlier device-call sites) would let `-Xlinker -dead_strip_dylibs` drop `libAsyncRTMojoBindings.dylib` entirely: **1,156,592 bytes, 42% of the runtime dylib closure** measured by `marrow compile --bundle` on `query_param`, shrinking every bundled/relocatable artifact by that much. | marrow-compile spec §7 | `pixi run binary_size` + `marrow compile --bundle` | S |
+| **S19** | **A GPU-off binary links `libAsyncRTMojoBindings.dylib`, and — measured 2026-08-19 — it cannot stop doing so. Recommend closing as Won't.** The card claimed 10 `_AsyncRT_*` symbols survive DCE, all of them `DeviceBuffer`/`DeviceContext` device calls, and that eliminating them would let `-Xlinker -dead_strip_dylibs` drop the dylib for **1,156,592 bytes, 42% of the runtime dylib closure**. Four things were checked by direct experiment; the first three confirm the mechanism and the fourth kills the win. (1) It is **14** undefined symbols, not 10 — eleven `_AsyncRT_Device*` plus three `_KGEN_CompilerRT_AsyncRT_*CPUDevice`. (2) The three `_KGEN_CompilerRT_*` do not matter: `def main(): print("hi")` pulls all three, yet `-dead_strip_dylibs` drops the dylib from it, so they resolve elsewhere. (3) The `Optional[DeviceBuffer]` / `Optional[HostBuffer]` / `Optional[DeviceContext]` **fields are not the floor** — the obvious objection, that Mojo has no conditional struct fields so `Allocation.__deinit__` must always emit `_AsyncRT_DeviceBuffer_release`, is **false**: a probe struct holding `Optional[DeviceBuffer[uint8]]`, constructed and destroyed, emits no `_AsyncRT_Device*` symbol and drops the dylib, because the optimizer proves the slot is always `None`. **(4) But six of the eleven are not GPU code at all — they are the CPU thread pool.** A program whose entire content is `sync_parallelize(body, 4)`, importing no marrow and no GPU module, pulls `_AsyncRT_DeviceContext_{create,deviceApi,enqueueHostFunctionRange,release,strfree,synchronize}` and **keeps the dylib under `-dead_strip_dylibs`**. `sync_parallelize` is what `ExecContext.stripe` / `views._cpu_striped` are built on, so marrow cannot shed the dylib without giving up parallel CPU execution. Only five symbols are marrow's own (`DeviceBuffer_{context,release,retain}`, `DeviceContext_{createHostBuffer,retain}`) and removing them cannot drop the dylib on its own. **Also ruled out:** gating `DynArray.to_device` / `to_cpu` — the erased entry points, and the obvious reachability root since `_dispatch` instantiates every arm — behind `comptime if GPU_ENABLED` changed the symbol count by **zero** (tried and reverted; it restricted a public API for nothing). CLAUDE.md's note that gating `GPU_ENABLED` "does not shed the `libmax`/AsyncRT runtime dependency" is therefore not a gap to close but a property of how Mojo implements CPU parallelism. Reopen only if `max.algorithm` gains a thread pool that does not route through `DeviceContext`. | re-measured 2026-08-19 | `nm -u` + `otool -L` probes | Won't — premise measured false |
 
 **Order.** S1 landed first, 2026-08-17 — it was the conflict-heaviest change and
 every later `expr` edit would otherwise have been rebased onto it. Then the
@@ -1284,8 +1234,8 @@ to change. Listed with the competing responsibilities, most costly first.
   runs, and `probe_hashes` reads them unconditionally. `insert()` then `probe()`
   is an out-of-bounds read on a zero-length buffer, guarded only by prose. The
   two clients happen not to mix them, which is why it has never fired.
-- **`DynRelation`** (`relations.mojo:291`) — the erasure box **and the entire
-  plan builder/binder** (`:406-736`: schema derivation, dtype probing, join
+- **`DynRelation`** (`relations.mojo:413`) — the erasure box **and the entire
+  plan builder/binder** (`:643-1178`: schema derivation, dtype probing, join
   name-collision suffixing, top-K folding, predicate pushdown). "There is no
   `Planner`" is true of *dispatch*; the planner exists, and it is fused into the
   box.

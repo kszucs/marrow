@@ -372,17 +372,17 @@ inside a fused subtree.
 ## 5. Relations — a walkable plan that executes itself
 
 `marrow/expr/relations.mojo` holds the plan IR. `trait Relation`
-(`relations.mojo:103`) nodes are **pure, immutable descriptions**: they hold their
+(`relations.mojo:119`) nodes are **pure, immutable descriptions**: they hold their
 parameters and child relations, and no execution state. `DynRelation`
-(`relations.mojo:291`) erases a node behind an `ArcPointer`, so copying a plan is
+(`relations.mojo:413`) erases a node behind an `ArcPointer`, so copying a plan is
 an O(1) share and the plan is a reusable, inspectable, rewritable template.
 
-Execution is a separate layer. `Relation.to_processor(ctx)` (`relations.mojo:135`)
-builds the stateful `Processor` (`execution.mojo:78`) that runs, opening its
+Execution is a separate layer. `Relation.to_processor(ctx)` (`relations.mojo:187`)
+builds the stateful `Processor` (`execution.mojo:104`) that runs, opening its
 children recursively; the processor owns *all* mutable state — scan offset, built
-hash index, grouper, child processors. `DynProcessor` (`execution.mojo:94`) erases
-it and drives the pull loop; `collect()` (`execution.mojo:135`) drains it into one
-`RecordBatch`. `DynRelation.execute()` (`relations.mojo:393`) is
+hash index, grouper, child processors. `DynProcessor` (`execution.mojo:120`) erases
+it and drives the pull loop; `collect()` (`execution.mojo:161`) drains it into one
+`RecordBatch`. `DynRelation.execute()` (`relations.mojo:571`) is
 `to_processor(ctx).collect()`, and it never mutates the plan — so a plan runs
 repeatedly and concurrently.
 

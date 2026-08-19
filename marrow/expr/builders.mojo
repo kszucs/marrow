@@ -27,9 +27,10 @@ from ..dtypes import (
     TemporalType,
 )
 from ..scalars import DynScalar, PrimitiveScalar, StringScalar
-from .dynamic import DynAgg, DynValue
+from .dynamic import DynValue
 from .params import ParamDecl, register_param
 from .values import (
+    AggExpr,
     ListColumn,
     NumericColumn,
     NumericLiteral,
@@ -223,7 +224,7 @@ def param(
     return DynValue.param(name^)
 
 
-def count_star() -> DynAgg:
+def count_star() -> AggExpr:
     """`COUNT(*)` — how many rows each group has.
 
     Not the same aggregate as `col("x").count()`, which counts the *non-null*

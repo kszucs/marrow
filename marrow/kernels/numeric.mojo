@@ -568,7 +568,7 @@ trait NumericCompareKernel(Kernel):
         # `apply` is bound on `PrimitiveType`, so dispatch on that family, not
         # the narrower `NumericType`: temporal, interval and decimal columns all
         # reach the same leaf. Narrowing here made runtime comparison raise on
-        # those dtypes, took `equal_any` -- and with it hash-join key
+        # those dtypes, took `equal` -- and with it hash-join key
         # verification and `nullif` -- down too, and left `pruning.mojo` unable
         # to prune a single row group on a date or decimal predicate. CLAUDE.md's
         # "dispatch on the widest family the typed leaf accepts" rule is for
@@ -586,7 +586,7 @@ trait NumericCompareKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-def equal_any(
+def equal(
     left: DynArray,
     right: DynArray,
     ctx: ExecContext = ExecContext.serial(),
@@ -644,7 +644,7 @@ def _bytes_equal[
     byte-level — but the whole `StringPredicateKernel` family is deliberately
     bound on `StringLikeType`, because `LIKE`, `upper` and `startswith` *are*
     text operations and their `is_string_like` guards exist to say so. Row
-    equality is not a text operation: `equal_any` has to compare whatever a key
+    equality is not a text operation: `equal` has to compare whatever a key
     column happens to hold. Widening the text family to reach `binary` would
     have made `upper(binary)` type-check, so the byte-level bound lives here
     instead, next to the one caller that needs it.
@@ -690,16 +690,16 @@ struct EqKernel(NumericCompareKernel):
 
         This is the comparison the hash table verifies key rows with. A key row
         is an arbitrary schema, so the children span dtype families and each one
-        goes through `equal_any` rather than this kernel's own numeric
+        goes through `equal` rather than this kernel's own numeric
         `dispatch`."""
         Self.expect_same_dtype(left.dtype, right.dtype)
-        var mask = equal_any(
+        var mask = equal(
             left.children[0].copy(), right.children[0].copy(), ctx
         )
         for k in range(1, len(left.children)):
             mask = AndKernel.apply(
                 mask,
-                equal_any(
+                equal(
                     left.children[k].copy(), right.children[k].copy(), ctx
                 ),
                 ctx,

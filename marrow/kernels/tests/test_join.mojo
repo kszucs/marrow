@@ -866,7 +866,7 @@ def test_join_kind_writes_its_name() raises:
 #
 # `SwissHashTable.probe` verifies hash-collision candidates with
 # `EqKernel.apply(StructArray, StructArray)`, which routes each key column
-# through `equal_any`. That picked its kernel family with
+# through `equal`. That picked its kernel family with
 # `is_string() or is_large_string()`, so a `binary` key column fell through to
 # the numeric arm and `dispatch_primitive` raised — joining on `binary` was
 # impossible while the identical join on `string` worked.

@@ -859,3 +859,62 @@ def test_buffer_mapped_size_raises_for_other_kinds() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+# ---------------------------------------------------------------------------
+# Equatable conformance
+#
+# `Buffer` and `Bitmap` had an `__eq__` long before they conformed to
+# `Equatable`, but it was parameterised — `__eq__[m: Bool](self, other:
+# Buffer[mut=m])` — which does not satisfy the trait's `__eq__(self, other:
+# Self)`. The consequence was invisible until something needed it generically:
+# `List[Buffer]` was not `Equatable`, so `ArrayData` could not compare its
+# `buffers` field at all. These pin the conformance, not just the operator.
+# ---------------------------------------------------------------------------
+
+
+def test_buffer_is_equatable_in_a_list() raises:
+    """`List[Buffer]` equality is what `ArrayData.__eq__` needs."""
+    var a = Buffer.alloc_zeroed[DType.int64](4)
+    a.unsafe_set[DType.int64](0, 11)
+    var b = Buffer.alloc_zeroed[DType.int64](4)
+    b.unsafe_set[DType.int64](0, 11)
+    var c = Buffer.alloc_zeroed[DType.int64](4)
+    c.unsafe_set[DType.int64](0, 22)
+
+    var left = [a^.to_immutable(), b^.to_immutable()]
+    var right = [c^.to_immutable()]
+    assert_equal(len(left), 2)
+    assert_equal(len(right), 1)
+    assert_true(left[0] == left[1])
+    assert_false(left[0] == right[0])
+
+
+def test_bitmap_is_equatable_in_an_optional() raises:
+    """`Optional[Bitmap]` equality — the validity field's shape."""
+    var a = Bitmap.alloc_zeroed(8)
+    a.set(1)
+    var b = Bitmap.alloc_zeroed(8)
+    b.set(1)
+    var c = Bitmap.alloc_zeroed(8)
+    c.set(2)
+
+    var fa = a^.to_immutable()
+    var fb = b^.to_immutable()
+    var fc = c^.to_immutable()
+    assert_true(fa == fb)
+    assert_false(fa == fc)
+
+    var opt_a = Optional(fa.copy())
+    var opt_b = Optional(fb.copy())
+    assert_true(opt_a.value() == opt_b.value())
+
+
+def test_buffer_ne_is_the_negation_of_eq() raises:
+    var a = Buffer.alloc_zeroed[DType.int64](2)
+    var b = Buffer.alloc_zeroed[DType.int64](2)
+    b.unsafe_set[DType.int64](1, 5)
+    var fa = a^.to_immutable()
+    var fb = b^.to_immutable()
+    assert_true(fa != fb)
+    assert_false(fa != fa.copy())
