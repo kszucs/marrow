@@ -10,6 +10,25 @@
 
 ### Features
 
+- **`marrow compile` — a CLI that compiles a `.mojo` query file (one ending
+  in `plan.execute_cli()`) into a standalone binary.** `python/marrow/compile.py`,
+  registered as the `marrow` console script (`python/pyproject.toml`'s
+  `[project.scripts]`, plus a `compile` extra pinning `mojo>=1.1,<2`).
+  Reuses `benchmarks/binary_size/compare.py:build_and_strip`'s recipe
+  (`mojo build -O3 -g0 -I <marrow> <src> -o <out>`, then `strip`).
+  `resolve_marrow_path` finds the `marrow/` package via `--marrow-path` ->
+  `$MARROW_MOJO_PATH` -> the (future) bundled `marrow/_mojo/` -> repo-root
+  autodetection, raising `FileNotFoundError` listing all four when none
+  resolve. `check_mojo_version` fails fast with an actionable message when
+  `mojo` is missing or out of range, naming marrow's pinned nightly and that
+  PyPI's stable wheel cannot reach it (a wheel cannot force
+  `--extra-index-url`), instead of letting an opaque compiler error surface.
+  **Passes `-D MARROW_CLI_WRITERS=true` by default** — Task 7 gated the
+  Parquet/IPC output writers behind that define since linking them costs
+  572,288 bytes of `__text`, but the CLI's documented `-o result.parquet` /
+  `-o result.arrow` contract has to work out of the box; `--no-writers` opts
+  back out for the ~572 KB smaller binary, with `-o` disabled in that build.
+
 - **`DynRelation.execute_cli()` — argv binding, `--help`, `--describe`, and
   the output contract for a compiled query binary.** The last call in a
   `main()` that built a plan with `param(...)` cells: drains the parameter

@@ -9,6 +9,12 @@ description = "Apache Arrow implementation in Mojo"
 readme = "../README.md"
 requires-python = ">=3.14"
 
+[project.scripts]
+marrow = "marrow.compile:main"
+
+[project.optional-dependencies]
+compile = ["mojo>=1.1,<2"]
+
 [tool.hatch.build.hooks.custom]
 path = "build.py"
 
