@@ -22,6 +22,7 @@ from std.ffi import OwnedDLHandle, _DLHandle, _Global, _try_find_dylib
 from std.pathlib import Path
 from std.memory import unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
+from std.sys import argv
 
 comptime _ZSTD_PATHS: List[Path] = [
     "libzstd.dylib",
@@ -55,6 +56,56 @@ comptime _BROTLI_DEC_PATHS: List[Path] = [
     "libbrotlidec.so",
     "libbrotlidec.so.1",
 ]
+
+
+def _exe_dir() -> String:
+    """Best-effort directory containing the running executable, derived from
+    ``argv()[0]``.
+
+    A bare soname (`dlopen("libsnappy.dylib")`) is resolved by the dynamic
+    loader's default search paths, never `@loader_path` — so a `marrow
+    compile --bundle` directory that ships the codec dylibs next to the
+    binary still fails to `dlopen` them unless something tells the loader to
+    look there. `argv()[0]` carries that "there": when the process is
+    launched as `./qp` or `/abs/path/qp` (as a bundle is documented to be
+    run), it has a directory component, and a candidate built from it plus a
+    slash resolves as a path, not a bare name, bypassing the search order
+    entirely.
+
+    Returns the empty string when `argv()[0]` has no `/` (an unqualified
+    `PATH` lookup, e.g. a bare `qp` after `install`) — callers then fall back
+    to the original bare-soname candidates below, exactly as before this
+    existed.
+    """
+    var args = argv()
+    if len(args) == 0:
+        return String()
+    var exe = String(args[0])
+    var parts = exe.split("/")
+    if len(parts) <= 1:
+        return String()
+    var out = String()
+    for i in range(len(parts) - 1):
+        if i != 0:
+            out += "/"
+        out += parts[i]
+    return out
+
+
+def _with_exe_dir(dir: String, paths: List[Path]) -> List[Path]:
+    """`paths`, prefixed with an executable-relative candidate (under `dir`,
+    the result of `_exe_dir()`) for each entry when `dir` is non-empty.
+
+    Tried first, so a bundle's own copy of a codec library wins over
+    whatever the bare soname would otherwise resolve to on the host.
+    """
+    var out = List[Path]()
+    if dir.byte_length() != 0:
+        for p in paths:
+            out.append(Path(dir + "/" + String(p)))
+    for p in paths:
+        out.append(p)
+    return out^
 
 
 @fieldwise_init
@@ -109,15 +160,24 @@ struct _CodecHandles(Movable):
     var brotli_dec: _Library
 
     def __init__(out self):
-        self.zstd = _Library.open["zstd"](materialize[_ZSTD_PATHS]())
-        self.snappy = _Library.open["snappy"](materialize[_SNAPPY_PATHS]())
-        self.lz4 = _Library.open["lz4"](materialize[_LZ4_PATHS]())
-        self.zlib = _Library.open["z"](materialize[_ZLIB_PATHS]())
+        var exe_dir = _exe_dir()  # resolved once, shared by every candidate list
+        self.zstd = _Library.open["zstd"](
+            _with_exe_dir(exe_dir, materialize[_ZSTD_PATHS]())
+        )
+        self.snappy = _Library.open["snappy"](
+            _with_exe_dir(exe_dir, materialize[_SNAPPY_PATHS]())
+        )
+        self.lz4 = _Library.open["lz4"](
+            _with_exe_dir(exe_dir, materialize[_LZ4_PATHS]())
+        )
+        self.zlib = _Library.open["z"](
+            _with_exe_dir(exe_dir, materialize[_ZLIB_PATHS]())
+        )
         self.brotli_enc = _Library.open["brotlienc"](
-            materialize[_BROTLI_ENC_PATHS]()
+            _with_exe_dir(exe_dir, materialize[_BROTLI_ENC_PATHS]())
         )
         self.brotli_dec = _Library.open["brotlidec"](
-            materialize[_BROTLI_DEC_PATHS]()
+            _with_exe_dir(exe_dir, materialize[_BROTLI_DEC_PATHS]())
         )
 
 
