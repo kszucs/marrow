@@ -1,0 +1,151 @@
+== test_golden_select_two_columns
+k:string	v:int64
+a	1
+b	2
+a	3
+c	4
+b	NULL
+a	6
+NULL	7
+
+== test_golden_filter_gt
+k:string	v:int64	w:int64
+c	4	40
+a	6	60
+NULL	7	70
+
+== test_golden_filter_and
+k:string	v:int64	w:int64
+a	3	30
+c	4	40
+
+== test_golden_project_sum_of_columns
+s:int64
+11
+NULL
+33
+44
+NULL
+66
+77
+
+== test_golden_with_columns_appends
+k:string	v:int64	w:int64	s:int64
+a	1	10	11
+b	2	NULL	NULL
+a	3	30	33
+c	4	40	44
+b	NULL	50	NULL
+a	6	60	66
+NULL	7	70	77
+
+== test_golden_aggregate_sum_by_key
+k:string	total:int64
+NULL	7
+a	10
+b	2
+c	4
+
+== test_golden_aggregate_several
+k:string	total:int64	biggest:int64	n:int64
+NULL	7	7	1
+a	10	6	3
+b	2	2	1
+c	4	4	1
+
+== test_golden_aggregate_no_keys
+total:int64
+23
+
+== test_golden_order_by_asc
+k:string	v:int64	w:int64
+b	NULL	50
+a	1	10
+b	2	NULL
+a	3	30
+c	4	40
+a	6	60
+NULL	7	70
+
+== test_golden_order_by_desc_limit
+k:string	v:int64	w:int64
+b	NULL	50
+NULL	7	70
+a	6	60
+
+== test_golden_filter_then_aggregate
+k:string	total:int64
+NULL	7
+a	9
+b	NULL
+c	4
+
+== test_golden_filter_lt
+k:string	v:int64	w:int64
+a	1	10
+b	2	NULL
+a	3	30
+
+== test_golden_filter_or
+k:string	v:int64	w:int64
+a	1	10
+NULL	7	70
+
+== test_golden_filter_not
+k:string	v:int64	w:int64
+a	1	10
+b	2	NULL
+a	3	30
+
+== test_golden_project_difference
+d:int64
+-9
+NULL
+-27
+-36
+NULL
+-54
+-63
+
+== test_golden_project_predicate_is_boolean
+gt:bool
+False
+False
+False
+True
+NULL
+True
+True
+
+== test_golden_order_by_two_keys
+k:string	v:int64	w:int64
+NULL	7	70
+a	1	10
+a	3	30
+a	6	60
+b	NULL	50
+b	2	NULL
+c	4	40
+
+== test_golden_order_by_nulls_last
+k:string	v:int64	w:int64
+a	1	10
+b	2	NULL
+a	3	30
+c	4	40
+a	6	60
+NULL	7	70
+b	NULL	50
+
+== test_golden_limit_with_offset
+k:string	v:int64	w:int64
+b	2	NULL
+a	3	30
+c	4	40
+
+== test_golden_aggregate_min_max
+k:string	lo:int64	hi:int64
+NULL	7	70
+a	1	60
+b	2	50
+c	4	40

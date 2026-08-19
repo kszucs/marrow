@@ -216,3 +216,4 @@ skills-lock.json
 
 # Claude Code session state and agent worktrees
 .claude/
+golden/.exp/
