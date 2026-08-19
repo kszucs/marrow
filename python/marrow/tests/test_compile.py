@@ -7,9 +7,17 @@ the task report), not a unit test.
 """
 
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
-from marrow.compile import build_command, check_mojo_version, resolve_marrow_path
+from marrow.compile import (
+    build_command,
+    bundle,
+    check_mojo_version,
+    dylib_closure,
+    resolve_marrow_path,
+)
 
 
 def test_build_command_uses_o3_and_include_path(tmp_path):
@@ -105,3 +113,49 @@ def test_check_mojo_version_in_range_returns_version_string(monkeypatch):
 
     monkeypatch.setattr("marrow.compile.subprocess.run", fake_run)
     assert check_mojo_version() == "1.1.0"
+
+
+# --- dylib_closure / bundle --------------------------------------------------
+#
+# These exercise `otool`/`install_name_tool` against an *already-built* gate
+# binary (`benchmarks/binary_size/query_scan_typed`, built by
+# `pixi run binary_size`) rather than invoking `mojo build` — a build takes
+# 1-2 minutes and these tests only need a Mach-O to introspect. Both skip if
+# that binary is not present locally. macOS-only: `dylib_closure`/`bundle`
+# also have a Linux path (`ldd`/`patchelf`), but that is unverified here —
+# see the task report.
+
+_GATE_BINARY = Path("benchmarks/binary_size/query_scan_typed")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: otool")
+def test_dylib_closure_is_transitive_and_excludes_system():
+    if not _GATE_BINARY.exists():
+        pytest.skip("gate binary not built")
+    names = {p.name for p in dylib_closure(_GATE_BINARY)}
+    assert "libAsyncRTMojoBindings.dylib" in names
+    assert "libKGENCompilerRTShared.dylib" in names
+    assert "libAsyncRTRuntimeGlobals.dylib" in names  # transitive, not direct
+    assert "libMSupportGlobals.dylib" in names  # transitive, not direct
+    assert not any(n.startswith("libSystem") for n in names)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: install_name_tool")
+def test_bundle_copies_closure_and_rewrites_rpath_to_loader_path(tmp_path):
+    if not _GATE_BINARY.exists():
+        pytest.skip("gate binary not built")
+    dest = tmp_path / "bundled"
+    deps = dylib_closure(_GATE_BINARY)
+
+    out = bundle(_GATE_BINARY, dest)
+
+    assert out == dest / _GATE_BINARY.name
+    assert out.exists()
+    for dep in deps:
+        assert (dest / dep.name).exists()
+
+    result = subprocess.run(
+        ["otool", "-l", str(out)], capture_output=True, text=True, check=True
+    )
+    assert "@loader_path" in result.stdout
+    assert ".pixi" not in result.stdout

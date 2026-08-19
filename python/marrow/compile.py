@@ -73,6 +73,189 @@ def build_command(
     return cmd
 
 
+def _is_system_dep(path: str) -> bool:
+    """True for a dependency marrow does not need to ship.
+
+    `/usr/lib` and `/System` (macOS) and `/lib`, `/lib64` and `/usr/lib`
+    (Linux) are present on any target machine by construction — the OS
+    would not boot without them.
+    """
+    return (
+        path.startswith("/usr/lib")
+        or path.startswith("/System")
+        or path.startswith("/lib")
+    )
+
+
+def _otool_lines(flag: str, path: Path) -> list[str]:
+    result = subprocess.run(
+        ["otool", flag, str(path)], capture_output=True, text=True, check=True
+    )
+    return result.stdout.splitlines()
+
+
+def _otool_deps(path: Path) -> list[str]:
+    """The dependency list from `otool -L`, skipping the self-id/path line."""
+    lines = _otool_lines("-L", path)[1:]
+    return [line.strip().split(" (")[0] for line in lines if line.strip()]
+
+
+_RPATH_RE = re.compile(r"path (.+) \(offset \d+\)")
+
+
+def _otool_rpaths(path: Path) -> list[str]:
+    """The `LC_RPATH` entries baked into `path`, in load-command order."""
+    lines = _otool_lines("-l", path)
+    rpaths = []
+    for i, line in enumerate(lines):
+        if line.strip() == "cmd LC_RPATH":
+            match = _RPATH_RE.search(lines[i + 2])
+            if match is not None:
+                rpaths.append(match.group(1))
+    return rpaths
+
+
+def _resolve_macos_dep(dep: str, loader: Path) -> Path | None:
+    """Resolve one `otool -L` dependency string to a file on disk.
+
+    `@rpath/libX.dylib` is resolved against `loader`'s own `LC_RPATH`
+    entries (each of which may itself be `@loader_path`-relative) —
+    dependency resolution happens per-Mach-O-file, not against the
+    original binary's rpath. `@loader_path/...` and `@executable_path/...`
+    are resolved directly against `loader`'s directory. An absolute path
+    is returned as-is.
+    """
+    if dep.startswith("@rpath/"):
+        name = dep.removeprefix("@rpath/")
+        for rpath in _otool_rpaths(loader):
+            base = rpath.replace("@loader_path", str(loader.parent)).replace(
+                "@executable_path", str(loader.parent)
+            )
+            candidate = Path(base) / name
+            if candidate.exists():
+                return candidate.resolve()
+        return None
+    if dep.startswith("@loader_path/"):
+        candidate = loader.parent / dep.removeprefix("@loader_path/")
+        return candidate.resolve() if candidate.exists() else None
+    if dep.startswith("@executable_path/"):
+        candidate = loader.parent / dep.removeprefix("@executable_path/")
+        return candidate.resolve() if candidate.exists() else None
+    if dep.startswith("/"):
+        return Path(dep)
+    return None
+
+
+def _dylib_closure_macos(binary: Path) -> list[Path]:
+    seen: dict[Path, None] = {}
+    frontier = [binary]
+    while frontier:
+        current = frontier.pop()
+        for dep in _otool_deps(current):
+            if _is_system_dep(dep):
+                continue
+            resolved = _resolve_macos_dep(dep, current)
+            if resolved is None or not resolved.exists() or resolved == binary:
+                continue
+            if resolved not in seen:
+                seen[resolved] = None
+                frontier.append(resolved)
+    return list(seen.keys())
+
+
+def _ldd_deps(path: Path) -> list[str]:
+    result = subprocess.run(
+        ["ldd", str(path)], capture_output=True, text=True, check=True
+    )
+    deps = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if "=>" in line:
+            target = line.split("=>", 1)[1].strip().split(" (")[0].strip()
+            if target and target != "not found":
+                deps.append(target)
+        elif line.startswith("/"):
+            deps.append(line.split(" (")[0].strip())
+    return deps
+
+
+def _dylib_closure_linux(binary: Path) -> list[Path]:
+    seen: dict[Path, None] = {}
+    frontier = [binary]
+    while frontier:
+        current = frontier.pop()
+        for dep in _ldd_deps(current):
+            if _is_system_dep(dep):
+                continue
+            resolved = Path(dep).resolve()
+            if not resolved.exists() or resolved == binary:
+                continue
+            if resolved not in seen:
+                seen[resolved] = None
+                frontier.append(resolved)
+    return list(seen.keys())
+
+
+def dylib_closure(binary: Path) -> list[Path]:
+    """The transitive closure of `binary`'s non-system shared-library deps.
+
+    Direct deps come from a single `otool -L` (macOS) / `ldd` (Linux) call;
+    each newly discovered dependency is then walked the same way, so a lib
+    pulled in only transitively (`libAsyncRTRuntimeGlobals.dylib`, pulled in
+    by `libKGENCompilerRTShared.dylib` rather than linked directly into the
+    query binary) is still found. `/usr/lib`, `/System` and `/lib*` entries
+    are excluded throughout — they are present on any target machine.
+
+    This must recurse rather than hardcode the dylib list: marrow's own
+    query binaries currently link 2 dylibs directly and depend on 4
+    transitively, and a `-D MARROW_GPU=true` build pulls in a 5th
+    (`libMGPRT.dylib`). A fixed list silently ships a broken bundle the
+    moment that closure changes.
+    """
+    binary = binary.resolve()
+    if sys.platform == "darwin":
+        return _dylib_closure_macos(binary)
+    return _dylib_closure_linux(binary)
+
+
+def bundle(binary: Path, dest: Path) -> Path:
+    """Copy `binary` and its dylib closure into `dest`, relocatably.
+
+    The binary's `LC_RPATH` (macOS) / `RUNPATH` (Linux) is rewritten to
+    `@loader_path` / `$ORIGIN` so it resolves its dylibs next to itself
+    instead of inside the local pixi environment — `dest` can then be
+    zipped, copied to another machine, or shipped as a Lambda deployment
+    unit and run without the build machine's pixi environment present.
+    Returns the path to the copied binary inside `dest`.
+    """
+    binary = binary.resolve()
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    deps = dylib_closure(binary)
+    out_binary = dest / binary.name
+    shutil.copy2(binary, out_binary)
+    for dep in deps:
+        shutil.copy2(dep, dest / dep.name)
+
+    if sys.platform == "darwin":
+        for rpath in _otool_rpaths(out_binary):
+            subprocess.run(
+                ["install_name_tool", "-delete_rpath", rpath, str(out_binary)],
+                check=True,
+            )
+        subprocess.run(
+            ["install_name_tool", "-add_rpath", "@loader_path", str(out_binary)],
+            check=True,
+        )
+    else:
+        subprocess.run(
+            ["patchelf", "--set-rpath", "$ORIGIN", str(out_binary)], check=True
+        )
+
+    return out_binary
+
+
 def _bundled_path() -> Path:
     return Path(__file__).resolve().parent / "_mojo"
 
@@ -240,8 +423,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--bundle",
         metavar="DIR",
         default=None,
-        help="(not yet implemented) bundle the marrow Mojo sources into DIR "
-        "for a self-contained build",
+        help="copy the built binary and its dylib closure into DIR, with "
+        "the rpath rewritten to @loader_path/$ORIGIN, so DIR is a "
+        "self-contained, relocatable directory that runs without the "
+        "local pixi environment (default: emit a bare binary)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="print the build command"
@@ -252,10 +437,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
-
-    if args.bundle is not None:
-        print("marrow: --bundle is not implemented yet", file=sys.stderr)
-        return 2
 
     try:
         check_mojo_version()
@@ -301,6 +482,15 @@ def main(argv: list[str] | None = None) -> int:
                 subprocess.run([strip, str(out)], check=True)
             except subprocess.CalledProcessError as e:
                 print(f"marrow: warning: strip failed ({e})", file=sys.stderr)
+
+    if args.bundle is not None:
+        try:
+            bundled = bundle(out, Path(args.bundle))
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+            print(f"marrow: bundle failed ({e})", file=sys.stderr)
+            return 1
+        if args.verbose:
+            print(f"bundled: {bundled}")
 
     return 0
 
