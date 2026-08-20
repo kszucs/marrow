@@ -1,4 +1,11 @@
-def test_golden_cast_float_to_int() raises:
+from golden.helpers import table
+from marrow.dtypes import Int64Type, float64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import NumericCast
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(TRUNC(f) AS BIGINT) AS c FROM nums
 
@@ -21,4 +28,4 @@ def test_golden_cast_float_to_int() raises:
     """
     var t = table("nums")
     var q = t.project(["c"], [NumericCast[Int64Type](col("f", float64))])
-    check(q)
+    return q

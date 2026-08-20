@@ -1,4 +1,10 @@
-def test_golden_agg_two_group_keys() raises:
+from golden.helpers import table
+from marrow.dtypes import int64, string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v, CAST(sum(w) AS BIGINT) AS s FROM basic GROUP BY k, v ORDER BY k NULLS FIRST, v NULLS FIRST
 
@@ -15,11 +21,7 @@ def test_golden_agg_two_group_keys() raises:
     var t = table("basic")
     var agg = t.aggregate(
         keys=[col("k", string), col("v", int64)],
-        aggs=[
-            AggExpr.of[NumericAgg[SumKernel, Int64Type]](col("w", int64)).alias(
-                "s"
-            )
-        ],
+        aggs=[col("w", int64).sum().alias("s")],
     )
     var q = agg.sort([col("k", string), col("v", int64)], [True, True])
-    check(q)
+    return q

@@ -1,4 +1,11 @@
-def test_golden_join_inner() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.kernels.join import JOIN_ALL, JOIN_INNER
+
+
+def plan() raises -> DynRelation:
     """
     SELECT e.eid, e.dept, d.did, d.dname FROM emp e JOIN dept d ON e.dept = d.did ORDER BY e.eid NULLS FIRST
 
@@ -18,4 +25,4 @@ def test_golden_join_inner() raises:
         strictness=JOIN_ALL,
     )
     var q = joined.sort([col("eid", int64)], [True])
-    check(q)
+    return q

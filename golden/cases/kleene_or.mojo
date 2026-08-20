@@ -1,4 +1,10 @@
-def test_golden_kleene_or() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col, lit
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT x, y, (x > 0) OR (y > 0) AS r FROM kleene
 
@@ -24,4 +30,4 @@ def test_golden_kleene_or() raises:
             | (col("y", int64) > lit(0, int64)),
         ],
     )
-    check(q)
+    return q

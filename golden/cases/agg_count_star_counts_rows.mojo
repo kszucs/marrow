@@ -1,4 +1,9 @@
-def test_golden_agg_count_star_counts_rows() raises:
+from golden.helpers import table
+from marrow.expr.builders import count_star
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(count(*) AS BIGINT) AS n FROM basic
 
@@ -7,5 +12,5 @@ def test_golden_agg_count_star_counts_rows() raises:
     7
     """
     var t = table("basic")
-    var q = t.aggregate(keys=List[BoxedValue](), aggs=[count_star().alias("n")])
-    check(q)
+    var q = t.aggregate(aggs=[count_star().alias("n")])
+    return q

@@ -1,4 +1,10 @@
-def test_golden_limit_with_offset() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v, w FROM basic ORDER BY v NULLS FIRST LIMIT 3 OFFSET 2
 
@@ -10,4 +16,4 @@ def test_golden_limit_with_offset() raises:
     """
     var t = table("basic")
     var q = t.sort([col("v", int64)], [True]).limit(3, 2)
-    check(q)
+    return q

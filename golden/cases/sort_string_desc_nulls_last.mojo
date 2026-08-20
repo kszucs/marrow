@@ -1,4 +1,10 @@
-def test_golden_sort_string_desc_nulls_last() raises:
+from golden.helpers import table
+from marrow.dtypes import string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v, w FROM basic ORDER BY k DESC NULLS LAST
 
@@ -14,4 +20,4 @@ def test_golden_sort_string_desc_nulls_last() raises:
     """
     var t = table("basic")
     var q = t.sort([col("k", string)], [False], nulls_first=False)
-    check(q)
+    return q

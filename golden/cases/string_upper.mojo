@@ -1,4 +1,11 @@
-def test_golden_string_upper() raises:
+from golden.helpers import table
+from marrow.dtypes import string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import Upper
+
+
+def plan() raises -> DynRelation:
     """
     SELECT upper(s) AS u FROM words
 
@@ -13,4 +20,4 @@ def test_golden_string_upper() raises:
     """
     var t = table("words")
     var q = t.project(["u"], [Upper(col("s", string))])
-    check(q)
+    return q

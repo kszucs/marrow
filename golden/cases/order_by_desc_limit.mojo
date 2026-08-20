@@ -1,4 +1,10 @@
-def test_golden_order_by_desc_limit() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v, w FROM basic ORDER BY v DESC NULLS FIRST LIMIT 3
 
@@ -10,4 +16,4 @@ def test_golden_order_by_desc_limit() raises:
     """
     var t = table("basic")
     var q = t.sort([col("v", int64)], [False]).limit(3)
-    check(q)
+    return q

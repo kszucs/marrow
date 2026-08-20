@@ -21,9 +21,14 @@
   one expression below it. It is **Mojo source**, and Mojo is the source of
   truth — the constrained lane (no `**kwargs`, a dtype required at comptime)
   is the one whose spelling the other can always accept. The Mojo lane
-  compiles the cases concatenated into a generated `test_cases.mojo`; the
-  Python lane runs the same text through a three-rule transpile (drop
-  `raises`, drop `var`, keep everything else) against `golden/helpers.py`.
+  *imports* each case — the file is a standalone module exposing
+  `def plan() raises -> DynRelation`, and the generated `test_cases.mojo` is
+  one import plus a three-line wrapper per case, so a query exists in exactly
+  one place. The case's identity is its file name; nothing inside repeats it,
+  and `check` is called by the wrapper, which is where the name comes from.
+  The Python lane runs the same body through a one-rule transpile (drop `var`)
+  against `golden/helpers.py`. Measured: 69 separately-compiled case modules
+  cost 161s cold against 160s for one concatenated module.
   `expfmt.py`, `fixtures.py` and `regenerate.py` are folded into
   `golden/runner.py`, whose `import duckdb` sits inside `regenerate()` so the
   duckdb-free `dev` environment still runs the corpus. Regeneration is now
@@ -35,9 +40,24 @@
   `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x)`, `NumericCast[Float64Type]`,
   `Upper(x)` — is bridged by golden-local shims rather than by growing
   marrow's public Python API, which should never require writing
-  `AggExpr.of[NumericAgg[...]]` where `.sum()` exists. 48 shims today;
+  `AggExpr.of[NumericAgg[...]]` where `.sum()` exists. 39 shims today;
   `test_golden_shims_are_declared` fails both when a vocabulary name is added
   without being declared and when a shim has quietly become real API.
+
+- **Aggregates use the fluent API, which marrow already had.** The corpus
+  spelled every aggregate `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x)`,
+  and so did `marrow/expr/tests/test_aggregates.mojo` — but `.sum()`,
+  `.mean()`, `.min()`, `.max()` and `.count()` have been on `NumericValue`,
+  `StringValue` and `TemporalValue` all along, documented in
+  `Relation.aggregate`'s own docstring. Every case now reads
+  `col("v", int64).sum().alias("total")`, which deleted nine shims at a
+  stroke. `Relation` gained a keys-less `aggregate(aggs)` overload so a
+  no-`GROUP BY` aggregate needs no empty key list, matching
+  `df.select(pl.col("v").sum())` in polars and `t.aggregate(total=t.v.sum())`
+  in ibis. The low-level constructors stay where they belong: the kernel
+  layer, `bench_aggregate_aot.mojo` and `benchmarks/binary_size/`, which exist
+  to measure comptime versus runtime resolution and would stop measuring it if
+  rewritten. CLAUDE.md records the rule for new tests.
 
 ### Fixes
 

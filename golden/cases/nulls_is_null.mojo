@@ -1,4 +1,11 @@
-def test_golden_nulls_is_null() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import IsNull
+
+
+def plan() raises -> DynRelation:
     """
     SELECT a, b, g FROM nulls WHERE a IS NULL
 
@@ -11,4 +18,4 @@ def test_golden_nulls_is_null() raises:
     """
     var t = table("nulls")
     var q = t.filter(IsNull(col("a", int64)))
-    check(q)
+    return q

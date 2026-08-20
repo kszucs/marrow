@@ -1,4 +1,11 @@
-def test_golden_cond_fill_null_with_literal() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col, lit
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import FillNull
+
+
+def plan() raises -> DynRelation:
     """
     SELECT coalesce(v, 0) AS c FROM basic
 
@@ -14,4 +21,4 @@ def test_golden_cond_fill_null_with_literal() raises:
     """
     var t = table("basic")
     var q = t.project(["c"], [FillNull(col("v", int64), lit(0, int64))])
-    check(q)
+    return q

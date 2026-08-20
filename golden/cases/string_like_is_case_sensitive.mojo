@@ -1,4 +1,11 @@
-def test_golden_string_like_is_case_sensitive() raises:
+from golden.helpers import table
+from marrow.dtypes import string
+from marrow.expr.builders import col, lit
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import Like
+
+
+def plan() raises -> DynRelation:
     """
     SELECT s LIKE 'h%' AS b FROM words
 
@@ -13,4 +20,4 @@ def test_golden_string_like_is_case_sensitive() raises:
     """
     var t = table("words")
     var q = t.project(["b"], [Like(col("s", string), lit("h%"))])
-    check(q)
+    return q

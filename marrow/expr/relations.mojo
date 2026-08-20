@@ -702,6 +702,20 @@ struct DynRelation(ImplicitlyCopyable, Movable, Writable):
             return DynRelation(Filter(input=pushed^, predicate=predicate^))
         return DynRelation(Filter(input=self, predicate=predicate^))
 
+    def aggregate(self, aggs: List[AggExpr]) raises -> DynRelation:
+        """``SELECT agg(x), ...`` with no ``GROUP BY`` — one implicit group,
+        one row out.
+
+            rel.aggregate(aggs=[col("amount", int64).sum().alias("total")])
+
+        polars spells this ``df.select(pl.col("v").sum())`` and ibis
+        ``t.aggregate(total=t.v.sum())``; neither makes the caller write an
+        empty key list. ``keys`` cannot simply take a default value because it
+        precedes the non-defaulted ``aggs``, so the no-key form is an overload
+        rather than a default argument.
+        """
+        return self.aggregate(List[BoxedValue](), aggs)
+
     def aggregate(
         self, keys: List[BoxedValue], aggs: List[AggExpr]
     ) raises -> DynRelation:

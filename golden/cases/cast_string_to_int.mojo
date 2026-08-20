@@ -1,4 +1,11 @@
-def test_golden_cast_string_to_int() raises:
+from golden.helpers import table
+from marrow.dtypes import Int64Type, string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import StringToNum
+
+
+def plan() raises -> DynRelation:
     """
     SELECT TRY_CAST(s AS BIGINT) AS c FROM nums
 
@@ -15,4 +22,4 @@ def test_golden_cast_string_to_int() raises:
     """
     var t = table("nums")
     var q = t.project(["c"], [StringToNum[Int64Type](col("s", string))])
-    check(q)
+    return q

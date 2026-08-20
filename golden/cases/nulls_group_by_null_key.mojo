@@ -1,4 +1,10 @@
-def test_golden_nulls_group_by_null_key() raises:
+from golden.helpers import table
+from marrow.dtypes import int64, string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT g, CAST(sum(b) AS BIGINT) AS total FROM nulls GROUP BY g ORDER BY g NULLS FIRST
 
@@ -11,11 +17,7 @@ def test_golden_nulls_group_by_null_key() raises:
     var t = table("nulls")
     var agg = t.aggregate(
         keys=[col("g", string)],
-        aggs=[
-            AggExpr.of[NumericAgg[SumKernel, Int64Type]](col("b", int64)).alias(
-                "total"
-            )
-        ],
+        aggs=[col("b", int64).sum().alias("total")],
     )
     var q = agg.sort([col("g", string)], [True])
-    check(q)
+    return q

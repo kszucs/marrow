@@ -1,4 +1,8 @@
-def test_golden_select_two_columns() raises:
+from golden.helpers import table
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v FROM basic
 
@@ -14,4 +18,4 @@ def test_golden_select_two_columns() raises:
     """
     var t = table("basic")
     var q = t.select("k", "v")
-    check(q)
+    return q

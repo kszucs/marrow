@@ -1,4 +1,10 @@
-def test_golden_nulls_count_of_all_null_is_zero() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(count(a) AS BIGINT) AS n FROM nulls
 
@@ -8,11 +14,6 @@ def test_golden_nulls_count_of_all_null_is_zero() raises:
     """
     var t = table("nulls")
     var q = t.aggregate(
-        keys=List[BoxedValue](),
-        aggs=[
-            AggExpr.of[NumericAgg[CountKernel, Int64Type]](
-                col("a", int64)
-            ).alias("n")
-        ],
+        aggs=[col("a", int64).count().alias("n")],
     )
-    check(q)
+    return q

@@ -1,4 +1,10 @@
-def test_golden_sort_mixed_directions() raises:
+from golden.helpers import table
+from marrow.dtypes import int64, string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v, w FROM basic ORDER BY k ASC NULLS FIRST, v DESC NULLS FIRST
 
@@ -14,4 +20,4 @@ def test_golden_sort_mixed_directions() raises:
     """
     var t = table("basic")
     var q = t.sort([col("k", string), col("v", int64)], [True, False])
-    check(q)
+    return q

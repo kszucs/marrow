@@ -1,4 +1,10 @@
-def test_golden_kleene_column_and() raises:
+from golden.helpers import table
+from marrow.dtypes import bool_
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT p, q, p AND q AS r FROM flags
 
@@ -24,4 +30,4 @@ def test_golden_kleene_column_and() raises:
         ["p", "q", "r"],
         [col("p", bool_), col("q", bool_), col("p", bool_) & col("q", bool_)],
     )
-    check(q)
+    return q

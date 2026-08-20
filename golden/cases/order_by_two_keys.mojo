@@ -1,4 +1,10 @@
-def test_golden_order_by_two_keys() raises:
+from golden.helpers import table
+from marrow.dtypes import int64, string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v, w FROM basic ORDER BY k NULLS FIRST, v NULLS FIRST
 
@@ -14,4 +20,4 @@ def test_golden_order_by_two_keys() raises:
     """
     var t = table("basic")
     var q = t.sort([col("k", string), col("v", int64)], [True, True])
-    check(q)
+    return q

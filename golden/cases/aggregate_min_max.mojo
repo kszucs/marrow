@@ -1,4 +1,10 @@
-def test_golden_aggregate_min_max() raises:
+from golden.helpers import table
+from marrow.dtypes import int64, string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, min(v) AS lo, max(w) AS hi FROM basic GROUP BY k ORDER BY k NULLS FIRST
 
@@ -13,13 +19,9 @@ def test_golden_aggregate_min_max() raises:
     var agg = t.aggregate(
         keys=[col("k", string)],
         aggs=[
-            AggExpr.of[NumericAgg[MinKernel, Int64Type]](col("v", int64)).alias(
-                "lo"
-            ),
-            AggExpr.of[NumericAgg[MaxKernel, Int64Type]](col("w", int64)).alias(
-                "hi"
-            ),
+            col("v", int64).min().alias("lo"),
+            col("w", int64).max().alias("hi"),
         ],
     )
     var q = agg.sort([col("k", string)], [True])
-    check(q)
+    return q

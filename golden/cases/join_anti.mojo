@@ -1,4 +1,11 @@
-def test_golden_join_anti() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.kernels.join import JOIN_ALL, JOIN_ANTI
+
+
+def plan() raises -> DynRelation:
     """
     SELECT e.eid, e.dept FROM emp e WHERE NOT EXISTS (SELECT 1 FROM dept d WHERE e.dept = d.did) ORDER BY e.eid NULLS FIRST
 
@@ -17,4 +24,4 @@ def test_golden_join_anti() raises:
         strictness=JOIN_ALL,
     )
     var q = joined.sort([col("eid", int64)], [True])
-    check(q)
+    return q

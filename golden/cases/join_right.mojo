@@ -1,4 +1,11 @@
-def test_golden_join_right() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.kernels.join import JOIN_ALL, JOIN_RIGHT
+
+
+def plan() raises -> DynRelation:
     """
     SELECT e.eid, e.dept, d.did, d.dname FROM emp e RIGHT JOIN dept d ON e.dept = d.did ORDER BY d.did NULLS FIRST, e.eid NULLS FIRST
 
@@ -19,4 +26,4 @@ def test_golden_join_right() raises:
         strictness=JOIN_ALL,
     )
     var q = joined.sort([col("did", int64), col("eid", int64)], [True, True])
-    check(q)
+    return q

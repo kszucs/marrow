@@ -1,4 +1,10 @@
-def test_golden_aggregate_no_keys() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(sum(v) AS BIGINT) AS total FROM basic
 
@@ -8,11 +14,6 @@ def test_golden_aggregate_no_keys() raises:
     """
     var t = table("basic")
     var q = t.aggregate(
-        keys=List[BoxedValue](),
-        aggs=[
-            AggExpr.of[NumericAgg[SumKernel, Int64Type]](col("v", int64)).alias(
-                "total"
-            )
-        ],
+        aggs=[col("v", int64).sum().alias("total")],
     )
-    check(q)
+    return q

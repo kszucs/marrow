@@ -1,4 +1,10 @@
-def test_golden_nulls_sum_of_all_null_is_null() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(sum(a) AS BIGINT) AS total FROM nulls
 
@@ -8,11 +14,6 @@ def test_golden_nulls_sum_of_all_null_is_null() raises:
     """
     var t = table("nulls")
     var q = t.aggregate(
-        keys=List[BoxedValue](),
-        aggs=[
-            AggExpr.of[NumericAgg[SumKernel, Int64Type]](col("a", int64)).alias(
-                "total"
-            )
-        ],
+        aggs=[col("a", int64).sum().alias("total")],
     )
-    check(q)
+    return q

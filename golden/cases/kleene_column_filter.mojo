@@ -1,4 +1,10 @@
-def test_golden_kleene_column_filter() raises:
+from golden.helpers import table
+from marrow.dtypes import bool_
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT p, q FROM flags WHERE p
 
@@ -12,4 +18,4 @@ def test_golden_kleene_column_filter() raises:
     """
     var t = table("flags")
     var q = t.filter(col("p", bool_))
-    check(q)
+    return q

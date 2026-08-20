@@ -1,4 +1,10 @@
-def test_golden_agg_count_column_skips_nulls() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(count(v) AS BIGINT) AS n FROM basic
 
@@ -11,11 +17,6 @@ def test_golden_agg_count_column_skips_nulls() raises:
     """
     var t = table("basic")
     var q = t.aggregate(
-        keys=List[BoxedValue](),
-        aggs=[
-            AggExpr.of[NumericAgg[CountKernel, Int64Type]](
-                col("v", int64)
-            ).alias("n")
-        ],
+        aggs=[col("v", int64).count().alias("n")],
     )
-    check(q)
+    return q

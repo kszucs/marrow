@@ -1,4 +1,10 @@
-def test_golden_filter_then_aggregate() raises:
+from golden.helpers import table
+from marrow.dtypes import int64, string
+from marrow.expr.builders import col, lit
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, CAST(sum(v) AS BIGINT) AS total FROM basic WHERE w > 20 GROUP BY k ORDER BY k NULLS FIRST
 
@@ -12,11 +18,7 @@ def test_golden_filter_then_aggregate() raises:
     var t = table("basic")
     var agg = t.filter(col("w", int64) > lit(20, int64)).aggregate(
         keys=[col("k", string)],
-        aggs=[
-            AggExpr.of[NumericAgg[SumKernel, Int64Type]](col("v", int64)).alias(
-                "total"
-            )
-        ],
+        aggs=[col("v", int64).sum().alias("total")],
     )
     var q = agg.sort([col("k", string)], [True])
-    check(q)
+    return q

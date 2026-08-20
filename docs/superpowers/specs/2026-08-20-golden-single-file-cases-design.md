@@ -29,7 +29,13 @@ of the two grammars and the one Python can always accept.
 ### Case file anatomy
 
 ```mojo
-def test_golden_kleene_column_and() raises:
+from golden.helpers import table
+from marrow.dtypes import bool_
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """SELECT p, q, p AND q AS r FROM flags
 
     Reads bool *columns*, not derived predicates — the shape the AOT lane
@@ -46,7 +52,7 @@ def test_golden_kleene_column_and() raises:
         ["p", "q", "r"],
         [col("p", bool_), col("q", bool_), col("p", bool_) & col("q", bool_)],
     )
-    check(q)
+    return q
 ```
 
 (`<TAB>` above stands for a literal tab; the expected block is the typed TSV
@@ -59,43 +65,32 @@ paragraph (the existing convention), optional prose for a human, and the
 expected table after a `-- expected` marker. The marker is spelled as a SQL
 comment because the block above it is SQL.
 
-**A case file carries no import lines.** Each lane's generator emits a fixed
-header covering the whole allowed vocabulary — `table`, `check`, `col`, `lit`,
-`bool_`, `int64`, `CaseWhen`, and so on — and the Python runner execs case
-bodies in a namespace holding exactly those same names. That set is the
-convergence contract, written down once per lane rather than scattered across
-69 files. The cost is that a case file is not standalone-compilable, so an LSP
-flags unresolved names; it is never compiled standalone anyway, and
-`mojo format` is purely syntactic so formatting still works.
+**A case file is a standalone Mojo module, and its name is the file name.**
+The Mojo lane *imports* each case rather than copying its body, so what
+compiles is the file you edit and a query exists in exactly one place. That
+costs a wrapper — Mojo has no top-level statements in a package module, so a
+bare expression cannot be a file — but the wrapper's name is the fixed word
+`plan`, never the case's own, and nothing inside the file repeats its identity.
+Each case therefore carries its own imports, three to six lines; a shared
+header is impossible once the modules compile separately, and
+`from ... import *` is banned repo-wide.
 
-**The plan is bound to a variable, then checked.** A case body reads
-`var q = t.project(...)` followed by `check(q)`, rather than nesting the
-expression inside the call. The expression is what the case is *about*, so it
-gets a line of its own instead of an extra level of indentation, and the
-`check` call stays short.
-
-**`check(plan)` takes no case name.** Mojo cannot introspect its own function
-name, so both generators inject it, rewriting `check(` to
-`check("<case name>", `. One rule applied identically in both lanes keeps the
-case text lane-neutral, and it is a plain textual rewrite precisely because
-`check(q)` is a short single line.
-
-`check` takes its plan **borrowed**, not owned — `check(name: String,
-plan: DynRelation)`. An owned parameter would make Mojo want `check(q^)` at
-the call site, and `^` is not Python. `DynRelation` is `ImplicitlyCopyable`
-and `execute` borrows its receiver (`relations.mojo:413`,
-`relations.mojo:571`), so nothing is given up by borrowing here.
+**A case returns its plan; it never calls `check`.** `check` needs the case
+name, and Mojo cannot introspect a function's own name — so the generated
+wrapper supplies it from the file name. This is what keeps the case body free
+of its own identity, and it removes `check` from the case vocabulary
+altogether.
 
 ### The two generators
 
-**Mojo.** `runner.py`, on import from `conftest.py`, concatenates every `cases/*.mojo`
-under the fixed import header into `golden/test_cases.mojo` (generated,
-gitignored). One module, so the driver's compile cost stays comparable to
-today's. The existing harness then collects it unchanged: `pytest_collect_file`
-(`conftest.py:819`) picks up `test_*.mojo` and regex-scans for `def test_*(`
-(`conftest.py:24`). No new Mojo machinery exists — in particular there is no
-hand-written `test_cases.mojo`, because Mojo has no `eval` and a hand-written
-one could not parse anything.
+**Mojo.** `runner.py`, on import from `conftest.py`, writes
+`golden/test_cases.mojo` (generated, gitignored): one import and one
+three-line wrapper per case, no bodies. The harness then collects it unchanged
+— `pytest_collect_file` (`conftest.py:819`) picks up `test_*.mojo` and
+regex-scans for `def test_*(` (`conftest.py:24`), so the wrappers must exist;
+what they must not do is restate the query. Measured: 69 separately-compiled
+case modules cost 161s cold, against 160s for a single concatenated module, so
+module count is not the lever it was feared to be.
 
 **Python.** `runner.py` transpiles each case body and injects the resulting
 function into `test_cases.py`'s module globals. Item names then match the

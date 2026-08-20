@@ -1,4 +1,10 @@
-def test_golden_sort_all_null_key() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT a, b, g FROM nulls ORDER BY a NULLS FIRST, b NULLS FIRST
 
@@ -11,4 +17,4 @@ def test_golden_sort_all_null_key() raises:
     """
     var t = table("nulls")
     var q = t.sort([col("a", int64), col("b", int64)], [True, True])
-    check(q)
+    return q

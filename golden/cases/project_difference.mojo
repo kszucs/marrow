@@ -1,4 +1,10 @@
-def test_golden_project_difference() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT v - w AS d FROM basic
 
@@ -14,4 +20,4 @@ def test_golden_project_difference() raises:
     """
     var t = table("basic")
     var q = t.project(["d"], [col("v", int64) - col("w", int64)])
-    check(q)
+    return q

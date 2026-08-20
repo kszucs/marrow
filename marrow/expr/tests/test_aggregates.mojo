@@ -48,14 +48,6 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...dtypes import StringType
-from ...kernels.aggregate import (
-    NumericAgg,
-    StringMinMax,
-    MinOp,
-    SumKernel,
-    MaxKernel,
-)
 from ...expr.values import AggExpr
 from ...expr.builders import col, lit, count_star
 from ...expr.relations import DynRelation, in_memory_table
@@ -411,12 +403,8 @@ def _fused_sum_max_by_region() raises -> DynRelation:
     return in_memory_table(_orders()).aggregate(
         keys=[fused_col("region", string)],
         aggs=[
-            AggExpr.of[NumericAgg[SumKernel, Int64Type]](
-                fused_col("amount", int64)
-            ).alias("total"),
-            AggExpr.of[NumericAgg[MaxKernel, Int64Type]](
-                fused_col("amount", int64)
-            ).alias("biggest"),
+            fused_col("amount", int64).sum().alias("total"),
+            fused_col("amount", int64).max().alias("biggest"),
         ],
     )
 
@@ -464,11 +452,7 @@ def test_fused_non_numeric_aggregation() raises:
     min is just a different `Aggregation` named at compile time."""
     var plan = in_memory_table(_orders()).aggregate(
         keys=[fused_col("region", string)],
-        aggs=[
-            AggExpr.of[StringMinMax[MinOp, StringType]](
-                fused_col("region", string)
-            ).alias("lo")
-        ],
+        aggs=[fused_col("region", string).min().alias("lo")],
     )
     var out = plan.execute()
     var east = _row_for(out, "east")

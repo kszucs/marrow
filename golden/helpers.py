@@ -6,11 +6,18 @@ write is a name both lanes answer to.
 
 **Most of what is here is a shim, and that is the point.** A shim exists
 wherever the two lanes do not yet agree on a spelling — `Upper(x)` standing in
-for `x.upper()`, `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x)` for
-`x.sum()`. Marrow's *public* Python API is deliberately not grown to speak the
-fused lane's internal node vocabulary; nobody should have to write
-`AggExpr.of[NumericAgg[...]]` in Python when `.sum()` exists. So the bridge
-lives here, in the corpus, where it is countable.
+for `x.upper()`, `NumericCast[Float64Type](x)` for `x.cast(float64)`. Marrow's
+*public* Python API is deliberately not grown to speak the fused lane's
+internal node vocabulary, so the bridge lives here, in the corpus, where it is
+countable.
+
+The aggregates used to be the worst of it —
+`AggExpr.of[NumericAgg[SumKernel, Int64Type]](x).alias("total")` — and needed
+nine shims. It turned out marrow already had `col("v", int64).sum()`, on
+`NumericValue`, documented in `Relation.aggregate` and used throughout
+`marrow/expr/tests`; the corpus was simply spelling it the long way. That is
+the shape of the remaining work: check whether the nicer spelling already
+exists before designing one.
 
 `SHIMS` is that count. It is the convergence metric: every name in it is a
 place the two lanes still disagree, and the goal is an empty set. Deleting a
@@ -66,16 +73,6 @@ SHIMS = {
     "StringToNum",
     "BoolToNum",
     "NumToBool",
-    # fused aggregate vocabulary vs. `.sum()` / `.count()` / ...
-    "AggExpr",
-    "NumericAgg",
-    "SumKernel",
-    "CountKernel",
-    "MinKernel",
-    "MaxKernel",
-    "MeanKernel",
-    "BoxedValue",
-    "List",
     # join kinds: Mojo constants vs. Python strings
     "JOIN_INNER",
     "JOIN_LEFT",
@@ -229,50 +226,6 @@ def NumToBool(value):
 
 
 # ---------------------------------------------------------------------------
-# Aggregates
-# ---------------------------------------------------------------------------
-
-
-class _Kernel:
-    def __init__(self, method):
-        self.method = method
-
-
-SumKernel = _Kernel("sum")
-CountKernel = _Kernel("count")
-MinKernel = _Kernel("min")
-MaxKernel = _Kernel("max")
-MeanKernel = _Kernel("mean")
-
-
-class NumericAgg:
-    """`NumericAgg[SumKernel, Int64Type]` -> the kernel.
-
-    The dtype parameter names the fused lane's accumulator type; the runtime
-    lane resolves it from the operand, so it is dropped here.
-    """
-
-    def __class_getitem__(cls, params):
-        kernel, _accumulator = params
-        return kernel
-
-
-class _AggOf:
-    def __getitem__(self, kernel):
-        return lambda value: getattr(value, kernel.method)()
-
-
-class AggExpr:
-    of = _AggOf()
-
-
-# `List[BoxedValue]()` is Mojo's empty-key spelling. `list[object]()` is valid
-# Python and returns `[]`, so the two texts agree without a custom type.
-List = list
-BoxedValue = object
-
-
-# ---------------------------------------------------------------------------
 # Joins
 # ---------------------------------------------------------------------------
 
@@ -332,7 +285,13 @@ class _Relation:
             )
         )
 
-    def aggregate(self, keys, aggs):
+    def aggregate(self, aggs, keys=()):
+        """`keys` is optional, matching the Mojo overload.
+
+        No-GROUP-BY is `t.aggregate(aggs=[col("v", int64).sum()])` in both
+        lanes — polars and ibis both let the key list be absent, and an empty
+        one carried no information.
+        """
         return _Relation(self._lazy.aggregate(keys, *aggs))
 
     def join(self, other, left_on, right_on, how, strictness):
@@ -388,7 +347,6 @@ def _expectations():
 # vocabulary a case may use.
 NAMESPACE = {
     "table": table,
-    "check": check,
     "col": col,
     "lit": lit,
     "count_star": count_star,
@@ -420,15 +378,6 @@ NAMESPACE = {
     "StringToNum": StringToNum,
     "BoolToNum": BoolToNum,
     "NumToBool": NumToBool,
-    "AggExpr": AggExpr,
-    "NumericAgg": NumericAgg,
-    "SumKernel": SumKernel,
-    "CountKernel": CountKernel,
-    "MinKernel": MinKernel,
-    "MaxKernel": MaxKernel,
-    "MeanKernel": MeanKernel,
-    "List": List,
-    "BoxedValue": BoxedValue,
     "JOIN_INNER": JOIN_INNER,
     "JOIN_LEFT": JOIN_LEFT,
     "JOIN_RIGHT": JOIN_RIGHT,

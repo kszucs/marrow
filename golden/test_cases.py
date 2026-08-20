@@ -13,11 +13,12 @@ import marrow
 import helpers
 import runner
 
-runner.install(helpers.NAMESPACE, globals())
+runner.install(helpers.NAMESPACE, helpers.check, globals())
 
-# Infrastructure, not vocabulary: neither is marrow API, and neither is a
-# place the two lanes disagree about how to spell an expression.
-INFRASTRUCTURE = {"table", "check"}
+# Infrastructure, not vocabulary: `table` is not marrow API, and it is not a
+# place the two lanes disagree about how to spell an expression. `check` is no
+# longer here at all — a case returns its plan and the harness checks it.
+INFRASTRUCTURE = {"table"}
 
 
 def test_golden_shims_are_declared():

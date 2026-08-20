@@ -648,6 +648,14 @@ In addition:
   exercising the unsafe API is the point of the test.
 - **Prefer `assert_true(result == expected)`** over element-by-element loops;
   `PrimitiveArray[T].__eq__` is structural equality and replaces the whole loop.
+- **Write aggregates with the fluent API** — `col("amount", int64).sum()`,
+  `.mean()`, `.min()`, `.max()`, `.count()` on `NumericValue`/`StringValue`/
+  `TemporalValue`, named with `.alias("total")`, and no key list at all for a
+  no-`GROUP BY` aggregate (`rel.aggregate(aggs=[...])`). Never spell one
+  `AggExpr.of[NumericAgg[SumKernel, Int64Type]](...)` — that constructor is
+  for the kernel layer and for the benches that deliberately measure comptime
+  versus runtime resolution (`bench_aggregate_aot.mojo`,
+  `benchmarks/binary_size/`), not for tests.
 - Use standard pytest assertions and fixtures (`tmp_path`) on the Python side.
 
 ### Process

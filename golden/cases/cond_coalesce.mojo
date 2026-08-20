@@ -1,4 +1,11 @@
-def test_golden_cond_coalesce() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import Coalesce
+
+
+def plan() raises -> DynRelation:
     """
     SELECT coalesce(v, w) AS c FROM basic
 
@@ -14,4 +21,4 @@ def test_golden_cond_coalesce() raises:
     """
     var t = table("basic")
     var q = t.project(["c"], [Coalesce(col("v", int64), col("w", int64))])
-    check(q)
+    return q

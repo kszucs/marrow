@@ -1,4 +1,11 @@
-def test_golden_string_strip() raises:
+from golden.helpers import table
+from marrow.dtypes import string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import Strip
+
+
+def plan() raises -> DynRelation:
     """
     SELECT trim(s) AS p FROM words
 
@@ -13,4 +20,4 @@ def test_golden_string_strip() raises:
     """
     var t = table("words")
     var q = t.project(["p"], [Strip(col("s", string))])
-    check(q)
+    return q

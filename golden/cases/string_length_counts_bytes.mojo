@@ -1,4 +1,11 @@
-def test_golden_string_length_counts_bytes() raises:
+from golden.helpers import table
+from marrow.dtypes import string
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import StringLength
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(strlen(s) AS INTEGER) AS n FROM words
 
@@ -17,4 +24,4 @@ def test_golden_string_length_counts_bytes() raises:
     """
     var t = table("words")
     var q = t.project(["n"], [StringLength(col("s", string))])
-    check(q)
+    return q

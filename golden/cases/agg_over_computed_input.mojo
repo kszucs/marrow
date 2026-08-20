@@ -1,4 +1,10 @@
-def test_golden_agg_over_computed_input() raises:
+from golden.helpers import table
+from marrow.dtypes import int64, string
+from marrow.expr.builders import col, lit
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, CAST(sum(v * 2) AS BIGINT) AS d FROM basic GROUP BY k ORDER BY k NULLS FIRST
 
@@ -12,11 +18,7 @@ def test_golden_agg_over_computed_input() raises:
     var t = table("basic")
     var agg = t.aggregate(
         keys=[col("k", string)],
-        aggs=[
-            AggExpr.of[NumericAgg[SumKernel, Int64Type]](
-                col("v", int64) * lit(2, int64)
-            ).alias("d")
-        ],
+        aggs=[(col("v", int64) * lit(2, int64)).sum().alias("d")],
     )
     var q = agg.sort([col("k", string)], [True])
-    check(q)
+    return q

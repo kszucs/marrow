@@ -1,4 +1,11 @@
-def test_golden_cast_int_to_int32() raises:
+from golden.helpers import table
+from marrow.dtypes import Int32Type, int64
+from marrow.expr.builders import col
+from marrow.expr.relations import DynRelation
+from marrow.expr.values import NumericCast
+
+
+def plan() raises -> DynRelation:
     """
     SELECT CAST(i AS INTEGER) AS c FROM nums
 
@@ -11,4 +18,4 @@ def test_golden_cast_int_to_int32() raises:
     """
     var t = table("nums")
     var q = t.project(["c"], [NumericCast[Int32Type](col("i", int64))])
-    check(q)
+    return q

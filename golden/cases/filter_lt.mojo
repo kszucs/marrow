@@ -1,4 +1,10 @@
-def test_golden_filter_lt() raises:
+from golden.helpers import table
+from marrow.dtypes import int64
+from marrow.expr.builders import col, lit
+from marrow.expr.relations import DynRelation
+
+
+def plan() raises -> DynRelation:
     """
     SELECT k, v, w FROM basic WHERE v < 4
 
@@ -10,4 +16,4 @@ def test_golden_filter_lt() raises:
     """
     var t = table("basic")
     var q = t.filter(col("v", int64) < lit(4, int64))
-    check(q)
+    return q
