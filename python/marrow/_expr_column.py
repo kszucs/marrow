@@ -375,6 +375,14 @@ class Column(_Wrapper):
     def count(self, *, alias=None):
         return self.aggregate("count", alias=alias)
 
+    def count_distinct(self, *, alias=None):
+        """``count(DISTINCT x)`` — exact, and skipping nulls like ``count``."""
+        return self.aggregate("count_distinct", alias=alias)
+
+    def approx_count_distinct(self, *, alias=None):
+        """``count(DISTINCT x)`` from a sketch, for when exact is too dear."""
+        return self.aggregate("approx_count_distinct", alias=alias)
+
 
 class Aggregate(_Wrapper):
     """An aggregate over an expression — the Python face of ``AggExpr``.

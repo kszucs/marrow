@@ -83,6 +83,7 @@ SHIMS = {
     "JOIN_ALL",
     # relational verbs whose shapes differ (`sort`/`aggregate`/`join`) —
     # carried by the `_Relation` adapter rather than by `LazyTable` itself.
+    "_Relation.rename",
     "_Relation.sort",
     "_Relation.aggregate",
     "_Relation.join",
@@ -266,6 +267,18 @@ class _Relation:
 
     def with_columns(self, names, values):
         return _Relation(self._lazy.with_columns(names, values))
+
+    def drop(self, names):
+        return _Relation(self._lazy.drop(names))
+
+    def rename(self, names, new_names):
+        """Two parallel lists, as the plan node takes them.
+
+        `LazyTable.rename` spells this as a dict; the Mojo signature is
+        `rename(names, new_names)` because Mojo has no dict literal in this
+        position.
+        """
+        return _Relation(self._lazy.rename(dict(zip(names, new_names))))
 
     def limit(self, length, offset=0):
         return _Relation(self._lazy.limit(length, offset))

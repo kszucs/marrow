@@ -50,6 +50,7 @@ PREFIX = "test_golden_"
 MARKER = "-- expected"
 SKIP_MOJO = "-- skip mojo"
 SKIP_PYTHON = "-- skip python"
+XFAIL = "-- xfail "
 
 # Set from `conftest.py`'s `pytest_configure`; the `Golden` fixture that used
 # to read them off `request.config` is gone, so that `table(name)` reads the
@@ -138,6 +139,36 @@ TABLES = {
                 [True, False, None, True, False, None, True, False, None],
                 pa.bool_(),
             ),
+        }
+    ),
+    # The type-widening matrix's home: one row set carrying int32, float64,
+    # bool and string, so `join`, `aggregate`, `sort` and `filter` can each be
+    # asked the same question of every type. Every column has a null.
+    #
+    # `price` holds only exact binary fractions (1.5, 2.25, 0.5, 4.0, -1.25).
+    # A sum of those is exact whatever order the engine adds them in, so a
+    # float aggregate compares two implementations rather than two roundings.
+    #
+    # `ref` covers the join cases against itself: 2 repeats, 99 matches
+    # nothing, and one NULL — which must match nothing, not even another NULL.
+    "sales": pa.table(
+        {
+            "region": pa.array(
+                ["north", "south", "north", None, "east", "south"], pa.string()
+            ),
+            "qty": pa.array([10, 20, None, 40, 50, 5], pa.int32()),
+            "price": pa.array([1.5, 2.25, 0.5, None, 4.0, -1.25], pa.float64()),
+            "active": pa.array([True, False, True, None, True, False], pa.bool_()),
+            "ref": pa.array([1, 2, 2, 3, None, 99], pa.int64()),
+        }
+    ),
+    # The string-key join partner. `west` is unmatched from the right, and
+    # `east` and the NULL region are unmatched from the left, so an outer join
+    # has something to widen in both directions on a *string* key.
+    "regions": pa.table(
+        {
+            "region": pa.array(["north", "south", "west"], pa.string()),
+            "country": pa.array(["ca", "mx", None], pa.string()),
         }
     ),
     # Cast inputs. `f` holds values where truncation and rounding disagree
@@ -281,7 +312,7 @@ class Case:
     the one spelling both lanes run.
     """
 
-    def __init__(self, path, name, sql, prose, expected, imports, body, skips):
+    def __init__(self, path, name, sql, prose, expected, imports, body, skips, xfail):
         self.path = path
         self.name = name
         self.sql = sql
@@ -290,6 +321,7 @@ class Case:
         self.imports = imports
         self.body = body
         self.skips = skips
+        self.xfail = xfail
 
     @property
     def stem(self):
@@ -300,8 +332,16 @@ class Case:
 
 
 def _split_docstring(lines, where):
-    """`(sql, prose, expected_lines, skips)` from a case's docstring lines."""
+    """`(sql, prose, expected_lines, skips, xfail)` from a docstring.
+
+    `-- xfail <reason>` records a case marrow does not yet answer correctly:
+    the query is right and the expectation is DuckDB's, so the corpus states
+    the intended behaviour and stays green. The mark is **strict**, so fixing
+    the underlying bug turns the case red and forces the marker's removal —
+    a known bug that quietly starts passing is how a corpus goes stale.
+    """
     skips = set()
+    xfail = None
     kept, expected, in_expected = [], [], False
     for line in lines:
         stripped = line.strip()
@@ -313,6 +353,8 @@ def _split_docstring(lines, where):
             skips.add("mojo")
         elif stripped == SKIP_PYTHON:
             skips.add("python")
+        elif stripped.startswith(XFAIL):
+            xfail = stripped[len(XFAIL) :].strip()
         else:
             kept.append(line)
     if not in_expected:
@@ -321,7 +363,7 @@ def _split_docstring(lines, where):
         expected.pop()
     text = "\n".join(kept).strip("\n")
     sql, _, prose = text.partition("\n\n")
-    return " ".join(sql.split()), prose.strip("\n"), expected, skips
+    return " ".join(sql.split()), prose.strip("\n"), expected, skips, xfail
 
 
 def parse_case(path):
@@ -345,7 +387,7 @@ def parse_case(path):
         raise SystemExit(f"golden: {path.name}: docstring is never closed")
 
     doc = [_dedent(line) for line in lines[start + 2 : end]]
-    sql, prose, expected_lines, skips = _split_docstring(doc, path.name)
+    sql, prose, expected_lines, skips, xfail = _split_docstring(doc, path.name)
     body = "\n".join(_dedent(line) for line in lines[end + 1 :]).strip("\n")
     if not body:
         raise SystemExit(f"golden: {path.name}: case has no body")
@@ -358,6 +400,7 @@ def parse_case(path):
         imports="\n".join(lines[:start]).strip("\n"),
         body=body,
         skips=skips,
+        xfail=xfail,
     )
 
 
@@ -385,6 +428,8 @@ def render_case(case, expected=None):
         doc.append(case.prose)
     for lane in sorted(case.skips):
         doc.append(f"-- skip {lane}")
+    if case.xfail:
+        doc.append(f"{XFAIL}{case.xfail}")
     doc.append(f"{MARKER}\n{render_expected(table)}")
     return (
         f"{case.imports}\n"

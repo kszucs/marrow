@@ -1,0 +1,27 @@
+from golden.prelude import *
+
+
+def plan() raises -> DynRelation:
+    """
+    SELECT eid, dept FROM emp WHERE dept IN (SELECT did FROM dept) ORDER BY eid
+
+    `IN (subquery)` is a semi join: each left row appears once however
+    many right rows it matches, and a NULL key matches nothing.
+
+    -- expected
+    eid:int64	dept:int64
+    1	10
+    2	20
+    3	20
+    """
+    var left = table("emp")
+    var right = table("dept")
+    var joined = left.join(
+        right,
+        left_on=[col("dept", int64)],
+        right_on=[col("did", int64)],
+        how=JOIN_SEMI,
+        strictness=JOIN_ALL,
+    )
+    var q = joined.sort([col("eid", int64)], [True])
+    return q

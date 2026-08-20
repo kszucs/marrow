@@ -252,8 +252,12 @@ class LazyTable(_Wrapper):
         keys = [_unwrap_expr(k) for k in by]
         specs = [_unwrap_expr(a) for a in aggs]
         specs += [_aggregate_spec(n, v) for n, v in named_aggs.items()]
-        if not specs:
-            raise ValueError("aggregate: needs at least one aggregate")
+        if not specs and not keys:
+            # Keys with no aggregates is `SELECT DISTINCT`, which the plan
+            # layer executes; the Mojo lane always accepted it and this guard
+            # was the only thing rejecting it. Neither keys nor aggregates is
+            # still meaningless, so that stays an error.
+            raise ValueError("aggregate: needs at least one key or aggregate")
         return LazyTable.wrap(self._binding.aggregate(keys, specs))
 
     def order_by(self, *keys, nulls_first=True, stable=True):

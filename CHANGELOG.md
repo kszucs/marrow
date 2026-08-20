@@ -10,6 +10,28 @@
 
 ### Tests
 
+- **43 new golden cases, aimed at query shapes and the types they accept.**
+  The corpus tested one key type per operation: every join keyed on `int64`,
+  every group-by on `string` or `int64`, every sort on `int64`/`string`. It now
+  covers subquery forms that lower to semi/anti joins (`IN`, `EXISTS`,
+  `NOT EXISTS` — the twin is `NOT EXISTS` rather than `NOT IN`, because an anti
+  join keeps a NULL-keyed row and `NOT IN` does not), self-joins, multi-key
+  joins, `SELECT DISTINCT`, join-then-aggregate, aggregate-then-join, and a
+  four-operator pipeline; and it asks each of `join`, `aggregate`, `sort` and
+  `filter` the same question of `string`, `int32`, `float64` and `bool`. Two
+  new fixtures carry the matrix: `sales` (int32/float64/bool/string, nulls
+  throughout, prices chosen as exact binary fractions so a float sum is
+  order-independent) and `regions` (a string join partner unmatched in both
+  directions). **Four defects fell out of it** — see Fixes.
+
+- **`-- xfail <reason>` in a case docstring.** Records a query marrow does not
+  yet answer correctly: the SQL is right and the expectation is DuckDB's, so
+  the corpus states the intended behaviour and stays green. The mark is
+  **strict** and applies to both lanes, so a fix turns the case red and forces
+  the marker out — and a lane divergence surfaces as an xpass, which is how
+  the `SELECT DISTINCT` defect below was found.
+
+
 - **The golden corpus is now one file per case, and both lanes run the same
   text.** A case used to be spread across three files — the SQL and the
   runtime-lane expression in `test_<area>.py`, the AOT-lane expression in
@@ -79,6 +101,18 @@
   separate change to shared infrastructure.
 
 ### Fixes
+
+- **`LazyTable.aggregate` rejected `SELECT DISTINCT`.** Keys with no
+  aggregates raised `ValueError: aggregate: needs at least one aggregate`,
+  although the plan layer has always executed the keys-only form — the Mojo
+  lane accepted it and Python did not, so one query shape was reachable from
+  only one frontend. The guard now fires only when there is neither a key nor
+  an aggregate. Found by a strict `-- xfail` xpassing in the Mojo lane.
+
+- **`Column.count_distinct` and `Column.approx_count_distinct`.** Both
+  aggregates resolved through the binding already and had no Python method, so
+  `count(DISTINCT x)` was Mojo-only.
+
 
 - **Expected-table cells are quoted, because `mojo format` strips trailing
   whitespace inside docstrings.** The `words` fixture holds `"  pad  "`, so an

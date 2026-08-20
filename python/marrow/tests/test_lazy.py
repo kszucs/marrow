@@ -177,9 +177,21 @@ def test_aggregate_with_no_keys(lazy):
     assert out.column("total").to_pylist() == [21]
 
 
-def test_aggregate_needs_an_aggregate(lazy):
+def test_aggregate_with_keys_only_is_distinct(lazy):
+    """Keys and no aggregates is ``SELECT DISTINCT``.
+
+    This used to raise: the binding required an aggregate even though the
+    plan layer has always executed the keys-only form, so the one shape
+    ``SELECT DISTINCT k`` needs was reachable from Mojo and not from Python.
+    """
+    out = lazy.aggregate(by=["k"]).order_by("k").to_pyarrow()
+    assert out.column_names == ["k"]
+    assert out.column("k").to_pylist() == ["a", "b", "c"]
+
+
+def test_aggregate_needs_a_key_or_an_aggregate(lazy):
     with pytest.raises(ValueError):
-        lazy.aggregate(by=["k"])
+        lazy.aggregate()
 
 
 def test_order_by_ascending_is_the_default(lazy):
