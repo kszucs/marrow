@@ -1,11 +1,15 @@
 """The golden corpus, runtime lane.
 
-A shim. Each case in `golden/cases/*.mojo` is transpiled by `runner.py` and
-injected here as a real function, so item names match the Mojo lane's exactly
-and `-k` selects the same cases in both.
+A shim, and — unlike `test_cases.mojo` — **not** generated, because there is
+nothing per-case to generate. Python injects each case into `globals()` at
+import, so the file holds one line of wiring; the Mojo lane needs a real
+`def test_*(` per case for the harness to collect, which is why that side has a
+generated module and this one does not.
 
-The cases themselves are Mojo source. What runs here is the *same text* with
-`raises` and `var` removed, executed against `helpers.NAMESPACE`.
+The cases are Mojo source. What runs here is the *same body* with `var`
+dropped — the only rule, since `runner.transpile` writes the `def` line rather
+than transcribing it — executed against `helpers.NAMESPACE`. A traceback
+points into `golden/cases/<name>.mojo`, the file you edit.
 """
 
 import marrow
