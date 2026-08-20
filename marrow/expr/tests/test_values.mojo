@@ -125,12 +125,16 @@ def _batch() raises -> RecordBatch:
 def test_column_add_fuses() raises:
     var cv = (Add(col("a", int64), col("b", int64))).execute(_batch())
     assert_true(not cv.isa[DynScalar]())
-    assert_values_equal(into_array(cv, 4), array([11, 22, 33, 44], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([11, 22, 33, 44], int64).to_dyn()
+    )
 
 
 def test_literal_broadcast() raises:
     var cv = (Mul(col("a", int64), lit(10, int64))).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([10, 20, 30, 40], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([10, 20, 30, 40], int64).to_dyn()
+    )
 
 
 def test_scalar_literal_evaluates_once() raises:
@@ -144,14 +148,18 @@ def test_fused_chain() raises:
     var cv = (
         Mul(Add(col("a", int64), col("b", int64)), col("a", int64))
     ).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([11, 44, 99, 176], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([11, 44, 99, 176], int64).to_dyn()
+    )
 
 
 def test_reduction_is_scalar() raises:
     # sum(a) over [1,2,3,4] = 10, a scalar
     var cv = (Sum(col("a", int64))).execute(_batch())
     assert_true(cv.isa[DynScalar]())
-    assert_values_equal(into_array(cv, 4), array([10, 10, 10, 10], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([10, 10, 10, 10], int64).to_dyn()
+    )
 
 
 def test_reduction_broadcasts_into_columnar() raises:
@@ -159,7 +167,9 @@ def test_reduction_broadcasts_into_columnar() raises:
     # fused leaf reading its stage result from the context and splatting.
     var cv = (Add(col("a", int64), Sum(col("a", int64)))).execute(_batch())
     assert_true(not cv.isa[DynScalar]())
-    assert_values_equal(into_array(cv, 4), array([11, 12, 13, 14], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([11, 12, 13, 14], int64).to_dyn()
+    )
 
 
 def test_scalar_plus_scalar_stays_scalar() raises:
@@ -208,7 +218,9 @@ def test_div_is_true_division() raises:
 
 def test_unary_neg_fuses() raises:
     var cv = (Neg(col("a", int64))).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([-1, -2, -3, -4], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([-1, -2, -3, -4], int64).to_dyn()
+    )
 
 
 def test_cast_fuses_in_chain() raises:
@@ -216,7 +228,9 @@ def test_cast_fuses_in_chain() raises:
     var cv = (
         Add(NumericCast[Int64Type](col("a", int64)), col("b", int64))
     ).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([11, 22, 33, 44], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([11, 22, 33, 44], int64).to_dyn()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +263,9 @@ def test_arithmetic_above_window_materializes() raises:
 def test_comparison_fuses_to_bool() raises:
     # a < 3 over [1,2,3,4] → bit-packed [T,T,F,F] (the bool fused strategy)
     var cv = (Lt(col("a", int64), lit(3, int64))).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([True, True, False, False]).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([True, True, False, False]).to_dyn()
+    )
 
 
 def test_bool_and_fuses() raises:
@@ -269,7 +285,9 @@ def test_bool_and_fuses() raises:
 def test_bool_not_fuses() raises:
     # not (a < 3) → not [T,T,F,F] = [F,F,T,T]
     var cv = (Not(Lt(col("a", int64), lit(3, int64)))).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([False, False, True, True]).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([False, False, True, True]).to_dyn()
+    )
 
 
 def test_bool_or_fuses() raises:
@@ -280,7 +298,9 @@ def test_bool_or_fuses() raises:
             Gt(col("a", int64), lit(3, int64)),
         )
     ).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([True, False, False, True]).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([True, False, False, True]).to_dyn()
+    )
 
 
 def test_any_all_reductions() raises:
@@ -324,7 +344,9 @@ def test_mixed_width_compare_promotes() raises:
     assert_values_equal(into_array(cv, 3), array([False, True, False]).to_dyn())
     # ... and the mirrored operand order goes through the same promotion.
     var cv2 = (Lt(col("b", int64), col("a", int32))).execute(b)
-    assert_values_equal(into_array(cv2, 3), array([False, True, False]).to_dyn())
+    assert_values_equal(
+        into_array(cv2, 3), array([False, True, False]).to_dyn()
+    )
 
 
 def test_count_reduction() raises:
@@ -337,7 +359,9 @@ def test_count_reduction() raises:
 def test_notnull_and_isnull() raises:
     # no nulls in a=[1,2,3,4] → not_null all true, is_null all false
     var nn = (NotNull(col("a", int64))).execute(_batch())
-    assert_values_equal(into_array(nn, 4), array([True, True, True, True]).to_dyn())
+    assert_values_equal(
+        into_array(nn, 4), array([True, True, True, True]).to_dyn()
+    )
     var isn = (IsNull(col("a", int64))).execute(_batch())
     assert_values_equal(
         into_array(isn, 4),
@@ -365,7 +389,9 @@ def test_num_to_bool_fuses() raises:
         array([False, False, False, False]).to_dyn(),
     )
     var nz = (NumToBool(col("a", int64))).execute(_batch())
-    assert_values_equal(into_array(nz, 4), array([True, True, True, True]).to_dyn())
+    assert_values_equal(
+        into_array(nz, 4), array([True, True, True, True]).to_dyn()
+    )
 
 
 def test_bool_to_num_fuses() raises:
@@ -379,7 +405,9 @@ def test_bool_to_num_fuses() raises:
 def test_fluent_numeric_and_bool() raises:
     # operators/methods build the same nodes as the explicit builders
     var s = (col("a", int64) + col("b", int64)).execute(_batch())
-    assert_values_equal(into_array(s, 4), array([11, 22, 33, 44], int64).to_dyn())
+    assert_values_equal(
+        into_array(s, 4), array([11, 22, 33, 44], int64).to_dyn()
+    )
     # mean-centering via `x - x.mean()`
     var mc = (col("a", int64) - col("a", int64).mean()).execute(_batch())
     assert_values_equal(
@@ -797,7 +825,9 @@ def test_string_compare_composes_under_bool_logic() raises:
             StrGt(col("s", string), col("p", string)),
         )
     ).execute(_sp_batch())
-    assert_values_equal(into_array(cv, 3), array([False, False, False]).to_dyn())
+    assert_values_equal(
+        into_array(cv, 3), array([False, False, False]).to_dyn()
+    )
 
 
 def test_or_over_two_bool_breakers() raises:
@@ -849,7 +879,9 @@ def test_and_over_breaker_and_fused_unary() raises:
             Not(StrLt(col("s", string), col("p", string))),
         )
     ).execute(_sp_batch())
-    assert_values_equal(into_array(cv, 3), array([False, False, False]).to_dyn())
+    assert_values_equal(
+        into_array(cv, 3), array([False, False, False]).to_dyn()
+    )
 
 
 def test_and_over_two_breakers_of_different_types() raises:
@@ -899,7 +931,9 @@ def test_like_fluent_and_under_logic() raises:
 def test_is_in_numeric() raises:
     # a=[1,2,3,4] IN {2,3} -> [F,T,T,F]
     var cv = (IsIn(col("a", int64), array([2, 3], int64))).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([False, True, True, False]).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([False, True, True, False]).to_dyn()
+    )
 
 
 def test_is_in_string() raises:
@@ -943,7 +977,9 @@ def _cond_batch() raises -> RecordBatch:
 def test_coalesce() raises:
     # coalesce(a,b): [1, 20, null, 4]  (row 2 both null)
     var cv = (Coalesce(col("a", int64), col("b", int64))).execute(_cond_batch())
-    assert_values_equal(into_array(cv, 4), array([1, 20, None, 4], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([1, 20, None, 4], int64).to_dyn()
+    )
 
 
 def test_coalesce_fuses_above() raises:
@@ -951,7 +987,9 @@ def test_coalesce_fuses_above() raises:
     var cv = (
         Add(Coalesce(col("a", int64), col("b", int64)), lit(1, int64))
     ).execute(_cond_batch())
-    assert_values_equal(into_array(cv, 4), array([2, 21, None, 5], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([2, 21, None, 5], int64).to_dyn()
+    )
 
 
 def test_nullif() raises:
@@ -964,7 +1002,9 @@ def test_nullif() raises:
         names=["a", "b"],
     )
     var cv = (Nullif(col("a", int64), col("b", int64))).execute(b)
-    assert_values_equal(into_array(cv, 4), array([1, None, None, 4], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([1, None, None, 4], int64).to_dyn()
+    )
 
 
 def test_case_when() raises:
@@ -976,7 +1016,9 @@ def test_case_when() raises:
             col("b", int64),
         )
     ).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([10, 20, 3, 4], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([10, 20, 3, 4], int64).to_dyn()
+    )
 
 
 def test_case_when_fuses_above() raises:
@@ -991,7 +1033,9 @@ def test_case_when_fuses_above() raises:
             lit(2, int64),
         )
     ).execute(_batch())
-    assert_values_equal(into_array(cv, 4), array([20, 40, 6, 8], int64).to_dyn())
+    assert_values_equal(
+        into_array(cv, 4), array([20, 40, 6, 8], int64).to_dyn()
+    )
 
 
 # --- temporal ---------------------------------------------------------------
@@ -1057,7 +1101,9 @@ def test_temporal_extract_fluent() raises:
 def test_temporal_null_propagates() raises:
     # a null timestamp yields a null year
     var y = (Year(col("ts", timestamp(second)))).execute(_ts_null_batch())
-    assert_values_equal(into_array(y, 3), array([2019, None, 2020], int32).to_dyn())
+    assert_values_equal(
+        into_array(y, 3), array([2019, None, 2020], int32).to_dyn()
+    )
 
 
 def test_date_trunc_then_extract() raises:

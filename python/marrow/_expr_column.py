@@ -412,12 +412,15 @@ class Aggregate(_Wrapper):
 # ── constructors ───────────────────────────────────────────────────────────
 
 
-def col(name):
+def col(name, dtype=None):
     """Reference a column by name — ``col("amount")``.
 
     The dtype is resolved against the batch, not here; that is what makes this
-    the *runtime* lane. The Mojo-side ``col(name, dtype)`` builds the fused AOT
-    node instead, and has no Python equivalent."""
+    the *runtime* lane. ``dtype`` is accepted and ignored so that
+    ``col("amount", int64)`` — the spelling the Mojo lane *requires*, since a
+    fused AOT leaf fixes its type at compile time — is one expression both
+    lanes run. The golden corpus depends on that: a case is a single Mojo file
+    and the Python lane executes the same text."""
     return Column.wrap(_ma.expr_column(name))
 
 

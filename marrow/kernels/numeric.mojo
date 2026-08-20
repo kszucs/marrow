@@ -693,15 +693,11 @@ struct EqKernel(NumericCompareKernel):
         goes through `equal` rather than this kernel's own numeric
         `dispatch`."""
         Self.expect_same_dtype(left.dtype, right.dtype)
-        var mask = equal(
-            left.children[0].copy(), right.children[0].copy(), ctx
-        )
+        var mask = equal(left.children[0].copy(), right.children[0].copy(), ctx)
         for k in range(1, len(left.children)):
             mask = AndKernel.apply(
                 mask,
-                equal(
-                    left.children[k].copy(), right.children[k].copy(), ctx
-                ),
+                equal(left.children[k].copy(), right.children[k].copy(), ctx),
                 ctx,
             )
         return mask^

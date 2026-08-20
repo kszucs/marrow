@@ -1,7 +1,8 @@
-"""Shared machinery for the golden AOT cases.
+"""The vocabulary a golden case body may use, on the Mojo side.
 
-Not named `test_*`, so the harness never collects it — `pytest_collect_file`
-(`conftest.py:804`) only picks up `test_*.mojo`.
+`helpers.py` is the same list for the runtime lane. Not named `test_*`, so the
+harness never collects this file — `pytest_collect_file` only picks up
+`test_*.mojo`, and the collectable module is the generated `test_cases.mojo`.
 
 Imports are **absolute**: `golden/` sits outside the `marrow/` package and is
 reached through the `-I .` the harness passes, exactly as `benchmarks/` is.
@@ -11,7 +12,7 @@ driver runs from.
 
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType, bool_, float64, int32, int64
-from marrow.expr.relations import DynRelation
+from marrow.expr.relations import DynRelation, in_memory_table
 from marrow.ipc import read_ipc_file
 from marrow.tabular import RecordBatch
 
@@ -24,8 +25,13 @@ def read_one(var path: String) raises -> RecordBatch:
     return batches.pop()
 
 
-def fixture(var name: String) raises -> RecordBatch:
-    return read_one(String("golden/fixtures/", name, ".arrow"))
+def table(var name: String) raises -> DynRelation:
+    """A fixture as an in-memory source — never a file scan.
+
+    What is under test is the engine, so the source is a memtable in every
+    lane; Parquet and IPC keep their own suites.
+    """
+    return in_memory_table(read_one(String("golden/fixtures/", name, ".arrow")))
 
 
 def values_equal(a: DynArray, b: DynArray) raises -> Bool:
@@ -59,8 +65,14 @@ def values_equal(a: DynArray, b: DynArray) raises -> Bool:
         raise Error(String("golden: no value comparison for dtype ", dt))
 
 
-def check(var name: String, var plan: DynRelation) raises:
+def check(var name: String, plan: DynRelation) raises:
     """Run the plan and hold it to the shared expectation.
+
+    `plan` is **borrowed**, not owned: an owned parameter would make Mojo want
+    `check(q^)` at the call site, and `^` has no Python reading, so the one
+    spelling would stop being one spelling. `DynRelation` is
+    `ImplicitlyCopyable` and `execute` borrows its receiver, so nothing is
+    given up.
 
     Schema, then row count, then columns — reported separately, because the
     three mean different things: a schema mismatch is a dtype or naming bug, a

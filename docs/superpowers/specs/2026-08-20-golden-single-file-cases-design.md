@@ -50,7 +50,9 @@ def test_golden_kleene_column_and() raises:
 ```
 
 (`<TAB>` above stands for a literal tab; the expected block is the typed TSV
-`expfmt.py` already renders, `name:type` per column and `NULL` for a null.)
+`expfmt.py` already renders, `name:type` per column and `NULL` for a null.
+**String cells are quoted** — `'  pad  '`, `''` — see the formatter finding
+under Phases below.)
 
 The docstring carries three things in a fixed order: the SQL as the first
 paragraph (the existing convention), optional prose for a human, and the
@@ -125,11 +127,21 @@ already common to both.
 `col(name, dtype)` are the shapes both lanes must speak. Every convergence gap
 found during migration is closed by an addition on the Python side.
 
-The prototype needs exactly two: `col(name, dtype=None)`
-(`python/marrow/_expr_column.py:415`, currently `col(name)`) and a positional
-`project(names, values)` form alongside the keyword one
-(`python/marrow/expr.py:182`). Dtype names such as `bool_` and `int64` are
-already exported from `marrow`.
+Two additions are genuinely marrow's and were made there:
+`col(name, dtype=None)` (`python/marrow/_expr_column.py`) and a positional
+`project(names, values)` / `with_columns(names, values)` form alongside the
+keyword one (`python/marrow/expr.py`).
+
+**The rest are golden-local shims, and deliberately so.** Reading the whole
+corpus showed the gap is far wider than this spec first assumed, and much of
+it is the fused lane's *internal* vocabulary —
+`AggExpr.of[NumericAgg[SumKernel, Int64Type]](x)`, `NumericCast[Float64Type]`,
+`List[BoxedValue]()`, `Upper(x)`. Growing marrow's public Python API to speak
+that would be a bad trade: nobody should write `AggExpr.of[NumericAgg[...]]`
+in Python when `.sum()` exists. So the bridge lives in `helpers.py`, where it
+is countable, and `helpers.SHIMS` is the metric — 48 entries today, target
+zero, guarded by `test_golden_shims_are_declared` so it cannot go stale in
+either direction.
 
 ### Module layout
 
@@ -212,9 +224,16 @@ Deliverables: `runner.py` with case parse, render and single-case codegen;
 
 Four things are verified rather than assumed:
 
-1. `mojo format` preserves tabs and trailing whitespace inside a docstring. If
-   it does not, the expected block becomes pipe-delimited (` | `) instead of
-   tab-separated, and string values containing a pipe are escaped.
+1. `mojo format` preserves tabs and trailing whitespace inside a docstring.
+   **Resolved, and half of it was false.** Tabs survive; trailing whitespace
+   does not. The `words` fixture holds `"  pad  "`, so the formatter silently
+   turned two expectations into different strings and the corpus asserted the
+   wrong answer. The pipe-delimited fallback this spec proposed would *not*
+   have helped — a trailing cell still ends the line. The fix is to quote
+   string cells, so every line ends in a printable character; it also lets
+   string data contain a tab or a newline, which the bare format could not
+   represent at all. `golden/cases` and `golden/helpers.mojo` then joined the
+   `fmt` tasks.
 2. `golden/conftest.py` is imported before `pytest_collect_file` reaches
    `golden/test_cases.mojo`, so the generated file exists in time. If not,
    generation moves to a `pytest_configure` hook in the root `conftest.py`.
@@ -255,15 +274,16 @@ Known convergence gaps, each a Python-side addition under the standing rule:
 - `pixi run -e bench python golden/runner.py` produces an empty diff on an
   unmodified corpus.
 - `pixi run -e dev pytest golden/` works with no duckdb installed.
-- The count of cases whose two lanes are byte-identical is reported. It is 0
-  of 69 today; the target is all of them, and anything short of that is named
-  by a `-- skip` marker rather than hidden.
+- All 69 cases run in both lanes from one text, so the byte-identical count is
+  69 of 69 and no case needs a `-- skip` marker. What remains is measured
+  instead by `helpers.SHIMS` — the vocabulary the two lanes still spell
+  differently — which stands at 48 and should fall to zero.
 
 ## Risks
 
-**Formatter interference.** `mojo format` could reflow or strip whitespace in
-the expected block. Checked at the phase 1 gate; the pipe-delimited fallback
-is the mitigation.
+**Formatter interference.** Confirmed real, and fixed by quoting string cells
+rather than by the pipe-delimited fallback this spec originally proposed —
+which would not have worked. See phase 1, checkpoint 1.
 
 **Compile cost.** 69 concatenated cases in one module is more instantiations
 than any single golden file today. Measured at the phase 1 gate and again in

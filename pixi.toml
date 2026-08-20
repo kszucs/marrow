@@ -171,8 +171,8 @@ bench = { cmd = "pytest --benchmark -v" }
 ruff = ">=0.14.14,<0.15"
 
 [feature.format.tasks]
-fmt_mojo = { cmd = "mojo format marrow python benchmarks" }
-fmt_python = { cmd = "ruff format python conftest.py benchmarks" }
+fmt_mojo = { cmd = "mojo format marrow python benchmarks golden/cases golden/helpers.mojo" }
+fmt_python = { cmd = "ruff format python conftest.py benchmarks golden" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
 fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 

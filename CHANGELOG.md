@@ -8,6 +8,48 @@
 > findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
 > which indexes all twenty.
 
+### Tests
+
+- **The golden corpus is now one file per case, and both lanes run the same
+  text.** A case used to be spread across three files — the SQL and the
+  runtime-lane expression in `test_<area>.py`, the AOT-lane expression in
+  `test_<area>.mojo`, and the expectation in `test_<area>.exp` — matched only
+  by name, with nothing holding the two expressions to the same query. They
+  drifted once already, when the AOT lane had no boolean column leaf and the
+  Python twin silently tested something else. Each of the 69 cases is now a
+  single `golden/cases/<name>.mojo`: SQL and expected table in the docstring,
+  one expression below it. It is **Mojo source**, and Mojo is the source of
+  truth — the constrained lane (no `**kwargs`, a dtype required at comptime)
+  is the one whose spelling the other can always accept. The Mojo lane
+  compiles the cases concatenated into a generated `test_cases.mojo`; the
+  Python lane runs the same text through a three-rule transpile (drop
+  `raises`, drop `var`, keep everything else) against `golden/helpers.py`.
+  `expfmt.py`, `fixtures.py` and `regenerate.py` are folded into
+  `golden/runner.py`, whose `import duckdb` sits inside `regenerate()` so the
+  duckdb-free `dev` environment still runs the corpus. Regeneration is now
+  `pixi run -e bench python golden/runner.py`. Design in
+  `docs/superpowers/specs/2026-08-20-golden-single-file-cases-design.md`.
+
+- **`helpers.SHIMS` counts what the two lanes still spell differently, and a
+  test keeps the count honest.** The fused lane's internal vocabulary —
+  `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x)`, `NumericCast[Float64Type]`,
+  `Upper(x)` — is bridged by golden-local shims rather than by growing
+  marrow's public Python API, which should never require writing
+  `AggExpr.of[NumericAgg[...]]` where `.sum()` exists. 48 shims today;
+  `test_golden_shims_are_declared` fails both when a vocabulary name is added
+  without being declared and when a shim has quietly become real API.
+
+### Fixes
+
+- **Expected-table cells are quoted, because `mojo format` strips trailing
+  whitespace inside docstrings.** The `words` fixture holds `"  pad  "`, so an
+  unquoted expectation block silently lost its trailing spaces and asserted a
+  different string — caught by running the formatter over the new corpus and
+  watching two cases go red. Quoting keeps every line ending in a printable
+  character, and lets string data contain a tab or a newline, which the bare
+  format could not represent at all. `golden/cases` and `golden/helpers.mojo`
+  joined the `fmt` tasks now that formatting them is safe.
+
 ### Docs
 
 - **`docs/guide/compile.qmd` — a guide to `param()`, `execute_cli()` and

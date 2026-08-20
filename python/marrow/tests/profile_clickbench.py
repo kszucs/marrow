@@ -33,9 +33,7 @@ def _resolve(name):
         padded = f"q{int(key[1:]):02d}"
         if padded in cb.QUERIES:
             return cb.QUERIES[padded]
-    raise SystemExit(
-        f"unknown query {name!r}; known: {', '.join(sorted(cb.QUERIES))}"
-    )
+    raise SystemExit(f"unknown query {name!r}; known: {', '.join(sorted(cb.QUERIES))}")
 
 
 def main():
@@ -43,9 +41,7 @@ def main():
     repeats = int(os.environ.get("MARROW_PROFILE_REPEATS", "20"))
 
     if not cb.HAVE_DATA:
-        raise SystemExit(
-            f"dataset not found at {cb.HITS}; set MARROW_CLICKBENCH_HITS"
-        )
+        raise SystemExit(f"dataset not found at {cb.HITS}; set MARROW_CLICKBENCH_HITS")
 
     q = _resolve(name)
     if q.unsupported:

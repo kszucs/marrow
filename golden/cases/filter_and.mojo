@@ -1,0 +1,14 @@
+def test_golden_filter_and() raises:
+    """
+    SELECT k, v, w FROM basic WHERE v > 2 AND w < 60
+
+    -- expected
+    k:string	v:int64	w:int64
+    'a'	3	30
+    'c'	4	40
+    """
+    var t = table("basic")
+    var q = t.filter(
+        (col("v", int64) > lit(2, int64)) & (col("w", int64) < lit(60, int64))
+    )
+    check(q)

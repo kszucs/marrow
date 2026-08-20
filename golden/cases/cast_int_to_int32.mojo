@@ -1,0 +1,14 @@
+def test_golden_cast_int_to_int32() raises:
+    """
+    SELECT CAST(i AS INTEGER) AS c FROM nums
+
+    -- expected
+    c:int32
+    1
+    -2
+    300
+    NULL
+    """
+    var t = table("nums")
+    var q = t.project(["c"], [NumericCast[Int32Type](col("i", int64))])
+    check(q)
