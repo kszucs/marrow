@@ -30,6 +30,18 @@
 
 ### Fixes
 
+- **The AOT lane had no boolean column leaf.** `col` had overloads for
+  numeric, string, list and temporal dtypes and none for `BoolType`, and
+  `values.mojo` had no `BoolColumn` node — so a fused expression could not
+  reference a `bool` column at all, while the runtime lane could. That is an
+  invariant-2 violation (a feature present in only one lane), and it forced
+  three-valued-logic tests to synthesise their operands from comparisons.
+  Adds `BoolColumn` and the matching `col(name, bool_)` overload; booleans
+  are bit-packed, so its `State` is the `BoolArray` and the lane loads
+  through `values()`, the offset-applied `BitmapView`. **Zero bytes** on the
+  size gate — `query_streaming_agg_fused` measures 1,397,432 of `__text`
+  with and without it, since an unused fused node is eliminated.
+
 - **An empty result carried a schema but no columns.** `collect()` returned
   `RecordBatch(schema=..., columns=[])` when no morsel survived, so
   `num_columns()` was 0 while the schema named its fields — anything walking

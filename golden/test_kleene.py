@@ -33,3 +33,30 @@ def test_golden_kleene_filter_and(golden):
     """SELECT x, y FROM kleene WHERE (x > 0) AND (y > 0)"""
     t = golden.table("kleene")
     golden.check(t.filter((t["x"] > 0) & (t["y"] > 0)))
+
+
+def test_golden_kleene_column_and(golden):
+    """SELECT p, q, p AND q AS r FROM flags
+
+    Reads bool *columns*, not derived predicates. The AOT lane could not
+    express this at all until `col` gained a `BoolType` overload — `col` had
+    numeric, string, list and temporal leaves and no boolean one, so a fused
+    expression had no way to reference a bool column.
+    """
+    t = golden.table("flags")
+    golden.check(t.project(p=t["p"], q=t["q"], r=t["p"] & t["q"]))
+
+
+def test_golden_kleene_column_or(golden):
+    """SELECT p, q, p OR q AS r FROM flags"""
+    t = golden.table("flags")
+    golden.check(t.project(p=t["p"], q=t["q"], r=t["p"] | t["q"]))
+
+
+def test_golden_kleene_column_filter(golden):
+    """SELECT p, q FROM flags WHERE p
+
+    A null predicate does not select, so only the three TRUE rows survive.
+    """
+    t = golden.table("flags")
+    golden.check(t.filter(t["p"]))

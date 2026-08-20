@@ -37,3 +37,33 @@ NULL	NULL
 == test_golden_kleene_filter_and
 x:int64	y:int64
 1	1
+
+== test_golden_kleene_column_and
+p:bool	q:bool	r:bool
+True	True	True
+True	False	False
+True	NULL	NULL
+False	True	False
+False	False	False
+False	NULL	False
+NULL	True	NULL
+NULL	False	False
+NULL	NULL	NULL
+
+== test_golden_kleene_column_or
+p:bool	q:bool	r:bool
+True	True	True
+True	False	True
+True	NULL	True
+False	True	True
+False	False	False
+False	NULL	NULL
+NULL	True	True
+NULL	False	NULL
+NULL	NULL	NULL
+
+== test_golden_kleene_column_filter
+p:bool	q:bool
+True	True
+True	False
+True	NULL

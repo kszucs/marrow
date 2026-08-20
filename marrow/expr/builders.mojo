@@ -17,6 +17,7 @@ package `__init__`.
 """
 
 from ..dtypes import (
+    BoolType,
     DynType,
     FloatingType,
     Int64Type,
@@ -31,6 +32,7 @@ from .dynamic import DynValue
 from .params import ParamDecl, register_param
 from .values import (
     AggExpr,
+    BoolColumn,
     ListColumn,
     NumericColumn,
     NumericLiteral,
@@ -59,6 +61,15 @@ def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
 def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
     """Reference a list column by name — `col("l", list_(int64))`."""
     return ListColumn[T](name^)
+
+
+def col(var name: String, dtype: BoolType) -> BoolColumn:
+    """Reference a boolean column by name — `col("flag", bool_)`.
+
+    `BoolType` is a concrete struct rather than a trait, so this overload is
+    unparameterised. Without it the fused lane could not read a `bool` column
+    at all."""
+    return BoolColumn(name^)
 
 
 def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:

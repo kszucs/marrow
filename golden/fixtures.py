@@ -81,6 +81,21 @@ TABLES = {
             )
         }
     ),
+    # Actual boolean columns, covering the 3x3 Kleene table directly rather
+    # than through derived predicates. Unreadable by the AOT lane until
+    # `BoolColumn` existed.
+    "flags": pa.table(
+        {
+            "p": pa.array(
+                [True, True, True, False, False, False, None, None, None],
+                pa.bool_(),
+            ),
+            "q": pa.array(
+                [True, False, None, True, False, None, True, False, None],
+                pa.bool_(),
+            ),
+        }
+    ),
 }
 
 
