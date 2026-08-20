@@ -33,7 +33,18 @@ DIR = Path(__file__).parent
 CASES = DIR / "cases"
 FIXTURES = DIR / "fixtures"
 CACHE = DIR / ".exp"
-GENERATED = DIR / "test_cases.mojo"
+# The Mojo lane's wrappers must be a real file — Mojo has no `eval`, and the
+# harness collects by regex-scanning for `def test_*(`. They are build output,
+# so they go in a gitignored subdirectory rather than beside the sources.
+#
+# A tmpdir is not reachable, and the blocker is pytest's, not the compiler's:
+# `pytest_collect_file` from the repository conftest applies only to files
+# under that conftest's own directory, so a `.mojo` in /tmp is never recognised
+# as a test file. `-I` would satisfy the *compiler* (see `conftest.mojo_*`
+# history), but collection has to happen first. Moving Mojo collection out of
+# conftest.py into a real pytest plugin would lift this; that is a separate
+# change to shared infrastructure.
+GENERATED = DIR / "generated" / "test_cases.mojo"
 
 PREFIX = "test_golden_"
 MARKER = "-- expected"
@@ -433,6 +444,7 @@ def generate_mojo(cases):
     text = GENERATED_HEADER + "\n".join(imports) + "\n\n\n" + "\n\n".join(blocks)
     # Leave an unchanged file alone so the harness's content-addressed driver
     # cache is not invalidated on every run.
+    GENERATED.parent.mkdir(parents=True, exist_ok=True)
     if not GENERATED.exists() or GENERATED.read_text() != text:
         GENERATED.write_text(text)
 

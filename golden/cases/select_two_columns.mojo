@@ -1,5 +1,4 @@
-from golden.helpers import table
-from marrow.expr.relations import DynRelation
+from golden.prelude import *
 
 
 def plan() raises -> DynRelation:

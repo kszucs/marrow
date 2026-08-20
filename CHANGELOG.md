@@ -59,6 +59,25 @@
   to measure comptime versus runtime resolution and would stop measuring it if
   rewritten. CLAUDE.md records the rule for new tests.
 
+- **A case file has one import line.** `golden/prelude.mojo` re-exports the
+  case vocabulary and every case opens `from golden.prelude import *`,
+  replacing three to six explicit imports per file. This is the repository's
+  one sanctioned wildcard, and CLAUDE.md records why it is safe here: the
+  prelude defines nothing and imports nothing for its own use, so its wildcard
+  surface is exactly the curated list in it, and case files are leaves with no
+  second entry path for a name to resolve along. Cases import from the prelude
+  rather than `helpers.mojo`, whose own `DynArray` / `RecordBatch` imports
+  would otherwise leak into every case.
+
+- **The generated wrappers moved to a gitignored `golden/generated/`.** They
+  are build output and no longer sit beside the sources. A tmpdir was tried
+  and is not reachable — pytest applies a conftest's `pytest_collect_file`
+  only to files under that conftest's own directory, so a `.mojo` outside the
+  repository is never recognised as a test file. `-I` would satisfy the
+  compiler, but collection happens first. Lifting this means moving Mojo
+  collection out of `conftest.py` into a real pytest plugin, which is a
+  separate change to shared infrastructure.
+
 ### Fixes
 
 - **Expected-table cells are quoted, because `mojo format` strips trailing

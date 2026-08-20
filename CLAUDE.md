@@ -687,7 +687,12 @@ In addition:
   through — the signature of three separate incidents (a trait shadowing the
   builtin `Scalar`; `BoolArray` resolving along one path and not another; a "fix"
   that took errors 2 → 10). All wildcards were replaced with explicit lists; keep
-  it that way.
+  it that way. **`golden/prelude.mojo` is the one sanctioned exception**: it
+  defines nothing and imports nothing for its own use, so its wildcard surface
+  is exactly the curated list written in it, and case files are leaves with no
+  second entry path for a name to resolve along. Cases import from it, never
+  from `golden/helpers.mojo`, whose own imports would otherwise leak into every
+  case.
 - **An `__eq__` that compares *elements* of an erased container deadlocks the
   compiler.** Fixed 2026-08-19; recorded because the shape recurs. Comparing a
   nested array element by element materialises a `DynArray` per element, so
