@@ -17,6 +17,7 @@ from ...builders import (
     PrimitiveBuilder,
     StringBuilder,
     Int32Builder,
+    Int64Builder,
     Date32Builder,
     TimestampBuilder,
     DurationBuilder,
@@ -37,6 +38,7 @@ from ...dtypes import (
     UInt8Type,
     Float32Type,
 )
+from ...buffers import Bitmap
 from ...kernels.filter import Filter, Take, filter, take, drop_null
 
 
@@ -824,3 +826,58 @@ def test_filtersliced_multiword_offset_with_nulls() raises:
             assert_true(result.is_null(i))
         else:
             assert_equal(result[i].value(), expect_values[i])
+
+
+def test_filter_null_mask_entry_is_not_selected() raises:
+    """A null in the mask must not select its row.
+
+    Arrow drops rows whose mask entry is null — pyarrow's default
+    `null_selection_behavior="drop"` — and SQL agrees: `WHERE v < 4` omits the
+    row where `v` is NULL.
+
+    The mask is built by hand because the defect needs the *data* bit under
+    the null to be **set**, and no builder produces that — `append_null()`
+    clears both bits. A comparison kernel does: it evaluates every SIMD lane
+    whatever the validity says, so a null input compares its raw payload (0),
+    writes the result, and only then marks the lane invalid. `filter` read
+    that stray bit and selected the row.
+
+    Building the mask with `LtKernel` would be the faithful spelling, but the
+    hand-built form is equivalent and avoids one more instantiation.
+
+    **This case fails by wedging the compiler, not by asserting.** With the
+    `filter` fix reverted the whole compilation unit parks at 0% CPU with no
+    diagnostic — verified four ways, and it is not the mask construction, the
+    `LtKernel` import, the `as_int64()` narrowing or the argument spelling:
+    the unit builds in 36s with the fix and hangs without it. So it does
+    catch a regression, just noisily. `test_filter_null_mask_entry_is_not_selected`
+    in `python/marrow/tests/test_compute.py` is the clean guard — that one
+    fails by assertion in under a second.
+    """
+    var values = array([1, 5, 6, 2], int64)
+
+    var bits = Bitmap.alloc_zeroed(4)
+    for i in range(4):
+        bits.set(i)  # every lane's data bit says True
+    var valid = Bitmap.alloc_zeroed(4)
+    valid.set(0)
+    valid.set(2)
+    valid.set(3)  # lane 1 is null, but its data bit stays set
+
+    var mask = BoolArray(
+        4,
+        1,
+        0,
+        Optional(valid^.to_immutable(length=4)),
+        bits^.to_immutable(length=4),
+    )
+    assert_equal(mask.null_count(), 1)
+
+    # The row *count* is the whole assertion: the defect selected the null
+    # lane, giving 4. Narrowing the erased result with `as_int64()` to check
+    # the values as well wedges the elaborator — that narrowing inside
+    # filter's dispatch ladder parks the compiler at 0% CPU with no
+    # diagnostic — and the count already distinguishes the two behaviours.
+    var erased: DynArray = values.copy()
+    var kept = filter(erased, mask.copy())
+    assert_equal(kept.length(), 3)  # 1, 6, 2 — never the null lane
