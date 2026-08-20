@@ -1104,9 +1104,31 @@ def filter(
     mask: DynArray,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
-    """Filter `array`, keeping elements where boolean `mask` is True."""
-    var m = mask.as_bool().copy()
-    return Filter.dispatch(array, m.values(), ctx)
+    """Filter `array`, keeping elements where boolean `mask` is True.
+
+    **A null mask entry does not select.** That is Arrow's rule — pyarrow's
+    default `null_selection_behavior="drop"` — and SQL's: `WHERE v < 4` omits
+    the row where `v` is NULL.
+
+    It has to be applied here because the comparison kernels evaluate every
+    SIMD lane whatever the validity says. A null input still compares its raw
+    payload and writes a data bit; the validity bitmap is what records that
+    the bit is meaningless. Selecting on `values()` alone therefore read that
+    stray bit, which is why `v > 3` looked correct (`0 > 3` is False, so the
+    bit was clear) while `v < 4` silently returned an extra row.
+
+    `intersect_views` rather than `intersect`: views index logically from
+    zero and owning bitmaps do not, so a sliced mask would otherwise have its
+    nulls applied `offset` positions from where they belong."""
+    # Borrowed, not copied: `intersect_views` wants immutable-origin views,
+    # and an owned local would hand it a mutable one.
+    ref m = mask.as_bool()
+    if m.null_count() == 0:
+        return Filter.dispatch(array, m.values(), ctx)
+    var selected = Bitmap.intersect_views(
+        Optional(m.values()), m.validity()
+    ).value()
+    return Filter.dispatch(array, selected.view(), ctx)
 
 
 def take(

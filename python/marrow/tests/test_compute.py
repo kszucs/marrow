@@ -461,3 +461,34 @@ def test_equal_gpu():
     ).to_cpu(device)
     assert result.__len__() == 3
     assert result.null_count() == 0
+
+
+def test_filter_null_mask_entry_is_not_selected():
+    """A null in the mask must not select its row.
+
+    Arrow drops rows whose mask entry is null (pyarrow's default
+    ``null_selection_behavior="drop"``), and SQL agrees: ``WHERE v < 4``
+    omits the row where ``v`` is NULL.
+
+    The mask comes from a comparison rather than being built by hand, because
+    the defect needs the *data* bit under the null to be set and only a real
+    comparison produces that: the kernel evaluates every SIMD lane whatever
+    the validity says, so a null input compares its raw payload (0), writes
+    ``0 < 4`` = True, and only then marks the lane invalid. ``filter`` read
+    that bit and selected the row.
+
+    ``v > 3`` is asserted alongside because it was *accidentally* correct —
+    ``0 > 3`` is False, so the stray bit happened to be clear — and a
+    regression would reintroduce the asymmetry rather than break both.
+    """
+    values = ma.array([1, 2, 3, 4, None, 6, 7], ma.int64())
+    bound = ma.array([4] * 7, ma.int64())
+
+    mask = ma.compute.less(values, bound)
+    assert mask.to_pylist() == [True, True, True, False, None, False, False]
+    assert mask.null_count() == 1
+
+    assert ma.compute.filter(values, mask).to_pylist() == [1, 2, 3]
+
+    above = ma.compute.greater(values, ma.array([3] * 7, ma.int64()))
+    assert ma.compute.filter(values, above).to_pylist() == [4, 6, 7]

@@ -53,6 +53,23 @@ TABLES = {
             "y": pa.array([1, -1, None, 1, -1, None, 1, -1, None], pa.int64()),
         }
     ),
+    # Join fixtures. `emp.dept` covers every interesting case against
+    # `dept.did`: a unique match (10), a duplicated match (20, twice), a key
+    # with no match (99), and a NULL key — which must match nothing, not even
+    # another NULL. `dept.did` 30 is unmatched from the right, so outer joins
+    # have something to widen in both directions.
+    "emp": pa.table(
+        {
+            "eid": pa.array([1, 2, 3, 4, 5], pa.int64()),
+            "dept": pa.array([10, 20, 20, 99, None], pa.int64()),
+        }
+    ),
+    "dept": pa.table(
+        {
+            "did": pa.array([10, 20, 30], pa.int64()),
+            "dname": pa.array(["eng", "sales", "ops"], pa.string()),
+        }
+    ),
 }
 
 

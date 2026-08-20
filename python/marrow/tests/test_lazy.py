@@ -455,3 +455,38 @@ def test_filter_answer_is_independent_of_thread_count():
     parallel = pa.record_batch(plan.collect(num_threads=8)).to_pydict()
     assert len(serial["v"]) == n // 3
     assert serial == parallel
+
+
+@needs_expressions
+def test_join_on_differently_named_keys(tmp_path):
+    """`left_on`/`right_on` with different names must work.
+
+    The hash join filters collisions with `EqKernel.apply` over the two key
+    structs, and a struct's dtype includes its field names — so selecting the
+    key columns kept `dept` on one side and `did` on the other, and the kernel
+    rejected the pair with `equal: dtype mismatch: struct<dept: int64> vs
+    struct<did: int64>`. Only joins whose keys happened to share a name
+    worked, which is the rarer case: a foreign key seldom shares its
+    referent's name.
+    """
+    emp = marrow.record_batch(
+        {
+            "eid": marrow.array([1, 2, 3]).unwrap(),
+            "dept": marrow.array([10, 20, 99]).unwrap(),
+        }
+    )
+    dept = marrow.record_batch(
+        {
+            "did": marrow.array([10, 20]).unwrap(),
+            "dname": marrow.array(["eng", "sales"]).unwrap(),
+        }
+    )
+    out = (
+        marrow.memtable(emp)
+        .join(marrow.memtable(dept), left_on="dept", right_on="did")
+        .order_by("eid")
+        .collect()
+    )
+    assert out.num_rows() == 2
+    assert out.column(0).to_pylist() == [1, 2]
+    assert out.column(3).to_pylist() == ["eng", "sales"]

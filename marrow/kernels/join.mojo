@@ -426,6 +426,38 @@ paying for 8x oversubscription. Fanout stays a runtime parameter on
 ``RadixPartitioner`` and can be tuned per workload."""
 
 
+def _key_struct(source: StructArray, indices: List[Int]) raises -> StructArray:
+    """The key columns, renamed to **positional** field names.
+
+    `StructArray.select` keeps each field's original name, and a struct's
+    dtype includes those names — so a build side of `struct<dept: int64>` and
+    a probe side of `struct<did: int64>` are *different dtypes*, and the
+    `EqKernel.apply` that filters hash collisions rejects the pair through
+    `expect_same_dtype`. Join keys are matched by position, never by name, so
+    the names are normalised away here.
+
+    Without this, `left_on="dept", right_on="did"` — the ordinary shape, since
+    a foreign key rarely shares its referent's name — raised
+    `equal: dtype mismatch: struct<dept: int64> vs struct<did: int64>`. Only
+    joins whose key columns happened to share a name worked.
+    """
+    var selected = source.select(indices)
+    ref st = selected.dtype.as_struct()
+    var fields = List[Field]()
+    for i in range(len(st.fields)):
+        fields.append(
+            Field(String(i), st.fields[i].dtype.copy(), st.fields[i].nullable)
+        )
+    return StructArray(
+        dtype=struct_(fields^),
+        length=selected.length,
+        nulls=selected.null_count(),
+        offset=selected.offset,
+        bitmap=selected.bitmap,
+        children=selected.children.copy(),
+    )
+
+
 struct HashJoin[Hash: Hasher = RapidHash64]:
     """Hash join using SwissHashTable.
 
@@ -559,7 +591,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         self._left_key_indices = left_key_indices.copy()
         self._built_parallel = False
         var ctx = self._ctx.copy()
-        self._table.build(left.select(left_key_indices), ctx)
+        self._table.build(_key_struct(left, left_key_indices), ctx)
 
     def _probe_ctx(self, probe_rows: Int) -> ExecContext:
         """The context to spend on a probe call of `probe_rows` rows.
@@ -583,8 +615,10 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         kind: JoinKind,
         strictness: UInt8,
     ) raises -> StructArray:
-        var left_keys = self._left_data.value().select(self._left_key_indices)
-        var right_keys = right.select(right_key_indices)
+        var left_keys = _key_struct(
+            self._left_data.value(), self._left_key_indices
+        )
+        var right_keys = _key_struct(right, right_key_indices)
         # Sized by *this call's* probe rows, not by the build side and not by
         # the raw worker count: `SwissHashTable.probe` spends `ctx` on hashing
         # the probe keys, and striping 8192 of them across a forced 8 workers
@@ -628,7 +662,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         self._left_data = left.copy()
         self._left_key_indices = left_key_indices.copy()
 
-        var left_keys = left.select(left_key_indices)
+        var left_keys = _key_struct(left, left_key_indices)
 
         # Pre-size one table per partition; each is built *in place* by the
         # matching worker (avoids moving/copying a SwissHashTable out of a
@@ -682,7 +716,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         4. Concatenate per-partition index pairs, then run the shared
            ``_emit_unmatched`` + ``_assemble`` steps.
         """
-        var right_keys = right.select(right_key_indices)
+        var right_keys = _key_struct(right, right_key_indices)
         var right_n = len(right)
         var single = strictness == JOIN_ANY
 

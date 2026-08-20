@@ -646,6 +646,26 @@
   move costs nothing — every caller in the tree was already a `DynValue`, since
   the AOT lane spells the node directly as `IsNull(col("a", int64))`.
 
+### Fixes
+
+- **`filter` ignored the mask's validity bitmap**, so a comparison against a
+  null selected on the raw payload underneath. The comparison kernels
+  evaluate every SIMD lane whatever the validity says — a null input compares
+  its payload (0), writes the result, and only then marks the lane invalid —
+  so `WHERE v < 4` returned the row where `v` was NULL while `WHERE v > 3` was
+  accidentally correct (`0 > 3` is False, so the stray bit was clear). Now
+  intersects data with validity through `Bitmap.intersect_views`, which is
+  offset-applied and so stays correct for a sliced mask. Found by the golden
+  corpus, which failed it identically on both lanes.
+
+- **Joining on differently named keys always raised.** `StructArray.select`
+  keeps each field's name, a struct's dtype includes those names, and the
+  `EqKernel.apply` that filters hash collisions rejects mismatched dtypes — so
+  `left_on="dept", right_on="did"` died with
+  `equal: dtype mismatch: struct<dept: int64> vs struct<did: int64>` and only
+  joins whose keys happened to share a name worked. Key structs are now
+  renamed positionally, which is how join keys are matched.
+
 ### Tests
 
 - **Golden query corpus** (`golden/`) — 28 queries run through both the
