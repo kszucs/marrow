@@ -95,12 +95,16 @@ def test_select_unknown_column_raises(lazy):
 
 @needs_expressions
 def test_select_preserves_the_source_field(tmp_path):
-    """`select` copies the input `Field`; `project` rebuilds one.
+    """A pass-through column keeps its whole `Field`, by whichever verb.
 
-    The plan routes `select` through `DynRelation.select(List[String])` for
-    exactly this reason — going through `project` widened a non-nullable column
-    to nullable. Parquet is the reachable source of a non-nullable field from
-    Python: `pa.field(..., nullable=False)` survives the round trip.
+    `select` always copied the input `Field`; `project` used to rebuild a bare
+    one from the probed dtype alone, so the same column came out with a
+    different schema depending on which verb asked for it — a non-nullable
+    input widened to nullable. `project` now copies the source `Field` when the
+    expression is a bare column reference, so the two agree.
+
+    Parquet is the reachable source of a non-nullable field from Python:
+    `pa.field(..., nullable=False)` survives the round trip.
     """
     path = tmp_path / "nn.parquet"
     schema = pa.schema(
@@ -110,8 +114,23 @@ def test_select_preserves_the_source_field(tmp_path):
 
     t = marrow.read_parquet(path)
     assert pa.schema(t.select("a").schema).field("a").nullable is False
-    # The lossy alternative, kept here so the difference stays visible.
-    assert pa.schema(t.project(a=t["a"]).schema).field("a").nullable is True
+    assert pa.schema(t.project(a=t["a"]).schema).field("a").nullable is False
+
+
+def test_project_still_probes_a_computed_column(tmp_path):
+    """Only a *pass-through* inherits its source field.
+
+    A computed column has no source `Field` to inherit, so its dtype is probed
+    and it is nullable — the arithmetic's answer, not the input's.
+    """
+    path = tmp_path / "nn2.parquet"
+    schema = pa.schema([pa.field("a", pa.int64(), nullable=False)])
+    pq.write_table(pa.table({"a": [1, 2]}, schema=schema), path)
+
+    t = marrow.read_parquet(path)
+    computed = pa.schema(t.project(a=t["a"] + 1).schema).field("a")
+    assert computed.nullable is True
+    assert computed.type == pa.int64()
 
 
 # ── execution ──────────────────────────────────────────────────────────────
@@ -158,9 +177,21 @@ def test_aggregate_with_no_keys(lazy):
     assert out.column("total").to_pylist() == [21]
 
 
-def test_aggregate_needs_an_aggregate(lazy):
+def test_aggregate_with_keys_only_is_distinct(lazy):
+    """Keys and no aggregates is ``SELECT DISTINCT``.
+
+    This used to raise: the binding required an aggregate even though the
+    plan layer has always executed the keys-only form, so the one shape
+    ``SELECT DISTINCT k`` needs was reachable from Mojo and not from Python.
+    """
+    out = lazy.aggregate(by=["k"]).order_by("k").to_pyarrow()
+    assert out.column_names == ["k"]
+    assert out.column("k").to_pylist() == ["a", "b", "c"]
+
+
+def test_aggregate_needs_a_key_or_an_aggregate(lazy):
     with pytest.raises(ValueError):
-        lazy.aggregate(by=["k"])
+        lazy.aggregate()
 
 
 def test_order_by_ascending_is_the_default(lazy):
@@ -436,3 +467,60 @@ def test_filter_answer_is_independent_of_thread_count():
     parallel = pa.record_batch(plan.collect(num_threads=8)).to_pydict()
     assert len(serial["v"]) == n // 3
     assert serial == parallel
+
+
+@needs_expressions
+def test_join_on_differently_named_keys(tmp_path):
+    """`left_on`/`right_on` with different names must work.
+
+    The hash join filters collisions with `EqKernel.apply` over the two key
+    structs, and a struct's dtype includes its field names — so selecting the
+    key columns kept `dept` on one side and `did` on the other, and the kernel
+    rejected the pair with `equal: dtype mismatch: struct<dept: int64> vs
+    struct<did: int64>`. Only joins whose keys happened to share a name
+    worked, which is the rarer case: a foreign key seldom shares its
+    referent's name.
+    """
+    emp = marrow.record_batch(
+        {
+            "eid": marrow.array([1, 2, 3]).unwrap(),
+            "dept": marrow.array([10, 20, 99]).unwrap(),
+        }
+    )
+    dept = marrow.record_batch(
+        {
+            "did": marrow.array([10, 20]).unwrap(),
+            "dname": marrow.array(["eng", "sales"]).unwrap(),
+        }
+    )
+    out = (
+        marrow.memtable(emp)
+        .join(marrow.memtable(dept), left_on="dept", right_on="did")
+        .order_by("eid")
+        .collect()
+    )
+    assert out.num_rows() == 2
+    assert out.column(0).to_pylist() == [1, 2]
+    assert out.column(3).to_pylist() == ["eng", "sales"]
+
+
+@needs_expressions
+def test_empty_result_is_a_well_formed_batch(batch):
+    """A plan that matches nothing still returns one column per schema field.
+
+    `collect()` used to return the schema with an *empty* column list when no
+    morsel survived, so `num_columns()` was 0 while the schema named its
+    fields. Anything walking the columns by schema index ran off the end, and
+    exporting the batch through the C Data interface returned NULL without
+    setting an exception — `to_pyarrow()` raised a bare `SystemError`.
+    """
+    lazy = marrow.memtable(batch)
+    empty = lazy.filter(lazy["v"] > 10_000)
+
+    out = empty.collect()
+    assert out.num_rows() == 0
+    assert out.num_columns() == batch.num_columns()
+
+    exported = empty.to_pyarrow()
+    assert exported.num_rows == 0
+    assert exported.schema.names == ["k", "v"]

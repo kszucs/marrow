@@ -640,6 +640,21 @@ def pytest_addoption(parser):
         "--no-gpu", action="store_true", default=False, help="Exclude GPU tests"
     )
     parser.addoption(
+        "--morsel-size",
+        type=int,
+        default=8192,
+        metavar="N",
+        help="Rows per morsel for golden-corpus sources (default 8192). A small "
+        "value drives every operator across morsel boundaries.",
+    )
+    parser.addoption(
+        "--num-threads",
+        type=int,
+        default=0,
+        metavar="N",
+        help="CPU worker budget for golden-corpus execution (0 = auto).",
+    )
+    parser.addoption(
         "--benchmark",
         action="store_true",
         default=False,

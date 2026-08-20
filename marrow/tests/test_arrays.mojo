@@ -1491,6 +1491,222 @@ def test_list_array_eq_nulls() raises:
     assert_true(a == b)
 
 
+# ---------------------------------------------------------------------------
+# ArrayData equality — structural, and deliberately *not* logical
+# ---------------------------------------------------------------------------
+
+
+def _data_of(var arr: DynArray) raises -> ArrayData:
+    return arr.to_data()
+
+
+def test_array_data_eq_identical_layouts() raises:
+    """The same layout twice compares equal, field for field."""
+    var a = _data_of(array([1, 2, 3], int64))
+    var b = _data_of(array([1, 2, 3], int64))
+    assert_true(a == b)
+    assert_false(a != b)
+
+
+def test_array_data_eq_differing_values() raises:
+    var a = _data_of(array([1, 2, 3], int64))
+    var b = _data_of(array([1, 2, 4], int64))
+    assert_false(a == b)
+    assert_true(a != b)
+
+
+def test_array_data_eq_differing_dtype() raises:
+    """Dtype is a field, so it separates two otherwise identical layouts."""
+    var a = _data_of(array([1, 2, 3], int32))
+    var b = _data_of(array([1, 2, 3], int64))
+    assert_false(a == b)
+
+
+def test_array_data_eq_differing_length() raises:
+    var a = _data_of(array([1, 2, 3], int64))
+    var b = _data_of(array([1, 2], int64))
+    assert_false(a == b)
+
+
+def test_array_data_eq_is_structural_not_logical() raises:
+    """A slice and a fresh array holding the same values are **not** equal.
+
+    This pins the contract rather than lamenting it: `ArrayData.__eq__` compares
+    what the layout *is* — offset included — not what it decodes to. Two
+    layouts over the same values at different offsets differ here, and the
+    logical question is `EqKernel`'s to answer. The typed arrays keep their own
+    value-level `__eq__`, which is why `test_primitive_array_eq_sliced` still
+    holds.
+    """
+    var whole = array([9, 1, 2, 3], int64)
+    var sliced = _data_of(whole.slice(1, 3))
+    var fresh = _data_of(array([1, 2, 3], int64))
+    assert_equal(sliced.length, fresh.length)
+    assert_equal(sliced.dtype, fresh.dtype)
+    assert_true(sliced.offset != fresh.offset)
+    assert_false(sliced == fresh)
+
+
+def test_array_data_eq_recurses_into_children() raises:
+    """Nested layouts compare through `children`, a `List[ArrayData]`.
+
+    That recursion is the whole reason this comparison is hand-written: the
+    derived `Equatable` goes through `List.__eq__`, which is `always_inline`,
+    and a self-recursive type cannot have an always-inline derived comparison.
+    """
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca = la.values()
+    ref ca_typed = ca.as_int64()
+    ca_typed.append(1)
+    ca_typed.append(2)
+    la.append_valid()
+    var a: DynArray = la.finish()
+
+    var ib = Int64Builder()
+    var lb = ListBuilder(ib^)
+    var cb = lb.values()
+    ref cb_typed = cb.as_int64()
+    cb_typed.append(1)
+    cb_typed.append(2)
+    lb.append_valid()
+    var b: DynArray = lb.finish()
+
+    var da = a.to_data()
+    var db = b.to_data()
+    assert_equal(len(da.children), 1)
+    assert_true(da == db)
+
+    # A different child makes the parents differ, reached only by recursing.
+    var ic = Int64Builder()
+    var lc = ListBuilder(ic^)
+    var cc = lc.values()
+    ref cc_typed = cc.as_int64()
+    cc_typed.append(1)
+    cc_typed.append(99)
+    lc.append_valid()
+    var c: DynArray = lc.finish()
+    assert_false(da == c.to_data())
+
+
+# ---------------------------------------------------------------------------
+# DynArray equality — the erased path that used to deadlock the compiler
+# ---------------------------------------------------------------------------
+
+
+def test_dyn_array_eq_nested_list() raises:
+    """`DynArray == DynArray` over a nested type.
+
+    Comparing two *erased* arrays is what made `DynArray.__eq__` and the nested
+    arrays' `__eq__` mutually recursive at instantiation and parked the
+    compiler at 0% CPU. This case exists so that never silently returns.
+    """
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca = la.values()
+    ref ca_typed = ca.as_int64()
+    ca_typed.append(7)
+    la.append_valid()
+    var a: DynArray = la.finish()
+
+    var ib = Int64Builder()
+    var lb = ListBuilder(ib^)
+    var cb = lb.values()
+    ref cb_typed = cb.as_int64()
+    cb_typed.append(7)
+    lb.append_valid()
+    var b: DynArray = lb.finish()
+
+    assert_true(a == b)
+
+
+def test_dyn_array_eq_nested_list_unequal() raises:
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca = la.values()
+    ref ca_typed = ca.as_int64()
+    ca_typed.append(7)
+    la.append_valid()
+    var a: DynArray = la.finish()
+
+    var ib = Int64Builder()
+    var lb = ListBuilder(ib^)
+    var cb = lb.values()
+    ref cb_typed = cb.as_int64()
+    cb_typed.append(8)
+    lb.append_valid()
+    var b: DynArray = lb.finish()
+
+    assert_false(a == b)
+
+
+def test_dyn_array_eq_across_dtypes_is_false() raises:
+    """Different dtypes are unequal rather than an error."""
+    var a: DynArray = array([1, 2], int32)
+    var b: DynArray = array([1, 2], int64)
+    assert_false(a == b)
+
+
+def test_list_array_eq_child_nulls() raises:
+    """Nulls inside the *child*, not the list.
+
+    The list's own null count says nothing about them, so each element slice
+    has to have its nulls counted over that slice. Carrying the child's total
+    null count into every element instead reports equal lists as different.
+    """
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca_any = la.values()
+    ref ca = ca_any.as_int64()
+    ca.append(1)
+    ca.append_null()
+    la.append_valid()
+    ca.append(2)
+    la.append_valid()
+    var a = la.finish()
+
+    var ib = Int64Builder()
+    var lb = ListBuilder(ib^)
+    var cb_any = lb.values()
+    ref cb = cb_any.as_int64()
+    cb.append(1)
+    cb.append_null()
+    lb.append_valid()
+    cb.append(2)
+    lb.append_valid()
+    var b = lb.finish()
+
+    assert_true(a == b)
+
+
+def test_list_array_eq_child_nulls_position_differs() raises:
+    """`[[1, null], [2]]` vs `[[null, 1], [2]]` — same counts everywhere, and
+    only the per-slice null *pattern* separates them."""
+    var ia = Int64Builder()
+    var la = ListBuilder(ia^)
+    var ca_any = la.values()
+    ref ca = ca_any.as_int64()
+    ca.append(1)
+    ca.append_null()
+    la.append_valid()
+    ca.append(2)
+    la.append_valid()
+    var a = la.finish()
+
+    var ib = Int64Builder()
+    var lb = ListBuilder(ib^)
+    var cb_any = lb.values()
+    ref cb = cb_any.as_int64()
+    cb.append_null()
+    cb.append(1)
+    lb.append_valid()
+    cb.append(2)
+    lb.append_valid()
+    var b = lb.finish()
+
+    assert_false(a == b)
+
+
 def test_fixed_size_list_array_eq() raises:
     var a_b = Int32Builder(4)
     a_b.append(1)

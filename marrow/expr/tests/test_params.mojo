@@ -82,7 +82,8 @@ def test_numeric_param_binds_into_a_fused_predicate() raises:
     assert_true(len(decls) == 1)
     decls[0].cell[].set(Int64Scalar(3).to_dyn())
 
-    var out = BoxedValue(pred).execute(batch)
+    var boxed: BoxedValue = pred
+    var out = boxed.execute(batch)
     assert_true(out.as_bool() == array([False, True, False, True, False]))
 
 
@@ -91,8 +92,9 @@ def test_numeric_param_unbound_raises_at_execute() raises:
     var a = array([1, 2], int64)
     var batch = record_batch([a.copy()], names=["a"])
     var pred = col("a", int64) > param("min-a", int64)
+    var boxed: BoxedValue = pred
     with assert_raises():
-        _ = BoxedValue(pred).execute(batch)
+        _ = boxed.execute(batch)
 
 
 def test_string_param_binds_into_a_fused_predicate() raises:
@@ -103,7 +105,8 @@ def test_string_param_binds_into_a_fused_predicate() raises:
     var pred = col("s", string) == want
     var decls = drain_params()
     decls[0].cell[].set(StringScalar(String("p")).to_dyn())
-    var out = BoxedValue(pred).execute(batch)
+    var boxed: BoxedValue = pred
+    var out = boxed.execute(batch)
     assert_true(out.as_bool() == array([True, False, True]))
 
 
@@ -283,7 +286,8 @@ def test_param_repeated_name_across_lanes_binds_once() raises:
 
     parse_params(["--min-a", "3"], decls)
     var want = array([False, True, False, True, False])
-    assert_true(BoxedValue(fused).execute(batch).as_bool() == want)
+    var boxed: BoxedValue = fused
+    assert_true(boxed.execute(batch).as_bool() == want)
     assert_true(dyn.execute(batch).as_bool() == want)
 
 

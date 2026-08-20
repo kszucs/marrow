@@ -107,6 +107,26 @@ def _aggregate_spec(name, value):
     return unwrapped.alias(name)
 
 
+def _projection(positional, named, verb):
+    """`(names, values)` from either keywords or two parallel lists."""
+    if positional and named:
+        raise TypeError(f"{verb}: pass keywords or two lists, not both")
+    if positional:
+        if len(positional) != 2:
+            raise TypeError(
+                f"{verb}: positional form takes exactly two lists "
+                f"(names, values), got {len(positional)}"
+            )
+        names, values = positional
+        names = [str(n) for n in names]
+        values = [_unwrap_expr(v) for v in values]
+        if len(names) != len(values):
+            raise ValueError(f"{verb}: {len(names)} names but {len(values)} values")
+        return names, values
+    names = list(named)
+    return names, [_unwrap_expr(named[n]) for n in names]
+
+
 class LazyTable(_Wrapper):
     """A lazy relational table: a query plan you can keep composing.
 
@@ -179,17 +199,21 @@ class LazyTable(_Wrapper):
             )
         )
 
-    def project(self, **named):
+    def project(self, *positional, **named):
         """Computed columns — ``t.project(total=t["a"] + t["b"])``.
 
         Keywords name the output columns, so this replaces the projection
         entirely (it is ``SELECT <these>``, not ``with_columns``).
+
+        Two parallel lists — ``t.project(["total"], [t["a"] + t["b"]])`` — are
+        also accepted, which is how the plan node and the Mojo lane spell it.
+        Mojo has no ``**kwargs``, so the positional form is the only one both
+        lanes can share, and the golden corpus runs one text through both.
         """
-        names = list(named)
-        values = [_unwrap_expr(named[n]) for n in names]
+        names, values = _projection(positional, named, "project")
         return LazyTable.wrap(self._binding.project(names, values))
 
-    def with_columns(self, **named):
+    def with_columns(self, *positional, **named):
         """Add or replace computed columns, keeping every other one.
 
             t.with_columns(total=t["qty"] * t["price"])
@@ -199,11 +223,11 @@ class LazyTable(_Wrapper):
         position**, and every expression sees the *input* columns rather than a
         partially-updated output. Chain two calls for sequential semantics.
 
-        Keyword-only, matching :meth:`project` — the output name is always
-        written, never derived from the expression.
+        Takes the same two shapes as :meth:`project` — keywords, or two
+        parallel lists. The output name is always written, never derived from
+        the expression.
         """
-        names = list(named)
-        values = [_unwrap_expr(named[n]) for n in names]
+        names, values = _projection(positional, named, "with_columns")
         return LazyTable.wrap(self._binding.with_columns(names, values))
 
     # ibis spells `with_columns` as `mutate`. Both work.
@@ -228,8 +252,12 @@ class LazyTable(_Wrapper):
         keys = [_unwrap_expr(k) for k in by]
         specs = [_unwrap_expr(a) for a in aggs]
         specs += [_aggregate_spec(n, v) for n, v in named_aggs.items()]
-        if not specs:
-            raise ValueError("aggregate: needs at least one aggregate")
+        if not specs and not keys:
+            # Keys with no aggregates is `SELECT DISTINCT`, which the plan
+            # layer executes; the Mojo lane always accepted it and this guard
+            # was the only thing rejecting it. Neither keys nor aggregates is
+            # still meaningless, so that stays an error.
+            raise ValueError("aggregate: needs at least one key or aggregate")
         return LazyTable.wrap(self._binding.aggregate(keys, specs))
 
     def order_by(self, *keys, nulls_first=True, stable=True):

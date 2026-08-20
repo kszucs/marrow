@@ -32,7 +32,7 @@ Two ways in, one destination:
   Nothing is interpreted: no name, no dtype resolution, a direct pointer to
   ``AggState[SumKernel, Int64Type]``, everything else dead code.
 - **dynamic** — ``aggs.append("sum", value_dtype)``, which goes through
-  ``marrow.expr.dynamic.resolve_agg``: one string comparison per aggregate, once,
+  ``marrow.expr.aggregates.resolve_agg``: one string comparison per aggregate, once,
   when the plan is built. The Python ``group_by(...).aggregate([...])`` binding
   and ``DynRelation.aggregate(...)`` start here.
 
@@ -303,7 +303,7 @@ struct AggFunc(Copyable, Movable, Writable):
 
     def __init__(out self, name: String, value_dtype: DynType) raises:
         """The dynamic form: resolve a function *name* over a column dtype
-        (``marrow.expr.dynamic.resolve_agg`` — the one string comparison)."""
+        (``marrow.expr.aggregates.resolve_agg`` — the one string comparison)."""
         var box = List[AggFunc]()
 
         def make[A: Aggregation]() raises {mut box, imm}:

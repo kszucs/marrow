@@ -28,7 +28,7 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...expr.values import BoxedValue, Gt
+from ...expr.values import Gt
 from ...expr.builders import col
 from ...expr.relations import DynRelation, Sort, in_memory_table
 from ...expr.builders import col as dyn_col, lit, if_else, case_when
@@ -47,13 +47,10 @@ def _fused_plan(morsel: Int) raises -> DynRelation:
     """SELECT a, name WHERE a > b, fused values, given a morsel size."""
     return (
         in_memory_table(_batch(), morsel_size=morsel)
-        .filter(BoxedValue(Gt(col("a", int64), col("b", int64))))
+        .filter(Gt(col("a", int64), col("b", int64)))
         .project(
             names=["a", "name"],
-            values=[
-                BoxedValue(col("a", int64)),
-                BoxedValue(col("name", string)),
-            ],
+            values=[col("a", int64), col("name", string)],
         )
     )
 

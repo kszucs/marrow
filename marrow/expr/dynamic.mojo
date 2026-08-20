@@ -159,7 +159,7 @@ from ..kernels.interval import (
 )
 from .params import lookup_param
 from .pruning import PruneStats
-from .values import Value
+from .values import AggExpr, Value
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +357,19 @@ struct DynValue(Copyable, Movable, Value, Writable):
         args: List[DynArray], payload: DynPayload, batch: RecordBatch
     ) raises -> DynArray:
         return cast_array(args[0].copy(), payload[DynType])
+
+    @staticmethod
+    def _cast_unchecked(
+        args: List[DynArray], payload: DynPayload, batch: RecordBatch
+    ) raises -> DynArray:
+        """`safe=False`: take each leaf's raw conversion instead of raising.
+
+        A second evaluator rather than a flag in the payload, because
+        `DynPayload` is size-critical (see `EvalFn`) and a `Bool` arm would
+        widen every node's payload to carry what one node needs. The node name
+        stays `"cast"` either way — `safe` selects the leaf's behaviour, not
+        the operation."""
+        return cast_array(args[0].copy(), payload[DynType], safe=False)
 
     @staticmethod
     def _date_trunc(
@@ -919,8 +932,19 @@ struct DynValue(Copyable, Movable, Value, Writable):
         out._payload = DynPayload(unit^)
         return out^
 
-    def cast(self, to: DynType) -> Self:
-        var out = Self("cast", Self._cast, self)
+    def cast(self, to: DynType, safe: Bool = True) -> Self:
+        """Cast this expression to `to`.
+
+        `safe=True` (the default) raises on a lossy conversion; `safe=False`
+        takes the raw truncating/wrapping path, or nulls the value where the
+        leaf has no raw path (string parsing). Same flag, same default and same
+        meaning as `marrow.kernels.cast` — this is the expression-level
+        spelling of it."""
+        var out: Self
+        if safe:
+            out = Self("cast", Self._cast, self)
+        else:
+            out = Self("cast", Self._cast_unchecked, self)
         out._payload = DynPayload(to.copy())
         return out^
 
@@ -951,61 +975,29 @@ struct DynValue(Copyable, Movable, Value, Writable):
         return Self("if_else", Self._if_else, cond, then_, else_)
 
     # --- aggregates: named here too, resolved against the input dtype -------
-    def aggregate(self, var func: String) -> DynAgg:
-        return DynAgg(func^, self.copy())
+    #
+    # These return `AggExpr` — the *same* type the fused lane's
+    # `Reduction.alias` returns — rather than a runtime-lane aggregate struct
+    # of their own. `AggExpr` already carried both shapes (a name to resolve,
+    # or a comptime `Aggregation`), so a second struct holding the name half
+    # was a duplicate that had to be copied across at every boundary.
+    def aggregate(self, var func: String) -> AggExpr:
+        return AggExpr(func^, self.copy())
 
-    def sum(self) -> DynAgg:
+    def sum(self) -> AggExpr:
         return self.aggregate("sum")
 
-    def mean(self) -> DynAgg:
+    def mean(self) -> AggExpr:
         return self.aggregate("mean")
 
-    def product(self) -> DynAgg:
+    def product(self) -> AggExpr:
         return self.aggregate("product")
 
-    def min(self) -> DynAgg:
+    def min(self) -> AggExpr:
         return self.aggregate("min")
 
-    def max(self) -> DynAgg:
+    def max(self) -> AggExpr:
         return self.aggregate("max")
 
-    def count(self) -> DynAgg:
+    def count(self) -> AggExpr:
         return self.aggregate("count")
-
-
-# ---------------------------------------------------------------------------
-
-
-struct DynAgg(Copyable, Movable, Writable):
-    """An aggregate applied to a runtime expression — ``col("x").sum()``.
-
-    The dynamic counterpart of the fused ``AggExpr`` (``marrow.expr.values``):
-    it names the aggregate rather than naming its ``Aggregation`` type, so the
-    function is resolved once — against the input's dtype — when the plan is
-    built. ``alias`` sets the output column name; without one the function's own
-    name is used."""
-
-    var func: String
-    var input: DynValue
-    var out_name: String
-
-    def __init__(
-        out self,
-        var func: String,
-        var input: DynValue,
-        var out_name: String = String(),
-    ):
-        self.func = func^
-        self.input = input^
-        self.out_name = out_name^
-
-    def alias(self, var name: String) -> DynAgg:
-        """Name this aggregate's output column."""
-        return DynAgg(self.func, self.input.copy(), name^)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.func, "(")
-        self.input.write_to(writer)
-        writer.write(")")
-        if self.out_name:
-            writer.write(" as ", self.out_name)

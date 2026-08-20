@@ -82,7 +82,7 @@ def test_row_group_prune_decision() raises:
     _write_sorted(path, 3000, 1000)
     var stats = ParquetFile(path).statistics()
     assert_equal(len(stats), 3)
-    var pred = BoxedValue(col("x") > lit[Int64Type](Int64(1500)))
+    var pred: BoxedValue = col("x") > lit[Int64Type](Int64(1500))
     var sch = schema([field("x", int64)])
     var keep = List[Bool]()
     for rg in range(len(stats)):

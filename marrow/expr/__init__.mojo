@@ -58,7 +58,7 @@ Usage::
     var result = plan.execute()
 """
 
-from .dynamic import DynAgg, DynValue
+from .dynamic import DynValue
 from .builders import col, lit, if_else
 from .values import BoxedValue
 from ..execution import ExecContext

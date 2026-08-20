@@ -930,9 +930,7 @@ struct BinaryLikeCast(CastKernel):
         if len(array) == 0:
             return
 
-        var start = Int(
-            array.offsets.unsafe_get[From.offset](array.offset)
-        )
+        var start = Int(array.offsets.unsafe_get[From.offset](array.offset))
         var end = Int(
             array.offsets.unsafe_get[From.offset](array.offset + array.length)
         )

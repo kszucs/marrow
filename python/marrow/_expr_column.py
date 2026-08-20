@@ -1,7 +1,7 @@
 """The Python expression surface — ``Column`` and ``Aggregate``.
 
 ``marrow.libmarrow`` exposes two binding types from the runtime expression
-lane: ``Expr`` (Mojo ``DynValue``) and ``Agg`` (Mojo ``DynAgg``). Both are
+lane: ``Expr`` (Mojo ``DynValue``) and ``Agg`` (Mojo ``AggExpr``). Both are
 deliberately spartan — named methods only, one required argument each, no
 coercion. This module is the other half: the composition wrappers that own the
 operator dunders, scalar coercion, keyword arguments and ``__repr__``.
@@ -308,9 +308,15 @@ class Column(_Wrapper):
             value_set = array(list(values))._binding
         return Column.wrap(self._binding.isin(value_set))
 
-    def cast(self, target_type):
-        """Cast to `target_type`, a :class:`~marrow.DataType`."""
-        return Column.wrap(self._binding.cast(target_type))
+    def cast(self, target_type, *, safe=True):
+        """Cast to `target_type`, a :class:`~marrow.DataType`.
+
+        With ``safe=True`` (the default) a lossy conversion raises; with
+        ``safe=False`` the raw truncating/wrapping conversion is used, except
+        for string parsing, which nulls the unparseable value. Same flag,
+        default and meaning as :func:`marrow.compute.cast`, which casts an
+        array rather than an expression."""
+        return Column.wrap(self._binding.cast(target_type, safe))
 
     # ── null handling ───────────────────────────────────────────────────────
 
@@ -369,9 +375,17 @@ class Column(_Wrapper):
     def count(self, *, alias=None):
         return self.aggregate("count", alias=alias)
 
+    def count_distinct(self, *, alias=None):
+        """``count(DISTINCT x)`` — exact, and skipping nulls like ``count``."""
+        return self.aggregate("count_distinct", alias=alias)
+
+    def approx_count_distinct(self, *, alias=None):
+        """``count(DISTINCT x)`` from a sketch, for when exact is too dear."""
+        return self.aggregate("approx_count_distinct", alias=alias)
+
 
 class Aggregate(_Wrapper):
-    """An aggregate over an expression — the Python face of ``DynAgg``.
+    """An aggregate over an expression — the Python face of ``AggExpr``.
 
     Produced by :meth:`Column.sum` and friends, consumed by the plan layer's
     ``group_by(...).aggregate([...])``, which calls :meth:`unwrap`."""
@@ -406,12 +420,15 @@ class Aggregate(_Wrapper):
 # ── constructors ───────────────────────────────────────────────────────────
 
 
-def col(name):
+def col(name, dtype=None):
     """Reference a column by name — ``col("amount")``.
 
     The dtype is resolved against the batch, not here; that is what makes this
-    the *runtime* lane. The Mojo-side ``col(name, dtype)`` builds the fused AOT
-    node instead, and has no Python equivalent."""
+    the *runtime* lane. ``dtype`` is accepted and ignored so that
+    ``col("amount", int64)`` — the spelling the Mojo lane *requires*, since a
+    fused AOT leaf fixes its type at compile time — is one expression both
+    lanes run. The golden corpus depends on that: a case is a single Mojo file
+    and the Python lane executes the same text."""
     return Column.wrap(_ma.expr_column(name))
 
 

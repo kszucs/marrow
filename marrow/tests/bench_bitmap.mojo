@@ -41,6 +41,46 @@ def _make_half_set(size: Int) -> Bitmap[mut=False]:
 
 
 # ---------------------------------------------------------------------------
+# load[W] — the bit-addressed reader the masked `apply` lane runs per chunk
+# ---------------------------------------------------------------------------
+
+
+def _bench_load(mut b: Benchmark, size: Int) raises:
+    """Sweep `load[8]` across a bitmap, one call per 8 bits.
+
+    This is the primitive every masked kernel reads validity through, so it is
+    the one place a change to it can be measured without a surrounding kernel's
+    noise.
+    """
+    var bm = _make_alternating(size)
+    var bm_view = bm.view()
+    var chunks = size // 8
+    b.throughput(BenchMetric.elements, size)
+
+    @always_inline
+    def call() {imm}:
+        var acc = SIMD[DType.bool, 8](fill=False)
+        for i in range(chunks):
+            acc |= bm_view.load[8](i * 8)
+        keep(acc)
+
+    b.iter(call)
+    keep(bm)
+
+
+def bench_load_10k(mut b: Benchmark) raises:
+    _bench_load(b, 10_000)
+
+
+def bench_load_1m(mut b: Benchmark) raises:
+    _bench_load(b, 1_000_000)
+
+
+def bench_load_10m(mut b: Benchmark) raises:
+    _bench_load(b, 10_000_000)
+
+
+# ---------------------------------------------------------------------------
 # count_set_bits
 # ---------------------------------------------------------------------------
 

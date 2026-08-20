@@ -375,7 +375,7 @@ struct Allocation(Movable):
 
 
 struct Buffer[*, mut: Bool = False](
-    ImplicitlyCopyable, Movable, Sized, Writable
+    Equatable, ImplicitlyCopyable, Movable, Sized, Writable
 ):
     """Contiguous memory region with parametric mutability.
 
@@ -914,7 +914,7 @@ struct Buffer[*, mut: Bool = False](
         ctx.synchronize()
         return builder^.to_immutable()
 
-    def __eq__[m: Bool](self, other: Buffer[mut=m]) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Compare two buffers byte-by-byte (64-bit chunks for speed)."""
         if self._size != other._size:
             return False
@@ -983,7 +983,7 @@ struct Buffer[*, mut: Bool = False](
 
 
 struct Bitmap[*, mut: Bool = False](
-    ImplicitlyCopyable, Movable, Sized, Writable
+    Equatable, ImplicitlyCopyable, Movable, Sized, Writable
 ):
     """Bit-packed validity bitmap with parametric mutability.
 
@@ -1151,7 +1151,7 @@ struct Bitmap[*, mut: Bool = False](
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return self.view(offset, length)
 
-    def __eq__[m: Bool](self, other: Bitmap[mut=m]) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Compare two bitmaps over their valid ranges.
 
         Bit comparison has one implementation, `BitmapView.__eq__` (word-level

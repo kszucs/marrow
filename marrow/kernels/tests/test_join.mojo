@@ -866,7 +866,7 @@ def test_join_kind_writes_its_name() raises:
 #
 # `SwissHashTable.probe` verifies hash-collision candidates with
 # `EqKernel.apply(StructArray, StructArray)`, which routes each key column
-# through `equal_any`. That picked its kernel family with
+# through `equal`. That picked its kernel family with
 # `is_string() or is_large_string()`, so a `binary` key column fell through to
 # the numeric arm and `dispatch_primitive` raised — joining on `binary` was
 # impossible while the identical join on `string` worked.
@@ -1035,3 +1035,265 @@ def test_join_paths_agree_inner_single_probe() raises:
 
 def test_join_paths_agree_left_single_probe() raises:
     _assert_join_paths_agree(JOIN_LEFT, 150_000)
+
+
+# ---------------------------------------------------------------------------
+# NULL join keys — a NULL matches nothing, not even another NULL
+#
+# SQL's rule, and Arrow C++'s default `JoinKeyCmp::EQ`: Acero routes a null-keyed
+# row straight to no-match. marrow drops the pair at the equality verification in
+# `SwissHashTable.probe`, which every candidate pair passes through — so these
+# cases pin the *behaviour* of each join kind rather than the mechanism.
+#
+# Fingerprints are `_join_fingerprint`: row count, then `sum:null_count` per
+# column. A NULL landing in the wrong row moves a null count without moving a
+# sum, which a row count alone would miss.
+# ---------------------------------------------------------------------------
+
+
+def _nullable_int32_struct(
+    keys: List[Optional[Int]], vals: List[Optional[Int]]
+) raises -> StructArray:
+    """A two-column `k`/`v` side whose key column may carry NULLs."""
+    var cols = List[DynArray]()
+    cols.append(array(keys, int32).to_dyn())
+    cols.append(array(vals, int32).to_dyn())
+    return record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+
+def test_inner_join_null_key_left_only() raises:
+    """A NULL build key matches no probe row, however ordinary the probe."""
+    var left = _nullable_int32_struct([1, None], [10, 20])
+    var right = _nullable_int32_struct([1, 2], [100, 200])
+
+    var result = hash_join(left, right, _left_on(), _right_on())
+    # Only (k=1, v=10, k_right=1, v_right=100).
+    assert_equal(_join_fingerprint(result), "1|1:0|10:0|1:0|100:0")
+
+
+def test_inner_join_null_key_both_sides() raises:
+    """NULL does not match NULL — the case that used to return two rows.
+
+    Both null slots hold the same underlying bytes, so the comparison kernel's
+    SIMD lane set the data bit and only the validity bitmap recorded that the
+    bit was meaningless.
+    """
+    var left = _nullable_int32_struct([1, None], [10, 20])
+    var right = _nullable_int32_struct([1, None], [100, 200])
+
+    var result = hash_join(left, right, _left_on(), _right_on())
+    assert_equal(_join_fingerprint(result), "1|1:0|10:0|1:0|100:0")
+
+
+def test_semi_join_null_key_has_no_match() raises:
+    """SEMI keeps a left row only if it matched; a NULL key never does."""
+    var left = _nullable_int32_struct([1, None, 2], [10, 20, 30])
+    var right = _nullable_int32_struct([1, None], [100, 200])
+
+    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_SEMI)
+    # Left columns only, and only the k=1 row.
+    assert_equal(_join_fingerprint(result), "1|1:0|10:0")
+
+
+def test_anti_join_keeps_null_key() raises:
+    """ANTI keeps the NULL-keyed row: it matched nothing, which is the point."""
+    var left = _nullable_int32_struct([1, None, 2], [10, 20, 30])
+    var right = _nullable_int32_struct([1, None], [100, 200])
+
+    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_ANTI)
+    # (k=NULL, v=20) and (k=2, v=30): key sum 2 with one null, values 20+30.
+    assert_equal(_join_fingerprint(result), "2|2:1|50:0")
+
+
+def test_left_join_null_key_widens_right() raises:
+    """LEFT keeps the NULL-keyed left row, with the right side NULL-widened."""
+    var left = _nullable_int32_struct([1, None], [10, 20])
+    var right = _nullable_int32_struct([1, None], [100, 200])
+
+    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_LEFT)
+    # (1,10,1,100) and (NULL,20,NULL,NULL).
+    assert_equal(_join_fingerprint(result), "2|1:1|30:0|1:1|100:1")
+
+
+def test_right_join_null_key_widens_left() raises:
+    """RIGHT keeps the unmatched NULL-keyed probe row, left side NULL-widened.
+    """
+    var left = _nullable_int32_struct([1], [10])
+    var right = _nullable_int32_struct([1, None], [100, 200])
+
+    var result = hash_join(
+        left, right, _left_on(), _right_on(), kind=JOIN_RIGHT
+    )
+    # (1,10,1,100) and (NULL,NULL,NULL,200).
+    assert_equal(_join_fingerprint(result), "2|1:1|10:1|1:1|300:0")
+
+
+def test_full_join_null_keys_on_both_sides() raises:
+    """FULL emits the NULL-keyed row from *each* side, unmatched."""
+    var left = _nullable_int32_struct([1, None], [10, 20])
+    var right = _nullable_int32_struct([1, None], [100, 200])
+
+    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_FULL)
+    # (1,10,1,100), (NULL,20,NULL,NULL), (NULL,NULL,NULL,200).
+    assert_equal(_join_fingerprint(result), "3|1:2|30:1|1:2|300:1")
+
+
+def test_any_strictness_null_key_has_no_match() raises:
+    """JOIN_ANY changes how many matches are used, not what counts as one."""
+    var left = _nullable_int32_struct([1, None], [10, 20])
+    var right = _nullable_int32_struct([1, None], [100, 200])
+
+    var result = hash_join(
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        kind=JOIN_INNER,
+        strictness=JOIN_ANY,
+    )
+    assert_equal(_join_fingerprint(result), "1|1:0|10:0|1:0|100:0")
+
+
+def test_multi_key_join_null_in_one_column() raises:
+    """A row is unmatchable if *any* key column is NULL, not only all of them.
+
+    Both sides carry a `(1, NULL)` row here, so a key comparison that ignored
+    validity would pair them on the strength of the non-null column agreeing.
+    """
+    var lcols = List[DynArray]()
+    lcols.append(array([1, 1], int32).to_dyn())
+    lcols.append(array([None, 10], int32).to_dyn())
+    lcols.append(array([100, 200], int32).to_dyn())
+    var left = record_batch(lcols^, names=["a", "b", "v"]).to_struct_array()
+
+    var rcols = List[DynArray]()
+    rcols.append(array([1, 1], int32).to_dyn())
+    rcols.append(array([None, 10], int32).to_dyn())
+    rcols.append(array([1000, 2000], int32).to_dyn())
+    var right = record_batch(rcols^, names=["a", "b", "v"]).to_struct_array()
+
+    var left_on = List[Int]()
+    left_on.append(0)
+    left_on.append(1)
+    var right_on = List[Int]()
+    right_on.append(0)
+    right_on.append(1)
+
+    var result = hash_join(left, right, left_on, right_on)
+    # Only (a=1, b=10) pairs: v 200 on the left, 2000 on the right.
+    assert_equal(_join_fingerprint(result), "1|1:0|10:0|200:0|1:0|10:0|2000:0")
+
+
+def test_parallel_inner_join_drops_null_keys() raises:
+    """The partitioned layout drops NULL keys too.
+
+    It verifies through the same `SwissHashTable.probe` as the serial one, but
+    nothing else in this file probes the partitioned path with NULL keys — and
+    every NULL key hashes to one sentinel, so they all land in one partition.
+
+    `n` is 120k rather than the 150k the other parallel cases use, and the
+    difference is not cosmetic: a *nullable* 150k column has an 18,750-byte
+    validity bitmap, 62 mod 64, so the masked `apply` lane's unconditional
+    4-byte `BitmapView.load` reads one byte past the allocation's 64-byte
+    padding. That is a live bug in `views.mojo` with nothing to do with joins —
+    hashing one nullable 150k column reproduces it on its own — and this test is
+    sized to keep it out of the way rather than to hide it.
+    """
+    var n = 120_000
+    var kb = Int32Builder(capacity=n)
+    var vb = Int32Builder(capacity=n)
+    var null_keys = 0
+    for i in range(n):
+        if i % 1000 == 0:
+            kb.append_null()
+            null_keys += 1
+        else:
+            kb.append(Scalar[int32.native](i))
+        vb.append(Scalar[int32.native](i))
+    var cols = List[DynArray]()
+    cols.append(kb.finish().to_dyn())
+    cols.append(vb.finish().to_dyn())
+    var side = record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+    var joiner = HashJoin(ExecContext.parallel(4))
+    joiner.build(side, _left_on())
+    assert_true(
+        joiner.built_parallel(),
+        (
+            "expected the partitioned layout at 120k rows / 4 workers — without"
+            " it this test would re-check the serial path"
+        ),
+    )
+
+    var result = joiner.probe(side, _right_on(), JOIN_INNER, JOIN_ALL)
+    # Every non-null key is unique, so it matches itself exactly once.
+    assert_equal(len(result), n - null_keys)
+    assert_equal(result.field(0).null_count(), 0)
+
+
+# ---------------------------------------------------------------------------
+# bool join keys
+#
+# Booleans are bit-packed, so a `bool` key column is a `BoolArray` and never a
+# `PrimitiveArray[bool_]`. Key verification used to route it through
+# `dispatch_primitive`, which raised "dtype is not primitive" — joining on a
+# bool key was impossible.
+# ---------------------------------------------------------------------------
+
+
+def _bool_key_struct(
+    keys: List[Optional[Bool]],
+    vals: List[Optional[Int]],
+    names: List[String],
+) raises -> StructArray:
+    """A side whose *key* column is bit-packed bool."""
+    var cols = List[DynArray]()
+    cols.append(array(keys).to_dyn())
+    cols.append(array(vals, int32).to_dyn())
+    return record_batch(cols^, names=names).to_struct_array()
+
+
+def test_inner_join_bool_keys() raises:
+    """A bool key joins at all, and True does not match NULL."""
+    var left = _bool_key_struct([True, False, None], [1, 2, 3], ["b", "v"])
+    var right = _bool_key_struct([True, None], [9, 8], ["b2", "w"])
+
+    var result = hash_join(left, right, _left_on(), _right_on())
+    assert_equal(len(result), 1)
+    assert_true(result.field(0).as_bool()[0].value())
+    assert_equal(Int(result.field(1).as_int32()[0].value()), 1)
+    assert_true(result.field(2).as_bool()[0].value())
+    assert_equal(Int(result.field(3).as_int32()[0].value()), 9)
+
+
+def test_inner_join_bool_keys_false_matches_false() raises:
+    """False is a key value, not the absence of one — XNOR, not AND."""
+    var left = _bool_key_struct([True, False, None], [1, 2, 3], ["b", "v"])
+    var right = _bool_key_struct([False, None], [7, 8], ["b2", "w"])
+
+    var result = hash_join(left, right, _left_on(), _right_on())
+    assert_equal(len(result), 1)
+    assert_false(result.field(0).as_bool()[0].value())
+    assert_equal(Int(result.field(1).as_int32()[0].value()), 2)
+    assert_equal(Int(result.field(3).as_int32()[0].value()), 7)
+
+
+def test_left_join_bool_key_null_widens_right() raises:
+    """A NULL bool key keeps its left row and NULL-widens the right side."""
+    var left = _bool_key_struct([True, None], [1, 2], ["b", "v"])
+    var right = _bool_key_struct([True], [9], ["b2", "w"])
+
+    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_LEFT)
+    assert_equal(len(result), 2)
+    assert_equal(result.field(2).null_count(), 1)
+    assert_equal(result.field(3).null_count(), 1)
+
+
+def test_semi_join_bool_key_null_has_no_match() raises:
+    """The right side has a NULL bool key too; only the True row matches."""
+    var left = _bool_key_struct([True, False, None], [1, 2, 3], ["b", "v"])
+    var right = _bool_key_struct([True, None], [9, 8], ["b2", "w"])
+
+    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_SEMI)
+    assert_equal(len(result), 1)
+    assert_equal(Int(result.field(1).as_int32()[0].value()), 1)

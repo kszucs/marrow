@@ -17,6 +17,7 @@ package `__init__`.
 """
 
 from ..dtypes import (
+    BoolType,
     DynType,
     FloatingType,
     Int64Type,
@@ -27,9 +28,11 @@ from ..dtypes import (
     TemporalType,
 )
 from ..scalars import DynScalar, PrimitiveScalar, StringScalar
-from .dynamic import DynAgg, DynValue
+from .dynamic import DynValue
 from .params import ParamDecl, register_param
 from .values import (
+    AggExpr,
+    BoolColumn,
     ListColumn,
     NumericColumn,
     NumericLiteral,
@@ -58,6 +61,15 @@ def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
 def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
     """Reference a list column by name — `col("l", list_(int64))`."""
     return ListColumn[T](name^)
+
+
+def col(var name: String, dtype: BoolType) -> BoolColumn:
+    """Reference a boolean column by name — `col("flag", bool_)`.
+
+    `BoolType` is a concrete struct rather than a trait, so this overload is
+    unparameterised. Without it the fused lane could not read a `bool` column
+    at all."""
+    return BoolColumn(name^)
 
 
 def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:
@@ -223,7 +235,7 @@ def param(
     return DynValue.param(name^)
 
 
-def count_star() -> DynAgg:
+def count_star() -> AggExpr:
     """`COUNT(*)` — how many rows each group has.
 
     Not the same aggregate as `col("x").count()`, which counts the *non-null*

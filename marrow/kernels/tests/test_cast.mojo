@@ -1,6 +1,12 @@
 from std.testing import assert_equal, assert_true, assert_raises
 
-from ...arrays import BinaryArray, DynArray, NullArray, DictionaryArray, MapArray
+from ...arrays import (
+    BinaryArray,
+    DynArray,
+    NullArray,
+    DictionaryArray,
+    MapArray,
+)
 from ...buffers import Bitmap
 from ...builders import (
     array,
@@ -56,7 +62,12 @@ from ...dtypes import (
     BinaryType,
     StringType,
 )
-from ...kernels.cast import cast, BinaryLikeCast, FixedSizeBinaryCast, NumericCast
+from ...kernels.cast import (
+    cast,
+    BinaryLikeCast,
+    FixedSizeBinaryCast,
+    NumericCast,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +680,9 @@ def test_cast_timestamp_downscale_exact_passes_under_safe() raises:
 # ---------------------------------------------------------------------------
 
 
-def _binary_of_width(var cells: List[List[UInt8]], width: Int) raises -> DynArray:
+def _binary_of_width(
+    var cells: List[List[UInt8]], width: Int
+) raises -> DynArray:
     """A `binary` array whose elements are the given fixed-width byte cells."""
     var fb = FixedSizeBinaryBuilder(width)
     for cell in cells:
@@ -717,7 +730,9 @@ def test_binary_to_string_split_character_raises() raises:
 
 def test_binary_to_string_valid_multibyte_passes() raises:
     """Non-ASCII input misses the all-ASCII path and must still be accepted."""
-    var src = cast(array(["Здравствуйте", "ünïcødé", "日本語", "ascii", ""]), binary)
+    var src = cast(
+        array(["Здравствуйте", "ünïcødé", "日本語", "ascii", ""]), binary
+    )
     var out = cast(src, string)
     assert_true(out.dtype() == string)
     assert_equal(len(out), 5)

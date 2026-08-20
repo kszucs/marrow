@@ -21,6 +21,8 @@ runtime ``select``.
 """
 
 from std.testing import assert_true, assert_false, assert_raises
+
+from ...utils.testing import assert_values_equal
 from std.utils.numerics import nan
 
 from ...arrays import DynArray, Int64Array
@@ -181,7 +183,8 @@ def assert_fused(
     is PENDING T2.2 (which wires the same ops into ``dynamic.mojo``); until then
     we pin the fused result against the kernel's expected output."""
     var actual = fused.execute(batch)
-    assert_true(actual == expected)
+    # Values, not layout — see `assert_parity`.
+    assert_values_equal(actual, expected)
 
 
 def assert_parity(
@@ -195,7 +198,11 @@ def assert_parity(
     this suite is what stops them diverging."""
     var expected = fused.execute(batch)
     var actual = dyn.execute(batch)
-    assert_true(expected == actual)
+    # Both sides are *computed*, so their buffers are over-allocated and may
+    # carry different offsets. `==` on arrays is structural and would report
+    # that as a difference; parity is a question about values, so it goes
+    # through the eq kernel.
+    assert_values_equal(expected, actual)
 
 
 def _ab_batch() raises -> RecordBatch:
@@ -948,7 +955,7 @@ def test_erased_temporal_extract() raises:
     var yr: DynValue = col.year()
 
     var want: DynArray = array([1970, 1970, 1971], int32)
-    assert_true(yr.execute(batch) == want)
+    assert_values_equal(yr.execute(batch), want)
 
 
 # ---------------------------------------------------------------------------
@@ -1053,7 +1060,8 @@ def test_parity_param_lanes_share_one_cell() raises:
 
     parse_params(["--min-a", "3", "--max-a", "6"], decls)
 
-    var fused_out = BoxedValue(fused).execute(batch)
+    var boxed: BoxedValue = fused
+    var fused_out = boxed.execute(batch)
     var dyn_out = dyn.execute(batch)
     assert_true(fused_out.as_bool() == array([False, True, False, True, False]))
     assert_true(dyn_out.as_bool() == fused_out.as_bool())
@@ -1082,11 +1090,12 @@ def test_parity_param_prunes_like_a_literal() raises:
     var low = _param_stats(0, 50)
     var high = _param_stats(0, 200)
 
-    assert_false(BoxedValue(fused).prune(low).maybe_true)
+    var boxed: BoxedValue = fused
+    assert_false(boxed.prune(low).maybe_true)
     assert_false(dyn.prune(low).maybe_true)
     assert_false(literal.prune(low).maybe_true)
 
-    assert_true(BoxedValue(fused).prune(high).maybe_true)
+    assert_true(boxed.prune(high).maybe_true)
     assert_true(dyn.prune(high).maybe_true)
     assert_true(literal.prune(high).maybe_true)
 

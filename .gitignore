@@ -216,6 +216,8 @@ skills-lock.json
 
 # Claude Code session state and agent worktrees
 .claude/
+golden/.exp/
+golden/generated/
 
 # Profiler output from scripts/profile.py
 *.sample.txt

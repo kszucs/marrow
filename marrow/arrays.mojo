@@ -191,7 +191,7 @@ trait Array(
 # ---------------------------------------------------------------------------
 
 
-struct ArrayData(Copyable, Movable):
+struct ArrayData(Copyable, Equatable, Movable):
     """Generic array layout — the old DynArray wire format, now a pure DTO.
 
     Produced by `typed_array.to_data()` or `any_array.to_data()` for use
@@ -242,6 +242,58 @@ struct ArrayData(Copyable, Movable):
         self.bitmap = bitmap^
         self.buffers = buffers^
         self.children = children^
+
+    def __eq__(self, other: Self) -> Bool:
+        """Structural equality of the layout's fields.
+
+        **Low-level on purpose.** This compares what the layout *is* — dtype,
+        length, null count, offset, validity, buffers, children — not what it
+        decodes to. Two layouts holding the same values at different offsets,
+        or against differently ordered dictionaries, are not equal here.
+        Logical, value-level comparison is `EqKernel`'s job.
+
+        Hand-written rather than derived, for a reason that is not style:
+        `children` is a `List[ArrayData]`, so the derived `__eq__` recurses
+        through `List.__eq__`, which is `always_inline` — and the compiler
+        rejects a recursive call to an always-inline function. A self-recursive
+        type cannot have a derived comparison.
+
+        No element loop, and that is what makes it compile at all. Comparing a
+        nested array element by element materialises a `DynArray` per element,
+        which makes `DynArray.__eq__` and the nested arrays' `__eq__` mutually
+        recursive at instantiation; the elaborator never resolves that, parking
+        at 0% CPU with no diagnostic, and it kept every case in
+        `marrow/tests/test_arrays.mojo` from compiling. Measured: `_v == _v`,
+        `_dispatch` narrowing and `@no_inline` all still deadlock — only a path
+        that never names a typed `__eq__` works.
+        """
+        if self.dtype != other.dtype:
+            return False
+        if self.length != other.length:
+            return False
+        if self.nulls != other.nulls:
+            return False
+        if self.offset != other.offset:
+            return False
+        if Bool(self.bitmap) != Bool(other.bitmap):
+            return False
+        if self.bitmap:
+            if not (self.bitmap.value() == other.bitmap.value()):
+                return False
+        if len(self.buffers) != len(other.buffers):
+            return False
+        for i in range(len(self.buffers)):
+            if not (self.buffers[i] == other.buffers[i]):
+                return False
+        if len(self.children) != len(other.children):
+            return False
+        for i in range(len(self.children)):
+            if not (self.children[i] == other.children[i]):
+                return False
+        return True
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
 
     def validate(self) raises:
         """Raise if this layout does not match what its dtype describes.
@@ -1276,14 +1328,10 @@ struct ListLikeArray[T: ListLikeType](Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
-        for i in range(self.length):
-            if self.is_valid(i):
-                try:
-                    if self.unsafe_get(i) != other.unsafe_get(i):
-                        return False
-                except:
-                    return False
-        return True
+        # Fields, not elements: the child array is compared once as a whole.
+        # Materialising a `DynArray` per element is what made this method and
+        # `DynArray.__eq__` mutually recursive and deadlocked the compiler.
+        return self.values() == other.values()
 
     @staticmethod
     def from_arrays[
@@ -1556,14 +1604,10 @@ struct FixedSizeListArray(Array):
                 return False
             if not (sv.value() == ov.value()):
                 return False
-        for i in range(self.length):
-            if self.is_valid(i):
-                try:
-                    if self.unsafe_get(i) != other.unsafe_get(i):
-                        return False
-                except:
-                    return False
-        return True
+        # Fields, not elements: the child array is compared once as a whole.
+        # Materialising a `DynArray` per element is what made this method and
+        # `DynArray.__eq__` mutually recursive and deadlocked the compiler.
+        return self.values() == other.values()
 
     @staticmethod
     def from_arrays(
@@ -2538,7 +2582,24 @@ struct DynArray(
         self.write_to(writer)
 
     def __eq__(self, other: DynArray) -> Bool:
-        return self._v == other._v
+        """Compare the two arrays' fields, via their flat layout.
+
+        Deliberately **not** `self._v == other._v`. `Variant.__eq__` resolves
+        the active member on both sides and so dispatches into every typed
+        `__eq__`, including the nested ones — which hold `DynArray` fields and
+        come straight back here. That cycle deadlocks the compiler (see
+        `ArrayData.__eq__`). Going through `to_data()` reaches the same fields
+        without ever naming a typed `__eq__`, so the recursion is this method
+        calling itself and nothing else.
+
+        One conversion per array, not per element."""
+        try:
+            return self.to_data() == other.to_data()
+        except:
+            return False
+
+    def __ne__(self, other: DynArray) -> Bool:
+        return not (self == other)
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Array object (type-erased)."""

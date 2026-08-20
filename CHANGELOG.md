@@ -173,4 +173,7 @@
   crashes so the offending case reports it.
 - A binary-size gate measuring the `__text` section across the operator
   families, run by `pixi run binary_size`.
+- A golden query corpus: one file per case, run by both expression lanes
+  and checked against a reference, with the unsupported surface recorded
+  as skipped cases in `golden/COVERAGE.md`.
 - A Quarto documentation site with guides, tutorials and examples.

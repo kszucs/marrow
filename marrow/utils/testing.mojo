@@ -25,6 +25,10 @@ from std.sys import argv
 from std.testing import TestSuite as _StdTestSuite
 from std.testing.suite import TestResult, TestSuiteReport
 
+from ..arrays import DynArray
+from ..kernels.aggregate import AllKernel
+from ..kernels.numeric import equal
+
 
 struct CLIFlags:
     """Parsed CLI flags for test suites."""
@@ -548,3 +552,64 @@ def _format_ns(ns: Float64) -> String:
     if ns < 1_000_000_000:
         return String(ns / 1_000_000) + " ms"
     return String(ns / 1_000_000_000) + " s"
+
+
+def assert_values_equal(
+    a: DynArray, b: DynArray, msg: String = String()
+) raises:
+    """Assert two arrays are *logically* equal — same dtype, same values.
+
+    `==` on arrays is **structural**: it compares the layout's fields, offset
+    and buffers included. That is the right contract for a low-level identity
+    check, but it is not what a test asserting "this kernel produced these
+    values" means — a computed result sits in an over-allocated buffer, often
+    at a non-zero offset, so it compares unequal to a freshly built literal
+    holding the same values.
+
+    Value-level comparison is the eq kernel's job, and this is the test-side
+    spelling of it: compare element-wise, then require every element to be
+    true. Nulls are not equal to anything, so a null on either side fails.
+    """
+    if a.dtype() != b.dtype():
+        raise Error(
+            "assert_values_equal: dtype mismatch, ",
+            a.dtype(),
+            " != ",
+            b.dtype(),
+            " " + msg,
+        )
+    if len(a) != len(b):
+        raise Error(
+            "assert_values_equal: length mismatch, ",
+            len(a),
+            " != ",
+            len(b),
+            " " + msg,
+        )
+    if a.null_count() != b.null_count():
+        raise Error(
+            "assert_values_equal: null count mismatch, ",
+            a.null_count(),
+            " != ",
+            b.null_count(),
+            " " + msg,
+        )
+    for i in range(len(a)):
+        if a.is_null(i) != b.is_null(i):
+            raise Error(
+                "assert_values_equal: null at a different position (",
+                i,
+                ") " + msg,
+            )
+    if a.dtype().is_bool():
+        # `equal` dispatches over primitive and variable-width dtypes; bool is
+        # neither — it is bit-packed, and `BoolArray.__eq__` is the comparison
+        # that understands that layout.
+        if not (a.as_bool() == b.as_bool()):
+            raise Error(
+                "assert_values_equal: values differ, ", a, " != ", b, " " + msg
+            )
+    elif not AllKernel.reduce(equal(a, b)):
+        raise Error(
+            "assert_values_equal: values differ, ", a, " != ", b, " " + msg
+        )

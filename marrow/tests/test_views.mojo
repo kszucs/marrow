@@ -549,6 +549,44 @@ def test_bitmapview_load_bits() raises:
     assert_equal(Int(bits) & 0b11, 0b11)
 
 
+def test_bitmapview_load_at_the_last_byte_stays_in_bounds() raises:
+    """`load[W]` must not read past the allocation at a bitmap's tail.
+
+    512 bits is exactly 64 bytes, and `Buffer._aligned_size` rounds *up* to 64
+    — so this allocation ends at the last live byte and has no padding at all.
+    `load[W]` takes an unconditional 4-byte `UInt32`, so a load addressed at
+    the final byte wants bytes 63..66 of a 64-byte allocation.
+
+    The same hole opens whenever the byte extent is 62, 63 or 0 mod 64; a
+    nullable 150,000-element column (18,750 bytes, 62 mod 64) is the shape that
+    found it, through the masked `apply` lane.
+    """
+    var bm = Bitmap.alloc_zeroed(512)
+    bm.set(504)
+    bm.set(511)
+    var view = bm.view(0, 512)
+    var bits = view.load[8](504)
+    assert_true(bits[0])
+    assert_false(bits[1])
+    assert_true(bits[7])
+
+
+def test_bitmapview_load_at_a_62_mod_64_extent() raises:
+    """The other failing residue class, and the one seen in the wild.
+
+    A bitmap's byte extent has only ``(-extent) mod 64`` bytes of padding, and
+    `load[W]` wants 3. So 62, 63 and 0 mod 64 all fall short. 150,000 bits is
+    18,750 bytes, 62 mod 64, leaving 2 — one byte short.
+    """
+    var bits = 150_000
+    var bm = Bitmap.alloc_zeroed(bits)
+    bm.set(bits - 1)
+    var view = bm.view(0, bits)
+    var tail = view.load[8](bits - 8)
+    assert_true(tail[7])
+    assert_false(tail[0])
+
+
 def test_bitmapview_pext() raises:
     """Extracts and packs bits at mask=1 positions via pext."""
     var bm = Bitmap.alloc_zeroed(64)

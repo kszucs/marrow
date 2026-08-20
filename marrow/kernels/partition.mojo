@@ -109,10 +109,6 @@ struct Partition(Copyable, Movable):
     def num_rows(self) -> Int:
         return len(self.hashes)
 
-    def original_row(self, i: Int) -> Int:
-        """Map partition-local index → original row index."""
-        return Int(self.row_indices.unsafe_get(i))
-
 
 struct RadixPartitioner(Movable):
     """Partition rows by the top ``num_bits`` of their hash.

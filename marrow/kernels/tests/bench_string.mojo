@@ -265,9 +265,7 @@ def bench_upper_100k(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def _bench_like_array_pattern(
-    mut b: Benchmark, pattern: String, n: Int
-) raises:
+def _bench_like_array_pattern(mut b: Benchmark, pattern: String, n: Int) raises:
     var data = _urls(n)
     var pat = _broadcast(pattern, n)
     b.throughput(BenchMetric.elements, n)

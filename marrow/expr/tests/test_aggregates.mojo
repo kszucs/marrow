@@ -48,15 +48,6 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...dtypes import DynType, Int32Type, StringType
-from ...kernels.aggregate import (
-    NumericAgg,
-    StringMinMax,
-    MinOp,
-    SumKernel,
-    MaxKernel,
-)
-from ...expr.aggregates import AggFunc
 from ...expr.values import AggExpr
 from ...expr.builders import col, lit, count_star
 from ...expr.relations import DynRelation, in_memory_table
@@ -410,16 +401,11 @@ def test_the_same_plan_can_be_executed_repeatedly() raises:
 def _fused_sum_max_by_region() raises -> DynRelation:
     """``SELECT region, sum(amount), max(amount) GROUP BY region``, fused."""
     return in_memory_table(_orders()).aggregate(
-        keys=[BoxedValue(fused_col("region", string))],
-        inputs=[
-            BoxedValue(fused_col("amount", int64)),
-            BoxedValue(fused_col("amount", int64)),
-        ],
+        keys=[fused_col("region", string)],
         aggs=[
-            AggFunc.of[NumericAgg[SumKernel, Int64Type]](DynType(int64)),
-            AggFunc.of[NumericAgg[MaxKernel, Int64Type]](DynType(int64)),
+            fused_col("amount", int64).sum().alias("total"),
+            fused_col("amount", int64).max().alias("biggest"),
         ],
-        names=["region", "total", "biggest"],
     )
 
 
@@ -465,10 +451,8 @@ def test_fused_non_numeric_aggregation() raises:
     """A fused plan is not limited to the numeric folds: a bytewise string
     min is just a different `Aggregation` named at compile time."""
     var plan = in_memory_table(_orders()).aggregate(
-        keys=[BoxedValue(fused_col("region", string))],
-        inputs=[BoxedValue(fused_col("region", string))],
-        aggs=[AggFunc.of[StringMinMax[MinOp, StringType]](DynType(string))],
-        names=["region", "lo"],
+        keys=[fused_col("region", string)],
+        aggs=[fused_col("region", string).min().alias("lo")],
     )
     var out = plan.execute()
     var east = _row_for(out, "east")
@@ -480,7 +464,7 @@ def test_fused_non_numeric_aggregation() raises:
 #
 # The third axis of invariant 2, and the one `test_parity.mojo` cannot reach:
 # an aggregate is not a `Value`, so there is no `assert_parity` for it.
-# `col("amount").sum()` on a `DynValue` yields a `DynAgg` (a group-by spec),
+# `col("amount").sum()` on a `DynValue` yields a name-carrying `AggExpr`,
 # while `col("amount", int64).sum()` on a fused node yields a scalar
 # `Reduction`. They converge only at `AggExpr`, so parity has to be observed
 # where both are usable — through a plan.
@@ -565,7 +549,7 @@ def test_agg_parity_grouped_sum() raises:
     var f = (
         in_memory_table(_orders())
         .aggregate(
-            keys=[BoxedValue(fused_col("region", string))],
+            keys=[fused_col("region", string)],
             aggs=[fused_col("amount", int64).sum().alias("total")],
         )
         .execute()
@@ -573,7 +557,7 @@ def test_agg_parity_grouped_sum() raises:
     var d = (
         in_memory_table(_orders())
         .aggregate(
-            keys=[BoxedValue(col("region"))],
+            keys=[col("region")],
             aggs=[col("amount").sum().alias("total")],
         )
         .execute()
