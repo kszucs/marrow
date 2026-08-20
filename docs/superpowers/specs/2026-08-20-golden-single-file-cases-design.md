@@ -42,12 +42,11 @@ def test_golden_kleene_column_and() raises:
     True<TAB>NULL<TAB>NULL
     """
     var t = table("flags")
-    check(
-        t.project(
-            ["p", "q", "r"],
-            [col("p", bool_), col("q", bool_), col("p", bool_) & col("q", bool_)],
-        )
+    var q = t.project(
+        ["p", "q", "r"],
+        [col("p", bool_), col("q", bool_), col("p", bool_) & col("q", bool_)],
     )
+    check(q)
 ```
 
 (`<TAB>` above stands for a literal tab; the expected block is the typed TSV
@@ -67,10 +66,23 @@ convergence contract, written down once per lane rather than scattered across
 flags unresolved names; it is never compiled standalone anyway, and
 `mojo format` is purely syntactic so formatting still works.
 
+**The plan is bound to a variable, then checked.** A case body reads
+`var q = t.project(...)` followed by `check(q)`, rather than nesting the
+expression inside the call. The expression is what the case is *about*, so it
+gets a line of its own instead of an extra level of indentation, and the
+`check` call stays short.
+
 **`check(plan)` takes no case name.** Mojo cannot introspect its own function
 name, so both generators inject it, rewriting `check(` to
 `check("<case name>", `. One rule applied identically in both lanes keeps the
-case text lane-neutral.
+case text lane-neutral, and it is a plain textual rewrite precisely because
+`check(q)` is a short single line.
+
+`check` takes its plan **borrowed**, not owned — `check(name: String,
+plan: DynRelation)`. An owned parameter would make Mojo want `check(q^)` at
+the call site, and `^` is not Python. `DynRelation` is `ImplicitlyCopyable`
+and `execute` borrows its receiver (`relations.mojo:413`,
+`relations.mojo:571`), so nothing is given up by borrowing here.
 
 ### The two generators
 
@@ -95,8 +107,13 @@ three rules:
 | everything else | verbatim |
 
 This holds only while case bodies stay inside the intersection of the two
-grammars, which costs one constraint: **no type annotations in a case body**
-(`var t: DynRelation = …` would require `DynRelation` in the Python namespace).
+grammars, which costs two constraints:
+
+- **No type annotations.** `var t: DynRelation = …` would require
+  `DynRelation` in the Python namespace.
+- **No transfer sigils.** `q^` is Mojo-only syntax with no Python reading, so
+  every helper a case body calls must take its arguments borrowed.
+
 Everything the corpus uses today — `~`, `&`, `|`, list literals, keyword
 arguments, multi-line parenthesised expressions, `True`/`False`/`None` — is
 already common to both.
