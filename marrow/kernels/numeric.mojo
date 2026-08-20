@@ -50,9 +50,10 @@ from ..dtypes import (
     NumericType,
     FloatingType,
     BinaryLikeType,
+    bool_ as bool_dt,
 )
 from .core import Kernel
-from .boolean import AndKernel
+from .boolean import AndKernel, NotKernel, XorKernel
 from ..execution import ExecContext, GPU_ENABLED
 
 
@@ -617,6 +618,19 @@ def equal(
         # failure this function's binarylike arm was added to fix.
         raise Error(
             "equal: dtype mismatch, ", left.dtype(), " vs ", right.dtype()
+        )
+    elif left.dtype() == bool_dt:
+        # Booleans are bit-packed, so `BoolArray` is not a `PrimitiveArray` and
+        # `dispatch_primitive` raised "dtype is not primitive" on them — a
+        # `bool` join key was impossible for the same reason a `binary` one was.
+        # Equality over packed bits is XNOR, which the boolean kernels already
+        # spell: `Xor` gives "the two differ" with Arrow's validity (valid only
+        # where both operands are), and `Not` flips the data while propagating
+        # those nulls. Both work a word at a time on the bitmaps, so this is not
+        # a slower path than the SIMD one it could not use.
+        return NotKernel.apply(
+            XorKernel.apply(left.as_bool().copy(), right.as_bool().copy(), ctx),
+            ctx,
         )
     elif left.dtype().is_binary_like():
         # `is_binary_like`, not `is_string_like`. `binary` and `large_binary`

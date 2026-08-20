@@ -20,7 +20,7 @@ from ..dtypes import int32, uint64
 
 from .numeric import EqKernel
 from ..execution import ExecContext
-from .filter import Take, Filter
+from .filter import Take, filter
 from .hashing import HashKernel
 from ..utils import Hasher, RapidHash64
 
@@ -620,9 +620,36 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
             Take.apply(build_keys, build_indices),
             Take.apply(probe_keys, probe_indices),
         )
+        # `filter`, not `Filter.apply(..., mask.values())`: **a NULL key matches
+        # nothing, not even another NULL.** That is SQL's rule and Arrow C++'s
+        # default `JoinKeyCmp::EQ` — Acero's probe loop ("Apply null key
+        # filtering", hash_join.cc) sends any row with a null key column
+        # straight to no-match, and its build side ANDs the same null-key filter
+        # into the match vector.
+        #
+        # `EqKernel` records that as a *null* mask entry, and only as a null
+        # entry: the SIMD lane still compares the raw payloads whatever the
+        # validity says, so two null keys sharing a stray value — two zeroed
+        # int64 slots, which is what a null slot usually holds — leave the data
+        # bit *set*. Selecting on `values()` alone read that bit and joined NULL
+        # to NULL. `filter` is where the "a null entry does not select" rule
+        # lives; this is the same rule, so it is the same call.
+        #
+        # Dropping the pair here is enough to give every join kind its SQL
+        # answer, because every candidate pair passes through this
+        # verification: INNER and SEMI lose the null-keyed row, ANTI keeps it
+        # (it matched nothing), and LEFT / RIGHT / FULL keep it null-widened via
+        # `_emit_unmatched`, which reads exactly these pairs. Acero instead
+        # skips null-keyed rows before they reach the table, which also saves
+        # the lookup; doing that here would mean teaching the CSR build, the
+        # probe loop and the unmatched-row scan about it for a saving on rows a
+        # join is not supposed to match anyway.
+        var verifier = mask^.to_dyn()
+        var build_matched = filter(build_indices.copy().to_dyn(), verifier)
+        var probe_matched = filter(probe_indices.copy().to_dyn(), verifier)
         return (
-            Filter.apply(build_indices, mask.values()),
-            Filter.apply(probe_indices, mask.values()),
+            build_matched.as_int32().copy(),
+            probe_matched.as_int32().copy(),
         )
 
     def num_keys(self) -> Int:

@@ -8,8 +8,6 @@ def plan() raises -> DynRelation:
     A self-join. `ref` 2 appears twice, so the match is many-to-many and
     the NULL ref matches nothing — not even the other NULL.
 
-    -- xfail NULL join keys match each other; SQL says NULL never equals NULL
-
     -- expected
     aqty:int32	bqty:int32
     NULL	NULL

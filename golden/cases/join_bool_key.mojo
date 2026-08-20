@@ -7,8 +7,6 @@ def plan() raises -> DynRelation:
 
     A bit-packed join key. The NULL matches nothing.
 
-    -- xfail a bool join key raises `dispatch_primitive: dtype is not primitive`
-
     -- expected
     aqty:int32	bqty:int32
     NULL	NULL

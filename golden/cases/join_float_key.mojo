@@ -8,8 +8,6 @@ def plan() raises -> DynRelation:
     Equality on a float key. Every price is an exact binary fraction, so
     this asks about hashing and null handling rather than about rounding.
 
-    -- xfail NULL join keys match each other; SQL says NULL never equals NULL
-
     -- expected
     aqty:int32	bqty:int32
     NULL	NULL

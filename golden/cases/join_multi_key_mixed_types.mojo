@@ -8,8 +8,6 @@ def plan() raises -> DynRelation:
     Two keys of different types at once — a string and a bool. Rows whose
     region or active is NULL match nothing, so they drop out entirely.
 
-    -- xfail a bool join key raises `dispatch_primitive: dtype is not primitive`
-
     -- expected
     aqty:int32	bqty:int32
     NULL	NULL

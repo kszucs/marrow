@@ -102,6 +102,31 @@
 
 ### Fixes
 
+- **A NULL join key matched another NULL.** SQL's rule — and Arrow C++'s
+  default `JoinKeyCmp::EQ`, whose probe loop routes any row with a null key
+  column straight to no-match — is that a NULL key matches nothing, not even
+  another NULL. marrow paired them: `SwissHashTable.probe` verified candidate
+  pairs with `Filter.apply(indices, mask.values())`, and `values()` is the
+  comparison's *data* bits alone. A comparison kernel evaluates every SIMD lane
+  whatever the validity says, so two null keys sharing a payload — two zeroed
+  `int64` slots, which is what a null slot usually holds — left the data bit
+  set, and only the validity bitmap recorded that the bit was meaningless. The
+  verification now goes through `filter`, which already owns the "a null entry
+  does not select" rule. Dropping the pair there is enough for every join kind,
+  since every candidate passes through it: INNER and SEMI lose the null-keyed
+  row, ANTI keeps it (it matched nothing), and LEFT / RIGHT / FULL keep it
+  null-widened. Multi-column keys follow from Kleene AND: a NULL in *any* key
+  column makes the row unmatchable.
+
+- **A `bool` join key raised `dispatch_primitive: dtype is not primitive`.**
+  Booleans are bit-packed, so a bool column is a `BoolArray` and not a
+  `PrimitiveArray`, and `equal`'s numeric arm could not reach it — the same
+  shape as the `binary`-key failure fixed above it. `equal` gains a bool arm
+  spelled with the existing boolean kernels: `Not(Xor(a, b))` is XNOR over the
+  packed data bits, with Arrow's validity (valid only where both operands are),
+  and it works a word at a time rather than a lane at a time. `nullif` over
+  bool arrays, which shares that primitive, works for the same reason.
+
 - **`LazyTable.aggregate` rejected `SELECT DISTINCT`.** Keys with no
   aggregates raised `ValueError: aggregate: needs at least one aggregate`,
   although the plan layer has always executed the keys-only form — the Mojo
