@@ -66,18 +66,42 @@ def render(table):
     return "\n".join([header, *rows])
 
 
+def _blocks(text):
+    """Split on the `== name` markers, never on blank lines.
+
+    A blank line cannot be the separator: an empty-string value in a
+    single-column result renders as an empty line, so splitting on "\n\n"
+    tore that case's block in half and the parser read a data row as a header.
+    Scanning for the marker instead makes the format indifferent to what the
+    data contains.
+    """
+    name, rows = None, []
+    for line in text.splitlines():
+        if line.startswith("== "):
+            if name is not None:
+                yield name, rows
+            name, rows = line[3:].strip(), []
+        elif line or name is None:
+            rows.append(line)
+        elif rows:
+            rows.append(line)
+    if name is not None:
+        yield name, rows
+
+
 def parse(text):
     """A whole `.exp` file -> {case name: pyarrow.Table}."""
     tables = {}
-    for block in text.strip().split("\n\n"):
-        lines = block.splitlines()
-        name = lines[0].removeprefix("== ").strip()
+    for name, lines in _blocks(text):
+        lines = [ln for ln in lines]
+        if lines and lines[-1] == "":
+            lines.pop()
         columns, types = [], []
-        for spec in lines[1].split("\t"):
+        for spec in lines[0].split("\t"):
             column, _, tname = spec.partition(":")
             columns.append(column)
             types.append(TYPES[tname])
-        rows = [line.split("\t") for line in lines[2:]]
+        rows = [line.split("\t") for line in lines[1:]]
         tables[name] = pa.table(
             {
                 column: pa.array(

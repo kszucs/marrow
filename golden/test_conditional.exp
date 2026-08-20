@@ -1,0 +1,29 @@
+== test_golden_cond_coalesce
+c:int64
+1
+2
+3
+4
+50
+6
+7
+
+== test_golden_cond_fill_null_with_literal
+c:int64
+1
+2
+3
+4
+0
+6
+7
+
+== test_golden_cond_case_when
+c:int64
+10
+NULL
+30
+4
+50
+6
+7

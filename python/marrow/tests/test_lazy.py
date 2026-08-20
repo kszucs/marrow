@@ -490,3 +490,25 @@ def test_join_on_differently_named_keys(tmp_path):
     assert out.num_rows() == 2
     assert out.column(0).to_pylist() == [1, 2]
     assert out.column(3).to_pylist() == ["eng", "sales"]
+
+
+@needs_expressions
+def test_empty_result_is_a_well_formed_batch(batch):
+    """A plan that matches nothing still returns one column per schema field.
+
+    `collect()` used to return the schema with an *empty* column list when no
+    morsel survived, so `num_columns()` was 0 while the schema named its
+    fields. Anything walking the columns by schema index ran off the end, and
+    exporting the batch through the C Data interface returned NULL without
+    setting an exception — `to_pyarrow()` raised a bare `SystemError`.
+    """
+    lazy = marrow.memtable(batch)
+    empty = lazy.filter(lazy["v"] > 10_000)
+
+    out = empty.collect()
+    assert out.num_rows() == 0
+    assert out.num_columns() == batch.num_columns()
+
+    exported = empty.to_pyarrow()
+    assert exported.num_rows == 0
+    assert exported.schema.names == ["k", "v"]

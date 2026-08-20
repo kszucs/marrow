@@ -30,6 +30,13 @@
 
 ### Fixes
 
+- **An empty result carried a schema but no columns.** `collect()` returned
+  `RecordBatch(schema=..., columns=[])` when no morsel survived, so
+  `num_columns()` was 0 while the schema named its fields — anything walking
+  columns by schema index ran off the end, and the C Data export returned
+  NULL without setting an exception, surfacing as a bare `SystemError` from
+  `to_pyarrow()`. Now builds one zero-length column per field.
+
 - **Array equality compares fields, not elements — which is what let
   `marrow/tests/test_arrays.mojo` compile for the first time.** All 167 cases
   now pass in 49 s; the file had never built. The cause was a compiler
@@ -674,6 +681,8 @@
   Found three defects on its first run: `filter` ignores the mask's validity
   bitmap, an empty result carries a schema but no columns, and exporting a
   zero-row batch through the C Data interface fails.
+  Now 59 cases across eight areas — basic, nulls, kleene, aggregate, sort,
+  join, string and conditional — passing on both lanes.
 
 - **`benchmarks/binary_size/query_param.mojo` gates what a late-bound
   parameter costs**, and the writer-gating decision it forced. Against

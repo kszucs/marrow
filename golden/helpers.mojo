@@ -10,7 +10,7 @@ driver runs from.
 """
 
 from marrow.arrays import DynArray
-from marrow.dtypes import DynType, bool_, float64, int64
+from marrow.dtypes import DynType, bool_, float64, int32, int64
 from marrow.expr.relations import DynRelation
 from marrow.ipc import read_ipc_file
 from marrow.tabular import RecordBatch
@@ -49,6 +49,8 @@ def values_equal(a: DynArray, b: DynArray) raises -> Bool:
         return a.as_string() == b.as_string()
     elif dt == DynType(int64):
         return a.as_int64() == b.as_int64()
+    elif dt == DynType(int32):
+        return a.as_int32() == b.as_int32()
     elif dt == DynType(float64):
         return a.as_float64() == b.as_float64()
     elif dt == DynType(bool_):

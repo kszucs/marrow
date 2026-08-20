@@ -26,7 +26,7 @@ from std.memory import ArcPointer
 from ..arrays import DynArray, StructArray
 from .. import dtypes as dt
 from ..schema import Schema
-from ..builders import Int32Builder
+from ..builders import DynBuilder, Int32Builder
 from ..tabular import RecordBatch
 from ..kernels.concat import concat
 from ..kernels.filter import filter
@@ -169,7 +169,18 @@ struct DynProcessor(Movable):
                     raise e
                 break
         if len(batches) == 0:
-            return RecordBatch(schema=self.schema(), columns=List[DynArray]())
+            # An empty result still has to be a *well-formed* batch: one
+            # zero-length column per schema field. Returning the schema with
+            # an empty column list left `num_columns()` at 0 while the schema
+            # named its fields, so anything that walked the columns by schema
+            # index ran off the end — and exporting it through the C Data
+            # interface returned NULL without setting an exception.
+            var empty_schema = self.schema()
+            var empty_cols = List[DynArray](capacity=len(empty_schema.fields))
+            for ref f in empty_schema.fields:
+                var b = DynBuilder(f.dtype)
+                empty_cols.append(b.finish())
+            return RecordBatch(schema=empty_schema^, columns=empty_cols^)
         if len(batches) == 1:
             return RecordBatch(copy=batches[0])
         var schema = batches[0].schema

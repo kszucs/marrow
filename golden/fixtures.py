@@ -70,6 +70,17 @@ TABLES = {
             "dname": pa.array(["eng", "sales", "ops"], pa.string()),
         }
     ),
+    # Strings worth asking questions about: mixed case, surrounding
+    # whitespace, the empty string (which is not a null), a multi-byte
+    # character so `length` has to say whether it counts bytes or codepoints,
+    # and a null.
+    "words": pa.table(
+        {
+            "s": pa.array(
+                ["Hello", "wORLD", "  pad  ", "", "héllo", None], pa.string()
+            )
+        }
+    ),
 }
 
 
