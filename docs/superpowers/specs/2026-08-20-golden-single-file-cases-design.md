@@ -86,7 +86,7 @@ and `execute` borrows its receiver (`relations.mojo:413`,
 
 ### The two generators
 
-**Mojo.** `golden/conftest.py`, on import, concatenates every `cases/*.mojo`
+**Mojo.** `runner.py`, on import from `conftest.py`, concatenates every `cases/*.mojo`
 under the fixed import header into `golden/test_cases.mojo` (generated,
 gitignored). One module, so the driver's compile cost stays comparable to
 today's. The existing harness then collects it unchanged: `pytest_collect_file`
@@ -95,8 +95,8 @@ today's. The existing harness then collects it unchanged: `pytest_collect_file`
 hand-written `test_cases.mojo`, because Mojo has no `eval` and a hand-written
 one could not parse anything.
 
-**Python.** `golden/test_cases.py`, on import, transpiles each case body and
-injects the resulting function into module globals. Item names then match the
+**Python.** `runner.py` transpiles each case body and injects the resulting
+function into `test_cases.py`'s module globals. Item names then match the
 Mojo lane exactly, so `-k` selects symmetrically across both. The transpiler is
 three rules:
 
@@ -131,32 +131,60 @@ The prototype needs exactly two: `col(name, dtype=None)`
 (`python/marrow/expr.py:182`). Dtype names such as `bool_` and `int64` are
 already exported from `marrow`.
 
+### Module layout
+
+Five files, three of which carry content:
+
+| file | role |
+|---|---|
+| `golden/helpers.mojo` | the Mojo vocabulary — `table`, `check`, `values_equal` |
+| `golden/helpers.py` | the Python vocabulary, mirroring it, plus the `NAMESPACE` dict case bodies exec in |
+| `golden/runner.py` | all machinery — fixture definitions, case parse and render, DuckDB regeneration, `.exp` and `test_cases.mojo` codegen, the transpiler |
+| `golden/conftest.py` | pytest hook shim — options, config, triggers codegen on import |
+| `golden/test_cases.py` | collection shim — `runner.install(helpers.NAMESPACE, globals())` |
+
+`expfmt.py`, `fixtures.py` and `regenerate.py` are deleted and folded into
+`runner.py`; `casefmt.py` is never created. The two shims exist only because
+pytest's naming rules force them — hooks must live in a file called
+`conftest.py`, and collected functions must live in one matching `test_*.py` —
+and each is a handful of lines.
+
+Dependencies run one way: `runner.py` imports nothing from `golden`,
+`helpers.py` imports `runner`, and the two shims import both. `runner.py` must
+not import `helpers.py`; that would close a cycle, since the transpiler lives
+in `runner` and the namespace it execs against lives in `helpers`.
+
+**`runner.py` must not import duckdb at module scope.** The split between a
+format module and a regeneration script is *why* `expfmt.py` exists today: the
+`dev` environment has no duckdb, and comparing against an expectation does not
+need one. Folding them back together is only safe with `import duckdb` inside
+the regeneration function. Regeneration becomes
+`pixi run -e bench python golden/runner.py`, replacing `golden/regenerate.py`.
+
 ### Expectation pipeline
 
-`golden/casefmt.py` is new and owns the format end to end: parse
-`(name, sql, prose, expected)` out of a case file, render a typed table back
-into a docstring. `expfmt.py`'s typed-TSV render and parse survive inside it;
-its `== name` block splitter is deleted, since one file is now one case.
+`runner.py` owns the case format end to end: parse `(name, sql, prose,
+expected)` out of a case file, render a typed table back into a docstring.
+`expfmt.py`'s typed-TSV render and parse survive inside it; its `== name` block
+splitter is deleted, since one file is now one case.
 
-`regenerate.py` (`pixi run -e bench python golden/regenerate.py`) parses every
-`cases/*.mojo`, runs the SQL through DuckDB against the fixtures, and rewrites
-each docstring in place, replacing everything after `-- expected` and appending
-the marker when absent. Expectations still come from DuckDB and never from
-marrow — an expectation captured from the engine under test enshrines that
-engine's current bugs. They stay committed as text, so a changed expectation is
-a reviewable diff.
+Run as a script, it parses every `cases/*.mojo`, runs each SQL through DuckDB
+against the fixtures, and rewrites the docstring in place — replacing
+everything after `-- expected`, appending the marker when absent. Expectations
+still come from DuckDB and never from marrow, since an expectation captured
+from the engine under test enshrines that engine's current bugs. They stay
+committed as text, so a changed expectation is a reviewable diff.
 
-`golden/conftest.py` derives two artefacts from that committed text on import,
-so neither can drift from what a reviewer saw: `.exp/<name>.arrow` per case
-(typed Arrow IPC, which is what the Mojo lane reads) and
-`golden/test_cases.mojo`.
+Imported by `conftest.py`, it derives two artefacts from that committed text so
+neither can drift from what a reviewer saw: `.exp/<name>.arrow` per case (typed
+Arrow IPC, which is what the Mojo lane reads) and `golden/test_cases.mojo`.
 
-`golden/helpers.py` is new and holds the Python namespace. The `Golden` fixture
-disappears, so the `--morsel-size` and `--num-threads` options it read off
-`request.config` move to module state set in `pytest_configure`. That keeps the
-signature `table(name)` identical in both lanes instead of leaking a config
-argument into every case. On the Mojo side, `helpers.mojo`'s `fixture()`
-becomes `table()` and wraps `in_memory_table` itself.
+The `Golden` fixture disappears, so the `--morsel-size` and `--num-threads`
+options it read off `request.config` move to module state in `runner.py`, set
+from `conftest.py`'s `pytest_configure`. That keeps the signature `table(name)`
+identical in both lanes instead of leaking a config argument into every case.
+On the Mojo side, `helpers.mojo`'s `fixture()` becomes `table()` and wraps
+`in_memory_table` itself.
 
 ### Unconvergeable cases
 
@@ -178,9 +206,9 @@ Each phase ends at a review gate.
 bool columns, `project`, and Kleene null semantics, and needs only the two
 Python additions above.
 
-Deliverables: `casefmt.py` parse and render, `helpers.py` namespace, minimal
-`conftest.py` codegen for one case, `col(name, dtype=None)`, positional
-`project(names, values)`.
+Deliverables: `runner.py` with case parse, render and single-case codegen;
+`helpers.py` namespace; the `conftest.py` and `test_cases.py` shims;
+`col(name, dtype=None)`; positional `project(names, values)`.
 
 Four things are verified rather than assumed:
 
@@ -197,15 +225,16 @@ Four things are verified rather than assumed:
 
 ### Phase 2 — machinery
 
-`regenerate.py` rewritten to parse case files and rewrite docstrings in place.
-Full transpiler with errors that name the case file and line. The harness gets
-its own tests, as `conftest.py` already carries `test_write_driver_*`: a
-`casefmt` round trip and the three transpile rules.
+`runner.py`'s regeneration path rewritten to parse case files and rewrite
+docstrings in place, with `import duckdb` confined to it. Full transpiler with
+errors that name the case file and line. The harness gets its own tests, as the
+root `conftest.py` already carries `test_write_driver_*`: a case-file round trip
+and the three transpile rules.
 
 ### Phase 3 — migration
 
-All 69 cases ported; the `test_*.mojo`, `test_*.py` and `test_*.exp`
-triples and `expfmt.py` deleted.
+All 69 cases ported; the `test_*.mojo`, `test_*.py` and `test_*.exp` triples
+deleted, along with `expfmt.py`, `fixtures.py` and `regenerate.py`.
 
 Known convergence gaps, each a Python-side addition under the standing rule:
 
@@ -223,8 +252,9 @@ Known convergence gaps, each a Python-side addition under the standing rule:
   through the runtime lane and the bindings.
 - Expectations still come from DuckDB and are still committed as reviewable
   text.
-- `pixi run -e bench python golden/regenerate.py` produces an empty diff on an
+- `pixi run -e bench python golden/runner.py` produces an empty diff on an
   unmodified corpus.
+- `pixi run -e dev pytest golden/` works with no duckdb installed.
 - The count of cases whose two lanes are byte-identical is reported. It is 0
   of 69 today; the target is all of them, and anything short of that is named
   by a `-- skip` marker rather than hidden.
