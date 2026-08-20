@@ -15,7 +15,7 @@ Python lane silently tested a different thing.
 Worse, the divergence is invisible. Marrow's stated design target is that a
 Mojo expression and a Python expression are *the same expression* — the Mojo
 one compiled ahead of time, the Python one evaluated through the runtime lane
-and the bindings. Today all 60 cases are spelled differently in the two lanes,
+and the bindings. Today all 69 cases are spelled differently in the two lanes,
 and nothing measures that or pushes it toward zero.
 
 ## Design
@@ -63,7 +63,7 @@ header covering the whole allowed vocabulary — `table`, `check`, `col`, `lit`,
 `bool_`, `int64`, `CaseWhen`, and so on — and the Python runner execs case
 bodies in a namespace holding exactly those same names. That set is the
 convergence contract, written down once per lane rather than scattered across
-60 files. The cost is that a case file is not standalone-compilable, so an LSP
+69 files. The cost is that a case file is not standalone-compilable, so an LSP
 flags unresolved names; it is never compiled standalone anyway, and
 `mojo format` is purely syntactic so formatting still works.
 
@@ -146,7 +146,8 @@ becomes `table()` and wraps `in_memory_table` itself.
 A case whose two lanes genuinely cannot converge yet would block its own
 migration, and the old files it could otherwise hide in are being deleted. To
 keep that from silently reintroducing two spellings, a case file may declare
-`-- skip python` or `-- skip mojo` in its docstring. The runner honours it and
+`-- skip python` or `-- skip mojo` on a line of its own in its docstring,
+after the SQL paragraph and before `-- expected`. The runner honours it and
 migration reports the list, so divergence stays visible and countable rather
 than dissolving back into prose.
 
@@ -186,7 +187,7 @@ its own tests, as `conftest.py` already carries `test_write_driver_*`: a
 
 ### Phase 3 — migration
 
-All roughly 60 cases ported; the `test_*.mojo`, `test_*.py` and `test_*.exp`
+All 69 cases ported; the `test_*.mojo`, `test_*.py` and `test_*.exp`
 triples and `expfmt.py` deleted.
 
 Known convergence gaps, each a Python-side addition under the standing rule:
@@ -208,7 +209,7 @@ Known convergence gaps, each a Python-side addition under the standing rule:
 - `pixi run -e bench python golden/regenerate.py` produces an empty diff on an
   unmodified corpus.
 - The count of cases whose two lanes are byte-identical is reported. It is 0
-  of 60 today; the target is all of them, and anything short of that is named
+  of 69 today; the target is all of them, and anything short of that is named
   by a `-- skip` marker rather than hidden.
 
 ## Risks
@@ -217,7 +218,7 @@ Known convergence gaps, each a Python-side addition under the standing rule:
 the expected block. Checked at the phase 1 gate; the pipe-delimited fallback
 is the mitigation.
 
-**Compile cost.** 60 concatenated cases in one module is more instantiations
+**Compile cost.** 69 concatenated cases in one module is more instantiations
 than any single golden file today. Measured at the phase 1 gate and again in
 phase 3; if it regresses badly the generator can emit several modules instead
 of one, since the harness collects any `test_*.mojo`.
