@@ -1,0 +1,48 @@
+== test_golden_cast_int_to_float
+c:double
+1.0
+-2.0
+300.0
+NULL
+
+== test_golden_cast_int_to_int32
+c:int32
+1
+-2
+300
+NULL
+
+== test_golden_cast_float_to_int
+c:int64
+1
+-2
+0
+NULL
+
+== test_golden_cast_int_to_string
+c:string
+1
+-2
+300
+NULL
+
+== test_golden_cast_string_to_int
+c:int64
+1
+-2
+NULL
+NULL
+
+== test_golden_cast_bool_to_int
+c:int64
+1
+0
+1
+NULL
+
+== test_golden_cast_int_to_bool
+c:bool
+True
+True
+True
+NULL

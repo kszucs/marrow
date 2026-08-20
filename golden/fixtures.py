@@ -96,6 +96,17 @@ TABLES = {
             ),
         }
     ),
+    # Cast material: a negative and an out-of-int32-range integer, fractions
+    # that round and truncate differently, a string that will not parse, and
+    # a null in every column so each conversion has to carry validity through.
+    "nums": pa.table(
+        {
+            "i": pa.array([1, -2, 300, None], pa.int64()),
+            "f": pa.array([1.7, -2.7, 0.5, None], pa.float64()),
+            "s": pa.array(["1", "-2", "abc", None], pa.string()),
+            "b": pa.array([True, False, True, None], pa.bool_()),
+        }
+    ),
 }
 
 

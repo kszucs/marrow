@@ -693,8 +693,8 @@
   Found three defects on its first run: `filter` ignores the mask's validity
   bitmap, an empty result carries a schema but no columns, and exporting a
   zero-row batch through the C Data interface fails.
-  Now 59 cases across eight areas — basic, nulls, kleene, aggregate, sort,
-  join, string and conditional — passing on both lanes.
+  Now 69 cases across ten areas — basic, nulls, kleene, aggregate, sort,
+  join, string, conditional and cast — passing on both lanes.
 
 - **`benchmarks/binary_size/query_param.mojo` gates what a late-bound
   parameter costs**, and the writer-gating decision it forced. Against
