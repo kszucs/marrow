@@ -1,0 +1,39 @@
+== test_golden_kleene_and
+x:int64	y:int64	r:bool
+1	1	True
+1	-1	False
+1	NULL	NULL
+-1	1	False
+-1	-1	False
+-1	NULL	False
+NULL	1	NULL
+NULL	-1	False
+NULL	NULL	NULL
+
+== test_golden_kleene_or
+x:int64	y:int64	r:bool
+1	1	True
+1	-1	True
+1	NULL	True
+-1	1	True
+-1	-1	False
+-1	NULL	NULL
+NULL	1	True
+NULL	-1	NULL
+NULL	NULL	NULL
+
+== test_golden_kleene_not
+x:int64	r:bool
+1	False
+1	False
+1	False
+-1	True
+-1	True
+-1	True
+NULL	NULL
+NULL	NULL
+NULL	NULL
+
+== test_golden_kleene_filter_and
+x:int64	y:int64
+1	1

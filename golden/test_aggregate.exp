@@ -1,0 +1,35 @@
+== test_golden_agg_count_star_counts_rows
+n:int64
+7
+
+== test_golden_agg_count_column_skips_nulls
+n:int64
+6
+
+== test_golden_agg_over_computed_input
+k:string	d:int64
+NULL	14
+a	20
+b	4
+c	8
+
+== test_golden_agg_two_group_keys
+k:string	v:int64	s:int64
+NULL	7	70
+a	1	10
+a	3	30
+a	6	60
+b	NULL	50
+b	2	NULL
+c	4	40
+
+== test_golden_agg_computed_group_key
+key0:bool	s:int64
+NULL	50
+False	40
+True	170
+
+== test_golden_agg_having
+k:string	total:int64
+NULL	7
+a	10

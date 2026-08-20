@@ -39,6 +39,20 @@ TABLES = {
             "g": pa.array(["x", None, "x", "y"], pa.string()),
         }
     ),
+    # Three-valued logic. The AOT lane has no boolean column leaf — `col` has
+    # no `BoolType` overload — so a fused expression cannot read a `bool`
+    # column at all. These are int columns whose *derived* predicates
+    # (`x > 0`, `y > 0`) cover the full 3x3 Kleene table, which keeps the
+    # cases expressible in both lanes.
+    #
+    #   x > 0 : T T T F F F N N N
+    #   y > 0 : T F N T F N T F N
+    "kleene": pa.table(
+        {
+            "x": pa.array([1, 1, 1, -1, -1, -1, None, None, None], pa.int64()),
+            "y": pa.array([1, -1, None, 1, -1, None, 1, -1, None], pa.int64()),
+        }
+    ),
 }
 
 

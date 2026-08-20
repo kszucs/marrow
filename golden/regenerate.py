@@ -6,6 +6,9 @@ Expectations come from **DuckDB**, never from marrow: an expectation captured
 from the engine under test enshrines whatever that engine currently does, which
 is how a golden corpus quietly becomes a record of its own bugs.
 
+A case's SQL is the **first paragraph** of its docstring; a blank line ends
+it and everything after is commentary.
+
 Output is committed as text so that a change to an expectation shows up as a
 reviewable diff. `conftest.py` parses it back and materialises the per-case
 Arrow IPC files the Mojo lane reads.
@@ -30,9 +33,14 @@ def cases(module_path):
     tree = ast.parse(module_path.read_text())
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
-            sql = ast.get_docstring(node)
-            if not sql:
+            doc = ast.get_docstring(node)
+            if not doc:
                 raise SystemExit(f"golden: {node.name} has no SQL docstring")
+            # SQL is the docstring's **first paragraph**; anything after a
+            # blank line is commentary for a human. Without the split, prose
+            # explaining a case is concatenated onto its query and DuckDB
+            # fails to parse it.
+            sql = doc.split("\n\n", 1)[0]
             yield node.name, " ".join(sql.split())
 
 
