@@ -102,6 +102,31 @@
 
 ### Fixes
 
+- **`BitmapView.load[W]` read up to 3 bytes past the allocation at a bitmap's
+  tail.** The load takes an unconditional 4-byte `UInt32`, and a buffer's
+  padding is `(-extent) mod 64` — so an extent of 62, 63 or 0 mod 64 leaves
+  too little, and an extent that is already a multiple of 64 leaves none at
+  all. A nullable 150,000-element column (18,750 bytes, 62 mod 64) tripped it
+  through the masked `apply` lane; 512 bits is the smallest case. This is the
+  one-byte-overrun class that once corrupted tcmalloc's freelist. The window
+  now slides back to finish on the view's last live byte, with the distance it
+  slid added to the shift — correct rather than merely in-bounds, because the
+  caller only consumes lanes inside the view, so the clamped word always holds
+  the bits asked for. Two ALU ops, no branch: measured against
+  `bench_count_set_bits` as a control, `bench_load_*` and the filter path are
+  unchanged. `marrow/tests/bench_bitmap.mojo` gains `bench_load_*` so the
+  primitive has a benchmark of its own.
+
+  **`load_bits[T]` has the same defect and is not fixed here.** It reads
+  `size_of[T]()` bytes unconditionally, so eight residues fall short for a
+  `UInt64`, and it is reachable (an offset-4 view of a 512-bit bitmap wants
+  bytes 57..64 of 64). The sliding trick cannot work there — a `Scalar[T]`
+  cannot hold NBITS live bits after a shift — and a tail branch was measured
+  at **+5% on `bench_filter50pct_nulls_1m`**, since `filter.mojo` calls it in
+  six places on the hot path. Fixing it wants a different approach: guarantee
+  the padding at allocation instead, which costs 64 bytes per bitmap and
+  nothing at runtime.
+
 - **A NULL join key matched another NULL.** SQL's rule — and Arrow C++'s
   default `JoinKeyCmp::EQ`, whose probe loop routes any row with a null key
   column straight to no-match — is that a NULL key matches nothing, not even

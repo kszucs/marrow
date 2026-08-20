@@ -874,26 +874,47 @@ struct BitmapView[
         SIMD bool vector — the bit-addressed counterpart of `store[W]`.
 
         Each lane j is True iff bit (index + j) is set. ``_offset`` is applied.
-        Loads a full UInt32 unconditionally, so it may read up to 3 bytes past
-        the view's last live byte; `_check_byte_range` pins that read to the
-        view, and every in-tree caller drives it from `vectorize`/`apply` over
-        a destination whose extent covers the source's.
+
+        The 4-byte `UInt32` is loaded unconditionally, so near the end of a
+        bitmap the window is **slid backwards** to finish on the view's last
+        live byte, and the distance it slid is added to the shift. Without
+        that, a load addressed at the final byte reads 3 bytes past it — and a
+        buffer whose byte extent is already a multiple of 64 has no padding at
+        all (`Buffer._aligned_size` rounds *up* to 64), so those bytes are
+        outside the allocation. 512 bits is the smallest case; a nullable
+        150,000-element column, 18,750 bytes and 62 mod 64, is the shape that
+        found it through the masked `apply` lane.
+
+        Sliding is correct rather than merely in-bounds. The caller only ever
+        consumes lanes inside the view, so the last bit needed satisfies
+        ``abs_pos + W <= 8 * _byte_extent()``; when the window is clamped to
+        end at ``_byte_extent()`` the shifted word holds exactly
+        ``8 * _byte_extent() - abs_pos >= W`` live bits. It costs two ALU ops
+        and no branch, which is why it is done here rather than by giving the
+        caller a special tail path.
 
         This is the default reader, and it mirrors `BufferView.load[W]`: both
         take a logical element index and return W elements. Reach for
         `load_bytes` only for whole-byte bitmap arithmetic.
         """
         var abs_pos = self._offset + index
-        var byte_idx = abs_pos >> 3
-        var bit_off = abs_pos & 7
-        self._check_byte_read_range(byte_idx, size_of[UInt32]())
+        # `max(..., 0)` covers a view spanning fewer than 4 bytes, where there
+        # is nothing to slide back to. A marrow-owned allocation is at least 64
+        # bytes, so the load stays inside it; an imported FOREIGN buffer that
+        # small carries no such guarantee, and never did — see
+        # docs/alpha-findings/g1-buffer-invariants.md.
+        var base = min(
+            abs_pos >> 3, max(self._byte_extent() - size_of[UInt32](), 0)
+        )
+        var shift = abs_pos - (base << 3)
+        self._check_byte_read_range(base, size_of[UInt32]())
 
         var bits = (
-            (self._data.unsafe_offset(byte_idx))
+            (self._data.unsafe_offset(base))
             .unsafe_bitcast[UInt32]()
             .unsafe_load[alignment=1]()
         )
-        bits >>= UInt32(bit_off)
+        bits >>= UInt32(shift)
 
         return (
             (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
