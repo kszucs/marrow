@@ -1191,3 +1191,46 @@ So `BoolBinary.conjuncts()` guarded by `comptime if K.name == "and"` is
 available, and the spec's conclusion holds for marrow's actual node shape. The
 size cost of the eighth `BoxedValue` slot is still unmeasured and still gated at
 +0.25% on the two fused binaries.
+
+
+## Reconciliation with the AOT-rewrite research (2026-08-21)
+
+`2026-08-21-aot-rewrite-research.md` measured the `conjuncts()` slot that this
+spec estimates at "~1 KB" and gates at +0.25% on the fused binaries. Both
+numbers were wrong in the same direction, and phase 2 as written **fails its own
+gate**:
+
+| | `query_streaming` `__text` | verdict |
+|---|---|---|
+| slot + trampoline only | +1,060 (+0.073%) | passes |
+| slot + an actual conjunctive predicate | **+9,176 (+0.606%)** | **2.4x the +0.25% veto** |
+
+The shipped gates carry no conjunctive predicate, so the first row — which is
+what a naive gate run reports — misses the real cost. The research rebuilt
+`query_streaming` with its predicate changed to `(a > b) & (a < 100)`, both
+ways from identical source.
+
+The cost model: splitting an N-conjunct predicate instantiates N additional
+complete `BoxedValue` erasures, nine trampolines each, for sub-nodes that
+previously existed only *inside* the `And`'s type and were never boxed. It
+scales with the number of distinct conjunct **shapes** across the program, not
+with the number of queries.
+
+**This does not invalidate the rule mechanism** — phase 1 adds no `conjuncts()`
+and is unaffected. It invalidates the phase-2 costing, and turns
+"is conjunction splitting worth it?" into a question with a number attached:
+0.6% of `__text` for join-level predicate pushdown. That is a judgement for the
+user, not a gate to quietly raise.
+
+Two further corrections from the research:
+
+- The boundary this spec draws — "rebuilding an arbitrary interior node names a
+  type that does not exist yet" — is in the wrong place. Naming a new type is
+  fine; **conditionality** is the constraint. A type-changing recursive rewrite
+  (De Morgan, double-negation elimination) works in the fused lane when each
+  node states its own image as an associated type. It breaks the moment a node
+  must branch on what its child *is*.
+- The discriminator must be a `comptime is_conj: Bool` parameter rather than a
+  `where` clause: a `where` clause does defeat overload rule 4, but the
+  constraint solver rejects `StaticString.__eq__`. That upgrades this spec's
+  style preference into a hard requirement.

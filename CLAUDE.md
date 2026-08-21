@@ -775,13 +775,19 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   off an externally-bound generic parameter** (though `Self.name` inside the
   concrete type works, and `Self.K.name` on a kernel parameter does resolve).
   Expose the constant through a method.
-- **A struct method does not *override* a trait default** — the two become
-  competing overloads and every call reports `ambiguous call to 'x'`, at the
-  call site rather than at either definition. So a trait default that returns a
-  *concrete node type* dictates representation to every conformer. `Value`
-  carried `isnull`/`notnull` returning the fused `NullPredicate`, which made
-  `DynValue.is_null() -> Self` unwritable; they moved onto `DynValue`, whose
-  callers they all already were.
+- **A trait default whose return type a conformer must change cannot be
+  overridden** — the two become competing overloads and every call reports
+  `ambiguous call to 'x'`, at the call site rather than at either definition.
+  So a trait default that returns a *concrete node type* dictates
+  representation to every conformer. `Value` carried `isnull`/`notnull`
+  returning the fused `NullPredicate`, which made `DynValue.is_null() -> Self`
+  unwritable; they moved onto `DynValue`, whose callers they all already were.
+  **This was once written as the broader "a struct method does not override a
+  trait default", and that is false.** A *same-signature* override is ordinary
+  and works — `Value.prune`, `name` and `bound_column` are each a trait default
+  overridden by conformers throughout `values.mojo`. The incident above had a
+  differing return type, which is the actual trigger; verified again in
+  `docs/superpowers/specs/2026-08-21-aot-rewrite-research.md`.
 - **A trait default method's parameter name must not collide with a
   *conformer's* struct parameter**, or that struct fails with `name conflict
   between parameter 'R' in the default trait method and a parameter in the
