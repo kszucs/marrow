@@ -48,6 +48,43 @@
   without a filter. Worth lifting in the expectation format; until then it is a
   standing limit on what the corpus can assert about floats.
 
+- **16 new golden cases covering the temporal expression family**, which was
+  the largest wholly-untested area of the expression layer, and the `events`
+  fixture (timestamp[us] + date32, with nulls, a leap day and the last
+  microsecond of a year) now has cases reading it. They cover the nine field
+  extractions (`year` `month` `day` `hour` `minute` `second` `quarter`
+  `day_of_week` `day_of_year`) over both a timestamp and a date column,
+  `date_trunc` to month and to day, temporal `min`/`max`, grouping by a date
+  and by a truncated timestamp, sorting on a timestamp, and a timestamp
+  comparison in a predicate.
+
+  Two conventions had to be read off marrow rather than assumed, and each
+  twin asks DuckDB marrow's question rather than the reverse: the extractions
+  return **int32** where DuckDB returns int64 (so every twin casts), and
+  `day_of_week` is the **ISO weekday with Monday = 0**, matching PyArrow's
+  defaults, where DuckDB's `dayofweek` is Sunday = 0 and its `isodow` is
+  Monday = 1 (so the twin is `isodow(ts) - 1`). `date_trunc` over a date
+  column is a third: marrow preserves the input type, DuckDB widens to
+  TIMESTAMP.
+
+- **The expectation format understands dates and timestamps.** `runner.TYPES`
+  gained `date32` and `timestamp` (microseconds, matching DuckDB's
+  `TIMESTAMP`), rendered as quoted ISO-8601 — `'2021-06-15'`,
+  `'2021-12-31T23:59:59.999999'` — for the reason the string cells are
+  quoted: `mojo format` strips trailing whitespace inside a docstring, so no
+  cell may leave a line ending in one. `golden/helpers.mojo`'s `values_equal`
+  gained the matching arms, keyed on `is_date32()` / `is_timestamp()` rather
+  than on a unit-pinned dtype equality.
+
+- **A lane divergence, recorded as a strict xfail:** the AOT lane loses a
+  temporal group key's name. `Relation.aggregate` names a key after its
+  source column when `bound_column` finds one and `key<i>` when it does not;
+  `NumericColumn`, `BoolColumn` and `StringColumn` override `bound_column`,
+  but `TemporalColumn` and `ListColumn` inherit the `Value` default that
+  always answers -1. So `GROUP BY d` on a date column yields `key0` in the
+  AOT lane and `d` in the runtime lane. `temporal_group_by_date` holds the
+  correct (DuckDB) expectation and carries the marker.
+
 - **43 new golden cases, aimed at query shapes and the types they accept.**
   The corpus tested one key type per operation: every join keyed on `int64`,
   every group-by on `string` or `int64`, every sort on `int64`/`string`. It now

@@ -61,6 +61,14 @@ def values_equal(a: DynArray, b: DynArray) raises -> Bool:
         return a.as_float64() == b.as_float64()
     elif dt == DynType(bool_):
         return a.as_bool() == b.as_bool()
+    elif dt.is_date32():
+        return a.as_date32() == b.as_date32()
+    elif dt.is_timestamp():
+        # The predicate, not `dt == DynType(timestamp(microsecond))`: the
+        # equality above has already established that the two dtypes match, so
+        # pinning a unit here would only make a `timestamp[s]` result fall
+        # through to the raise instead of comparing.
+        return a.as_timestamp() == b.as_timestamp()
     else:
         raise Error(String("golden: no value comparison for dtype ", dt))
 

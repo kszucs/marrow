@@ -276,6 +276,12 @@ TYPES = {
     "int32": pa.int32(),
     "double": pa.float64(),
     "bool": pa.bool_(),
+    "date32": pa.date32(),
+    # Microseconds, which is what DuckDB's `TIMESTAMP` is and what the
+    # `events` fixture holds. A unit belongs in the *value*, not the type
+    # name: an expectation written as `timestamp` and read back as some other
+    # unit would compare equal on the numbers while meaning different instants.
+    "timestamp": pa.timestamp("us"),
 }
 _NAMES = {str(v): k for k, v in TYPES.items()}
 
@@ -299,6 +305,13 @@ def render_value(value):
     """
     if value is None:
         return NULL
+    if isinstance(value, (date, datetime)):
+        # ISO 8601, quoted like a string for the same reason. `datetime`
+        # subclasses `date`, and each one's own `isoformat` is the right
+        # spelling, so a single branch covers both. `isoformat` keeps
+        # microseconds when there are any (`23:59:59.999999`) and omits the
+        # fractional part when there are none, which round-trips exactly.
+        return repr(value.isoformat())
     if isinstance(value, (str, float)):
         return repr(value)
     return str(value)
@@ -309,7 +322,14 @@ def parse_value(text, dtype):
         return None
     if dtype == pa.bool_():
         return text == "True"
-    return ast.literal_eval(text)
+    value = ast.literal_eval(text)
+    # The temporal cells arrive as quoted ISO strings, so the literal_eval
+    # above yields the text and the constructor below yields the value.
+    if dtype == pa.date32():
+        return date.fromisoformat(value)
+    if dtype == pa.timestamp("us"):
+        return datetime.fromisoformat(value)
+    return value
 
 
 def render_expected(table):
