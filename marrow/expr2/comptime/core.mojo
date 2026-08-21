@@ -29,8 +29,12 @@ from ...buffers import Bitmap
 from ...dtypes import DataType, DynType, NumericType
 from ...kernels.interval import Interval
 from ...schema import Schema
+from ...arrays import PrimitiveArray
+from ...buffers import Buffer
+from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
-from ..core import Analyzable, Datum, Evaluable
+from ...views import apply
+from ..core import Analyzable, Datum, Evaluable, Shape
 from ..pruning import PruneStats
 
 
@@ -85,6 +89,20 @@ trait ComptimeValue(Analyzable, Evaluable, Writable, Copyable, Deinitable):
         where a comparison's data bit is read while its validity says the bit
         is meaningless.
 
+        **This is not fused, and that is a deliberate asymmetry.** `evaluate`
+        collapses a whole subtree into one loop; validity is a second recursive
+        walk that intersects a bitmap per level. It is affordable because a
+        bitmap is one bit per row against a data element's 32 or 64 — a
+        depth-`d` tree costs `d` passes over `rows/64` words, next to one pass
+        over `rows` elements — but it is a second walk, not a free one.
+
+        Folding it into `bind` would remove the walk, since `bind` already
+        descends the tree. That works for **structural** validity (null in,
+        null out) and not for data-dependent validity: a Kleene `AND` decides
+        its nulls from the values, so it cannot be known before the lane runs.
+        Any fused form has to keep both paths, which is why this stays a
+        separate method until something measures the walk as costing.
+
         Takes the `Bound`, not the batch. `expr/` had **two** methods —
         `validity(batch)` and `state_validity(batch, state)` — the second added
         because the first re-ran the whole selection kernel for `coalesce`,
@@ -102,6 +120,50 @@ trait NumericValue(ComptimeValue):
     """A comptime node producing a fixed-width numeric column."""
 
     comptime Type: NumericType
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        """One fused pass over the batch — `bind` once, then `lane` per chunk.
+
+        A trait **default**, not a free driver, because it is the same for
+        every numeric node and it is precisely what this trait means by
+        evaluating. `expr/` kept it as a free `_drive_numeric`; CLAUDE.md
+        records that re-defaulting a base trait's abstract method in a
+        sub-trait recurses, but that limit is about returning
+        `Self.ArrayType`, and `Datum` is concrete.
+
+        Leaves override it: a column returns itself rather than copying through
+        a fresh buffer, and a literal stays a scalar.
+        """
+        comptime native = Self.Type.native
+        var bound = self.bind(batch)
+
+        comptime if Self.shape == Shape.scalar:
+            # Nothing to iterate — evaluate the lane once and stay lazy, which
+            # is what `Shape.scalar` promises its caller.
+            return Datum(
+                PrimitiveScalar[Self.Type](self.lane[1](bound, 0)[0]).to_dyn()
+            )
+        else:
+            var length = batch.num_rows()
+            var buf = Buffer.alloc_uninit[native](length)
+
+            @always_inline
+            def producer[W: Int](i: Int) {imm} -> SIMD[native, W]:
+                return self.lane[W](bound, i)
+
+            apply[native](buf.view[native](0, length), producer)
+
+            # Validity once, from the bound — never per lane.
+            var v = self.validity(bound)
+            var arr = PrimitiveArray[Self.Type](
+                dtype=Self.Type(),
+                length=length,
+                nulls=v.value().unset_count() if v else 0,
+                offset=0,
+                bitmap=v^,
+                buffer=buf.to_immutable(),
+            )
+            return Datum(arr^.to_dyn())
 
     @always_inline
     def lane[

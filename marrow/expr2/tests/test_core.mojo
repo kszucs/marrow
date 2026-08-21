@@ -84,7 +84,7 @@ def test_expr2_both_lanes_box_together() raises:
     for ref v in boxed:
         assert_equal(v.name(), "a")
         assert_equal(len(v.columns()), 1)
-        assert_true(v.is_column())
+        assert_true(v.name() != "" and len(v.columns()) == 1)
         assert_true(v.shape() == Shape.columnar)
 
 
@@ -94,19 +94,20 @@ def test_expr2_both_lanes_box_together() raises:
 def test_expr2_is_column_separates_the_three_cases() raises:
     """`name() != "" and len(columns()) == 1`, across all three shapes.
 
-    The composition exists so that bare-column-ness needs no slot of its own.
-    It only works if a literal is *named* but reads no columns — which is why
-    `lit(7).name()` is `"7"` and not `""`.
+    The composition exists so that bare-column-ness needs no slot of its own,
+    and no method either: it is spelled out at each call site until a caller
+    exists that writes it more than once. It only works if a literal is
+    *named* but reads no columns — which is why `lit(7).name()` is `"7"`.
     """
     var col = DynValue(Column[Int64Type]("a"))
     var lit = DynValue(Literal[Int64Type](7))
 
-    assert_true(col.is_column())
+    assert_true(col.name() != "" and len(col.columns()) == 1)
     assert_equal(col.name(), "a")
     assert_equal(len(col.columns()), 1)
 
     # Named, but reads nothing — so not a column.
-    assert_false(lit.is_column())
+    assert_false(lit.name() != "" and len(lit.columns()) == 1)
     assert_equal(lit.name(), "7")
     assert_equal(len(lit.columns()), 0)
 

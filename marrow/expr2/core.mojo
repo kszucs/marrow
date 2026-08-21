@@ -321,14 +321,6 @@ struct DynValue(Copyable, Movable, Writable):
     def name(self) -> String:
         return self._name(self._boxed)
 
-    def is_column(self) -> Bool:
-        """Whether this is exactly a bare column reference.
-
-        The composition documented on `Analyzable.name`, written once here so
-        every caller asks it the same way rather than re-deriving it.
-        """
-        return self.name() != "" and len(self.columns()) == 1
-
     def dtype(self, schema: Schema) raises -> DynType:
         return self._dtype(self._boxed, schema)
 
