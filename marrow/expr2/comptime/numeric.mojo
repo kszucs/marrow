@@ -11,9 +11,17 @@ kernel in every binary that builds any expression.
 """
 
 from ...dtypes import DataType, DynType, NumericType
-from ...kernels.interval import Interval
+from ...kernels.interval import (
+    GtInterval,
+    Interval,
+    IntervalKernel,
+    LtInterval,
+)
 from ...kernels.numeric import (
     AddKernel,
+    GtKernel,
+    LtKernel,
+    NumericCompareKernel,
     BinaryNumericKernel,
     MulKernel,
     SubKernel,
@@ -23,8 +31,8 @@ from ...tabular import RecordBatch
 from ...buffers import Bitmap
 from ..core import Datum, Shape
 from ..pruning import PruneStats
-from .core import NumericValue
-from .rules import promote, widest_shape
+from .core import BoolValue, NumericValue
+from .rules import promote, wider, widest_shape
 
 
 struct NumericBinary[
@@ -108,3 +116,108 @@ struct NumericBinary[
 comptime Add = NumericBinary[AddKernel, _, _]
 comptime Sub = NumericBinary[SubKernel, _, _]
 comptime Mul = NumericBinary[MulKernel, _, _]
+
+
+struct NumericCompare[
+    K: NumericCompareKernel,
+    P: IntervalKernel,
+    L: NumericValue,
+    R: NumericValue,
+](BoolValue):
+    """A comparison over two numeric operands, producing packed bits.
+
+    Carries **two** kernels: `K` compares fixed-width lanes, `P` is the same
+    operator read over `[min, max]` intervals. Two parameters rather than one
+    because `interval` must not re-derive the operator from `K` — `expr/` did
+    that by matching `K.name` against five string literals, and when a kernel
+    was renamed the match fell through to `unknown()`, which is *sound*. So
+    pruning switched itself off with no error and no failing test.
+
+    `Type` is not declared: `BoolValue` fixes it, because a comparison has no
+    choice about what it produces.
+    """
+
+    comptime shape = widest_shape[Self.L, Self.R]
+
+    comptime ArgType = promote[Self.L.Type, Self.R.Type]
+    """The common type both operands are cast to before comparing.
+
+    `int32 < int64` compares in `int64`; without this the narrower operand
+    would be compared against a truncated view of the wider one.
+    """
+
+    comptime NativeType = wider[Self.L.Type.native, Self.R.Type.native]
+    """Sizes the lane. The *operands*' width, not the output's — see
+    `BoolValue.NativeType`."""
+
+    comptime Bound = Tuple[Self.L.Bound, Self.R.Bound]
+
+    var l: Self.L
+    var r: Self.R
+
+    def __init__(out self, var l: Self.L, var r: Self.R):
+        self.l = l^
+        self.r = r^
+
+    # -- Analyzable ---------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        var out = self.l.columns()
+        for ref n in self.r.columns():
+            var seen = False
+            for ref have in out:
+                if have == n:
+                    seen = True
+                    break
+            if not seen:
+                out.append(n.copy())
+        return out^
+
+    def name(self) -> String:
+        return String()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.Type())
+
+    def interval(self, stats: PruneStats) raises -> Interval:
+        """Can this comparison be true, given the operands' bounds?
+
+        This is where statistics pruning actually happens: everything else in
+        the interval chain exists to feed this one answer. A definite "no"
+        skips a row group without decoding it, and an imprecise "maybe" costs
+        that decode and nothing else.
+        """
+        return Interval.truth(
+            Self.P.apply(self.l.interval(stats), self.r.interval(stats))
+        )
+
+    # -- ComptimeValue ------------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        return (self.l.bind(batch), self.r.bind(batch))
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """A comparison is null-in, null-out: valid where both operands are.
+
+        The data bit is computed regardless — a SIMD lane compares whatever is
+        in the slot — so this bitmap is the *only* thing that records the
+        result is meaningless there. Reading the data bit without it is the
+        defect that made NULL join keys match each other.
+        """
+        return Bitmap.intersect(
+            self.l.validity(bound[0]), self.r.validity(bound[1])
+        )
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return Self.K.core[Self.ArgType.native, W](
+            self.l.lane[W](bound[0], idx).cast[Self.ArgType.native](),
+            self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
+
+
+comptime Gt = NumericCompare[GtKernel, GtInterval, _, _]
+comptime Lt = NumericCompare[LtKernel, LtInterval, _, _]

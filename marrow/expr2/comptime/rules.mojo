@@ -64,3 +64,16 @@ def _outranks[L: NumericType, R: NumericType]() -> Bool:
 comptime promote[L: NumericType, R: NumericType] = L if (
     _outranks[L, R]()
 ) else R
+
+
+comptime wider[L: DType, R: DType] = L if (
+    bit_width_of[L]() >= bit_width_of[R]()
+) else R
+"""The wider of two machine types — a different question from `promote`.
+
+`promote` decides the **value domain**, where a float outranks any integer.
+This decides the **register size** a lane iterates at, where only bit width
+matters. A bit-packing driver sizes `W` from a DType, and a narrower one yields
+a *larger* `W`, so sizing from the narrower operand would overflow the register
+the wider one is loaded into.
+"""

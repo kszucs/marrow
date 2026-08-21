@@ -26,11 +26,11 @@ is the first such family; string, bool, temporal and list follow the same shape.
 """
 
 from ...buffers import Bitmap
-from ...dtypes import DataType, DynType, NumericType
+from ...dtypes import BoolType, DataType, DynType, NumericType
 from ...kernels.interval import Interval
 from ...schema import Schema
-from ...arrays import PrimitiveArray
-from ...buffers import Buffer
+from ...arrays import BoolArray, PrimitiveArray
+from ...buffers import Bitmap, Buffer
 from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
@@ -176,4 +176,61 @@ trait NumericValue(ComptimeValue):
         exists as a separate stage rather than the lane reaching through
         `self`.
         """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# BoolValue — the family whose lane is bit-packed
+# ---------------------------------------------------------------------------
+trait BoolValue(ComptimeValue):
+    """A comptime node producing a bit-packed boolean column.
+
+    Separate from `NumericValue` because the output is *packed*: a lane yields
+    `SIMD[DType.bool, W]` and the driver writes bits, not elements. That is a
+    different destination, not a different dtype, which is why `Type` is fixed
+    here rather than declared per node — a bool node has no choice about what
+    it produces.
+    """
+
+    comptime Type = BoolType
+
+    comptime NativeType: DType
+    """The **operand** width, which sizes the SIMD lane — not the output.
+
+    A comparison over `int64` iterates 64-bit lanes even though it emits one
+    bit per row, so `W` follows the operands. Sizing it from the output would
+    give a `W` wide enough to overflow the register the operands are loaded
+    into. A node with two operands of different widths takes the wider.
+    """
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        """One fused bool pass: bit-pack a `Bitmap` from `lane`.
+
+        The numeric default's sibling, and separate for the one reason above —
+        the destination is a bitmap, so `apply` takes its bit-packing overload
+        and the lane width comes from `NativeType`.
+        """
+        var length = batch.num_rows()
+        var bound = self.bind(batch)
+        var bits = Bitmap.alloc_uninit(length)
+
+        @always_inline
+        def producer[W: Int](i: Int) {imm} -> SIMD[DType.bool, W]:
+            return self.lane[W](bound, i)
+
+        apply[Self.NativeType](bits.view(), producer)
+
+        var v = self.validity(bound)
+        return Datum(
+            BoolArray(
+                length=length,
+                nulls=v.value().unset_count() if v else 0,
+                offset=0,
+                bitmap=v^,
+                buffer=bits.to_immutable(),
+            ).to_dyn()
+        )
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         ...
