@@ -1234,3 +1234,46 @@ Two further corrections from the research:
   `where` clause: a `where` clause does defeat overload rule 4, but the
   constraint solver rejects `StaticString.__eq__`. That upgrades this spec's
   style preference into a hard requirement.
+
+
+## Why the optimizer should be lane-asymmetric by design (2026-08-21)
+
+A fused AOT subtree compiles to **one inlined SIMD loop**, so LLVM already
+applies constant folding, GVN/CSE, instcombine, DCE and strength reduction to
+its interior. A `DynValue` tree is the opposite: `execute` returns a `DynArray`
+**per node, per morsel** (`dynamic.mojo:586`), so every node is an opaque
+function-pointer call that materialises a whole column, and LLVM cannot see
+across the boundary at all.
+
+That makes the value of an expression-interior rewrite almost exactly inverted
+against its cost:
+
+| | AOT lane | runtime lane |
+|---|---|---|
+| value of interior rewrites | **~0** — LLVM already did it | **high** — each node removed is one fewer materialised column per morsel |
+| cost of enabling them | **+0.606%** `__text` for decomposition | ~0 |
+
+So constant folding, CSE and algebraic simplification should be **runtime-lane
+only** — not because the fused lane cannot host them (category E shows it can),
+but because there is nothing left for them to find.
+
+**The corollary is the justification for ever paying the fused-lane cost.** It
+is only worth it for rewrites LLVM *cannot* perform — those that change data
+flow rather than instruction selection:
+
+- pushing a predicate down to a Parquet scan, which changes what is **read**
+  (row-group and page pruning);
+- splitting a conjunction across a join's inputs, which changes **cardinality**
+  before the join runs.
+
+Neither is in LLVM's scope at any optimization level. So conjunction splitting's
+0.6% buys a *relational* win, never an expression one — and open question 4
+("does splitting actually help scan pruning today?") is therefore the whole
+justification for phase 2, not a detail of it.
+
+**This also resolves a worry raised against lane-asymmetric rules.** The golden
+corpus exists to catch a *feature* present in only one lane, because that
+changes results. An optimization must not change results, so a rule that fires
+for the runtime lane and not the fused one is observationally invisible —
+only plan shape and speed differ. Lane-asymmetric optimization is sound in a
+way lane-asymmetric semantics never is.
