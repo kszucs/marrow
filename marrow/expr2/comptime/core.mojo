@@ -1,0 +1,117 @@
+"""The comptime lane: expressions whose structure is their type.
+
+`And[Gt[Column[Int64Type], Literal[Int64Type]], …]` is a type, not data. A whole
+subtree therefore compiles to one inlined SIMD loop with no dispatch anywhere
+inside it — worth a measured **3.4x** on binary size against the same plan built
+from runtime expressions (1.46 MB vs 4.91 MB), because the fused form
+instantiates only the kernels it names.
+
+Two consequences follow, and both are load-bearing elsewhere:
+
+- **Nothing outside can inspect the structure.** A rewriter cannot open a type,
+  so every question it asks is answered by the node itself — which is what
+  `Analyzable` exists for, and why its methods are total.
+- **LLVM already optimises the interior.** Constant folding, GVN/CSE and
+  instcombine all apply to an inlined loop, so an expression-level rewriter has
+  nothing to find here. Interior rewrites belong to the runtime lane alone.
+
+This module holds only what the lane *shares* — the base trait and the family
+traits that refine it. The nodes themselves live beside it: `leaves.mojo`,
+`operators.mojo`, `reductions.mojo`.
+
+`ComptimeValue` is the base every node here shares. It does *not* declare
+`lane` — that returns `SIMD[Type.native, W]`, which only means something for
+a fixed-width type, so each family refines the base with its own. `NumericValue`
+is the first such family; string, bool, temporal and list follow the same shape.
+"""
+
+from ...buffers import Bitmap
+from ...dtypes import DataType, DynType, NumericType
+from ...kernels.interval import Interval
+from ...schema import Schema
+from ...tabular import RecordBatch
+from ..core import Analyzable, Datum, Evaluable
+from ..pruning import PruneStats
+
+
+# ---------------------------------------------------------------------------
+# ComptimeValue — what every node in this lane shares
+# ---------------------------------------------------------------------------
+trait ComptimeValue(Analyzable, Evaluable, Writable, Copyable, Deinitable):
+    """A `Value` whose type states its output type and its per-batch state.
+
+    The two comptime members are what the runtime lane cannot supply, and are
+    therefore the whole reason this is a separate trait rather than a naming
+    convention: a `RuntimeValue` learns its type from a schema at run time and
+    materialises a `DynArray` per node, so it can answer neither.
+    """
+
+    comptime Type: DataType
+    """This node's output type, known without a schema.
+
+    `Analyzable.dtype(schema)` ignores its argument in this lane and answers
+    from here. The runtime lane is the reason that method takes a schema at all.
+    """
+
+    comptime Bound: Copyable & Deinitable
+    """Everything the lane loop needs, resolved once per batch.
+
+    A column leaf's is its typed column; a literal's is nothing; a binary node's
+    is `Pair[L.Bound, R.Bound]`. Declared per concrete struct rather than
+    defaulted: a trait default cannot reduce at a `-> Self.Bound` return site
+    unless the bound is `ImplicitlyCopyable`, and marrow's array types
+    deliberately are not.
+
+    `expr/` called this `State`, which could mean anything. It is specifically
+    *this subtree's column references, bound to this batch* — the stage between
+    an expression and a per-element read.
+    """
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        """Resolve this subtree against `batch`, once, before the lane loop.
+
+        Every schema lookup and every `Variant` unwrap happens here so that
+        `lane` does none. That removal is the optimisation.
+        """
+        ...
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, or `None` when it cannot be null.
+
+        `lane` produces the **data** bits only, so validity is a separate and
+        genuinely data-dependent question: a Kleene `AND` derives three-valued
+        nulls from its operands, which the plain bitwise `a & b` in the lane
+        does not give. Fusing without this contract reproduces the defect class
+        where a comparison's data bit is read while its validity says the bit
+        is meaningless.
+
+        Takes the `Bound`, not the batch. `expr/` had **two** methods —
+        `validity(batch)` and `state_validity(batch, state)` — the second added
+        because the first re-ran the whole selection kernel for `coalesce`,
+        `nullif` and `case_when`, so every fused pass over them did the work
+        twice. One method reading the already-resolved `Bound` cannot: a leaf's
+        `Bound` *is* its column, bitmap included.
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# NumericValue — the first family, refining the base with a lane
+# ---------------------------------------------------------------------------
+trait NumericValue(ComptimeValue):
+    """A comptime node producing a fixed-width numeric column."""
+
+    comptime Type: NumericType
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        """One SIMD chunk.
+
+        Reads `bound` and `idx` and nothing else — not `self`. That is what
+        lets the whole subtree inline into a single loop, and it is why `bind`
+        exists as a separate stage rather than the lane reaching through
+        `self`.
+        """
+        ...
