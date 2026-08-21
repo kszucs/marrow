@@ -107,6 +107,46 @@ Two of today's methods do **not** survive this test and move out:
 Net: `DynValue` carries five slots instead of seven, and each is traceable to a
 named asker.
 
+### The comptime lane gets an ibis-style surface
+
+`col("amount", int64)` makes the caller retype a dtype the schema already
+knows, and a disagreement between the two is a runtime error. With a comptime
+schema and `__getattr_param__`, the column reference carries both:
+
+```mojo
+comptime SCHEMA = Sch(["amount", "region"], [int64, string])
+var t = Table[SCHEMA]()
+
+t.amount > t.price        # typed, and `price` is a COMPILE error
+```
+
+**Verified end to end.** `__getattr_param__[name: StaticString](self) ->
+Col[Self.s.code_of(name)]` compiles, and the return *type* is computed from a
+comptime schema lookup — `t.a` yields `Col[dtype=11]`, `t.b` yields
+`Col[dtype=22]`. An unknown name fails the build with
+`constraint failed: unknown column: nope`.
+
+This closes the question the earlier `Table[T]` note left open. That note
+records a real limit — *"a reflected field type is opaque inside the generic
+function that reflects it"* — but that is about **reflecting** a struct's
+fields. Carrying a schema as a comptime *value* and indexing it is a different
+capability, and it works.
+
+Consequences for `expr2`:
+
+- The comptime lane's primary surface becomes `t.amount`, with
+  `col("amount", int64)` retained for callers holding no comptime schema.
+- Unknown columns and dtype mismatches become compile errors in the AOT lane.
+- The runtime lane is unaffected — `t["amount"]` stays, because its schema
+  arrives at runtime.
+- It costs a handle type parameterised on the schema, and nothing at runtime.
+
+Open: how a `Relation` produced by a builder carries its schema forward as a
+comptime value, since `in_memory_table(batch)` learns its schema at runtime.
+The likely answer is that the handle is opt-in — you get `t.amount` when you
+declared a schema, and `col(name, dtype)` when you did not — but that is a
+Phase 0 design question, not a settled one.
+
 ### Rules are free functions, not slots and not a trait
 
 ```mojo
@@ -239,6 +279,7 @@ Every row compiled, none recalled.
 | `comptime assert` on an unknown column | ✅ named compile error |
 | one `def` at comptime *and* runtime | ✅ same function, both worlds |
 | conditional recursive type rewrite | ✅ fixpoint; **totality** is the enabling trick |
+| `__getattr_param__` returning a schema-derived type | ✅ `t.a` -> `Col[dtype=11]`; unknown name is a compile error |
 | DCE erases unused operators | ✅ `kernels::sort` = **0 bytes** |
 | expression lane worth | **3.4×** — 1.46 MB vs 4.91 MB, same plan |
 | plan machinery share | **3.3%**; `builders`+`dtypes`+`arrays` = 73.7% |
@@ -252,10 +293,10 @@ Each ends at a review gate. `expr/` is untouched until the last.
 **0 — probe the two open questions.** Neither blocks the skeleton, both change
 scope:
 
-- **`col["a", SCHEMA]()`** — compile-time validation with the dtype *derived*
-  rather than retyped. Comptime schemas and `comptime assert` both work;
-  unprobed is deriving a *type* from a schema *value*, which may hit the
-  reflection limit that deferred `Table[T]`.
+- **Threading a comptime schema through the plan builders.** The `t.amount`
+  surface is proven (see above); what is unproven is how a `Relation` carries
+  its schema as a comptime value when `in_memory_table(batch)` learns it at
+  runtime.
 - **The physical plan layer.** Deferred earlier on "one join algorithm, nothing
   to choose between" — too weak. Selection-vector propagation and
   downstream-column awareness are *also* physical properties, and
@@ -292,7 +333,10 @@ code and the diff that renames it are never the same diff.
 
 ## Open questions
 
-1. Does `col["a", SCHEMA]()` compile? (Phase 0)
+1. How does a `Relation` carry a comptime schema forward, given
+   `in_memory_table(batch)` learns its schema at runtime? The `t.amount`
+   surface itself is proven; threading the schema through the plan builders is
+   not. (Phase 0)
 2. Does the physical plan layer go in now? (Phase 0)
 3. Does conjunction splitting improve pruning *today*? If not, Phase 4 has
    nothing to buy and should not happen.
