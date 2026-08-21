@@ -25,6 +25,7 @@ back together is only safe while that import stays where it is.
 import ast
 import re
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import pyarrow as pa
@@ -169,6 +170,61 @@ TABLES = {
         {
             "region": pa.array(["north", "south", "west"], pa.string()),
             "country": pa.array(["ca", "mx", None], pa.string()),
+        }
+    ),
+    # Floating-point edge values, for the scalar kernels that only get
+    # interesting here: NaN (which is not null, and is not equal to itself),
+    # both infinities, and a negative zero that compares equal to +0.0 while
+    # having a different sign bit. `y` has no zero, so a division case asks
+    # about arithmetic rather than about what marrow and DuckDB each do with
+    # division by zero — a separate question, and one they answer differently.
+    "floats": pa.table(
+        {
+            "x": pa.array(
+                [
+                    1.5,
+                    -2.0,
+                    0.0,
+                    -0.0,
+                    float("nan"),
+                    float("inf"),
+                    float("-inf"),
+                    None,
+                ],
+                pa.float64(),
+            ),
+            "y": pa.array([2.0, 4.0, 8.0, 1.0, 1.0, 2.0, 2.0, None], pa.float64()),
+            "n": pa.array([4, -9, 0, 1, 2, 3, -1, None], pa.int64()),
+        }
+    ),
+    # Temporal inputs. Naive (zone-free) timestamps, so nothing here depends on
+    # a DST rule or a tz database. Covers a leap day, the last microsecond of a
+    # year, a repeated instant so grouping has something to do, and a null.
+    "events": pa.table(
+        {
+            "ts": pa.array(
+                [
+                    datetime(2021, 1, 1, 0, 0, 0),
+                    datetime(2021, 6, 15, 12, 30, 45),
+                    datetime(2021, 6, 15, 12, 30, 45),
+                    None,
+                    datetime(2020, 2, 29, 23, 59, 59),
+                    datetime(2021, 12, 31, 23, 59, 59, 999999),
+                ],
+                pa.timestamp("us"),
+            ),
+            "d": pa.array(
+                [
+                    date(2021, 1, 1),
+                    date(2021, 6, 15),
+                    None,
+                    date(2020, 2, 29),
+                    date(2021, 12, 31),
+                    date(2021, 6, 15),
+                ],
+                pa.date32(),
+            ),
+            "label": pa.array(["a", "b", "a", None, "c", "b"], pa.string()),
         }
     ),
     # Cast inputs. `f` holds values where truncation and rounding disagree
