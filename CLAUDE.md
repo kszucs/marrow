@@ -827,8 +827,13 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   escaped with backticks at every import site** — `from pkg.`comptime`.x
   import y` compiles and runs (verified 2026-08-21). This entry used to say
   it "cannot be a module name", which is false; the cost is the escaping,
-  not impossibility. Prefer a non-keyword name — `fused` / `runtime` — so
-  no import has to carry backticks.
+  not impossibility. **And the cost is one line, not every import.** Inside
+  `expr/comptime/` the package name never appears, so its own relative imports
+  (`from .leaves import Column`) are plain; consumers import from `marrow.expr`,
+  which re-exports. Only the boundary crossing escapes — the parent
+  `__init__.mojo`, plus whatever imports both lanes directly (`builders.mojo`,
+  `aggregates.mojo`). Verified end to end: a backticked subpackage with an
+  `__init__.mojo` re-exported through its parent compiles and runs.
 - There is **no runtime `__getattr__`**; the comptime `__getattr_param__` hook
   fires only for missing attributes and needs a handle type.
 - Keep recursive and nested ops **out of kernel structs** — a binding-compiler
