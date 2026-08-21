@@ -754,6 +754,18 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   type is `ImplicitlyCopyable` — and marrow's array types deliberately are not.
   So a protocol carrying non-implicitly-copyable state cannot be rolled out
   behind defaults; every conformer must implement it in the same commit.
+- **A conditional comptime *associated type* reduces, and carries its trait
+  bound** — provided **both branches are always well-formed**. Verified
+  2026-08-21: `comptime Simplified = Self.A.Inner.Simplified if
+  Self.A.KIND == 1 else Neg[Self.A.Simplified]` recurses to a fixpoint
+  (`Neg^4[Leaf]` -> `Leaf`, `Neg^3[Leaf]` -> `Neg`) and its members are
+  reachable. The enabling trick is **totality**: every node declares every
+  structural projection, leaves answering with `Self`, so neither arm can
+  name a type that does not exist — the type-level form of `bound_column`
+  returning `-1`. An earlier attempt concluded "conditionality does not
+  reduce"; the real blocker was an ill-formed branch. This makes a
+  compile-time plan rewrite possible in principle; its compile-time and
+  binary-size cost at marrow's scale is **unmeasured**.
 - **A comptime conditional type carries no trait conformance** and does not
   reduce at a return site, even inside a `comptime if` that selected the branch.
   `rebind` cannot bridge it. Usable as an annotation only — which is why
@@ -794,7 +806,29 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   struct`. This is why every binary operator on `NumericValue` names its
   parameter `Rhs`: `NumericBinary`/`FloatBinary`/`ConditionalBinary` already use
   `L`/`R`.
-- **`comptime` is a reserved keyword and cannot be a module name.**
+- **`constrained` is gone; the compile-time assertion is `comptime assert`.**
+  `comptime assert i >= 0, "unknown column: " + String(name)` fails the
+  build with `constraint failed: unknown column: nope`, message included.
+- **A struct holding heap-allocated fields can be a comptime parameter.**
+  `comptime SCHEMA = MiniSchema([...])` passed as `[s: MiniSchema]` works,
+  so a schema can be a compile-time value and a bad column reference can
+  be a compile error. That is *not* the reflection limit below, which is
+  about reflecting field types and still stands.
+- **A function that can `raise` cannot run at comptime.** Marrow mandates
+  `def`, which is fine — a `def` without `raises` is comptime-eligible.
+  But it decides which analysis methods are reusable at compile time:
+  `referenced_columns`, `name` and `render` are non-raising and can be;
+  `bound_column` and `prune` declare `raises` and cannot, until the
+  not-found case becomes a `comptime assert` instead of an `Error`.
+  **One `def` can serve both worlds** — verified: the same `index_of` ran
+  at comptime and at runtime, which is how one analysis can back both
+  expression lanes.
+- **`comptime` is a reserved keyword, so a module named `comptime` must be
+  escaped with backticks at every import site** — `from pkg.`comptime`.x
+  import y` compiles and runs (verified 2026-08-21). This entry used to say
+  it "cannot be a module name", which is false; the cost is the escaping,
+  not impossibility. Prefer a non-keyword name — `fused` / `runtime` — so
+  no import has to carry backticks.
 - There is **no runtime `__getattr__`**; the comptime `__getattr_param__` hook
   fires only for missing attributes and needs a handle type.
 - Keep recursive and nested ops **out of kernel structs** — a binding-compiler
