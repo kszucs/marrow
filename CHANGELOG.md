@@ -177,6 +177,16 @@
 
 ### Fixes
 
+- **A temporal or list column was not recognised as a column by name.**
+  `NumericColumn`, `BoolColumn` and `StringColumn` each override
+  `Value.bound_column`; `TemporalColumn` and `ListColumn` did not, so they
+  inherited the default that answers -1 — "not a bare column". `GROUP BY d`
+  therefore produced a key named `key0` in the fused lane while the runtime
+  lane answered `d`: one query, two spellings, two different output schemas.
+  The golden corpus caught it on the temporal family's first outing;
+  `ListColumn` had the same bug with nothing exercising it.
+
+
 - **`BitmapView.load[W]` read up to 3 bytes past the allocation at a bitmap's
   tail.** The load takes an unconditional 4-byte `UInt32`, and a buffer's
   padding is `(-extent) mod 64` — so an extent of 62, 63 or 0 mod 64 leaves

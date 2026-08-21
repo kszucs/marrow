@@ -32,10 +32,6 @@ def plan() raises -> DynRelation:
     `temporal_group_by_date_trunc_month`, whose key is computed and so is
     named `key0` by both.
 
-    -- skip python
-
-    -- xfail AOT lane names a temporal group key `key0`: TemporalColumn does not override `bound_column`
-
     -- expected
     d:date32	n:int64
     NULL	1

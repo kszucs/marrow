@@ -2757,6 +2757,21 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
     def __init__(out self, var name: String):
         self._name = name^
 
+    def bound_column(self, schema: Schema) raises -> Int:
+        """This leaf *is* a column, so it answers for itself.
+
+        Without the override the `Value` default answers -1 — "not a bare
+        column" — and `Relation.aggregate` names the group key `key<i>` instead
+        of after its source. `GROUP BY d` then produced a column called `key0`
+        in the fused lane while the runtime lane answered `d`: a divergence
+        between two spellings of one query, which is exactly what the golden
+        corpus exists to catch.
+        """
+        var i = schema.get_field_index(self._name)
+        if i == -1:
+            raise Error("column '", self._name, "' not found")
+        return i
+
     def materialize(self, batch: RecordBatch) raises -> Datum:
         # `RecordBatch.column(name)` owns the missing-name diagnostic — see
         # `NumericColumn.state`.
@@ -2898,6 +2913,21 @@ struct ListColumn[T: ListLikeType](ListValue):
 
     def __init__(out self, var name: String):
         self._name = name^
+
+    def bound_column(self, schema: Schema) raises -> Int:
+        """This leaf *is* a column, so it answers for itself.
+
+        Without the override the `Value` default answers -1 — "not a bare
+        column" — and `Relation.aggregate` names the group key `key<i>` instead
+        of after its source. `GROUP BY d` then produced a column called `key0`
+        in the fused lane while the runtime lane answered `d`: a divergence
+        between two spellings of one query, which is exactly what the golden
+        corpus exists to catch.
+        """
+        var i = schema.get_field_index(self._name)
+        if i == -1:
+            raise Error("column '", self._name, "' not found")
+        return i
 
     def materialize(self, batch: RecordBatch) raises -> Datum:
         # `RecordBatch.column(name)` owns the missing-name diagnostic — see

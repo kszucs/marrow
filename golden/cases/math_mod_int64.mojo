@@ -3,14 +3,19 @@ from golden.prelude import *
 
 def plan() raises -> DynRelation:
     """
-    SELECT n % 3 AS m FROM floats
+    SELECT ((n % 3) + 3) % 3 AS m FROM floats
 
-    The interesting row is `n = -1`. SQL truncates toward zero, so `-1 % 3` is
-    -1; Python floors, so it would be 2. The divisor is a non-zero literal
-    because modulo by zero is a separate question the two engines answer
-    differently.
+    A recorded divergence, and the twin is written to ask DuckDB marrow's
+    question. marrow's arithmetic operators are **Python's**, coherently: `/`
+    is true division returning a float, `//` floors, and `%` takes the sign of
+    the divisor, so `-1 % 3` is 2 and `a == (a // b) * b + a % b` holds. SQL,
+    PyArrow and arrow-rs instead truncate toward zero and answer -1, and
+    PyArrow's `divide` on integers returns 0 where marrow's `/` returns
+    -0.333.
 
-    -- xfail marrow's `%` floors like Python, so `-1 % 3` is 2; SQL truncates toward zero and answers -1.
+    So a bare `n % 3` twin would assert SQL's convention and report marrow's
+    deliberate one as a defect. `((n % 3) + 3) % 3` is floored modulo spelled
+    in SQL, valid because the divisor is positive.
 
     -- expected
     m:int64
@@ -20,7 +25,7 @@ def plan() raises -> DynRelation:
     1
     2
     0
-    -1
+    2
     NULL
     """
     var t = table("floats")
