@@ -46,9 +46,10 @@ responsibility in a few words. Anything needing "and" is a design smell.
 
 | type | responsibility |
 |---|---|
-| `Value` | an expression — *composed of the three traits below, adds nothing* |
 | `Analyzable` | answer questions a rewriter asks |
 | `Evaluable` | produce a column from a batch |
+| `ComptimeValue` | `Analyzable & Evaluable & Writable`, **plus** the fusable per-element surface |
+| `RuntimeValue` | `Analyzable & Evaluable & Writable`, materialising a column per node |
 | `Writable` | render itself (stdlib trait, not ours) |
 | `DynValue` | erase which lane a `Value` came from |
 | `Bound` | one fused subtree's column references, resolved against one batch |
@@ -88,8 +89,20 @@ trait Analyzable:
     """The range this expression can produce, for statistics pruning."""
 ```
 
-`Value = Analyzable & Evaluable & Writable`. Three askers, three traits, and a
-node implements exactly what someone asks of it.
+There is **no `Value` trait**. It added nothing over the composition, and
+dropping it lets the two lanes take the clear names:
+
+```
+Analyzable & Evaluable & Writable      the common surface; what DynValue erases
+├── ComptimeValue    + Bound / bind() / lane[W]()      fusable, per element
+└── RuntimeValue     a struct, not a trait             materialises per node
+```
+
+Verified in `expr/`: `DynValue` conforms to `Value` **and nothing else**, and
+the three fused nodes that accept a runtime operand — `IsIn[A: Value]`,
+`NullPredicate[K, A: Value]`, `WindowFunction[Func, A: Value]` — bind on the
+*common* trait, not on a family. So lane mixing already happens at the common
+surface, and naming the lanes changes nothing about how it works.
 
 `conjuncts()` is **not** here. It is measured at **+0.606%** on the comptime
 gates — a slot every binary pays for — and its only consumer is Phase 4, which

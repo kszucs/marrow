@@ -418,8 +418,13 @@ Two standing constraints:
   cast target — resolve a runtime dtype with `dispatch_*` and box each arm), or
   it does not depend on the type at all (a column read by name).
   `DynColumn`/`DynLiteral`/`DynCast` were all added and all removed for this
-  reason. `DynValue` conforms to every value family, so fused nodes take it as an
-  operand with no bound relaxed; a node keys off `comptime IsErased` (propagated,
+  reason. **`DynValue` conforms to `Value` and to nothing else** — its own docstring
+  says so, and the struct declares `(Copyable, Movable, Value, Writable)`.
+  This entry used to claim it "conforms to every value family", which is
+  false. Fused nodes take a runtime operand because the three that accept
+  one bind on `Value` itself — `IsIn[A: Value]`,
+  `NullPredicate[K, A: Value]`, `WindowFunction[Func, A: Value]` — not
+  because the families are satisfied; a node keys off `comptime IsErased` (propagated,
   not defaulted) to pick dispatch over fusion.
 
 ### Interop and tabular
