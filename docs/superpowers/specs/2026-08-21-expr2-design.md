@@ -141,11 +141,42 @@ Consequences for `expr2`:
   arrives at runtime.
 - It costs a handle type parameterised on the schema, and nothing at runtime.
 
-Open: how a `Relation` produced by a builder carries its schema forward as a
-comptime value, since `in_memory_table(batch)` learns its schema at runtime.
-The likely answer is that the handle is opt-in — you get `t.amount` when you
-declared a schema, and `col(name, dtype)` when you did not — but that is a
-Phase 0 design question, not a settled one.
+**Decided: the surface is opt-in, keyed on whether a schema is given upfront.**
+
+| the schema is | you get |
+|---|---|
+| declared at compile time — `comptime SCHEMA = …`, `Schema.from_struct[T]()` | `Table[SCHEMA]`, so `t.amount`, validated |
+| learned at run time — `in_memory_table(batch)`, `parquet_scan(path)` | `col("amount", int64)`, or the runtime lane |
+
+A Parquet footer is read at *plan build*, not at compile time, so a scan is in
+the second row.
+
+**The handle is a builder facade, not a plan node — and that distinction is
+what stops this from being comptime relations readmitted by the back door.**
+`t.amount` produces an ordinary `Column[Int64Type]`, which goes into an
+ordinary `DynValue`, inside an ordinary `Relation`. Nothing downstream is
+parameterised on the schema; the plan and every processor stay exactly as they
+are.
+
+The cost model is therefore completely different from a comptime plan:
+
+| | instantiates | reaches kernels |
+|---|---|---|
+| comptime **plan** (rejected) | processors, per plan shape | **yes** — this is why it projected +237% |
+| comptime **facade** (this) | node construction, per schema | **no** |
+
+The facade is thin — it builds nodes and disappears — so it never drags an
+operator or a kernel into a binary. The DCE argument that killed comptime
+relations does not apply to it.
+
+**Still open: whether the facade threads through the verbs.** `t.filter(p)`
+preserves the schema, so it can return `Table[SCHEMA]`; `t.project(…)` produces
+a *new* schema, so threading it means computing that schema at comptime and
+returning `Table[SCHEMA2]`. That is possible in principle — projection output
+names and dtypes are both comptime in the AOT lane — but it is the point where
+a thin facade starts to acquire a plan's shape, and it should be justified on
+its own rather than assumed. The leaf-only version is useful on its own: it is
+where column names are written and therefore where they are got wrong.
 
 ### Rules are free functions, not slots and not a trait
 
