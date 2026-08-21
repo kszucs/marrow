@@ -10,6 +10,44 @@
 
 ### Tests
 
+- **26 new golden cases, covering sixteen scalar expression methods that had
+  none.** The numeric maps (`abs`, `sign`, `floor`, `ceil`, `round`, `sqrt`,
+  `exp`, `ln`), the `product` aggregate, the operators `/`, `%`, `**` and unary
+  `-`, the float predicates `is_nan` / `is_inf`, and the string maps
+  `capitalize`, `reverse`, `lstrip`, `rstrip`, `contains` and `endswith` were
+  all reachable from both lanes and asserted by neither. The numeric cases run
+  on the `floats` fixture, so NaN, both infinities, `-0.0` and a null are in
+  scope; the string cases run on `words`. Every case is written with the
+  *method* spelling both lanes already share, so none of them needed a new
+  shim — the corpus's convergence metric is unchanged.
+
+  **One defect fell out of it, and is recorded as an `-- xfail` rather than
+  fixed**: marrow's `%` floors the way Python's does, so `-1 % 3` is 2, while
+  SQL truncates toward zero and DuckDB, PostgreSQL and the standard all answer
+  -1. `ModKernel` is `a % b` over Mojo SIMD, which carries Python's convention
+  into a SQL-facing engine. Both lanes agree with each other and differ from
+  the twin, so this is one kernel's semantics and not a lane divergence.
+
+  Three constraints shaped the set, and each is recorded in the prose of the
+  cases it touches. `exp` and `ln` are not correctly rounded under IEEE 754, so
+  those two cases filter down to inputs whose result is exact (`exp(0)` is 1,
+  `ln(1)` is 0) rather than comparing two implementations' last bits; `sqrt` is
+  correctly rounded and takes ordinary inputs. DuckDB's `sign` returns TINYINT,
+  which the expectation block's type map does not carry, so those twins cast to
+  the type marrow returns. And DuckDB has neither `capitalize` nor `initcap`,
+  so that twin spells the operation out as `upper(s[1:1]) || lower(s[2:])`.
+
+- **A golden expectation cannot hold a NaN or an infinity.** `render_value`
+  writes a float with `repr`, and `nan` / `inf` are not Python literals, so
+  `parse_value`'s `ast.literal_eval` rejects them — and because that happens in
+  `load_cases()`, a single such case takes down the whole corpus rather than
+  just itself. Even past the parser, `pa.Table.equals` holds NaN unequal to
+  NaN, so the case could never pass. The numeric cases over `floats` therefore
+  either filter to the finite rows or pick an operation that maps the edge
+  values to finite ones — `sign` is the one that covers NaN and both infinities
+  without a filter. Worth lifting in the expectation format; until then it is a
+  standing limit on what the corpus can assert about floats.
+
 - **43 new golden cases, aimed at query shapes and the types they accept.**
   The corpus tested one key type per operation: every join keyed on `int64`,
   every group-by on `string` or `int64`, every sort on `int64`/`string`. It now
