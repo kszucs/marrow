@@ -151,7 +151,7 @@ marrow/expr2/
 ├── aggregates.mojo        AggExpr
 │
 ├── plan.mojo              Relation nodes · to_view / from_view
-├── optimize.mojo          Rule · the pipeline
+├── optimize.mojo          rule functions · the straight-line pipeline
 ├── physical.mojo          Processor · plan_to_processor
 ├── pruning.mojo · params.mojo
 └── __init__.mojo          the public surface; the one file that escapes a keyword
