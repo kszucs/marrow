@@ -157,6 +157,126 @@ struct HashGrouper(Movable):
             self._key_builders[k].extend(gathered.children[k])
 
 
+# ---------------------------------------------------------------------------
+# Grouping — the placement axis
+# ---------------------------------------------------------------------------
+trait Grouping(Deinitable, Movable):
+    """Which slot does a row contribute to?
+
+    The *strategy*; `Groups` is the assignment it produces. One of the four
+    axes an aggregation composes from — algebra x input x placement x emission
+    — and the one that decides whether a fold scatters at all.
+
+    A trait rather than a flag, so window partitions and a sorted or radix
+    placement arrive as **conformers** rather than as further branches inside
+    `GroupBy`. Placement is a comptime type parameter of a fold, so the loop a
+    placement implies is chosen when the plan is built, not per batch.
+
+    Takes **already-evaluated key columns**, never a `RecordBatch`: `kernels`
+    must not depend on the expression layer, and evaluating a key expression is
+    the caller's job. That is also what lets one grouping serve every aggregate
+    in a query — the keys are hashed once, not once per aggregate.
+    """
+
+    comptime scatters: Bool
+    """Whether a fold must scatter into per-slot accumulators.
+
+    False for a single implicit slot, which lets a fold accumulate in registers
+    and reduce once at the end. Not a micro-optimisation: scattering at one
+    group measured **14.6x** worse than the register fold, which is the whole
+    reason `ScalarGrouping` is its own conformer rather than `HashGrouping`
+    with one key.
+    """
+
+    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
+        """Place this batch's rows, extending the grouping with any new slots.
+
+        Ids are dense and stable across calls, so an accumulator that folded an
+        earlier batch keeps its slots when a later one introduces new groups.
+        """
+        ...
+
+    def num_groups(self) -> Int:
+        """How many slots exist so far — the size of a per-slot accumulator."""
+        ...
+
+    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
+        """One column per key field, one row per slot.
+
+        Empty when there are no keys. Call once, at emit time — it finishes the
+        key builders.
+        """
+        ...
+
+
+struct ScalarGrouping(Grouping):
+    """One slot for every row — `SELECT sum(x) FROM t`, with no `GROUP BY`.
+
+    Holds nothing and allocates nothing per batch. In particular it does **not**
+    build a zero vector to say "every row is group 0": a fold whose `scatters`
+    is False never reads the ids, and materialising one `Int32` per row to
+    communicate a constant is exactly the cost this conformer exists to avoid.
+    """
+
+    comptime scatters = False
+
+    def __init__(out self):
+        pass
+
+    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
+        var empty = Int32Builder(0)
+        return Groups(empty.finish(), 1)
+
+    def num_groups(self) -> Int:
+        return 1
+
+    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
+        return List[DynArray]()
+
+
+struct HashGrouping(Grouping):
+    """Dense ids from a keys-only hash table, accumulated across batches.
+
+    Wraps `HashGrouper`, which already owns the hashing, the dense-id
+    assignment and the unique-key materialisation. This adds the `Grouping`
+    surface over it so a fold can be parameterised on placement.
+    """
+
+    comptime scatters = True
+
+    var _grouper: HashGrouper
+
+    def __init__(out self):
+        self._grouper = HashGrouper()
+
+    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
+        """Hash the key columns and resolve dense ids.
+
+        The field names built here are positional and deliberately arbitrary —
+        `HashGrouper` keys on the *values*, and the caller supplies the real
+        fields at `key_columns` time, where they reach the output schema.
+        """
+        var fields = List[Field](capacity=len(keys))
+        for i in range(len(keys)):
+            fields.append(Field("k" + String(i), keys[i].dtype()))
+        var st = StructArray(
+            dtype=struct_(fields^),
+            length=num_rows,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            children=keys.copy(),
+        )
+        var ids = self._grouper.consume_keys(st)
+        return Groups(ids^, self._grouper.num_groups())
+
+    def num_groups(self) -> Int:
+        return self._grouper.num_groups()
+
+    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
+        return self._grouper.key_columns(fields)
+
+
 trait ColumnAggregator(Copyable, Deinitable, Movable):
     """What to compute per value column, for a grouping this layer drives.
 

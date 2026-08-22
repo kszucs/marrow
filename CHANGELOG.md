@@ -177,6 +177,26 @@
 
 ### Features
 
+- **`Grouping` — the placement axis, as a trait.** `kernels/groupby.mojo` gains
+  `trait Grouping` with `ScalarGrouping` and `HashGrouping` conformers, so
+  window partitions and a sorted or radix placement can arrive as *conformers*
+  rather than as further branches inside `GroupBy`. It takes already-evaluated
+  key columns rather than a `RecordBatch`, because `kernels` must not depend on
+  the expression layer — and because that is what lets one grouping serve every
+  aggregate in a query, hashing the keys once instead of once per aggregate.
+
+  `ScalarGrouping` allocates nothing and returns **no ids at all**: a fold whose
+  `scatters` is False never reads them, and materialising one `Int32` per row to
+  communicate a constant is the cost it exists to avoid.
+
+  **Placement is deliberately *not* a parameter of `AggregateOperator`**, and
+  that is measured rather than assumed. Making it one instantiates the operator
+  once per conformer for **+24,432 bytes (+2.439% on the gate)** and buys
+  nothing: the operator's branch runs once per batch, while the 14.6x
+  register-fold win lives in `NumericAggregateState`, which is already
+  monomorphised on whether it scatters. Comptime placement belongs in the fold,
+  which is where `Fold[K, A, G]` will put it.
+
 - **`Operator` carries an associated `Out`.** `push`/`finish` answer
   `Optional[Self.Out]` rather than `Optional[RecordBatch]`, and `DynOperator`
   is parameterised on it.

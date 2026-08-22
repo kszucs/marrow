@@ -39,7 +39,8 @@ from ..dtypes import Field, struct_
 from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter
-from ..kernels.groupby import HashGrouper
+from ..kernels.core import Groups
+from ..kernels.groupby import HashGrouping
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .core import DynValue
@@ -441,10 +442,10 @@ struct AggregateOperator(Operator):
     var _keys: List[DynValue]
     var _states: List[DynAggregateState]
     var _schema: Schema
-    var _grouper: HashGrouper
+    var _grouping: HashGrouping
+    var _keyless: Bool
     var _ctx: ExecContext
     var _num_groups: Int
-    var _keyless: Bool
     var _emitted: Bool
 
     def __init__(
@@ -458,7 +459,7 @@ struct AggregateOperator(Operator):
         self._keys = keys^
         self._states = states^
         self._schema = schema^
-        self._grouper = HashGrouper()
+        self._grouping = HashGrouping()
         self._ctx = ctx^
         # One implicit group when there are no keys — including over an input
         # that yields nothing, where `sum` must still answer one null rather
@@ -474,46 +475,48 @@ struct AggregateOperator(Operator):
             fields.append(self._schema.fields[i].copy())
         return fields^
 
-    def _group(mut self, batch: RecordBatch) raises -> Int32Array:
-        """This morsel's rows, resolved to dense group ids."""
+    def _key_columns(mut self, batch: RecordBatch) raises -> List[DynArray]:
+        """The key expressions, evaluated against this morsel.
+
+        Evaluated **once** and handed to the grouping, not once per aggregate:
+        that is why placement is the operator's business rather than each
+        fold's, and it is what a fold-shaped-as-an-independent-operator design
+        would have to give up.
+        """
         var children = List[DynArray](capacity=len(self._keys))
         for ref k in self._keys:
             children.append(k.evaluate(batch).to_array(batch.num_rows()))
-        var keys = StructArray(
-            dtype=struct_(self._key_fields()),
-            length=batch.num_rows(),
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            children=children^,
-        )
-        return self._grouper.consume_keys(keys)
+        return children^
 
     def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+        # Placement is a **runtime** choice here and a comptime one inside the
+        # fold, and that split is measured. Parameterising this operator on
+        # `Grouping` instantiates it once per conformer for **+24,432 bytes**
+        # and buys nothing: its branch runs once per batch, while the 14.6x
+        # register-fold win lives in `NumericAggregateState`, which is already
+        # monomorphised on whether it scatters.
+        var groups: Groups
         if self._keyless:
-            # An ungrouped fold ignores `groups` entirely, so the empty array
-            # is never read. Building one zero per row to say "everything is
-            # group 0" is exactly the cost `grouped=False` exists to avoid.
             var empty = Int32Builder(0)
-            var no_groups = empty.finish()
-            # Indexed rather than `for ref`: a state is move-only, and
-            # iterating a `List` by reference requires `Copyable`.
-            for i in range(len(self._states)):
-                self._states[i].update(batch, no_groups, 1)
+            groups = Groups(empty.finish(), 1)
         else:
-            var gids = self._group(batch)
-            self._num_groups = self._grouper.num_groups()
-            for i in range(len(self._states)):
-                self._states[i].update(batch, gids, self._num_groups)
+            groups = self._grouping.assign(
+                self._key_columns(batch), batch.num_rows()
+            )
+            self._num_groups = groups.num_groups
+        # Indexed rather than `for ref`: a state is move-only, and iterating a
+        # `List` by reference requires `Copyable`.
+        for i in range(len(self._states)):
+            self._states[i].update(batch, groups.ids, self._num_groups)
         return None
 
     def finish(mut self) raises -> Optional[RecordBatch]:
         if self._emitted:
             return None
         self._emitted = True
-        var cols = List[DynArray](capacity=len(self._schema.fields))
+        var cols = List[DynArray]()
         if not self._keyless:
-            cols = self._grouper.key_columns(self._key_fields())
+            cols = self._grouping.key_columns(self._key_fields())
         for i in range(len(self._states)):
             cols.append(self._states[i].finish(self._num_groups))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
