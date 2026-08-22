@@ -60,11 +60,11 @@ struct DynRelation(Copyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_schema: def (ArcPointer[NoneType]) thin -> Schema
-    var _virt_to_processor: def (
+    var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
+    var _virt_to_processor: def(
         ArcPointer[NoneType], ExecContext
     ) thin raises -> DynProcessor
-    var _virt_write: def (ArcPointer[NoneType]) thin -> String
+    var _virt_write: def(ArcPointer[NoneType]) thin -> String
 
     @staticmethod
     def _schema_tramp[R: Relation](ptr: ArcPointer[NoneType]) -> Schema:

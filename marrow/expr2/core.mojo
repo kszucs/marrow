@@ -26,8 +26,8 @@ either. Lane mixing already worked this way in `expr/` — `IsIn[A: Value]` and
 its two siblings bind on the *common* trait, never on a family — so naming the
 lanes changes nothing about how they meet.
 
-This module is a **leaf**: it imports the containers and the interval kernel,
-and nothing else under `marrow.expr2`.
+This module is a **leaf**: it imports the containers and nothing else under
+`marrow.expr2`.
 """
 
 from std.memory import ArcPointer
@@ -36,10 +36,8 @@ from std.utils import Variant
 from ..arrays import DynArray
 from ..scalars import DynScalar
 from ..dtypes import DynType
-from ..kernels.interval import Interval
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .pruning import PruneStats
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +109,10 @@ trait Analyzable:
     being an expression — hence this trait, named for the asker.
 
     Every method is **total**: a node that is not a column still answers
-    `as_column`, a node with no bounds still answers `interval`. Totality is
-    what lets a caller compose answers without asking what kind of node it
-    holds — and, at the type level, it is what makes a conditional rewrite
-    reduce, since neither branch can name something that does not exist.
+    `name`, with `""`. Totality is what lets a caller compose answers without
+    asking what kind of node it holds — and, at the type level, it is what
+    makes a conditional rewrite reduce, since neither branch can name
+    something that does not exist.
     """
 
     def columns(self) -> List[String]:
@@ -166,16 +164,6 @@ trait Analyzable:
         outright: a `RuntimeValue` column reference learns its type by looking
         itself up. The comptime lane ignores the argument and answers from
         `Type`.
-        """
-        ...
-
-    def interval(self, stats: PruneStats) raises -> Interval:
-        """The range this expression can produce, given per-column `[min, max]`.
-
-        Drives statistics pruning: a definite "cannot be true" skips a row
-        group without decoding it. Correctness never depends on the answer — a
-        scan still applies the exact predicate — so an imprecise `Interval`
-        costs time, never a wrong row.
         """
         ...
 
@@ -251,12 +239,11 @@ struct DynValue(Copyable, Movable, Writable):
     """
 
     var _boxed: ArcPointer[NoneType]
-    var _evaluate: def (ArcPointer[NoneType], RecordBatch) thin raises -> Datum
-    var _columns: def (ArcPointer[NoneType]) thin -> List[String]
-    var _name: def (ArcPointer[NoneType]) thin -> String
-    var _dtype: def (ArcPointer[NoneType], Schema) thin raises -> DynType
-    var _interval: def (ArcPointer[NoneType], PruneStats) thin raises -> Interval
-    var _write: def (ArcPointer[NoneType]) thin -> String
+    var _evaluate: def(ArcPointer[NoneType], RecordBatch) thin raises -> Datum
+    var _columns: def(ArcPointer[NoneType]) thin -> List[String]
+    var _name: def(ArcPointer[NoneType]) thin -> String
+    var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
+    var _write: def(ArcPointer[NoneType]) thin -> String
     var _shape: Shape
 
     # -- trampolines --------------------------------------------------------
@@ -271,9 +258,7 @@ struct DynValue(Copyable, Movable, Writable):
         return rebind[ArcPointer[V]](ptr)[].evaluate(batch)
 
     @staticmethod
-    def _columns_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType]) -> List[String]:
+    def _columns_tramp[V: Value](ptr: ArcPointer[NoneType]) -> List[String]:
         return rebind[ArcPointer[V]](ptr)[].columns()
 
     @staticmethod
@@ -287,15 +272,7 @@ struct DynValue(Copyable, Movable, Writable):
         return rebind[ArcPointer[V]](ptr)[].dtype(schema)
 
     @staticmethod
-    def _interval_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> Interval:
-        return rebind[ArcPointer[V]](ptr)[].interval(stats)
-
-    @staticmethod
-    def _write_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType]) -> String:
+    def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
         return String(rebind[ArcPointer[V]](ptr)[])
 
     @implicit
@@ -306,7 +283,6 @@ struct DynValue(Copyable, Movable, Writable):
         self._columns = Self._columns_tramp[V]
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
-        self._interval = Self._interval_tramp[V]
         self._write = Self._write_tramp[V]
         self._shape = V.shape
 
@@ -323,9 +299,6 @@ struct DynValue(Copyable, Movable, Writable):
 
     def dtype(self, schema: Schema) raises -> DynType:
         return self._dtype(self._boxed, schema)
-
-    def interval(self, stats: PruneStats) raises -> Interval:
-        return self._interval(self._boxed, stats)
 
     def shape(self) -> Shape:
         """The boxed value's `shape`, read at construction.

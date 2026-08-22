@@ -11,12 +11,6 @@ kernel in every binary that builds any expression.
 """
 
 from ...dtypes import DataType, DynType, NumericType
-from ...kernels.interval import (
-    GtInterval,
-    Interval,
-    IntervalKernel,
-    LtInterval,
-)
 from ...kernels.numeric import (
     AddKernel,
     GtKernel,
@@ -30,14 +24,13 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
 from ..core import Datum, Shape
-from ..pruning import PruneStats
 from .core import BoolValue, NumericValue
 from .rules import promote, wider, widest_shape
 
 
-struct NumericBinary[
-    K: BinaryNumericKernel, L: NumericValue, R: NumericValue
-](NumericValue):
+struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
+    NumericValue
+):
     """A binary arithmetic node over two fused operands."""
 
     comptime Type = promote[Self.L.Type, Self.R.Type]
@@ -74,12 +67,6 @@ struct NumericBinary[
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
-
-    def interval(self, stats: PruneStats) raises -> Interval:
-        # Arithmetic over intervals is a kernel family of its own and is not
-        # wired here yet. `unknown` is always sound: a caller only skips data it
-        # has *proven* cannot match, so this costs a decode and never a row.
-        return Interval.unknown()
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -119,19 +106,9 @@ comptime Mul = NumericBinary[MulKernel, _, _]
 
 
 struct NumericCompare[
-    K: NumericCompareKernel,
-    P: IntervalKernel,
-    L: NumericValue,
-    R: NumericValue,
+    K: NumericCompareKernel, L: NumericValue, R: NumericValue
 ](BoolValue):
     """A comparison over two numeric operands, producing packed bits.
-
-    Carries **two** kernels: `K` compares fixed-width lanes, `P` is the same
-    operator read over `[min, max]` intervals. Two parameters rather than one
-    because `interval` must not re-derive the operator from `K` — `expr/` did
-    that by matching `K.name` against five string literals, and when a kernel
-    was renamed the match fell through to `unknown()`, which is *sound*. So
-    pruning switched itself off with no error and no failing test.
 
     `Type` is not declared: `BoolValue` fixes it, because a comparison has no
     choice about what it produces.
@@ -179,18 +156,6 @@ struct NumericCompare[
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def interval(self, stats: PruneStats) raises -> Interval:
-        """Can this comparison be true, given the operands' bounds?
-
-        This is where statistics pruning actually happens: everything else in
-        the interval chain exists to feed this one answer. A definite "no"
-        skips a row group without decoding it, and an imprecise "maybe" costs
-        that decode and nothing else.
-        """
-        return Interval.truth(
-            Self.P.apply(self.l.interval(stats), self.r.interval(stats))
-        )
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: RecordBatch) raises -> Self.Bound:
@@ -219,5 +184,5 @@ struct NumericCompare[
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
 
-comptime Gt = NumericCompare[GtKernel, GtInterval, _, _]
-comptime Lt = NumericCompare[LtKernel, LtInterval, _, _]
+comptime Gt = NumericCompare[GtKernel, _, _]
+comptime Lt = NumericCompare[LtKernel, _, _]

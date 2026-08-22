@@ -30,12 +30,10 @@ from std.utils import Variant
 
 from ...arrays import DynArray
 from ...dtypes import DynType
-from ...kernels.interval import Interval
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..core import Analyzable, Datum, Evaluable, Shape, into_array
-from ..pruning import PruneStats
 
 
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
@@ -47,7 +45,7 @@ to it should be a decision someone makes rather than something a caller can do
 from outside.
 """
 
-comptime EvalFn = def (
+comptime EvalFn = def(
     List[DynArray], Payload, RecordBatch
 ) thin raises -> DynArray
 """How one node computes its column, given its children's already-computed
@@ -58,7 +56,9 @@ its expressions name and nothing else.
 """
 
 
-struct RuntimeValue(Analyzable, Copyable, Deinitable, Evaluable, Movable, Writable):
+struct RuntimeValue(
+    Analyzable, Copyable, Deinitable, Evaluable, Movable, Writable
+):
     """A runtime-built expression.
 
     Satisfies `Value` — `Analyzable & Evaluable & Writable & Copyable &
@@ -167,23 +167,6 @@ struct RuntimeValue(Analyzable, Copyable, Deinitable, Evaluable, Movable, Writab
             return self._payload[DynScalar].type()
         return self.evaluate(RecordBatch.empty(schema))[DynArray].dtype()
 
-    def interval(self, stats: PruneStats) raises -> Interval:
-        """What this node can produce, given per-column bounds.
-
-        Only the shapes that can say something useful do: a column reads its
-        statistics, a literal is its own bounds. Everything else answers
-        `unknown`, which is always sound — a caller only ever skips data it has
-        *proven* cannot match, so an imprecise answer costs time and never a
-        row.
-        """
-        if self._tag == "column" and self._payload.isa[String]():
-            var iv = stats.by_name(self._payload[String])
-            return Interval.bounds(iv[0].copy(), iv[1].copy())
-        if self._tag == "literal" and self._payload.isa[DynScalar]():
-            var v = self._payload[DynScalar].copy()
-            return Interval.bounds(Optional(v.copy()), Optional(v^))
-        return Interval.unknown()
-
     # -- Evaluable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
@@ -191,15 +174,11 @@ struct RuntimeValue(Analyzable, Copyable, Deinitable, Evaluable, Movable, Writab
         # kernel runs was decided when the node was built, by which `EvalFn`
         # the constructing method named.
         if len(self._kids) == 0:
-            return Datum(
-                self._eval(List[DynArray](), self._payload, batch)
-            )
+            return Datum(self._eval(List[DynArray](), self._payload, batch))
 
         var kids = List[DynArray]()
         for ref kid in self._kids:
-            kids.append(
-                into_array(kid[].evaluate(batch), batch.num_rows())
-            )
+            kids.append(into_array(kid[].evaluate(batch), batch.num_rows()))
         return Datum(self._eval(kids, self._payload, batch))
 
     # -- Writable -----------------------------------------------------------

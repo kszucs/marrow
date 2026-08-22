@@ -63,8 +63,8 @@ struct DynProcessor(Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_schema: def (ArcPointer[NoneType]) thin -> Schema
-    var _virt_pull: def (ArcPointer[NoneType]) thin raises -> RecordBatch
+    var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
+    var _virt_pull: def(ArcPointer[NoneType]) thin raises -> RecordBatch
 
     @staticmethod
     def _schema_tramp[P: Processor](ptr: ArcPointer[NoneType]) -> Schema:
@@ -189,8 +189,6 @@ struct FilterProcessor(Processor):
                 cols.append(
                     filter(batch.columns[i].copy(), mask.copy(), self._ctx)
                 )
-            var out = RecordBatch(
-                schema=batch.schema.copy(), columns=cols^
-            )
+            var out = RecordBatch(schema=batch.schema.copy(), columns=cols^)
             if out.num_rows() > 0:
                 return out^

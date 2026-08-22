@@ -22,9 +22,9 @@ from ..core import Evaluable, Shape
 
 
 comptime widest_shape[A: Evaluable, B: Evaluable] = (
-    Shape.columnar
-    if (A.shape == Shape.columnar or B.shape == Shape.columnar)
-    else Shape.scalar
+    Shape.columnar if (
+        A.shape == Shape.columnar or B.shape == Shape.columnar
+    ) else Shape.scalar
 )
 """The wider of two operands' shapes.
 

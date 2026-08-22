@@ -15,9 +15,6 @@ such pair here has already cost something in `expr/`:
   broadcast something already broadcast.
 - `name()` and `columns()` must jointly identify a bare column, because four
   callers ask exactly that composition and nothing else answers it.
-- `interval` must **contain** every value the expression can produce. This is
-  the only one-directional invariant here: an interval that is too wide costs
-  a row group's decode time, one that is too narrow silently drops rows.
 - `validity(bound)` must match the null pattern of the evaluated column.
 
 Both lanes are asserted through the *same* box wherever the property is about
@@ -193,8 +190,9 @@ def test_expr2_columns_are_deduped_in_first_seen_order() raises:
         "add",
         _column_eval,
         _runtime_column("b"),
-        RuntimeValue("add", _column_eval, _runtime_column("a"),
-                     _runtime_column("b")),
+        RuntimeValue(
+            "add", _column_eval, _runtime_column("a"), _runtime_column("b")
+        ),
     )
     var cols = v.columns()
     assert_equal(len(cols), 2)
@@ -206,47 +204,6 @@ def test_expr2_a_literal_reads_no_columns() raises:
     assert_equal(len(DynValue(Literal[Int64Type](3)).columns()), 0)
 
 
-# ---------------------------------------------------------------------------
-# interval contains what the expression can produce
-# ---------------------------------------------------------------------------
-def test_expr2_literal_interval_contains_its_own_value() raises:
-    """The one-directional invariant: an interval may be too wide, never too
-    narrow. Too wide costs a decode; too narrow drops rows silently."""
-    from ..pruning import PruneStats
-
-    var s = schema([field("a", int64)])
-    var stats = PruneStats(
-        schema=s,
-        mins=[Optional[DynScalar](None)],
-        maxs=[Optional[DynScalar](None)],
-    )
-    var iv = Literal[Int64Type](5).interval(stats)
-    # 5 is in [5, 5]; nothing outside it is.
-    assert_true(iv.maybe_eq(iv))
-
-
-def test_expr2_unknown_statistics_stay_sound() raises:
-    """A column with no statistic must answer *unknown*, not empty.
-
-    An empty answer would let a scan prove a row group cannot match when it has
-    simply never been told anything about it — the one failure mode that costs
-    correctness rather than time.
-    """
-    from ..pruning import PruneStats
-
-    var s = schema([field("a", int64)])
-    var stats = PruneStats(
-        schema=s,
-        mins=[Optional[DynScalar](None)],
-        maxs=[Optional[DynScalar](None)],
-    )
-    var iv = Column[Int64Type]("a").interval(stats)
-    assert_true(iv.maybe_eq(Literal[Int64Type](999).interval(stats)))
-
-
-# ---------------------------------------------------------------------------
-# validity(bound) matches the evaluated column
-# ---------------------------------------------------------------------------
 def test_expr2_validity_matches_the_bound_column() raises:
     """`lane` produces data bits only, so validity is a separate contract.
 

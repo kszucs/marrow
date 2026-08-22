@@ -8,12 +8,10 @@ lane loop above does none.
 from ...arrays import PrimitiveArray
 from ...buffers import Bitmap
 from ...dtypes import DynType, NumericType
-from ...kernels.interval import Interval
 from ...scalars import PrimitiveScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..core import Datum, Shape
-from ..pruning import PruneStats
 from .core import NumericValue
 
 
@@ -40,10 +38,6 @@ struct Column[T: NumericType](NumericValue):
     def dtype(self, schema: Schema) raises -> DynType:
         # The argument is ignored: this lane knows its type outright.
         return DynType(Self.T())
-
-    def interval(self, stats: PruneStats) raises -> Interval:
-        var iv = stats.by_name(self._name)
-        return Interval.bounds(iv[0].copy(), iv[1].copy())
 
     # -- Evaluable ----------------------------------------------------------
 
@@ -99,10 +93,6 @@ struct Literal[T: NumericType](NumericValue):
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
-
-    def interval(self, stats: PruneStats) raises -> Interval:
-        var v = PrimitiveScalar[Self.T](self._value).to_dyn()
-        return Interval.bounds(Optional(v.copy()), Optional(v^))
 
     # -- Evaluable ----------------------------------------------------------
 

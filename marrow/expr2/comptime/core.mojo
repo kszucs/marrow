@@ -27,7 +27,6 @@ is the first such family; string, bool, temporal and list follow the same shape.
 
 from ...buffers import Bitmap
 from ...dtypes import BoolType, DataType, DynType, NumericType
-from ...kernels.interval import Interval
 from ...schema import Schema
 from ...arrays import BoolArray, PrimitiveArray
 from ...buffers import Bitmap, Buffer
@@ -35,13 +34,12 @@ from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
 from ..core import Analyzable, Datum, Evaluable, Shape
-from ..pruning import PruneStats
 
 
 # ---------------------------------------------------------------------------
 # ComptimeValue — what every node in this lane shares
 # ---------------------------------------------------------------------------
-trait ComptimeValue(Analyzable, Evaluable, Writable, Copyable, Deinitable):
+trait ComptimeValue(Analyzable, Copyable, Deinitable, Evaluable, Writable):
     """A `Value` whose type states its output type and its per-batch state.
 
     The two comptime members are what the runtime lane cannot supply, and are
