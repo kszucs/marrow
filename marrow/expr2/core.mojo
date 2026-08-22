@@ -38,6 +38,7 @@ from ..scalars import DynScalar
 from ..dtypes import DynType
 from ..schema import Schema
 from ..tabular import RecordBatch
+from .physical import DynAggregateState
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ struct Shape(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
     var _code: UInt8
 
     comptime scalar = Shape(0)
-    """One value for the whole batch. A literal; a reduction's result."""
+    """One value for the whole batch. A literal; an aggregate's result."""
 
     comptime columnar = Shape(1)
     """One value per row."""
@@ -338,3 +339,98 @@ struct DynValue(Copyable, Movable, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write(self._boxed))
+
+
+# ---------------------------------------------------------------------------
+# Aggregate — a value folded to a scalar
+# ---------------------------------------------------------------------------
+trait Aggregate(Analyzable, Copyable, Deinitable, Writable):
+    """A value reduced to a single scalar, named. Pure, like `Relation`.
+
+    Extends `Analyzable` rather than `Value`: an aggregate answers the same
+    three questions about itself — which columns it reads, what it is called,
+    what type it produces — but it does **not** `evaluate` to a `Datum` per
+    batch, which is the whole of `Evaluable`. Folding is the accumulator's job.
+
+    Named for what it is rather than `Aggregation`, which
+    `kernels.aggregate` already uses for the monomorphized kernel-level thing,
+    or `Aggregate`, which the relational node wants. It is also ibis's term for
+    this exact concept.
+    """
+
+    def to_state(self, grouped: Bool) raises -> DynAggregateState:
+        """Begin a fold. Mirrors `Relation.to_processor`, and returns the
+        erased form for the same reason: the caller holds a heterogeneous list
+        of aggregates and needs one type back from all of them."""
+        ...
+
+
+struct DynAggregate(Copyable, Movable, Writable):
+    """An `AggValue` of any aggregate, erased.
+
+    Four slots, matching the four things an aggregate is asked: its name, the
+    columns it reads, the type it produces, and how to start folding it.
+    `write_to` is the fifth and exists for the same reason `DynValue`'s does —
+    a plan that cannot print itself cannot be debugged.
+    """
+
+    var _data: ArcPointer[NoneType]
+    var _virt_columns: def(ArcPointer[NoneType]) thin -> List[String]
+    var _virt_name: def(ArcPointer[NoneType]) thin -> String
+    var _virt_dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
+    var _virt_acc: def(
+        ArcPointer[NoneType], Bool
+    ) thin raises -> DynAggregateState
+    var _virt_write: def(ArcPointer[NoneType]) thin -> String
+
+    @staticmethod
+    def _columns_tramp[A: Aggregate](ptr: ArcPointer[NoneType]) -> List[String]:
+        return rebind[ArcPointer[A]](ptr)[].columns()
+
+    @staticmethod
+    def _name_tramp[A: Aggregate](ptr: ArcPointer[NoneType]) -> String:
+        return rebind[ArcPointer[A]](ptr)[].name()
+
+    @staticmethod
+    def _dtype_tramp[
+        A: Aggregate
+    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> DynType:
+        return rebind[ArcPointer[A]](ptr)[].dtype(schema)
+
+    @staticmethod
+    def _acc_tramp[
+        A: Aggregate
+    ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynAggregateState:
+        return rebind[ArcPointer[A]](ptr)[].to_state(grouped)
+
+    @staticmethod
+    def _write_tramp[A: Aggregate](ptr: ArcPointer[NoneType]) -> String:
+        return String(rebind[ArcPointer[A]](ptr)[])
+
+    @implicit
+    def __init__[A: Aggregate](out self, var value: A):
+        var ptr = ArcPointer[A](value^)
+        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_columns = Self._columns_tramp[A]
+        self._virt_name = Self._name_tramp[A]
+        self._virt_dtype = Self._dtype_tramp[A]
+        self._virt_acc = Self._acc_tramp[A]
+        self._virt_write = Self._write_tramp[A]
+
+    def columns(self) -> List[String]:
+        return self._virt_columns(self._data)
+
+    def name(self) -> String:
+        return self._virt_name(self._data)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self._virt_dtype(self._data, schema)
+
+    def to_state(self, grouped: Bool) raises -> DynAggregateState:
+        """`grouped` picks the fold: a register accumulator when the query has
+        no keys, a per-group scatter when it does. The plan knows which at
+        construction, so this is decided once per query, never per morsel."""
+        return self._virt_acc(self._data, grouped)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._virt_write(self._data))

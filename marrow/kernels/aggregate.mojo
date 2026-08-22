@@ -621,11 +621,8 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
     ) raises:
         """Grow to `num_groups` (new slots filled with `K.identity`), then
         scatter-fold this batch. No dtype dispatch — `Acc`/`V` are comptime."""
+        self._grow(num_groups)
         comptime A = Self.Acc.native
-        comptime S = Self.Seen.native
-        while self.acc.length() < num_groups:
-            self.acc.append(Self.K.identity[A]())
-            self.cnt.append(Scalar[S](0))
 
         # Reads go through `BufferView`s; accumulator/count writes use the builder
         # element accessor (a builder has no mutable value view — this is
@@ -658,6 +655,94 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
                 self._mark(g)
 
     @always_inline
+    def _grow(mut self, num_groups: Int) raises:
+        """Ensure `num_groups` slots exist, new ones seeded with `K.identity`.
+
+        Called by `update` and by `finish`. `finish` needs it because an
+        aggregate over **zero** batches never calls `update` at all, and its
+        loop then reads slots that were never allocated — a `debug_assert` under
+        `ASSERT=all` and a **silent out-of-bounds read in a release build**.
+        Unreachable through `AggKernel.reduce`, which always calls `update`
+        once; reachable the moment an accumulator is driven by a plan that sees
+        no rows.
+        """
+        comptime A = Self.Acc.native
+        comptime S = Self.Seen.native
+        while self.acc.length() < num_groups:
+            self.acc.append(Self.K.identity[A]())
+            self.cnt.append(Scalar[S](0))
+
+    def combine_at(
+        mut self, g: Int, value: Scalar[Self.Acc.native], count: Int
+    ) raises:
+        """Fold an already-reduced value into group `g`, crediting `count` rows.
+
+        The entry point for a caller that folded in **registers** rather than
+        scattering. An ungrouped aggregate reduces a whole morsel to one value
+        and one count, then calls this once per morsel instead of scattering
+        once per row — measured at 14.6x on 1M rows, where the scatter is a
+        million serially dependent read-modify-writes through a builder slot.
+
+        Additive, not a store, so the register accumulator stays *per-batch
+        scratch* and this state remains the only thing crossing a batch
+        boundary. `K.finalize`, `K.empty_is_null` and the count-is-zero rule
+        therefore stay defined in exactly one place — `finish` — rather than
+        being re-derived by every caller that folds its own way.
+        """
+        self._grow(g + 1)
+        comptime A = Self.Acc.native
+        comptime S = Self.Seen.native
+        self.acc.unsafe_set(
+            g, Self.K.combine[A, 1](self.acc.unsafe_get(g), value)
+        )
+        comptime if Self.K.needs_count:
+            self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + Scalar[S](count))
+        else:
+            if count > 0:
+                self.cnt.unsafe_set(g, Scalar[S](1))
+
+    @always_inline
+    def accumulate[
+        W: Int
+    ](
+        mut self,
+        groups: SIMD[DType.int32, W],
+        values: SIMD[Self.Acc.native, W],
+        mask: SIMD[DType.bool, W],
+        num_groups: Int,
+    ) raises:
+        """Scatter-fold one SIMD lane of already-computed values.
+
+        The entry point a **fused** caller needs: it takes values in registers
+        rather than a materialised `PrimitiveArray`, so an expression like
+        `sum(a * 2 + b)` folds without ever writing the intermediate column.
+
+        It cannot be generic over the expression that produced the lane —
+        `NumericValue` lives in `marrow.expr`, and kernels must not depend on
+        it. Passing the lane by value is what keeps the dependency pointing one
+        way, and this method is public because the alternative is the caller
+        reaching `_mark`.
+
+        The scatter stays scalar per lane and that is not an oversight: two
+        lanes may carry the same group, and a vector read-modify-write would
+        lose one of them without conflict detection. `W > 1` still pays,
+        measured at 1.09-1.37x, because the *loads and arithmetic* feeding this
+        vectorise even though the store does not.
+
+        `mask` is validity: a false lane contributes nothing and is not counted,
+        which is what keeps a null out of both the accumulator and `K.finalize`'s
+        divisor.
+        """
+        self._grow(num_groups)
+        comptime A = Self.Acc.native
+        for j in range(W):
+            if mask[j]:
+                var g = Int(groups[j])
+                self.acc.unsafe_set(
+                    g, Self.K.combine[A, 1](self.acc.unsafe_get(g), values[j])
+                )
+                self._mark(g)
+
     def _mark(mut self, g: Int):
         """Record that group `g` saw a valid value: a counter bump when the
         kernel reads the count, otherwise a plain store — no read, no add."""
@@ -671,6 +756,10 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
         """Finalize into the typed output column. A group with no valid rows is
         NULL unless the kernel says otherwise (`AggKernel.empty_is_null`)."""
         comptime A = Self.Acc.native
+        # An aggregate over zero batches never called `update`, so the slots may
+        # not exist yet. Seeding them here is what makes `SUM` of nothing NULL
+        # rather than an out-of-bounds read.
+        self._grow(num_groups)
         var b = PrimitiveBuilder[Self.Acc](num_groups)
         for g in range(num_groups):
             var c = Int(self.cnt.unsafe_get(g))

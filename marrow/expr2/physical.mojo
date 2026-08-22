@@ -18,11 +18,12 @@ that forgets to propagate it hangs rather than silently truncating.
 
 from std.memory import ArcPointer
 
-from ..arrays import DynArray
+from ..arrays import DynArray, Int32Array
 from ..builders import DynBuilder
 from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter
+from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .core import DynValue
@@ -222,3 +223,81 @@ struct ProjectProcessor(Processor):
             # projection of a constant materialises here and nowhere earlier.
             cols.append(v.evaluate(batch).to_array(batch.num_rows()))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
+
+
+# ---------------------------------------------------------------------------
+# AggregateState — the physical half of a aggregate
+# ---------------------------------------------------------------------------
+trait AggregateState(Deinitable, Movable):
+    """A fold in progress. The aggregate counterpart of `Processor`.
+
+    Move-only for the same reason: it owns mutable state, so copying one would
+    fork a fold halfway through and double-count whatever came before.
+    """
+
+    def update(
+        mut self, batch: RecordBatch, groups: Int32Array, num_groups: Int
+    ) raises:
+        """Fold one morsel in, at the given group assignment.
+
+        Takes the **batch**, not a column: a fused aggregate state binds its own
+        input subtree and reads lanes, so `sum(a * 2 + b)` never materialises
+        `a * 2 + b`. That is the one thing DataFusion, Polars and ClickHouse
+        cannot express — all three take an already-computed column, because
+        none has comptime types.
+
+        An ungrouped fold ignores `groups`; there is one group by construction,
+        and building a zero vector to say so is exactly the cost it avoids.
+        """
+        ...
+
+    def finish(mut self, num_groups: Int) raises -> DynArray:
+        """One value per group, once every morsel has been folded.
+
+        A column rather than a scalar even when ungrouped — `num_groups` is
+        then 1 — so the grouped and ungrouped folds answer the same shape and
+        `Aggregate` does not branch on which it holds.
+        """
+        ...
+
+
+struct DynAggregateState(Movable):
+    """An `AggregateState` of any aggregate, erased."""
+
+    var _data: ArcPointer[NoneType]
+    var _virt_update: def(
+        ArcPointer[NoneType], RecordBatch, Int32Array, Int
+    ) thin raises
+    var _virt_finish: def(ArcPointer[NoneType], Int) thin raises -> DynArray
+
+    @staticmethod
+    def _update_tramp[
+        A: AggregateState
+    ](
+        ptr: ArcPointer[NoneType],
+        batch: RecordBatch,
+        groups: Int32Array,
+        num_groups: Int,
+    ) raises:
+        rebind[ArcPointer[A]](ptr)[].update(batch, groups, num_groups)
+
+    @staticmethod
+    def _finish_tramp[
+        A: AggregateState
+    ](ptr: ArcPointer[NoneType], num_groups: Int) raises -> DynArray:
+        return rebind[ArcPointer[A]](ptr)[].finish(num_groups)
+
+    @implicit
+    def __init__[A: AggregateState](out self, var value: A):
+        var ptr = ArcPointer[A](value^)
+        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_update = Self._update_tramp[A]
+        self._virt_finish = Self._finish_tramp[A]
+
+    def update(
+        mut self, batch: RecordBatch, groups: Int32Array, num_groups: Int
+    ) raises:
+        self._virt_update(self._data, batch, groups, num_groups)
+
+    def finish(mut self, num_groups: Int) raises -> DynArray:
+        return self._virt_finish(self._data, num_groups)
