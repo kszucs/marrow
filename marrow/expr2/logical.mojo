@@ -30,12 +30,12 @@ from ..tabular import RecordBatch
 from .core import DynAggValue, DynValue
 from ..dtypes import Field, field
 from .physical import (
-    AggregateProcessor,
+    AggregateOperator,
     BatchSource,
     DynAggregateState,
     DynProcessor,
-    FilterProcessor,
-    ProjectProcessor,
+    FilterOperator,
+    ProjectOperator,
 )
 
 
@@ -111,7 +111,7 @@ struct DynRelation(Copyable, Movable, Writable):
     ) raises -> RecordBatch:
         """Run this plan and drain it into one batch."""
         var p = self.to_processor(ctx)
-        return p.collect()
+        return p.collect(self.schema())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write(self._data))
@@ -129,6 +129,7 @@ struct InMemoryTable(Relation, Writable):
         return self._batch.schema.copy()
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
+        """The one relation that *creates* a pipeline; every other appends."""
         return DynProcessor(BatchSource(self._batch.copy()))
 
     def write_to[W: Writer](self, mut writer: W):
@@ -156,13 +157,9 @@ struct Filter(Relation, Writable):
         return self._input.schema()
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
-        return DynProcessor(
-            FilterProcessor(
-                self._input.to_processor(ctx),
-                self._predicate.copy(),
-                ctx.copy(),
-            )
-        )
+        var pipe = self._input.to_processor(ctx)
+        pipe.append(FilterOperator(self._predicate.copy(), ctx.copy()))
+        return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Filter(", self._input, ", ", self._predicate, ")")
@@ -239,13 +236,9 @@ struct Project(Relation, Writable):
         return self._schema.copy()
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
-        return DynProcessor(
-            ProjectProcessor(
-                self._input.to_processor(ctx),
-                self._values.copy(),
-                self._schema.copy(),
-            )
-        )
+        var pipe = self._input.to_processor(ctx)
+        pipe.append(ProjectOperator(self._values.copy(), self._schema.copy()))
+        return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Project(", self._input, ", ")
@@ -319,15 +312,13 @@ struct Aggregate(Relation, Writable):
         var states = List[DynAggregateState](capacity=len(self._aggs))
         for ref a in self._aggs:
             states.append(a.to_state(grouped))
-        return DynProcessor(
-            AggregateProcessor(
-                self._input.to_processor(ctx),
-                self._keys.copy(),
-                states^,
-                self._schema.copy(),
-                ctx.copy(),
+        var pipe = self._input.to_processor(ctx)
+        pipe.append(
+            AggregateOperator(
+                self._keys.copy(), states^, self._schema.copy(), ctx.copy()
             )
         )
+        return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Aggregate(", self._input)

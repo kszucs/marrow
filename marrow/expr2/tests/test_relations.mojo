@@ -16,8 +16,15 @@ from std.testing import assert_equal, assert_true
 from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
 from ...execution import ExecContext
+from ...dtypes import field
+from ...schema import schema
 from ...tabular import RecordBatch, record_batch
 from ..core import DynAggValue, DynValue
+from ..physical import (
+    AggregateOperator,
+    DynAggregateState,
+    FilterOperator,
+)
 from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
@@ -366,3 +373,77 @@ def test_having_is_a_filter_above_an_aggregate() raises:
     var out = plan.execute()
     assert_equal(out.num_rows(), 1)  # group 1 totals 40, group 2 totals 60
     assert_true(out.columns[0].as_int64() == array([2], int64))
+
+
+# ---------------------------------------------------------------------------
+# The push engine
+# ---------------------------------------------------------------------------
+def test_a_streaming_operator_answers_from_push() raises:
+    """`Filter` produces per morsel and has nothing to flush."""
+    var op = FilterOperator(
+        DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
+        ExecContext.serial(),
+    )
+    var out = op.push(_batch())
+    assert_true(Bool(out))
+    assert_equal(out.value().num_rows(), 1)
+    assert_true(not Bool(op.finish()))
+
+
+def test_a_blocking_operator_answers_nothing_until_finish() raises:
+    """The distinction the push interface replaces a *type* with.
+
+    An aggregate accumulates through every `push` and answers `None`; its whole
+    result arrives from `finish`. Under the pull design this needed a different
+    trait from `Filter` and therefore a second erased box — collapsing that is
+    the point of the engine.
+    """
+    var states = List[DynAggregateState]()
+    states.append(Sum(Column[Int64Type]("a"), "total").to_state(False))
+    var op = AggregateOperator(
+        List[DynValue](),
+        states^,
+        schema([field("total", int64)]),
+        ExecContext.serial(),
+    )
+    assert_true(not Bool(op.push(_batch())))
+
+    var out = op.finish()
+    assert_true(Bool(out))
+    assert_true(out.value().columns[0].as_int64() == array([7], int64))
+    # Emitting the fold twice would double every grouped result downstream.
+    assert_true(not Bool(op.finish()))
+
+
+def test_the_flush_cascade_feeds_the_stages_above() raises:
+    """An aggregate's result must still pass through everything above it.
+
+    `finish` on stage *i* produces a batch no later stage has ever seen, so it
+    has to be pushed through *i+1..* before stage *i+1* is itself finished. A
+    projection over an aggregate is the smallest query that returns nothing at
+    all if the flush is a plain loop of independent `finish` calls.
+    """
+    var plan = DynRelation(
+        Project(
+            DynRelation(
+                Aggregate(
+                    DynRelation(InMemoryTable(_keyed())),
+                    [DynValue(Column[Int64Type]("g"))],
+                    [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+                )
+            ),
+            ["doubled"],
+            [
+                DynValue(
+                    Add(
+                        Column[Int64Type]("total"),
+                        Column[Int64Type]("total"),
+                    )
+                )
+            ],
+        )
+    )
+    var out = plan.execute()
+    # groups total 40 and 60, doubled by a projection above the aggregate
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[0].as_int64() == array([80, 120], int64))

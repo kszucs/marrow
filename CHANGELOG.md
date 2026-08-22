@@ -177,6 +177,36 @@
 
 ### Features
 
+- **`expr2`'s engine pushes.** `Operator{push, finish}` replaces
+  `Processor{schema, pull}`, and `Exhausted` is deleted — end of stream is
+  `Source.next()` answering `None`, not an exception, so the
+  `String(e) == "Exhausted"` comparison in `collect` is gone too.
+
+  The point is not the direction of dataflow but that **blocking stops being a
+  type distinction and becomes *when you return `Some`***. `Filter` and
+  `Project` answer from `push`; an aggregate answers `None` through the whole
+  stream and produces its result from `finish`. Under the pull design those
+  were two shapes needing two traits and two erased boxes.
+
+  Sources stay pull and drive, as in DuckDB: `Source.next()` generates and
+  `DynProcessor.collect` pushes through the chain. `DynProcessor` is now the
+  assembled *pipeline* — a source plus an operator list — which is what lets
+  `Relation.to_processor` stay compositional without a `children()` walk, since
+  `DynRelation` deliberately exposes none.
+
+  The flush is a **cascade**, not a loop of independent `finish` calls: when
+  stage *i* finally produces its result, that batch has never been seen by
+  stages *i+1..*, so it is pushed through them before stage *i+1* is finished.
+  `SELECT total * 2 FROM (… GROUP BY g)` returns nothing at all without this,
+  and `test_the_flush_cascade_feeds_the_stages_above` is the guard.
+
+  All 63 existing expr2 tests pass **unchanged** — they describe behaviour, not
+  the engine. Binary size, measured on the gates added for exactly this:
+  `query_expr2_streaming` +0.433%, `query_expr2_agg_fused` +0.589%. The second
+  is over the 0.5% threshold and is **not yet paid back**: this step adds
+  `DynSource` and `DynOperator` while `DynAggregateState` still exists, and the
+  box collapse that motivates the engine comes with `Value.to_processor`.
+
 - **`expr2` can aggregate.** `Aggregate` (logical) and `AggregateProcessor`
   (physical) complete the operator set the package needed to run a `GROUP BY`
   end to end, and `HAVING` falls out for free — a `Filter` above the aggregate
