@@ -342,9 +342,9 @@ struct DynValue(Copyable, Movable, Writable):
 
 
 # ---------------------------------------------------------------------------
-# Aggregate — a value folded to a scalar
+# AggValue — a value folded to a scalar
 # ---------------------------------------------------------------------------
-trait Aggregate(Analyzable, Copyable, Deinitable, Writable):
+trait AggValue(Analyzable, Copyable, Deinitable, Writable):
     """A value reduced to a single scalar, named. Pure, like `Relation`.
 
     Extends `Analyzable` rather than `Value`: an aggregate answers the same
@@ -365,7 +365,7 @@ trait Aggregate(Analyzable, Copyable, Deinitable, Writable):
         ...
 
 
-struct DynAggregate(Copyable, Movable, Writable):
+struct DynAggValue(Copyable, Movable, Writable):
     """An `AggValue` of any aggregate, erased.
 
     Four slots, matching the four things an aggregate is asked: its name, the
@@ -384,31 +384,31 @@ struct DynAggregate(Copyable, Movable, Writable):
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
 
     @staticmethod
-    def _columns_tramp[A: Aggregate](ptr: ArcPointer[NoneType]) -> List[String]:
+    def _columns_tramp[A: AggValue](ptr: ArcPointer[NoneType]) -> List[String]:
         return rebind[ArcPointer[A]](ptr)[].columns()
 
     @staticmethod
-    def _name_tramp[A: Aggregate](ptr: ArcPointer[NoneType]) -> String:
+    def _name_tramp[A: AggValue](ptr: ArcPointer[NoneType]) -> String:
         return rebind[ArcPointer[A]](ptr)[].name()
 
     @staticmethod
     def _dtype_tramp[
-        A: Aggregate
+        A: AggValue
     ](ptr: ArcPointer[NoneType], schema: Schema) raises -> DynType:
         return rebind[ArcPointer[A]](ptr)[].dtype(schema)
 
     @staticmethod
     def _acc_tramp[
-        A: Aggregate
+        A: AggValue
     ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynAggregateState:
         return rebind[ArcPointer[A]](ptr)[].to_state(grouped)
 
     @staticmethod
-    def _write_tramp[A: Aggregate](ptr: ArcPointer[NoneType]) -> String:
+    def _write_tramp[A: AggValue](ptr: ArcPointer[NoneType]) -> String:
         return String(rebind[ArcPointer[A]](ptr)[])
 
     @implicit
-    def __init__[A: Aggregate](out self, var value: A):
+    def __init__[A: AggValue](out self, var value: A):
         var ptr = ArcPointer[A](value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_columns = Self._columns_tramp[A]

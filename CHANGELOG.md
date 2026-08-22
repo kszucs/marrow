@@ -175,6 +175,38 @@
   collection out of `conftest.py` into a real pytest plugin, which is a
   separate change to shared infrastructure.
 
+### Features
+
+- **`expr2` can aggregate.** `Aggregate` (logical) and `AggregateProcessor`
+  (physical) complete the operator set the package needed to run a `GROUP BY`
+  end to end, and `HAVING` falls out for free — a `Filter` above the aggregate
+  reads its *output* batch, so no node is needed for it.
+
+  It **buffers nothing**. `AggregateState.update` takes the whole
+  `RecordBatch` rather than a computed column, so each state binds its own
+  input subtree and folds lanes straight out of the morsel: `sum(a + b)` never
+  materialises `a + b`. `expr/`'s processor keeps one evaluated column per
+  aggregate per morsel and `concat`s them at emit time; this one keeps only
+  the grouper's key builders, which grow with the number of *groups* rather
+  than the number of rows. DataFusion, ClickHouse and Polars all hand an
+  aggregate an already-computed array and cannot express this.
+
+  An empty key list is not a separate node — it is one implicit group, and the
+  only thing it changes is which fold `to_state(grouped)` starts. That is
+  chosen at plan-build time because it is known there; running the grouped
+  loop over a single group measured 14.6x worse.
+
+### Refactors
+
+- **The value-level aggregate trait is `AggValue`, not `Aggregate`.** Its own
+  docstring already said it was named "rather than `Aggregate`, which the
+  relational node wants", and `DynAggregate`'s docstring described itself as
+  "an `AggValue`" — both were left stale by an earlier rename, and the name
+  the relational node was promised was occupied. Renamed to `AggValue` /
+  `DynAggValue`, which is what the prose says and what frees `Aggregate` for
+  the plan node added above. Contained entirely within `marrow/expr2/`, which
+  nothing outside the package imports.
+
 ### Fixes
 
 - **`expr2`'s fused aggregate could not be instantiated at all.** Every one of

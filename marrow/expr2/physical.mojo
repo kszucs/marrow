@@ -18,11 +18,13 @@ that forgets to propagate it hangs rather than silently truncating.
 
 from std.memory import ArcPointer
 
-from ..arrays import DynArray, Int32Array
-from ..builders import DynBuilder
+from ..arrays import DynArray, Int32Array, StructArray
+from ..builders import DynBuilder, Int32Builder
+from ..dtypes import Field, struct_
 from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter
+from ..kernels.groupby import HashGrouper
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -301,3 +303,115 @@ struct DynAggregateState(Movable):
 
     def finish(mut self, num_groups: Int) raises -> DynArray:
         return self._virt_finish(self._data, num_groups)
+
+
+struct AggregateProcessor(Processor):
+    """Blocking: fold every morsel as it arrives, then emit one row per group.
+
+    **Nothing is buffered.** `AggregateState.update` takes the whole
+    `RecordBatch`, so each state binds its own input subtree and folds lanes
+    straight out of the morsel — `sum(a * 2 + b)` never materialises
+    `a * 2 + b`, and no per-aggregate chunk list is ever built. `expr/`'s
+    processor buffers one evaluated column per aggregate per morsel and
+    `concat`s them at emit time; this one keeps only the grouper's key
+    builders, which grow with the number of *groups* rather than the number of
+    rows.
+
+    Group ids are dense and stable across morsels, so a state that has already
+    folded batch N keeps its slots when batch N+1 introduces new groups —
+    `AggState._grow` extends them in place rather than reallocating a fold.
+
+    `HAVING` needs no node of its own: a `Filter` above this operator evaluates
+    its predicate against the aggregate's *output* batch.
+    """
+
+    var _input: DynProcessor
+    var _keys: List[DynValue]
+    var _states: List[DynAggregateState]
+    var _schema: Schema
+    var _grouper: HashGrouper
+    var _ctx: ExecContext
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var input: DynProcessor,
+        var keys: List[DynValue],
+        var states: List[DynAggregateState],
+        var schema: Schema,
+        var ctx: ExecContext,
+    ):
+        self._input = input^
+        self._keys = keys^
+        self._states = states^
+        self._schema = schema^
+        self._grouper = HashGrouper()
+        self._ctx = ctx^
+        self._emitted = False
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def _key_fields(self) -> List[Field]:
+        """The output schema is keys then aggregates, so the group keys are its
+        first `len(self._keys)` fields."""
+        var fields = List[Field](capacity=len(self._keys))
+        for i in range(len(self._keys)):
+            fields.append(self._schema.fields[i].copy())
+        return fields^
+
+    def _group(mut self, batch: RecordBatch) raises -> Int32Array:
+        """This morsel's rows, resolved to dense group ids."""
+        var children = List[DynArray](capacity=len(self._keys))
+        for ref k in self._keys:
+            children.append(k.evaluate(batch).to_array(batch.num_rows()))
+        var keys = StructArray(
+            dtype=struct_(self._key_fields()),
+            length=batch.num_rows(),
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            children=children^,
+        )
+        return self._grouper.consume_keys(keys)
+
+    def pull(mut self) raises -> RecordBatch:
+        if self._emitted:
+            raise Exhausted()
+        self._emitted = True
+
+        var keyless = len(self._keys) == 0
+        # An ungrouped fold ignores `groups` entirely, so this is never read.
+        # Building one zero per row to say "everything is group 0" is exactly
+        # the cost the `grouped=False` instantiation exists to avoid.
+        var empty = Int32Builder(0)
+        var no_groups = empty.finish()
+        # One implicit group when there are no keys — including over an input
+        # that yields nothing, where `sum` must still answer one null rather
+        # than no rows.
+        var num_groups = 1 if keyless else 0
+
+        while True:
+            try:
+                var batch = self._input.pull()
+                if keyless:
+                    for i in range(len(self._states)):
+                        self._states[i].update(batch, no_groups, 1)
+                else:
+                    var gids = self._group(batch)
+                    num_groups = self._grouper.num_groups()
+                    for i in range(len(self._states)):
+                        self._states[i].update(batch, gids, num_groups)
+            except e:
+                if String(e) != "Exhausted":
+                    raise e
+                break
+
+        var cols = List[DynArray](capacity=len(self._schema.fields))
+        if not keyless:
+            cols = self._grouper.key_columns(self._key_fields())
+        # Indexed rather than `for ref`: a state is move-only, and iterating a
+        # `List` by reference requires its element to be `Copyable`.
+        for i in range(len(self._states)):
+            cols.append(self._states[i].finish(num_groups))
+        return RecordBatch(schema=self._schema.copy(), columns=cols^)

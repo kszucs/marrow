@@ -17,10 +17,17 @@ from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
-from ..core import DynValue
+from ..core import DynAggValue, DynValue
 from ..`comptime`.leaves import Column, Literal
+from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
-from ..logical import DynRelation, Filter, InMemoryTable, Project
+from ..logical import (
+    Aggregate,
+    DynRelation,
+    Filter,
+    InMemoryTable,
+    Project,
+)
 
 
 def _batch() raises -> RecordBatch:
@@ -111,10 +118,6 @@ def test_an_empty_result_is_a_well_formed_batch() raises:
 
 
 # ---------------------------------------------------------------------------
-# Project — the caller that justifies dtype() and name()
-
-
-# ---------------------------------------------------------------------------
 # Project
 # ---------------------------------------------------------------------------
 def test_project_carries_a_bare_column_field_whole() raises:
@@ -198,3 +201,168 @@ def test_project_rejects_mismatched_names_and_values() raises:
 
 # ---------------------------------------------------------------------------
 # builders — `col` and `lit` select a lane by what the caller knows
+
+
+# ---------------------------------------------------------------------------
+# Aggregate
+# ---------------------------------------------------------------------------
+def _keyed() raises -> RecordBatch:
+    """Two groups, interleaved, so first-appearance ordering is observable."""
+    return record_batch(
+        [
+            array([1, 2, 1, 2], int64).copy(),
+            array([10, 20, 30, 40], int64).copy(),
+        ],
+        names=["g", "a"],
+    )
+
+
+def test_an_aggregate_with_no_keys_folds_into_one_row() raises:
+    """`SELECT sum(a) FROM t` — one implicit group, and a column of one row.
+
+    An empty key list is not a different node. It selects the *ungrouped* fold
+    at plan-build time, which is the whole reason `to_state` takes `grouped`.
+    """
+    var plan = DynRelation(
+        Aggregate(
+            DynRelation(InMemoryTable(_batch())),
+            List[DynValue](),
+            [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)
+    assert_equal(out.num_columns(), 1)
+    # a = [1, 2, None, 4] — the null contributes nothing, it is not a zero.
+    assert_true(out.columns[0].as_int64() == array([7], int64))
+
+
+def test_an_aggregate_groups_by_its_key() raises:
+    """Group ids are dense and assigned in first-appearance order, so the keys
+    come back in the order they were first seen, not sorted."""
+    var plan = DynRelation(
+        Aggregate(
+            DynRelation(InMemoryTable(_keyed())),
+            [DynValue(Column[Int64Type]("g"))],
+            [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[0].as_int64() == array([1, 2], int64))
+    assert_true(out.columns[1].as_int64() == array([40, 60], int64))
+
+
+def test_aggregate_schema_is_keys_then_aggregates() raises:
+    """The ordering every consumer depends on, asserted where it is decided.
+
+    The processor reads its key fields straight off the front of this schema,
+    so a change that appended keys last would mis-type the grouper rather than
+    fail loudly.
+    """
+    var plan = Aggregate(
+        DynRelation(InMemoryTable(_keyed())),
+        [DynValue(Column[Int64Type]("g"))],
+        [
+            DynAggValue(Sum(Column[Int64Type]("a"), "total")),
+            DynAggValue(Min(Column[Int64Type]("a"), "smallest")),
+        ],
+    )
+    var s = plan.schema()
+    assert_equal(len(s.fields), 3)
+    assert_equal(s.fields[0].name, "g")
+    assert_equal(s.fields[1].name, "total")
+    assert_equal(s.fields[2].name, "smallest")
+    assert_true(s.fields[0].dtype == DynType(int64))
+    assert_true(plan.schema() == DynRelation(plan^).execute().schema)
+
+
+def test_a_computed_key_is_named_by_position() raises:
+    """A bare column keeps its name; anything computed has none.
+
+    `expr/` shipped a defect where one lane answered `d` and the other `key0`
+    for the same `GROUP BY d`, giving one query two output schemas.
+    """
+    var plan = Aggregate(
+        DynRelation(InMemoryTable(_keyed())),
+        [DynValue(Add(Column[Int64Type]("g"), Column[Int64Type]("a")))],
+        [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+    )
+    assert_equal(plan.schema().fields[0].name, "key0")
+
+
+def test_an_aggregate_over_no_rows_answers_one_null() raises:
+    """`sum` of nothing is NULL, not 0 — and the input here yields *no morsel*.
+
+    This is the case that made `AggState.finish` grow before reading: only
+    `update` ever extended the builders, so a fold that saw zero batches read
+    unallocated slots. It aborts under `ASSERT=all` and is a silent bad read in
+    release.
+    """
+    var plan = DynRelation(
+        Aggregate(
+            DynRelation(
+                Filter(
+                    DynRelation(InMemoryTable(_batch())),
+                    DynValue(
+                        Gt(Column[Int64Type]("a"), Literal[Int64Type](999))
+                    ),
+                )
+            ),
+            List[DynValue](),
+            [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)
+    assert_true(out.columns[0].is_null(0))
+
+
+def test_an_aggregate_folds_a_fused_subtree() raises:
+    """`sum(a + b)` never materialises `a + b`.
+
+    The state binds the subtree and reads lanes straight out of the morsel, so
+    there is no intermediate column to buffer — the one thing DataFusion,
+    ClickHouse and Polars cannot express, because all three hand an aggregate
+    an already-computed array.
+    """
+    var plan = DynRelation(
+        Aggregate(
+            DynRelation(InMemoryTable(_batch())),
+            List[DynValue](),
+            [
+                DynAggValue(
+                    Sum(
+                        Add(Column[Int64Type]("a"), Column[Int64Type]("b")),
+                        "total",
+                    )
+                )
+            ],
+        )
+    )
+    # a = [1, 2, None, 4], b = [10, 20, 30, 40] -> 11 + 22 + 44, the null row
+    # propagating through the addition rather than contributing b alone.
+    assert_true(plan.execute().columns[0].as_int64() == array([77], int64))
+
+
+def test_having_is_a_filter_above_an_aggregate() raises:
+    """`HAVING` needs no node of its own.
+
+    A `Filter` above the aggregate sees the aggregate's *output* batch, so the
+    predicate reads the aggregate's output column by name.
+    """
+    var plan = DynRelation(
+        Filter(
+            DynRelation(
+                Aggregate(
+                    DynRelation(InMemoryTable(_keyed())),
+                    [DynValue(Column[Int64Type]("g"))],
+                    [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+                )
+            ),
+            DynValue(Gt(Column[Int64Type]("total"), Literal[Int64Type](50))),
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)  # group 1 totals 40, group 2 totals 60
+    assert_true(out.columns[0].as_int64() == array([2], int64))

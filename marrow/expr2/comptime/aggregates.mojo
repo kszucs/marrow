@@ -33,7 +33,7 @@ from ...kernels.aggregate import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Aggregate
+from ..core import AggValue
 from ..physical import AggregateState, DynAggregateState
 from .core import NumericValue
 
@@ -185,7 +185,7 @@ struct NumericAggregateState[K: AggKernel, A: NumericValue, grouped: Bool](
         return self._state.finish(num_groups).to_dyn()
 
 
-struct NumericAggregate[K: AggKernel, A: NumericValue](Aggregate):
+struct NumericAggregate[K: AggKernel, A: NumericValue](AggValue):
     """`sum(x)`, `min(x)`, … — pure, and rewritable because of it."""
 
     comptime Type = Self.K.AccType[Self.A.Type]
@@ -215,7 +215,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Aggregate):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    # -- Aggregate ----------------------------------------------------------
+    # -- AggValue -----------------------------------------------------------
 
     def to_state(self, grouped: Bool) raises -> DynAggregateState:
         if grouped:

@@ -6,7 +6,7 @@ from ....arrays import Int32Array
 from ....builders import array, arange
 from ....dtypes import Int32Type, Int64Type, int32, int64
 from ....tabular import RecordBatch, record_batch
-from ...core import DynAggregate
+from ...core import DynAggValue
 from ..aggregates import Max, Mean, Min, Sum
 from ..leaves import Column, Literal
 from ..numeric import Mul
@@ -76,7 +76,8 @@ def test_a_fused_subtree_never_materialises() raises:
 
 
 def test_a_ragged_tail_stays_in_bounds() raises:
-    """n is not a multiple of the SIMD width. A body without a scalar tail
+    """The row count is not a multiple of the SIMD width. A body without a
+    scalar tail
     reads past the view and aborts the process."""
     var b = record_batch([arange[Int64Type](0, 1003).to_dyn()], names=["a"])
     var s = Sum(Column[Int64Type]("a"), "t").to_state(False)
@@ -118,7 +119,7 @@ def test_mean_uses_the_valid_count_as_divisor() raises:
 def test_erasure_answers_as_the_value_it_holds() raises:
     var b = _b([1, 2, 3])
     var agg = Sum(Column[Int64Type]("a"), "total")
-    var boxed = DynAggregate(agg.copy())
+    var boxed = DynAggValue(agg.copy())
     assert_equal(boxed.name(), "total")
     assert_equal(boxed.columns()[0], "a")
     assert_true(boxed.dtype(b.schema) == agg.dtype(b.schema))
