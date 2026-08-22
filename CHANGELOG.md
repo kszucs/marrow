@@ -241,6 +241,17 @@
 
 ### Refactors
 
+- **`kernels.core.Grouping` is now `Groups`.** It holds the *result* of
+  grouping — dense ids plus a group count — and the name was needed for the
+  placement *strategy* the aggregation architecture specifies as
+  `trait Grouping` with `ScalarGrouping` / `HashGrouping` conformers. Two
+  `Grouping` names in one package is precisely the ambiguity the wildcard-import
+  ban exists to prevent, and this tree has three recorded incidents of it.
+
+  The resulting pair reads the way it should: `HashGrouping.group(batch)`
+  answers `Groups`. 47 references across 10 files, including shipped `expr/`
+  and two golden cases; verified by 75 kernel cases and 435 `expr/` cases.
+
 - **The value-level aggregate trait is `AggValue`, not `Aggregate`.** Its own
   docstring already said it was named "rather than `Aggregate`, which the
   relational node wants", and `DynAggregate`'s docstring described itself as

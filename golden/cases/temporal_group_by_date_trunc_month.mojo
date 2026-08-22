@@ -5,7 +5,7 @@ def plan() raises -> DynRelation:
     """
     SELECT date_trunc('month', ts) AS key0, CAST(count(*) AS BIGINT) AS n FROM events GROUP BY date_trunc('month', ts) ORDER BY key0 NULLS FIRST
 
-    Grouping by a *computed* temporal key, which is how a real time-series
+    Groups by a *computed* temporal key, which is how a real time-series
     rollup is written. A computed key has no source column to name it after, so
     the plan calls it `key0` and the twin matches that.
 

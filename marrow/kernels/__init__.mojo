@@ -38,7 +38,7 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `filter.mojo` — selection, take, drop_null
   - `sort.mojo` — sort and sort_indices
   - `concat.mojo` — concatenation
-  - `core.mojo` — the `Kernel` root trait and `Grouping`
+  - `core.mojo` — the `Kernel` root trait and `Groups`
   - *not re-exported* — `groupby.mojo` (grouped aggregation), `join.mojo` /
     `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the hash machinery
     group-by, join and `is_in` share), `interval.mojo` (the interval algebra
@@ -176,7 +176,7 @@ from .conditional import (
 from .nested import ArrayLengthKernel, ArrayContainsKernel
 from .cast import CastKernel, cast
 from .concat import concat
-from .core import Kernel, Grouping
+from .core import Kernel, Groups
 from .distinct import (
     count_distinct,
     approx_count_distinct,

@@ -27,7 +27,7 @@ def plan() raises -> DynRelation:
 
     `-- skip python` is here only because the mark below is strict and applies
     to both lanes: the runtime lane already answers correctly, so without the
-    skip it would report an xpass. The bug is the Mojo lane's alone. Grouping
+    skip it would report an xpass. The bug is the Mojo lane's alone. Groups
     on a temporal key is still covered in *both* lanes by
     `temporal_group_by_date_trunc_month`, whose key is computed and so is
     named `key0` by both.

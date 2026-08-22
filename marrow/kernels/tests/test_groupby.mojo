@@ -46,7 +46,7 @@ from ...dtypes import (
 )
 from ...arrays import Int32Array
 from ...execution import ExecContext
-from ...kernels.core import Grouping
+from ...kernels.core import Groups
 from ...kernels.groupby import (
     GroupBy,
     GroupedColumns,
@@ -572,7 +572,7 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     values.append(vals.copy())
 
     def exact(
-        _j: Int, groups: Grouping, col: DynArray
+        _j: Int, groups: Groups, col: DynArray
     ) raises {imm} -> DynArray:
         return count_distinct_grouped(groups, col)
 

@@ -26,7 +26,7 @@ from ..arrays import (
 )
 from ..builders import DynBuilder, Int32Builder
 from ..dtypes import Field, struct_
-from .core import Grouping
+from .core import Groups
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import RapidHashKernel
@@ -177,13 +177,13 @@ trait ColumnAggregator(Copyable, Deinitable, Movable):
         ...
 
     def grouped(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> DynArray:
         """Aggregate one value column over precomputed group ids."""
         ...
 
     def partials(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         """One thread's raw per-group accumulator + valid counts."""
         ...
@@ -219,12 +219,12 @@ struct OneAggregation[A: Aggregation](ColumnAggregator):
         return Self.A.is_mergeable
 
     def grouped(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> DynArray:
         return Self.A.grouped(groups, Self.A.from_any(values)).to_dyn()
 
     def partials(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         var parts = Self.A.partials(groups, Self.A.from_any(values))
         return (parts[0].copy().to_dyn(), parts[1].copy())
@@ -313,7 +313,7 @@ comptime _CARD_SAMPLE_ROWS = 4096
 comptime GROUP_SERIAL: UInt8 = 0
 comptime GROUP_THREAD_LOCAL: UInt8 = 1
 comptime GROUP_RADIX: UInt8 = 2
-"""Grouping execution strategies — see `GroupBy` for what each trades off.
+"""Groups execution strategies — see `GroupBy` for what each trades off.
 
 Public so a driver layered on top (the expression layer's runtime, multi-
 aggregate group-by) can reuse the same strategy decision instead of making its
@@ -496,7 +496,7 @@ struct GroupBy(Movable):
             )
 
         def by_column(
-            j: Int, groups: Grouping, value: DynArray
+            j: Int, groups: Groups, value: DynArray
         ) raises {imm} -> DynArray:
             return agg.grouped(j, groups, value)
 
@@ -551,7 +551,7 @@ struct GroupBy(Movable):
                 for j in range(na):
                     var parts = agg.partials(
                         j,
-                        Grouping(gids.copy(), ng),
+                        Groups(gids.copy(), ng),
                         values[j].slice(start, length),
                     )
                     accs.append(parts[0].copy())
@@ -609,7 +609,7 @@ struct GroupBy(Movable):
         return GroupedColumns(key_cols^, agg_cols^)
 
     def aggregate_columns[
-        ColAgg: def(Int, Grouping, DynArray) raises -> DynArray
+        ColAgg: def(Int, Groups, DynArray) raises -> DynArray
     ](self, values: List[DynArray], col_agg: ColAgg) raises -> GroupedColumns:
         """Group the keys once, then emit ``col_agg(j, gids, values[j], ng)`` as
         output column ``j`` — the multi-aggregate driver.
@@ -628,7 +628,7 @@ struct GroupBy(Movable):
 
     @staticmethod
     def _by_partition[
-        ColAgg: def(Int, Grouping, DynArray) raises -> DynArray,
+        ColAgg: def(Int, Groups, DynArray) raises -> DynArray,
     ](
         keys: StructArray,
         values: List[DynArray],
@@ -698,13 +698,13 @@ struct GroupBy(Movable):
                     agg_cols.append(
                         col_agg(
                             j,
-                            Grouping(gids.copy(), ng),
+                            Groups(gids.copy(), ng),
                             take(values[j], rows),
                         )
                     )
                 else:
                     agg_cols.append(
-                        col_agg(j, Grouping(gids.copy(), ng), values[j])
+                        col_agg(j, Groups(gids.copy(), ng), values[j])
                     )
             return (first^, agg_cols^)
 

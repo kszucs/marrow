@@ -51,7 +51,7 @@ from ..execution import ExecContext
 from ..schema import Schema
 from ..tabular import RecordBatch
 from ..dtypes import NumericType, StringLikeType, TemporalType
-from ..kernels.core import Grouping
+from ..kernels.core import Groups
 from ..kernels.aggregate import (
     Aggregation,
     AggFunction,
@@ -267,12 +267,12 @@ struct AggFunc(Copyable, Movable, Writable):
     column) are dedicated per-group passes rather than the ``AggState`` fold the
     merge understands."""
 
-    var _grouped_fn: def(Grouping, DynArray) thin raises -> DynArray
+    var _grouped_fn: def(Groups, DynArray) thin raises -> DynArray
 
     @staticmethod
     def _grouped[
         A: Aggregation
-    ](groups: Grouping, value: DynArray) raises -> DynArray:
+    ](groups: Groups, value: DynArray) raises -> DynArray:
         """The erasure boundary: a typed column in, a typed column out, widened
         back to ``DynArray`` only for the caller's heterogeneous column list."""
         return A.grouped(groups, A.from_any(value)).to_dyn()
@@ -283,7 +283,7 @@ struct AggFunc(Copyable, Movable, Writable):
         var func_name: String,
         var out_dtype: DynType,
         is_mergeable: Bool,
-        grouped_fn: def(Grouping, DynArray) thin raises -> DynArray,
+        grouped_fn: def(Groups, DynArray) thin raises -> DynArray,
     ):
         self.name = func_name^
         self.out_dtype = out_dtype^
@@ -312,7 +312,7 @@ struct AggFunc(Copyable, Movable, Writable):
         resolve_agg(name, value_dtype, make)
         self = box[0].copy()
 
-    def grouped(self, groups: Grouping, value: DynArray) raises -> DynArray:
+    def grouped(self, groups: Groups, value: DynArray) raises -> DynArray:
         """One aggregate column over precomputed group ids."""
         return self._grouped_fn(groups, value)
 
@@ -335,7 +335,7 @@ struct AggFold(Copyable, Movable):
     single resolution."""
 
     var _whole_fn: def(DynArray, ExecContext) thin raises -> DynArray
-    var _partials_fn: def(Grouping, DynArray) thin raises -> Tuple[
+    var _partials_fn: def(Groups, DynArray) thin raises -> Tuple[
         DynArray, Int64Array
     ]
     var _merge_fn: def(
@@ -351,7 +351,7 @@ struct AggFold(Copyable, Movable):
     @staticmethod
     def _partials[
         A: Aggregation
-    ](groups: Grouping, value: DynArray) raises -> Tuple[DynArray, Int64Array]:
+    ](groups: Groups, value: DynArray) raises -> Tuple[DynArray, Int64Array]:
         var parts = A.partials(groups, A.from_any(value))
         return (parts[0].copy().to_dyn(), parts[1].copy())
 
@@ -373,7 +373,7 @@ struct AggFold(Copyable, Movable):
         out self,
         *,
         whole_fn: def(DynArray, ExecContext) thin raises -> DynArray,
-        partials_fn: def(Grouping, DynArray) thin raises -> Tuple[
+        partials_fn: def(Groups, DynArray) thin raises -> Tuple[
             DynArray, Int64Array
         ],
         merge_fn: def(
@@ -399,7 +399,7 @@ struct AggFold(Copyable, Movable):
         return self._whole_fn(value, ctx)
 
     def partials(
-        self, groups: Grouping, value: DynArray
+        self, groups: Groups, value: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         """A thread-local partial fold: raw per-group accumulator + valid counts.
         """
@@ -482,12 +482,12 @@ struct FoldedAggregates(ColumnAggregator, Copyable, Movable, Sized):
         return True
 
     def grouped(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> DynArray:
         return self._funcs[column].grouped(groups, values)
 
     def partials(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         return self._folds[column].partials(groups, values)
 
