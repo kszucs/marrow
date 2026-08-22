@@ -109,19 +109,36 @@ trait Operator(Deinitable, Movable):
 
     Two methods, and that is the whole physical contract. Streaming and
     blocking operators differ only in *when* they answer `Some`.
+
+    `Out` is an **associated type** rather than a fixed `RecordBatch`, because
+    the two things this trait must cover do not produce the same thing: a
+    relational stage produces a batch, a *value*'s stage produces a column.
+    Fixing `Out = RecordBatch` would force every value to wrap its column in a
+    one-column `RecordBatch` — allocating a `Schema` per value per batch — only
+    for `ProjectOperator` to unwrap N of them and reassemble one. That is a
+    real runtime cost paid for a nominal unification.
     """
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+    comptime Out: Copyable
+    """What this stage produces — `RecordBatch` relationally, a column for a
+    value."""
+
+    def push(mut self, batch: RecordBatch) raises -> Optional[Self.Out]:
         """Consume one batch; answer what it produced, if anything."""
         ...
 
-    def finish(mut self) raises -> Optional[RecordBatch]:
+    def finish(mut self) raises -> Optional[Self.Out]:
         """Flush at end of stream. A streaming operator answers `None`."""
         ...
 
 
-struct DynOperator(Movable):
-    """An `Operator` of any stage, erased.
+struct DynOperator[Out: Copyable](Movable):
+    """An `Operator` of any stage, erased — **one box, parameterised on `Out`**.
+
+    `DynOperator[RecordBatch]` carries the relational chain and
+    `DynOperator[Datum]` carries a value's, but they are two instantiations of
+    one definition rather than two hand-written boxes, so the erasure surface
+    stays single.
 
     Move-only: an operator owns mutable state, so copying one would fork an
     execution mid-stream. `DynRelation` copies freely for the opposite reason —
@@ -131,36 +148,34 @@ struct DynOperator(Movable):
     var _data: ArcPointer[NoneType]
     var _virt_push: def(
         ArcPointer[NoneType], RecordBatch
-    ) thin raises -> Optional[RecordBatch]
+    ) thin raises -> Optional[Self.Out]
     var _virt_finish: def(ArcPointer[NoneType]) thin raises -> Optional[
-        RecordBatch
+        Self.Out
     ]
 
     @staticmethod
     def _push_tramp[
         O: Operator
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> Optional[
-        RecordBatch
-    ]:
+    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> Optional[O.Out]:
         return rebind[ArcPointer[O]](ptr)[].push(batch)
 
     @staticmethod
     def _finish_tramp[
         O: Operator
-    ](ptr: ArcPointer[NoneType]) raises -> Optional[RecordBatch]:
+    ](ptr: ArcPointer[NoneType]) raises -> Optional[O.Out]:
         return rebind[ArcPointer[O]](ptr)[].finish()
 
     @implicit
-    def __init__[O: Operator](out self, var value: O):
+    def __init__[O: Operator](out self: DynOperator[O.Out], var value: O):
         var ptr = ArcPointer[O](value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_push = Self._push_tramp[O]
         self._virt_finish = Self._finish_tramp[O]
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+    def push(mut self, batch: RecordBatch) raises -> Optional[Self.Out]:
         return self._virt_push(self._data, batch)
 
-    def finish(mut self) raises -> Optional[RecordBatch]:
+    def finish(mut self) raises -> Optional[Self.Out]:
         return self._virt_finish(self._data)
 
 
@@ -178,13 +193,13 @@ struct DynProcessor(Movable):
     """
 
     var _source: DynSource
-    var _ops: List[DynOperator]
+    var _ops: List[DynOperator[RecordBatch]]
 
     def __init__(out self, var source: DynSource):
         self._source = source^
-        self._ops = List[DynOperator]()
+        self._ops = List[DynOperator[RecordBatch]]()
 
-    def append(mut self, var op: DynOperator):
+    def append(mut self, var op: DynOperator[RecordBatch]):
         self._ops.append(op^)
 
     def _flow(
@@ -263,6 +278,8 @@ struct DynProcessor(Movable):
 struct FilterOperator(Operator):
     """Keeps rows where the predicate is true."""
 
+    comptime Out = RecordBatch
+
     var _predicate: DynValue
     var _ctx: ExecContext
 
@@ -293,6 +310,8 @@ struct FilterOperator(Operator):
 
 struct ProjectOperator(Operator):
     """Evaluates each projected value against every morsel."""
+
+    comptime Out = RecordBatch
 
     var _values: List[DynValue]
     var _schema: Schema
@@ -416,6 +435,8 @@ struct AggregateOperator(Operator):
     the aggregate's *output* batch, which is exactly what the flush cascade in
     `DynProcessor.collect` delivers.
     """
+
+    comptime Out = RecordBatch
 
     var _keys: List[DynValue]
     var _states: List[DynAggregateState]

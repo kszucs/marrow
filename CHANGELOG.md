@@ -177,6 +177,19 @@
 
 ### Features
 
+- **`Operator` carries an associated `Out`.** `push`/`finish` answer
+  `Optional[Self.Out]` rather than `Optional[RecordBatch]`, and `DynOperator`
+  is parameterised on it.
+
+  The push engine was specified on the premise that one trait covers relations
+  and values alike. It does not: a relational stage produces a batch, a value's
+  stage produces a **column**. Fixing `Out = RecordBatch` would make every
+  value wrap its column in a one-column `RecordBatch` — a `Schema` allocated
+  per value per batch — only for `ProjectOperator` to unwrap N of them and
+  reassemble one. `DynOperator[RecordBatch]` and `DynOperator[Datum]` are two
+  instantiations of one definition, so the erasure surface stays single.
+  Measured **byte-for-byte size-neutral** on both `expr2` gates.
+
 - **`expr2`'s engine pushes.** `Operator{push, finish}` replaces
   `Processor{schema, pull}`, and `Exhausted` is deleted — end of stream is
   `Source.next()` answering `None`, not an exception, so the

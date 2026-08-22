@@ -22,9 +22,21 @@ partitioning for parallelism. This is why DuckDB and Velox are push-based.
 
 ```mojo
 trait Operator(Deinitable, Movable):
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]
-    def finish(mut self) raises -> Optional[RecordBatch]
+    comptime Out: Copyable
+    def push(mut self, batch: RecordBatch) raises -> Optional[Self.Out]
+    def finish(mut self) raises -> Optional[Self.Out]
 ```
+
+**`Out` is an associated type, and that correction came from implementing
+this.** The draft fixed `Out = RecordBatch` and claimed one trait covers
+relations and values alike. It does not: a relational stage produces a batch, a
+*value*'s stage produces a **column**. Forcing `RecordBatch` makes every value
+wrap its column in a one-column batch — a `Schema` allocated per value per
+batch — only for `ProjectOperator` to unwrap N of them and reassemble one.
+`DynOperator[Out]` keeps the erasure surface single: `DynOperator[RecordBatch]`
+and `DynOperator[Datum]` are two instantiations of one definition, not two
+hand-written boxes. Measured **size-neutral** — byte-identical on both `expr2`
+gates.
 
 | | `push` | `finish` |
 |---|---|---|
@@ -164,6 +176,14 @@ spelled as an `Operator` instead of its own trait.
 4. **`Logical.to_processor`** with the associated type; delete `DynAggValue`
    and `DynAggregateState`.
 5. **`Grouping`** (`Scalar`, `Hash`), then the fold as an `Operator`.
+   **This blocks step 4's deletions**, which the draft did not record.
+   `AggregateOperator.push` resolves group ids from its grouper and calls
+   `state.update(batch, gids, num_groups)`; a fold spelled as an `Operator`
+   sees only `push(batch)` and has nowhere to get `gids`. It becomes possible
+   once grouping is a *type* parameter — the aggregation architecture's
+   `Fold[K, A, G: Grouping]` — so `DynAggValue` and `DynAggregateState` cannot
+   be deleted until `Grouping` exists. Step 4 must therefore follow step 5, not
+   precede it.
 6. ~~`Aggregate` relation~~ **landed 2026-08-23, pull-based.** `Aggregate` +
    `AggregateProcessor`, buffering nothing, with 7 cases covering the ungrouped
    fold, grouping, schema order, positional key naming, a fold over zero
