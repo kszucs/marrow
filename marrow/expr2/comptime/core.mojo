@@ -152,7 +152,7 @@ trait NumericValue(ComptimeValue):
                 bitmap=v^,
                 buffer=buf.to_immutable(),
             )
-            return Datum(arr^.to_dyn())
+            return arr^.to_dyn()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """This node's result validity, or `None` when it cannot be null.

@@ -43,23 +43,50 @@ from ..tabular import RecordBatch
 # ---------------------------------------------------------------------------
 # Datum — the wire format between stages
 # ---------------------------------------------------------------------------
-comptime Datum = Variant[DynScalar, DynArray]
-"""`Scalar | Array`, Arrow's Datum and DataFusion's ColumnarValue.
+struct Datum(Copyable, Movable):
+    """`Scalar | Array` — Arrow's Datum, DataFusion's ColumnarValue.
 
-A literal stays a scalar until something needs it as a column, so a predicate
-over a constant never allocates one.
-"""
+    What every `evaluate` returns. A struct rather than a bare `Variant` alias
+    so that the one operation callers actually perform on it — *give me a
+    column* — is a method on the thing rather than a free function beside it,
+    and so the variant's members stay closed: nothing outside can reach in and
+    handle the two cases differently.
 
-
-def into_array(d: Datum, n: Int) raises -> DynArray:
-    """Force `d` to a column of length `n`, broadcasting a scalar.
-
-    The single place laziness ends. Keeping it here rather than in either lane
-    is what lets the lanes stop importing each other for it.
+    The scalar case is what makes it worth having. `lit(1)` evaluates to one
+    value, not a million copies of one value, and stays that way until
+    something needs a column. A literal-only subtree therefore costs nothing
+    until it meets a batch.
     """
-    if d.isa[DynScalar]():
-        return d[DynScalar].repeat(n)
-    return d[DynArray].copy()
+
+    var _v: Variant[DynScalar, DynArray]
+
+    @implicit
+    def __init__(out self, var value: DynArray):
+        self._v = Variant[DynScalar, DynArray](value^)
+
+    @implicit
+    def __init__(out self, var value: DynScalar):
+        self._v = Variant[DynScalar, DynArray](value^)
+
+    def is_scalar(self) -> Bool:
+        """Whether this is still one value.
+
+        The planner asks so it knows whether a projection needs materialising;
+        `Shape` is the *static* answer to the same question, and this is the
+        one that survives erasure.
+        """
+        return self._v.isa[DynScalar]()
+
+    def to_array(self, n: Int) raises -> DynArray:
+        """This value as a column of length `n`, broadcasting a scalar.
+
+        The single place laziness ends. `n` is why this cannot be an implicit
+        conversion: a scalar does not know how many rows it is about to become,
+        and only the caller holding the batch does.
+        """
+        if self._v.isa[DynScalar]():
+            return self._v[DynScalar].repeat(n)
+        return self._v[DynArray].copy()
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +97,7 @@ struct Shape(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
 
     A value type rather than a bare `Int`, for the reason `JoinKind` is one:
     `0` and `1` are interchangeable to the compiler and to a reader, and the
-    two callers who ask this — `into_array`, deciding whether to broadcast, and
+    two callers who ask this — `Datum.to_array`, deciding whether to broadcast, and
     the planner, deciding whether a projection needs materialising — would each
     be re-deriving the convention from a comment.
     """

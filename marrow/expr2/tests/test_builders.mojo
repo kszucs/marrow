@@ -12,7 +12,7 @@ from ...dtypes import Int64Type, int64
 from ...scalars import DynScalar, Int64Scalar
 from ...tabular import RecordBatch, record_batch
 from ..builders import col, lit
-from ..core import Shape, into_array
+from ..core import Shape
 
 
 def _batch() raises -> RecordBatch:
@@ -43,8 +43,8 @@ def test_col_without_dtype_takes_the_runtime_lane() raises:
 def test_both_col_overloads_evaluate_alike() raises:
     """The two lanes are different machinery, not different answers."""
     var b = _batch()
-    var typed = into_array(col("b", int64).evaluate(b), b.num_rows())
-    var erased = into_array(col("b").evaluate(b), b.num_rows())
+    var typed = col("b", int64).evaluate(b).to_array(b.num_rows())
+    var erased = col("b").evaluate(b).to_array(b.num_rows())
     assert_true(typed == erased)
     assert_true(typed == b.column("b"))
 
@@ -55,7 +55,7 @@ def test_lit_with_dtype_stays_scalar() raises:
     var v = lit(7, int64)
     assert_true(v.shape == Shape.scalar)
     var d = v.evaluate(_batch())
-    assert_true(d.isa[DynScalar]())
+    assert_true(d.is_scalar())
 
 
 def test_lit_without_dtype_broadcasts() raises:
@@ -68,7 +68,7 @@ def test_lit_without_dtype_broadcasts() raises:
     var b = _batch()
     var v = lit(DynScalar(Int64Scalar(7)))
     assert_true(v.shape == Shape.columnar)
-    var arr = into_array(v.evaluate(b), b.num_rows())
+    var arr = v.evaluate(b).to_array(b.num_rows())
     assert_equal(len(arr), 4)
     assert_true(arr == array([7, 7, 7, 7], int64))
 

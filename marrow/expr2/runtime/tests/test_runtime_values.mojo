@@ -13,7 +13,7 @@ from ....builders import array
 from ....dtypes import int64
 from ....scalars import DynScalar, Int64Scalar
 from ....tabular import RecordBatch, record_batch
-from ...core import Shape, into_array
+from ...core import Shape
 from ..values import Payload, RuntimeValue, column, literal
 
 
@@ -36,7 +36,7 @@ def _unevaluated(
 
 def test_runtime_shape_is_always_columnar() raises:
     """The lane materialises unconditionally, so it answers truthfully rather
-    than aspirationally — `into_array` never has to broadcast its result."""
+    than aspirationally — `Datum.to_array` never has to broadcast its result."""
     assert_true(RuntimeValue.shape == Shape.columnar)
     assert_true(column("a").shape == Shape.columnar)
     assert_true(literal(DynScalar(Int64Scalar(1))).shape == Shape.columnar)
@@ -62,13 +62,13 @@ def test_runtime_dtype_agrees_with_evaluation() raises:
     then produces."""
     var b = _batch()
     var v = column("b")
-    var produced = into_array(v.evaluate(b), b.num_rows()).dtype()
+    var produced = v.evaluate(b).to_array(b.num_rows()).dtype()
     assert_true(v.dtype(b.schema) == produced)
 
 
 def test_runtime_column_reads_the_named_column() raises:
     var b = _batch()
-    var got = into_array(column("b").evaluate(b), b.num_rows())
+    var got = column("b").evaluate(b).to_array(b.num_rows())
     assert_true(got == b.column("b"))
 
 
@@ -76,8 +76,8 @@ def test_runtime_literal_broadcasts_to_the_batch_length() raises:
     """A literal owes a full column here, unlike the comptime lane's, which
     stays a scalar until something asks."""
     var b = _batch()
-    var got = into_array(
-        literal(DynScalar(Int64Scalar(7))).evaluate(b), b.num_rows()
+    var got = (
+        literal(DynScalar(Int64Scalar(7))).evaluate(b).to_array(b.num_rows())
     )
     assert_equal(len(got), 4)
     assert_true(got == array([7, 7, 7, 7], int64))

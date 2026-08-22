@@ -30,19 +30,30 @@ from ...kernels.boolean import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Datum, Shape, into_array
+from ..core import Datum, Shape
 from .core import ComptimeValue
 
 
 def _as_bool(d: Datum, n: Int) raises -> BoolArray:
-    """Force an operand's result to the packed boolean column the kernel takes.
+    """Narrow an operand's result to the packed column the kernel takes.
+
+    **The dtype check is the reason this exists**, not the narrowing. Operands
+    are bound on `ComptimeValue`, so an `int64` operand type-checks here and is
+    only wrong at run time. `DynArray.as_bool()` is `as_type[BoolArray]()`,
+    whose failure is a `debug_assert` — *"as_type: wrong type, holds int64"* —
+    which aborts the process rather than raising. Verified 2026-08-22 by
+    deleting the check: the abort took down the whole test runner, failing all
+    seven cases in the file rather than the one that was wrong.
+
+    So this converts an unrecoverable abort into a catchable error naming the
+    dtype it got. Without it the two lines would read the same and behave
+    completely differently under a mistake.
 
     A boolean operand can still be `Shape.scalar` — `lit(True)` — so this is
-    where such an operand stops being lazy. `into_array` owns the broadcast;
-    this only narrows the erased result to the one layout `BoolBinaryKernel`
-    accepts.
+    also where such an operand stops being lazy; `Datum.to_array` owns that
+    broadcast.
     """
-    var arr = into_array(d, n)
+    var arr = d.to_array(n)
     if arr.dtype() != DynType(BoolType()):
         raise Error(
             String("boolean operator: expected bool operand, got ")
@@ -104,7 +115,7 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         var n = batch.num_rows()
         var lhs = _as_bool(self.l.evaluate(batch), n)
         var rhs = _as_bool(self.r.evaluate(batch), n)
-        return Datum(Self.K.apply(lhs, rhs).to_dyn())
+        return Self.K.apply(lhs, rhs).to_dyn()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

@@ -33,7 +33,7 @@ from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Analyzable, Datum, Evaluable, Shape, into_array
+from ..core import Analyzable, Datum, Evaluable, Shape
 
 
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
@@ -165,7 +165,7 @@ struct RuntimeValue(
             return schema.fields[i].dtype.copy()
         if self._tag == "literal" and self._payload.isa[DynScalar]():
             return self._payload[DynScalar].type()
-        return self.evaluate(RecordBatch.empty(schema))[DynArray].dtype()
+        return self.evaluate(RecordBatch.empty(schema)).to_array(0).dtype()
 
     # -- Evaluable ----------------------------------------------------------
 
@@ -174,12 +174,12 @@ struct RuntimeValue(
         # kernel runs was decided when the node was built, by which `EvalFn`
         # the constructing method named.
         if len(self._kids) == 0:
-            return Datum(self._eval(List[DynArray](), self._payload, batch))
+            return self._eval(List[DynArray](), self._payload, batch)
 
         var kids = List[DynArray]()
         for ref kid in self._kids:
-            kids.append(into_array(kid[].evaluate(batch), batch.num_rows()))
-        return Datum(self._eval(kids, self._payload, batch))
+            kids.append(kid[].evaluate(batch).to_array(batch.num_rows()))
+        return self._eval(kids, self._payload, batch)
 
     # -- Writable -----------------------------------------------------------
 

@@ -25,7 +25,7 @@ from ..execution import ExecContext
 from ..kernels.filter import filter
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .core import DynValue, into_array
+from .core import DynValue
 
 
 struct Exhausted(TrivialRegisterPassable, Writable):
@@ -181,8 +181,8 @@ struct FilterProcessor(Processor):
         """
         while True:
             var batch = self._input.pull()
-            var mask = into_array(
-                self._predicate.evaluate(batch), batch.num_rows()
+            var mask = self._predicate.evaluate(batch).to_array(
+                batch.num_rows()
             )
             var cols = List[DynArray]()
             for i in range(batch.num_columns()):
@@ -218,7 +218,7 @@ struct ProjectProcessor(Processor):
         var batch = self._input.pull()
         var cols = List[DynArray](capacity=len(self._values))
         for ref v in self._values:
-            # `into_array` is where a scalar-shaped value stops being lazy: a
+            # `Datum.to_array` is where a scalar-shaped value stops being lazy: a
             # projection of a constant materialises here and nowhere earlier.
-            cols.append(into_array(v.evaluate(batch), batch.num_rows()))
+            cols.append(v.evaluate(batch).to_array(batch.num_rows()))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)

@@ -44,7 +44,7 @@ struct Column[T: NumericType](NumericValue):
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         # A leaf returns its column as-is, validity included; the fused loop
         # above it decides what nulls mean.
-        return Datum(batch.column(self._name).copy())
+        return batch.column(self._name).copy()
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -97,10 +97,10 @@ struct Literal[T: NumericType](NumericValue):
     # -- Evaluable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
-        # Stays a scalar. `Shape == 0` tells the caller so, and `into_array`
+        # Stays a scalar. `Shape == 0` tells the caller so, and `Datum.to_array`
         # is the one place it stops being lazy — a predicate over a constant
         # never allocates a column.
-        return Datum(PrimitiveScalar[Self.T](self._value).to_dyn())
+        return PrimitiveScalar[Self.T](self._value).to_dyn()
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -161,7 +161,7 @@ struct BoolColumn(BoolValue):
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         # As with `Column[T]`: hand back the column rather than re-packing an
         # identical bitmap through the fused driver.
-        return Datum(batch.column(self._name).copy())
+        return batch.column(self._name).copy()
 
     def bind(self, batch: RecordBatch) raises -> Self.Bound:
         return batch.column(self._name).as_bool().copy()
