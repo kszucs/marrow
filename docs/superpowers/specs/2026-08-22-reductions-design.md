@@ -316,8 +316,10 @@ binary_size` will report ~0.00% regardless — the same blind spot that let a
 
 1. Add the `expr2` binary-size gate. Without it nothing below is measurable.
 2. Fix `AggState.finish` to grow to `num_groups` (R10; a real out-of-bounds read).
-3. `core.mojo`: `Reduction`, `DynReduction`, `Accumulator`, `DynAccumulator` —
-   `update`/`finish` only; `state`/`absorb` deferred with two-phase aggregation.
+3. `core.mojo`: `Reduction`, `DynReduction`. `physical.mojo`: `Accumulator`,
+   `DynAccumulator` — `update`/`finish` only; `state`/`absorb` deferred with
+   two-phase aggregation. **No new state type**: `AggState` gains one public
+   `accumulate[W]`, and the ungrouped fold is two registers.
 4. `comptime/reductions.mojo`: `NumericReduction[K: AggKernel, A: NumericValue]`
    with the corrected fold loop — masked, counted, scalar tail, register
    accumulator ungrouped and scatter grouped.
