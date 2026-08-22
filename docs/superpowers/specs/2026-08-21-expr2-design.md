@@ -365,6 +365,97 @@ veto, only if Phase 0 shows splitting improves pruning.
 is deleted. `expr2` is renamed `expr` in its own commit, so the diff that moves
 code and the diff that renames it are never the same diff.
 
+## Phase 1a — the boolean family, and the Kleene refactor it needs
+
+The numeric family fuses because `validity(bound)` can answer from the bound
+alone: null in, null out. **The boolean family cannot**, and that is not an
+oversight in the trait — it is three-valued logic. `NULL AND FALSE` is `FALSE`,
+so the result's *validity* depends on the operands' *values*, which the bound
+does not carry.
+
+`expr/` solves this by calling `Self.K.apply(la, ra)` and reading `res.bitmap` —
+correct, because the kernel already implements Kleene, but it materialises both
+operands as arrays even inside a fused pass.
+
+### The rule lives in exactly one place today
+
+`AndKernel.apply` → `_kleene[is_and=True]`, `OrKernel.apply` →
+`_kleene[is_and=False]`. One shared function in `marrow/kernels/boolean.mojo`,
+whose validity half is whole-bitmap algebra:
+
+```mojo
+term_a = av.difference(a_data)      # is_and:  valid AND NOT data
+term_b = bv.difference(b_data)
+valid  = term_a | term_b | (av & bv)
+```
+
+**Adding a second lane-level implementation is the thing not to do.** Two copies
+of Kleene drift — the failure shape already recorded twice in this tree
+(`emits_right_columns` re-derived at four sites that disagreed; the `K.name`
+dispatch that silently stopped matching). A `validity_core` slot on
+`BoolBinaryKernel` was proposed and **rejected** for exactly this.
+
+### The task: one definition, two drivers
+
+Extract the rule as an `@always_inline` function in `kernels/boolean.mojo`:
+
+```mojo
+@always_inline
+def kleene_validity[is_and: Bool, W: Int](
+    da: SIMD[DType.bool, W], va: SIMD[DType.bool, W],
+    db: SIMD[DType.bool, W], vb: SIMD[DType.bool, W],
+) -> SIMD[DType.bool, W]:
+    """Arrow C++ `KleeneAnd` / `KleeneOr` validity, one lane wide.
+
+    AND: a known-false operand forces a valid (false) result.
+    OR:  a known-true  operand forces a valid (true)  result.
+    """
+    comptime if is_and:
+        return (va & ~da) | (vb & ~db) | (va & vb)
+    else:
+        return (va &  da) | (vb &  db) | (va & vb)
+```
+
+Then **rebuild `_kleene`'s validity section on top of it**, so the array path and
+the fused path share one definition rather than agreeing by inspection. The
+bitmap operands become `SIMD[DType.bool, W]` chunks loaded through `BitmapView`,
+driven by the same `apply` bit-packing overload the bool lane uses.
+
+`expr2`'s `BoolValue` then calls `kleene_validity` directly from its own
+`validity(bound)`, with the operand data it already has in registers.
+
+### The trap to preserve
+
+`_kleene` returns early when **neither** operand has a bitmap:
+
+```mojo
+if not left.bitmap and not right.bitmap:
+    return BoolArray(..., bitmap=None, ...)
+```
+
+That is the common case for real predicates and it allocates nothing. A
+vectorised rewrite that always materialises `_validity_ones` for both sides
+**loses** it and regresses every non-nullable `and`/`or` in the tree. Keep the
+early return, and keep `_validity_ones` behind it.
+
+### Verification — required, not optional
+
+`_kleene` is what every boolean kernel in marrow uses, so "it compiles" is not
+evidence:
+
+```bash
+pixi run -e dev pytest marrow/kernels/tests/test_boolean.mojo
+pixi run -e dev pytest marrow/expr/tests marrow/expr2/tests
+pixi run -e dev pytest --benchmark marrow/kernels/tests/bench_boolean.mojo
+```
+
+Benchmarks need an **untouched control row** (a bitmap benchmark the change
+cannot reach) with its median subtracted before any delta is attributed — this
+machine drifts ±8% per case. See CLAUDE.md, "Writing Mojo benchmarks".
+
+Gate: kernels and both expression suites pass, and the null-free `and`/`or`
+benchmark is within noise of baseline after control subtraction.
+
 ## Success criteria
 
 - The golden corpus passes in both lanes with no case-body changes.
