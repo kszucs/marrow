@@ -177,6 +177,21 @@
 
 ### Fixes
 
+- **`expr2`'s fused aggregate could not be instantiated at all.** Every one of
+  the 13 cases in `expr2/comptime/tests/test_aggregates.mojo` failed to build,
+  and the handoff plan recorded the cause as bisected "to the *body*, not the
+  plumbing", to be fixed during a later rewrite. It was neither: the grouped,
+  no-validity arm splatted a mask with `SIMD[DType.bool, W](True)`, and that
+  positional constructor is `comptime assert Self.size == 1` — *"must be a
+  scalar; use the `fill` keyword instead for explicit splatting"*. One line,
+  `fill=True`, and all 13 pass.
+
+  The trap worth recording is the near-miss fix: `fill=` is declared **only**
+  for `SIMD[DType.bool, size]`. Numeric splats go through the positional
+  `Scalar[Self.dtype]` constructor and were already correct, so applying
+  `fill=` uniformly to the accumulator and count vectors traded one error for
+  two. Only the bool mask was ever broken.
+
 - **A temporal or list column was not recognised as a column by name.**
   `NumericColumn`, `BoolColumn` and `StringColumn` each override
   `Value.bound_column`; `TemporalColumn` and `ListColumn` did not, so they

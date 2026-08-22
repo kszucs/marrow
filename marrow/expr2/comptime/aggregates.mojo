@@ -103,7 +103,7 @@ struct NumericAggregateState[K: AggKernel, A: NumericValue, grouped: Bool](
                     self._state.accumulate[W](
                         gids.load[W](i),
                         self._input.lane[W](bound, i).cast[Self.acc](),
-                        SIMD[DType.bool, W](True),
+                        SIMD[DType.bool, W](fill=True),
                         num_groups,
                     )
                     i += W
