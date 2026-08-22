@@ -771,11 +771,20 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   reduce"; the real blocker was an ill-formed branch. This makes a
   compile-time plan rewrite possible in principle; its compile-time and
   binary-size cost at marrow's scale is **unmeasured**.
-- **A comptime conditional type carries no trait conformance** and does not
-  reduce at a return site, even inside a `comptime if` that selected the branch.
-  `rebind` cannot bridge it. Usable as an annotation only — which is why
-  `promote[L, R]` works and "wrap this operand only when it needs converting"
-  does not.
+- **A comptime conditional type *does* reduce at a return site, and *does*
+  carry its trait bound — when both branches are always well-formed.** Verified
+  2026-08-22: `def __getattr_param__[name: String](self) -> Column[Int64Type if
+  s.codes[s.index_of(name)] == 0 else Float64Type]` compiles, satisfies
+  `Column[T: NumericType]`, and gives `t.a` and `t.b` genuinely different types.
+  This entry previously said the opposite — "carries no trait conformance and
+  does not reduce at a return site" — which is **false**, and false for the same
+  reason an earlier "conditionality does not reduce" claim about associated
+  types was: the blocker in both original incidents was an **ill-formed
+  branch**, not conditionality. Totality is the enabling condition, exactly as
+  in the associated-type entry above. What genuinely does not work is bridging a
+  conditional type to a *different* representation — `rebind` cannot, which is
+  why `promote[L, R]` works and "wrap this operand only when it needs
+  converting" does not.
 - **A reflected field type is opaque inside the generic function that reflects
   it.** Route construction through a separately-instantiated generic bound on
   the trait — `_construct_default[D: Defaultable & DataType]()`

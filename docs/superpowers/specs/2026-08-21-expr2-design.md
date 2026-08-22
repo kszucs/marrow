@@ -334,8 +334,8 @@ Four `CLAUDE.md` entries were wrong or overbroad and are corrected in the file.
 
 Each ends at a review gate. `expr/` is untouched until the last.
 
-**0 — probe the two open questions.** Neither blocks the skeleton, both change
-scope:
+**0 — probe the two open questions.** ✅ **Done 2026-08-22 — see "Phase 0 —
+resolved" below.** Neither blocked the skeleton, both changed scope:
 
 - **Threading a comptime schema through the plan builders.** The `t.amount`
   surface is proven (see above); what is unproven is how a `Relation` carries
@@ -364,6 +364,67 @@ veto, only if Phase 0 shows splitting improves pruning.
 **5 — migrate and delete.** Python bindings and golden move to `expr2`; `expr`
 is deleted. `expr2` is renamed `expr` in its own commit, so the diff that moves
 code and the diff that renames it are never the same diff.
+
+## Phase 0 — resolved 2026-08-22
+
+### Q1: comptime schema threading — **works, in full**
+
+Probed end to end. All four steps hold:
+
+| step | result |
+|---|---|
+| heap-holding struct as a comptime parameter (`comptime SCHEMA = MiniSchema([...])`) | works |
+| `__getattr_param__[name]` on a schema-parameterised handle | fires; `t.a` resolves |
+| **returned type depends on the name** — `Column[Int64Type if … else Float64Type]` | reduces, **and carries the `NumericType` bound** |
+| unknown column | `constraint failed: unknown column: nope`, at build time |
+
+So `t.amount` is not merely nicer syntax: it infers the dtype *and* turns a typo
+into a compile error, which `col("amount", int64)` cannot do.
+
+**But a comptime schema cannot come from a runtime batch**, and that is the
+answer to the question as posed. `in_memory_table(batch)` learns its schema at
+run time; there is no lifting a runtime value to a comptime parameter. The two
+are not reconcilable and do not need to be — it is the same split `col` already
+encodes:
+
+- schema written at compile time → `t.amount`, inferred dtype, validated names
+- schema known only at run time → `col("a", int64)` (typed, unvalidated) or
+  `col("a")` (runtime lane)
+
+`Relation` therefore does **not** need to carry a comptime schema. The handle
+does, and it is what the caller builds expressions *from*. A relation built from
+a runtime batch simply offers no `t.amount`.
+
+**Measurement note.** `precompile` reported no error for `t.nope`, and even
+`comptime assert False` in that position looked silent — it elaborates
+signatures, not bodies. Only `pytest` surfaces it. This is CLAUDE.md's "clean
+precompile is not evidence a test will build", and it applies to *comptime
+assertions* specifically: a validation probe run under `precompile` alone reads
+as "validation does not fire" when it does.
+
+### Q2: the physical plan layer — **deferred, with a named trigger**
+
+Not added now. Each motivating case resolves elsewhere:
+
+- **Column pruning** — `FilterProcessor` compacting columns nothing downstream
+  reads is real and grows with table width, but the fix is projection pushdown,
+  a *logical* rewrite (Phase 2/3). Inserting a `Project` below a `Filter` is a
+  rule, not a layer.
+- **Join algorithm choice** — `to_processor(ctx)` is already that seam. One
+  logical operator can become different physical ones there today.
+- **Selection vectors** — genuinely physical, and genuinely absent: marrow has
+  no selection-vector machinery anywhere. A layer introduced now would be
+  scaffolding for a capability that does not exist.
+
+**What forces the decision later**, explicitly, so this is revisited on evidence
+rather than taste: when two physical strategies for one logical operator must be
+*costed against each other* (hash versus merge join, given statistics), or when
+selection vectors land. Either makes `to_processor` a choice point that needs a
+representation, and a parameter list is the wrong place to put a decision.
+
+Until then the deferral costs one thing — a top-down "columns actually needed"
+pass has nowhere natural to live — and Phase 2's `Rule` pipeline is where that
+goes.
 
 ## Phase 1a — the boolean family
 
@@ -431,11 +492,10 @@ the first place.
 
 ## Open questions
 
-1. How does a `Relation` carry a comptime schema forward, given
-   `in_memory_table(batch)` learns its schema at runtime? The `t.amount`
-   surface itself is proven; threading the schema through the plan builders is
-   not. (Phase 0)
-2. Does the physical plan layer go in now? (Phase 0)
+1. ~~How does a `Relation` carry a comptime schema forward?~~ **Answered**: it
+   does not — the *handle* carries it, and only when the caller writes one.
+2. ~~Does the physical plan layer go in now?~~ **Answered**: no; trigger
+   recorded.
 3. Does conjunction splitting improve pruning *today*? If not, Phase 4 has
    nothing to buy and should not happen.
 4. Is name-based join-key identity sufficient? `HashJoin` renames colliding
