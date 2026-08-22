@@ -180,6 +180,26 @@ Four things, each of which cost a wrong answer or a crash when missing:
 
 ## Do not repeat
 
+- **`Column[T: PrimitiveType]` does not work — probed and reverted
+  2026-08-23.** The idea was sound and is what CLAUDE.md advises ("dispatch on
+  the widest family the typed leaf accepts"): `PrimitiveType` carries
+  `comptime native: DType`, which is all `lane[W]` needs, and `TemporalType` /
+  `DecimalType` / `IntervalType` all conform to it — so **one** leaf should
+  cover every fixed-width type and `expr/`'s separate `TemporalColumn` should be
+  unnecessary duplication. It is not achievable as a widening: **19 errors**,
+  because the aggregate chain is bound on `NumericType` the whole way down
+  (`AggState[K, V: NumericType]`, `AggKernel.AccType[V: NumericType]`), so
+  widening `NumericValue.Type` breaks every fold.
+
+  The clean form needs `PrimitiveValue` as the family and `NumericValue`
+  refining it — but **Mojo has no conditional conformance**, so a single
+  `Column` struct cannot be a `PrimitiveValue` when `T` is a date and a
+  `NumericValue` when `T` is an int. Temporal support therefore costs either a
+  second leaf type (`expr/`'s answer) or widening `AccType` to `PrimitiveType`
+  in `kernels/aggregate.mojo` first. **Do the kernels widening first** if this
+  is attempted again; the expression layer is not where it is blocked.
+
+
 - **`precompile` does not elaborate function bodies.** A clean `precompile` is
   not evidence a test will build, and `comptime assert` in an uninstantiated
   body reports *nothing*. Only `pytest` proves it.
