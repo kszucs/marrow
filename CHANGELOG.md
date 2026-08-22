@@ -296,6 +296,31 @@
 
 ### Fixes
 
+- **A join reached the type-erased `filter`, and it cost 450 KB.**
+  `SwissHashTable.probe` verified candidate pairs with
+  `filter(build_indices.to_dyn(), verifier)`. The indices are `Int32Array`, but
+  `filter` exists only as a `DynArray` free function, so `.to_dyn()`
+  instantiated the per-dtype ladder and made it reachable from **every binary
+  that joins** — `marrow::kernels::filter` 98 → 121 symbols, dragging
+  `marrow::views` 112 → 148, `marrow::arrays` 289 → 315 and
+  `marrow::execution` 237 → 258.
+
+  The null-key semantics that call introduced are correct and unchanged: a NULL
+  key still matches nothing, not even another NULL. The rule is simply *data
+  AND valid*, so it is now applied by ANDing validity into the mask and
+  selecting through the typed `Filter.apply`, which instantiates for
+  `Int32Type` alone.
+
+  **`query_join` 1,967,052 → 1,527,820, recovering 439,232 bytes**; +30.455%
+  over its baseline becomes +1.325%. The residue is the bool-key arm added by
+  the same commit, which is new functionality rather than drift.
+
+  Found by the `expr2` gates added in this cycle — they failed the *existing*
+  gates on their first run, and the culprit was bisected over 183 commits to
+  `6c570eb`. It is the third instance of one pattern, after hashing reaching
+  `cast` (~2.4 MB) and the closure adapter in `variant_dispatch` (+662,740
+  bytes): **one call site making a per-dtype family reachable from everything.**
+
 - **`expr2`'s fused aggregate could not be instantiated at all.** Every one of
   the 13 cases in `expr2/comptime/tests/test_aggregates.mojo` failed to build,
   and the handoff plan recorded the cause as bisected "to the *body*, not the
