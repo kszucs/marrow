@@ -77,38 +77,21 @@ trait ComptimeValue(Analyzable, Copyable, Deinitable, Evaluable, Writable):
         """
         ...
 
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        """This node's result validity, or `None` when it cannot be null.
-
-        `lane` produces the **data** bits only, so validity is a separate and
-        genuinely data-dependent question: a Kleene `AND` derives three-valued
-        nulls from its operands, which the plain bitwise `a & b` in the lane
-        does not give. Fusing without this contract reproduces the defect class
-        where a comparison's data bit is read while its validity says the bit
-        is meaningless.
-
-        **This is not fused, and that is a deliberate asymmetry.** `evaluate`
-        collapses a whole subtree into one loop; validity is a second recursive
-        walk that intersects a bitmap per level. It is affordable because a
-        bitmap is one bit per row against a data element's 32 or 64 — a
-        depth-`d` tree costs `d` passes over `rows/64` words, next to one pass
-        over `rows` elements — but it is a second walk, not a free one.
-
-        Folding it into `bind` would remove the walk, since `bind` already
-        descends the tree. That works for **structural** validity (null in,
-        null out) and not for data-dependent validity: a Kleene `AND` decides
-        its nulls from the values, so it cannot be known before the lane runs.
-        Any fused form has to keep both paths, which is why this stays a
-        separate method until something measures the walk as costing.
-
-        Takes the `Bound`, not the batch. `expr/` had **two** methods —
-        `validity(batch)` and `state_validity(batch, state)` — the second added
-        because the first re-ran the whole selection kernel for `coalesce`,
-        `nullif` and `case_when`, so every fused pass over them did the work
-        twice. One method reading the already-resolved `Bound` cannot: a leaf's
-        `Bound` *is* its column, bitmap included.
-        """
-        ...
+    # `validity` is deliberately **not** here. It is declared per family,
+    # because the families do not agree on what validity needs.
+    #
+    # Structural validity — numeric, comparison, string — is null-in-null-out
+    # and answers from the `Bound` alone. Data-dependent validity does not:
+    # Kleene `AND` decides its nulls from the operand *values* (`NULL AND
+    # FALSE` is `FALSE`), so it needs the batch, and measurement says it should
+    # not compute the rule per lane at all — the bitmap algebra in
+    # `kernels.boolean._kleene` runs 64 bits per instruction against a SIMD
+    # lane's one bit per byte, and beat a fused per-lane version by 4-10x
+    # (`bench_boolean.mojo`, 2026-08-22).
+    #
+    # One signature on the base would therefore have to serve both, which is
+    # how `expr/` ended up with two methods (`validity` and `state_validity`)
+    # and evaluated `coalesce`/`nullif`/`case_when` twice per fused pass.
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +145,25 @@ trait NumericValue(ComptimeValue):
                 buffer=buf.to_immutable(),
             )
             return Datum(arr^.to_dyn())
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, or `None` when it cannot be null.
+
+        Structural: a numeric node is null exactly where an operand is, so this
+        intersects the operands' bitmaps and never reads their values. That is
+        what lets it take the `Bound` and not the batch — a leaf's `Bound` *is*
+        its column, bitmap included. `expr/` needed a second method
+        (`state_validity`) precisely because its first one took the batch and
+        re-ran the whole selection kernel for `coalesce`, `nullif` and
+        `case_when`.
+
+        `lane` produces the **data** bits only, so this stays a separate
+        question from evaluation. It is a second recursive walk, not a free
+        one, but it is affordable: a bitmap is one bit per row against a data
+        element's 32 or 64, so a depth-`d` tree costs `d` passes over
+        `rows/64` words next to one pass over `rows` elements.
+        """
+        ...
 
     @always_inline
     def lane[
@@ -228,6 +230,22 @@ trait BoolValue(ComptimeValue):
                 buffer=bits.to_immutable(),
             ).to_dyn()
         )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, or `None` when it cannot be null.
+
+        Structural, exactly as `NumericValue.validity` is: a comparison is null
+        where an operand is, and never because of what the operands *say*.
+
+        **Kleene `AND`/`OR` do not belong to this family**, and that is the
+        reason this signature is allowed to stay simple. Three-valued logic
+        decides nulls from operand values, so it can answer neither from the
+        `Bound` nor per lane — measured at 4-10x slower per-lane than the
+        bitmap algebra in `kernels.boolean._kleene`, which runs 64 bits per
+        instruction (`bench_boolean.mojo`, 2026-08-22). They get their own
+        family, whose `evaluate` calls the kernel rather than driving a lane.
+        """
+        ...
 
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
