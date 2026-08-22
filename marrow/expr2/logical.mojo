@@ -32,10 +32,12 @@ from ..dtypes import Field, field
 from .physical import (
     AggregateOperator,
     BatchSource,
+    LimitOperator,
     DynAggregateState,
     DynProcessor,
     FilterOperator,
     ProjectOperator,
+    SortOperator,
 )
 
 
@@ -326,4 +328,100 @@ struct Aggregate(Relation, Writable):
             writer.write(", by=", k)
         for ref a in self._aggs:
             writer.write(", ", a)
+        writer.write(")")
+
+
+struct Limit(Relation, Writable):
+    """`OFFSET n LIMIT m` — schema-preserving and streaming.
+
+    Reads no column of its own, so it neither adds nor removes fields. The
+    operator it builds reports `done` once it has its rows, which is what stops
+    the source: in a push engine nothing downstream can otherwise halt a scan.
+    """
+
+    var _input: DynRelation
+    var _offset: Int
+    var _length: Int
+
+    def __init__(out self, var input: DynRelation, offset: Int, length: Int):
+        self._input = input^
+        self._offset = offset
+        self._length = length
+
+    def schema(self) -> Schema:
+        return self._input.schema()
+
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
+        var pipe = self._input.to_processor(ctx)
+        pipe.append(LimitOperator(self._offset, self._length))
+        return pipe^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "Limit(",
+            self._input,
+            ", offset=",
+            self._offset,
+            ", length=",
+            self._length,
+            ")",
+        )
+
+
+struct Sort(Relation, Writable):
+    """`ORDER BY` — schema-preserving, and a pipeline breaker.
+
+    Sorting is blocking by nature: no prefix of the input determines the first
+    output row, so the operator buffers every morsel and orders once at
+    `finish`. That the engine expresses this with the same two methods a filter
+    uses is the point of the push interface.
+    """
+
+    var _input: DynRelation
+    var _keys: List[DynValue]
+    var _ascending: List[Bool]
+    var _nulls_first: Bool
+
+    def __init__(
+        out self,
+        var input: DynRelation,
+        var keys: List[DynValue],
+        var ascending: List[Bool],
+        nulls_first: Bool = True,
+    ) raises:
+        if len(keys) != len(ascending):
+            raise Error(
+                "sort: ",
+                len(keys),
+                " keys but ",
+                len(ascending),
+                " directions",
+            )
+        if len(keys) == 0:
+            raise Error("sort: needs at least one key")
+        self._input = input^
+        self._keys = keys^
+        self._ascending = ascending^
+        self._nulls_first = nulls_first
+
+    def schema(self) -> Schema:
+        return self._input.schema()
+
+    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
+        var pipe = self._input.to_processor(ctx)
+        pipe.append(
+            SortOperator(
+                self._keys.copy(),
+                self._ascending.copy(),
+                self._nulls_first,
+                ctx.copy(),
+            )
+        )
+        return pipe^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Sort(", self._input)
+        for i in range(len(self._keys)):
+            writer.write(", ", self._keys[i])
+            writer.write(" asc" if self._ascending[i] else " desc")
         writer.write(")")

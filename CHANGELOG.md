@@ -177,6 +177,24 @@
 
 ### Features
 
+- **`expr2` gains `Limit` and `Sort`**, taking it to 6 of `expr/`'s 8
+  relations.
+
+  `Limit` forced a real gap in the push engine and closed it. A pull engine
+  gets early termination for free — a consumer simply stops calling `pull`. In
+  a push engine the *source* drives, so nothing downstream can halt a scan, and
+  `LIMIT 10` over a billion rows would read a billion rows. `Operator` gains
+  `done()`, defaulting False, and the driver stops pulling as soon as any stage
+  answers True.
+
+  `Sort` is a pipeline breaker that needs no new machinery: it buffers in
+  `push` and orders once in `finish`, expressed with the same two methods a
+  filter uses. Multiple keys are decomposed into stable passes applied
+  **last key first**, each one *permuting* the previous order rather than
+  replacing it — dropping that composition is the classic multi-key bug where
+  the last key wins and the rest are silently discarded, and it has its own
+  test.
+
 - **`Fold[K, A, G: Grouping]`** replaces
   `NumericAggregateState[K, A, grouped: Bool]`. Three axes, all comptime: the
   algebra, the whole input subtree, and now the **placement**. A sorted or

@@ -38,9 +38,10 @@ from ..builders import DynBuilder, Int32Builder
 from ..dtypes import Field, struct_
 from ..kernels.concat import concat
 from ..execution import ExecContext
-from ..kernels.filter import filter
+from ..kernels.filter import filter, take
 from ..kernels.core import Groups
 from ..kernels.groupby import HashGrouping
+from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .core import DynValue
@@ -132,6 +133,19 @@ trait Operator(Deinitable, Movable):
         """Flush at end of stream. A streaming operator answers `None`."""
         ...
 
+    def done(self) -> Bool:
+        """Whether this stage will never produce anything again.
+
+        The signal a push engine needs and a pull engine gets for free. Without
+        it `LIMIT 10` over a billion-row scan still reads a billion rows: the
+        source drives, so nothing downstream can stop it. `collect` stops
+        pulling as soon as any stage answers True.
+
+        Defaults to False because almost nothing finishes early — only a
+        bounded operator like `Limit` does.
+        """
+        return False
+
 
 struct DynOperator[Out: Copyable](Movable):
     """An `Operator` of any stage, erased — **one box, parameterised on `Out`**.
@@ -153,6 +167,7 @@ struct DynOperator[Out: Copyable](Movable):
     var _virt_finish: def(ArcPointer[NoneType]) thin raises -> Optional[
         Self.Out
     ]
+    var _virt_done: def(ArcPointer[NoneType]) thin -> Bool
 
     @staticmethod
     def _push_tramp[
@@ -166,18 +181,26 @@ struct DynOperator[Out: Copyable](Movable):
     ](ptr: ArcPointer[NoneType]) raises -> Optional[O.Out]:
         return rebind[ArcPointer[O]](ptr)[].finish()
 
+    @staticmethod
+    def _done_tramp[O: Operator](ptr: ArcPointer[NoneType]) -> Bool:
+        return rebind[ArcPointer[O]](ptr)[].done()
+
     @implicit
     def __init__[O: Operator](out self: DynOperator[O.Out], var value: O):
         var ptr = ArcPointer[O](value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_push = Self._push_tramp[O]
         self._virt_finish = Self._finish_tramp[O]
+        self._virt_done = Self._done_tramp[O]
 
     def push(mut self, batch: RecordBatch) raises -> Optional[Self.Out]:
         return self._virt_push(self._data, batch)
 
     def finish(mut self) raises -> Optional[Self.Out]:
         return self._virt_finish(self._data)
+
+    def done(self) -> Bool:
+        return self._virt_done(self._data)
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +261,15 @@ struct DynProcessor(Movable):
             var b = self._source.next()
             if b:
                 self._flow(b.value().copy(), 0, out)
+                # Early termination. A `Limit` that has its rows stops the
+                # source rather than letting it drain — the one thing a push
+                # engine must add back that a pull engine got for free.
+                var stop = False
+                for i in range(len(self._ops)):
+                    if self._ops[i].done():
+                        stop = True
+                if stop:
+                    break
             else:
                 break
 
@@ -520,3 +552,136 @@ struct AggregateOperator(Operator):
         for i in range(len(self._states)):
             cols.append(self._states[i].finish(self._num_groups))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
+
+
+struct LimitOperator(Operator):
+    """`OFFSET`/`LIMIT` — streaming, and the reason `Operator.done` exists.
+
+    Skips `offset` rows, emits at most `length`, and then reports `done` so the
+    driver stops pulling. Without that signal the source would drain in full and
+    a `LIMIT 10` over a large scan would cost the whole scan.
+
+    Slicing is zero-copy, so a limited batch shares its parent's buffers rather
+    than compacting.
+    """
+
+    comptime Out = RecordBatch
+
+    var _offset: Int
+    var _length: Int
+    var _skipped: Int
+    var _emitted: Int
+
+    def __init__(out self, offset: Int, length: Int):
+        self._offset = offset
+        self._length = length
+        self._skipped = 0
+        self._emitted = 0
+
+    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+        var n = batch.num_rows()
+        var start = 0
+        if self._skipped < self._offset:
+            var skip = min(self._offset - self._skipped, n)
+            self._skipped += skip
+            start = skip
+        var available = n - start
+        if available <= 0:
+            return None
+        var wanted = min(available, self._length - self._emitted)
+        if wanted <= 0:
+            return None
+        self._emitted += wanted
+        return batch.slice(start, wanted)
+
+    def finish(mut self) raises -> Optional[RecordBatch]:
+        return None
+
+    def done(self) -> Bool:
+        return self._emitted >= self._length
+
+
+struct SortOperator(Operator):
+    """`ORDER BY` — blocking, because a global order needs every row.
+
+    Buffers each morsel and sorts once at `finish`. That is not a limitation of
+    the engine but of the operation: no prefix of the input determines the
+    first output row.
+
+    Multiple keys are handled by sorting **stably, last key first**, which is
+    the standard decomposition — each pass preserves the order the previous one
+    established, so the composition orders by key 0, ties broken by key 1, and
+    so on. It costs one pass per key and needs no comparator over tuples, which
+    the single-column `sort_indices` kernel could not express anyway.
+    """
+
+    comptime Out = RecordBatch
+
+    var _keys: List[DynValue]
+    var _ascending: List[Bool]
+    var _nulls_first: Bool
+    var _batches: List[RecordBatch]
+    var _ctx: ExecContext
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var keys: List[DynValue],
+        var ascending: List[Bool],
+        nulls_first: Bool,
+        var ctx: ExecContext,
+    ):
+        self._keys = keys^
+        self._ascending = ascending^
+        self._nulls_first = nulls_first
+        self._batches = List[RecordBatch]()
+        self._ctx = ctx^
+        self._emitted = False
+
+    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+        self._batches.append(batch.copy())
+        return None
+
+    def finish(mut self) raises -> Optional[RecordBatch]:
+        if self._emitted or len(self._batches) == 0:
+            return None
+        self._emitted = True
+
+        var schema = self._batches[0].schema.copy()
+        var cols = List[DynArray](capacity=len(schema.fields))
+        for i in range(len(schema.fields)):
+            var parts = List[DynArray]()
+            for ref b in self._batches:
+                parts.append(b.columns[i].copy())
+            cols.append(concat(parts, self._ctx))
+        var whole = RecordBatch(schema=schema^, columns=cols^)
+
+        var order = Optional[Int32Array](None)
+        for k in range(len(self._keys) - 1, -1, -1):
+            var key = self._keys[k].evaluate(whole).to_array(whole.num_rows())
+            if order:
+                key = take(key, order.value(), self._ctx)
+            var pass_order = sort_indices(
+                key,
+                ascending=self._ascending[k],
+                nulls_first=self._nulls_first,
+                stable=True,
+                ctx=self._ctx,
+            )
+            if order:
+                # Compose: this pass permutes the previous order, it does not
+                # replace it. Skipping this is the classic multi-key sort bug —
+                # the last key wins and every earlier one is discarded.
+                var prev: DynArray = order.value().copy()
+                order = take(prev, pass_order, self._ctx).as_int32().copy()
+            else:
+                order = pass_order^
+
+        if not order:
+            return whole^
+        var sorted = List[DynArray](capacity=whole.num_columns())
+        for i in range(whole.num_columns()):
+            sorted.append(
+                take(whole.columns[i].copy(), order.value(), self._ctx)
+            )
+        return RecordBatch(schema=whole.schema.copy(), columns=sorted^)

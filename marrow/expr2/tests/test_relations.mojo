@@ -22,6 +22,7 @@ from ...tabular import RecordBatch, record_batch
 from ..core import DynAggValue, DynValue
 from ..physical import (
     AggregateOperator,
+    LimitOperator,
     DynAggregateState,
     FilterOperator,
 )
@@ -30,6 +31,8 @@ from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
 from ..logical import (
     Aggregate,
+    Limit,
+    Sort,
     DynRelation,
     Filter,
     InMemoryTable,
@@ -447,3 +450,139 @@ def test_the_flush_cascade_feeds_the_stages_above() raises:
     # groups total 40 and 60, doubled by a projection above the aggregate
     assert_equal(out.num_rows(), 2)
     assert_true(out.columns[0].as_int64() == array([80, 120], int64))
+
+
+# ---------------------------------------------------------------------------
+# Limit
+# ---------------------------------------------------------------------------
+def test_limit_takes_a_prefix() raises:
+    var plan = DynRelation(
+        Limit(DynRelation(InMemoryTable(_batch())), offset=0, length=2)
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[1].as_int64() == array([10, 20], int64))
+
+
+def test_limit_skips_the_offset() raises:
+    var plan = DynRelation(
+        Limit(DynRelation(InMemoryTable(_batch())), offset=2, length=2)
+    )
+    var out = plan.execute()
+    assert_true(out.columns[1].as_int64() == array([30, 40], int64))
+
+
+def test_limit_reports_done_so_the_source_can_stop() raises:
+    """The signal a push engine needs and a pull engine gets for free.
+
+    Without it a `LIMIT 10` over a billion-row scan reads a billion rows: the
+    source drives, so nothing downstream could otherwise halt it.
+    """
+    var op = LimitOperator(offset=0, length=2)
+    assert_true(not op.done())
+    var out = op.push(_batch())
+    assert_true(Bool(out))
+    assert_equal(out.value().num_rows(), 2)
+    assert_true(op.done())
+
+
+def test_limit_preserves_its_input_schema() raises:
+    var b = _batch()
+    var plan = DynRelation(
+        Limit(DynRelation(InMemoryTable(b.copy())), offset=0, length=1)
+    )
+    assert_true(plan.schema() == b.schema)
+
+
+# ---------------------------------------------------------------------------
+# Sort
+# ---------------------------------------------------------------------------
+def test_sort_orders_by_one_key() raises:
+    var b = record_batch([array([3, 1, 2], int64).copy()], names=["a"])
+    var plan = DynRelation(
+        Sort(
+            DynRelation(InMemoryTable(b^)),
+            [DynValue(Column[Int64Type]("a"))],
+            [True],
+        )
+    )
+    assert_true(plan.execute().columns[0].as_int64() == array([1, 2, 3], int64))
+
+
+def test_sort_descending() raises:
+    var b = record_batch([array([3, 1, 2], int64).copy()], names=["a"])
+    var plan = DynRelation(
+        Sort(
+            DynRelation(InMemoryTable(b^)),
+            [DynValue(Column[Int64Type]("a"))],
+            [False],
+        )
+    )
+    assert_true(plan.execute().columns[0].as_int64() == array([3, 2, 1], int64))
+
+
+def test_sort_composes_multiple_keys() raises:
+    """Keys are applied stably last-first, and each pass **permutes** the
+    previous order rather than replacing it.
+
+    Dropping the composition is the classic multi-key sort bug: the last key
+    wins and every earlier one is silently discarded. Here `a` alone would give
+    [1,1,2,2] in some order — only a correct composition also orders `b`
+    within each `a`.
+    """
+    var b = record_batch(
+        [
+            array([2, 1, 2, 1], int64).copy(),
+            array([20, 30, 10, 40], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+    var plan = DynRelation(
+        Sort(
+            DynRelation(InMemoryTable(b^)),
+            [
+                DynValue(Column[Int64Type]("a")),
+                DynValue(Column[Int64Type]("b")),
+            ],
+            [True, True],
+        )
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([1, 1, 2, 2], int64))
+    assert_true(out.columns[1].as_int64() == array([30, 40, 10, 20], int64))
+
+
+def test_sort_rejects_mismatched_keys_and_directions() raises:
+    var raised = False
+    try:
+        _ = Sort(
+            DynRelation(InMemoryTable(_batch())),
+            [DynValue(Column[Int64Type]("a"))],
+            [True, False],
+        )
+    except e:
+        raised = True
+        assert_true("sort" in String(e))
+    assert_true(raised)
+
+
+def test_sort_then_limit_is_top_n() raises:
+    """The composition every engine needs, and the one that proves a blocking
+    stage and a bounded stage cooperate: `Sort` emits only from `finish`, and
+    the `Limit` above it must still see that batch through the flush cascade.
+    """
+    var b = record_batch([array([5, 3, 9, 1], int64).copy()], names=["a"])
+    var plan = DynRelation(
+        Limit(
+            DynRelation(
+                Sort(
+                    DynRelation(InMemoryTable(b^)),
+                    [DynValue(Column[Int64Type]("a"))],
+                    [True],
+                )
+            ),
+            offset=0,
+            length=2,
+        )
+    )
+    assert_true(plan.execute().columns[0].as_int64() == array([1, 3], int64))
