@@ -36,6 +36,7 @@ from ...tabular import RecordBatch, record_batch
 from ..core import Datum, DynValue, Shape, into_array
 from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.numeric import Add, Gt
+from ..plan import DynRelation, Filter, InMemoryTable
 from ..runtime.values import Payload, RuntimeValue
 
 
@@ -335,3 +336,79 @@ def test_expr2_a_literal_only_expression_stays_scalar() raises:
     var both = Add(Literal[Int64Type](1), Literal[Int64Type](2))
     assert_true(both.shape == Shape.scalar)
     assert_true(both.evaluate(b).isa[DynScalar]())
+
+
+# ---------------------------------------------------------------------------
+# End to end: a dynamic plan holding a fused predicate
+# ---------------------------------------------------------------------------
+def test_expr2_a_dynamic_plan_runs_a_fused_predicate() raises:
+    """The configuration the whole two-lane design exists to allow.
+
+    The plan is erased and composed at run time; the predicate is a comptime
+    type fused into one loop. That combination is what measures 1.46 MB against
+    4.91 MB for the same plan with runtime expressions — and it only works
+    because `DynValue` lets a `Filter` hold either lane without knowing which.
+    """
+    var plan = DynRelation(
+        Filter(
+            DynRelation(InMemoryTable(_batch())),
+            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
+        )
+    )
+    var out = plan.execute()
+
+    # a = [1, 2, None, 4] -> only 4 > 2
+    assert_equal(out.num_rows(), 1)
+    ref a = out.columns[0].as_int64()
+    assert_equal(a[0].value(), 4)
+
+
+def test_expr2_a_null_predicate_does_not_select() raises:
+    """SQL's rule, and the reason `Filter` must not read the data bit alone.
+
+    `None > 2` is NULL, not false — but the SIMD lane still produced a bit for
+    that row. If the filter selected on data bits, the null row's payload would
+    decide whether it survives.
+    """
+    var plan = DynRelation(
+        Filter(
+            DynRelation(InMemoryTable(_batch())),
+            # every non-null row passes, so only the null's treatment shows
+            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](-100))),
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 3)  # 1, 2, 4 — the null is not selected
+
+
+def test_expr2_filter_preserves_its_input_schema() raises:
+    """A filter changes which rows survive, never which columns exist."""
+    var b = _batch()
+    var plan = DynRelation(
+        Filter(
+            DynRelation(InMemoryTable(b.copy())),
+            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
+        )
+    )
+    assert_true(plan.schema() == b.schema)
+    assert_equal(plan.execute().num_columns(), b.num_columns())
+
+
+def test_expr2_an_empty_result_is_a_well_formed_batch() raises:
+    """Zero rows still means one zero-length column per field.
+
+    A schema naming fields beside an empty column list leaves `num_columns()`
+    at 0, so anything walking columns by schema index runs off the end — and
+    exporting it over the C Data interface returns NULL without setting an
+    exception.
+    """
+    var b = _batch()
+    var plan = DynRelation(
+        Filter(
+            DynRelation(InMemoryTable(b.copy())),
+            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](999))),
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 0)
+    assert_equal(out.num_columns(), len(b.schema.fields))
