@@ -24,7 +24,6 @@ from ...dtypes import BoolType, DynType
 from ...kernels.boolean import (
     AndKernel,
     BoolBinaryKernel,
-    BoolUnaryKernel,
     NotKernel,
     OrKernel,
     XorKernel,
@@ -116,13 +115,19 @@ comptime Or = BoolBinary[OrKernel, _, _]
 comptime Xor = BoolBinary[XorKernel, _, _]
 
 
-struct BoolUnary[K: BoolUnaryKernel, A: ComptimeValue](ComptimeValue):
+struct Not[A: ComptimeValue](ComptimeValue):
     """`NOT`, which is three-valued too: `NOT NULL` is `NULL`.
 
     Unlike `AND`/`OR`, negation's validity *is* structural — the result is null
-    exactly where the operand is. It is here rather than in the fusing family
-    only because it shares `NOT`'s kernel and its operand bound; a fused
-    version would be a legitimate, separate optimisation.
+    exactly where the operand is. It sits here rather than in the fusing family
+    only because it shares the operand bound that lets the families mix; a
+    fused version would be a legitimate, separate optimisation.
+
+    **Not parameterised on its kernel**, unlike `BoolBinary`. `NotKernel` is
+    the only `BoolUnaryKernel` in the tree, so a `K` parameter would be generic
+    over something that cannot vary — it would read as a choice where there is
+    none. `BoolBinary` earns its `K` with three (`and`, `or`, `xor`). If a
+    second unary boolean kernel ever lands, generalising is mechanical.
     """
 
     comptime Type = BoolType
@@ -144,10 +149,9 @@ struct BoolUnary[K: BoolUnaryKernel, A: ComptimeValue](ComptimeValue):
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         var n = batch.num_rows()
-        return Datum(Self.K.apply(_as_bool(self.a.evaluate(batch), n)).to_dyn())
+        return Datum(
+            NotKernel.apply(_as_bool(self.a.evaluate(batch), n)).to_dyn()
+        )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(Self.K.name, "(", self.a, ")")
-
-
-comptime Not = BoolUnary[NotKernel, _]
+        writer.write(NotKernel.name, "(", self.a, ")")
