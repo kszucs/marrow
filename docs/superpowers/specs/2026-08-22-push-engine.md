@@ -47,7 +47,10 @@ DynRelation   any relation
 DynProcessor  any Operator
 ```
 
-Gone: `DynAggregate` and `DynAggregateState`/`DynFold`.
+Gone: `DynAggValue` and `DynAggregateState`/`DynFold`. (The value-level
+aggregate trait was renamed `Aggregate` -> `AggValue` on 2026-08-23, freeing
+`Aggregate` for the relational node; both its docstrings already claimed the
+new name.)
 
 They disappear for a reason rather than by fiat. Once **every logical node has
 `to_processor(ctx)`**, an aggregate is no longer a different *kind* of node —
