@@ -192,3 +192,33 @@ struct FilterProcessor(Processor):
             var out = RecordBatch(schema=batch.schema.copy(), columns=cols^)
             if out.num_rows() > 0:
                 return out^
+
+
+struct ProjectProcessor(Processor):
+    """Evaluates each projected value against every morsel."""
+
+    var _input: DynProcessor
+    var _values: List[DynValue]
+    var _schema: Schema
+
+    def __init__(
+        out self,
+        var input: DynProcessor,
+        var values: List[DynValue],
+        var schema: Schema,
+    ):
+        self._input = input^
+        self._values = values^
+        self._schema = schema^
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def pull(mut self) raises -> RecordBatch:
+        var batch = self._input.pull()
+        var cols = List[DynArray](capacity=len(self._values))
+        for ref v in self._values:
+            # `into_array` is where a scalar-shaped value stops being lazy: a
+            # projection of a constant materialises here and nowhere earlier.
+            cols.append(into_array(v.evaluate(batch), batch.num_rows()))
+        return RecordBatch(schema=self._schema.copy(), columns=cols^)

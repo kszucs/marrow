@@ -33,7 +33,7 @@ from ...tabular import RecordBatch, record_batch
 from ..core import Datum, DynValue, Shape, into_array
 from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.numeric import Add, Gt
-from ..plan import DynRelation, Filter, InMemoryTable
+from ..plan import DynRelation, Filter, InMemoryTable, Project
 from ..runtime.values import Payload, RuntimeValue
 
 
@@ -369,3 +369,85 @@ def test_expr2_an_empty_result_is_a_well_formed_batch() raises:
     var out = plan.execute()
     assert_equal(out.num_rows(), 0)
     assert_equal(out.num_columns(), len(b.schema.fields))
+
+
+# ---------------------------------------------------------------------------
+# Project — the caller that justifies dtype() and name()
+# ---------------------------------------------------------------------------
+def test_expr2_project_carries_a_bare_column_field_whole() raises:
+    """A projected pass-through keeps its source `Field`, not just its dtype.
+
+    Rebuilding the field from `dtype()` alone loses `nullable`, so projecting
+    a column would produce a *different* schema for it than selecting the same
+    column does. `expr/` records that divergence with `nullable` False
+    becoming True.
+    """
+    var b = record_batch([array([1, 2], int64).copy()], names=["a"])
+    # `a` is non-nullable here; the projection must not widen it.
+    var src = b.schema.fields[0].nullable
+
+    var p = Project(
+        DynRelation(InMemoryTable(b.copy())),
+        ["out"],
+        [DynValue(Column[Int64Type]("a"))],
+    )
+    assert_equal(p.schema().fields[0].nullable, src)
+    assert_true(p.schema().fields[0].dtype == DynType(int64))
+
+
+def test_expr2_project_names_a_computed_column_from_its_dtype() raises:
+    """A computed value has no `Field` to carry, so `dtype()` answers instead.
+
+    This is `dtype()`'s reason to exist: the schema must be known *before*
+    anything runs, and `expr/` got it by evaluating against a zero-row batch.
+    """
+    var b = _batch()
+    var p = Project(
+        DynRelation(InMemoryTable(b.copy())),
+        ["sum"],
+        [DynValue(Add(Column[Int64Type]("a"), Column[Int64Type]("b")))],
+    )
+    assert_equal(p.schema().fields[0].name, "sum")
+    assert_true(p.schema().fields[0].dtype == DynType(int64))
+
+
+def test_expr2_project_schema_matches_what_it_produces() raises:
+    """The soundness property: the declared schema and the executed batch agree.
+
+    A schema computed statically can disagree with the batch; one derived by
+    evaluating cannot. Trading the probe for `dtype()` is what makes this
+    worth asserting.
+    """
+    var b = _batch()
+    var plan = DynRelation(
+        Project(
+            DynRelation(InMemoryTable(b.copy())),
+            ["sum", "orig"],
+            [
+                DynValue(Add(Column[Int64Type]("a"), Column[Int64Type]("b"))),
+                DynValue(Column[Int64Type]("a")),
+            ],
+        )
+    )
+    var out = plan.execute()
+    assert_true(out.schema == plan.schema())
+    assert_equal(out.num_columns(), 2)
+    assert_equal(out.num_rows(), b.num_rows())
+
+
+def test_expr2_project_rejects_mismatched_names_and_values() raises:
+    """Two parallel lists that must agree, checked where they are supplied."""
+    var raised = False
+    try:
+        _ = Project(
+            DynRelation(InMemoryTable(_batch())),
+            ["only_one"],
+            [
+                DynValue(Column[Int64Type]("a")),
+                DynValue(Column[Int64Type]("b")),
+            ],
+        )
+    except e:
+        raised = True
+        assert_true("project" in String(e))
+    assert_true(raised)
