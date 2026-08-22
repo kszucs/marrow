@@ -22,6 +22,7 @@ from std.sys.info import simd_width_of
 
 from ...arrays import DynArray, Int32Array
 from ...dtypes import DynType, NumericType
+from ...kernels.groupby import Grouping, HashGrouping, ScalarGrouping
 from ...kernels.aggregate import (
     AggKernel,
     AggState,
@@ -38,16 +39,26 @@ from ..physical import AggregateState, DynAggregateState
 from .core import NumericValue
 
 
-struct NumericAggregateState[K: AggKernel, A: NumericValue, grouped: Bool](
-    AggregateState
-):
+struct Fold[K: AggKernel, A: NumericValue, G: Grouping](AggregateState):
     """The fold in progress: this aggregate's input, plus the kernel's state.
 
-    `grouped` is a **comptime** parameter, so the two loops are two
-    instantiations of one struct rather than two structs — and neither compiles
-    the other's body. It is not a runtime branch: which one a query needs is
-    known when the plan is built, and running the grouped loop at one group
-    costs 14.6x.
+    Three axes, all comptime: the **algebra** (`K`), the whole **input**
+    subtree (`A`), and the **placement** (`G`). `Fold[SumKernel,
+    Mul[Column[Int64Type], Literal[Int64Type]], ScalarGrouping]` is one type,
+    and therefore one loop with nothing interpreted inside it.
+
+    `G` is a *phantom* parameter — the fold reads `G.scatters` and never holds
+    a `G`. The grouping instance itself belongs to the operator above, which
+    assigns every row once and shares the result with every aggregate in the
+    query; a fold that owned its own grouping would re-hash the keys once per
+    aggregate.
+
+    Placement being a **type** rather than a flag is what makes the two loops
+    two instantiations of one struct, neither compiling the other's body. It is
+    not a runtime branch: which one a query needs is known when the plan is
+    built, and running the scattering loop at a single group costs **14.6x**.
+    A sorted or partitioned placement arrives as another conformer, not as
+    another `Bool`.
     """
 
     comptime Acc = Self.K.AccType[Self.A.Type]
@@ -76,7 +87,7 @@ struct NumericAggregateState[K: AggKernel, A: NumericValue, grouped: Bool](
         # buffer *size* is rounded up to 64 bytes, and that is not slack.
         var simd_end = (n // W) * W
 
-        comptime if Self.grouped:
+        comptime if Self.G.scatters:
             var gids = groups.values()
             var i = 0
             if v:
@@ -218,11 +229,15 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](AggValue):
     # -- AggValue -----------------------------------------------------------
 
     def to_state(self, grouped: Bool) raises -> DynAggregateState:
+        """Pick the placement, once, when the plan is built.
+
+        A runtime `Bool` in, a comptime *type* out: whether the query has keys
+        is a property of the plan, and resolving it here is what keeps it out
+        of the inner loop.
+        """
         if grouped:
-            return NumericAggregateState[Self.K, Self.A, True](
-                self._input.copy()
-            )
-        return NumericAggregateState[Self.K, Self.A, False](self._input.copy())
+            return Fold[Self.K, Self.A, HashGrouping](self._input.copy())
+        return Fold[Self.K, Self.A, ScalarGrouping](self._input.copy())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self._input, ")")

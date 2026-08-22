@@ -177,6 +177,19 @@
 
 ### Features
 
+- **`Fold[K, A, G: Grouping]`** replaces
+  `NumericAggregateState[K, A, grouped: Bool]`. Three axes, all comptime: the
+  algebra, the whole input subtree, and now the **placement**. A sorted or
+  partitioned placement arrives as another conformer rather than another
+  `Bool`.
+
+  `G` is a *phantom* parameter — the fold reads `G.scatters` and never holds a
+  `G`. The grouping instance belongs to the operator above, which assigns every
+  row once and shares the result with every aggregate in the query; a fold that
+  owned its own grouping would re-hash the keys once per aggregate. Measured
+  **byte-for-byte size-neutral**, since the two instantiations already existed
+  under the `Bool`.
+
 - **`Grouping` — the placement axis, as a trait.** `kernels/groupby.mojo` gains
   `trait Grouping` with `ScalarGrouping` and `HashGrouping` conformers, so
   window partitions and a sorted or radix placement can arrive as *conformers*

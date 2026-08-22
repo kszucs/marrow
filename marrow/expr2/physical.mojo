@@ -493,7 +493,7 @@ struct AggregateOperator(Operator):
         # fold, and that split is measured. Parameterising this operator on
         # `Grouping` instantiates it once per conformer for **+24,432 bytes**
         # and buys nothing: its branch runs once per batch, while the 14.6x
-        # register-fold win lives in `NumericAggregateState`, which is already
+        # register-fold win lives in `Fold`, which is already
         # monomorphised on whether it scatters.
         var groups: Groups
         if self._keyless:
