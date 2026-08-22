@@ -1,8 +1,10 @@
 # The push engine, and three `Dyn*` boxes
 
-Status: proposed, 2026-08-22. Supersedes `physical.mojo`'s pull design and
-simplifies `2026-08-22-aggregation-architecture.md` by collapsing two of its
-types.
+Status: proposed, 2026-08-22. **Amended 2026-08-23** — the uniform
+`to_processor` surface below returns an *associated type*, not `DynProcessor`;
+what an operator owns is spelled out; and the claim that the logical layer is
+untouched is corrected. Supersedes `physical.mojo`'s pull design and simplifies
+`2026-08-22-aggregation-architecture.md` by collapsing two of its types.
 
 ## Why
 
@@ -54,14 +56,66 @@ extra slot to accommodate it, because `to_processor` is the uniform method, not
 an aggregate-specific one. And `Fold` is an `Operator`, so `DynFold` was
 `DynProcessor` all along.
 
-The uniform surface:
+The uniform surface — **an associated type, not an erased return**:
 
 ```mojo
 trait Logical:
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor
+    comptime Processor: Operator
+    def to_processor(self, ctx: ExecContext) raises -> Self.Processor
 ```
 
 implemented by `Relation` and by `Value` alike.
+
+**`-> DynProcessor` would have been wrong**, and it is the one correction this
+draft needed. A fused subtree's whole value is that it is *one type*, so
+erasing at `to_processor` ends fusion at exactly the boundary the AOT lane
+exists to cross. With an associated type, `Column[Int64Type].Processor` is
+`FusedOperator[Column[Int64Type]]` — concrete, monomorphic, DCE-able — while
+`DynValue.Processor` is `DynProcessor`, the same box relations use. The count
+is still three; only the *runtime* lane pays for a box.
+
+### What the operator owns, and what stays logical
+
+`bind`, `lane[W]` and `validity` **stay on the logical node**. They are
+compile-time composition — `Add[L, R].lane[W]` calls `L.lane[W]` — and moving
+them would dissolve the fusion they exist for. What becomes physical is the
+loop that *drives* them, together with everything whose lifetime is an
+execution:
+
+```mojo
+struct FusedOperator[V: NumericValue](Operator):
+    var _node: V              # the node itself, never a callback
+    var _ctx: ExecContext
+```
+
+Holding the node rather than a callback is not a style choice: the interposed
+`narrow` closure adapter in the old `variant_dispatch` helper measured
+**+662,740 bytes**, and removing it is what recovered that regression. A
+callback-parameterised operator is the same shape and should be expected to
+cost the same.
+
+This is also what finally gives per-execution state a home. `evaluate` was a
+pure function of (node, batch), so `IsIn`'s hash set and a compiled `LIKE`
+automaton had nowhere to live but a per-batch rebuild — and `ExecContext` was
+held by `FilterProcessor` and never reached the value at all. `push(mut self)`
+fixes both.
+
+Two binding levels, not three: per-execution (the operator) and per-batch
+(`Bound`). A third, `Prepared`, is **deferred until it has a conformer** —
+`IsIn` and `LIKE` are not ported yet, and a level built for nodes that do not
+exist cannot be tested.
+
+### `Evaluable` dissolves
+
+`evaluate(batch) -> Datum` is the physical contract inlined into the logical
+node; `push` replaces it. `comptime shape` moves to `Analyzable`, joining the
+three analysis questions it belongs with, and `Value` becomes
+`Analyzable & Logical & Writable & Copyable & Deinitable`.
+
+**There is no incremental rollout.** A trait default cannot return
+`Self.AssocType` unless that type is `ImplicitlyCopyable`, and marrow's array
+types deliberately are not — so every conformer gains `to_processor` in the
+same commit that declares it. Roughly nine source files, one commit.
 
 ### What this costs
 
@@ -74,9 +128,16 @@ as a requirement (R6); it is now a *preference* that lost to minimality.
 
 ## What stays
 
-The logical layer is **untouched** — `logical.mojo`, `core.mojo`, and both
-lanes. That is the first real payoff from having kept logical and physical
-separate: an engine rewrite that does not reach the plan.
+`logical.mojo` and both lanes keep their **node types**: every `Filter`,
+`Project`, `Column`, `Add` and `Sum` survives unchanged in what it *describes*,
+so no test that builds a plan changes shape.
+
+**`core.mojo` is not untouched, and this draft's original claim that it was is
+withdrawn.** `Evaluable` dissolves, `shape` moves to `Analyzable`, and every
+value node gains `Processor` + `to_processor`. The payoff of the logical /
+physical split is therefore smaller than first claimed, but it is real and it
+is the useful half: the engine rewrite does not reach the *plan a caller
+writes*.
 
 The aggregation architecture's four axes are unchanged: algebra x input x
 placement compose into a monomorphized fold, emission belongs to the operator,
@@ -85,19 +146,33 @@ spelled as an `Operator` instead of its own trait.
 
 ## Order
 
-1. **`expr2` binary-size gate.** Still first — nothing here is measurable
-   without it, and this change moves enough code to need a before/after.
+1. ~~**`expr2` binary-size gate.**~~ **Done 2026-08-23.**
+   `query_expr2_agg_fused` (1,320,356) and `query_expr2_streaming` (1,358,480)
+   are in `baseline.json`. The planned third gate, a runtime-named aggregate,
+   **cannot be written yet**: `NumericAggregate[K, A: NumericValue]` accepts
+   only a fused input, so `expr2` has no runtime aggregate to measure.
+   Running the gate immediately exposed a **pre-existing** +450,112-byte
+   regression on `query_join`, bisected to `6c570eb` and filed as backlog
+   **S20**. The gate is red for that reason and for nothing in this work; do
+   not clear it by re-baselining.
 2. **`Operator` + `DynProcessor`**, with `BatchSource` as driver and `collect()`
    as the driver loop. Port `Filter`/`Project`. Delete `Exhausted`.
 3. **`Kind` on `Value`**; `Project`/`Filter` validate at construction.
-4. **`DynValue.to_processor`**; delete `DynAggregate`.
+4. **`Logical.to_processor`** with the associated type; delete `DynAggValue`
+   and `DynAggregateState`.
 5. **`Grouping`** (`Scalar`, `Hash`), then the fold as an `Operator`.
-6. `Aggregate` relation; then combinators; then `PartitionGrouping` + `Window`.
+6. ~~`Aggregate` relation~~ **landed 2026-08-23, pull-based.** `Aggregate` +
+   `AggregateProcessor`, buffering nothing, with 7 cases covering the ungrouped
+   fold, grouping, schema order, positional key naming, a fold over zero
+   morsels, a fused subtree, and `HAVING`. It is correct under the pull engine
+   and should be **ported** at step 2 rather than rewritten — those tests are
+   behaviour specs and should pass unchanged. Then combinators; then
+   `PartitionGrouping` + `Window`.
 
-## Carried over — correct under either engine
+## Carried over — correct under either engine, and now committed
 
-The uncommitted kernel work stands on its own and should be reviewed and
-committed independently:
+All of this is **in HEAD** as of 2026-08-23; the draft described it as
+uncommitted, which is stale.
 
 - `AggState._grow`, and `finish` growing before it reads — a **live
   out-of-bounds**, silent in release builds.
@@ -107,6 +182,14 @@ committed independently:
   per-batch scratch.
 - The verified fold body: masked lanes, mandatory scalar tail, int64 valid
   count.
+
+One correction to the record: the fused aggregate's `update` was reported as
+failing to instantiate for a reason "bisected to the *body*, not the plumbing".
+That was wrong. The cause was `SIMD[DType.bool, W](True)`, whose positional
+constructor asserts `size == 1`; `fill=True` is the whole fix and all 13 cases
+pass. **`fill=` is declared only for `SIMD[DType.bool, size]`** — numeric
+splats use the positional `Scalar[Self.dtype]` constructor and are already
+correct.
 
 ## Open
 
