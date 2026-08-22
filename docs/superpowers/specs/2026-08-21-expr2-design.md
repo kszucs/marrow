@@ -501,7 +501,10 @@ the first place.
 4. Is name-based join-key identity sufficient? `HashJoin` renames colliding
    right-side columns, so "name" is not unique across a join's output. Gates
    decorrelation.
-5. Do `Bound` / `bind()` replace `State` / `state()`, or is that churn?
+5. ~~Do `Bound` / `bind()` replace `State` / `state()`?~~ **Answered by the
+   build**: `Bound`/`bind()` are what the comptime lane shipped with. The names
+   earn the change — `State` could mean anything, while a `Bound` is
+   specifically *this subtree's column references, resolved against this batch*.
 6. From the subquery spec: is `exists(sub, left_on=…, right_on=…)` honest
    naming when the caller supplies the key, and should `IsInKernel` move from
    PyArrow's `MATCH` to SQL's `INCONCLUSIVE`? No golden case can pin the
