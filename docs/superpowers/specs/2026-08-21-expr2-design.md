@@ -365,96 +365,59 @@ veto, only if Phase 0 shows splitting improves pruning.
 is deleted. `expr2` is renamed `expr` in its own commit, so the diff that moves
 code and the diff that renames it are never the same diff.
 
-## Phase 1a — the boolean family, and the Kleene refactor it needs
+## Phase 1a — the boolean family
 
-The numeric family fuses because `validity(bound)` can answer from the bound
-alone: null in, null out. **The boolean family cannot**, and that is not an
-oversight in the trait — it is three-valued logic. `NULL AND FALSE` is `FALSE`,
-so the result's *validity* depends on the operands' *values*, which the bound
-does not carry.
+The numeric family fuses because `validity(bound)` answers from the bound alone:
+null in, null out. **The boolean family cannot**, and that is not an oversight
+in the trait — it is three-valued logic. `NULL AND FALSE` is `FALSE`, so the
+result's *validity* depends on the operands' *values*, which the bound does not
+carry.
 
-`expr/` solves this by calling `Self.K.apply(la, ra)` and reading `res.bitmap` —
-correct, because the kernel already implements Kleene, but it materialises both
-operands as arrays even inside a fused pass.
+### Resolution: call the kernel, as `expr/` does — it is also the fastest
 
-### The rule lives in exactly one place today
+`BoolBinary.validity` calls `Self.K.apply(la, ra)` and reads `res.bitmap`. That
+materialises both operands as arrays inside what is otherwise a fused pass, which
+read as a compromise worth removing. **It is not.** Measured 2026-08-22 on
+`bench_boolean.mojo`:
 
-`AndKernel.apply` → `_kleene[is_and=True]`, `OrKernel.apply` →
-`_kleene[is_and=False]`. One shared function in `marrow/kernels/boolean.mojo`,
-whose validity half is whole-bitmap algebra:
+| | array path (`_kleene`) | per-lane rule | |
+|---|---|---|---|
+| `and_nullable_100k` | 2.55 µs | 25.38 µs | 10.0× slower |
+| `and_nullable_1m` | 24.94 µs | 252.1 µs | 10.1× slower |
+| `or_nullable_1m` | 25.05 µs | 98.41 µs | 3.9× slower |
+| `and_nonnull_1m` | 3.23 µs | 3.24 µs | noise |
+| `not_control_1m` | 4.40 µs | 4.43 µs | *control* |
 
-```mojo
-term_a = av.difference(a_data)      # is_and:  valid AND NOT data
-term_b = bv.difference(b_data)
-valid  = term_a | term_b | (av & bv)
-```
+A lane-shaped `kleene_validity[is_and, W]` driven by `apply` was written, and it
+did cut five bitmap temporaries and five passes down to one. It still lost by
+4-10×, because **pass count was the wrong thing to count**: `Bitmap`'s `&`, `|`
+and `difference` work **64 bits per instruction**, while `BitmapView.load[W]`
+expands each bit to a byte-wide SIMD lane and `store[W]` re-packs it. One pass
+16 bits wide is far worse than five passes 64 bits wide.
 
-**Adding a second lane-level implementation is the thing not to do.** Two copies
-of Kleene drift — the failure shape already recorded twice in this tree
-(`emits_right_columns` re-derived at four sites that disagreed; the `K.name`
-dispatch that silently stopped matching). A `validity_core` slot on
-`BoolBinaryKernel` was proposed and **rejected** for exactly this.
+So `expr2`'s `BoolValue.validity` calls the kernel, and Kleene keeps exactly one
+implementation — `_kleene` in `marrow/kernels/boolean.mojo`. The
+"one-definition-two-drivers" refactor this section previously specified is
+**withdrawn**: there is no second driver worth having.
 
-### The task: one definition, two drivers
+### What this settles more generally
 
-Extract the rule as an `@always_inline` function in `kernels/boolean.mojo`:
+Validity is not uniformly fusable, and the trait should stop implying it is.
+Structural validity (numeric, comparison, string) fuses from the bound;
+data-dependent validity (Kleene, and anything else deciding nulls from values)
+is a bitmap-algebra problem and belongs at array granularity. That argues
+`validity` belongs on the **family** traits, each taking what it needs, rather
+than on `ComptimeValue` where one signature must serve both — the consequence
+first hit when `validity(bound)` made the bool family unimplementable.
 
-```mojo
-@always_inline
-def kleene_validity[is_and: Bool, W: Int](
-    da: SIMD[DType.bool, W], va: SIMD[DType.bool, W],
-    db: SIMD[DType.bool, W], vb: SIMD[DType.bool, W],
-) -> SIMD[DType.bool, W]:
-    """Arrow C++ `KleeneAnd` / `KleeneOr` validity, one lane wide.
+### Guardrail
 
-    AND: a known-false operand forces a valid (false) result.
-    OR:  a known-true  operand forces a valid (true)  result.
-    """
-    comptime if is_and:
-        return (va & ~da) | (vb & ~db) | (va & vb)
-    else:
-        return (va &  da) | (vb &  db) | (va & vb)
-```
-
-Then **rebuild `_kleene`'s validity section on top of it**, so the array path and
-the fused path share one definition rather than agreeing by inspection. The
-bitmap operands become `SIMD[DType.bool, W]` chunks loaded through `BitmapView`,
-driven by the same `apply` bit-packing overload the bool lane uses.
-
-`expr2`'s `BoolValue` then calls `kleene_validity` directly from its own
-`validity(bound)`, with the operand data it already has in registers.
-
-### The trap to preserve
-
-`_kleene` returns early when **neither** operand has a bitmap:
-
-```mojo
-if not left.bitmap and not right.bitmap:
-    return BoolArray(..., bitmap=None, ...)
-```
-
-That is the common case for real predicates and it allocates nothing. A
-vectorised rewrite that always materialises `_validity_ones` for both sides
-**loses** it and regresses every non-nullable `and`/`or` in the tree. Keep the
-early return, and keep `_validity_ones` behind it.
-
-### Verification — required, not optional
-
-`_kleene` is what every boolean kernel in marrow uses, so "it compiles" is not
-evidence:
-
-```bash
-pixi run -e dev pytest marrow/kernels/tests/test_boolean.mojo
-pixi run -e dev pytest marrow/expr/tests marrow/expr2/tests
-pixi run -e dev pytest --benchmark marrow/kernels/tests/bench_boolean.mojo
-```
-
-Benchmarks need an **untouched control row** (a bitmap benchmark the change
-cannot reach) with its median subtracted before any delta is attributed — this
-machine drifts ±8% per case. See CLAUDE.md, "Writing Mojo benchmarks".
-
-Gate: kernels and both expression suites pass, and the null-free `and`/`or`
-benchmark is within noise of baseline after control subtraction.
+`_kleene`'s early return — neither operand nullable → no validity buffer, no
+allocation — is the common case for real predicates and is worth 8× on
+`and_nonnull_1m` (3.2 µs against 25 µs). Any future change here keeps it.
+`marrow/kernels/tests/bench_boolean.mojo` now gates all of this; it did not
+exist before, which is why the regression was available to be reasoned into in
+the first place.
 
 ## Success criteria
 
