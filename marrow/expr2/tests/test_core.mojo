@@ -27,14 +27,15 @@ from std.testing import assert_equal, assert_false, assert_true
 from ...arrays import DynArray
 from ...builders import array
 from ...dtypes import DynType, Int64Type, field, int64
-from ...scalars import DynScalar
+from ...scalars import DynScalar, Int64Scalar
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
 from ..core import Datum, DynValue, Shape, into_array
 from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.numeric import Add, Gt
 from ..logical import DynRelation, Filter, InMemoryTable, Project
-from ..runtime.values import Payload, RuntimeValue
+from ..builders import col, lit
+from ..runtime.values import Payload, RuntimeValue, column, literal
 
 
 # ---------------------------------------------------------------------------
@@ -57,14 +58,6 @@ def _column_eval(
     return b.column(p[String]).copy()
 
 
-def _runtime_column(var name: String) -> RuntimeValue:
-    return RuntimeValue("column", _column_eval, Payload(name^))
-
-
-def _runtime_literal(var v: DynScalar) -> RuntimeValue:
-    return RuntimeValue("literal", _column_eval, Payload(v^))
-
-
 # ---------------------------------------------------------------------------
 # Both lanes satisfy one Value and box into one DynValue
 # ---------------------------------------------------------------------------
@@ -78,7 +71,7 @@ def test_expr2_both_lanes_box_together() raises:
     """
     var boxed = List[DynValue]()
     boxed.append(DynValue(Column[Int64Type]("a")))
-    boxed.append(DynValue(_runtime_column("a")))
+    boxed.append(DynValue(column("a")))
 
     for ref v in boxed:
         assert_equal(v.name(), "a")
@@ -136,7 +129,7 @@ def test_expr2_dtype_agrees_with_evaluation_comptime() raises:
 def test_expr2_dtype_agrees_with_evaluation_runtime() raises:
     """Same claim for the lane that has to look itself up in the schema."""
     var b = _batch()
-    var v = DynValue(_runtime_column("b"))
+    var v = DynValue(column("b"))
     var produced = into_array(v.evaluate(b), b.num_rows()).dtype()
     assert_true(v.dtype(b.schema) == produced)
 
@@ -147,7 +140,7 @@ def test_expr2_dtype_of_a_missing_column_names_the_column() raises:
     `get_field_index` answers -1, and indexing a column list with that trips an
     assert that kills the process instead of saying which column was wrong.
     """
-    var v = DynValue(_runtime_column("nope"))
+    var v = DynValue(column("nope"))
     var raised = False
     try:
         _ = v.dtype(_batch().schema)
@@ -189,10 +182,8 @@ def test_expr2_columns_are_deduped_in_first_seen_order() raises:
     var v = RuntimeValue(
         "add",
         _column_eval,
-        _runtime_column("b"),
-        RuntimeValue(
-            "add", _column_eval, _runtime_column("a"), _runtime_column("b")
-        ),
+        column("b"),
+        RuntimeValue("add", _column_eval, column("a"), column("b")),
     )
     var cols = v.columns()
     assert_equal(len(cols), 2)
@@ -451,3 +442,59 @@ def test_expr2_project_rejects_mismatched_names_and_values() raises:
         raised = True
         assert_true("project" in String(e))
     assert_true(raised)
+
+
+# ---------------------------------------------------------------------------
+# builders — `col` and `lit` select a lane by what the caller knows
+# ---------------------------------------------------------------------------
+def test_col_with_dtype_takes_the_comptime_lane() raises:
+    """A dtype in hand fuses: the result is a `Column[T]`, not erased."""
+    var c = col("a", int64)
+    assert_equal(c.name(), "a")
+    assert_true(c.shape == Shape.columnar)
+    assert_true(type_of(c).Type == Int64Type)
+
+
+def test_col_without_dtype_takes_the_runtime_lane() raises:
+    var c = col("a")
+    assert_equal(c.name(), "a")
+    assert_true(c.shape == Shape.columnar)
+
+
+def test_both_col_overloads_evaluate_alike() raises:
+    """The two lanes are different machinery, not different answers."""
+    var b = _batch()
+    var typed = into_array(col("b", int64).evaluate(b), b.num_rows())
+    var erased = into_array(col("b").evaluate(b), b.num_rows())
+    assert_true(typed == erased)
+    assert_true(typed == b.column("b"))
+
+
+def test_lit_with_dtype_stays_scalar() raises:
+    """The comptime literal does not materialise — that is what `Shape.scalar`
+    buys, and it is the difference from the runtime lane below."""
+    var v = lit(7, int64)
+    assert_true(v.shape == Shape.scalar)
+    var d = v.evaluate(_batch())
+    assert_true(d.isa[DynScalar]())
+
+
+def test_lit_without_dtype_broadcasts() raises:
+    """The runtime lane promised `Shape.columnar`, so it pays for it.
+
+    This is the case the test fixtures got wrong before `literal` existed: they
+    wired a literal to the column evaluator, which reads `Payload[String]` and
+    would have failed the moment anything evaluated it.
+    """
+    var b = _batch()
+    var v = lit(DynScalar(Int64Scalar(7)))
+    assert_true(v.shape == Shape.columnar)
+    var arr = into_array(v.evaluate(b), b.num_rows())
+    assert_equal(len(arr), 4)
+    assert_true(arr == array([7, 7, 7, 7], int64))
+
+
+def test_lit_names_itself_by_value() raises:
+    """A literal's `name()` is its value, so a projection of one is not
+    anonymous — `SELECT 1` has a column called `1`."""
+    assert_equal(lit(1, int64).name(), "1")
