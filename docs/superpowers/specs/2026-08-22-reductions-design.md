@@ -22,7 +22,7 @@ The design is judged against these. Each is testable; none is aspirational.
 | **R6** | a reduction used as a value is a **compile** error | `project([sum(a)])` must not silently yield per-morsel partials |
 | **R7** | closed erasure: unused kernels are dropped by DCE; `pixi run binary_size` within +0.5% | standing constraint on `marrow.expr` |
 | **R8** | the runtime lane can be added later without redesigning | Python-driven aggregates land in Phase 5 |
-| **R9** | thread-local partials + merge is expressible | `ExecContext` owns thread count; the fold must be able to use it |
+| **R9** | thread-local partials + merge is expressible, **and intermediate state is a column** | `ExecContext` owns thread count; and a state column makes two-phase aggregation, spilling and distributed merge one mechanism (ClickHouse `-State`/`-Merge`) |
 | **R10** | empty input and all-null input both yield NULL | SQL semantics, not the kernel's identity |
 | **R11** | `count(*)`, `count_distinct`, `any`/`all` fit without a second architecture | their state is not `AggState[K, V: NumericType]` |
 | **R12** | kernels stay typed-first; erasure lives with whoever holds the list | every other kernel file has exactly one thin erased overload; `aggregate.mojo` has four |
@@ -152,14 +152,63 @@ boundary, which is where erasure destroys fusion (R1), and they are why
 the deletion is gated on Phase 5. Until then `DynAccumulator` lands **beside**
 the existing types, not in place of them.
 
+## Intermediate state as a value — ClickHouse's `-State` / `-Merge`
+
+ClickHouse makes the accumulator's *intermediate* state a first-class typed
+value: `sumState(x)` yields a column of type `AggregateFunction(sum, UInt64)`,
+which `sumMerge` later folds. That is what makes partial aggregation,
+distributed aggregation and `AggregatingMergeTree` all one mechanism instead of
+three. DataFusion has the same idea in weaker form — `AggregateMode::Partial` /
+`Final`, with `Accumulator::state() -> Vec<ScalarValue>`.
+
+**This changes `Accumulator`'s surface**, and for the better. The first draft
+had `merge(remap, other: Self)` — an internal, accumulator-to-accumulator
+operation, usable only by whoever held both objects. Making the state a
+*column* instead:
+
+```mojo
+trait Accumulator(Deinitable, Movable):
+    def update(mut self, batch, groups: Int32Array, num_groups: Int) raises
+    def state(mut self, num_groups: Int) raises -> DynArray   # intermediate, NOT finalized
+    def absorb(mut self, state: DynArray, groups: Int32Array, num_groups: Int) raises
+    def finish(mut self, num_groups: Int) raises -> DynArray  # finalized
+```
+
+`state`/`absorb` replace `merge`, and the remap disappears: a state column is
+re-grouped by the same `groups` mechanism as input data, so merging partials
+with independently-assigned group ids is just `absorb` under the merged
+grouper's ids. That removes open risk 2 rather than managing it.
+
+What it buys, all from one mechanism:
+
+- **R9** thread-local partials — each worker produces a state column, one
+  `absorb` pass combines them
+- **two-phase aggregation in the plan** — `Aggregate(mode=Partial)` below an
+  exchange, `Aggregate(mode=Final)` above, which is what lets the optimizer push
+  aggregation below a join
+- **spilling** — a state column is a column; it can be written and read back
+- **incremental/materialised aggregates** later, without new machinery
+
+Cost: every kernel must define a state *layout*, not just an accumulator type.
+`sum` is its own state; `mean` is `(sum, count)`; `count_distinct` is a sketch
+or a hash set. `AggKernel.AccType` covers the first case only, so this needs a
+`StateType` alongside it — and for `mean` that is a struct column. That is real
+work and it is the main cost of this section.
+
+**Decision: design the surface for it now, implement `finish` first.** `state`
+and `absorb` are on the trait from the start so that adding two-phase
+aggregation is not a redesign, but only `sum`/`min`/`max` — whose state *is*
+their accumulator — need to implement them in the first increment. `mean` and
+`count_distinct` may raise `unimplemented` until R11 is taken on.
+
 ## Open risks
 
 1. **Grouped scatter from a SIMD lane.** Ungrouped keeps the accumulator in a
    register; grouped must scatter `W` lanes to `W` different slots. Whether that
    beats materialise-then-scatter is **unmeasured**, and R1 only claims the
    ungrouped win outright.
-2. **`merge`'s remap.** Threads group independently, so partials merge through a
-   remap. Kept in the signature rather than promising pairwise merge.
+2. ~~**`merge`'s remap.**~~ Removed by `state`/`absorb`: a state column
+   re-groups through the same mechanism as input data.
 3. **R11.** `count_distinct` needs entirely different state. The `Reduction`/
    `Accumulator` split is what should absorb that — same logical node, different
    physical fold — but the factory is then not always `AggState`-backed, and
