@@ -1,5 +1,7 @@
 """The logical layer: an immutable description of a query.
 
+Paired with `physical.mojo`, which holds what these become when they run.
+
 A `Relation` says *what* to compute. It owns nothing that runs, so a plan is
 freely copyable, shareable, inspectable and — once the optimizer exists —
 rewritable. `to_processor(ctx)` turns it into the physical operator that owns

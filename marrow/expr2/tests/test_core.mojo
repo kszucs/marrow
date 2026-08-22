@@ -33,7 +33,7 @@ from ...tabular import RecordBatch, record_batch
 from ..core import Datum, DynValue, Shape, into_array
 from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.numeric import Add, Gt
-from ..plan import DynRelation, Filter, InMemoryTable, Project
+from ..logical import DynRelation, Filter, InMemoryTable, Project
 from ..runtime.values import Payload, RuntimeValue
 
 
