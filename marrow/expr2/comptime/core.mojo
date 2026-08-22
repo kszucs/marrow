@@ -55,30 +55,16 @@ trait ComptimeValue(Analyzable, Copyable, Deinitable, Evaluable, Writable):
     from here. The runtime lane is the reason that method takes a schema at all.
     """
 
-    comptime Bound: Copyable & Deinitable
-    """Everything the lane loop needs, resolved once per batch.
-
-    A column leaf's is its typed column; a literal's is nothing; a binary node's
-    is `Pair[L.Bound, R.Bound]`. Declared per concrete struct rather than
-    defaulted: a trait default cannot reduce at a `-> Self.Bound` return site
-    unless the bound is `ImplicitlyCopyable`, and marrow's array types
-    deliberately are not.
-
-    `expr/` called this `State`, which could mean anything. It is specifically
-    *this subtree's column references, bound to this batch* — the stage between
-    an expression and a per-element read.
-    """
-
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        """Resolve this subtree against `batch`, once, before the lane loop.
-
-        Every schema lookup and every `Variant` unwrap happens here so that
-        `lane` does none. That removal is the optimisation.
-        """
-        ...
-
-    # `validity` is deliberately **not** here. It is declared per family,
-    # because the families do not agree on what validity needs.
+    # `Bound`, `bind` and `validity` are deliberately **not** here. All
+    # three are *fusion* machinery, and this trait does not mean "fuses" --
+    # it means "knows its output type without a schema". A Kleene `AND`
+    # knows it produces `bool` and does not fuse at all; making it invent a
+    # `Bound` it never reads, to satisfy a base it only needs `Type` from,
+    # is how a trait starts describing its first implementer instead of its
+    # concept.
+    #
+    # They are declared on the fusing families, which also do not agree on
+    # what validity needs.
     #
     # Structural validity — numeric, comparison, string — is null-in-null-out
     # and answers from the `Bound` alone. Data-dependent validity does not:
@@ -101,6 +87,28 @@ trait NumericValue(ComptimeValue):
     """A comptime node producing a fixed-width numeric column."""
 
     comptime Type: NumericType
+
+    comptime Bound: Copyable & Deinitable
+    """Everything the lane loop needs, resolved once per batch.
+
+    A column leaf's is its typed column; a literal's is nothing; a binary node's
+    is `Tuple[L.Bound, R.Bound]`. Declared per concrete struct rather than
+    defaulted: a trait default cannot reduce at a `-> Self.Bound` return site
+    unless the bound is `ImplicitlyCopyable`, and marrow's array types
+    deliberately are not.
+
+    `expr/` called this `State`, which could mean anything. It is specifically
+    *this subtree's column references, bound to this batch* — the stage between
+    an expression and a per-element read.
+    """
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        """Resolve this subtree against `batch`, once, before the lane loop.
+
+        Every schema lookup and every `Variant` unwrap happens here so that
+        `lane` does none. That removal is the optimisation.
+        """
+        ...
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         """One fused pass over the batch — `bind` once, then `lane` per chunk.
@@ -193,6 +201,28 @@ trait BoolValue(ComptimeValue):
     """
 
     comptime Type = BoolType
+
+    comptime Bound: Copyable & Deinitable
+    """Everything the lane loop needs, resolved once per batch.
+
+    A column leaf's is its typed column; a literal's is nothing; a binary node's
+    is `Tuple[L.Bound, R.Bound]`. Declared per concrete struct rather than
+    defaulted: a trait default cannot reduce at a `-> Self.Bound` return site
+    unless the bound is `ImplicitlyCopyable`, and marrow's array types
+    deliberately are not.
+
+    `expr/` called this `State`, which could mean anything. It is specifically
+    *this subtree's column references, bound to this batch* — the stage between
+    an expression and a per-element read.
+    """
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        """Resolve this subtree against `batch`, once, before the lane loop.
+
+        Every schema lookup and every `Variant` unwrap happens here so that
+        `lane` does none. That removal is the optimisation.
+        """
+        ...
 
     comptime NativeType: DType
     """The **operand** width, which sizes the SIMD lane — not the output.

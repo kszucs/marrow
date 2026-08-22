@@ -5,14 +5,14 @@ does its work — every schema lookup and `Variant` unwrap happens here so the
 lane loop above does none.
 """
 
-from ...arrays import PrimitiveArray
+from ...arrays import BoolArray, PrimitiveArray
 from ...buffers import Bitmap
-from ...dtypes import DynType, NumericType
+from ...dtypes import BoolType, DynType, NumericType
 from ...scalars import PrimitiveScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..core import Datum, Shape
-from .core import NumericValue
+from .core import BoolValue, NumericValue
 
 
 struct Column[T: NumericType](NumericValue):
@@ -119,3 +119,59 @@ struct Literal[T: NumericType](NumericValue):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("lit(", self._value, ")")
+
+
+struct BoolColumn(BoolValue):
+    """A boolean column, resolved by name once per batch.
+
+    Separate from `Column[T]` because booleans are **bit-packed**: the `Bound`
+    is a `BoolArray` and the lane loads through `values()`, the offset-applied
+    `BitmapView`, rather than through a typed buffer. `Column[T]` is bound on
+    `NumericType` and cannot take `BoolType` — the same reason `PrimitiveArray[bool_]`
+    is not a thing anywhere in the tree.
+
+    Without this leaf a fused expression could not read a `bool` column at all,
+    so any three-valued-logic test would have to synthesise its operands from
+    comparisons. `expr/` shipped without it for exactly that reason and had to
+    add it later.
+    """
+
+    comptime NativeType = DType.bool
+    comptime shape = Shape.columnar
+    comptime Bound = BoolArray
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Analyzable ---------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(BoolType())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        # As with `Column[T]`: hand back the column rather than re-packing an
+        # identical bitmap through the fused driver.
+        return Datum(batch.column(self._name).copy())
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        return batch.column(self._name).as_bool().copy()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return bound.to_data().owned_validity()
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._name)
