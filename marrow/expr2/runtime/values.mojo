@@ -15,7 +15,7 @@ That is the trade, and it is why the two lanes exist rather than one:
 
 The runtime lane is what a frontend uses when the query is not known until the
 program runs, which is every frontend that is not the Mojo DSL. It is also why
-`marrow.expr2` has a box at all: a plan holds either lane through `DynValue`,
+this package has a box at all: a plan holds either lane through `DynValue`,
 and that mixing is what buys the 1.46 MB.
 
 **A tag never selects a kernel.** `_tag` is how a node prints and how it

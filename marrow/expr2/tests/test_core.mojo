@@ -1,46 +1,27 @@
-"""Soundness of the `expr2` spine.
+"""`DynValue`, `Shape` and `Datum` — the erasure boundary itself.
 
-These do not test that a kernel computes the right numbers — that is the golden
-corpus's job, against DuckDB. They test the **invariants the design rests on**,
-each of which is a claim one method makes about another. A design where two
-methods can disagree is one where a caller must know which to trust, and every
-such pair here has already cost something in `expr/`:
+What is tested here is the boundary, not either lane: that both lanes box into
+one `DynValue`, and that every question the box answers agrees with what the
+value it holds actually does when evaluated. A box that reports one dtype and
+produces another is the failure this file exists to catch, and nothing above it
+could detect the disagreement.
 
-- `dtype(schema)` must agree with what `evaluate` actually produces. `expr/`
-  had no `dtype` and computed output types by evaluating against a zero-row
-  batch, which cannot disagree because it *is* the evaluation. Answering
-  statically reintroduces the possibility, so it gets a test.
-- `shape` must agree with what `evaluate` returns — scalar or array. A node
-  claiming `scalar` while materialising a column would make `into_array`
-  broadcast something already broadcast.
-- `name()` and `columns()` must jointly identify a bare column, because four
-  callers ask exactly that composition and nothing else answers it.
-- `validity(bound)` must match the null pattern of the evaluated column.
-
-Both lanes are asserted through the *same* box wherever the property is about
-the erased surface, because "both lanes agree" is the property the two-lane
-design is staking everything on.
+Lane-specific behaviour lives with its lane — `comptime/tests/` and
+`runtime/tests/`.
 """
 
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...arrays import DynArray
 from ...builders import array
-from ...dtypes import DynType, Int64Type, field, int64
-from ...scalars import DynScalar, Int64Scalar
-from ...schema import schema
+from ...dtypes import DynType, Int64Type, int64
+from ...scalars import DynScalar
 from ...tabular import RecordBatch, record_batch
-from ..core import Datum, DynValue, Shape, into_array
+from ..core import DynValue, Shape, into_array
 from ..`comptime`.leaves import Column, Literal
-from ..`comptime`.numeric import Add, Gt
-from ..logical import DynRelation, Filter, InMemoryTable, Project
-from ..builders import col, lit
-from ..runtime.values import Payload, RuntimeValue, column, literal
+from ..runtime.values import RuntimeValue, column
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 def _batch() raises -> RecordBatch:
     """`a` has a null so validity has something to report."""
     return record_batch(
@@ -52,21 +33,10 @@ def _batch() raises -> RecordBatch:
     )
 
 
-def _unevaluated(
-    kids: List[DynArray], p: Payload, b: RecordBatch
-) raises -> DynArray:
-    """A stand-in `EvalFn` for nodes built to be *analysed*, never run.
-
-    `RuntimeValue` needs some function pointer to exist. Tests that only ask a
-    tree about its structure — `columns()`, `name()` — should not have to pick
-    a real evaluator and imply the node computes something."""
-    raise Error("_unevaluated: this node exists for structural assertions only")
-
-
 # ---------------------------------------------------------------------------
 # Both lanes satisfy one Value and box into one DynValue
 # ---------------------------------------------------------------------------
-def test_expr2_both_lanes_box_together() raises:
+def test_both_lanes_box_together() raises:
     """The two-lane design's load-bearing claim, asserted rather than assumed.
 
     A comptime node and a runtime node must be interchangeable *as boxed
@@ -87,8 +57,9 @@ def test_expr2_both_lanes_box_together() raises:
 
 # ---------------------------------------------------------------------------
 # name() / columns() jointly identify a bare column
-# ---------------------------------------------------------------------------
-def test_expr2_is_column_separates_the_three_cases() raises:
+
+
+def test_is_column_separates_the_three_cases() raises:
     """`name() != "" and len(columns()) == 1`, across all three shapes.
 
     The composition exists so that bare-column-ness needs no slot of its own,
@@ -109,7 +80,7 @@ def test_expr2_is_column_separates_the_three_cases() raises:
     assert_equal(len(lit.columns()), 0)
 
 
-def test_expr2_literal_is_named_as_sql_names_it() raises:
+def test_literal_is_named_as_sql_names_it() raises:
     """`SELECT 1` yields a column called `1`; so does `lit(1)`."""
     assert_equal(DynValue(Literal[Int64Type](1)).name(), "1")
     assert_equal(DynValue(Literal[Int64Type](-42)).name(), "-42")
@@ -117,29 +88,16 @@ def test_expr2_literal_is_named_as_sql_names_it() raises:
 
 # ---------------------------------------------------------------------------
 # dtype(schema) agrees with evaluate()
+
+
+def test_a_literal_reads_no_columns() raises:
+    assert_equal(len(DynValue(Literal[Int64Type](3)).columns()), 0)
+
+
 # ---------------------------------------------------------------------------
-def test_expr2_dtype_agrees_with_evaluation_comptime() raises:
-    """The comptime lane answers from `Type` without touching the batch.
-
-    That is the whole reason `dtype` exists rather than probing — so the two
-    answers being equal is the property, not an implementation detail.
-    """
-    var b = _batch()
-    var v = DynValue(Column[Int64Type]("a"))
-    var produced = into_array(v.evaluate(b), b.num_rows()).dtype()
-    assert_true(v.dtype(b.schema) == produced)
-    assert_true(v.dtype(b.schema) == DynType(int64))
-
-
-def test_expr2_dtype_agrees_with_evaluation_runtime() raises:
-    """Same claim for the lane that has to look itself up in the schema."""
-    var b = _batch()
-    var v = DynValue(column("b"))
-    var produced = into_array(v.evaluate(b), b.num_rows()).dtype()
-    assert_true(v.dtype(b.schema) == produced)
-
-
-def test_expr2_dtype_of_a_missing_column_names_the_column() raises:
+# What the box says agrees with what it does
+# ---------------------------------------------------------------------------
+def test_dtype_of_a_missing_column_names_the_column() raises:
     """A bad column must be reported by name, not by a bounds abort.
 
     `get_field_index` answers -1, and indexing a column list with that trips an
@@ -157,8 +115,9 @@ def test_expr2_dtype_of_a_missing_column_names_the_column() raises:
 
 # ---------------------------------------------------------------------------
 # shape agrees with what evaluate returns
-# ---------------------------------------------------------------------------
-def test_expr2_shape_agrees_with_evaluation() raises:
+
+
+def test_shape_agrees_with_evaluation() raises:
     """A `scalar` node must stay lazy; a `columnar` one must materialise.
 
     If a literal claimed `columnar`, every predicate over a constant would
@@ -180,326 +139,3 @@ def test_expr2_shape_agrees_with_evaluation() raises:
 
 # ---------------------------------------------------------------------------
 # columns() is deduped and order-preserving
-# ---------------------------------------------------------------------------
-def test_expr2_columns_are_deduped_in_first_seen_order() raises:
-    """Projection pushdown reads this list; a repeat would narrow twice and a
-    reorder would build a schema in the wrong order."""
-    var v = RuntimeValue(
-        "add",
-        _unevaluated,
-        column("b"),
-        RuntimeValue("add", _unevaluated, column("a"), column("b")),
-    )
-    var cols = v.columns()
-    assert_equal(len(cols), 2)
-    assert_equal(cols[0], "b")
-    assert_equal(cols[1], "a")
-
-
-def test_expr2_a_literal_reads_no_columns() raises:
-    assert_equal(len(DynValue(Literal[Int64Type](3)).columns()), 0)
-
-
-def test_expr2_validity_matches_the_bound_column() raises:
-    """`lane` produces data bits only, so validity is a separate contract.
-
-    Reading it from the `Bound` rather than the batch is what stops the second
-    pass `expr/` needed; the property is that it still reports the same nulls.
-    """
-    var b = _batch()
-    var c = Column[Int64Type]("a")
-    var bound = c.bind(b)
-    var v = c.validity(bound)
-
-    assert_true(v)
-    # `a` is [1, 2, None, 4] — exactly one null, at index 2.
-    assert_false(v.value()[2])
-    assert_true(v.value()[0])
-
-
-def test_expr2_a_literal_is_never_null() raises:
-    var b = _batch()
-    var l = Literal[Int64Type](7)
-    assert_false(Bool(l.validity(l.bind(b))))
-
-
-# ---------------------------------------------------------------------------
-# Fusion: the lane computes data bits, validity records what they mean
-# ---------------------------------------------------------------------------
-def test_expr2_a_comparison_over_a_null_is_null_not_false() raises:
-    """The defect class this whole validity contract exists to prevent.
-
-    A SIMD lane compares whatever is in the slot, so the *data* bit for a null
-    row is whatever the payload happened to be — usually zero, which reads as
-    `False`. Only the validity bitmap records that the bit is meaningless.
-    Reading the data bit without it is exactly what made NULL join keys match
-    each other in `expr/`.
-    """
-    var b = _batch()  # a = [1, 2, None, 4]
-    var pred = Gt(Column[Int64Type]("a"), Literal[Int64Type](2))
-    var arr = into_array(pred.evaluate(b), b.num_rows())
-    ref out = arr.as_bool()
-
-    assert_equal(out.null_count(), 1)
-    assert_true(out.is_null(2))
-    # The rows that are not null answer the comparison.
-    assert_false(out[0].value())  # 1 > 2
-    assert_false(out[1].value())  # 2 > 2
-    assert_true(out[3].value())  # 4 > 2
-
-
-def test_expr2_arithmetic_propagates_nulls_through_fusion() raises:
-    """Null in, null out — across a fused subtree, not just one node."""
-    var b = _batch()
-    var sum = Add(Column[Int64Type]("a"), Column[Int64Type]("b"))
-    var arr = into_array(sum.evaluate(b), b.num_rows())
-    ref out = arr.as_int64()
-
-    assert_equal(out.null_count(), 1)
-    assert_true(out.is_null(2))
-    assert_equal(out[0].value(), 11)
-    assert_equal(out[3].value(), 44)
-
-
-def test_expr2_a_fused_subtree_is_one_expression() raises:
-    """`(a + b) > 10` fuses three nodes; the null still propagates to the top.
-
-    The point is not the arithmetic — it is that `bind` descends the whole
-    subtree once and validity survives two levels, which is what a single
-    fused pass has to preserve.
-    """
-    var b = _batch()
-    var pred = Gt(
-        Add(Column[Int64Type]("a"), Column[Int64Type]("b")),
-        Literal[Int64Type](10),
-    )
-    var arr = into_array(pred.evaluate(b), b.num_rows())
-    ref out = arr.as_bool()
-
-    assert_equal(out.null_count(), 1)
-    assert_true(out.is_null(2))
-    assert_true(out[0].value())  # 1 + 10 = 11 > 10
-    assert_true(out[3].value())  # 4 + 40 = 44 > 10
-
-
-def test_expr2_a_literal_only_expression_stays_scalar() raises:
-    """`Shape.scalar` must survive composition, or every constant folds into a
-    column before it is used."""
-    var b = _batch()
-    var both = Add(Literal[Int64Type](1), Literal[Int64Type](2))
-    assert_true(both.shape == Shape.scalar)
-    assert_true(both.evaluate(b).isa[DynScalar]())
-
-
-# ---------------------------------------------------------------------------
-# End to end: a dynamic plan holding a fused predicate
-# ---------------------------------------------------------------------------
-def test_expr2_a_dynamic_plan_runs_a_fused_predicate() raises:
-    """The configuration the whole two-lane design exists to allow.
-
-    The plan is erased and composed at run time; the predicate is a comptime
-    type fused into one loop. That combination is what measures 1.46 MB against
-    4.91 MB for the same plan with runtime expressions — and it only works
-    because `DynValue` lets a `Filter` hold either lane without knowing which.
-    """
-    var plan = DynRelation(
-        Filter(
-            DynRelation(InMemoryTable(_batch())),
-            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
-        )
-    )
-    var out = plan.execute()
-
-    # a = [1, 2, None, 4] -> only 4 > 2
-    assert_equal(out.num_rows(), 1)
-    ref a = out.columns[0].as_int64()
-    assert_equal(a[0].value(), 4)
-
-
-def test_expr2_a_null_predicate_does_not_select() raises:
-    """SQL's rule, and the reason `Filter` must not read the data bit alone.
-
-    `None > 2` is NULL, not false — but the SIMD lane still produced a bit for
-    that row. If the filter selected on data bits, the null row's payload would
-    decide whether it survives.
-    """
-    var plan = DynRelation(
-        Filter(
-            DynRelation(InMemoryTable(_batch())),
-            # every non-null row passes, so only the null's treatment shows
-            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](-100))),
-        )
-    )
-    var out = plan.execute()
-    assert_equal(out.num_rows(), 3)  # 1, 2, 4 — the null is not selected
-
-
-def test_expr2_filter_preserves_its_input_schema() raises:
-    """A filter changes which rows survive, never which columns exist."""
-    var b = _batch()
-    var plan = DynRelation(
-        Filter(
-            DynRelation(InMemoryTable(b.copy())),
-            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
-        )
-    )
-    assert_true(plan.schema() == b.schema)
-    assert_equal(plan.execute().num_columns(), b.num_columns())
-
-
-def test_expr2_an_empty_result_is_a_well_formed_batch() raises:
-    """Zero rows still means one zero-length column per field.
-
-    A schema naming fields beside an empty column list leaves `num_columns()`
-    at 0, so anything walking columns by schema index runs off the end — and
-    exporting it over the C Data interface returns NULL without setting an
-    exception.
-    """
-    var b = _batch()
-    var plan = DynRelation(
-        Filter(
-            DynRelation(InMemoryTable(b.copy())),
-            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](999))),
-        )
-    )
-    var out = plan.execute()
-    assert_equal(out.num_rows(), 0)
-    assert_equal(out.num_columns(), len(b.schema.fields))
-
-
-# ---------------------------------------------------------------------------
-# Project — the caller that justifies dtype() and name()
-# ---------------------------------------------------------------------------
-def test_expr2_project_carries_a_bare_column_field_whole() raises:
-    """A projected pass-through keeps its source `Field`, not just its dtype.
-
-    Rebuilding the field from `dtype()` alone loses `nullable`, so projecting
-    a column would produce a *different* schema for it than selecting the same
-    column does. `expr/` records that divergence with `nullable` False
-    becoming True.
-    """
-    var b = record_batch([array([1, 2], int64).copy()], names=["a"])
-    # `a` is non-nullable here; the projection must not widen it.
-    var src = b.schema.fields[0].nullable
-
-    var p = Project(
-        DynRelation(InMemoryTable(b.copy())),
-        ["out"],
-        [DynValue(Column[Int64Type]("a"))],
-    )
-    assert_equal(p.schema().fields[0].nullable, src)
-    assert_true(p.schema().fields[0].dtype == DynType(int64))
-
-
-def test_expr2_project_names_a_computed_column_from_its_dtype() raises:
-    """A computed value has no `Field` to carry, so `dtype()` answers instead.
-
-    This is `dtype()`'s reason to exist: the schema must be known *before*
-    anything runs, and `expr/` got it by evaluating against a zero-row batch.
-    """
-    var b = _batch()
-    var p = Project(
-        DynRelation(InMemoryTable(b.copy())),
-        ["sum"],
-        [DynValue(Add(Column[Int64Type]("a"), Column[Int64Type]("b")))],
-    )
-    assert_equal(p.schema().fields[0].name, "sum")
-    assert_true(p.schema().fields[0].dtype == DynType(int64))
-
-
-def test_expr2_project_schema_matches_what_it_produces() raises:
-    """The soundness property: the declared schema and the executed batch agree.
-
-    A schema computed statically can disagree with the batch; one derived by
-    evaluating cannot. Trading the probe for `dtype()` is what makes this
-    worth asserting.
-    """
-    var b = _batch()
-    var plan = DynRelation(
-        Project(
-            DynRelation(InMemoryTable(b.copy())),
-            ["sum", "orig"],
-            [
-                DynValue(Add(Column[Int64Type]("a"), Column[Int64Type]("b"))),
-                DynValue(Column[Int64Type]("a")),
-            ],
-        )
-    )
-    var out = plan.execute()
-    assert_true(out.schema == plan.schema())
-    assert_equal(out.num_columns(), 2)
-    assert_equal(out.num_rows(), b.num_rows())
-
-
-def test_expr2_project_rejects_mismatched_names_and_values() raises:
-    """Two parallel lists that must agree, checked where they are supplied."""
-    var raised = False
-    try:
-        _ = Project(
-            DynRelation(InMemoryTable(_batch())),
-            ["only_one"],
-            [
-                DynValue(Column[Int64Type]("a")),
-                DynValue(Column[Int64Type]("b")),
-            ],
-        )
-    except e:
-        raised = True
-        assert_true("project" in String(e))
-    assert_true(raised)
-
-
-# ---------------------------------------------------------------------------
-# builders — `col` and `lit` select a lane by what the caller knows
-# ---------------------------------------------------------------------------
-def test_col_with_dtype_takes_the_comptime_lane() raises:
-    """A dtype in hand fuses: the result is a `Column[T]`, not erased."""
-    var c = col("a", int64)
-    assert_equal(c.name(), "a")
-    assert_true(c.shape == Shape.columnar)
-    assert_true(type_of(c).Type == Int64Type)
-
-
-def test_col_without_dtype_takes_the_runtime_lane() raises:
-    var c = col("a")
-    assert_equal(c.name(), "a")
-    assert_true(c.shape == Shape.columnar)
-
-
-def test_both_col_overloads_evaluate_alike() raises:
-    """The two lanes are different machinery, not different answers."""
-    var b = _batch()
-    var typed = into_array(col("b", int64).evaluate(b), b.num_rows())
-    var erased = into_array(col("b").evaluate(b), b.num_rows())
-    assert_true(typed == erased)
-    assert_true(typed == b.column("b"))
-
-
-def test_lit_with_dtype_stays_scalar() raises:
-    """The comptime literal does not materialise — that is what `Shape.scalar`
-    buys, and it is the difference from the runtime lane below."""
-    var v = lit(7, int64)
-    assert_true(v.shape == Shape.scalar)
-    var d = v.evaluate(_batch())
-    assert_true(d.isa[DynScalar]())
-
-
-def test_lit_without_dtype_broadcasts() raises:
-    """The runtime lane promised `Shape.columnar`, so it pays for it.
-
-    This is the case the test fixtures got wrong before `literal` existed: they
-    wired a literal to the column evaluator, which reads `Payload[String]` and
-    would have failed the moment anything evaluated it.
-    """
-    var b = _batch()
-    var v = lit(DynScalar(Int64Scalar(7)))
-    assert_true(v.shape == Shape.columnar)
-    var arr = into_array(v.evaluate(b), b.num_rows())
-    assert_equal(len(arr), 4)
-    assert_true(arr == array([7, 7, 7, 7], int64))
-
-
-def test_lit_names_itself_by_value() raises:
-    """A literal's `name()` is its value, so a projection of one is not
-    anonymous — `SELECT 1` has a column called `1`."""
-    assert_equal(lit(1, int64).name(), "1")

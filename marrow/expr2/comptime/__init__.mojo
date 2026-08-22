@@ -1,5 +1,5 @@
 """The comptime lane. Relative imports here need no backtick escaping — the
-package name only has to be spelled at the boundary, in `expr2/__init__.mojo`.
+package name only has to be spelled at the boundary, in the package `__init__.mojo`.
 """
 
 from .core import ComptimeValue, NumericValue

@@ -1,6 +1,6 @@
 """`col` and `lit` — the one surface that spans both lanes.
 
-Every other module in `expr2` belongs to exactly one lane. This one cannot, and
+Every other module in this package belongs to exactly one lane. This one cannot, and
 that is deliberate rather than a compromise: `col` is a single name whose
 overloads select a lane by **what the caller knows**.
 

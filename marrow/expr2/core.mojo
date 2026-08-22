@@ -27,7 +27,7 @@ its two siblings bind on the *common* trait, never on a family — so naming the
 lanes changes nothing about how they meet.
 
 This module is a **leaf**: it imports the containers and nothing else under
-`marrow.expr2`.
+this package.
 """
 
 from std.memory import ArcPointer
