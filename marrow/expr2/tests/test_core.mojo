@@ -52,10 +52,15 @@ def _batch() raises -> RecordBatch:
     )
 
 
-def _column_eval(
+def _unevaluated(
     kids: List[DynArray], p: Payload, b: RecordBatch
 ) raises -> DynArray:
-    return b.column(p[String]).copy()
+    """A stand-in `EvalFn` for nodes built to be *analysed*, never run.
+
+    `RuntimeValue` needs some function pointer to exist. Tests that only ask a
+    tree about its structure — `columns()`, `name()` — should not have to pick
+    a real evaluator and imply the node computes something."""
+    raise Error("_unevaluated: this node exists for structural assertions only")
 
 
 # ---------------------------------------------------------------------------
@@ -181,9 +186,9 @@ def test_expr2_columns_are_deduped_in_first_seen_order() raises:
     reorder would build a schema in the wrong order."""
     var v = RuntimeValue(
         "add",
-        _column_eval,
+        _unevaluated,
         column("b"),
-        RuntimeValue("add", _column_eval, column("a"), column("b")),
+        RuntimeValue("add", _unevaluated, column("a"), column("b")),
     )
     var cols = v.columns()
     assert_equal(len(cols), 2)

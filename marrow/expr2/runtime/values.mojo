@@ -202,29 +202,23 @@ struct RuntimeValue(
 # ---------------------------------------------------------------------------
 # Leaf constructors
 # ---------------------------------------------------------------------------
-def _column_eval(
-    kids: List[DynArray], p: Payload, b: RecordBatch
-) raises -> DynArray:
-    return b.column(p[String]).copy()
-
-
-def _literal_eval(
-    kids: List[DynArray], p: Payload, b: RecordBatch
-) raises -> DynArray:
-    """Broadcast, because this lane is unconditionally `Shape.columnar`.
-
-    The comptime lane's `Literal` stays a `DynScalar` and lets `into_array`
-    decide; a `RuntimeValue` has already promised a `DynArray`, so the cost of
-    that promise is paid here.
-    """
-    return p[DynScalar].repeat(b.num_rows())
-
-
 def column(var name: String) -> RuntimeValue:
     """Read `name` from the batch."""
-    return RuntimeValue("column", _column_eval, Payload(name^))
+
+    def eval(
+        kids: List[DynArray], p: Payload, b: RecordBatch
+    ) raises -> DynArray:
+        return b.column(p[String]).copy()
+
+    return RuntimeValue("column", eval, Payload(name^))
 
 
 def literal(var value: DynScalar) -> RuntimeValue:
     """A constant, broadcast to the batch's length on evaluation."""
-    return RuntimeValue("literal", _literal_eval, Payload(value^))
+
+    def eval(
+        kids: List[DynArray], p: Payload, b: RecordBatch
+    ) raises -> DynArray:
+        return p[DynScalar].repeat(b.num_rows())
+
+    return RuntimeValue("literal", eval, Payload(value^))
