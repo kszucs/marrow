@@ -26,10 +26,17 @@ is the first such family; string, bool, temporal and list follow the same shape.
 """
 
 from ...buffers import Bitmap
-from ...dtypes import BoolType, DataType, DynType, NumericType
+from ...dtypes import (
+    BoolType,
+    DataType,
+    DynType,
+    NumericType,
+    StringLikeType,
+)
 from ...schema import Schema
-from ...arrays import BoolArray, PrimitiveArray
+from ...arrays import BinaryLikeArray, BoolArray, PrimitiveArray
 from ...buffers import Bitmap, Buffer
+from ...builders import BinaryLikeBuilder
 from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
@@ -184,6 +191,80 @@ trait NumericValue(ComptimeValue):
         exists as a separate stage rather than the lane reaching through
         `self`.
         """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# StringValue — the family whose lane has no width
+# ---------------------------------------------------------------------------
+trait StringValue(ComptimeValue):
+    """A comptime node producing a variable-width string column.
+
+    The family that breaks the SIMD shape, and it is worth being explicit about
+    why rather than treating it as an exception. `NumericValue.lane[W]` and
+    `BoolValue.lane[W]` both answer `W` elements at once because their storage
+    is fixed-width: element `i` is at a computable offset. UTF-8 is not — a
+    string's position depends on every string before it — so **`lane` here takes
+    no `W` and answers one `String`**. There is no vector to widen to.
+
+    Everything else is unchanged, and that is the point: `bind` still resolves
+    the subtree once per batch, `validity` is still structural and still reads
+    the `Bound` rather than the batch, and a string subtree still fuses into one
+    loop. Fusion is about eliminating dispatch, not about SIMD width, so it
+    survives a family that cannot vectorise.
+    """
+
+    comptime Type: StringLikeType
+
+    comptime Bound: Copyable & Deinitable
+    """This subtree's column references, bound to this batch — as
+    `NumericValue.Bound`, and declared per concrete struct for the same
+    reason."""
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        """Resolve this subtree against `batch`, once, before the lane loop."""
+        ...
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        """One fused pass — `bind` once, then `lane` per row.
+
+        A builder rather than `apply`: `apply` writes fixed-width elements into
+        a preallocated buffer, and neither the width nor the total byte count of
+        a string result is known before the loop runs. The offsets buffer is
+        built as it goes, which is what a `BinaryLikeBuilder` already does.
+
+        Leaves override this: a column hands back its own array rather than
+        copying every byte through a fresh builder.
+        """
+        var bound = self.bind(batch)
+        var length = batch.num_rows()
+        var builder = BinaryLikeBuilder[Self.Type](length)
+        var v = self.validity(bound)
+        if v:
+            ref bm = v.value()
+            var bits = bm.view()
+            for i in range(length):
+                if bits[i]:
+                    builder.append(self.lane(bound, i))
+                else:
+                    builder.append_null()
+        else:
+            for i in range(length):
+                builder.append(self.lane(bound, i))
+        return builder.finish().to_dyn()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity, or `None` when it cannot be null.
+
+        Structural, exactly as in `NumericValue`: intersect the operands'
+        bitmaps, never read their values.
+        """
+        ...
+
+    @always_inline
+    def lane(self, bound: Self.Bound, idx: Int) -> String:
+        """One row. The elementwise counterpart of the SIMD families'
+        `lane[W]`, and the only shape a variable-width encoding admits."""
         ...
 
 

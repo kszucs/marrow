@@ -177,6 +177,29 @@
 
 ### Features
 
+- **`expr2` gains the string family** — `StringValue`, `StringColumn[T]`,
+  `StringLiteral[T]`, and the four comparisons, plus `col(name, string)` and
+  `lit(value, string)`.
+
+  This is the family that **cannot vectorise**, and it is worth stating why
+  rather than treating it as an exception. `NumericValue.lane[W]` and
+  `BoolValue.lane[W]` answer `W` elements because their storage is fixed-width;
+  UTF-8 is not, since a string's position depends on every string before it. So
+  `StringValue.lane` takes no `W` and answers one `String`. **Fusion survives
+  it**: fusion removes *dispatch*, not width, so `name > 'b' AND a > 1` is
+  still one pass with no intermediate column — and that composition has a test.
+
+  Everything else is unchanged, which is the point: `bind` still resolves once
+  per batch, `validity` is still structural and still reads the `Bound` rather
+  than the batch, and the output still bit-packs, so a string predicate feeds
+  `And`/`Or` and `Filter` without either knowing it came from strings.
+  `StringColumn` is parameterised on `StringLikeType`, so `large_string` is the
+  same leaf with a different offset width rather than a second node type.
+
+  Costs **+600 bytes** on the streaming gate and nothing on a query that uses
+  no strings — the family is dead-code-eliminated exactly as the lane design
+  intends.
+
 - **`expr2` gains `Limit` and `Sort`**, taking it to 6 of `expr/`'s 8
   relations.
 

@@ -5,14 +5,14 @@ does its work — every schema lookup and `Variant` unwrap happens here so the
 lane loop above does none.
 """
 
-from ...arrays import BoolArray, PrimitiveArray
+from ...arrays import BinaryLikeArray, BoolArray, PrimitiveArray
 from ...buffers import Bitmap
-from ...dtypes import BoolType, DynType, NumericType
-from ...scalars import PrimitiveScalar
+from ...dtypes import BoolType, DynType, NumericType, StringLikeType
+from ...scalars import PrimitiveScalar, StringScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..core import Datum, Shape
-from .core import BoolValue, NumericValue
+from .core import BoolValue, NumericValue, StringValue
 
 
 struct Column[T: NumericType](NumericValue):
@@ -175,3 +175,100 @@ struct BoolColumn(BoolValue):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._name)
+
+
+struct StringColumn[T: StringLikeType](StringValue):
+    """A string column, resolved by name once per batch.
+
+    Parameterised on `StringLikeType` rather than fixed to `string`, so
+    `large_string` is the same leaf with a different offset width rather than a
+    second node type.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.columnar
+    comptime Bound = BinaryLikeArray[Self.T]
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Analyzable ---------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        # Hand back the column rather than copying every byte through a
+        # builder — the whole reason the trait default is overridable.
+        return batch.column(self._name).copy()
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        return batch.column(self._name).as_type[Self.Bound]().copy()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return bound.to_data().owned_validity()
+
+    @always_inline
+    def lane(self, bound: Self.Bound, idx: Int) -> String:
+        return String(bound.unsafe_get(UInt(idx)))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct StringLiteral[T: StringLikeType](StringValue):
+    """A constant string. Stays `Shape.scalar`, so it never materialises
+    unless something asks it to."""
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = Bool
+
+    var _value: String
+
+    def __init__(out self, var value: String):
+        self._value = value^
+
+    # -- Analyzable ---------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String("")
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.T())
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        return Datum(StringScalar(self._value.copy()).to_dyn())
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        # Nothing to resolve: a constant reads no column.
+        return False
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane(self, bound: Self.Bound, idx: Int) -> String:
+        return self._value.copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write('"', self._value, '"')

@@ -17,9 +17,14 @@ shadow rather than overload — and which one a call site got would depend on it
 imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
-from .`comptime`.leaves import Column, Literal
+from .`comptime`.leaves import (
+    Column,
+    Literal,
+    StringColumn,
+    StringLiteral,
+)
 from .runtime.values import RuntimeValue, column, literal
-from ..dtypes import FloatingType, NumericType
+from ..dtypes import FloatingType, NumericType, StringLikeType
 from ..scalars import DynScalar
 
 
@@ -34,6 +39,17 @@ def col[T: NumericType](var name: String, dtype: T) -> Column[T]:
     run time; `Column[T].Type` answers from `T`.
     """
     return Column[T](name^)
+
+
+def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
+    """A typed string column, fused like its numeric sibling.
+
+    A separate overload rather than a wider bound on the numeric one: strings
+    are variable-width, so `StringColumn` is a different family with a
+    width-less `lane`. Mojo picks between them from `dtype`'s type, so the
+    caller writes `col("name", string)` either way.
+    """
+    return StringColumn[T](name^)
 
 
 def col(var name: String) -> RuntimeValue:
@@ -70,3 +86,8 @@ def lit[T: FloatingType](value: Float64, dtype: T) -> Literal[T]:
 def lit(var value: DynScalar) -> RuntimeValue:
     """An erased constant, broadcast on evaluation."""
     return literal(value^)
+
+
+def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:
+    """A typed constant string, `Shape.scalar` like its numeric sibling."""
+    return StringLiteral[T](value^)
