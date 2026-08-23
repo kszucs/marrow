@@ -1,5 +1,16 @@
 # The push engine, and three `Dyn*` boxes
 
+> **Built, and the design moved. Read
+> `docs/superpowers/plans/2026-08-23-expr2-aggregation-plan.md` for what
+> `expr2` actually is.** This spec is kept for its reasoning, not as a
+> description of the tree. Four things below are now stale: `finish` is
+> `drain` and is *repeatable* (which is what let `Source` be deleted rather
+> than kept); `to_processor` is `to_operator`; `DynAggValue` is gone entirely,
+> because an aggregate turned out to be a `Value` rather than a sibling of
+> one; and `DynProcessor` is `Pipeline`, which is itself an `Operator`. The
+> box count landed at **three**, as this spec predicted, but by a different
+> route than it describes.
+
 Status: proposed, 2026-08-22. **Amended 2026-08-23** — the uniform
 `to_processor` surface below returns an *associated type*, not `DynProcessor`;
 what an operator owns is spelled out; and the claim that the logical layer is

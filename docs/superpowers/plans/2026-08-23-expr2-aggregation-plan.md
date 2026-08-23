@@ -1,151 +1,167 @@
-# expr2 aggregation — implementation plan
+# expr2 — architecture and remaining work
 
-Self-contained handoff. Written 2026-08-23 at the end of a long design session;
-everything needed to continue is here or linked from here.
+Rewritten 2026-08-23 after the consolidation. The original document was a plan
+for the aggregation work; that work is done, and the layer was restructured
+around it. This now describes **what expr2 is** and **what is left**.
 
-## Decision
+## The architecture
 
-Build **design A** (`docs/superpowers/specs/2026-08-23-expr-design-a.md`) plus
-the aggregation architecture
-(`docs/superpowers/specs/2026-08-22-aggregation-architecture.md`).
+Two modules, one edge, no cycle.
 
-Design B (`…-expr-design-b.md`) is *better* on one axis — one implementation of
-every operation, and rewrites that run at compile time — but costs the UX: an
-explicit `comptime P = …` lift and comptime-parameterised builders. A synthesis
-keeping both exists (typed nodes carry a `comptime PLAN`, the plan value is the
-IR) but rests on one **unprobed** mechanism. See Tier 3.
+```
+logical.mojo   Shape, Analyzable, Executable, Value, DynValue,
+               Relation, DynRelation, and the plan nodes
+       │
+       ▼
+physical.mojo  Datum, Morsel, Operator, DynOperator[Out], Pipeline,
+               Evaluable, EvalOperator, and the operators
+```
 
-**A is not a dead end.** Typed nodes are the surface in every version, so
-adopting A forecloses nothing — a plan IR derived from those types is additive.
+`physical` imports **nothing** from inside the package. The split is by
+meaning: `Shape` is a *description* (does this yield one value or one per row,
+knowable without running), `Datum` is a *result* (what a running operator
+produced).
 
-A's known weakness, stated plainly: a Python-built expression's *shape* cannot
-be a type, so operations exist twice — typed nodes and runtime evaluators. That
-is the status quo `expr/` already lives with. A does not fix it; B does.
+### Four rules the layer now obeys
 
-## State of the tree
+1. **A logical node is stateless; a physical one owns state.** `to_operator()`
+   is the *only* door between them, for relations and values alike. There is no
+   `evaluate` on `Value` or on `DynValue` — a description has no business
+   exposing a way to run itself. `evaluate` survives only inside a lane, on
+   `Evaluable`, as the fused driver that lane's operator calls.
 
-Branch `expr2`. **Updated 2026-08-23 during execution — the description below
-replaces the original handoff text, which was stale.**
+2. **One executor contract.**
 
-The work this plan described as "uncommitted and held for review" was **already
-committed**; the tree was clean at the start of the session. `AggState._grow`,
-`AggState.accumulate[W]` and `AggState.combine_at` are all in HEAD. Tier 1.2 was
-therefore done before this plan was executed.
+   ```mojo
+   trait Operator(Deinitable, Movable):
+       comptime Out: Copyable
+       def push(mut self, morsel: Morsel) raises -> Optional[Self.Out]
+       def drain(mut self) raises -> Optional[Self.Out]
+       def done(self) -> Bool
+   ```
 
-Landed since:
+   Blocking is not a type distinction — it is *when you answer `Some`*. A
+   filter answers from `push`; an aggregate accumulates and answers from
+   `drain`; a **source** is simply the operator whose `push` is never called
+   and whose `drain` answers until it runs dry. `Out` is what lets one trait
+   cover both a relational stage (`RecordBatch`) and a value's (`Datum`).
 
-- `fix(expr2)` — the fused aggregate's mask splat. The plan recorded `update`
-  as failing to instantiate, "bisected to the *body*, not the plumbing", to be
-  fixed during the `Fold` rewrite. **That diagnosis was wrong.** The cause was
-  `SIMD[DType.bool, W](True)`, whose positional constructor carries
-  `comptime assert Self.size == 1` — *"use the `fill` keyword instead for
-  explicit splatting"*. One line. All 13 cases pass. The verified fold body was
-  never at fault, so there is nothing to carry into `Fold` beyond what is
-  already written.
-  **Note for the rewrite:** `fill=` is declared **only** for
-  `SIMD[DType.bool, size]`. Numeric splats use the positional
-  `Scalar[Self.dtype]` constructor and are already correct; applying `fill=`
-  uniformly trades one error for two.
-- `feat(expr2)` — the `Aggregate` relation and `AggregateProcessor` (Tier 2.8's
-  first half). It **buffers nothing**: `update` takes the `RecordBatch`, so no
-  per-aggregate chunk list is built. `HAVING` falls out as a `Filter` above it.
-  Also renamed the value-level `Aggregate`/`DynAggregate` to
-  `AggValue`/`DynAggValue`, which is what both docstrings already claimed and
-  what frees `Aggregate` for the plan node.
-- `test(binary_size)` — Tier 1.1, see below.
+   `drain` is **repeatable** — the driver calls it until `None`. An operator
+   that cannot say "spent" hangs the driver; `FoldOperator` violated this and
+   it was a latent infinite loop.
 
-63 expr2 tests pass; `precompile` is clean at 0 errors, 0 warnings.
+3. **An aggregate is a `Value`.** Not a sibling of one. `sum(x)` conforms to
+   exactly what `x + 1` conforms to and is boxed by the same `DynValue`; it is
+   simply the conformer that answers from `drain`. There is no `AggValue`
+   trait and no `DynAggValue` box. Projecting or filtering on an aggregate is a
+   plan-time error naming it, which is what DuckDB, DataFusion and Polars do.
 
-## Tier 1 — design-independent, build first
+4. **A `Pipeline` is an `Operator`.** A chain of stages pushes, drains and
+   finishes like a single stage, so it is a *composite*, not a second
+   abstraction. That is what will let `Join` hold two whole sub-plans.
+   Relations still build it concretely, because `append` needs the concrete
+   type and composing through the box would nest one pipeline per stage.
 
-1. ~~**The `expr2` binary-size gate.**~~ **Done**, with one deviation. The plan
-   said to mirror `query_streaming_agg_fused` *and* `query_streaming_agg`. The
-   second could not be written: it measures the cost of a **runtime-named**
-   aggregate identity, and `expr2` has no `AggFunc` equivalent —
-   `NumericAggregate[K, A: NumericValue]` accepts only a fused input, so a
-   runtime aggregate cannot be spelled at all yet. Shipped instead:
-   `query_expr2_agg_fused` (1,320,356) and `query_expr2_streaming`
-   (1,358,480), the latter covering filter + projection. Add the runtime-named
-   gate when `expr2` grows a runtime aggregate.
+### Naming
 
-   Both use an `int64` group key where their `expr/` twins use `string`:
-   `Column[T]` is bound on `NumericType`, so a fused string column cannot be
-   spelled. **The two packages' numbers are not comparable**; these gates catch
-   `expr2` regressing against itself.
+Every `Operator` conformer ends in `Operator`: `BatchSourceOperator`,
+`FilterOperator`, `ProjectOperator`, `LimitOperator`, `SortOperator`,
+`AggregateOperator`, `FoldOperator`, `EvalOperator`.
 
-   **Running the gate immediately surfaced two pre-existing regressions**,
-   neither caused by this work: `query_join` **+30.455%** (+459,216 bytes) and
-   `query_dynvalue` **+0.862%**. Proven pre-existing by A/B — `query_join`
-   measures 1,967,052 at `6b32d74`, byte-for-byte what HEAD measures. 59
-   commits since the 2026-08-17 baseline reset touch what `query_join` links.
-   **Do not `--update` the baseline to clear these**; that erases the signal,
-   which is exactly the failure the baseline comment already documents once.
-2. ~~**Commit the `AggState` fixes.**~~ **Done before this session** — already
-   in HEAD, tree clean.
-3. **`Grouping`** in `kernels/groupby.mojo` — `ScalarGrouping`, `HashGrouping`;
-   placement extracted from `GroupBy`'s tangle. `PartitionGrouping`/`Sorted`
-   later, as conformers rather than branches.
-4. **Combinators** in `kernels/aggregate.mojo` — `State[K]`, `Merge[K]`,
-   `If[K]`, `Distinct[K]`, each an `AggKernel` transformer. Two-phase
-   aggregation becomes the same fold differently composed; `count_distinct`
-   becomes `Distinct[CountKernel]` rather than a second state design.
+### The lanes
 
-## Tier 2 — A-shaped
+`comptime/` is the fused lane — a node's type *is* the expression, and
+`bind`/`lane[W]`/`validity` are compile-time composition, so a subtree inlines
+into one loop. `runtime/` resolves dtypes from a schema. Both reach the
+physical layer through the same `to_operator`, and `builders.mojo` holds the
+one surface spanning them: `col("a", int64)` fuses, `col("a")` does not. That
+overload set **cannot** be split across the lane packages — Mojo resolves
+overloads from candidates visible at one name, so splitting gives two functions
+that shadow rather than overload.
 
-5. `Fold[K: AggKernel, A: NumericValue, G: Grouping]` in
-   `expr2/comptime/aggregates.mojo`, carrying the verified fold body below.
-6. `Kind` on `Value` (`elementwise | reduction | analytic`) beside `Shape`.
-7. **The push engine** (`…-push-engine.md`) — orthogonal to A vs B, and what
-   cuts five `Dyn*` boxes to three. `Operator{push, finish}`; sources stay pull
-   and drive; delete `Exhausted`.
-8. ~~`Aggregate` relation + processor~~ **done**; then `PartitionGrouping` +
-   `Window`.
+## What landed
 
-## Tier 2.5 — `to_processor()` symmetry (added 2026-08-23, approved)
+- **Tier 1.1** — the first binary-size gates that build anything from `expr2`
+  (`query_expr2_agg_fused`, `query_expr2_streaming`). Running them immediately
+  exposed a pre-existing **+450 KB** regression on `query_join`, bisected to
+  `6c570eb` and since fixed (backlog S20, −439,232 bytes recovered).
+- **Tier 1.2** — the `AggState` fixes were already in HEAD.
+- **Tier 1.3** — `Grouping` / `ScalarGrouping` / `HashGrouping`, the placement
+  axis as a trait. `kernels.core.Grouping` was renamed `Groups` to free the
+  name: the trait is the grouping, `Groups` is what it assigned.
+- **Tier 2.5** — `FoldOperator[K, A, G]`. Algebra, input subtree and placement
+  all comptime.
+- **Tier 2.7** — the push engine, then the consolidation above.
+- **Tier 2.8** — the `Aggregate` relation, plus `Limit` and `Sort`. Six of
+  `expr/`'s eight relations.
+- **The string family** — `StringValue`, the one that cannot vectorise
+  (`lane` has no `W`). Fusion survived it, which is the evidence that fusion
+  removes *dispatch*, not width.
 
-Agreed during execution, design approved, spec pending at
-`docs/superpowers/specs/2026-08-23-expr2-processor-symmetry-design.md`.
+**Nine types deleted**: `Exhausted`, `Processor`, `FilterProcessor`,
+`ProjectProcessor`, `AggregateState`, `DynAggregateState`, `AggValue`,
+`DynAggValue`, and `core.mojo` itself.
 
-**The rule: the physical counterpart of logical trait `X` is `XProcessor`,
-erased as `DynXProcessor`, produced by `X.to_processor(ctx)`.** Three instances
-— `Relation`/`RelationProcessor`, `AggValue`/`AggValueProcessor`,
-`Value`/`ValueProcessor` — so today's `Processor`/`DynProcessor` are renamed to
-`RelationProcessor`/`DynRelationProcessor` and `AggregateState` becomes
-`AggValueProcessor`.
+## Standing debt — the gate
 
-Four decisions, all settled:
+`query_expr2_agg_fused` **+6.339%**, `query_expr2_streaming` **+3.268%**,
+against a 0.5% threshold. Attributed, not guessed:
 
-- **The processor owns real per-execution state** — `IsIn`'s set, a compiled
-  `LIKE` automaton, and the `ExecContext`, which today `FilterProcessor` holds
-  and never hands to the value. `evaluate` takes `mut self`.
-- **`to_processor` returns an associated type, and the processor holds the
-  node** — `FusedProcessor[V]` owns `V` by value, so the comptime lane is never
-  erased and fusion and DCE survive the boundary. **Not** a callback-based
-  executor: the interposed closure adapter in `variant_dispatch` measured
-  **+662,740 bytes**.
-- **`bind`/`lane[W]`/`validity` stay logical.** They are compile-time
-  composition — `Add[L, R].lane[W]` calls `L.lane[W]`. Only the driving loop
-  becomes physical. `Evaluable` dissolves; `comptime shape` moves to
-  `Analyzable`, where the other analysis questions live.
-- **Two binding levels, not three.** `Prepared` waits for a real conformer.
+| | |
+|---|---|
+| ~44 KB | `Morsel` carrying `Groups` through every stage (`marrow::kernels::groupby` 1 → 13 linked symbols). **Inherent** to one executor contract. |
+| ~32 KB | `EvalOperator[V]` instantiating once per boxed value type. **Recoverable.** |
 
-**No incremental rollout is possible** — no trait default can return the
-associated type unless it is `ImplicitlyCopyable`, which marrow's array types
-deliberately are not. One commit, ~9 source files. The gates in Tier 1.1 exist
-so this refactor's size cost is one falsifiable number.
+The recoverable half is a `kind` field on `DynValue`: elementwise values share
+one `EvalOperator[DynValue]`, and only aggregates pay per-type. That is the
+Tier 2.6 `Kind` item, which was vacuous while aggregates had their own trait
+and stopped being so the moment they became values.
 
-## Tier 3 — the probe that could change the shape
+**Do not clear the gate by re-baselining.** §0 of the backlog already records
+one +55% regression that survived ten commits for exactly that reason.
 
-Can a type carry `comptime PLAN` built recursively from its children's `PLAN`s
-— `List` concatenation at comptime, upward through a generic parameter? The
-pieces are individually verified (heap-holding structs as comptime parameters;
-non-raising `def`s at comptime; conditional comptime types reducing *and*
-carrying their trait bound when both branches are well-formed). Composing them
-upward through a type tree is not.
+## Next steps, in order
 
-If it works: the plan IR lands **under the existing surface**, rewrites run at
-comptime, and the Python bindings share one set of operation implementations.
-If it does not: A stands as-is.
+1. **Spend the `Kind` lever.** Do it before adding surface, so new work is
+   measured against an honest baseline rather than a −32 KB debt.
+2. **Two audit leftovers** — a direct test for `Pipeline.drain`/`_stage` (new,
+   non-trivial, covered only indirectly), and `Pipeline.push`'s docstring,
+   which claims a capability the constructor forbids.
+3. **`Join`.** The largest gap and the one that tests the design: a pipeline
+   breaker with **two inputs**. Unblocked only now — `Pipeline` is an
+   `Operator` so a join can hold two, and repeatable `drain` lets it emit
+   several batches.
+4. **`ParquetScan`** — a `BatchSourceOperator` sibling. With `Join` that is
+   8/8 relations and the first point where `expr2` runs a real query.
+5. **Widen `AccType` to `PrimitiveType`** in `kernels/aggregate.mojo`. It
+   unblocks temporal *and* collapses `col`'s five overloads toward three, so it
+   removes work rather than adding it. Before writing temporal nodes, not
+   after.
+6. **Temporal and list families**, then `param` (`expr/params.mojo`, 564 lines,
+   no counterpart) and `if_else` / `coalesce` / `case_when`.
+7. **Repoint the Python bindings.** Nothing outside `marrow/expr2/` imports it
+   today, so it ships to no one. Until that changes `expr/` is the product and
+   `expr2` is a parallel tree.
+
+### Parity, measured
+
+| | `expr/` | `expr2` |
+|---|---|---|
+| relations | 8 | **6** |
+| value families | numeric, bool, string, temporal, list | **numeric, bool, string** |
+| `col`/`lit` entry points | 18 | **7** |
+| subsystems | pruning, params, pushdown, bindings | **none** |
+
+Full parity is many sessions, not many steps.
+
+## Open design questions
+
+- **`x - avg(x)`** is still unresolved — see "Do not repeat".
+- **`Pipeline.push` is vestigial.** The constructor guarantees stage 0 is a
+  source, which ignores `push`, so it exists to satisfy the trait.
+- **`physical.mojo` is ~820 lines** across the contract and six operators.
+  Splitting the concrete operators into `operators.mojo` would mirror
+  `logical.mojo`; deferred because it is cosmetic.
 
 ## The fold body — verified, transcribe carefully
 
@@ -165,8 +181,9 @@ Four things, each of which cost a wrong answer or a crash when missing:
    the end, never a horizontal reduce per chunk.
 4. **`AccType` must never appear unerased in a signature.** It is a comptime
    conditional type: it reduces inside a struct but fails to unify at a return
-   site. `finish() -> DynArray` is forced, not chosen. `AggKernel.combine` also
-   will not infer `W` from a `Scalar` — spell `combine[acc, 1](…)`.
+   site. That is why `FoldOperator.Out` is `Datum` and not the accumulator
+   type — forced, not chosen. `AggKernel.combine` also will not infer `W` from
+   a `Scalar` — spell `combine[acc, 1](…)`.
 
 ## Measurements this rests on
 
