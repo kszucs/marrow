@@ -17,6 +17,7 @@ from ...arrays import DynArray
 from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
 from ...execution import ExecContext
+from ...kernels.join import JOIN_INNER, JOIN_LEFT, JOIN_SEMI
 from ...dtypes import field
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
@@ -36,6 +37,7 @@ from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
 from ..logical import (
     Aggregate,
+    Join,
     Limit,
     Sort,
     DynRelation,
@@ -644,3 +646,126 @@ def test_a_pipeline_is_an_operator() raises:
     var got = boxed.drain()
     assert_true(Bool(got))
     assert_equal(got.value().num_rows(), 4)
+
+
+# ---------------------------------------------------------------------------
+# Join — the operator with two inputs
+# ---------------------------------------------------------------------------
+def _left() raises -> RecordBatch:
+    return record_batch(
+        [array([1, 2, 3], int64).copy(), array([10, 20, 30], int64).copy()],
+        names=["k", "lv"],
+    )
+
+
+def _right() raises -> RecordBatch:
+    return record_batch(
+        [array([2, 3, 4], int64).copy(), array([200, 300, 400], int64).copy()],
+        names=["k", "rv"],
+    )
+
+
+def test_an_inner_join_streams_the_probe_side() raises:
+    """Keys 2 and 3 match; 1 and 4 do not."""
+    var plan = DynRelation(
+        Join(
+            DynRelation(InMemoryTable(_left())),
+            DynRelation(InMemoryTable(_right())),
+            [0],
+            [0],
+            JOIN_INNER,
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    assert_equal(out.num_columns(), 4)  # left k, lv + right k, rv
+    assert_true(out.columns[1].as_int64() == array([20, 30], int64))
+    assert_true(out.columns[3].as_int64() == array([200, 300], int64))
+
+
+def test_join_schema_is_left_then_right() raises:
+    var plan = Join(
+        DynRelation(InMemoryTable(_left())),
+        DynRelation(InMemoryTable(_right())),
+        [0],
+        [0],
+        JOIN_INNER,
+    )
+    var s = plan.schema()
+    assert_equal(len(s.fields), 4)
+    assert_equal(s.fields[1].name, "lv")
+    assert_equal(s.fields[3].name, "rv")
+    assert_true(plan.schema() == DynRelation(plan^).execute().schema)
+
+
+def test_a_semi_join_emits_only_the_left_side() raises:
+    """`SEMI` answers "which left rows matched", so the right side contributes
+    no columns — the schema rule and the kernel must agree on that."""
+    var plan = Join(
+        DynRelation(InMemoryTable(_left())),
+        DynRelation(InMemoryTable(_right())),
+        [0],
+        [0],
+        JOIN_SEMI,
+    )
+    assert_equal(len(plan.schema().fields), 2)
+    var out = DynRelation(plan^).execute()
+    assert_equal(out.num_columns(), 2)
+    assert_equal(out.num_rows(), 2)  # left keys 2 and 3 matched
+
+
+def test_a_left_join_keeps_unmatched_build_rows_once() raises:
+    """The reason LEFT buffers the probe side instead of streaming it.
+
+    Its tail of unmatched build rows is a property of *every* probe row taken
+    together. Probing morsel-by-morsel would re-emit that tail once per morsel;
+    key 1 must appear exactly once.
+    """
+    var plan = DynRelation(
+        Join(
+            DynRelation(InMemoryTable(_left())),
+            DynRelation(InMemoryTable(_right())),
+            [0],
+            [0],
+            JOIN_LEFT,
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 3)  # 2 and 3 matched, 1 null-widened once
+
+
+def test_join_rejects_mismatched_key_counts() raises:
+    var raised = False
+    try:
+        _ = Join(
+            DynRelation(InMemoryTable(_left())),
+            DynRelation(InMemoryTable(_right())),
+            [0],
+            [0, 1],
+            JOIN_INNER,
+        )
+    except e:
+        raised = True
+        assert_true("join" in String(e))
+    assert_true(raised)
+
+
+def test_a_join_composes_with_a_filter_above_it() raises:
+    """The build side is a whole sub-plan and the probe side is a pipeline, so
+    a join has to sit in a chain like any other stage."""
+    var plan = DynRelation(
+        Filter(
+            DynRelation(
+                Join(
+                    DynRelation(InMemoryTable(_left())),
+                    DynRelation(InMemoryTable(_right())),
+                    [0],
+                    [0],
+                    JOIN_INNER,
+                )
+            ),
+            DynValue(Gt(Column[Int64Type]("lv"), Literal[Int64Type](25))),
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)  # lv = 30

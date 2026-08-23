@@ -25,6 +25,7 @@ operator reachable from any plan.
 from std.memory import ArcPointer
 
 from ..execution import ExecContext
+from ..kernels.join import JoinKind, JOIN_INNER
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field
@@ -36,6 +37,7 @@ from .physical import (
     LimitOperator,
     Pipeline,
     FilterOperator,
+    JoinOperator,
     ProjectOperator,
     SortOperator,
 )
@@ -729,3 +731,98 @@ def _to_operators(values: List[DynValue]) raises -> List[DynOperator[Datum]]:
     for ref v in values:
         out.append(v.to_operator(False))
     return out^
+
+
+struct Join(Relation, Writable):
+    """An equijoin over two sub-plans.
+
+    The **only** node with two inputs, and the reason `Pipeline` had to be an
+    `Operator`: the build side is a whole plan, and it is handed to the
+    operator as an ordinary boxed stage. Before that, a chain of stages was a
+    different kind of thing from a stage, and there was nowhere to put a second
+    one.
+
+    `left` is the build side and `right` streams. That is the usual convention
+    and it is not arbitrary — the build side is materialised and indexed, so it
+    should be the smaller one. Choosing it automatically is an optimiser's job
+    and this layer does not have one.
+    """
+
+    var _left: DynRelation
+    var _right: DynRelation
+    var _left_keys: List[Int]
+    var _right_keys: List[Int]
+    var _kind: JoinKind
+    var _strictness: UInt8
+    var _schema: Schema
+
+    def __init__(
+        out self,
+        var left: DynRelation,
+        var right: DynRelation,
+        var left_keys: List[Int],
+        var right_keys: List[Int],
+        kind: JoinKind = JOIN_INNER,
+        strictness: UInt8 = 0,
+    ) raises:
+        if len(left_keys) != len(right_keys):
+            raise Error(
+                "join: ",
+                len(left_keys),
+                " left keys but ",
+                len(right_keys),
+                " right keys",
+            )
+        if len(left_keys) == 0:
+            raise Error("join: needs at least one key pair")
+        self._schema = Self._output_schema(left.schema(), right.schema(), kind)
+        self._left = left^
+        self._right = right^
+        self._left_keys = left_keys^
+        self._right_keys = right_keys^
+        self._kind = kind
+        self._strictness = strictness
+
+    @staticmethod
+    def _output_schema(
+        left: Schema, right: Schema, kind: JoinKind
+    ) raises -> Schema:
+        """Left fields then right fields — except for the kinds that emit only
+        the left side.
+
+        `SEMI` and `ANTI` answer "which left rows had a match", so the right
+        side contributes nothing to the output. `JoinKind.emits_right_columns`
+        owns that rule; asking it here keeps the schema and the kernel from
+        disagreeing about the shape of the same result.
+        """
+        var fields = List[Field]()
+        for ref f in left.fields:
+            fields.append(f.copy())
+        if kind.emits_right_columns():
+            for ref f in right.fields:
+                fields.append(f.copy())
+        return schema(fields^)
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+        """The probe side is the pipeline; the build side is a stage's cargo."""
+        var probe = self._right.to_operator(ctx)
+        probe.append(
+            JoinOperator(
+                self._left.to_operator(ctx),
+                self._left_keys.copy(),
+                self._right_keys.copy(),
+                self._kind,
+                self._strictness,
+                self._schema.copy(),
+                ctx.copy(),
+            )
+        )
+        return probe^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "Join(", self._left, ", ", self._right, ", ", self._kind, ")"
+        )

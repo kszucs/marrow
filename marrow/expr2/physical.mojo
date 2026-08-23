@@ -44,6 +44,8 @@ from ..execution import ExecContext
 from ..kernels.filter import filter, take
 from ..kernels.core import Groups
 from ..kernels.groupby import HashGrouping
+from ..kernels.join import HashJoin, JoinKind
+from ..utils import RapidHash64
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -827,3 +829,146 @@ struct BatchSourceOperator(Operator):
             return None
         self._done = True
         return self._batch.copy()
+
+
+struct JoinOperator(Operator):
+    """Equijoin — **the operator with two inputs**, and the one the push
+    interface had to be checked against.
+
+    Its build side is a whole sub-plan, held as a `DynOperator[RecordBatch]`.
+    That only became expressible when `Pipeline` started conforming to
+    `Operator`: before, a chain of stages was a different kind of thing from a
+    stage, so there was nowhere to put a second one.
+
+    **The build side is drained to completion before the first probe.** A hash
+    join is a pipeline breaker on one input and streaming on the other, and the
+    two methods say exactly that — the build happens inside the first `push`,
+    and probe morsels stream through afterwards.
+
+    Some kinds also block on the *probe* side, and that is not a shortcut.
+    LEFT, FULL, SEMI and ANTI each emit rows determined by every probe row
+    taken together: LEFT/FULL/ANTI have a tail of unmatched build rows, and
+    SEMI emits a build row once no matter how many probe rows hit it. Probing
+    morsel-by-morsel recomputes those per morsel, so LEFT, FULL and ANTI would
+    re-emit their tail once per morsel and SEMI would duplicate. Those kinds
+    therefore buffer and probe once at `drain`. RIGHT is *not* among them: its
+    extra rows are unmatched probe rows, and each probe row belongs to exactly
+    one morsel, so it streams correctly. `expr/` reached the same conclusion
+    and this carries it over deliberately.
+    """
+
+    comptime Out = RecordBatch
+
+    var _build: DynOperator[RecordBatch]
+    var _left_keys: List[Int]
+    var _right_keys: List[Int]
+    var _kind: JoinKind
+    var _strictness: UInt8
+    var _schema: Schema
+    var _ctx: ExecContext
+    var _index: Optional[HashJoin[RapidHash64]]
+    var _buffered: List[RecordBatch]
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var build: DynOperator[RecordBatch],
+        var left_keys: List[Int],
+        var right_keys: List[Int],
+        kind: JoinKind,
+        strictness: UInt8,
+        var schema: Schema,
+        var ctx: ExecContext,
+    ):
+        self._build = build^
+        self._left_keys = left_keys^
+        self._right_keys = right_keys^
+        self._kind = kind
+        self._strictness = strictness
+        self._schema = schema^
+        self._ctx = ctx^
+        self._index = None
+        self._buffered = List[RecordBatch]()
+        self._emitted = False
+
+    def _blocks_on_probe_side(self) -> Bool:
+        """Whether this kind's output depends on the whole probe side."""
+        return (
+            self._kind.emits_unmatched_left()
+            or not self._kind.emits_right_columns()
+        )
+
+    def _ensure_built(mut self) raises:
+        """Drain the build side and index it, once."""
+        if self._index:
+            return
+        var parts = List[RecordBatch]()
+        while True:
+            var b = self._build.drain()
+            if b:
+                parts.append(b.value().copy())
+            else:
+                break
+        var left = _concat_batches(parts, self._build_schema(), self._ctx)
+        var index = HashJoin[RapidHash64](self._ctx.copy())
+        index.build(left.to_struct_array(), self._left_keys)
+        self._index = index^
+
+    def _build_schema(self) -> Schema:
+        """The build side's fields are the first `len(left_keys)`-agnostic
+        prefix of the output schema for every kind that emits them."""
+        return self._schema.copy()
+
+    def _probe(mut self, batch: RecordBatch) raises -> RecordBatch:
+        var result = self._index.value().probe(
+            batch.to_struct_array(),
+            self._right_keys,
+            self._kind,
+            self._strictness,
+        )
+        return RecordBatch(
+            schema=self._schema.copy(), columns=result.children.copy()
+        )
+
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        self._ensure_built()
+        if self._blocks_on_probe_side():
+            self._buffered.append(morsel.batch.copy())
+            return None
+        return self._probe(morsel.batch)
+
+    def drain(mut self) raises -> Optional[RecordBatch]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        # Reached even when the probe side yielded nothing, which is what makes
+        # `LEFT JOIN` over an empty right side emit the left rows at all.
+        self._ensure_built()
+        if not self._blocks_on_probe_side():
+            return None
+        var whole = _concat_batches(
+            self._buffered, self._schema.copy(), self._ctx
+        )
+        return self._probe(whole)
+
+
+def _concat_batches(
+    batches: List[RecordBatch], schema: Schema, ctx: ExecContext
+) raises -> RecordBatch:
+    """Join both phases need one contiguous side; this is where that happens."""
+    if len(batches) == 1:
+        return batches[0].copy()
+    if len(batches) == 0:
+        var cols = List[DynArray](capacity=len(schema.fields))
+        for ref f in schema.fields:
+            var b = DynBuilder(f.dtype)
+            cols.append(b.finish())
+        return RecordBatch(schema=schema.copy(), columns=cols^)
+    var s = batches[0].schema.copy()
+    var cols = List[DynArray](capacity=len(s.fields))
+    for i in range(len(s.fields)):
+        var parts = List[DynArray]()
+        for ref b in batches:
+            parts.append(b.columns[i].copy())
+        cols.append(concat(parts, ctx))
+    return RecordBatch(schema=s^, columns=cols^)
