@@ -33,7 +33,8 @@ from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Analyzable, Datum, Executable, Shape
+from ..logical import Analyzable, Executable, Shape
+from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
 

@@ -23,7 +23,7 @@ from marrow.builders import array
 from marrow.dtypes import int64
 from marrow.expr2.builders import col
 from marrow.expr2.`comptime`.numeric import Gt
-from marrow.expr2.core import DynValue
+from marrow.expr2.logical import DynValue
 from marrow.expr2.logical import DynRelation, Filter, InMemoryTable, Project
 from marrow.tabular import record_batch
 

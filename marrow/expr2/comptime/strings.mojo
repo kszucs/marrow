@@ -11,9 +11,11 @@ from ...buffers import Bitmap
 from ...dtypes import DynType, StringLikeType
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Datum, Shape
-from .core import BoolValue, StringValue
+from ..logical import Shape
+from ..physical import Datum
+
 from .rules import widest_shape
+from .core import BoolValue, StringValue
 
 
 trait StringCompareKernel:

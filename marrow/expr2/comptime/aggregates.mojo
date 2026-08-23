@@ -30,10 +30,12 @@ from ...kernels.aggregate import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Analyzable, Datum, Executable, Shape
+from ..logical import Analyzable, Executable, Shape
+from ..physical import Datum
 from ..physical import DynOperator
-from .core import NumericValue
+
 from .folds import FoldOperator
+from .core import NumericValue
 
 
 struct NumericAggregate[K: AggKernel, A: NumericValue](

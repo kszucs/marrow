@@ -18,7 +18,7 @@ operand types *may* be compared is a rule, not a node's business.
 from std.sys import bit_width_of
 
 from ...dtypes import NumericType
-from ..core import Executable, Shape
+from ..logical import Executable, Shape
 
 
 comptime widest_shape[A: Executable, B: Executable] = (

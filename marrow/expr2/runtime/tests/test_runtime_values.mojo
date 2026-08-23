@@ -13,7 +13,7 @@ from ....builders import array
 from ....dtypes import int64
 from ....scalars import DynScalar, Int64Scalar
 from ....tabular import RecordBatch, record_batch
-from ...core import Shape
+from ...logical import Shape
 from ..values import Payload, RuntimeValue, column, literal
 
 

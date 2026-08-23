@@ -19,7 +19,7 @@ from ....dtypes import (
     string,
 )
 from ....tabular import RecordBatch, record_batch
-from ...core import DynValue
+from ...logical import DynValue
 from ...logical import DynRelation, Filter, InMemoryTable, Project
 from ..boolean import And
 from ..leaves import Column, Literal, StringColumn, StringLiteral

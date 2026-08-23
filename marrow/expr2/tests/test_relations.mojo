@@ -20,7 +20,8 @@ from ...execution import ExecContext
 from ...dtypes import field
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ..core import Datum, DynValue
+from ..logical import DynValue
+from ..physical import Datum
 from ..physical import (
     AggregateOperator,
     DynOperator,

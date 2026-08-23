@@ -30,7 +30,8 @@ from ...kernels.boolean import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Datum, Shape
+from ..logical import Shape
+from ..physical import Datum
 from .core import ComptimeValue
 
 

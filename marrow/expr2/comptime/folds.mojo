@@ -23,7 +23,7 @@ from ...arrays import DynArray, Int32Array
 from ...kernels.groupby import Grouping
 from ...kernels.aggregate import AggKernel, AggState
 from ...tabular import RecordBatch
-from ..core import Datum
+from ..physical import Datum
 from ..physical import Morsel, Operator
 from .core import NumericValue
 

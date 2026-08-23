@@ -11,7 +11,8 @@ from ...dtypes import BoolType, DynType, NumericType, StringLikeType
 from ...scalars import PrimitiveScalar, StringScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Datum, Shape
+from ..logical import Shape
+from ..physical import Datum
 from .core import BoolValue, NumericValue, StringValue
 
 

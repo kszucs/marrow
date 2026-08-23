@@ -13,7 +13,7 @@ from ....builders import array
 from ....dtypes import DynType, Int64Type, int64
 from ....tabular import RecordBatch, record_batch
 from ....scalars import DynScalar
-from ...core import DynValue, Shape
+from ...logical import DynValue, Shape
 from ...physical import Morsel
 from ..leaves import Column, Literal
 from ..numeric import Add, Gt, Mul, Sub

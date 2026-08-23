@@ -35,6 +35,8 @@ appends one stage.
 from std.memory import ArcPointer
 
 from ..arrays import DynArray, Int32Array, StructArray
+from ..scalars import DynScalar
+from std.utils import Variant
 from ..builders import DynBuilder, Int32Builder
 from ..dtypes import Field, struct_
 from ..kernels.concat import concat
@@ -45,7 +47,55 @@ from ..kernels.groupby import HashGrouping
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .core import Datum, DynValue
+
+
+# ---------------------------------------------------------------------------
+# Datum — the wire format between stages
+# ---------------------------------------------------------------------------
+struct Datum(Copyable, Movable):
+    """`Scalar | Array` — Arrow's Datum, DataFusion's ColumnarValue.
+
+    What every `evaluate` returns. A struct rather than a bare `Variant` alias
+    so that the one operation callers actually perform on it — *give me a
+    column* — is a method on the thing rather than a free function beside it,
+    and so the variant's members stay closed: nothing outside can reach in and
+    handle the two cases differently.
+
+    The scalar case is what makes it worth having. `lit(1)` evaluates to one
+    value, not a million copies of one value, and stays that way until
+    something needs a column. A literal-only subtree therefore costs nothing
+    until it meets a batch.
+    """
+
+    var _v: Variant[DynScalar, DynArray]
+
+    @implicit
+    def __init__(out self, var value: DynArray):
+        self._v = Variant[DynScalar, DynArray](value^)
+
+    @implicit
+    def __init__(out self, var value: DynScalar):
+        self._v = Variant[DynScalar, DynArray](value^)
+
+    def is_scalar(self) -> Bool:
+        """Whether this is still one value.
+
+        The planner asks so it knows whether a projection needs materialising;
+        `Shape` is the *static* answer to the same question, and this is the
+        one that survives erasure.
+        """
+        return self._v.isa[DynScalar]()
+
+    def to_array(self, n: Int) raises -> DynArray:
+        """This value as a column of length `n`, broadcasting a scalar.
+
+        The single place laziness ends. `n` is why this cannot be an implicit
+        conversion: a scalar does not know how many rows it is about to become,
+        and only the caller holding the batch does.
+        """
+        if self._v.isa[DynScalar]():
+            return self._v[DynScalar].repeat(n)
+        return self._v[DynArray].copy()
 
 
 # ---------------------------------------------------------------------------

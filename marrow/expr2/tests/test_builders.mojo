@@ -12,7 +12,7 @@ from ...dtypes import Int64Type, int64
 from ...scalars import DynScalar, Int64Scalar
 from ...tabular import RecordBatch, record_batch
 from ..builders import col, lit
-from ..core import Shape
+from ..logical import Shape
 
 
 def _batch() raises -> RecordBatch:

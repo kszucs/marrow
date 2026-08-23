@@ -2,7 +2,7 @@
 package name only has to be spelled at the boundary, in the package `__init__.mojo`.
 """
 
-from .core import ComptimeValue, NumericValue
+
 from .leaves import Column, Literal
 from .numeric import (
     Add,
@@ -14,3 +14,4 @@ from .numeric import (
     Sub,
 )
 from .rules import promote, widest_shape
+from .core import ComptimeValue, NumericValue

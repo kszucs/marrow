@@ -23,9 +23,11 @@ from ...kernels.numeric import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
-from ..core import Datum, Shape
-from .core import BoolValue, NumericValue
+from ..logical import Shape
+from ..physical import Datum
+
 from .rules import promote, wider, widest_shape
+from .core import BoolValue, NumericValue
 
 
 struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](

@@ -12,8 +12,9 @@ from ....arrays import BoolArray
 from ....builders import BoolBuilder, array
 from ....dtypes import Int64Type, int64
 from ....tabular import RecordBatch, record_batch
-from ..boolean import And, Not, Or, Xor
 from ..core import ComptimeValue
+from ..boolean import And, Not, Or, Xor
+
 from ..leaves import BoolColumn, Column, Literal
 from ..numeric import Gt, Lt
 

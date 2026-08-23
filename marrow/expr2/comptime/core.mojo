@@ -40,7 +40,8 @@ from ...builders import BinaryLikeBuilder
 from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
-from ..core import Analyzable, Datum, Executable, Shape
+from ..logical import Analyzable, Executable, Shape
+from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
 

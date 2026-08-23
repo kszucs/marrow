@@ -7,7 +7,7 @@ from ....builders import array, arange
 from ....dtypes import Int32Type, Int64Type, int32, int64
 from ....tabular import RecordBatch, record_batch
 from ....kernels.core import Groups
-from ...core import DynValue
+from ...logical import DynValue
 from ...physical import Morsel
 from ..aggregates import Max, Mean, Min, Product, Sum
 from ..leaves import Column, Literal
