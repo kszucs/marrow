@@ -31,12 +31,18 @@ from ...dtypes import (
     PrimitiveType,
     TemporalType,
     DataType,
+    ListLikeType,
     DynType,
     NumericType,
     StringLikeType,
 )
 from ...schema import Schema
-from ...arrays import BinaryLikeArray, BoolArray, PrimitiveArray
+from ...arrays import (
+    BinaryLikeArray,
+    BoolArray,
+    ListLikeArray,
+    PrimitiveArray,
+)
 from ...buffers import Bitmap, Buffer
 from ...builders import BinaryLikeBuilder
 from ...scalars import PrimitiveScalar
@@ -378,6 +384,47 @@ trait TemporalValue(PrimitiveValue):
     """
 
     comptime Type: TemporalType
+
+
+# ---------------------------------------------------------------------------
+# ListValue — the family with no lane
+# ---------------------------------------------------------------------------
+trait ListValue(ComptimeValue):
+    """A comptime node producing a list column.
+
+    **Declares no `lane`, and that is the point.** Every other family answers
+    `lane` with something a register holds — `SIMD` for numeric and bool, a
+    `String` for text. A list *element* is a whole sub-array, so there is no
+    per-element value to return and nothing a fused loop could do with one.
+
+    So this family exists to be **consumed** rather than to be an operand:
+    `bind` resolves the column, and the operations over it — `length`,
+    `contains` — are nodes of *other* families that read the bound list and
+    produce a fixed-width lane. `ListLength` is a `NumericValue`; a list never
+    flows through arithmetic itself.
+
+    That is why the trait is small: `Type`, `Bound`, `bind`, `validity`. There
+    is no fused `evaluate` default either, because without a lane there is
+    nothing to drive — a list leaf hands back its own column.
+    """
+
+    comptime Type: ListLikeType
+
+    # No associated `Bound`. Every other family has one because a *composite*
+    # node's bound is a tuple of its operands' — `Add`'s is
+    # `Tuple[L.Bound, R.Bound]`. There are no composite list nodes: a list is
+    # only ever read from a column, so the bound is always the column itself
+    # and naming it as a variable would be a variable with one value. It also
+    # keeps `ArrayLengthKernel` able to infer its own `T`, which an opaque
+    # associated type defeats.
+
+    def bind(self, batch: RecordBatch) raises -> ListLikeArray[Self.Type]:
+        ...
+
+    def validity(
+        self, bound: ListLikeArray[Self.Type]
+    ) raises -> Optional[Bitmap[mut=False]]:
+        ...
 
 
 # ---------------------------------------------------------------------------

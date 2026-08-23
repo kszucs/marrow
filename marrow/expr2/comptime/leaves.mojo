@@ -5,21 +5,36 @@ does its work — every schema lookup and `Variant` unwrap happens here so the
 lane loop above does none.
 """
 
-from ...arrays import BinaryLikeArray, BoolArray, PrimitiveArray
+from ...arrays import (
+    BinaryLikeArray,
+    BoolArray,
+    ListLikeArray,
+    PrimitiveArray,
+)
 from ...buffers import Bitmap
 from ...dtypes import (
     BoolType,
     DynType,
     NumericType,
+    ListLikeType,
     StringLikeType,
     TemporalType,
 )
 from ...scalars import PrimitiveScalar, StringScalar
+from ...arrays import Int32Array
+from ...dtypes import Int32Type
+from ...kernels.nested import ArrayLengthKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
 from ..physical import Datum
-from .core import BoolValue, NumericValue, StringValue, TemporalValue
+from .core import (
+    BoolValue,
+    ListValue,
+    NumericValue,
+    StringValue,
+    TemporalValue,
+)
 
 
 struct Column[T: NumericType](NumericValue):
@@ -354,3 +369,103 @@ struct StringLiteral[T: StringLikeType](StringValue):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write('"', self._value, '"')
+
+
+struct ListColumn[T: ListLikeType](ListValue):
+    """A list column, resolved by name once per batch.
+
+    Parameterised on `ListLikeType`, so `list`, `large_list` and `map` are the
+    same leaf with a different offset width rather than three node types.
+
+    It has no `lane` because `ListValue` has none — a list element is a whole
+    sub-array. What reads it are nodes of other families: `ListLength` below is
+    a `NumericValue` over this leaf's bound column.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.columnar
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        # From the schema: a list dtype carries its child field, which cannot
+        # be conjured from `Self.T()` any more than a timestamp's unit can.
+        return schema.fields[schema.get_field_index(self._name)].dtype.copy()
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        return batch.column(self._name).copy()
+
+    # -- ListValue ----------------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> ListLikeArray[Self.Type]:
+        return batch.column(self._name).as_type[ListLikeArray[Self.T]]().copy()
+
+    def validity(
+        self, bound: ListLikeArray[Self.Type]
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return bound.to_data().owned_validity()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct ListLength[A: ListValue](NumericValue):
+    """`array_length(list)` — a list consumed into a fixed-width column.
+
+    The shape every list operation takes: it binds a `ListValue` and produces a
+    lane of its own family. That is why `ListValue` needs no `lane` — nothing
+    reads a list element as a value, only as something to measure or search.
+
+    `bind` runs `ArrayLengthKernel` over the whole column and `lane` reads the
+    result, as `CaseWhen` does: the work is offset arithmetic the kernel
+    already vectorises, and a per-element lane would only re-derive it.
+    """
+
+    comptime Type = Int32Type
+    comptime shape = Shape.columnar
+    comptime Bound = Int32Array
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    def name(self) -> String:
+        return String()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Int32Type())
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        return ArrayLengthKernel.apply(self.a.bind(batch))
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # A null list has no length, so validity is the list's own.
+        return bound.to_data().owned_validity()
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("array_length(", self.a, ")")

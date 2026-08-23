@@ -17,9 +17,13 @@ shadow rather than overload — and which one a call site got would depend on it
 imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
+from .`comptime`.numeric import CaseWhen
+from .`comptime`.core import BoolValue, ListValue, NumericValue
 from .`comptime`.leaves import (
     BoolColumn,
     Column,
+    ListColumn,
+    ListLength,
     TemporalColumn,
     Literal,
     StringColumn,
@@ -28,6 +32,7 @@ from .`comptime`.leaves import (
 from .runtime.values import RuntimeValue, column, literal
 from ..dtypes import (
     BoolType,
+    ListLikeType,
     FloatingType,
     NumericType,
     StringLikeType,
@@ -87,6 +92,11 @@ def col(var name: String, dtype: BoolType) -> BoolColumn:
     return BoolColumn(name^)
 
 
+def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
+    """A list column. `list`, `large_list` and `map` are the same leaf."""
+    return ListColumn[T](name^)
+
+
 def col(var name: String) -> RuntimeValue:
     """An untyped column read, resolved against the schema at evaluation.
 
@@ -126,3 +136,25 @@ def lit(var value: DynScalar) -> RuntimeValue:
 def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:
     """A typed constant string, `Shape.scalar` like its numeric sibling."""
     return StringLiteral[T](value^)
+
+
+# ---------------------------------------------------------------------------
+# conditionals
+# ---------------------------------------------------------------------------
+def if_else[
+    C: BoolValue, T: NumericValue, E: NumericValue
+](var cond: C, var then: T, var otherwise: E) -> CaseWhen[C, T, E]:
+    """`CASE WHEN cond THEN then ELSE otherwise END`, fused.
+
+    A null condition counts as **false** rather than producing a null — Arrow's
+    `ExecArrayCaseWhen` rule and PyArrow's `pc.case_when`. A selected value
+    that is itself null does stay null.
+    """
+    return CaseWhen[C, T, E](cond^, then^, otherwise^)
+
+
+def array_length[A: ListValue](var a: A) -> ListLength[A]:
+    """The number of elements in each list. A list consumed into a numeric
+    column — which is the only way a list is read, since a list element is a
+    whole sub-array rather than a value a lane can hold."""
+    return ListLength[A](a^)

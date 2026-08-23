@@ -20,6 +20,8 @@ from ...kernels.numeric import (
     MulKernel,
     SubKernel,
 )
+from ...arrays import BoolArray, DynArray, PrimitiveArray
+from ...kernels.conditional import case_when
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
@@ -188,3 +190,93 @@ struct NumericCompare[
 
 comptime Gt = NumericCompare[GtKernel, _, _]
 comptime Lt = NumericCompare[LtKernel, _, _]
+
+
+struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
+    """`CASE WHEN cond THEN then ELSE otherwise END`, over numeric branches.
+
+    **Not element-wise fused, deliberately.** `bind` computes the whole result
+    through `kernels.conditional.case_when` and `lane` reads it back, so the
+    `Bound` is the answer rather than the operands. `expr/`'s `CaseWhen` does
+    the same thing for the same reason: which branch supplies a row depends on
+    the condition's *validity* as well as its value — a null condition counts
+    as false, and a selected-but-null value stays null — and that three-way
+    rule is the kernel's, not a lane's. Reimplementing it per lane would be the
+    `_kleene` mistake, where per-lane boolean validity measured 4-10x worse
+    than the kernel's bitmap algebra.
+
+    What it does keep is the *type*: the branches are comptime nodes, so
+    `then` and `otherwise` are still fused subtrees evaluated without
+    materialising their own intermediates, and the output type is `T`'s with no
+    dispatch.
+    """
+
+    comptime Type = Self.T.Type
+    comptime shape = Shape.columnar
+    comptime Bound = PrimitiveArray[Self.Type]
+    """The computed result. `bind` is where the work happens."""
+
+    var cond: Self.C
+    var then: Self.T
+    var otherwise: Self.E
+
+    def __init__(
+        out self, var cond: Self.C, var then: Self.T, var otherwise: Self.E
+    ):
+        self.cond = cond^
+        self.then = then^
+        self.otherwise = otherwise^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        var out = self.cond.columns()
+        for ref src in [self.then.columns(), self.otherwise.columns()]:
+            for ref n in src:
+                var seen = False
+                for ref have in out:
+                    if have == n:
+                        seen = True
+                        break
+                if not seen:
+                    out.append(n.copy())
+        return out^
+
+    def name(self) -> String:
+        return String()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.then.dtype(schema)
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        var n = batch.num_rows()
+        var conditions = List[BoolArray]()
+        conditions.append(
+            self.cond.evaluate(batch).to_array(n).as_bool().copy()
+        )
+        var values = List[DynArray]()
+        values.append(self.then.evaluate(batch).to_array(n))
+        var else_ = Optional(self.otherwise.evaluate(batch).to_array(n))
+        return (
+            case_when(conditions, values, else_^)
+            .as_primitive[Self.Type]()
+            .copy()
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # Not structural: a row is null when the *selected* branch was null, so
+        # the answer lives in the computed result and nowhere else.
+        return bound.to_data().owned_validity()
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "if_else(", self.cond, ", ", self.then, ", ", self.otherwise, ")"
+        )

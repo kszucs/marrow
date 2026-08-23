@@ -14,11 +14,11 @@ implicit conversion or a wrong argument order actually shows up.
 
 from std.testing import assert_equal, assert_true
 
-from ...builders import array
-from ...dtypes import Int64Type, int64, string
+from ...builders import Int64Builder, ListBuilder, array
+from ...dtypes import Int64Type, int64, list_, string
 from ...kernels.join import JOIN_INNER, JOIN_LEFT
 from ...tabular import RecordBatch, record_batch
-from ..builders import col, lit
+from ..builders import array_length, col, if_else, lit
 from ..logical import DynRelation, DynValue, InMemoryTable
 from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.numeric import Add, Gt, Lt
@@ -209,7 +209,7 @@ def test_join_composes_with_the_other_verbs() raises:
 
 
 def test_a_full_query_reads_as_one_sentence() raises:
-    """scan -> filter -> group -> having -> order -> limit, all as verbs.
+    """Scan, filter, group, having, order, limit -- all as verbs.
 
     The point of the whole surface: this is the shape a user writes, and it
     exercises six operators plus the fused lane in one plan.
@@ -230,3 +230,69 @@ def test_a_full_query_reads_as_one_sentence() raises:
     )
     assert_equal(out.num_rows(), 1)
     assert_true(out.columns[1].as_int64() == array([60], int64))
+
+
+# ---------------------------------------------------------------------------
+# conditionals and lists
+# ---------------------------------------------------------------------------
+def test_if_else_selects_per_row() raises:
+    """A null condition counts as **false**, not as a null result.
+
+    That is Arrow's `ExecArrayCaseWhen` rule and PyArrow's `pc.case_when`, and
+    it is the reason the node calls the kernel rather than fusing a lane: the
+    three-way rule over condition validity is the kernel's.
+    """
+    var out = (
+        _table()
+        .project(
+            ["capped"],
+            [
+                DynValue(
+                    if_else(
+                        Gt(Column[Int64Type]("amount"), Literal[Int64Type](15)),
+                        Literal[Int64Type](99),
+                        Column[Int64Type]("amount"),
+                    )
+                )
+            ],
+        )
+        .execute()
+    )
+    ref got = out.columns[0].as_int64()
+    assert_equal(got[0].value(), 10)  # 10 > 15 false -> amount
+    assert_equal(got[1].value(), 99)  # 20 > 15 true  -> 99
+    # amount is NULL here, so the condition is null -> false -> else branch,
+    # and the else branch is itself null.
+    assert_true(got.is_null(2))
+    assert_equal(got[3].value(), 99)
+
+
+def test_array_length_consumes_a_list_into_a_number() raises:
+    """The shape every list operation takes.
+
+    `ListValue` declares no `lane` because a list element is a whole
+    sub-array; operations over it produce a *different* family's lane, and
+    `array_length` is the smallest example.
+    """
+    var ints = Int64Builder()
+    var lists = ListBuilder(ints^)
+    var child_any = lists.values()
+    ref child = child_any.as_int64()
+    child.append(1)
+    child.append(2)
+    child.append(3)
+    lists.append_valid()  # [1, 2, 3]
+    child.append(4)
+    lists.append_valid()  # [4]
+    lists.append_null()  # null
+    var batch = record_batch([lists.finish().to_dyn()], names=["xs"])
+
+    var out = (
+        DynRelation(InMemoryTable(batch^))
+        .project(["n"], [DynValue(array_length(col("xs", list_(int64))))])
+        .execute()
+    )
+    ref got = out.columns[0].as_int32()
+    assert_equal(got[0].value(), 3)
+    assert_equal(got[1].value(), 1)
+    assert_true(got.is_null(2))  # a null list has no length
