@@ -23,6 +23,7 @@ from ...arrays import DynArray, Int32Array
 from ...kernels.groupby import Grouping
 from ...kernels.aggregate import AggKernel, AggState
 from ...tabular import RecordBatch
+from ..core import Datum
 from ..physical import Morsel, Operator
 from .core import NumericValue
 
@@ -53,8 +54,9 @@ struct Fold[K: AggKernel, A: NumericValue, G: Grouping](Operator):
     comptime acc = Self.Acc.native
     comptime W = simd_width_of[Scalar[Self.acc]]()
 
-    comptime Out = DynArray
-    """A **column**, not a batch — one value per slot.
+    comptime Out = Datum
+    """A `Datum` — one value per slot, carried in the same box an
+    elementwise value uses.
 
     This is what `Operator.Out` was introduced for. A fold and a filter are the
     same shape of thing (`push` until there is nothing left, then `finish`) and
@@ -74,7 +76,7 @@ struct Fold[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         self._num_groups = 1 if not Self.G.scatters else 0
         self._state = AggState[Self.K, Self.A.Type]()
 
-    def push(mut self, morsel: Morsel) raises -> Optional[DynArray]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Fold one morsel in and answer nothing — the result arrives at
         `finish`. The grouping travels *with* the batch, which is what lets this
         be an `Operator` at all."""
@@ -202,5 +204,5 @@ struct Fold[K: AggKernel, A: NumericValue, G: Grouping](Operator):
 
         return None
 
-    def finish(mut self) raises -> Optional[DynArray]:
-        return self._state.finish(self._num_groups).to_dyn()
+    def finish(mut self) raises -> Optional[Datum]:
+        return Datum(self._state.finish(self._num_groups).to_dyn())

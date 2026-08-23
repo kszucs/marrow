@@ -20,7 +20,7 @@ from ...execution import ExecContext
 from ...dtypes import field
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ..core import DynAggValue, DynValue
+from ..core import Datum, DynValue
 from ..physical import (
     AggregateOperator,
     DynOperator,
@@ -239,7 +239,7 @@ def test_an_aggregate_with_no_keys_folds_into_one_row() raises:
         Aggregate(
             DynRelation(InMemoryTable(_batch())),
             List[DynValue](),
-            [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+            [DynValue(Sum(Column[Int64Type]("a"), "total"))],
         )
     )
     var out = plan.execute()
@@ -256,7 +256,7 @@ def test_an_aggregate_groups_by_its_key() raises:
         Aggregate(
             DynRelation(InMemoryTable(_keyed())),
             [DynValue(Column[Int64Type]("g"))],
-            [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+            [DynValue(Sum(Column[Int64Type]("a"), "total"))],
         )
     )
     var out = plan.execute()
@@ -276,8 +276,8 @@ def test_aggregate_schema_is_keys_then_aggregates() raises:
         DynRelation(InMemoryTable(_keyed())),
         [DynValue(Column[Int64Type]("g"))],
         [
-            DynAggValue(Sum(Column[Int64Type]("a"), "total")),
-            DynAggValue(Min(Column[Int64Type]("a"), "smallest")),
+            DynValue(Sum(Column[Int64Type]("a"), "total")),
+            DynValue(Min(Column[Int64Type]("a"), "smallest")),
         ],
     )
     var s = plan.schema()
@@ -298,7 +298,7 @@ def test_a_computed_key_is_named_by_position() raises:
     var plan = Aggregate(
         DynRelation(InMemoryTable(_keyed())),
         [DynValue(Add(Column[Int64Type]("g"), Column[Int64Type]("a")))],
-        [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+        [DynValue(Sum(Column[Int64Type]("a"), "total"))],
     )
     assert_equal(plan.schema().fields[0].name, "key0")
 
@@ -322,7 +322,7 @@ def test_an_aggregate_over_no_rows_answers_one_null() raises:
                 )
             ),
             List[DynValue](),
-            [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+            [DynValue(Sum(Column[Int64Type]("a"), "total"))],
         )
     )
     var out = plan.execute()
@@ -343,7 +343,7 @@ def test_an_aggregate_folds_a_fused_subtree() raises:
             DynRelation(InMemoryTable(_batch())),
             List[DynValue](),
             [
-                DynAggValue(
+                DynValue(
                     Sum(
                         Add(Column[Int64Type]("a"), Column[Int64Type]("b")),
                         "total",
@@ -369,7 +369,7 @@ def test_having_is_a_filter_above_an_aggregate() raises:
                 Aggregate(
                     DynRelation(InMemoryTable(_keyed())),
                     [DynValue(Column[Int64Type]("g"))],
-                    [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+                    [DynValue(Sum(Column[Int64Type]("a"), "total"))],
                 )
             ),
             DynValue(Gt(Column[Int64Type]("total"), Literal[Int64Type](50))),
@@ -403,7 +403,7 @@ def test_a_blocking_operator_answers_nothing_until_finish() raises:
     trait from `Filter` and therefore a second erased box — collapsing that is
     the point of the engine.
     """
-    var folds = List[DynOperator[DynArray]]()
+    var folds = List[DynOperator[Datum]]()
     folds.append(Sum(Column[Int64Type]("a"), "total").to_processor(False))
     var op = AggregateOperator(
         List[DynValue](),
@@ -434,7 +434,7 @@ def test_the_flush_cascade_feeds_the_stages_above() raises:
                 Aggregate(
                     DynRelation(InMemoryTable(_keyed())),
                     [DynValue(Column[Int64Type]("g"))],
-                    [DynAggValue(Sum(Column[Int64Type]("a"), "total"))],
+                    [DynValue(Sum(Column[Int64Type]("a"), "total"))],
                 )
             ),
             ["doubled"],

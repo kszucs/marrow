@@ -38,7 +38,7 @@ from ..scalars import DynScalar
 from ..dtypes import DynType
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .physical import DynOperator
+from .physical import DynOperator, EvalOperator
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ trait Analyzable:
 # ---------------------------------------------------------------------------
 # Evaluable — what the executor asks
 # ---------------------------------------------------------------------------
-trait Evaluable:
+trait Evaluable(Copyable, Deinitable):
     """Produce a column from a batch.
 
     One method, because that is the entire physical contract at this level. The
@@ -222,8 +222,28 @@ trait Evaluable:
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         ...
 
+    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+        """The stateful thing that runs this value.
 
-comptime Value = Analyzable & Evaluable & Writable & Copyable & Deinitable
+        **One method for every logical node.** A `Relation` becomes a pipeline,
+        and a value — elementwise or reduction alike — becomes an `Operator`
+        producing a `Datum`. The two differ only in *when* they answer `Some`:
+        an elementwise value answers from `push`, an aggregate accumulates and
+        answers from `finish`. That is the same distinction `Filter` and
+        `Aggregate` already make one layer up, so it needs no second trait and
+        no second box.
+
+        `grouped` picks a fold's placement and is ignored by everything else.
+        It is the one asymmetry left, and it goes away when placement becomes
+        part of the value's type rather than a plan-time flag.
+
+        Defaulted here because it is identical for every elementwise node:
+        wrap `self` and forward each batch. Only aggregates override it.
+        """
+        return EvalOperator[Self](self.copy())
+
+
+comptime Value = Analyzable & Evaluable & Writable
 """What every expression is, in both lanes — a *name for the composition*, not
 a trait of its own.
 
@@ -272,6 +292,9 @@ struct DynValue(Copyable, Movable, Writable):
     var _name: def(ArcPointer[NoneType]) thin -> String
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
     var _write: def(ArcPointer[NoneType]) thin -> String
+    var _to_processor: def(
+        ArcPointer[NoneType], Bool
+    ) thin raises -> DynOperator[Datum]
     var _shape: Shape
 
     # -- trampolines --------------------------------------------------------
@@ -300,6 +323,12 @@ struct DynValue(Copyable, Movable, Writable):
         return rebind[ArcPointer[V]](ptr)[].dtype(schema)
 
     @staticmethod
+    def _to_processor_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynOperator[Datum]:
+        return rebind[ArcPointer[V]](ptr)[].to_processor(grouped)
+
+    @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
         return String(rebind[ArcPointer[V]](ptr)[])
 
@@ -312,6 +341,7 @@ struct DynValue(Copyable, Movable, Writable):
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
         self._write = Self._write_tramp[V]
+        self._to_processor = Self._to_processor_tramp[V]
         self._shape = V.shape
 
     # -- the erased surface -------------------------------------------------
@@ -328,6 +358,16 @@ struct DynValue(Copyable, Movable, Writable):
     def dtype(self, schema: Schema) raises -> DynType:
         return self._dtype(self._boxed, schema)
 
+    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+        """The stateful thing that runs this value.
+
+        The slot `DynAggValue._acc` used to occupy, on the one box that now
+        holds every value. An aggregate reaches its `Fold` through here; an
+        elementwise value reaches an `EvalOperator`. The caller cannot tell,
+        which is the point.
+        """
+        return self._to_processor(self._boxed, grouped)
+
     def shape(self) -> Shape:
         """The boxed value's `shape`, read at construction.
 
@@ -339,98 +379,3 @@ struct DynValue(Copyable, Movable, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write(self._boxed))
-
-
-# ---------------------------------------------------------------------------
-# AggValue — a value folded to a scalar
-# ---------------------------------------------------------------------------
-trait AggValue(Analyzable, Copyable, Deinitable, Writable):
-    """A value reduced to a single scalar, named. Pure, like `Relation`.
-
-    Extends `Analyzable` rather than `Value`: an aggregate answers the same
-    three questions about itself — which columns it reads, what it is called,
-    what type it produces — but it does **not** `evaluate` to a `Datum` per
-    batch, which is the whole of `Evaluable`. Folding is the accumulator's job.
-
-    Named for what it is rather than `Aggregation`, which
-    `kernels.aggregate` already uses for the monomorphized kernel-level thing,
-    or `Aggregate`, which the relational node wants. It is also ibis's term for
-    this exact concept.
-    """
-
-    def to_processor(self, grouped: Bool) raises -> DynOperator[DynArray]:
-        """Begin a fold. Mirrors `Relation.to_processor`, and returns the
-        erased form for the same reason: the caller holds a heterogeneous list
-        of aggregates and needs one type back from all of them."""
-        ...
-
-
-struct DynAggValue(Copyable, Movable, Writable):
-    """An `AggValue` of any aggregate, erased.
-
-    Four slots, matching the four things an aggregate is asked: its name, the
-    columns it reads, the type it produces, and how to start folding it.
-    `write_to` is the fifth and exists for the same reason `DynValue`'s does —
-    a plan that cannot print itself cannot be debugged.
-    """
-
-    var _data: ArcPointer[NoneType]
-    var _virt_columns: def(ArcPointer[NoneType]) thin -> List[String]
-    var _virt_name: def(ArcPointer[NoneType]) thin -> String
-    var _virt_dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
-    var _virt_acc: def(ArcPointer[NoneType], Bool) thin raises -> DynOperator[
-        DynArray
-    ]
-    var _virt_write: def(ArcPointer[NoneType]) thin -> String
-
-    @staticmethod
-    def _columns_tramp[A: AggValue](ptr: ArcPointer[NoneType]) -> List[String]:
-        return rebind[ArcPointer[A]](ptr)[].columns()
-
-    @staticmethod
-    def _name_tramp[A: AggValue](ptr: ArcPointer[NoneType]) -> String:
-        return rebind[ArcPointer[A]](ptr)[].name()
-
-    @staticmethod
-    def _dtype_tramp[
-        A: AggValue
-    ](ptr: ArcPointer[NoneType], schema: Schema) raises -> DynType:
-        return rebind[ArcPointer[A]](ptr)[].dtype(schema)
-
-    @staticmethod
-    def _acc_tramp[
-        A: AggValue
-    ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynOperator[DynArray]:
-        return rebind[ArcPointer[A]](ptr)[].to_processor(grouped)
-
-    @staticmethod
-    def _write_tramp[A: AggValue](ptr: ArcPointer[NoneType]) -> String:
-        return String(rebind[ArcPointer[A]](ptr)[])
-
-    @implicit
-    def __init__[A: AggValue](out self, var value: A):
-        var ptr = ArcPointer[A](value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_columns = Self._columns_tramp[A]
-        self._virt_name = Self._name_tramp[A]
-        self._virt_dtype = Self._dtype_tramp[A]
-        self._virt_acc = Self._acc_tramp[A]
-        self._virt_write = Self._write_tramp[A]
-
-    def columns(self) -> List[String]:
-        return self._virt_columns(self._data)
-
-    def name(self) -> String:
-        return self._virt_name(self._data)
-
-    def dtype(self, schema: Schema) raises -> DynType:
-        return self._virt_dtype(self._data, schema)
-
-    def to_processor(self, grouped: Bool) raises -> DynOperator[DynArray]:
-        """`grouped` picks the fold: a register accumulator when the query has
-        no keys, a per-group scatter when it does. The plan knows which at
-        construction, so this is decided once per query, never per morsel."""
-        return self._virt_acc(self._data, grouped)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._virt_write(self._data))

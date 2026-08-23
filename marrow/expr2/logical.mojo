@@ -27,8 +27,7 @@ from std.memory import ArcPointer
 from ..execution import ExecContext
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
-from ..arrays import DynArray
-from .core import DynAggValue, DynValue
+from .core import Datum, DynValue
 from ..dtypes import Field, field
 from .physical import (
     AggregateOperator,
@@ -270,14 +269,14 @@ struct Aggregate(Relation, Writable):
 
     var _input: DynRelation
     var _keys: List[DynValue]
-    var _aggs: List[DynAggValue]
+    var _aggs: List[DynValue]
     var _schema: Schema
 
     def __init__(
         out self,
         var input: DynRelation,
         var keys: List[DynValue],
-        var aggs: List[DynAggValue],
+        var aggs: List[DynValue],
     ) raises:
         self._schema = Self._output_schema(input.schema(), keys, aggs)
         self._input = input^
@@ -286,7 +285,7 @@ struct Aggregate(Relation, Writable):
 
     @staticmethod
     def _output_schema(
-        input: Schema, keys: List[DynValue], aggs: List[DynAggValue]
+        input: Schema, keys: List[DynValue], aggs: List[DynValue]
     ) raises -> Schema:
         """Keys first, then aggregates, computed once at construction.
 
@@ -312,7 +311,7 @@ struct Aggregate(Relation, Writable):
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         var grouped = len(self._keys) > 0
-        var folds = List[DynOperator[DynArray]](capacity=len(self._aggs))
+        var folds = List[DynOperator[Datum]](capacity=len(self._aggs))
         for ref a in self._aggs:
             folds.append(a.to_processor(grouped))
         var pipe = self._input.to_processor(ctx)

@@ -27,7 +27,7 @@ from marrow.builders import array
 from marrow.dtypes import int64
 from marrow.expr2.builders import col
 from marrow.expr2.`comptime`.aggregates import Min, Sum
-from marrow.expr2.core import DynAggValue, DynValue
+from marrow.expr2.core import DynValue
 from marrow.expr2.logical import Aggregate, DynRelation, InMemoryTable
 from marrow.tabular import record_batch
 
@@ -43,9 +43,9 @@ def main() raises:
     var keys = List[DynValue]()
     keys.append(DynValue(col("g", int64)))
 
-    var aggs = List[DynAggValue]()
-    aggs.append(DynAggValue(Sum(col("a", int64), "total")))
-    aggs.append(DynAggValue(Min(col("b", int64), "smallest")))
+    var aggs = List[DynValue]()
+    aggs.append(DynValue(Sum(col("a", int64), "total")))
+    aggs.append(DynValue(Min(col("b", int64), "smallest")))
 
     var agg = Aggregate(DynRelation(InMemoryTable(batch^)), keys^, aggs^)
     print(DynRelation(agg^).execute())

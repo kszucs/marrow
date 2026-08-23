@@ -44,7 +44,7 @@ from ..kernels.groupby import HashGrouping
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .core import DynValue
+from .core import Datum, DynValue, Evaluable
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +234,37 @@ struct DynOperator[Out: Copyable](Movable):
 
     def done(self) -> Bool:
         return self._virt_done(self._data)
+
+
+struct EvalOperator[V: Evaluable](Operator):
+    """An elementwise value, as an `Operator`.
+
+    The adapter that lets one method — `to_processor` — serve every logical
+    node. An elementwise value has all its output ready as soon as it sees a
+    batch, so it answers from `push` and has nothing to flush; an aggregate is
+    the mirror image. Neither needs a trait the other does not have.
+
+    Generic over the node type rather than holding a `DynValue`, so a fused
+    subtree stays one type through the boundary and is still inlined into one
+    loop. That is the same reason `Fold` is parameterised on its input.
+
+    This is also where a value would keep state that outlives a batch — a
+    compiled `LIKE` automaton, an `IsIn` hash set. It has none today, and the
+    slot existing is the point: `evaluate(batch)` alone had nowhere to put one.
+    """
+
+    comptime Out = Datum
+
+    var _value: Self.V
+
+    def __init__(out self, var value: Self.V):
+        self._value = value^
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        return self._value.evaluate(morsel.batch)
+
+    def finish(mut self) raises -> Optional[Datum]:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +464,7 @@ struct AggregateOperator(Operator):
     comptime Out = RecordBatch
 
     var _keys: List[DynValue]
-    var _folds: List[DynOperator[DynArray]]
+    var _folds: List[DynOperator[Datum]]
     var _schema: Schema
     var _grouping: HashGrouping
     var _keyless: Bool
@@ -444,7 +475,7 @@ struct AggregateOperator(Operator):
     def __init__(
         out self,
         var keys: List[DynValue],
-        var folds: List[DynOperator[DynArray]],
+        var folds: List[DynOperator[Datum]],
         var schema: Schema,
         var ctx: ExecContext,
     ):
@@ -524,7 +555,7 @@ struct AggregateOperator(Operator):
         for i in range(len(self._folds)):
             var col = self._folds[i].finish()
             if col:
-                cols.append(col.value().copy())
+                cols.append(col.value().to_array(self._num_groups))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 
