@@ -38,7 +38,7 @@ from ..scalars import DynScalar
 from ..dtypes import DynType
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .physical import DynAggregateState
+from .physical import DynOperator
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ trait AggValue(Analyzable, Copyable, Deinitable, Writable):
     this exact concept.
     """
 
-    def to_state(self, grouped: Bool) raises -> DynAggregateState:
+    def to_processor(self, grouped: Bool) raises -> DynOperator[DynArray]:
         """Begin a fold. Mirrors `Relation.to_processor`, and returns the
         erased form for the same reason: the caller holds a heterogeneous list
         of aggregates and needs one type back from all of them."""
@@ -378,9 +378,9 @@ struct DynAggValue(Copyable, Movable, Writable):
     var _virt_columns: def(ArcPointer[NoneType]) thin -> List[String]
     var _virt_name: def(ArcPointer[NoneType]) thin -> String
     var _virt_dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
-    var _virt_acc: def(
-        ArcPointer[NoneType], Bool
-    ) thin raises -> DynAggregateState
+    var _virt_acc: def(ArcPointer[NoneType], Bool) thin raises -> DynOperator[
+        DynArray
+    ]
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
 
     @staticmethod
@@ -400,8 +400,8 @@ struct DynAggValue(Copyable, Movable, Writable):
     @staticmethod
     def _acc_tramp[
         A: AggValue
-    ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynAggregateState:
-        return rebind[ArcPointer[A]](ptr)[].to_state(grouped)
+    ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynOperator[DynArray]:
+        return rebind[ArcPointer[A]](ptr)[].to_processor(grouped)
 
     @staticmethod
     def _write_tramp[A: AggValue](ptr: ArcPointer[NoneType]) -> String:
@@ -426,7 +426,7 @@ struct DynAggValue(Copyable, Movable, Writable):
     def dtype(self, schema: Schema) raises -> DynType:
         return self._virt_dtype(self._data, schema)
 
-    def to_state(self, grouped: Bool) raises -> DynAggregateState:
+    def to_processor(self, grouped: Bool) raises -> DynOperator[DynArray]:
         """`grouped` picks the fold: a register accumulator when the query has
         no keys, a per-group scatter when it does. The plan knows which at
         construction, so this is decided once per query, never per morsel."""

@@ -27,13 +27,14 @@ from std.memory import ArcPointer
 from ..execution import ExecContext
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
+from ..arrays import DynArray
 from .core import DynAggValue, DynValue
 from ..dtypes import Field, field
 from .physical import (
     AggregateOperator,
     BatchSource,
+    DynOperator,
     LimitOperator,
-    DynAggregateState,
     DynProcessor,
     FilterOperator,
     ProjectOperator,
@@ -311,13 +312,13 @@ struct Aggregate(Relation, Writable):
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         var grouped = len(self._keys) > 0
-        var states = List[DynAggregateState](capacity=len(self._aggs))
+        var folds = List[DynOperator[DynArray]](capacity=len(self._aggs))
         for ref a in self._aggs:
-            states.append(a.to_state(grouped))
+            folds.append(a.to_processor(grouped))
         var pipe = self._input.to_processor(ctx)
         pipe.append(
             AggregateOperator(
-                self._keys.copy(), states^, self._schema.copy(), ctx.copy()
+                self._keys.copy(), folds^, self._schema.copy(), ctx.copy()
             )
         )
         return pipe^

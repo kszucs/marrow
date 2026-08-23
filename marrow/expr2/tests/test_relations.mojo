@@ -13,6 +13,7 @@ corrupt whatever reads them by index.
 
 from std.testing import assert_equal, assert_true
 
+from ...arrays import DynArray
 from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
 from ...execution import ExecContext
@@ -22,9 +23,10 @@ from ...tabular import RecordBatch, record_batch
 from ..core import DynAggValue, DynValue
 from ..physical import (
     AggregateOperator,
-    LimitOperator,
-    DynAggregateState,
+    DynOperator,
     FilterOperator,
+    LimitOperator,
+    Morsel,
 )
 from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.aggregates import Min, Sum
@@ -387,7 +389,7 @@ def test_a_streaming_operator_answers_from_push() raises:
         DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
         ExecContext.serial(),
     )
-    var out = op.push(_batch())
+    var out = op.push(Morsel.ungrouped(_batch()))
     assert_true(Bool(out))
     assert_equal(out.value().num_rows(), 1)
     assert_true(not Bool(op.finish()))
@@ -401,15 +403,15 @@ def test_a_blocking_operator_answers_nothing_until_finish() raises:
     trait from `Filter` and therefore a second erased box — collapsing that is
     the point of the engine.
     """
-    var states = List[DynAggregateState]()
-    states.append(Sum(Column[Int64Type]("a"), "total").to_state(False))
+    var folds = List[DynOperator[DynArray]]()
+    folds.append(Sum(Column[Int64Type]("a"), "total").to_processor(False))
     var op = AggregateOperator(
         List[DynValue](),
-        states^,
+        folds^,
         schema([field("total", int64)]),
         ExecContext.serial(),
     )
-    assert_true(not Bool(op.push(_batch())))
+    assert_true(not Bool(op.push(Morsel.ungrouped(_batch()))))
 
     var out = op.finish()
     assert_true(Bool(out))
@@ -480,7 +482,7 @@ def test_limit_reports_done_so_the_source_can_stop() raises:
     """
     var op = LimitOperator(offset=0, length=2)
     assert_true(not op.done())
-    var out = op.push(_batch())
+    var out = op.push(Morsel.ungrouped(_batch()))
     assert_true(Bool(out))
     assert_equal(out.value().num_rows(), 2)
     assert_true(op.done())

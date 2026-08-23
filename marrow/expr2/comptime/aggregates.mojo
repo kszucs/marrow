@@ -18,14 +18,11 @@ same status `Bound` has — and hand off through `combine_at` once per morsel. S
 exactly one place.
 """
 
-from std.sys.info import simd_width_of
-
-from ...arrays import DynArray, Int32Array
+from ...arrays import DynArray
 from ...dtypes import DynType, NumericType
-from ...kernels.groupby import Grouping, HashGrouping, ScalarGrouping
+from ...kernels.groupby import HashGrouping, ScalarGrouping
 from ...kernels.aggregate import (
     AggKernel,
-    AggState,
     MaxKernel,
     MeanKernel,
     MinKernel,
@@ -35,165 +32,9 @@ from ...kernels.aggregate import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..core import AggValue
-from ..physical import AggregateState, DynAggregateState
+from ..physical import DynOperator
 from .core import NumericValue
-
-
-struct Fold[K: AggKernel, A: NumericValue, G: Grouping](AggregateState):
-    """The fold in progress: this aggregate's input, plus the kernel's state.
-
-    Three axes, all comptime: the **algebra** (`K`), the whole **input**
-    subtree (`A`), and the **placement** (`G`). `Fold[SumKernel,
-    Mul[Column[Int64Type], Literal[Int64Type]], ScalarGrouping]` is one type,
-    and therefore one loop with nothing interpreted inside it.
-
-    `G` is a *phantom* parameter — the fold reads `G.scatters` and never holds
-    a `G`. The grouping instance itself belongs to the operator above, which
-    assigns every row once and shares the result with every aggregate in the
-    query; a fold that owned its own grouping would re-hash the keys once per
-    aggregate.
-
-    Placement being a **type** rather than a flag is what makes the two loops
-    two instantiations of one struct, neither compiling the other's body. It is
-    not a runtime branch: which one a query needs is known when the plan is
-    built, and running the scattering loop at a single group costs **14.6x**.
-    A sorted or partitioned placement arrives as another conformer, not as
-    another `Bool`.
-    """
-
-    comptime Acc = Self.K.AccType[Self.A.Type]
-    comptime acc = Self.Acc.native
-    comptime W = simd_width_of[Scalar[Self.acc]]()
-
-    var _input: Self.A
-    var _state: AggState[Self.K, Self.A.Type]
-
-    def __init__(out self, var input: Self.A):
-        self._input = input^
-        self._state = AggState[Self.K, Self.A.Type]()
-
-    def update(
-        mut self, batch: RecordBatch, groups: Int32Array, num_groups: Int
-    ) raises:
-        var n = batch.num_rows()
-        if n == 0:
-            return
-        comptime W = Self.W
-        var bound = self._input.bind(batch)
-        var v = self._input.validity(bound)
-
-        # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
-        # reads past the view on the final chunk and **aborts the process**:
-        # buffer *size* is rounded up to 64 bytes, and that is not slack.
-        var simd_end = (n // W) * W
-
-        comptime if Self.G.scatters:
-            var gids = groups.values()
-            var i = 0
-            if v:
-                var vb = v.value()
-                var bits = vb.view()
-                while i < simd_end:
-                    self._state.accumulate[W](
-                        gids.load[W](i),
-                        self._input.lane[W](bound, i).cast[Self.acc](),
-                        bits.load[W](i),
-                        num_groups,
-                    )
-                    i += W
-                while i < n:
-                    self._state.accumulate[1](
-                        gids.load[1](i),
-                        self._input.lane[1](bound, i).cast[Self.acc](),
-                        bits.load[1](i),
-                        num_groups,
-                    )
-                    i += 1
-            else:
-                while i < simd_end:
-                    self._state.accumulate[W](
-                        gids.load[W](i),
-                        self._input.lane[W](bound, i).cast[Self.acc](),
-                        SIMD[DType.bool, W](fill=True),
-                        num_groups,
-                    )
-                    i += W
-                while i < n:
-                    self._state.accumulate[1](
-                        gids.load[1](i),
-                        self._input.lane[1](bound, i).cast[Self.acc](),
-                        SIMD[DType.bool, 1](True),
-                        num_groups,
-                    )
-                    i += 1
-        else:
-            # One group by construction, so `groups` is unused: building a zero
-            # vector to say so is exactly the cost this path exists to avoid.
-            var ident = Self.K.identity[Self.acc]()
-            var vec = SIMD[Self.acc, W](ident)
-            var acc = ident
-            var count = 0
-            var i = 0
-            if v:
-                var vb = v.value()
-                var bits = vb.view()
-                # A second accumulator, not a horizontal reduce per chunk: the
-                # count is `K.finalize`'s divisor for `mean`, and the only thing
-                # distinguishing "sum of nothing" from "sum of zeros" — both 0.
-                # int64, not the accumulator type: `mean` accumulates in
-                # float64, and a count is a count.
-                var cnt = SIMD[DType.int64, W](0)
-                while i < simd_end:
-                    # `lane[W]` is null-blind: it returns data bits regardless
-                    # of validity, so a null must become the identity here.
-                    # Without the mask an unmasked `sum` is *silently correct*
-                    # whenever the null slot's payload happens to be zero —
-                    # only min/max expose it.
-                    var mask = bits.load[W](i)
-                    vec = Self.K.combine[Self.acc, W](
-                        vec,
-                        mask.select(
-                            self._input.lane[W](bound, i).cast[Self.acc](),
-                            SIMD[Self.acc, W](ident),
-                        ),
-                    )
-                    cnt += mask.select(
-                        SIMD[DType.int64, W](1), SIMD[DType.int64, W](0)
-                    )
-                    i += W
-                while i < n:
-                    if bits.load[1](i)[0]:
-                        acc = Self.K.combine[Self.acc, 1](
-                            acc, self._input.lane[1](bound, i).cast[Self.acc]()
-                        )
-                        count += 1
-                    i += 1
-                for j in range(W):
-                    count += Int(cnt[j])
-            else:
-                while i < simd_end:
-                    vec = Self.K.combine[Self.acc, W](
-                        vec, self._input.lane[W](bound, i).cast[Self.acc]()
-                    )
-                    i += W
-                while i < n:
-                    acc = Self.K.combine[Self.acc, 1](
-                        acc, self._input.lane[1](bound, i).cast[Self.acc]()
-                    )
-                    i += 1
-                count += n
-            for j in range(W):
-                acc = Self.K.combine[Self.acc, 1](acc, vec[j])
-
-            # The registers were per-batch scratch; this is the hand-off, once
-            # per morsel rather than once per row.
-            if count > 0:
-                self._state.combine_at(0, acc, count)
-            else:
-                self._state.combine_at(0, ident, 0)
-
-    def finish(mut self, num_groups: Int) raises -> DynArray:
-        return self._state.finish(num_groups).to_dyn()
+from .folds import Fold
 
 
 struct NumericAggregate[K: AggKernel, A: NumericValue](AggValue):
@@ -228,7 +69,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](AggValue):
 
     # -- AggValue -----------------------------------------------------------
 
-    def to_state(self, grouped: Bool) raises -> DynAggregateState:
+    def to_processor(self, grouped: Bool) raises -> DynOperator[DynArray]:
         """Pick the placement, once, when the plan is built.
 
         A runtime `Bool` in, a comptime *type* out: whether the query has keys

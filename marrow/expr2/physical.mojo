@@ -104,6 +104,39 @@ struct BatchSource(Source):
 
 
 # ---------------------------------------------------------------------------
+# Morsel — the unit that flows through the pipeline
+# ---------------------------------------------------------------------------
+struct Morsel(Copyable, Movable):
+    """A batch, plus the group each of its rows belongs to.
+
+    Carrying the grouping *with* the batch is what collapses three executor
+    shapes into one. A fold needs to know which slot a row contributes to;
+    `push(batch)` alone cannot tell it, which is why an aggregate used to need
+    its own trait (`AggregateState`) and its own erased box. Put the assignment
+    in the morsel and a fold is simply an `Operator` whose `Out` is a column.
+
+    Relational stages ignore `groups` entirely. They pay nothing for it: the
+    ungrouped assignment holds an **empty** id array, because a fold that does
+    not scatter never reads the ids and materialising one `Int32` per row to
+    say "everything is group 0" is exactly the cost `ScalarGrouping` avoids.
+    """
+
+    var batch: RecordBatch
+    var groups: Groups
+
+    def __init__(out self, var batch: RecordBatch, var groups: Groups):
+        self.batch = batch^
+        self.groups = groups^
+
+    @staticmethod
+    def ungrouped(var batch: RecordBatch) raises -> Morsel:
+        """A morsel with the trivial one-slot assignment, for the relational
+        chain and for a query with no `GROUP BY`."""
+        var empty = Int32Builder(0)
+        return Morsel(batch^, Groups(empty.finish(), 1))
+
+
+# ---------------------------------------------------------------------------
 # Operator — one stage of the pipeline
 # ---------------------------------------------------------------------------
 trait Operator(Deinitable, Movable):
@@ -125,8 +158,8 @@ trait Operator(Deinitable, Movable):
     """What this stage produces — `RecordBatch` relationally, a column for a
     value."""
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[Self.Out]:
-        """Consume one batch; answer what it produced, if anything."""
+    def push(mut self, morsel: Morsel) raises -> Optional[Self.Out]:
+        """Consume one morsel; answer what it produced, if anything."""
         ...
 
     def finish(mut self) raises -> Optional[Self.Out]:
@@ -161,9 +194,9 @@ struct DynOperator[Out: Copyable](Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_push: def(
-        ArcPointer[NoneType], RecordBatch
-    ) thin raises -> Optional[Self.Out]
+    var _virt_push: def(ArcPointer[NoneType], Morsel) thin raises -> Optional[
+        Self.Out
+    ]
     var _virt_finish: def(ArcPointer[NoneType]) thin raises -> Optional[
         Self.Out
     ]
@@ -172,8 +205,8 @@ struct DynOperator[Out: Copyable](Movable):
     @staticmethod
     def _push_tramp[
         O: Operator
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> Optional[O.Out]:
-        return rebind[ArcPointer[O]](ptr)[].push(batch)
+    ](ptr: ArcPointer[NoneType], morsel: Morsel) raises -> Optional[O.Out]:
+        return rebind[ArcPointer[O]](ptr)[].push(morsel)
 
     @staticmethod
     def _finish_tramp[
@@ -193,8 +226,8 @@ struct DynOperator[Out: Copyable](Movable):
         self._virt_finish = Self._finish_tramp[O]
         self._virt_done = Self._done_tramp[O]
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[Self.Out]:
-        return self._virt_push(self._data, batch)
+    def push(mut self, morsel: Morsel) raises -> Optional[Self.Out]:
+        return self._virt_push(self._data, morsel)
 
     def finish(mut self) raises -> Optional[Self.Out]:
         return self._virt_finish(self._data)
@@ -228,7 +261,7 @@ struct DynProcessor(Movable):
 
     def _flow(
         mut self,
-        var batch: RecordBatch,
+        var morsel: Morsel,
         start: Int,
         mut out: List[RecordBatch],
     ) raises:
@@ -238,14 +271,18 @@ struct DynProcessor(Movable):
         (an aggregate) or it emptied (a filter), and either way there is
         nothing for the stages above to see.
         """
-        var cur = Optional[RecordBatch](batch^)
+        var cur = Optional[Morsel](morsel^)
         for i in range(start, len(self._ops)):
             if cur:
-                cur = self._ops[i].push(cur.value().copy())
+                var produced = self._ops[i].push(cur.value())
+                if produced:
+                    cur = Morsel.ungrouped(produced.value().copy())
+                else:
+                    cur = None
             else:
                 return
         if cur:
-            out.append(cur.value().copy())
+            out.append(cur.value().batch.copy())
 
     def collect(mut self, schema: Schema) raises -> RecordBatch:
         """Drive the source, then flush, and drain everything into one batch.
@@ -260,7 +297,7 @@ struct DynProcessor(Movable):
         while True:
             var b = self._source.next()
             if b:
-                self._flow(b.value().copy(), 0, out)
+                self._flow(Morsel.ungrouped(b.value().copy()), 0, out)
                 # Early termination. A `Limit` that has its rows stops the
                 # source rather than letting it drain — the one thing a push
                 # engine must add back that a pull engine got for free.
@@ -276,7 +313,7 @@ struct DynProcessor(Movable):
         for i in range(len(self._ops)):
             var f = self._ops[i].finish()
             if f:
-                self._flow(f.value().copy(), i + 1, out)
+                self._flow(Morsel.ungrouped(f.value().copy()), i + 1, out)
 
         if len(out) == 0:
             # An empty result must still be a *well-formed* batch: one
@@ -320,7 +357,7 @@ struct FilterOperator(Operator):
         self._predicate = predicate^
         self._ctx = ctx^
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
         """Evaluate the predicate, then compact every column.
 
         A morsel that filters to nothing answers `None` rather than an empty
@@ -328,6 +365,7 @@ struct FilterOperator(Operator):
         and forwarding it makes every stage above handle a case carrying no
         rows.
         """
+        ref batch = morsel.batch
         var mask = self._predicate.evaluate(batch).to_array(batch.num_rows())
         var cols = List[DynArray]()
         for i in range(batch.num_columns()):
@@ -353,7 +391,8 @@ struct ProjectOperator(Operator):
         self._values = values^
         self._schema = schema^
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        ref batch = morsel.batch
         var cols = List[DynArray](capacity=len(self._values))
         for ref v in self._values:
             # `Datum.to_array` is where a scalar-shaped value stops being lazy:
@@ -363,84 +402,6 @@ struct ProjectOperator(Operator):
 
     def finish(mut self) raises -> Optional[RecordBatch]:
         return None
-
-
-# ---------------------------------------------------------------------------
-# AggregateState — the physical half of a aggregate
-# ---------------------------------------------------------------------------
-trait AggregateState(Deinitable, Movable):
-    """A fold in progress. The aggregate counterpart of `Processor`.
-
-    Move-only for the same reason: it owns mutable state, so copying one would
-    fork a fold halfway through and double-count whatever came before.
-    """
-
-    def update(
-        mut self, batch: RecordBatch, groups: Int32Array, num_groups: Int
-    ) raises:
-        """Fold one morsel in, at the given group assignment.
-
-        Takes the **batch**, not a column: a fused aggregate state binds its own
-        input subtree and reads lanes, so `sum(a * 2 + b)` never materialises
-        `a * 2 + b`. That is the one thing DataFusion, Polars and ClickHouse
-        cannot express — all three take an already-computed column, because
-        none has comptime types.
-
-        An ungrouped fold ignores `groups`; there is one group by construction,
-        and building a zero vector to say so is exactly the cost it avoids.
-        """
-        ...
-
-    def finish(mut self, num_groups: Int) raises -> DynArray:
-        """One value per group, once every morsel has been folded.
-
-        A column rather than a scalar even when ungrouped — `num_groups` is
-        then 1 — so the grouped and ungrouped folds answer the same shape and
-        `Aggregate` does not branch on which it holds.
-        """
-        ...
-
-
-struct DynAggregateState(Movable):
-    """An `AggregateState` of any aggregate, erased."""
-
-    var _data: ArcPointer[NoneType]
-    var _virt_update: def(
-        ArcPointer[NoneType], RecordBatch, Int32Array, Int
-    ) thin raises
-    var _virt_finish: def(ArcPointer[NoneType], Int) thin raises -> DynArray
-
-    @staticmethod
-    def _update_tramp[
-        A: AggregateState
-    ](
-        ptr: ArcPointer[NoneType],
-        batch: RecordBatch,
-        groups: Int32Array,
-        num_groups: Int,
-    ) raises:
-        rebind[ArcPointer[A]](ptr)[].update(batch, groups, num_groups)
-
-    @staticmethod
-    def _finish_tramp[
-        A: AggregateState
-    ](ptr: ArcPointer[NoneType], num_groups: Int) raises -> DynArray:
-        return rebind[ArcPointer[A]](ptr)[].finish(num_groups)
-
-    @implicit
-    def __init__[A: AggregateState](out self, var value: A):
-        var ptr = ArcPointer[A](value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_update = Self._update_tramp[A]
-        self._virt_finish = Self._finish_tramp[A]
-
-    def update(
-        mut self, batch: RecordBatch, groups: Int32Array, num_groups: Int
-    ) raises:
-        self._virt_update(self._data, batch, groups, num_groups)
-
-    def finish(mut self, num_groups: Int) raises -> DynArray:
-        return self._virt_finish(self._data, num_groups)
 
 
 struct AggregateOperator(Operator):
@@ -472,7 +433,7 @@ struct AggregateOperator(Operator):
     comptime Out = RecordBatch
 
     var _keys: List[DynValue]
-    var _states: List[DynAggregateState]
+    var _folds: List[DynOperator[DynArray]]
     var _schema: Schema
     var _grouping: HashGrouping
     var _keyless: Bool
@@ -483,13 +444,13 @@ struct AggregateOperator(Operator):
     def __init__(
         out self,
         var keys: List[DynValue],
-        var states: List[DynAggregateState],
+        var folds: List[DynOperator[DynArray]],
         var schema: Schema,
         var ctx: ExecContext,
     ):
         self._keyless = len(keys) == 0
         self._keys = keys^
-        self._states = states^
+        self._folds = folds^
         self._schema = schema^
         self._grouping = HashGrouping()
         self._ctx = ctx^
@@ -520,26 +481,37 @@ struct AggregateOperator(Operator):
             children.append(k.evaluate(batch).to_array(batch.num_rows()))
         return children^
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
-        # Placement is a **runtime** choice here and a comptime one inside the
-        # fold, and that split is measured. Parameterising this operator on
-        # `Grouping` instantiates it once per conformer for **+24,432 bytes**
-        # and buys nothing: its branch runs once per batch, while the 14.6x
-        # register-fold win lives in `Fold`, which is already
-        # monomorphised on whether it scatters.
-        var groups: Groups
-        if self._keyless:
-            var empty = Int32Builder(0)
-            groups = Groups(empty.finish(), 1)
-        else:
-            groups = self._grouping.assign(
-                self._key_columns(batch), batch.num_rows()
-            )
-            self._num_groups = groups.num_groups
-        # Indexed rather than `for ref`: a state is move-only, and iterating a
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        """Assign the rows to slots **once**, then hand the same morsel to
+        every fold.
+
+        This is why placement belongs to the operator rather than to each fold:
+        N aggregates over one `GROUP BY` hash the keys once between them, where
+        N folds each owning a grouping would hash N times.
+
+        Placement is a runtime choice here and a comptime one inside the fold,
+        and that split is measured. Parameterising *this* operator on
+        `Grouping` instantiates it once per conformer for **+24,432 bytes** and
+        buys nothing: its branch runs once per batch, while the 14.6x
+        register-fold win lives in `Fold`, already monomorphised on `G`.
+        """
+        # Indexed rather than `for ref`: a fold is move-only, and iterating a
         # `List` by reference requires `Copyable`.
-        for i in range(len(self._states)):
-            self._states[i].update(batch, groups.ids, self._num_groups)
+        if self._keyless:
+            # The morsel already carries the trivial one-slot assignment, so
+            # there is nothing to compute and nothing to rebuild.
+            for i in range(len(self._folds)):
+                _ = self._folds[i].push(morsel)
+            return None
+
+        ref batch = morsel.batch
+        var groups = self._grouping.assign(
+            self._key_columns(batch), batch.num_rows()
+        )
+        self._num_groups = groups.num_groups
+        var forwarded = Morsel(batch.copy(), groups^)
+        for i in range(len(self._folds)):
+            _ = self._folds[i].push(forwarded)
         return None
 
     def finish(mut self) raises -> Optional[RecordBatch]:
@@ -549,8 +521,10 @@ struct AggregateOperator(Operator):
         var cols = List[DynArray]()
         if not self._keyless:
             cols = self._grouping.key_columns(self._key_fields())
-        for i in range(len(self._states)):
-            cols.append(self._states[i].finish(self._num_groups))
+        for i in range(len(self._folds)):
+            var col = self._folds[i].finish()
+            if col:
+                cols.append(col.value().copy())
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 
@@ -578,7 +552,8 @@ struct LimitOperator(Operator):
         self._skipped = 0
         self._emitted = 0
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        ref batch = morsel.batch
         var n = batch.num_rows()
         var start = 0
         if self._skipped < self._offset:
@@ -638,8 +613,8 @@ struct SortOperator(Operator):
         self._ctx = ctx^
         self._emitted = False
 
-    def push(mut self, batch: RecordBatch) raises -> Optional[RecordBatch]:
-        self._batches.append(batch.copy())
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        self._batches.append(morsel.batch.copy())
         return None
 
     def finish(mut self) raises -> Optional[RecordBatch]:
