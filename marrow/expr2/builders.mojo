@@ -29,6 +29,7 @@ from .`comptime`.leaves import (
     StringColumn,
     StringLiteral,
 )
+from .params import Param
 from .runtime.values import RuntimeValue, column, literal
 from ..dtypes import (
     BoolType,
@@ -158,3 +159,30 @@ def array_length[A: ListValue](var a: A) -> ListLength[A]:
     column — which is the only way a list is read, since a list element is a
     whole sub-array rather than a value a lane can hold."""
     return ListLength[A](a^)
+
+
+# ---------------------------------------------------------------------------
+# param — a literal whose value arrives later
+# ---------------------------------------------------------------------------
+def param[
+    T: NumericType
+](
+    var name: String,
+    dtype: T,
+    var help: String = String(),
+    var default: Optional[Scalar[T.native]] = None,
+) -> Param[T]:
+    """Declare a late-bound scalar.
+
+    **Declare once and reuse it.** Copies share the cell, so binding once is
+    visible everywhere:
+
+        var min_a = param("min-a", int64)
+        t.filter(col("a", int64) > min_a).project(["m"], [min_a])
+
+    Calling `param("min-a", int64)` twice makes two *independent* parameters
+    that happen to share a name — which is why there is no registry, no
+    name-keyed dedup and no dtype-conflict check. `expr/` needs all three
+    because it declares parameters inline at each use site.
+    """
+    return Param[T](name^, help^, default^)

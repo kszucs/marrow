@@ -22,6 +22,7 @@ bytes in a binary that never sorts. A `match` over all kinds would make every
 operator reachable from any plan.
 """
 
+from std.collections import Set
 from std.memory import ArcPointer
 
 from ..execution import ExecContext
@@ -29,6 +30,7 @@ from ..kernels.join import JoinKind, JOIN_INNER
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field
+from .params import Bindings, DynParam
 from .runtime.values import column
 from .physical import (
     Datum,
@@ -124,10 +126,30 @@ trait Value(Copyable, Deinitable, Writable):
         """The type this produces, without running anything."""
         ...
 
-    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def params(self) -> List[DynParam]:
+        """The late-bound parameters this expression reads, first-seen order.
+
+        A sibling to `columns()` and the same walk, which is what makes a
+        plan's parameters a property *of the plan*. `expr/` answers this from a
+        process-global registry instead, and inherits two limitations from it:
+        a plan built but never executed leaks its declarations into the next
+        plan's `--help`, and the globals are unsynchronised. Neither exists
+        when the answer comes from the tree.
+
+        Defaulted to empty because almost nothing has parameters — only a
+        `Param` leaf, and the composite nodes that carry one up.
+        """
+        return List[DynParam]()
+
+    def to_operator(
+        self, grouped: Bool, bindings: Bindings = Bindings()
+    ) raises -> DynOperator[Datum]:
         """The stateful thing that runs this value.
 
         `grouped` picks a fold's placement and is ignored by everything else.
+        `bindings` supplies this execution's parameter values — a `Param`
+        resolves against them here, which is why a plan holds no parameter
+        state and two executions cannot interfere.
         """
         ...
 
@@ -163,9 +185,10 @@ struct DynValue(Copyable, Movable, Writable):
     var _columns: def(ArcPointer[NoneType]) thin -> List[String]
     var _name: def(ArcPointer[NoneType]) thin -> String
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
+    var _params: def(ArcPointer[NoneType]) thin -> List[DynParam]
     var _write: def(ArcPointer[NoneType]) thin -> String
     var _to_processor: def(
-        ArcPointer[NoneType], Bool
+        ArcPointer[NoneType], Bool, Bindings
     ) thin raises -> DynOperator[Datum]
     var _shape: Shape
 
@@ -191,8 +214,14 @@ struct DynValue(Copyable, Movable, Writable):
     @staticmethod
     def _to_processor_tramp[
         V: Value
-    ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynOperator[Datum]:
-        return rebind[ArcPointer[V]](ptr)[].to_operator(grouped)
+    ](
+        ptr: ArcPointer[NoneType], grouped: Bool, bindings: Bindings
+    ) raises -> DynOperator[Datum]:
+        return rebind[ArcPointer[V]](ptr)[].to_operator(grouped, bindings)
+
+    @staticmethod
+    def _params_tramp[V: Value](ptr: ArcPointer[NoneType]) -> List[DynParam]:
+        return rebind[ArcPointer[V]](ptr)[].params()
 
     @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -206,6 +235,7 @@ struct DynValue(Copyable, Movable, Writable):
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
         self._write = Self._write_tramp[V]
+        self._params = Self._params_tramp[V]
         self._to_processor = Self._to_processor_tramp[V]
         self._shape = V.shape
 
@@ -220,7 +250,12 @@ struct DynValue(Copyable, Movable, Writable):
     def dtype(self, schema: Schema) raises -> DynType:
         return self._dtype(self._boxed, schema)
 
-    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def params(self) -> List[DynParam]:
+        return self._params(self._boxed)
+
+    def to_operator(
+        self, grouped: Bool, bindings: Bindings = Bindings()
+    ) raises -> DynOperator[Datum]:
         """The stateful thing that runs this value.
 
         The slot `DynAggValue._acc` used to occupy, on the one box that now
@@ -228,7 +263,7 @@ struct DynValue(Copyable, Movable, Writable):
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
-        return self._to_processor(self._boxed, grouped)
+        return self._to_processor(self._boxed, grouped, bindings)
 
     def shape(self) -> Shape:
         """The boxed value's `shape`, read at construction.
@@ -243,6 +278,47 @@ struct DynValue(Copyable, Movable, Writable):
         writer.write(self._write(self._boxed))
 
 
+# ---------------------------------------------------------------------------
+# merged — the one shape every analysis traversal shares
+# ---------------------------------------------------------------------------
+# `columns()` and `params()` both fold a node's children into a list that is
+# deduplicated but **order-preserving**: first-seen order is part of the
+# contract (`test_runtime_columns_are_deduped_in_first_seen_order` asserts it),
+# so a plain `Set` cannot answer either on its own.
+#
+# A `List` carries the order and a `Set` answers membership, which also makes
+# this linear — the loop it replaces rescanned the accumulated list once per
+# candidate, so a wide expression was quadratic in its own column count.
+#
+# `bind` and `validity` fold too and are deliberately *not* here: each is
+# already a single expression — a tuple and an intersect — so there is nothing
+# to extract. They could not be defaulted onto a trait anyway, since a default
+# returning `Self.Bound` needs that type to be `ImplicitlyCopyable`, which
+# marrow's array types deliberately are not.
+def merged(var into: List[String], extra: List[String]) -> List[String]:
+    """`into`, followed by whatever in `extra` it does not already contain."""
+    var seen = Set[String]()
+    for ref n in into:
+        seen.add(n.copy())
+    for ref n in extra:
+        if n not in seen:
+            seen.add(n.copy())
+            into.append(n.copy())
+    return into^
+
+
+def merged(var into: List[DynParam], extra: List[DynParam]) -> List[DynParam]:
+    """The same, keyed on a parameter's name — which is its identity."""
+    var seen = Set[String]()
+    for ref p in into:
+        seen.add(p.name.copy())
+    for ref p in extra:
+        if p.name not in seen:
+            seen.add(p.name.copy())
+            into.append(p.copy())
+    return into^
+
+
 trait Relation(Copyable, Deinitable, Movable):
     """An immutable description of a query."""
 
@@ -255,7 +331,18 @@ trait Relation(Copyable, Deinitable, Movable):
         """
         ...
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+    def params(self) -> List[DynParam]:
+        """The late-bound parameters this relation and its inputs read.
+
+        Defaulted to empty so a leaf need not implement it; the nodes holding
+        values override it. This is what makes `plan.params()` answerable from
+        the tree rather than from a global registry.
+        """
+        return List[DynParam]()
+
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
         """The running operator for this description.
 
         Takes a context because this is the seam where one logical operator may
@@ -276,19 +363,30 @@ struct DynRelation(Copyable, Movable, Writable):
     var _data: ArcPointer[NoneType]
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_to_processor: def(
-        ArcPointer[NoneType], ExecContext
+        ArcPointer[NoneType], ExecContext, Bindings
     ) thin raises -> Pipeline
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
+    var _virt_params: def(ArcPointer[NoneType]) thin -> List[DynParam]
 
     @staticmethod
-    def _schema_tramp[R: Relation](ptr: ArcPointer[NoneType]) -> Schema:
+    def _schema_tramp[
+        R: Relation & Writable
+    ](ptr: ArcPointer[NoneType]) -> Schema:
         return rebind[ArcPointer[R]](ptr)[].schema()
 
     @staticmethod
     def _to_processor_tramp[
         R: Relation
-    ](ptr: ArcPointer[NoneType], ctx: ExecContext) raises -> Pipeline:
-        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx)
+    ](
+        ptr: ArcPointer[NoneType], ctx: ExecContext, bindings: Bindings
+    ) raises -> Pipeline:
+        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx, bindings)
+
+    @staticmethod
+    def _params_tramp[
+        R: Relation & Writable
+    ](ptr: ArcPointer[NoneType]) -> List[DynParam]:
+        return rebind[ArcPointer[R]](ptr)[].params()
 
     @staticmethod
     def _write_tramp[
@@ -303,12 +401,24 @@ struct DynRelation(Copyable, Movable, Writable):
         self._virt_schema = Self._schema_tramp[R]
         self._virt_to_processor = Self._to_processor_tramp[R]
         self._virt_write = Self._write_tramp[R]
+        self._virt_params = Self._params_tramp[R]
 
     def schema(self) -> Schema:
         return self._virt_schema(self._data)
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
-        return self._virt_to_processor(self._data, ctx)
+    def params(self) -> List[DynParam]:
+        """Every parameter this plan reads, first-seen order, deduped by name.
+
+        Walking the tree rather than draining a registry is what makes this a
+        property of the plan: two plans in one process cannot see each other's
+        parameters, and a plan that is built but never run leaks nothing.
+        """
+        return self._virt_params(self._data)
+
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
+        return self._virt_to_processor(self._data, ctx, bindings)
 
     # -- the plan-building API ---------------------------------------------
     #
@@ -386,10 +496,12 @@ struct DynRelation(Copyable, Movable, Writable):
         )
 
     def execute(
-        self, ctx: ExecContext = ExecContext.auto()
+        self,
+        ctx: ExecContext = ExecContext.auto(),
+        bindings: Bindings = Bindings(),
     ) raises -> RecordBatch:
         """Run this plan and drain it into one batch."""
-        var p = self.to_operator(ctx)
+        var p = self.to_operator(ctx, bindings)
         return p.collect(self.schema())
 
     def write_to[W: Writer](self, mut writer: W):
@@ -407,7 +519,9 @@ struct InMemoryTable(Relation, Writable):
     def schema(self) -> Schema:
         return self._batch.schema.copy()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
         """The one relation that *creates* a pipeline; every other appends."""
         return Pipeline(BatchSourceOperator(self._batch.copy()))
 
@@ -435,10 +549,19 @@ struct Filter(Relation, Writable):
     def schema(self) -> Schema:
         return self._input.schema()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx)
+    def params(self) -> List[DynParam]:
+        """Union of the operands', deduped by name — the same fold as
+        `columns()`, which is why parameters need no registry."""
+        return merged(self._input.params(), self._predicate.params())
+
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx, bindings)
         pipe.append(
-            FilterOperator(self._predicate.to_operator(False), ctx.copy())
+            FilterOperator(
+                self._predicate.to_operator(False, bindings), ctx.copy()
+            )
         )
         return pipe^
 
@@ -516,11 +639,19 @@ struct Project(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx)
+    def params(self) -> List[DynParam]:
+        var out = self._input.params()
+        for ref v in self._values:
+            out = merged(out^, v.params())
+        return out^
+
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx, bindings)
         var values = List[DynOperator[Datum]](capacity=len(self._values))
         for ref v in self._values:
-            values.append(v.to_operator(False))
+            values.append(v.to_operator(False, bindings))
         pipe.append(ProjectOperator(values^, self._schema.copy()))
         return pipe^
 
@@ -591,15 +722,25 @@ struct Aggregate(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+    def params(self) -> List[DynParam]:
+        var out = self._input.params()
+        for ref v in self._keys:
+            out = merged(out^, v.params())
+        for ref v in self._aggs:
+            out = merged(out^, v.params())
+        return out^
+
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
         var grouped = len(self._keys) > 0
         var folds = List[DynOperator[Datum]](capacity=len(self._aggs))
         for ref a in self._aggs:
-            folds.append(a.to_operator(grouped))
-        var pipe = self._input.to_operator(ctx)
+            folds.append(a.to_operator(grouped, bindings))
+        var pipe = self._input.to_operator(ctx, bindings)
         var keys = List[DynOperator[Datum]](capacity=len(self._keys))
         for ref k in self._keys:
-            keys.append(k.to_operator(False))
+            keys.append(k.to_operator(False, bindings))
         pipe.append(
             AggregateOperator(keys^, folds^, self._schema.copy(), ctx.copy())
         )
@@ -634,8 +775,13 @@ struct Limit(Relation, Writable):
     def schema(self) -> Schema:
         return self._input.schema()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx)
+    def params(self) -> List[DynParam]:
+        return self._input.params()
+
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx, bindings)
         pipe.append(LimitOperator(self._offset, self._length))
         return pipe^
 
@@ -690,11 +836,16 @@ struct Sort(Relation, Writable):
     def schema(self) -> Schema:
         return self._input.schema()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx)
+    def params(self) -> List[DynParam]:
+        return self._input.params()
+
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx, bindings)
         pipe.append(
             SortOperator(
-                _to_operators(self._keys),
+                _to_operators(self._keys, bindings),
                 self._ascending.copy(),
                 self._nulls_first,
                 ctx.copy(),
@@ -710,7 +861,9 @@ struct Sort(Relation, Writable):
         writer.write(")")
 
 
-def _to_operators(values: List[DynValue]) raises -> List[DynOperator[Datum]]:
+def _to_operators(
+    values: List[DynValue], bindings: Bindings
+) raises -> List[DynOperator[Datum]]:
     """Turn a list of logical values into the operators that run them.
 
     Built **once**, when the plan becomes physical — not per batch. That is the
@@ -719,7 +872,7 @@ def _to_operators(values: List[DynValue]) raises -> List[DynOperator[Datum]]:
     """
     var out = List[DynOperator[Datum]](capacity=len(values))
     for ref v in values:
-        out.append(v.to_operator(False))
+        out.append(v.to_operator(False, bindings))
     return out^
 
 
@@ -796,12 +949,14 @@ struct Join(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
         """The probe side is the pipeline; the build side is a stage's cargo."""
-        var probe = self._right.to_operator(ctx)
+        var probe = self._right.to_operator(ctx, bindings)
         probe.append(
             JoinOperator(
-                self._left.to_operator(ctx),
+                self._left.to_operator(ctx, bindings),
                 self._left_keys.copy(),
                 self._right_keys.copy(),
                 self._kind,
@@ -841,7 +996,9 @@ struct ParquetScan(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+    def to_operator(
+        self, ctx: ExecContext, bindings: Bindings = Bindings()
+    ) raises -> Pipeline:
         return Pipeline(
             ParquetScanOperator(self._path.copy(), self._schema.copy())
         )

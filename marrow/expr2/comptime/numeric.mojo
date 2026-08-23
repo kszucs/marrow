@@ -25,7 +25,9 @@ from ...kernels.conditional import case_when
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
-from ..logical import Shape
+from ..logical import Shape, merged
+from ..params import Bindings
+from ..params import Bindings, DynParam
 from ..physical import Datum
 
 from .rules import promote, wider, widest_shape
@@ -54,16 +56,12 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     # -- Analyzable ---------------------------------------------------------
 
     def columns(self) -> List[String]:
-        var out = self.l.columns()
-        for ref n in self.r.columns():
-            var seen = False
-            for ref have in out:
-                if have == n:
-                    seen = True
-                    break
-            if not seen:
-                out.append(n.copy())
-        return out^
+        return merged(self.l.columns(), self.r.columns())
+
+    def params(self) -> List[DynParam]:
+        """Union of the operands', deduped by name — the same fold as
+        `columns()`, which is why parameters need no registry."""
+        return merged(self.l.params(), self.r.params())
 
     def name(self) -> String:
         # Computed, so it has no name of its own — the planner supplies one.
@@ -74,8 +72,8 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        return (self.l.bind(batch), self.r.bind(batch))
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Arithmetic is null-in, null-out: the result is valid where both
@@ -143,16 +141,12 @@ struct NumericCompare[
     # -- Analyzable ---------------------------------------------------------
 
     def columns(self) -> List[String]:
-        var out = self.l.columns()
-        for ref n in self.r.columns():
-            var seen = False
-            for ref have in out:
-                if have == n:
-                    seen = True
-                    break
-            if not seen:
-                out.append(n.copy())
-        return out^
+        return merged(self.l.columns(), self.r.columns())
+
+    def params(self) -> List[DynParam]:
+        """Union of the operands', deduped by name — the same fold as
+        `columns()`, which is why parameters need no registry."""
+        return merged(self.l.params(), self.r.params())
 
     def name(self) -> String:
         return String()
@@ -162,8 +156,8 @@ struct NumericCompare[
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        return (self.l.bind(batch), self.r.bind(batch))
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """A comparison is null-in, null-out: valid where both operands are.
@@ -230,17 +224,16 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
     # -- Value --------------------------------------------------------------
 
     def columns(self) -> List[String]:
-        var out = self.cond.columns()
-        for ref src in [self.then.columns(), self.otherwise.columns()]:
-            for ref n in src:
-                var seen = False
-                for ref have in out:
-                    if have == n:
-                        seen = True
-                        break
-                if not seen:
-                    out.append(n.copy())
-        return out^
+        return merged(
+            merged(self.cond.columns(), self.then.columns()),
+            self.otherwise.columns(),
+        )
+
+    def params(self) -> List[DynParam]:
+        return merged(
+            merged(self.cond.params(), self.then.params()),
+            self.otherwise.params(),
+        )
 
     def name(self) -> String:
         return String()
@@ -250,15 +243,17 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         var n = batch.num_rows()
         var conditions = List[BoolArray]()
         conditions.append(
-            self.cond.evaluate(batch).to_array(n).as_bool().copy()
+            self.cond.evaluate(batch, bindings).to_array(n).as_bool().copy()
         )
         var values = List[DynArray]()
-        values.append(self.then.evaluate(batch).to_array(n))
-        var else_ = Optional(self.otherwise.evaluate(batch).to_array(n))
+        values.append(self.then.evaluate(batch, bindings).to_array(n))
+        var else_ = Optional(
+            self.otherwise.evaluate(batch, bindings).to_array(n)
+        )
         return (
             case_when(conditions, values, else_^)
             .as_primitive[Self.Type]()
@@ -329,16 +324,12 @@ struct TemporalCompare[
     # -- Value --------------------------------------------------------------
 
     def columns(self) -> List[String]:
-        var out = self.l.columns()
-        for ref n in self.r.columns():
-            var seen = False
-            for ref have in out:
-                if have == n:
-                    seen = True
-                    break
-            if not seen:
-                out.append(n.copy())
-        return out^
+        return merged(self.l.columns(), self.r.columns())
+
+    def params(self) -> List[DynParam]:
+        """Union of the operands', deduped by name — the same fold as
+        `columns()`, which is why parameters need no registry."""
+        return merged(self.l.params(), self.r.params())
 
     def name(self) -> String:
         return String()
@@ -348,7 +339,7 @@ struct TemporalCompare[
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         # Same width is not the same type: `date32` and `time32[s]` are both
         # int32, and `timestamp[s]` and `timestamp[ms]` differ only in a unit
         # the width cannot see. Checked once per batch, not per row.
@@ -360,7 +351,7 @@ struct TemporalCompare[
                 String(self.r.dtype(batch.schema)),
                 ": units must match, coercion is not implemented",
             )
-        return (self.l.bind(batch), self.r.bind(batch))
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Null-in, null-out — as `NumericCompare`. The lane compares whatever

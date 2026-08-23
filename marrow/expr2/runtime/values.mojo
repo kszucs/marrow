@@ -35,7 +35,8 @@ from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Shape, Value
+from ..logical import Shape, Value, merged
+from ..params import Bindings
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
@@ -137,14 +138,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "column" and self._payload.isa[String]():
             out.append(self._payload[String].copy())
         for ref kid in self._kids:
-            for ref n in kid[].columns():
-                var seen = False
-                for ref have in out:
-                    if have == n:
-                        seen = True
-                        break
-                if not seen:
-                    out.append(n.copy())
+            out = merged(out^, kid[].columns())
         return out^
 
     def name(self) -> String:
@@ -177,17 +171,23 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return schema.fields[i].dtype.copy()
         if self._tag == "literal" and self._payload.isa[DynScalar]():
             return self._payload[DynScalar].type()
-        return self.evaluate(RecordBatch.empty(schema)).to_array(0).dtype()
+        return (
+            self.evaluate(RecordBatch.empty(schema), Bindings())
+            .to_array(0)
+            .dtype()
+        )
 
     # -- Executable ----------------------------------------------------------
 
-    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def to_operator(
+        self, grouped: Bool, bindings: Bindings = Bindings()
+    ) raises -> DynOperator[Datum]:
         """The runtime lane's half of the same contract. Its processor is the
         same adapter the comptime lane uses — the lanes differ in how they
         compute, not in how they are turned into something that runs."""
-        return EvalOperator[Self](self.copy())
+        return EvalOperator[Self](self.copy(), bindings.copy())
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         # Leaf spelled out — see `columns`. There is no switch here: which
         # kernel runs was decided when the node was built, by which `EvalFn`
         # the constructing method named.
@@ -196,7 +196,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
         var kids = List[DynArray]()
         for ref kid in self._kids:
-            kids.append(kid[].evaluate(batch).to_array(batch.num_rows()))
+            kids.append(
+                kid[].evaluate(batch, bindings).to_array(batch.num_rows())
+            )
         return self._eval(kids, self._payload, batch)
 
     # -- Writable -----------------------------------------------------------

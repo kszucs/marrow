@@ -27,6 +27,7 @@ from ...kernels.nested import ArrayLengthKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
+from ..params import Bindings
 from ..physical import Datum
 from .core import (
     BoolValue,
@@ -63,14 +64,14 @@ struct Column[T: NumericType](NumericValue):
 
     # -- Executable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         # A leaf returns its column as-is, validity included; the fused loop
         # above it decides what nulls mean.
         return batch.column(self._name).copy()
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         # `RecordBatch.column(name)` owns the missing-name diagnostic:
         # `get_field_index` answers -1, and indexing a column list with that
         # trips a bounds assert that aborts the process instead of naming the
@@ -145,12 +146,12 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
 
     # -- Executable ---------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         return batch.column(self._name).copy()
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         return batch.column(self._name).as_primitive[Self.T]().copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -193,7 +194,7 @@ struct Literal[T: NumericType](NumericValue):
 
     # -- Executable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         # Stays a scalar. `Shape == 0` tells the caller so, and `Datum.to_array`
         # is the one place it stops being lazy — a predicate over a constant
         # never allocates a column.
@@ -201,7 +202,7 @@ struct Literal[T: NumericType](NumericValue):
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         return NoneType()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -255,12 +256,12 @@ struct BoolColumn(BoolValue):
 
     # -- Executable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         # As with `Column[T]`: hand back the column rather than re-packing an
         # identical bitmap through the fused driver.
         return batch.column(self._name).copy()
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         return batch.column(self._name).as_bool().copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -304,14 +305,14 @@ struct StringColumn[T: StringLikeType](StringValue):
 
     # -- Executable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         # Hand back the column rather than copying every byte through a
         # builder — the whole reason the trait default is overridable.
         return batch.column(self._name).copy()
 
     # -- StringValue --------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         return batch.column(self._name).as_type[Self.Bound]().copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -351,12 +352,12 @@ struct StringLiteral[T: StringLikeType](StringValue):
 
     # -- Executable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         return Datum(StringScalar(self._value.copy()).to_dyn())
 
     # -- StringValue --------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         # Nothing to resolve: a constant reads no column.
         return False
 
@@ -403,12 +404,14 @@ struct ListColumn[T: ListLikeType](ListValue):
         # be conjured from `Self.T()` any more than a timestamp's unit can.
         return schema.fields[schema.get_field_index(self._name)].dtype.copy()
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         return batch.column(self._name).copy()
 
     # -- ListValue ----------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> ListLikeArray[Self.Type]:
+    def bind(
+        self, batch: RecordBatch, bindings: Bindings
+    ) raises -> ListLikeArray[Self.Type]:
         return batch.column(self._name).as_type[ListLikeArray[Self.T]]().copy()
 
     def validity(
@@ -454,8 +457,8 @@ struct ListLength[A: ListValue](NumericValue):
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        return ArrayLengthKernel.apply(self.a.bind(batch))
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+        return ArrayLengthKernel.apply(self.a.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         # A null list has no length, so validity is the list's own.

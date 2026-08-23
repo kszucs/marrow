@@ -11,7 +11,8 @@ from ...buffers import Bitmap
 from ...dtypes import DynType, StringLikeType
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Shape
+from ..logical import Shape, merged
+from ..params import Bindings
 from ..physical import Datum
 
 from .rules import widest_shape
@@ -95,16 +96,7 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
     # -- Analyzable ---------------------------------------------------------
 
     def columns(self) -> List[String]:
-        var out = self.l.columns()
-        for ref n in self.r.columns():
-            var seen = False
-            for ref have in out:
-                if have == n:
-                    seen = True
-                    break
-            if not seen:
-                out.append(n.copy())
-        return out^
+        return merged(self.l.columns(), self.r.columns())
 
     def name(self) -> String:
         return String()
@@ -114,8 +106,8 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        return (self.l.bind(batch), self.r.bind(batch))
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Null-in, null-out: valid exactly where both operands are.

@@ -14,6 +14,7 @@ from ....dtypes import DynType, Int64Type, int64
 from ....tabular import RecordBatch, record_batch
 from ....scalars import DynScalar
 from ...logical import DynValue, Shape
+from ...params import Bindings
 from ...physical import Morsel
 from ..leaves import Column, Literal
 from ..numeric import Add, Gt, Mul, Sub
@@ -59,7 +60,7 @@ def test_validity_matches_the_bound_column() raises:
     """
     var b = _batch()
     var c = Column[Int64Type]("a")
-    var bound = c.bind(b)
+    var bound = c.bind(b, Bindings())
     var v = c.validity(bound)
 
     assert_true(v)
@@ -71,7 +72,7 @@ def test_validity_matches_the_bound_column() raises:
 def test_a_literal_is_never_null() raises:
     var b = _batch()
     var l = Literal[Int64Type](7)
-    assert_false(Bool(l.validity(l.bind(b))))
+    assert_false(Bool(l.validity(l.bind(b, Bindings()))))
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +90,7 @@ def test_a_comparison_over_a_null_is_null_not_false() raises:
     """
     var b = _batch()  # a = [1, 2, None, 4]
     var pred = Gt(Column[Int64Type]("a"), Literal[Int64Type](2))
-    var arr = pred.evaluate(b).to_array(b.num_rows())
+    var arr = pred.evaluate(b, Bindings()).to_array(b.num_rows())
     ref out = arr.as_bool()
 
     assert_equal(out.null_count(), 1)
@@ -104,7 +105,7 @@ def test_arithmetic_propagates_nulls_through_fusion() raises:
     """Null in, null out — across a fused subtree, not just one node."""
     var b = _batch()
     var sum = Add(Column[Int64Type]("a"), Column[Int64Type]("b"))
-    var arr = sum.evaluate(b).to_array(b.num_rows())
+    var arr = sum.evaluate(b, Bindings()).to_array(b.num_rows())
     ref out = arr.as_int64()
 
     assert_equal(out.null_count(), 1)
@@ -125,7 +126,7 @@ def test_a_fused_subtree_is_one_expression() raises:
         Add(Column[Int64Type]("a"), Column[Int64Type]("b")),
         Literal[Int64Type](10),
     )
-    var arr = pred.evaluate(b).to_array(b.num_rows())
+    var arr = pred.evaluate(b, Bindings()).to_array(b.num_rows())
     ref out = arr.as_bool()
 
     assert_equal(out.null_count(), 1)
@@ -140,7 +141,7 @@ def test_a_literal_only_expression_stays_scalar() raises:
     var b = _batch()
     var both = Add(Literal[Int64Type](1), Literal[Int64Type](2))
     assert_true(both.shape == Shape.scalar)
-    assert_true(both.evaluate(b).is_scalar())
+    assert_true(both.evaluate(b, Bindings()).is_scalar())
 
 
 # ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@ from ..utils import RapidHash64
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
+from .params import Bindings
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +253,7 @@ trait Evaluable(Copyable, Deinitable):
     own processor, and nothing outside a lane is bound on it.
     """
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         ...
 
 
@@ -276,12 +277,22 @@ struct EvalOperator[V: Evaluable](Operator):
     comptime Out = Datum
 
     var _value: Self.V
+    var _bindings: Bindings
+    """This execution's parameter values.
 
-    def __init__(out self, var value: Self.V):
+    Held by the *operator*, not the node: that is what keeps a plan a
+    description and lets two executions bind different values. `bind` receives
+    them and a `Param` reads them there — which is also the only place they can
+    reach a parameter nested inside a subtree, since `to_operator` copies a
+    node without descending into it.
+    """
+
+    def __init__(out self, var value: Self.V, var bindings: Bindings):
         self._value = value^
+        self._bindings = bindings^
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        return self._value.evaluate(morsel.batch)
+        return self._value.evaluate(morsel.batch, self._bindings)
 
     def drain(mut self) raises -> Optional[Datum]:
         return None
