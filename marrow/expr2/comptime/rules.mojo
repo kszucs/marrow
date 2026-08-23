@@ -18,10 +18,10 @@ operand types *may* be compared is a rule, not a node's business.
 from std.sys import bit_width_of
 
 from ...dtypes import NumericType
-from ..logical import Executable, Shape
+from ..logical import Shape, Value
 
 
-comptime widest_shape[A: Executable, B: Executable] = (
+comptime widest_shape[A: Value, B: Value] = (
     Shape.columnar if (
         A.shape == Shape.columnar or B.shape == Shape.columnar
     ) else Shape.scalar

@@ -44,16 +44,13 @@ from ...kernels.aggregate import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Analyzable, Executable, Shape
-from ..physical import Datum
-from ..physical import DynOperator, Morsel, Operator
+from ..logical import Shape, Value
+from ..physical import Datum, DynOperator, Evaluable, Morsel, Operator
 
 from .core import NumericValue
 
 
-struct NumericAggregate[K: AggKernel, A: NumericValue](
-    Analyzable, Executable, Writable
-):
+struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
     """`sum(x)`, `min(x)`, … — pure, and rewritable because of it.
 
     **An ordinary `Value`.** It conforms to exactly what `x + 1` conforms to

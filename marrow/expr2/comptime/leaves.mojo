@@ -62,11 +62,6 @@ struct Column[T: NumericType](NumericValue):
         # column. Every leaf goes through it for that reason.
         return batch.column(self._name).as_primitive[Self.T]().copy()
 
-    def out_dtype(self, bound: Self.Bound) -> Self.Type:
-        # From the bound column, not from `Self.T()`: a parameterised dtype
-        # (timestamp's unit and timezone) exists only as a value.
-        return bound.dtype
-
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         # The bound column already carries it — no second lookup, no re-read.
         return bound.to_data().owned_validity()
@@ -146,9 +141,6 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
     def bind(self, batch: RecordBatch) raises -> Self.Bound:
         return batch.column(self._name).as_primitive[Self.T]().copy()
 
-    def out_dtype(self, bound: Self.Bound) -> Self.Type:
-        return bound.dtype
-
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return bound.to_data().owned_validity()
 
@@ -199,11 +191,6 @@ struct Literal[T: NumericType](NumericValue):
 
     def bind(self, batch: RecordBatch) raises -> Self.Bound:
         return NoneType()
-
-    def out_dtype(self, bound: Self.Bound) -> Self.Type:
-        # No bound column to read, and `NumericType` is `Defaultable`, so a
-        # literal's dtype genuinely is knowable from its type alone.
-        return Self.T()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         # A constant is never null.
@@ -360,11 +347,6 @@ struct StringLiteral[T: StringLikeType](StringValue):
     def bind(self, batch: RecordBatch) raises -> Self.Bound:
         # Nothing to resolve: a constant reads no column.
         return False
-
-    def out_dtype(self, bound: Self.Bound) -> Self.Type:
-        # A literal has no bound column to read, and `NumericType` is
-        # `Defaultable`, so its dtype genuinely is knowable from the type.
-        return Self.T()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return None

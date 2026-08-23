@@ -42,7 +42,7 @@ from ...builders import BinaryLikeBuilder
 from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
-from ..logical import Analyzable, Executable, Shape
+from ..logical import Shape, Value
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
@@ -50,9 +50,7 @@ from ..physical import Evaluable, DynOperator, EvalOperator
 # ---------------------------------------------------------------------------
 # ComptimeValue — what every node in this lane shares
 # ---------------------------------------------------------------------------
-trait ComptimeValue(
-    Analyzable, Copyable, Deinitable, Evaluable, Executable, Writable
-):
+trait ComptimeValue(Evaluable, Value):
     """A `Value` whose type states its output type and its per-batch state.
 
     This is where `evaluate` lives — **not** on `Value`. A logical node is
@@ -161,24 +159,6 @@ trait PrimitiveValue(ComptimeValue):
         """
         ...
 
-    def out_dtype(self, bound: Self.Bound) -> Self.Type:
-        """This node's output dtype **as a value**.
-
-        `comptime Type` names the type; this produces an instance of it, and
-        the two are not interchangeable. `NumericType` is `Defaultable`, so a
-        numeric node can write `Self.Type()` — but `TemporalType` and
-        `DecimalType` are not, because a timestamp carries a unit and timezone
-        and a decimal a precision and scale. Those cannot be conjured, only
-        carried.
-
-        It takes the `Bound` because that is where the answer lives for the
-        node that has one: a column leaf reads its own bound column's dtype.
-        Everything else answers from its type, and a comparison does not
-        implement this at all — it is a `BoolValue`, and `bool` has no
-        parameters.
-        """
-        ...
-
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         """One fused pass over the batch — `bind` once, then `lane` per chunk.
 
@@ -200,7 +180,8 @@ trait PrimitiveValue(ComptimeValue):
             # is what `Shape.scalar` promises its caller.
             return Datum(
                 PrimitiveScalar[Self.Type](
-                    Optional(self.lane[1](bound, 0)[0]), self.out_dtype(bound)
+                    Optional(self.lane[1](bound, 0)[0]),
+                    self.dtype(batch.schema).as_type[Self.Type](),
                 ).to_dyn()
             )
         else:
@@ -216,7 +197,7 @@ trait PrimitiveValue(ComptimeValue):
             # Validity once, from the bound — never per lane.
             var v = self.validity(bound)
             var arr = PrimitiveArray[Self.Type](
-                dtype=self.out_dtype(bound),
+                dtype=self.dtype(batch.schema).as_type[Self.Type](),
                 length=length,
                 nulls=v.value().unset_count() if v else 0,
                 offset=0,

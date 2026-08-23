@@ -33,7 +33,7 @@ from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Analyzable, Executable, Shape
+from ..logical import Shape, Value
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
@@ -58,9 +58,7 @@ its expressions name and nothing else.
 """
 
 
-struct RuntimeValue(
-    Analyzable, Copyable, Deinitable, Evaluable, Executable, Movable, Writable
-):
+struct RuntimeValue(Evaluable, Movable, Value):
     """A runtime-built expression.
 
     Satisfies `Value` — `Analyzable & Executable & Writable & Copyable &

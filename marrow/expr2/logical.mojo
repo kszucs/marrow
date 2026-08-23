@@ -81,141 +81,54 @@ struct Shape(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 # Analyzable — what a rewriter asks
 # ---------------------------------------------------------------------------
-trait Analyzable:
-    """Questions a rewriter asks of an expression it cannot open.
+trait Value(Copyable, Deinitable, Writable):
+    """What every expression is, in both lanes.
 
-    The comptime lane's structure *is* its type, so nothing outside can inspect
-    it; a node must answer for itself. That constraint is real and is why these
-    methods exist at all. What is *not* forced is scattering them across the
-    expression's own interface as though answering a rewriter were part of
-    being an expression — hence this trait, named for the asker.
+    Five members: what it reads, what it is called, what type it produces,
+    whether it yields one value or one per row, and how to turn it into
+    something that runs.
 
-    Every method is **total**: a node that is not a column still answers
-    `name`, with `""`. Totality is what lets a caller compose answers without
-    asking what kind of node it holds — and, at the type level, it is what
-    makes a conditional rewrite reduce, since neither branch can name
-    something that does not exist.
-    """
+    **One trait, not three.** This was `Analyzable & Executable & Writable`, a
+    composite alias split that way in reaction to `expr/`'s nine-responsibility
+    `Value` trait. The reaction overshot: nothing ever bound on `Analyzable`
+    alone, and `Executable` was bound alone in exactly one place, for `shape`.
+    Two names that only ever appeared composed back together are not two
+    abstractions — five members in one trait is the honest count, and it is
+    still not nine.
 
-    def columns(self) -> List[String]:
-        """Every column name this expression reads, first-seen order, no repeats.
+    `dtype` takes a `Schema` because the runtime lane learns its type from one.
+    The comptime lane ignores the argument and answers from its own type; that
+    asymmetry is the price of one box holding both lanes.
 
-        Projection pushdown is exactly this question asked of a predicate.
-        """
-        ...
-
-    def name(self) -> String:
-        """What this expression is called, or `""` if it has no name of its own.
-
-        A column is called by its column name; a literal by how it reads, so
-        `lit(1)` is `"1"` — matching SQL, where `SELECT 1` yields a column
-        named `1`. A computed expression has no name and answers `""`; the
-        planner supplies `key0`, `sum`, or whatever the caller aliased.
-
-        **Bare-column-ness is a composition, not a second method.** Four
-        callers need to know whether an expression is exactly a column
-        reference — a projected pass-through must carry its source `Field`
-        whole (dtype, `nullable`, metadata), `GROUP BY d` must name its output
-        `d` rather than `key0`, and a join must reject a computed key. All four
-        ask:
-
-            value.name() != "" and len(value.columns()) == 1
-
-        which separates the three cases without a slot of its own, because
-        `columns()` is empty for a literal and `name()` is empty for anything
-        computed.
-
-        A **name**, not a position: a node does not know the schema it will be
-        resolved against. `expr/` spelled this `bound_column(schema) raises ->
-        Int`, which conflated *are you a column?* with *where is it?* and made
-        the first able to raise. The planner holds the schema and does the
-        lookup; the node only says what it is.
-        """
-        ...
-
-    def dtype(self, schema: Schema) raises -> DynType:
-        """The type this expression produces over `schema`.
-
-        A planner needs this to build a `Project`'s or an `Aggregate`'s output
-        schema. `expr/` had no such method and instead **evaluated every
-        expression against a zero-row batch** to see what came back — which
-        works, but makes schema computation depend on execution, allocates, and
-        can raise from deep inside a kernel for what is a static question.
-
-        It takes a `schema` because only the comptime lane knows its type
-        outright: a `RuntimeValue` column reference learns its type by looking
-        itself up. The comptime lane ignores the argument and answers from
-        `Type`.
-        """
-        ...
-
-
-# ---------------------------------------------------------------------------
-# Executable — what the executor asks
-# ---------------------------------------------------------------------------
-trait Executable(Copyable, Deinitable):
-    """Produce a column from a batch.
-
-    One method, because that is the entire physical contract at this level. The
-    comptime lane satisfies it by binding its column references once per batch
-    and running a fused per-element loop; the runtime lane satisfies it by
-    materialising a `DynArray` per node. The difference is invisible here,
-    which is why a `Relation` can hold either.
+    `to_operator` is the only way to run a value — see `physical.mojo`. There
+    is deliberately no `evaluate` here: a logical node is stateless and has no
+    business exposing a way to run itself.
     """
 
     comptime shape: Shape
-    """`Shape.scalar` or `Shape.columnar`.
+    """`Shape.scalar` or `Shape.columnar` — whether this yields one value or
+    one per row. Known without running, which is why it lives here and not on
+    the operator."""
 
-    Lets a caller know whether `evaluate` will broadcast before it calls, so a
-    literal-only expression need not materialise a column to find out.
+    def columns(self) -> List[String]:
+        """Which columns this expression reads, deduplicated, first-seen
+        order."""
+        ...
 
-    Lowercase because it is a comptime *value*, not a type — the same spelling
-    kernels use for `comptime name`.
-    """
+    def name(self) -> String:
+        """This expression's name, or empty when it has none."""
+        ...
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        """The type this produces, without running anything."""
+        ...
 
     def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
         """The stateful thing that runs this value.
 
-        **One method for every logical node.** A `Relation` becomes a pipeline,
-        and a value — elementwise or reduction alike — becomes an `Operator`
-        producing a `Datum`. The two differ only in *when* they answer `Some`:
-        an elementwise value answers from `push`, an aggregate accumulates and
-        answers from `finish`. That is the same distinction `Filter` and
-        `Aggregate` already make one layer up, so it needs no second trait and
-        no second box.
-
         `grouped` picks a fold's placement and is ignored by everything else.
-        It is the one asymmetry left, and it goes away when placement becomes
-        part of the value's type rather than a plan-time flag.
-
-        **There is deliberately no `evaluate` beside this.** A logical node is
-        stateless — it describes an expression and nothing more — so it has no
-        business exposing a way to run itself. Anything that runs owns state,
-        and that is what a processor is for. `evaluate` survives only *inside*
-        each lane, as the fused driver the lane's processor calls, and it is
-        not visible on `Value` or on `DynValue`.
-
-        No default: a node cannot supply one without naming its lane's
-        processor, and the two lanes have different ones. Each lane defaults it
-        for its own family.
         """
         ...
-
-
-comptime Value = Analyzable & Executable & Writable
-"""What every expression is, in both lanes — a *name for the composition*, not
-a trait of its own.
-
-`expr/` had a `Value` **trait** carrying nine responsibilities. This keeps the
-name, which the tree and its docs already use, while the substance moves into
-`Analyzable` and `Executable`. Nothing conforms to `Value`; things conform to
-the traits it names.
-
-`Copyable & Deinitable` are here because `DynValue` boxes into an
-`ArcPointer`, which requires them (`Copyable` already implies `Movable`). They
-are a storage requirement, not part of what it means to be an expression, which
-is why they sit in the alias rather than in `Analyzable` or `Executable`.
-"""
 
 
 # ---------------------------------------------------------------------------
