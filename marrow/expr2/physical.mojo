@@ -236,7 +236,7 @@ struct EvalOperator[V: Evaluable](Operator):
 # ---------------------------------------------------------------------------
 # Pipeline — the assembled pipeline
 # ---------------------------------------------------------------------------
-struct Pipeline(Movable):
+struct Pipeline(Operator):
     """A chain of operators, stage 0 being the one that drives.
 
     Not a second abstraction beside `Operator` — just a `List` of them, so
@@ -249,13 +249,34 @@ struct Pipeline(Movable):
     It was called `DynProcessor`, which was wrong twice over: it erases
     nothing, and "processor" was a second word for what `Operator` already
     names.
+
+    **It is itself an `Operator`** — a composite one. A chain of stages pushes,
+    drains and finishes exactly like a single stage, so it needs no concept of
+    its own. That is not decoration: `Join` has *two* inputs, and each of them
+    is a whole sub-plan. Only if a pipeline is an operator can a join hold two
+    of them.
+
+    Relations still build it *concretely* rather than through the box, because
+    `append` needs the concrete type. Composing through `DynOperator` would
+    nest one pipeline per stage and charge every batch an extra trampoline per
+    level; appending keeps a plan's stages in one flat list. Composite where it
+    buys something, flat where it does not.
     """
 
+    comptime Out = RecordBatch
+
     var _ops: List[DynOperator[RecordBatch]]
+    var _stage: Int
+    """How far `drain` has walked. A composite operator has to remember its own
+    position, because `drain` answers one batch per call."""
+
+    var _pending: List[RecordBatch]
 
     def __init__(out self, var source: DynOperator[RecordBatch]):
         self._ops = List[DynOperator[RecordBatch]]()
         self._ops.append(source^)
+        self._stage = 0
+        self._pending = List[RecordBatch]()
 
     def append(mut self, var op: DynOperator[RecordBatch]):
         self._ops.append(op^)
@@ -285,6 +306,58 @@ struct Pipeline(Movable):
         if cur:
             out.append(cur.value().batch.copy())
 
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        """Push a morsel through every stage.
+
+        Meaningful for a pipeline used as a *sub-plan* — a join's build side,
+        a boxed subquery. A top-level pipeline's stage 0 is a source, which
+        ignores what it is handed.
+        """
+        var out = List[RecordBatch]()
+        self._flow(morsel.copy(), 0, out)
+        if len(out) == 0:
+            return None
+        for i in range(1, len(out)):
+            self._pending.append(out[i].copy())
+        return out[0].copy()
+
+    def done(self) -> Bool:
+        for i in range(len(self._ops)):
+            if self._ops[i].done():
+                return True
+        return False
+
+    def drain(mut self) raises -> Optional[RecordBatch]:
+        """One batch of whatever the chain still has, `None` when spent.
+
+        Walks the stages in order, draining each dry and cascading what it
+        yields through the stages above — the same cascade `collect` needs, but
+        resumable, because an `Operator` answers one batch at a time. `_stage`
+        is the resume point.
+        """
+        while True:
+            if len(self._pending) > 0:
+                return self._pending.pop(0)
+            if self._stage >= len(self._ops):
+                return None
+            var produced = self._ops[self._stage].drain()
+            if produced:
+                var out = List[RecordBatch]()
+                self._flow(
+                    Morsel.ungrouped(produced.value().copy()),
+                    self._stage + 1,
+                    out,
+                )
+                for ref b in out:
+                    self._pending.append(b.copy())
+                # Early termination: a `Limit` with its rows stops the chain
+                # rather than letting the source drain — the one thing a push
+                # engine must add back that a pull engine got for free.
+                if self.done():
+                    self._stage = len(self._ops)
+            else:
+                self._stage += 1
+
     def collect(mut self, schema: Schema) raises -> RecordBatch:
         """Run the chain to completion and drain it into one batch.
 
@@ -301,23 +374,12 @@ struct Pipeline(Movable):
         aggregate returns nothing without this.
         """
         var out = List[RecordBatch]()
-        for i in range(len(self._ops)):
-            while True:
-                var produced = self._ops[i].drain()
-                if not produced:
-                    break
-                self._flow(
-                    Morsel.ungrouped(produced.value().copy()), i + 1, out
-                )
-                # Early termination. A `Limit` that has its rows stops the
-                # chain rather than letting the source drain — the one thing a
-                # push engine must add back that a pull engine got for free.
-                var stop = False
-                for j in range(len(self._ops)):
-                    if self._ops[j].done():
-                        stop = True
-                if stop:
-                    break
+        while True:
+            var b = self.drain()
+            if b:
+                out.append(b.value().copy())
+            else:
+                break
 
         if len(out) == 0:
             # An empty result must still be a *well-formed* batch: one

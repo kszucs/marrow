@@ -16,7 +16,7 @@ from ....scalars import DynScalar
 from ...core import DynValue, Shape
 from ...physical import Morsel
 from ..leaves import Column, Literal
-from ..numeric import Add, Gt
+from ..numeric import Add, Gt, Mul, Sub
 
 
 def _batch() raises -> RecordBatch:
@@ -145,3 +145,27 @@ def test_a_literal_only_expression_stays_scalar() raises:
 
 # ---------------------------------------------------------------------------
 # End to end: a dynamic plan holding a fused predicate
+
+
+def test_sub_and_mul_fuse_like_add() raises:
+    """`Sub` had zero test references and `Mul` only appeared inside an
+    aggregate — found by auditing public names against the test corpus.
+
+    They share `NumericBinary`, so this guards the alias wiring rather than the
+    arithmetic: a mis-parameterised alias would compute the wrong operation
+    while still type-checking.
+    """
+    var b = _batch()
+    var op = DynValue(
+        Sub(Column[Int64Type]("b"), Column[Int64Type]("a"))
+    ).to_operator(False)
+    var got = op.push(Morsel.ungrouped(b.copy())).value().to_array(4)
+    # b = [10, 20, 30, 40], a = [1, 2, None, 4]
+    assert_true(got.as_int64()[0].value() == 9)
+    assert_true(got.as_int64().is_null(2))
+
+    var m = DynValue(
+        Mul(Column[Int64Type]("a"), Literal[Int64Type](3))
+    ).to_operator(False)
+    var prod = m.push(Morsel.ungrouped(b.copy())).value().to_array(4)
+    assert_true(prod.as_int64()[1].value() == 6)

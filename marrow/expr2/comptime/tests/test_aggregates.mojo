@@ -9,7 +9,7 @@ from ....tabular import RecordBatch, record_batch
 from ....kernels.core import Groups
 from ...core import DynValue
 from ...physical import Morsel
-from ..aggregates import Max, Mean, Min, Sum
+from ..aggregates import Max, Mean, Min, Product, Sum
 from ..leaves import Column, Literal
 from ..numeric import Mul
 
@@ -138,3 +138,25 @@ def test_erasure_answers_as_the_value_it_holds() raises:
     var s = boxed.to_operator(False)
     _ = s.push(_m(b.copy(), _groups(List[Optional[Int]]()), 1))
     assert_true(s.drain().value().to_array(1) == array([6], int64))
+
+
+def test_a_fold_reports_spent_on_a_second_drain() raises:
+    """`drain` is repeatable, so a fold must be able to say "nothing left".
+
+    The driver calls `drain` until it answers `None`. A fold that answered
+    `Some` every time would spin `while True: drain()` forever — it is only
+    safe today because `AggregateOperator` happens to call it once, and
+    "happens to" is not a contract.
+    """
+    var s = Sum(Column[Int64Type]("a"), "t").to_operator(False)
+    _ = s.push(_m(_b([1, 2]), _groups(List[Optional[Int]]()), 1))
+    assert_true(Bool(s.drain()))
+    assert_true(not Bool(s.drain()))
+
+
+def test_product_folds() raises:
+    """`Product` had no test at all — found by auditing public names against
+    test references."""
+    var s = Product(Column[Int64Type]("a"), "p").to_operator(False)
+    _ = s.push(_m(_b([2, 3, 4]), _groups(List[Optional[Int]]()), 1))
+    assert_true(s.drain().value().to_array(1) == array([24], int64))

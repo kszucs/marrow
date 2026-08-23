@@ -68,12 +68,22 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
     var _input: Self.A
     var _state: AggState[Self.K, Self.A.Type]
     var _num_groups: Int
+    var _emitted: Bool
+    """Whether the fold has already been drained.
+
+    `drain` is **repeatable** — the driver calls it until it answers `None` —
+    so a fold that answered `Some` every time would make
+    `while True: drain()` spin forever. It is only reachable through
+    `AggregateOperator` today, which calls it once, but the contract is the
+    contract: an operator that cannot say "spent" cannot be driven generically.
+    """
 
     def __init__(out self, var input: Self.A):
         self._input = input^
         # One implicit slot when this fold does not scatter, including over an
         # input that yields nothing: `sum` of no rows is one NULL, not no rows.
         self._num_groups = 1 if not Self.G.scatters else 0
+        self._emitted = False
         self._state = AggState[Self.K, Self.A.Type]()
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -205,4 +215,7 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         return None
 
     def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
         return Datum(self._state.finish(self._num_groups).to_dyn())
