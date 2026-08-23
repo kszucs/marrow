@@ -86,17 +86,14 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
     `TemporalValue` when `T` is `date32`, and the difference matters because
     `date + date` must not compile.
 
-    That is the whole duplication, and it stops here. Comparison, `min`/`max`
-    and grouping all bind on `PrimitiveValue` and serve this leaf unchanged —
-    where `expr/` needs `TemporalColumn` *plus* duplicated comparison arms
-    *plus* `TemporalMinMax`.
+    That is the whole duplication, and the point of the split is that it stops
+    at the leaf: everything above binds on `PrimitiveValue`, where `expr/`
+    needs `TemporalColumn` *plus* duplicated comparison arms *plus*
+    `TemporalMinMax`.
 
-    `out_dtype` is why the split was needed at all: a timestamp carries a unit
-    and a timezone, so its dtype cannot be conjured from `Self.T()` and has to
-    come from the bound column.
-
-    **What works today: projection and grouping.** Comparison does not, and the
-    blocker is named rather than hidden — `NumericCompare.ArgType` is
+    **What works today: projection and grouping.** Comparison does not — the
+    node exists but is still bound on `NumericValue`. The blocker is named
+    rather than hidden: `NumericCompare.ArgType` is
     `promote[L.Type, R.Type]`, and `promote` is bound on `NumericType` because
     it encodes *numeric* widening (signedness, int-to-float). Those rules do
     not generalise to temporal, and `wider[L.native, R.native]` is not a
