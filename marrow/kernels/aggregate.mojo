@@ -162,7 +162,7 @@ trait AggKernel(Kernel):
         for _ in range(n):
             gb.append(Scalar[int32.native](0))
         var gids = gb.finish()
-        var state = AggState[Self, V]()
+        var state = AggState[Self, V](Self.AccType[V]())
         state.update(gids, array, 1)
         return state.finish(1)[0]
 
@@ -673,8 +673,21 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
     var acc: PrimitiveBuilder[Self.Acc]
     var cnt: PrimitiveBuilder[Self.Seen]
 
-    def __init__(out self):
-        self.acc = PrimitiveBuilder[Self.Acc]()
+    var dtype: Self.Acc
+    """The accumulator's dtype, as a *value*.
+
+    Held rather than conjured because a dtype is not always constructible from
+    its type. `NumericType` is `Defaultable`, but `TemporalType` and
+    `DecimalType` are not — a timestamp carries a unit and timezone, a decimal
+    a precision and scale — and `min`/`max` keep the input's type as the
+    accumulator's (`AccType[V] = V`). So the moment this state folds a temporal
+    column, `PrimitiveBuilder[Acc]()` cannot build the column it must produce,
+    and only the caller knows what to pass.
+    """
+
+    def __init__(out self, dtype: Self.Acc):
+        self.dtype = dtype
+        self.acc = PrimitiveBuilder[Self.Acc](dtype)
         self.cnt = PrimitiveBuilder[Self.Seen]()
 
     def num_groups(self) -> Int:
@@ -827,7 +840,7 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
         # not exist yet. Seeding them here is what makes `SUM` of nothing NULL
         # rather than an out-of-bounds read.
         self._grow(num_groups)
-        var b = PrimitiveBuilder[Self.Acc](num_groups)
+        var b = PrimitiveBuilder[Self.Acc](self.dtype, num_groups)
         for g in range(num_groups):
             var c = Int(self.cnt.unsafe_get(g))
             if c > 0:
@@ -1067,7 +1080,7 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
 
     @staticmethod
     def grouped(groups: Groups, values: Self.InArray) raises -> Self.OutArray:
-        var state = AggState[Self.K, Self.V]()
+        var state = AggState[Self.K, Self.V](Self.K.AccType[Self.V]())
         state.update(groups.ids, values, groups.num_groups)
         return state.finish(groups.num_groups)
 
@@ -1086,7 +1099,7 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
     def partials(
         groups: Groups, values: Self.InArray
     ) raises -> Tuple[Self.OutArray, Int64Array]:
-        var state = AggState[Self.K, Self.V]()
+        var state = AggState[Self.K, Self.V](Self.K.AccType[Self.V]())
         state.update(groups.ids, values, groups.num_groups)
         return state.into_partials()
 
@@ -1100,7 +1113,7 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
         # Exact for every kernel: the accumulator is the raw fold and the count
         # is carried separately, so `mean` merges as (Σsum, Σcount) and
         # finalizes once at the end.
-        var state = AggState[Self.K, Self.V]()
+        var state = AggState[Self.K, Self.V](Self.K.AccType[Self.V]())
         for t in range(len(remap)):
             state.merge(remap[t], accs[t], cnts[t], num_groups)
         return state.finish(num_groups)
@@ -1148,7 +1161,9 @@ struct TemporalMinMax[Op: MinMaxOp, T: TemporalType](Aggregation):
 
     @staticmethod
     def grouped(groups: Groups, values: Self.InArray) raises -> Self.OutArray:
-        var state = AggState[MinMax[Self.Op], Self.Backing]()
+        var state = AggState[MinMax[Self.Op], Self.Backing](
+            MinMax[Self.Op].AccType[Self.Backing]()
+        )
         state.update(groups.ids, Self._as_backing(values), groups.num_groups)
         return Self._as_temporal(state.finish(groups.num_groups), values.dtype)
 

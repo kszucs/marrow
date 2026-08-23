@@ -84,7 +84,14 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         # input that yields nothing: `sum` of no rows is one NULL, not no rows.
         self._num_groups = 1 if not Self.G.scatters else 0
         self._emitted = False
-        self._state = AggState[Self.K, Self.A.Type]()
+        # The accumulator's dtype as a value. `A.Type()` is constructible
+        # today because the fused lane is numeric, and that is precisely the
+        # constraint this has to shed: when `A` can be temporal, the dtype is
+        # not known until `bind(batch)` and must come from the bound column
+        # rather than from the type.
+        self._state = AggState[Self.K, Self.A.Type](
+            Self.K.AccType[Self.A.Type]()
+        )
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """FoldOperator one morsel in and answer nothing — the result arrives at
