@@ -236,7 +236,74 @@ struct ProductOp(WideningOp):
         return a * b
 
 
-struct Widening[Op: WideningOp](AggKernel):
+# ---------------------------------------------------------------------------
+# Input domains — what a kernel requires of the column it folds
+# ---------------------------------------------------------------------------
+# `AccType` is bound on `NumericType`, and that bound is the **intersection of
+# four different requirements**: `count` needs nothing of the type, `min`/`max`
+# need an ordering, `sum` needs addition, `mean` needs division. One bound for
+# four requirements means the most permissive kernel is constrained by the
+# least — `TemporalMinMax` exists only to work around it — and no kernel states
+# what it actually needs.
+#
+# These markers say it. They are declarations today and become enforceable the
+# moment the bound widens: a fold constrains itself with
+# `where conforms_to(Self.K, OrderedAgg)`, which is probed and works.
+#
+# **No marker means "accepts anything"** — that is `CountKernel`, which reads
+# validity and never touches a value.
+#
+# Markers rather than a `comptime numeric_only: Bool` because a flag can be
+# wrong silently: `numeric_only = False` on a summing kernel compiles and
+# yields nonsense, whereas conformance is a claim the compiler checks and a
+# `where` clause can dispatch on. Mojo permits neither narrowing a trait method
+# with `where` (it becomes a different signature) nor narrowing an associated
+# type's bound in a conformer, so this is the closest sound form.
+#
+# They constrain the **input domain** only. State shape — variance's
+# sum+sumsq+count, a quantile sketch, `StringMinMax`'s per-group index — is a
+# separate axis and stays a kernel paired with a different state struct.
+#
+# **Widening `AccType` to `PrimitiveType` is a separate change and is blocked
+# on something else.** `NumericType` is `Defaultable`; `TemporalType` and
+# `DecimalType` are not, because a timestamp carries a unit and timezone and a
+# decimal a precision and scale. `AggState` builds its accumulator with
+# `PrimitiveBuilder[Acc]()`, the no-dtype constructor, which only exists for
+# numeric types. Folding a temporal column therefore requires threading the
+# dtype *instance* into `AggState` — and in the fused lane that value is not
+# known until `bind(batch)`. Do that first; the markers below are then the
+# thing that keeps `sum(date)` from compiling.
+trait OrderedAgg(AggKernel):
+    """Needs an ordering and nothing more — any fixed-width type will do.
+
+    `min`, `max`, and later `quantile` / `median`.
+    """
+
+    pass
+
+
+trait ArithmeticAgg(AggKernel):
+    """Needs addition or division, so numeric input only.
+
+    `sum`, `product`, `mean`, and later `variance` / `stddev`.
+    """
+
+    pass
+
+
+trait IntegralAgg(ArithmeticAgg):
+    """Needs bit operations, so integers only — narrower than arithmetic.
+
+    Nothing conforms yet; `bitwise_and` / `_or` / `_xor` will. Declared with
+    the others because it is what shows the domains form a lattice rather than
+    a flag: a bitwise kernel accepts `int64` and rejects `float64`, which a
+    Bool could not express.
+    """
+
+    pass
+
+
+struct Widening[Op: WideningOp](ArithmeticAgg):
     """`sum`/`product` as one kernel: integers accumulate in int64 and floats in
     float64 so narrow inputs cannot overflow, the fold is `Op.combine`, and
     finalize is the identity."""
@@ -335,7 +402,7 @@ struct MaxOp(MinMaxOp):
         return math.max(a, b)
 
 
-struct MinMax[Op: MinMaxOp](AggKernel):
+struct MinMax[Op: MinMaxOp](OrderedAgg):
     """`min`/`max` as one kernel: the accumulator keeps the input type, the fold
     is `Op.combine`, and finalize is the identity. Previously two structs that
     differed only in `name`, `identity`, `combine`, and the `is_min` flag passed
@@ -416,7 +483,7 @@ struct CountKernel(AggKernel):
         return Int64Scalar(Int64(len(array) - array.null_count()))
 
 
-struct MeanKernel(AggKernel):
+struct MeanKernel(ArithmeticAgg):
     """Sums into a float64 accumulator; divides by the valid count on finish."""
 
     comptime name = "mean"
