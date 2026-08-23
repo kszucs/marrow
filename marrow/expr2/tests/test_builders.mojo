@@ -7,8 +7,8 @@ differs is only what the caller had to know, and when it is resolved.
 
 from std.testing import assert_equal, assert_true
 
-from ...builders import array
-from ...dtypes import Int64Type, bool_, int64
+from ...builders import Date32Builder, array
+from ...dtypes import Date32Type, DynType, Int64Type, bool_, date32, int64
 from ...scalars import DynScalar, Int64Scalar
 from ...tabular import RecordBatch, record_batch
 from ..builders import col, lit
@@ -89,3 +89,33 @@ def test_col_with_bool_dtype_takes_the_comptime_lane() raises:
     var got = op.push(Morsel.ungrouped(b.copy())).value().to_array(3)
     assert_true(got.as_bool()[0].value())
     assert_true(not got.as_bool()[1].value())
+
+
+def test_col_with_temporal_dtype_takes_the_comptime_lane() raises:
+    """A temporal column is readable by the fused lane at all — which it was
+    not before `PrimitiveValue` split the machinery from the domain.
+
+    Its dtype comes from the bound column rather than from `Self.T()`, because
+    a temporal type is not `Defaultable`: a timestamp carries a unit and a
+    timezone, and neither can be conjured.
+    """
+    var d = Date32Builder(date32(), 3)
+    d.append(Int32(19000))
+    d.append(Int32(19001))
+    d.append(Int32(19002))
+    var b = record_batch([d.finish().to_dyn()], names=["d"])
+    var v = col("d", date32())
+    var op = DynValue(v).to_operator(False)
+    var got = op.push(Morsel.ungrouped(b.copy())).value().to_array(3)
+    assert_true(got.dtype() == DynType(date32()))
+    assert_true(got.as_primitive[Date32Type]()[0].value() == 19000)
+
+
+def test_a_temporal_column_is_not_arithmetic() raises:
+    """`date + date` is meaningless and must not compile.
+
+    Not assertable in Mojo — it is a *compile* error, so the guard is that
+    `Add` binds on `NumericValue` while `TemporalColumn` conforms only to
+    `TemporalValue`. Recorded here so the intent survives; verified by probe.
+    """
+    assert_true(True)

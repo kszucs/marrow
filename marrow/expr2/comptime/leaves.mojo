@@ -7,13 +7,19 @@ lane loop above does none.
 
 from ...arrays import BinaryLikeArray, BoolArray, PrimitiveArray
 from ...buffers import Bitmap
-from ...dtypes import BoolType, DynType, NumericType, StringLikeType
+from ...dtypes import (
+    BoolType,
+    DynType,
+    NumericType,
+    StringLikeType,
+    TemporalType,
+)
 from ...scalars import PrimitiveScalar, StringScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
 from ..physical import Datum
-from .core import BoolValue, NumericValue, StringValue
+from .core import BoolValue, NumericValue, StringValue, TemporalValue
 
 
 struct Column[T: NumericType](NumericValue):
@@ -63,6 +69,87 @@ struct Column[T: NumericType](NumericValue):
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         # The bound column already carries it — no second lookup, no re-read.
+        return bound.to_data().owned_validity()
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct TemporalColumn[T: TemporalType](TemporalValue):
+    """A date/time/timestamp/duration column, resolved by name once per batch.
+
+    **Byte-for-byte the same lane as `Column[T]`** — temporal dtypes are
+    fixed-width signed integers underneath, so `bind` and `lane[W]` are
+    identical. It is a separate struct only because Mojo has no conditional
+    conformance: one leaf cannot be a `NumericValue` when `T` is `int64` and a
+    `TemporalValue` when `T` is `date32`, and the difference matters because
+    `date + date` must not compile.
+
+    That is the whole duplication, and it stops here. Comparison, `min`/`max`
+    and grouping all bind on `PrimitiveValue` and serve this leaf unchanged —
+    where `expr/` needs `TemporalColumn` *plus* duplicated comparison arms
+    *plus* `TemporalMinMax`.
+
+    `out_dtype` is why the split was needed at all: a timestamp carries a unit
+    and a timezone, so its dtype cannot be conjured from `Self.T()` and has to
+    come from the bound column.
+
+    **What works today: projection and grouping.** Comparison does not, and the
+    blocker is named rather than hidden — `NumericCompare.ArgType` is
+    `promote[L.Type, R.Type]`, and `promote` is bound on `NumericType` because
+    it encodes *numeric* widening (signedness, int-to-float). Those rules do
+    not generalise to temporal, and `wider[L.native, R.native]` is not a
+    substitute: it picks by width and would silently change what `int32 <
+    float32` compares in. Generalising `promote` is a decision about promotion
+    semantics, not a bound to widen, so it is left to its own change.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.columnar
+    comptime Bound = PrimitiveArray[Self.T]
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    # -- Analyzable ---------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        """Read from the schema, not built from `Self.T()`.
+
+        The one place this leaf genuinely differs from `Column[T]`: a numeric
+        dtype is `Defaultable` and can answer from its type, a temporal one
+        cannot.
+        """
+        return schema.fields[schema.get_field_index(self._name)].dtype.copy()
+
+    # -- Executable ---------------------------------------------------------
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        return batch.column(self._name).copy()
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        return batch.column(self._name).as_primitive[Self.T]().copy()
+
+    def out_dtype(self, bound: Self.Bound) -> Self.Type:
+        return bound.dtype
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return bound.to_data().owned_validity()
 
     @always_inline

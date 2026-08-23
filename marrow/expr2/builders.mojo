@@ -20,12 +20,19 @@ imports. That is the same failure the wildcard-import ban exists to prevent.
 from .`comptime`.leaves import (
     BoolColumn,
     Column,
+    TemporalColumn,
     Literal,
     StringColumn,
     StringLiteral,
 )
 from .runtime.values import RuntimeValue, column, literal
-from ..dtypes import BoolType, FloatingType, NumericType, StringLikeType
+from ..dtypes import (
+    BoolType,
+    FloatingType,
+    NumericType,
+    StringLikeType,
+    TemporalType,
+)
 from ..scalars import DynScalar
 
 
@@ -51,6 +58,17 @@ def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
     caller writes `col("name", string)` either way.
     """
     return StringColumn[T](name^)
+
+
+def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:
+    """A date/time/timestamp/duration column, fused like its numeric sibling.
+
+    A separate overload for the same reason `TemporalColumn` is a separate
+    struct: Mojo has no conditional conformance, so one leaf cannot be numeric
+    for `int64` and temporal for `date32`. The caller still writes
+    `col("d", date32)` and never sees the difference.
+    """
+    return TemporalColumn[T](name^)
 
 
 def col(var name: String, dtype: BoolType) -> BoolColumn:
