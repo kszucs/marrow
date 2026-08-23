@@ -14,14 +14,31 @@ implicit conversion or a wrong argument order actually shows up.
 
 from std.testing import assert_equal, assert_true
 
-from ...builders import Int64Builder, ListBuilder, array
-from ...dtypes import Int64Type, int64, list_, string
+from ...builders import (
+    BoolBuilder,
+    Date32Builder,
+    Int64Builder,
+    ListBuilder,
+    Time32Builder,
+    array,
+)
+from ...dtypes import (
+    Int64Type,
+    second,
+    date32,
+    int64,
+    list_,
+    string,
+    time32,
+)
 from ...kernels.join import JOIN_INNER, JOIN_LEFT
 from ...tabular import RecordBatch, record_batch
 from ..builders import array_length, col, if_else, lit
+from ..runtime.values import case_when, coalesce, column, literal
+from ...scalars import DynScalar, Int64Scalar
 from ..logical import DynRelation, DynValue, InMemoryTable
 from ..`comptime`.leaves import Column, Literal
-from ..`comptime`.numeric import Add, Gt, Lt
+from ..`comptime`.numeric import Add, Gt, Lt, TemporalGt
 
 
 def _orders() raises -> RecordBatch:
@@ -296,3 +313,134 @@ def test_array_length_consumes_a_list_into_a_number() raises:
     assert_equal(got[0].value(), 3)
     assert_equal(got[1].value(), 1)
     assert_true(got.is_null(2))  # a null list has no length
+
+
+def test_a_temporal_column_can_be_filtered() raises:
+    """`WHERE d > <date>` in the fused lane — what S21 blocked.
+
+    A separate node from `NumericCompare` because `promote` encodes numeric
+    widening, and the temporal question is *unit* rather than width. This one
+    compares only operands that already share a representation.
+    """
+    var d = Date32Builder(date32(), 3)
+    d.append(Int32(19000))
+    d.append(Int32(19005))
+    d.append_null()
+    var e = Date32Builder(date32(), 3)
+    e.append(Int32(19002))
+    e.append(Int32(19002))
+    e.append(Int32(19002))
+    var batch = record_batch(
+        [d.finish().to_dyn(), e.finish().to_dyn()], names=["d", "cutoff"]
+    )
+
+    var out = (
+        DynRelation(InMemoryTable(batch^))
+        .filter(
+            DynValue(TemporalGt(col("d", date32()), col("cutoff", date32())))
+        )
+        .execute()
+    )
+    # 19000 > 19002 false; 19005 > 19002 true; the null does not select
+    assert_equal(out.num_rows(), 1)
+
+
+def test_temporal_comparison_rejects_mismatched_units() raises:
+    """Same width is not the same type.
+
+    `date32` and `time32[s]` are both int32, so a width check cannot separate
+    them — the dtypes are compared at `bind`, once per batch. Cross-unit
+    comparison raises rather than silently comparing raw integers.
+    """
+    var d = Date32Builder(date32(), 1)
+    d.append(Int32(19000))
+    var t = Time32Builder(time32(second), 1)
+    t.append(Int32(19000))
+    var batch = record_batch(
+        [d.finish().to_dyn(), t.finish().to_dyn()], names=["d", "t"]
+    )
+
+    var raised = False
+    try:
+        _ = (
+            DynRelation(InMemoryTable(batch^))
+            .filter(
+                DynValue(
+                    TemporalGt(col("d", date32()), col("t", time32(second)))
+                )
+            )
+            .execute()
+        )
+    except e:
+        raised = True
+        assert_true("units must match" in String(e))
+    assert_true(raised)
+
+
+def test_coalesce_takes_the_first_non_null() raises:
+    """N-ary, because the kernel is — `expr/` folds binary nodes only because
+    its runtime node could not hold N children."""
+    var b = record_batch(
+        [
+            array([1, None, None], int64).copy(),
+            array([None, 20, None], int64).copy(),
+            array([300, 300, 300], int64).copy(),
+        ],
+        names=["a", "b", "c"],
+    )
+    var out = (
+        DynRelation(InMemoryTable(b^))
+        .project(
+            ["first"],
+            [DynValue(coalesce([column("a"), column("b"), column("c")]))],
+        )
+        .execute()
+    )
+    assert_true(out.columns[0].as_int64() == array([1, 20, 300], int64))
+
+
+def test_case_when_picks_the_first_true_branch() raises:
+    """Arity comes from the child count's **parity**: `2n` without an else,
+    `2n + 1` with one. That is why it needs no payload — `EvalFn` is a `thin`
+    pointer and cannot capture a flag.
+
+    Conditions are bool columns rather than comparisons because the runtime
+    lane has only `column` and `literal` today; it cannot build a predicate of
+    its own. That gap is real and separate from this node.
+    """
+    var lo = BoolBuilder(3)
+    lo.append(True)
+    lo.append(False)
+    lo.append(False)
+    var mid = BoolBuilder(3)
+    mid.append(False)
+    mid.append(True)
+    mid.append(False)
+    var b = record_batch(
+        [
+            lo.finish().to_dyn(),
+            mid.finish().to_dyn(),
+            array([10, 20, 30], int64).copy(),
+        ],
+        names=["lo", "mid", "v"],
+    )
+    var out = (
+        DynRelation(InMemoryTable(b^))
+        .project(
+            ["bucket"],
+            [
+                DynValue(
+                    case_when(
+                        [column("lo"), column("mid")],
+                        [
+                            literal(DynScalar(Int64Scalar(1))),
+                            literal(DynScalar(Int64Scalar(2))),
+                        ],
+                        literal(DynScalar(Int64Scalar(9))),
+                    )
+                )
+            ],
+        )
+        .execute()
+    )
+    assert_true(out.columns[0].as_int64() == array([1, 2, 9], int64))

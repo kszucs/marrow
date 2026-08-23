@@ -28,7 +28,9 @@ operators out of a plan.
 from std.memory import ArcPointer
 from std.utils import Variant
 
-from ...arrays import DynArray
+from ...arrays import BoolArray, DynArray
+from ...kernels.conditional import case_when as case_when_kernel
+from ...kernels.conditional import coalesce as coalesce_kernel
 from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
@@ -100,6 +102,16 @@ struct RuntimeValue(Evaluable, Movable, Value):
     def __init__(out self, var tag: String, ev: EvalFn, a: Self):
         self._tag = tag^
         self._kids = [ArcPointer(a.copy())]
+        self._payload = Payload(NoneType())
+        self._eval = ev
+
+    def __init__(out self, var tag: String, ev: EvalFn, var kids: List[Self]):
+        """N children. `if_else` needs three and `case_when` needs `2n + 1`, so
+        the fixed-arity constructors below do not cover everything."""
+        self._tag = tag^
+        self._kids = List[ArcPointer[Self]](capacity=len(kids))
+        for ref k in kids:
+            self._kids.append(ArcPointer(k.copy()))
         self._payload = Payload(NoneType())
         self._eval = ev
 
@@ -228,3 +240,74 @@ def literal(var value: DynScalar) -> RuntimeValue:
         return p[DynScalar].repeat(b.num_rows())
 
     return RuntimeValue("literal", eval, Payload(value^))
+
+
+def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
+    """First non-null across N expressions (PyArrow `pc.coalesce`).
+
+    N-ary rather than a fold of binary nodes, because the kernel is already
+    n-ary — `expr/` folds only because its runtime node had no way to hold N
+    children.
+    """
+    if len(values) == 0:
+        raise Error("coalesce: needs at least one value")
+
+    def eval(
+        kids: List[DynArray], p: Payload, b: RecordBatch
+    ) raises -> DynArray:
+        return coalesce_kernel(kids)
+
+    return RuntimeValue("coalesce", eval, values^)
+
+
+def case_when(
+    var conditions: List[RuntimeValue],
+    var values: List[RuntimeValue],
+    var else_: Optional[RuntimeValue] = None,
+) raises -> RuntimeValue:
+    """Multi-branch `CASE WHEN` (PyArrow `pc.case_when`).
+
+    The first `values[k]` whose `conditions[k]` is **valid and true**; a null
+    condition counts as false. With no `else_`, an unmatched row is null.
+
+    Children are laid out as `conditions ++ values ++ [else_]`, and the shape
+    is recoverable from the **count's parity** alone: without an else there are
+    `2n` children, with one there are `2n + 1`. Even means no else, odd means
+    else. That is why this needs no payload — which matters because `EvalFn` is
+    a `thin` pointer and cannot capture a flag.
+    """
+    if len(conditions) != len(values):
+        raise Error(
+            "case_when: ",
+            len(conditions),
+            " conditions but ",
+            len(values),
+            " values",
+        )
+    if len(conditions) == 0:
+        raise Error("case_when: needs at least one condition")
+
+    def eval(
+        kids: List[DynArray], p: Payload, b: RecordBatch
+    ) raises -> DynArray:
+        var has_else = len(kids) % 2 == 1
+        var n = (len(kids) - 1) // 2 if has_else else len(kids) // 2
+        var conds = List[BoolArray](capacity=n)
+        for i in range(n):
+            conds.append(kids[i].as_bool().copy())
+        var vals = List[DynArray](capacity=n)
+        for i in range(n):
+            vals.append(kids[n + i].copy())
+        var otherwise = Optional[DynArray](None)
+        if has_else:
+            otherwise = kids[len(kids) - 1].copy()
+        return case_when_kernel(conds, vals, otherwise^)
+
+    var kids = List[RuntimeValue]()
+    for ref c in conditions:
+        kids.append(c.copy())
+    for ref v in values:
+        kids.append(v.copy())
+    if else_:
+        kids.append(else_.value().copy())
+    return RuntimeValue("case_when", eval, kids^)

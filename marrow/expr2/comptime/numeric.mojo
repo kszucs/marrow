@@ -29,7 +29,7 @@ from ..logical import Shape
 from ..physical import Datum
 
 from .rules import promote, wider, widest_shape
-from .core import BoolValue, NumericValue
+from .core import BoolValue, NumericValue, TemporalValue
 
 
 struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
@@ -280,3 +280,111 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
         writer.write(
             "if_else(", self.cond, ", ", self.then, ", ", self.otherwise, ")"
         )
+
+
+struct TemporalCompare[
+    K: NumericCompareKernel, L: TemporalValue, R: TemporalValue
+](BoolValue):
+    """A comparison over two temporal operands, producing packed bits.
+
+    Separate from `NumericCompare` for one reason: `NumericCompare.ArgType` is
+    `promote[L.Type, R.Type]`, and `promote` encodes *numeric* widening —
+    signedness and int-to-float. Those rules are wrong for temporal, where the
+    question is not width but **unit**: `timestamp[s]` against `timestamp[ms]`
+    needs one side *scaled*, not widened.
+
+    **So this compares only operands that already share a representation, and
+    checks it rather than assuming.** The comptime assert catches a width
+    mismatch (`date32` against `timestamp[ns]`) at compile time; `bind` checks
+    the dtypes are actually equal, which is what catches a *unit* mismatch that
+    the widths agree on. Cross-unit comparison is deliberately not silently
+    wrong — it raises, and adding it means choosing coercion rules (Arrow C++'s
+    `common_temporal_resolution` is the prior art). Backlog S21.
+    """
+
+    comptime ArgType = Self.L.Type
+    """The shared representation, named as a member.
+
+    `Self.L.Type.native` used directly at a call site does not reduce — the
+    compiler reports a type "cannot be converted" to *itself*, because a
+    chained projection is not canonicalised. Binding it here makes every later
+    use a single projection off `Self.ArgType`, which is exactly why
+    `NumericCompare` has an `ArgType` too.
+    """
+
+    comptime NativeType = Self.ArgType.native
+    comptime shape = widest_shape[Self.L, Self.R]
+    comptime Bound = Tuple[Self.L.Bound, Self.R.Bound]
+
+    var l: Self.L
+    var r: Self.R
+
+    def __init__(out self, var l: Self.L, var r: Self.R):
+        comptime assert (
+            Self.L.Type.native == Self.R.Type.native
+        ), "temporal comparison needs one representation on both sides"
+        self.l = l^
+        self.r = r^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        var out = self.l.columns()
+        for ref n in self.r.columns():
+            var seen = False
+            for ref have in out:
+                if have == n:
+                    seen = True
+                    break
+            if not seen:
+                out.append(n.copy())
+        return out^
+
+    def name(self) -> String:
+        return String()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Self.Type())
+
+    # -- ComptimeValue ------------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        # Same width is not the same type: `date32` and `time32[s]` are both
+        # int32, and `timestamp[s]` and `timestamp[ms]` differ only in a unit
+        # the width cannot see. Checked once per batch, not per row.
+        if self.l.dtype(batch.schema) != self.r.dtype(batch.schema):
+            raise Error(
+                "temporal comparison between ",
+                String(self.l.dtype(batch.schema)),
+                " and ",
+                String(self.r.dtype(batch.schema)),
+                ": units must match, coercion is not implemented",
+            )
+        return (self.l.bind(batch), self.r.bind(batch))
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """Null-in, null-out — as `NumericCompare`. The lane compares whatever
+        bytes are present, so this bitmap is the only record that the answer is
+        meaningless."""
+        return Bitmap.intersect(
+            self.l.validity(bound[0]), self.r.validity(bound[1])
+        )
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        # The representations are equal by construction, so this is the same
+        # instruction a numeric comparison of the backing integers would be.
+        # Both casts are no-ops — the constructor's assert guarantees the two
+        # natives are identical — but the compiler cannot see that through the
+        # projection, so they are spelled.
+        return Self.K.core[Self.ArgType.native, W](
+            self.l.lane[W](bound[0], idx).cast[Self.ArgType.native](),
+            self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
+
+
+comptime TemporalGt = TemporalCompare[GtKernel, _, _]
+comptime TemporalLt = TemporalCompare[LtKernel, _, _]
