@@ -386,7 +386,9 @@ def test_having_is_a_filter_above_an_aggregate() raises:
 def test_a_streaming_operator_answers_from_push() raises:
     """`Filter` produces per morsel and has nothing to flush."""
     var op = FilterOperator(
-        DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
+        DynValue(
+            Gt(Column[Int64Type]("a"), Literal[Int64Type](2))
+        ).to_processor(False),
         ExecContext.serial(),
     )
     var out = op.push(Morsel.ungrouped(_batch()))
@@ -406,7 +408,7 @@ def test_a_blocking_operator_answers_nothing_until_finish() raises:
     var folds = List[DynOperator[Datum]]()
     folds.append(Sum(Column[Int64Type]("a"), "total").to_processor(False))
     var op = AggregateOperator(
-        List[DynValue](),
+        List[DynOperator[Datum]](),
         folds^,
         schema([field("total", int64)]),
         ExecContext.serial(),

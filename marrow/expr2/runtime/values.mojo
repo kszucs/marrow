@@ -34,6 +34,7 @@ from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..core import Analyzable, Datum, Evaluable, Shape
+from ..physical import Driver, DynOperator, EvalOperator
 
 
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
@@ -57,7 +58,7 @@ its expressions name and nothing else.
 
 
 struct RuntimeValue(
-    Analyzable, Copyable, Deinitable, Evaluable, Movable, Writable
+    Analyzable, Copyable, Deinitable, Driver, Evaluable, Movable, Writable
 ):
     """A runtime-built expression.
 
@@ -168,6 +169,12 @@ struct RuntimeValue(
         return self.evaluate(RecordBatch.empty(schema)).to_array(0).dtype()
 
     # -- Evaluable ----------------------------------------------------------
+
+    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+        """The runtime lane's half of the same contract. Its processor is the
+        same adapter the comptime lane uses — the lanes differ in how they
+        compute, not in how they are turned into something that runs."""
+        return EvalOperator[Self](self.copy())
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         # Leaf spelled out — see `columns`. There is no switch here: which

@@ -44,7 +44,7 @@ from ..kernels.groupby import HashGrouping
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .core import Datum, DynValue, Evaluable
+from .core import Datum, DynValue
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +236,19 @@ struct DynOperator[Out: Copyable](Movable):
         return self._virt_done(self._data)
 
 
-struct EvalOperator[V: Evaluable](Operator):
+trait Driver(Copyable, Deinitable):
+    """A lane's fused driver — the one thing a processor needs to call.
+
+    Deliberately *not* `Value`. `evaluate` is execution, so it does not belong
+    on a logical trait; this names the internal capability each lane offers its
+    own processor, and nothing outside a lane is bound on it.
+    """
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        ...
+
+
+struct EvalOperator[V: Driver](Operator):
     """An elementwise value, as an `Operator`.
 
     The adapter that lets one method — `to_processor` — serve every logical
@@ -381,10 +393,12 @@ struct FilterOperator(Operator):
 
     comptime Out = RecordBatch
 
-    var _predicate: DynValue
+    var _predicate: DynOperator[Datum]
     var _ctx: ExecContext
 
-    def __init__(out self, var predicate: DynValue, var ctx: ExecContext):
+    def __init__(
+        out self, var predicate: DynOperator[Datum], var ctx: ExecContext
+    ):
         self._predicate = predicate^
         self._ctx = ctx^
 
@@ -397,7 +411,10 @@ struct FilterOperator(Operator):
         rows.
         """
         ref batch = morsel.batch
-        var mask = self._predicate.evaluate(batch).to_array(batch.num_rows())
+        var produced = self._predicate.push(morsel)
+        if not produced:
+            return None
+        var mask = produced.value().to_array(batch.num_rows())
         var cols = List[DynArray]()
         for i in range(batch.num_columns()):
             cols.append(filter(batch.columns[i].copy(), mask.copy(), self._ctx))
@@ -415,20 +432,25 @@ struct ProjectOperator(Operator):
 
     comptime Out = RecordBatch
 
-    var _values: List[DynValue]
+    var _values: List[DynOperator[Datum]]
     var _schema: Schema
 
-    def __init__(out self, var values: List[DynValue], var schema: Schema):
+    def __init__(
+        out self, var values: List[DynOperator[Datum]], var schema: Schema
+    ):
         self._values = values^
         self._schema = schema^
 
     def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
         ref batch = morsel.batch
         var cols = List[DynArray](capacity=len(self._values))
-        for ref v in self._values:
+        # Indexed: an operator is move-only, so a `List` of them cannot be
+        # iterated by reference.
+        for i in range(len(self._values)):
+            var d = self._values[i].push(morsel)
             # `Datum.to_array` is where a scalar-shaped value stops being lazy:
             # a projection of a constant materialises here and nowhere earlier.
-            cols.append(v.evaluate(batch).to_array(batch.num_rows()))
+            cols.append(d.value().to_array(batch.num_rows()))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
     def finish(mut self) raises -> Optional[RecordBatch]:
@@ -463,7 +485,7 @@ struct AggregateOperator(Operator):
 
     comptime Out = RecordBatch
 
-    var _keys: List[DynValue]
+    var _keys: List[DynOperator[Datum]]
     var _folds: List[DynOperator[Datum]]
     var _schema: Schema
     var _grouping: HashGrouping
@@ -474,7 +496,7 @@ struct AggregateOperator(Operator):
 
     def __init__(
         out self,
-        var keys: List[DynValue],
+        var keys: List[DynOperator[Datum]],
         var folds: List[DynOperator[Datum]],
         var schema: Schema,
         var ctx: ExecContext,
@@ -499,7 +521,7 @@ struct AggregateOperator(Operator):
             fields.append(self._schema.fields[i].copy())
         return fields^
 
-    def _key_columns(mut self, batch: RecordBatch) raises -> List[DynArray]:
+    def _key_columns(mut self, morsel: Morsel) raises -> List[DynArray]:
         """The key expressions, evaluated against this morsel.
 
         Evaluated **once** and handed to the grouping, not once per aggregate:
@@ -507,9 +529,11 @@ struct AggregateOperator(Operator):
         fold's, and it is what a fold-shaped-as-an-independent-operator design
         would have to give up.
         """
+        var n = morsel.batch.num_rows()
         var children = List[DynArray](capacity=len(self._keys))
-        for ref k in self._keys:
-            children.append(k.evaluate(batch).to_array(batch.num_rows()))
+        for i in range(len(self._keys)):
+            var d = self._keys[i].push(morsel)
+            children.append(d.value().to_array(n))
         return children^
 
     def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
@@ -537,7 +561,7 @@ struct AggregateOperator(Operator):
 
         ref batch = morsel.batch
         var groups = self._grouping.assign(
-            self._key_columns(batch), batch.num_rows()
+            self._key_columns(morsel), batch.num_rows()
         )
         self._num_groups = groups.num_groups
         var forwarded = Morsel(batch.copy(), groups^)
@@ -623,7 +647,7 @@ struct SortOperator(Operator):
 
     comptime Out = RecordBatch
 
-    var _keys: List[DynValue]
+    var _keys: List[DynOperator[Datum]]
     var _ascending: List[Bool]
     var _nulls_first: Bool
     var _batches: List[RecordBatch]
@@ -632,7 +656,7 @@ struct SortOperator(Operator):
 
     def __init__(
         out self,
-        var keys: List[DynValue],
+        var keys: List[DynOperator[Datum]],
         var ascending: List[Bool],
         nulls_first: Bool,
         var ctx: ExecContext,
@@ -664,7 +688,12 @@ struct SortOperator(Operator):
 
         var order = Optional[Int32Array](None)
         for k in range(len(self._keys) - 1, -1, -1):
-            var key = self._keys[k].evaluate(whole).to_array(whole.num_rows())
+            var key = (
+                self._keys[k]
+                .push(Morsel.ungrouped(whole.copy()))
+                .value()
+                .to_array(whole.num_rows())
+            )
             if order:
                 key = take(key, order.value(), self._ctx)
             var pass_order = sort_indices(

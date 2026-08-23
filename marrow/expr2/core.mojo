@@ -219,9 +219,6 @@ trait Evaluable(Copyable, Deinitable):
     kernels use for `comptime name`.
     """
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
-        ...
-
     def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
         """The stateful thing that runs this value.
 
@@ -237,10 +234,18 @@ trait Evaluable(Copyable, Deinitable):
         It is the one asymmetry left, and it goes away when placement becomes
         part of the value's type rather than a plan-time flag.
 
-        Defaulted here because it is identical for every elementwise node:
-        wrap `self` and forward each batch. Only aggregates override it.
+        **There is deliberately no `evaluate` beside this.** A logical node is
+        stateless — it describes an expression and nothing more — so it has no
+        business exposing a way to run itself. Anything that runs owns state,
+        and that is what a processor is for. `evaluate` survives only *inside*
+        each lane, as the fused driver the lane's processor calls, and it is
+        not visible on `Value` or on `DynValue`.
+
+        No default: a node cannot supply one without naming its lane's
+        processor, and the two lanes have different ones. Each lane defaults it
+        for its own family.
         """
-        return EvalOperator[Self](self.copy())
+        ...
 
 
 comptime Value = Analyzable & Evaluable & Writable
@@ -287,7 +292,6 @@ struct DynValue(Copyable, Movable, Writable):
     """
 
     var _boxed: ArcPointer[NoneType]
-    var _evaluate: def(ArcPointer[NoneType], RecordBatch) thin raises -> Datum
     var _columns: def(ArcPointer[NoneType]) thin -> List[String]
     var _name: def(ArcPointer[NoneType]) thin -> String
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
@@ -301,12 +305,6 @@ struct DynValue(Copyable, Movable, Writable):
     # One instantiation per boxed type, wired at construction. There is no
     # registry and nothing names every value type in one place, so a type that
     # is never boxed costs nothing in the binary.
-
-    @staticmethod
-    def _evaluate_tramp[
-        V: Value
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> Datum:
-        return rebind[ArcPointer[V]](ptr)[].evaluate(batch)
 
     @staticmethod
     def _columns_tramp[V: Value](ptr: ArcPointer[NoneType]) -> List[String]:
@@ -336,7 +334,6 @@ struct DynValue(Copyable, Movable, Writable):
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._evaluate = Self._evaluate_tramp[V]
         self._columns = Self._columns_tramp[V]
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
@@ -345,9 +342,6 @@ struct DynValue(Copyable, Movable, Writable):
         self._shape = V.shape
 
     # -- the erased surface -------------------------------------------------
-
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
-        return self._evaluate(self._boxed, batch)
 
     def columns(self) -> List[String]:
         return self._columns(self._boxed)

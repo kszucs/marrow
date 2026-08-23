@@ -41,19 +41,40 @@ from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
 from ..core import Analyzable, Datum, Evaluable, Shape
+from ..physical import Driver, DynOperator, EvalOperator
 
 
 # ---------------------------------------------------------------------------
 # ComptimeValue — what every node in this lane shares
 # ---------------------------------------------------------------------------
-trait ComptimeValue(Analyzable, Copyable, Deinitable, Evaluable, Writable):
+trait ComptimeValue(
+    Analyzable, Copyable, Deinitable, Driver, Evaluable, Writable
+):
     """A `Value` whose type states its output type and its per-batch state.
+
+    This is where `evaluate` lives — **not** on `Value`. A logical node is
+    stateless and has no business exposing a way to run itself; `evaluate` here
+    is the *lane's fused driver*, the thing this lane's processor calls once it
+    has been handed a batch. It is invisible to `DynValue` and to every
+    consumer outside the lane, which reach a value only through
+    `to_processor`.
 
     The two comptime members are what the runtime lane cannot supply, and are
     therefore the whole reason this is a separate trait rather than a naming
     convention: a `RuntimeValue` learns its type from a schema at run time and
     materialises a `DynArray` per node, so it can answer neither.
     """
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
+        """One fused pass over the batch. The lane's driver, called by
+        `EvalOperator`; each family below supplies the default body."""
+        ...
+
+    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+        """Every comptime node becomes the same operator — one that forwards
+        each batch to the fused driver. `grouped` is ignored: an elementwise
+        value has no placement. Aggregates override this with a `Fold`."""
+        return EvalOperator[Self](self.copy())
 
     comptime Type: DataType
     """This node's output type, known without a schema.

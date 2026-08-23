@@ -160,7 +160,9 @@ struct Filter(Relation, Writable):
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         var pipe = self._input.to_processor(ctx)
-        pipe.append(FilterOperator(self._predicate.copy(), ctx.copy()))
+        pipe.append(
+            FilterOperator(self._predicate.to_processor(False), ctx.copy())
+        )
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
@@ -239,7 +241,10 @@ struct Project(Relation, Writable):
 
     def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
         var pipe = self._input.to_processor(ctx)
-        pipe.append(ProjectOperator(self._values.copy(), self._schema.copy()))
+        var values = List[DynOperator[Datum]](capacity=len(self._values))
+        for ref v in self._values:
+            values.append(v.to_processor(False))
+        pipe.append(ProjectOperator(values^, self._schema.copy()))
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
@@ -315,10 +320,11 @@ struct Aggregate(Relation, Writable):
         for ref a in self._aggs:
             folds.append(a.to_processor(grouped))
         var pipe = self._input.to_processor(ctx)
+        var keys = List[DynOperator[Datum]](capacity=len(self._keys))
+        for ref k in self._keys:
+            keys.append(k.to_processor(False))
         pipe.append(
-            AggregateOperator(
-                self._keys.copy(), folds^, self._schema.copy(), ctx.copy()
-            )
+            AggregateOperator(keys^, folds^, self._schema.copy(), ctx.copy())
         )
         return pipe^
 
@@ -411,7 +417,7 @@ struct Sort(Relation, Writable):
         var pipe = self._input.to_processor(ctx)
         pipe.append(
             SortOperator(
-                self._keys.copy(),
+                _to_operators(self._keys),
                 self._ascending.copy(),
                 self._nulls_first,
                 ctx.copy(),
@@ -425,3 +431,16 @@ struct Sort(Relation, Writable):
             writer.write(", ", self._keys[i])
             writer.write(" asc" if self._ascending[i] else " desc")
         writer.write(")")
+
+
+def _to_operators(values: List[DynValue]) raises -> List[DynOperator[Datum]]:
+    """Turn a list of logical values into the operators that run them.
+
+    Built **once**, when the plan becomes physical — not per batch. That is the
+    whole point of the split: anything a value needs to resolve or cache before
+    the first row arrives has a place to live now.
+    """
+    var out = List[DynOperator[Datum]](capacity=len(values))
+    for ref v in values:
+        out.append(v.to_processor(False))
+    return out^

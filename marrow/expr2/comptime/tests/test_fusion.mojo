@@ -14,6 +14,7 @@ from ....dtypes import DynType, Int64Type, int64
 from ....tabular import RecordBatch, record_batch
 from ....scalars import DynScalar
 from ...core import DynValue, Shape
+from ...physical import Morsel
 from ..leaves import Column, Literal
 from ..numeric import Add, Gt
 
@@ -37,7 +38,15 @@ def test_dtype_agrees_with_evaluation_comptime() raises:
     """
     var b = _batch()
     var v = DynValue(Column[Int64Type]("a"))
-    var produced = v.evaluate(b).to_array(b.num_rows()).dtype()
+    # A value is reached only through `to_processor` now: it is a stateless
+    # description, and running it is the processor's job.
+    var op = v.to_processor(False)
+    var produced = (
+        op.push(Morsel.ungrouped(b.copy()))
+        .value()
+        .to_array(b.num_rows())
+        .dtype()
+    )
     assert_true(v.dtype(b.schema) == produced)
     assert_true(v.dtype(b.schema) == DynType(int64))
 
