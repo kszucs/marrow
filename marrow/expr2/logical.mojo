@@ -38,6 +38,7 @@ from .physical import (
     Pipeline,
     FilterOperator,
     JoinOperator,
+    ParquetScanOperator,
     ProjectOperator,
     SortOperator,
 )
@@ -826,3 +827,35 @@ struct Join(Relation, Writable):
         writer.write(
             "Join(", self._left, ", ", self._right, ", ", self._kind, ")"
         )
+
+
+struct ParquetScan(Relation, Writable):
+    """A Parquet file as a source, read one row group at a time.
+
+    **The schema is the projection.** The scan reads only its own columns out
+    of the file, so narrowing a scan's schema *is* how a projection gets pushed
+    into it — no separate mechanism, and nothing to keep in sync.
+
+    The schema is supplied rather than read from the file, so building the plan
+    touches no I/O: a `Relation` is a description, and a description that has
+    to open a file to exist cannot be constructed for a file that is not there
+    yet. The operator opens it on first `drain`.
+    """
+
+    var _path: String
+    var _schema: Schema
+
+    def __init__(out self, var path: String, var schema: Schema):
+        self._path = path^
+        self._schema = schema^
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+        return Pipeline(
+            ParquetScanOperator(self._path.copy(), self._schema.copy())
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("ParquetScan(", self._path, ")")

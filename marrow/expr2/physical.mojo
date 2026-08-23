@@ -44,6 +44,8 @@ from ..execution import ExecContext
 from ..kernels.filter import filter, take
 from ..kernels.core import Groups
 from ..kernels.groupby import HashGrouping
+from ..parquet.reader import LeafSet, ParquetFile
+from ..parquet.source import MappedFile
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
 from ..kernels.sort import sort_indices
@@ -972,3 +974,72 @@ def _concat_batches(
             parts.append(b.columns[i].copy())
         cols.append(concat(parts, ctx))
     return RecordBatch(schema=s^, columns=cols^)
+
+
+struct ParquetScanOperator(Operator):
+    """Reads a Parquet file, one **row group** per `drain`.
+
+    A source like `BatchSourceOperator`, and the reason sources stayed pull:
+    this is a generator over I/O, and nothing would be gained by inverting it.
+    `drain` answering repeatedly until `None` is exactly a scan's shape — which
+    is why merging `Source` into `Operator` cost nothing here.
+
+    One row group at a time rather than the whole file, so resident data is
+    bounded by a row group rather than by the file. `read()` decodes only the
+    requested group, so an unread group is never touched.
+
+    **The schema doubles as the projection.** Only its columns are read, so
+    narrowing a scan's schema is how a projection is pushed into it.
+
+    **No pruning.** `expr/`'s scan skips row groups whose statistics prove no
+    row can match, and windows several groups at once. Both need
+    `expr/pruning.mojo`, which has no `expr2` counterpart yet. Their absence
+    costs speed and never correctness — a `Filter` above the scan applies the
+    predicate exactly — so this is a smaller scan, not a wrong one.
+    """
+
+    comptime Out = RecordBatch
+
+    var _path: String
+    var _schema: Schema
+    var _file: Optional[ParquetFile[MappedFile, LeafSet.all()]]
+    var _next_group: Int
+    var _pending: List[RecordBatch]
+
+    def __init__(out self, var path: String, var schema: Schema):
+        self._path = path^
+        self._schema = schema^
+        self._file = None
+        self._next_group = 0
+        self._pending = List[RecordBatch]()
+
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        # A source consumes nothing; the driver never calls this.
+        return None
+
+    def drain(mut self) raises -> Optional[RecordBatch]:
+        while len(self._pending) == 0:
+            if not self._file:
+                # Opened on first use, not at plan time: a `Relation` is a
+                # description and must not touch the filesystem to exist.
+                self._file = ParquetFile[MappedFile, LeafSet.all()](
+                    self._path.copy()
+                )
+            if self._next_group >= self._file.value().num_row_groups():
+                return None
+
+            var names = List[String](capacity=len(self._schema.fields))
+            for ref f in self._schema.fields:
+                names.append(f.name.copy())
+            var groups = List[Int]()
+            groups.append(self._next_group)
+            self._next_group += 1
+
+            var table = self._file.value().read(
+                columns=Optional(names^), row_groups=Optional(groups^)
+            )
+            # A row group can decode to several chunks; each becomes a morsel
+            # rather than being concatenated back together.
+            for ref b in table.to_batches():
+                self._pending.append(b.copy())
+        return self._pending.pop(0)

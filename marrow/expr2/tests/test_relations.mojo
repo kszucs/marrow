@@ -20,6 +20,8 @@ from ...execution import ExecContext
 from ...kernels.join import JOIN_INNER, JOIN_LEFT, JOIN_SEMI
 from ...dtypes import field
 from ...schema import schema
+from ...parquet.writer import write_table
+from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
 from ..logical import DynValue
 from ..physical import Datum
@@ -38,6 +40,7 @@ from ..`comptime`.numeric import Add, Gt
 from ..logical import (
     Aggregate,
     Join,
+    ParquetScan,
     Limit,
     Sort,
     DynRelation,
@@ -769,3 +772,54 @@ def test_a_join_composes_with_a_filter_above_it() raises:
     )
     var out = plan.execute()
     assert_equal(out.num_rows(), 1)  # lv = 30
+
+
+# ---------------------------------------------------------------------------
+# ParquetScan
+# ---------------------------------------------------------------------------
+def test_a_parquet_scan_feeds_the_pipeline() raises:
+    """A scan is a source like any other, so everything composes above it.
+
+    Written and read back rather than mocked: the point is that the operator
+    really decodes a file and that its batches flow through the same stages an
+    in-memory table's do.
+    """
+    var path = String("/tmp/marrow_expr2_scan.parquet")
+    var b = record_batch(
+        [
+            array([1, 2, 3, 4], int64).copy(),
+            array([10, 20, 30, 40], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+    write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
+
+    var plan = DynRelation(
+        Filter(
+            DynRelation(ParquetScan(path.copy(), b.schema.copy())),
+            DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))),
+        )
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[1].as_int64() == array([30, 40], int64))
+
+
+def test_a_parquet_scan_schema_is_the_projection() raises:
+    """Narrowing the scan's schema is how a projection is pushed into it —
+    only the named columns are read out of the file."""
+    var path = String("/tmp/marrow_expr2_proj.parquet")
+    var b = record_batch(
+        [
+            array([1, 2], int64).copy(),
+            array([10, 20], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+    write_table(Table.from_batches(b.schema.copy(), [b.copy()]), path)
+
+    var only_b = schema([field("b", int64)])
+    var plan = DynRelation(ParquetScan(path.copy(), only_b.copy()))
+    var out = plan.execute()
+    assert_equal(out.num_columns(), 1)
+    assert_true(out.columns[0].as_int64() == array([10, 20], int64))
