@@ -142,13 +142,34 @@ one +55% regression that survived ten commits for exactly that reason.
    several batches.
 4. **`ParquetScan`** — a `BatchSourceOperator` sibling. With `Join` that is
    8/8 relations and the first point where `expr2` runs a real query.
-5. **Widen `AccType` to `PrimitiveType`** in `kernels/aggregate.mojo`. It
-   unblocks temporal *and* collapses `col`'s five overloads toward three, so it
-   removes work rather than adding it. Before writing temporal nodes, not
-   after.
-6. **Temporal and list families**, then `param` (`expr/params.mojo`, 564 lines,
+5. **Thread the dtype *instance* into `AggState`.** This is the real
+   prerequisite for temporal, and it is not what this plan previously said.
+
+   Widening `AccType` to `PrimitiveType` was attempted and is blocked on
+   something else entirely: `NumericType` is `Defaultable`, while
+   `TemporalType` and `DecimalType` are **not** — a timestamp carries a unit
+   and timezone, a decimal a precision and scale, so neither can be built from
+   its type. `AggState` constructs its accumulator with
+   `PrimitiveBuilder[Acc]()`, the no-dtype constructor that exists only for
+   numeric types. Widening the bound without threading the dtype compiles and
+   unlocks nothing.
+
+   In the fused lane the dtype value is not known until `bind(batch)`, so the
+   accumulator must either take it there or defer construction.
+
+6. **Then widen `AccType`**, which activates the domain markers already in
+   `kernels/aggregate.mojo` (`OrderedAgg` / `ArithmeticAgg` / `IntegralAgg`).
+   A fold constrains itself with `where conforms_to(Self.K, OrderedAgg)` —
+   probed and working, rejecting `sum(date)` at compile time. Then delete
+   `TemporalMinMax`, which exists only because `MinMax` could not take a
+   temporal type.
+
+   **`StringMinMax` is not duplication and stays.** It keeps a per-group
+   *index* rather than a scalar accumulator, because strings are
+   variable-width — a state-shape difference, not a domain one.
+7. **Temporal and list families**, then `param` (`expr/params.mojo`, 564 lines,
    no counterpart) and `if_else` / `coalesce` / `case_when`.
-7. **Repoint the Python bindings.** Nothing outside `marrow/expr2/` imports it
+8. **Repoint the Python bindings.** Nothing outside `marrow/expr2/` imports it
    today, so it ships to no one. Until that changes `expr/` is the product and
    `expr2` is a parallel tree.
 
@@ -156,8 +177,9 @@ one +55% regression that survived ten commits for exactly that reason.
 
 | | `expr/` | `expr2` |
 |---|---|---|
-| relations | 8 | **6** |
+| relations | 8 | **8** |
 | value families | numeric, bool, string, temporal, list | **numeric, bool, string** |
+| `col`/`lit` entry points | 18 | **8** |
 | `col`/`lit` entry points | 18 | **7** |
 | subsystems | pruning, params, pushdown, bindings | **none** |
 
