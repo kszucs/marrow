@@ -8,11 +8,12 @@ differs is only what the caller had to know, and when it is resolved.
 from std.testing import assert_equal, assert_true
 
 from ...builders import array
-from ...dtypes import Int64Type, int64
+from ...dtypes import Int64Type, bool_, int64
 from ...scalars import DynScalar, Int64Scalar
 from ...tabular import RecordBatch, record_batch
 from ..builders import col, lit
-from ..logical import Shape
+from ..logical import DynValue, Shape
+from ..physical import Morsel
 
 
 def _batch() raises -> RecordBatch:
@@ -77,3 +78,14 @@ def test_lit_names_itself_by_value() raises:
     """A literal's `name()` is its value, so a projection of one is not
     anonymous — `SELECT 1` has a column called `1`."""
     assert_equal(lit(1, int64).name(), "1")
+
+
+def test_col_with_bool_dtype_takes_the_comptime_lane() raises:
+    """`BoolColumn` existed but had no `col` overload, so a fused bool column
+    could only be reached by naming the node type directly."""
+    var b = record_batch([array([True, False, True]).copy()], names=["flag"])
+    var v = col("flag", bool_)
+    var op = DynValue(v).to_operator(False)
+    var got = op.push(Morsel.ungrouped(b.copy())).value().to_array(3)
+    assert_true(got.as_bool()[0].value())
+    assert_true(not got.as_bool()[1].value())

@@ -18,13 +18,14 @@ imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
 from .`comptime`.leaves import (
+    BoolColumn,
     Column,
     Literal,
     StringColumn,
     StringLiteral,
 )
 from .runtime.values import RuntimeValue, column, literal
-from ..dtypes import FloatingType, NumericType, StringLikeType
+from ..dtypes import BoolType, FloatingType, NumericType, StringLikeType
 from ..scalars import DynScalar
 
 
@@ -50,6 +51,22 @@ def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
     caller writes `col("name", string)` either way.
     """
     return StringColumn[T](name^)
+
+
+def col(var name: String, dtype: BoolType) -> BoolColumn:
+    """A boolean column, fused like its numeric and string siblings.
+
+    Its own overload because booleans are **bit-packed**: `BoolColumn`'s lane
+    loads through a `BitmapView` rather than a typed buffer, and `Column[T]` is
+    bound on `NumericType` and cannot take `BoolType` — the same reason
+    `PrimitiveArray[bool_]` exists nowhere in the tree.
+
+    The leaf already existed; without this overload a fused expression could
+    only reach a bool column by spelling `BoolColumn("flag")` directly, so any
+    three-valued-logic test had to synthesise its operands from comparisons.
+    `expr/` shipped without it for exactly that reason and had to add it later.
+    """
+    return BoolColumn(name^)
 
 
 def col(var name: String) -> RuntimeValue:
