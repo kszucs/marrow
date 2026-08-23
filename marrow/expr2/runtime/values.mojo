@@ -33,8 +33,8 @@ from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Analyzable, Datum, Evaluable, Shape
-from ..physical import Driver, DynOperator, EvalOperator
+from ..core import Analyzable, Datum, Executable, Shape
+from ..physical import Evaluable, DynOperator, EvalOperator
 
 
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
@@ -58,11 +58,11 @@ its expressions name and nothing else.
 
 
 struct RuntimeValue(
-    Analyzable, Copyable, Deinitable, Driver, Evaluable, Movable, Writable
+    Analyzable, Copyable, Deinitable, Evaluable, Executable, Movable, Writable
 ):
     """A runtime-built expression.
 
-    Satisfies `Value` — `Analyzable & Evaluable & Writable & Copyable &
+    Satisfies `Value` — `Analyzable & Executable & Writable & Copyable &
     Deinitable` — and nothing else. It cannot satisfy `ComptimeValue`, whose
     `Type` and `Bound` it has no way to supply: its type is not known until a
     schema is in hand, and it has no per-batch bound state because it does not
@@ -168,9 +168,9 @@ struct RuntimeValue(
             return self._payload[DynScalar].type()
         return self.evaluate(RecordBatch.empty(schema)).to_array(0).dtype()
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
-    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
         """The runtime lane's half of the same contract. Its processor is the
         same adapter the comptime lane uses — the lanes differ in how they
         compute, not in how they are turned into something that runs."""

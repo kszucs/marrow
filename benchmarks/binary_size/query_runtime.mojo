@@ -5,7 +5,7 @@
 built with the `DynRelation`/`DynValue` layer
 (`marrow.expr.relations`, `marrow.expr.dynamic`, `marrow.expr.execution`)
 -- `in_memory_table(batch).filter(...).select(...)` then `plan.execute()`,
-which builds each node's own processor via `Relation.to_processor()` into a
+which builds each node's own processor via `Relation.to_operator()` into a
 pull-based pipeline. Filter comes before select in the chain because
 `DynRelation.filter()` resolves `col()` names against its *input*'s schema --
 `b` must still be present when the predicate is resolved, so it has to run

@@ -4,11 +4,11 @@ Paired with `physical.mojo`, which holds what these become when they run.
 
 A `Relation` says *what* to compute. It owns nothing that runs, so a plan is
 freely copyable, shareable, inspectable and — once the optimizer exists —
-rewritable. `to_processor(ctx)` turns it into the physical operator that owns
+rewritable. `to_operator(ctx)` turns it into the physical operator that owns
 the running state.
 
 **Two methods, not eight.** `expr/`'s `DynRelation` carries `schema`,
-`to_processor`, `write`, `drop`, `kind`, `with_predicate`, `with_projection`
+`to_operator`, `write`, `drop`, `kind`, `with_predicate`, `with_projection`
 and `children`. The last four exist for an optimizer that was never finished,
 and two of them cannot express any rewrite that changes a node's type or arity
 — which is every rewrite worth having. They are not reproduced here. When a
@@ -31,10 +31,10 @@ from .core import Datum, DynValue
 from ..dtypes import Field, field
 from .physical import (
     AggregateOperator,
-    BatchSource,
+    BatchSourceOperator,
     DynOperator,
     LimitOperator,
-    DynProcessor,
+    Pipeline,
     FilterOperator,
     ProjectOperator,
     SortOperator,
@@ -53,7 +53,7 @@ trait Relation(Copyable, Deinitable, Movable):
         """
         ...
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
         """The running operator for this description.
 
         Takes a context because this is the seam where one logical operator may
@@ -67,7 +67,7 @@ trait Relation(Copyable, Deinitable, Movable):
 struct DynRelation(Copyable, Movable, Writable):
     """A `Relation` of any operator, erased.
 
-    Copyable, unlike `DynProcessor`: a plan owns nothing that runs, so sharing
+    Copyable, unlike `Pipeline`: a plan owns nothing that runs, so sharing
     one is an `ArcPointer` bump and two consumers cannot interfere.
     """
 
@@ -75,7 +75,7 @@ struct DynRelation(Copyable, Movable, Writable):
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_to_processor: def(
         ArcPointer[NoneType], ExecContext
-    ) thin raises -> DynProcessor
+    ) thin raises -> Pipeline
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
 
     @staticmethod
@@ -85,8 +85,8 @@ struct DynRelation(Copyable, Movable, Writable):
     @staticmethod
     def _to_processor_tramp[
         R: Relation
-    ](ptr: ArcPointer[NoneType], ctx: ExecContext) raises -> DynProcessor:
-        return rebind[ArcPointer[R]](ptr)[].to_processor(ctx)
+    ](ptr: ArcPointer[NoneType], ctx: ExecContext) raises -> Pipeline:
+        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx)
 
     @staticmethod
     def _write_tramp[
@@ -105,14 +105,14 @@ struct DynRelation(Copyable, Movable, Writable):
     def schema(self) -> Schema:
         return self._virt_schema(self._data)
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
         return self._virt_to_processor(self._data, ctx)
 
     def execute(
         self, ctx: ExecContext = ExecContext.auto()
     ) raises -> RecordBatch:
         """Run this plan and drain it into one batch."""
-        var p = self.to_processor(ctx)
+        var p = self.to_operator(ctx)
         return p.collect(self.schema())
 
     def write_to[W: Writer](self, mut writer: W):
@@ -130,9 +130,9 @@ struct InMemoryTable(Relation, Writable):
     def schema(self) -> Schema:
         return self._batch.schema.copy()
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
         """The one relation that *creates* a pipeline; every other appends."""
-        return DynProcessor(BatchSource(self._batch.copy()))
+        return Pipeline(BatchSourceOperator(self._batch.copy()))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("InMemoryTable(", self._batch.num_rows(), " rows)")
@@ -158,10 +158,10 @@ struct Filter(Relation, Writable):
     def schema(self) -> Schema:
         return self._input.schema()
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
-        var pipe = self._input.to_processor(ctx)
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx)
         pipe.append(
-            FilterOperator(self._predicate.to_processor(False), ctx.copy())
+            FilterOperator(self._predicate.to_operator(False), ctx.copy())
         )
         return pipe^
 
@@ -239,11 +239,11 @@ struct Project(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
-        var pipe = self._input.to_processor(ctx)
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx)
         var values = List[DynOperator[Datum]](capacity=len(self._values))
         for ref v in self._values:
-            values.append(v.to_processor(False))
+            values.append(v.to_operator(False))
         pipe.append(ProjectOperator(values^, self._schema.copy()))
         return pipe^
 
@@ -314,15 +314,15 @@ struct Aggregate(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
         var grouped = len(self._keys) > 0
         var folds = List[DynOperator[Datum]](capacity=len(self._aggs))
         for ref a in self._aggs:
-            folds.append(a.to_processor(grouped))
-        var pipe = self._input.to_processor(ctx)
+            folds.append(a.to_operator(grouped))
+        var pipe = self._input.to_operator(ctx)
         var keys = List[DynOperator[Datum]](capacity=len(self._keys))
         for ref k in self._keys:
-            keys.append(k.to_processor(False))
+            keys.append(k.to_operator(False))
         pipe.append(
             AggregateOperator(keys^, folds^, self._schema.copy(), ctx.copy())
         )
@@ -357,8 +357,8 @@ struct Limit(Relation, Writable):
     def schema(self) -> Schema:
         return self._input.schema()
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
-        var pipe = self._input.to_processor(ctx)
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx)
         pipe.append(LimitOperator(self._offset, self._length))
         return pipe^
 
@@ -413,8 +413,8 @@ struct Sort(Relation, Writable):
     def schema(self) -> Schema:
         return self._input.schema()
 
-    def to_processor(self, ctx: ExecContext) raises -> DynProcessor:
-        var pipe = self._input.to_processor(ctx)
+    def to_operator(self, ctx: ExecContext) raises -> Pipeline:
+        var pipe = self._input.to_operator(ctx)
         pipe.append(
             SortOperator(
                 _to_operators(self._keys),
@@ -442,5 +442,5 @@ def _to_operators(values: List[DynValue]) raises -> List[DynOperator[Datum]]:
     """
     var out = List[DynOperator[Datum]](capacity=len(values))
     for ref v in values:
-        out.append(v.to_processor(False))
+        out.append(v.to_operator(False))
     return out^

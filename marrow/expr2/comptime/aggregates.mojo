@@ -30,20 +30,20 @@ from ...kernels.aggregate import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..core import Analyzable, Datum, Evaluable, Shape
+from ..core import Analyzable, Datum, Executable, Shape
 from ..physical import DynOperator
 from .core import NumericValue
-from .folds import Fold
+from .folds import FoldOperator
 
 
 struct NumericAggregate[K: AggKernel, A: NumericValue](
-    Analyzable, Evaluable, Writable
+    Analyzable, Executable, Writable
 ):
     """`sum(x)`, `min(x)`, … — pure, and rewritable because of it.
 
     **An ordinary `Value`.** It conforms to exactly what `x + 1` conforms to
     and is boxed by the same `DynValue`. There is no `AggValue` trait: once
-    every logical node answers `to_processor`, an aggregate stopped being a
+    every logical node answers `to_operator`, an aggregate stopped being a
     different *kind* of node and became one that answers from
     `Operator.finish` rather than from `Operator.push`.
 
@@ -82,7 +82,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
     comptime shape = Shape.scalar
     """An aggregate yields one value per group, so it is scalar-shaped in the
@@ -92,7 +92,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](
         """An aggregate has no per-batch value, and saying so is the point.
 
         Folding needs every batch, so there is nothing to answer here — the
-        result exists only once the stream ends, which is what `to_processor`
+        result exists only once the stream ends, which is what `to_operator`
         and `Operator.finish` express. Raising makes
         `project([col("a").sum()])` a **plan-time** error naming the mistake,
         which is what DuckDB, DataFusion and Polars all do. The alternative,
@@ -108,9 +108,9 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](
             ),
         )
 
-    # -- to_processor -------------------------------------------------------
+    # -- to_operator -------------------------------------------------------
 
-    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
         """Pick the placement, once, when the plan is built.
 
         A runtime `Bool` in, a comptime *type* out: whether the query has keys
@@ -118,8 +118,10 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](
         of the inner loop.
         """
         if grouped:
-            return Fold[Self.K, Self.A, HashGrouping](self._input.copy())
-        return Fold[Self.K, Self.A, ScalarGrouping](self._input.copy())
+            return FoldOperator[Self.K, Self.A, HashGrouping](
+                self._input.copy()
+            )
+        return FoldOperator[Self.K, Self.A, ScalarGrouping](self._input.copy())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self._input, ")")

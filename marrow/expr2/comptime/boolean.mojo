@@ -103,7 +103,7 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         """Materialise both operands, then let the kernel decide the nulls.

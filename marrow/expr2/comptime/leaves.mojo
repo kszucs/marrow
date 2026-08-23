@@ -39,7 +39,7 @@ struct Column[T: NumericType](NumericValue):
         # The argument is ignored: this lane knows its type outright.
         return DynType(Self.T())
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         # A leaf returns its column as-is, validity included; the fused loop
@@ -94,7 +94,7 @@ struct Literal[T: NumericType](NumericValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         # Stays a scalar. `Shape == 0` tells the caller so, and `Datum.to_array`
@@ -156,7 +156,7 @@ struct BoolColumn(BoolValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(BoolType())
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         # As with `Column[T]`: hand back the column rather than re-packing an
@@ -205,7 +205,7 @@ struct StringColumn[T: StringLikeType](StringValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         # Hand back the column rather than copying every byte through a
@@ -252,7 +252,7 @@ struct StringLiteral[T: StringLikeType](StringValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
 
-    # -- Evaluable ----------------------------------------------------------
+    # -- Executable ----------------------------------------------------------
 
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         return Datum(StringScalar(self._value.copy()).to_dyn())

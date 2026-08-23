@@ -18,15 +18,16 @@ from `finish`. Under the old pull design those were two different shapes and
 therefore two different erased boxes.
 
 **Sources stay pull, and drive.** A scan is I/O and naturally a generator, so
-`Source.next()` produces batches and `DynProcessor.collect` pushes them through
+the source operator answers from `drain` and `Pipeline.collect` pushes what
+it yields through
 the chain. That keeps a reader unchanged, and it is the same split DuckDB
 makes. `Exhausted` is **gone**: end of stream is `next()` answering `None`, not
 an exception, which also removes the `String(e) == "Exhausted"` comparison the
 old `collect` needed.
 
-`DynProcessor` is the assembled pipeline — the driving source plus the operator
+`Pipeline` is the assembled pipeline — the driving source plus the operator
 chain above it — rather than a single erased operator. That is what lets
-`Relation.to_processor` stay compositional without a `children()` walk over the
+`Relation.to_operator` stay compositional without a `children()` walk over the
 plan: a source relation creates the pipeline, and every relation above it
 appends one stage.
 """
@@ -45,62 +46,6 @@ from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .core import Datum, DynValue
-
-
-# ---------------------------------------------------------------------------
-# Source — the driver
-# ---------------------------------------------------------------------------
-trait Source(Deinitable, Movable):
-    """Produces batches until it has none left.
-
-    Pull, deliberately, and the only pull in the engine: a scan is a generator
-    over I/O, so inverting it would buy nothing and cost every reader.
-    """
-
-    def next(mut self) raises -> Optional[RecordBatch]:
-        """The next batch, or `None` at end of stream."""
-        ...
-
-
-struct DynSource(Movable):
-    """A `Source` of any kind, erased. Move-only: it owns a position."""
-
-    var _data: ArcPointer[NoneType]
-    var _virt_next: def(ArcPointer[NoneType]) thin raises -> Optional[
-        RecordBatch
-    ]
-
-    @staticmethod
-    def _next_tramp[
-        S: Source
-    ](ptr: ArcPointer[NoneType]) raises -> Optional[RecordBatch]:
-        return rebind[ArcPointer[S]](ptr)[].next()
-
-    @implicit
-    def __init__[S: Source](out self, var value: S):
-        var ptr = ArcPointer[S](value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_next = Self._next_tramp[S]
-
-    def next(mut self) raises -> Optional[RecordBatch]:
-        return self._virt_next(self._data)
-
-
-struct BatchSource(Source):
-    """Yields one in-memory batch, once."""
-
-    var _batch: RecordBatch
-    var _done: Bool
-
-    def __init__(out self, var batch: RecordBatch):
-        self._batch = batch^
-        self._done = False
-
-    def next(mut self) raises -> Optional[RecordBatch]:
-        if self._done:
-            return None
-        self._done = True
-        return self._batch.copy()
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +107,19 @@ trait Operator(Deinitable, Movable):
         """Consume one morsel; answer what it produced, if anything."""
         ...
 
-    def finish(mut self) raises -> Optional[Self.Out]:
-        """Flush at end of stream. A streaming operator answers `None`."""
+    def drain(mut self) raises -> Optional[Self.Out]:
+        """Produce whatever is available **without new input**; `None` when
+        there is nothing left.
+
+        Repeatable, and that is what lets one trait cover sources too. A source
+        is simply the operator whose `push` is never called and whose `drain`
+        keeps answering until its input runs out; a filter answers `None`
+        immediately; an aggregate answers its result once, then `None`.
+
+        It also lets an operator emit *several* batches at end of stream — a
+        chunking sort, a fanning join — which a one-shot `finish` could not
+        express at all.
+        """
         ...
 
     def done(self) -> Bool:
@@ -197,9 +153,7 @@ struct DynOperator[Out: Copyable](Movable):
     var _virt_push: def(ArcPointer[NoneType], Morsel) thin raises -> Optional[
         Self.Out
     ]
-    var _virt_finish: def(ArcPointer[NoneType]) thin raises -> Optional[
-        Self.Out
-    ]
+    var _virt_drain: def(ArcPointer[NoneType]) thin raises -> Optional[Self.Out]
     var _virt_done: def(ArcPointer[NoneType]) thin -> Bool
 
     @staticmethod
@@ -209,10 +163,10 @@ struct DynOperator[Out: Copyable](Movable):
         return rebind[ArcPointer[O]](ptr)[].push(morsel)
 
     @staticmethod
-    def _finish_tramp[
+    def _drain_tramp[
         O: Operator
     ](ptr: ArcPointer[NoneType]) raises -> Optional[O.Out]:
-        return rebind[ArcPointer[O]](ptr)[].finish()
+        return rebind[ArcPointer[O]](ptr)[].drain()
 
     @staticmethod
     def _done_tramp[O: Operator](ptr: ArcPointer[NoneType]) -> Bool:
@@ -223,20 +177,20 @@ struct DynOperator[Out: Copyable](Movable):
         var ptr = ArcPointer[O](value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_push = Self._push_tramp[O]
-        self._virt_finish = Self._finish_tramp[O]
+        self._virt_drain = Self._drain_tramp[O]
         self._virt_done = Self._done_tramp[O]
 
     def push(mut self, morsel: Morsel) raises -> Optional[Self.Out]:
         return self._virt_push(self._data, morsel)
 
-    def finish(mut self) raises -> Optional[Self.Out]:
-        return self._virt_finish(self._data)
+    def drain(mut self) raises -> Optional[Self.Out]:
+        return self._virt_drain(self._data)
 
     def done(self) -> Bool:
         return self._virt_done(self._data)
 
 
-trait Driver(Copyable, Deinitable):
+trait Evaluable(Copyable, Deinitable):
     """A lane's fused driver — the one thing a processor needs to call.
 
     Deliberately *not* `Value`. `evaluate` is execution, so it does not belong
@@ -248,17 +202,17 @@ trait Driver(Copyable, Deinitable):
         ...
 
 
-struct EvalOperator[V: Driver](Operator):
+struct EvalOperator[V: Evaluable](Operator):
     """An elementwise value, as an `Operator`.
 
-    The adapter that lets one method — `to_processor` — serve every logical
+    The adapter that lets one method — `to_operator` — serve every logical
     node. An elementwise value has all its output ready as soon as it sees a
     batch, so it answers from `push` and has nothing to flush; an aggregate is
     the mirror image. Neither needs a trait the other does not have.
 
     Generic over the node type rather than holding a `DynValue`, so a fused
     subtree stays one type through the boundary and is still inlined into one
-    loop. That is the same reason `Fold` is parameterised on its input.
+    loop. That is the same reason `FoldOperator` is parameterised on its input.
 
     This is also where a value would keep state that outlives a batch — a
     compiled `LIKE` automaton, an `IsIn` hash set. It has none today, and the
@@ -275,29 +229,33 @@ struct EvalOperator[V: Driver](Operator):
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         return self._value.evaluate(morsel.batch)
 
-    def finish(mut self) raises -> Optional[Datum]:
+    def drain(mut self) raises -> Optional[Datum]:
         return None
 
 
 # ---------------------------------------------------------------------------
-# DynProcessor — the assembled pipeline
+# Pipeline — the assembled pipeline
 # ---------------------------------------------------------------------------
-struct DynProcessor(Movable):
-    """A driving source plus the operator chain above it.
+struct Pipeline(Movable):
+    """A chain of operators, stage 0 being the one that drives.
 
-    A pipeline rather than a single operator, so `Relation.to_processor` can
-    stay compositional: `InMemoryTable` creates one, and `Filter`, `Project`
-    and `Aggregate` each `append` a stage to their input's. Nothing has to walk
-    the plan, which matters because `DynRelation` deliberately exposes no
-    `children()`.
+    Not a second abstraction beside `Operator` — just a `List` of them, so
+    `Relation.to_operator` stays compositional: `InMemoryTable` creates a
+    pipeline holding its source operator, and `Filter`, `Project`, `Sort`,
+    `Limit` and `Aggregate` each `append` a stage to their input's. Nothing has
+    to walk the plan, which matters because `DynRelation` deliberately exposes
+    no `children()`.
+
+    It was called `DynProcessor`, which was wrong twice over: it erases
+    nothing, and "processor" was a second word for what `Operator` already
+    names.
     """
 
-    var _source: DynSource
     var _ops: List[DynOperator[RecordBatch]]
 
-    def __init__(out self, var source: DynSource):
-        self._source = source^
+    def __init__(out self, var source: DynOperator[RecordBatch]):
         self._ops = List[DynOperator[RecordBatch]]()
+        self._ops.append(source^)
 
     def append(mut self, var op: DynOperator[RecordBatch]):
         self._ops.append(op^)
@@ -328,35 +286,38 @@ struct DynProcessor(Movable):
             out.append(cur.value().batch.copy())
 
     def collect(mut self, schema: Schema) raises -> RecordBatch:
-        """Drive the source, then flush, and drain everything into one batch.
+        """Run the chain to completion and drain it into one batch.
 
-        The flush is a **cascade**, not a loop of independent calls: when stage
-        `i` finally produces its result from `finish`, that batch has still
-        never been seen by stages `i+1..`, so it is pushed through them before
-        stage `i+1` is itself finished. An aggregate under a projection depends
-        on exactly this ordering.
+        **One loop, not two.** Driving the source and flushing the chain used
+        to be separate code paths because a source had a different method
+        (`next`) from an operator (`finish`). With a repeatable `drain` they
+        are the same act — "produce without new input" — so the driver walks
+        the stages in order, drains each until it runs dry, and pushes whatever
+        comes out through the stages above it.
+
+        That ordering is what makes the flush a **cascade**: when stage `i`
+        finally yields its result, no later stage has seen it, so it must flow
+        through `i+1..` before stage `i+1` is drained. A projection over an
+        aggregate returns nothing without this.
         """
         var out = List[RecordBatch]()
-        while True:
-            var b = self._source.next()
-            if b:
-                self._flow(Morsel.ungrouped(b.value().copy()), 0, out)
+        for i in range(len(self._ops)):
+            while True:
+                var produced = self._ops[i].drain()
+                if not produced:
+                    break
+                self._flow(
+                    Morsel.ungrouped(produced.value().copy()), i + 1, out
+                )
                 # Early termination. A `Limit` that has its rows stops the
-                # source rather than letting it drain — the one thing a push
-                # engine must add back that a pull engine got for free.
+                # chain rather than letting the source drain — the one thing a
+                # push engine must add back that a pull engine got for free.
                 var stop = False
-                for i in range(len(self._ops)):
-                    if self._ops[i].done():
+                for j in range(len(self._ops)):
+                    if self._ops[j].done():
                         stop = True
                 if stop:
                     break
-            else:
-                break
-
-        for i in range(len(self._ops)):
-            var f = self._ops[i].finish()
-            if f:
-                self._flow(Morsel.ungrouped(f.value().copy()), i + 1, out)
 
         if len(out) == 0:
             # An empty result must still be a *well-formed* batch: one
@@ -371,18 +332,16 @@ struct DynProcessor(Movable):
         if len(out) == 1:
             return out.pop()
 
-        # Concatenate per column: `concat` joins arrays, and a batch is its
-        # columns plus a schema every morsel already agrees on.
-        var s = out[0].schema.copy()
-        var cols = List[DynArray](capacity=len(s.fields))
-        for i in range(len(s.fields)):
+        var sch = out[0].schema.copy()
+        var cols = List[DynArray](capacity=len(sch.fields))
+        for i in range(len(sch.fields)):
             var parts = List[DynArray]()
             for ref b in out:
                 parts.append(b.columns[i].copy())
             # Serial: this runs once at the end over already-materialised
             # morsels, so there is nothing for workers to overlap with.
             cols.append(concat(parts, ExecContext.serial()))
-        return RecordBatch(schema=s^, columns=cols^)
+        return RecordBatch(schema=sch^, columns=cols^)
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +382,7 @@ struct FilterOperator(Operator):
             return out^
         return None
 
-    def finish(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[RecordBatch]:
         return None
 
 
@@ -453,7 +412,7 @@ struct ProjectOperator(Operator):
             cols.append(d.value().to_array(batch.num_rows()))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
-    def finish(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[RecordBatch]:
         return None
 
 
@@ -480,7 +439,7 @@ struct AggregateOperator(Operator):
 
     `HAVING` needs no node of its own: a `FilterOperator` above this stage sees
     the aggregate's *output* batch, which is exactly what the flush cascade in
-    `DynProcessor.collect` delivers.
+    `Pipeline.collect` delivers.
     """
 
     comptime Out = RecordBatch
@@ -548,7 +507,7 @@ struct AggregateOperator(Operator):
         and that split is measured. Parameterising *this* operator on
         `Grouping` instantiates it once per conformer for **+24,432 bytes** and
         buys nothing: its branch runs once per batch, while the 14.6x
-        register-fold win lives in `Fold`, already monomorphised on `G`.
+        register-fold win lives in `FoldOperator`, already monomorphised on `G`.
         """
         # Indexed rather than `for ref`: a fold is move-only, and iterating a
         # `List` by reference requires `Copyable`.
@@ -569,7 +528,7 @@ struct AggregateOperator(Operator):
             _ = self._folds[i].push(forwarded)
         return None
 
-    def finish(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[RecordBatch]:
         if self._emitted:
             return None
         self._emitted = True
@@ -577,7 +536,7 @@ struct AggregateOperator(Operator):
         if not self._keyless:
             cols = self._grouping.key_columns(self._key_fields())
         for i in range(len(self._folds)):
-            var col = self._folds[i].finish()
+            var col = self._folds[i].drain()
             if col:
                 cols.append(col.value().to_array(self._num_groups))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
@@ -624,7 +583,7 @@ struct LimitOperator(Operator):
         self._emitted += wanted
         return batch.slice(start, wanted)
 
-    def finish(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[RecordBatch]:
         return None
 
     def done(self) -> Bool:
@@ -672,7 +631,7 @@ struct SortOperator(Operator):
         self._batches.append(morsel.batch.copy())
         return None
 
-    def finish(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[RecordBatch]:
         if self._emitted or len(self._batches) == 0:
             return None
         self._emitted = True
@@ -720,3 +679,34 @@ struct SortOperator(Operator):
                 take(whole.columns[i].copy(), order.value(), self._ctx)
             )
         return RecordBatch(schema=whole.schema.copy(), columns=sorted^)
+
+
+struct BatchSourceOperator(Operator):
+    """Yields one in-memory batch, once — **an ordinary `Operator`**.
+
+    There is no `Source` trait. A source is just the operator that never has
+    `push` called on it and answers from `drain` until it runs dry, which is
+    exactly what a repeatable `drain` means. Sources are still *pull* in the
+    sense that matters — a scan is a generator over I/O and nothing asks it to
+    invert — but that is a property of this conformer, not a second
+    abstraction the whole layer has to carry.
+    """
+
+    comptime Out = RecordBatch
+
+    var _batch: RecordBatch
+    var _done: Bool
+
+    def __init__(out self, var batch: RecordBatch):
+        self._batch = batch^
+        self._done = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+        # A source consumes nothing; the driver never calls this.
+        return None
+
+    def drain(mut self) raises -> Optional[RecordBatch]:
+        if self._done:
+            return None
+        self._done = True
+        return self._batch.copy()

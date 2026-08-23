@@ -386,15 +386,15 @@ def test_having_is_a_filter_above_an_aggregate() raises:
 def test_a_streaming_operator_answers_from_push() raises:
     """`Filter` produces per morsel and has nothing to flush."""
     var op = FilterOperator(
-        DynValue(
-            Gt(Column[Int64Type]("a"), Literal[Int64Type](2))
-        ).to_processor(False),
+        DynValue(Gt(Column[Int64Type]("a"), Literal[Int64Type](2))).to_operator(
+            False
+        ),
         ExecContext.serial(),
     )
     var out = op.push(Morsel.ungrouped(_batch()))
     assert_true(Bool(out))
     assert_equal(out.value().num_rows(), 1)
-    assert_true(not Bool(op.finish()))
+    assert_true(not Bool(op.drain()))
 
 
 def test_a_blocking_operator_answers_nothing_until_finish() raises:
@@ -406,7 +406,7 @@ def test_a_blocking_operator_answers_nothing_until_finish() raises:
     the point of the engine.
     """
     var folds = List[DynOperator[Datum]]()
-    folds.append(Sum(Column[Int64Type]("a"), "total").to_processor(False))
+    folds.append(Sum(Column[Int64Type]("a"), "total").to_operator(False))
     var op = AggregateOperator(
         List[DynOperator[Datum]](),
         folds^,
@@ -415,11 +415,11 @@ def test_a_blocking_operator_answers_nothing_until_finish() raises:
     )
     assert_true(not Bool(op.push(Morsel.ungrouped(_batch()))))
 
-    var out = op.finish()
+    var out = op.drain()
     assert_true(Bool(out))
     assert_true(out.value().columns[0].as_int64() == array([7], int64))
     # Emitting the fold twice would double every grouped result downstream.
-    assert_true(not Bool(op.finish()))
+    assert_true(not Bool(op.drain()))
 
 
 def test_the_flush_cascade_feeds_the_stages_above() raises:

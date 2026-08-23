@@ -38,9 +38,9 @@ def test_dtype_agrees_with_evaluation_comptime() raises:
     """
     var b = _batch()
     var v = DynValue(Column[Int64Type]("a"))
-    # A value is reached only through `to_processor` now: it is a stateless
+    # A value is reached only through `to_operator` now: it is a stateless
     # description, and running it is the processor's job.
-    var op = v.to_processor(False)
+    var op = v.to_operator(False)
     var produced = (
         op.push(Morsel.ungrouped(b.copy()))
         .value()

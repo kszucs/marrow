@@ -40,15 +40,15 @@ from ...builders import BinaryLikeBuilder
 from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
-from ..core import Analyzable, Datum, Evaluable, Shape
-from ..physical import Driver, DynOperator, EvalOperator
+from ..core import Analyzable, Datum, Executable, Shape
+from ..physical import Evaluable, DynOperator, EvalOperator
 
 
 # ---------------------------------------------------------------------------
 # ComptimeValue — what every node in this lane shares
 # ---------------------------------------------------------------------------
 trait ComptimeValue(
-    Analyzable, Copyable, Deinitable, Driver, Evaluable, Writable
+    Analyzable, Copyable, Deinitable, Evaluable, Executable, Writable
 ):
     """A `Value` whose type states its output type and its per-batch state.
 
@@ -57,7 +57,7 @@ trait ComptimeValue(
     is the *lane's fused driver*, the thing this lane's processor calls once it
     has been handed a batch. It is invisible to `DynValue` and to every
     consumer outside the lane, which reach a value only through
-    `to_processor`.
+    `to_operator`.
 
     The two comptime members are what the runtime lane cannot supply, and are
     therefore the whole reason this is a separate trait rather than a naming
@@ -70,10 +70,11 @@ trait ComptimeValue(
         `EvalOperator`; each family below supplies the default body."""
         ...
 
-    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
         """Every comptime node becomes the same operator — one that forwards
         each batch to the fused driver. `grouped` is ignored: an elementwise
-        value has no placement. Aggregates override this with a `Fold`."""
+        value has no placement. Aggregates override this with a `FoldOperator`.
+        """
         return EvalOperator[Self](self.copy())
 
     comptime Type: DataType

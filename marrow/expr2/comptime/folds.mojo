@@ -1,16 +1,16 @@
 """The comptime lane's aggregate executor.
 
-`Fold` is **physical**: it owns an accumulator and mutates it as morsels
+`FoldOperator` is **physical**: it owns an accumulator and mutates it as morsels
 arrive. It lived beside the logical `Sum` / `Min` nodes in `aggregates.mojo`,
 which mixed a description with the thing that runs it — the one split this
 package is otherwise strict about.
 
 It is not a duplicate of `kernels.aggregate.AggState`, and the difference is
 the point of the whole lane. `AggState.update` takes an
-`PrimitiveArray[V]` — an **already-materialised column**. `Fold` holds the
+`PrimitiveArray[V]` — an **already-materialised column**. `FoldOperator` holds the
 fused subtree instead and reads `lane[W]` straight into the accumulator, so
 `sum(a * 2 + b)` never builds `a * 2 + b`. `AggState` is storage and scatter;
-`Fold` is what avoids handing it a column in the first place.
+`FoldOperator` is what avoids handing it a column in the first place.
 
 It lives in the comptime lane rather than in `physical.mojo` because it is
 parameterised on `A: NumericValue` — a fused type. `physical.mojo` stays
@@ -28,11 +28,11 @@ from ..physical import Morsel, Operator
 from .core import NumericValue
 
 
-struct Fold[K: AggKernel, A: NumericValue, G: Grouping](Operator):
+struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
     """The fold in progress: this aggregate's input, plus the kernel's state.
 
     Three axes, all comptime: the **algebra** (`K`), the whole **input**
-    subtree (`A`), and the **placement** (`G`). `Fold[SumKernel,
+    subtree (`A`), and the **placement** (`G`). `FoldOperator[SumKernel,
     Mul[Column[Int64Type], Literal[Int64Type]], ScalarGrouping]` is one type,
     and therefore one loop with nothing interpreted inside it.
 
@@ -77,7 +77,7 @@ struct Fold[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         self._state = AggState[Self.K, Self.A.Type]()
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Fold one morsel in and answer nothing — the result arrives at
+        """FoldOperator one morsel in and answer nothing — the result arrives at
         `finish`. The grouping travels *with* the batch, which is what lets this
         be an `Operator` at all."""
         ref batch = morsel.batch
@@ -204,5 +204,5 @@ struct Fold[K: AggKernel, A: NumericValue, G: Grouping](Operator):
 
         return None
 
-    def finish(mut self) raises -> Optional[Datum]:
+    def drain(mut self) raises -> Optional[Datum]:
         return Datum(self._state.finish(self._num_groups).to_dyn())

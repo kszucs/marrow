@@ -30,57 +30,57 @@ def _m(var batch: RecordBatch, var ids: Int32Array, n: Int) raises -> Morsel:
 
 def test_fused_sum_folds_across_morsels() raises:
     """One state, several batches — what `to_state` exists for."""
-    var s = Sum(Column[Int64Type]("a"), "total").to_processor(False)
+    var s = Sum(Column[Int64Type]("a"), "total").to_operator(False)
     _ = s.push(_m(_b([1, 2]), _groups(List[Optional[Int]]()), 1))
     _ = s.push(_m(_b([3, 4]), _groups(List[Optional[Int]]()), 1))
     _ = s.push(_m(_b([5]), _groups(List[Optional[Int]]()), 1))
-    assert_true(s.finish().value().to_array(1) == array([15], int64))
+    assert_true(s.drain().value().to_array(1) == array([15], int64))
 
 
 def test_fused_sum_skips_nulls() raises:
-    var s = Sum(Column[Int64Type]("a"), "t").to_processor(False)
+    var s = Sum(Column[Int64Type]("a"), "t").to_operator(False)
     _ = s.push(_m(_b([1, None, 3]), _groups(List[Optional[Int]]()), 1))
-    assert_true(s.finish().value().to_array(1) == array([4], int64))
+    assert_true(s.drain().value().to_array(1) == array([4], int64))
 
 
 def test_min_max_expose_null_blindness() raises:
     """`sum` can be silently right over a null whose payload is 0; `min` cannot.
     These are the cases that prove the lane mask is applied."""
-    var lo = Min(Column[Int64Type]("a"), "lo").to_processor(False)
-    var hi = Max(Column[Int64Type]("a"), "hi").to_processor(False)
+    var lo = Min(Column[Int64Type]("a"), "lo").to_operator(False)
+    var hi = Max(Column[Int64Type]("a"), "hi").to_operator(False)
     _ = lo.push(_m(_b([5, None, 9]), _groups(List[Optional[Int]]()), 1))
     _ = hi.push(_m(_b([5, None, 9]), _groups(List[Optional[Int]]()), 1))
-    assert_true(lo.finish().value().to_array(1) == array([5], int64))
-    assert_true(hi.finish().value().to_array(1) == array([9], int64))
+    assert_true(lo.drain().value().to_array(1) == array([5], int64))
+    assert_true(hi.drain().value().to_array(1) == array([9], int64))
 
 
 def test_fused_sum_over_no_rows_is_null() raises:
     """R10, and the live out-of-bounds this design was blocked on: `AggState`
     only grew in `update`, so an aggregate that never updated read a slot that
     did not exist — a crash under ASSERT=all, a silent bad read otherwise."""
-    var s = Sum(Column[Int64Type]("a"), "t").to_processor(False)
-    assert_true(s.finish().value().to_array(1).as_int64().is_null(0))
+    var s = Sum(Column[Int64Type]("a"), "t").to_operator(False)
+    assert_true(s.drain().value().to_array(1).as_int64().is_null(0))
 
 
 def test_fused_sum_over_empty_batch_is_null() raises:
-    var s = Sum(Column[Int64Type]("a"), "t").to_processor(False)
+    var s = Sum(Column[Int64Type]("a"), "t").to_operator(False)
     _ = s.push(_m(_b(List[Optional[Int]]()), _groups(List[Optional[Int]]()), 1))
-    assert_true(s.finish().value().to_array(1).as_int64().is_null(0))
+    assert_true(s.drain().value().to_array(1).as_int64().is_null(0))
 
 
 def test_fused_sum_over_all_nulls_is_null() raises:
-    var s = Sum(Column[Int64Type]("a"), "t").to_processor(False)
+    var s = Sum(Column[Int64Type]("a"), "t").to_operator(False)
     _ = s.push(_m(_b([None, None]), _groups(List[Optional[Int]]()), 1))
-    assert_true(s.finish().value().to_array(1).as_int64().is_null(0))
+    assert_true(s.drain().value().to_array(1).as_int64().is_null(0))
 
 
 def test_a_fused_subtree_never_materialises() raises:
     """`sum(a * 2)` — the input is a fused node, so the fold reads its lane."""
     var s = Sum(
         Mul(Column[Int64Type]("a"), Literal[Int64Type](2)), "t"
-    ).to_processor(False)
+    ).to_operator(False)
     _ = s.push(_m(_b([1, 2, 3]), _groups(List[Optional[Int]]()), 1))
-    assert_true(s.finish().value().to_array(1) == array([12], int64))
+    assert_true(s.drain().value().to_array(1) == array([12], int64))
 
 
 def test_a_ragged_tail_stays_in_bounds() raises:
@@ -88,44 +88,44 @@ def test_a_ragged_tail_stays_in_bounds() raises:
     scalar tail
     reads past the view and aborts the process."""
     var b = record_batch([arange[Int64Type](0, 1003).to_dyn()], names=["a"])
-    var s = Sum(Column[Int64Type]("a"), "t").to_processor(False)
+    var s = Sum(Column[Int64Type]("a"), "t").to_operator(False)
     _ = s.push(_m(b.copy(), _groups(List[Optional[Int]]()), 1))
     assert_true(
-        s.finish().value().to_array(1) == array([1003 * 1002 // 2], int64)
+        s.drain().value().to_array(1) == array([1003 * 1002 // 2], int64)
     )
 
 
 def test_sum_widens_to_the_accumulator_type() raises:
     var b = record_batch([array([1, 2, 3], int32).copy()], names=["a"])
     var agg = Sum(Column[Int32Type]("a"), "t")
-    var s = agg.to_processor(False)
+    var s = agg.to_operator(False)
     _ = s.push(_m(b.copy(), _groups(List[Optional[Int]]()), 1))
-    var got = s.finish().value().to_array(1)
+    var got = s.drain().value().to_array(1)
     assert_true(got.dtype() == agg.dtype(b.schema))
     assert_true(got == array([6], int64))
 
 
 def test_grouped_folds_into_slots() raises:
-    var s = Sum(Column[Int64Type]("a"), "t").to_processor(True)
+    var s = Sum(Column[Int64Type]("a"), "t").to_operator(True)
     _ = s.push(_m(_b([1, 2, 3, 4]), _groups([0, 1, 0, 1]), 2))
     _ = s.push(_m(_b([10, 20]), _groups([1, 0]), 2))
     assert_true(
-        s.finish().value().to_array(1) == array([1 + 3 + 20, 2 + 4 + 10], int64)
+        s.drain().value().to_array(1) == array([1 + 3 + 20, 2 + 4 + 10], int64)
     )
 
 
 def test_grouped_skips_nulls_per_group() raises:
-    var s = Min(Column[Int64Type]("a"), "t").to_processor(True)
+    var s = Min(Column[Int64Type]("a"), "t").to_operator(True)
     _ = s.push(_m(_b([5, None, 1, 9]), _groups([0, 0, 1, 1]), 2))
-    assert_true(s.finish().value().to_array(1) == array([5, 1], int64))
+    assert_true(s.drain().value().to_array(1) == array([5, 1], int64))
 
 
 def test_mean_uses_the_valid_count_as_divisor() raises:
     """The count is not bookkeeping: it is `finalize`'s divisor, and a null
     must not be in it."""
-    var s = Mean(Column[Int64Type]("a"), "t").to_processor(False)
+    var s = Mean(Column[Int64Type]("a"), "t").to_operator(False)
     _ = s.push(_m(_b([1, None, 5]), _groups(List[Optional[Int]]()), 1))
-    assert_equal(String(s.finish().value().to_array(1).as_float64()[0]), "3.0")
+    assert_equal(String(s.drain().value().to_array(1).as_float64()[0]), "3.0")
 
 
 def test_erasure_answers_as_the_value_it_holds() raises:
@@ -135,6 +135,6 @@ def test_erasure_answers_as_the_value_it_holds() raises:
     assert_equal(boxed.name(), "total")
     assert_equal(boxed.columns()[0], "a")
     assert_true(boxed.dtype(b.schema) == agg.dtype(b.schema))
-    var s = boxed.to_processor(False)
+    var s = boxed.to_operator(False)
     _ = s.push(_m(b.copy(), _groups(List[Optional[Int]]()), 1))
-    assert_true(s.finish().value().to_array(1) == array([6], int64))
+    assert_true(s.drain().value().to_array(1) == array([6], int64))

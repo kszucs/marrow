@@ -4,7 +4,7 @@ There is deliberately **no `Value` trait**. An expression is the composition of
 three traits, each named for who asks:
 
     Analyzable   a rewriter asks these
-    Evaluable    the executor asks this
+    Executable    the executor asks this
     Writable     a human asks this (stdlib)
 
 `expr/` carried one `Value` trait that executed, materialised, pruned, named
@@ -197,9 +197,9 @@ trait Analyzable:
 
 
 # ---------------------------------------------------------------------------
-# Evaluable — what the executor asks
+# Executable — what the executor asks
 # ---------------------------------------------------------------------------
-trait Evaluable(Copyable, Deinitable):
+trait Executable(Copyable, Deinitable):
     """Produce a column from a batch.
 
     One method, because that is the entire physical contract at this level. The
@@ -219,7 +219,7 @@ trait Evaluable(Copyable, Deinitable):
     kernels use for `comptime name`.
     """
 
-    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
         """The stateful thing that runs this value.
 
         **One method for every logical node.** A `Relation` becomes a pipeline,
@@ -248,19 +248,19 @@ trait Evaluable(Copyable, Deinitable):
         ...
 
 
-comptime Value = Analyzable & Evaluable & Writable
+comptime Value = Analyzable & Executable & Writable
 """What every expression is, in both lanes — a *name for the composition*, not
 a trait of its own.
 
 `expr/` had a `Value` **trait** carrying nine responsibilities. This keeps the
 name, which the tree and its docs already use, while the substance moves into
-`Analyzable` and `Evaluable`. Nothing conforms to `Value`; things conform to
+`Analyzable` and `Executable`. Nothing conforms to `Value`; things conform to
 the traits it names.
 
 `Copyable & Deinitable` are here because `DynValue` boxes into an
 `ArcPointer`, which requires them (`Copyable` already implies `Movable`). They
 are a storage requirement, not part of what it means to be an expression, which
-is why they sit in the alias rather than in `Analyzable` or `Evaluable`.
+is why they sit in the alias rather than in `Analyzable` or `Executable`.
 """
 
 
@@ -278,7 +278,7 @@ struct DynValue(Copyable, Movable, Writable):
     is the 4.91 MB configuration).
 
     Six slots, each traceable to a named asker: four for `Analyzable`, one for
-    `Evaluable`, one for `Writable`. `expr/` carried seven and had no `dtype`,
+    `Executable`, one for `Writable`. `expr/` carried seven and had no `dtype`,
     computing output types by evaluating against a zero-row batch instead.
     Dropped: `name()`, which duplicated what `name` and `write` already
     answered, and `resolve_names`, a rewrite that is a no-op in the comptime
@@ -324,7 +324,7 @@ struct DynValue(Copyable, Movable, Writable):
     def _to_processor_tramp[
         V: Value
     ](ptr: ArcPointer[NoneType], grouped: Bool) raises -> DynOperator[Datum]:
-        return rebind[ArcPointer[V]](ptr)[].to_processor(grouped)
+        return rebind[ArcPointer[V]](ptr)[].to_operator(grouped)
 
     @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -352,11 +352,11 @@ struct DynValue(Copyable, Movable, Writable):
     def dtype(self, schema: Schema) raises -> DynType:
         return self._dtype(self._boxed, schema)
 
-    def to_processor(self, grouped: Bool) raises -> DynOperator[Datum]:
+    def to_operator(self, grouped: Bool) raises -> DynOperator[Datum]:
         """The stateful thing that runs this value.
 
         The slot `DynAggValue._acc` used to occupy, on the one box that now
-        holds every value. An aggregate reaches its `Fold` through here; an
+        holds every value. An aggregate reaches its `FoldOperator` through here; an
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
