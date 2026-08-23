@@ -359,9 +359,14 @@ struct Pipeline(Operator):
     def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
         """Push a morsel through every stage.
 
-        Meaningful for a pipeline used as a *sub-plan* — a join's build side,
-        a boxed subquery. A top-level pipeline's stage 0 is a source, which
-        ignores what it is handed.
+        **Vestigial today, and the docstring should say so rather than imply a
+        capability the type does not have.** `__init__` requires a source as
+        stage 0, and a source ignores `push`, so for every pipeline that can
+        currently be constructed this walks the chain and answers `None`. It
+        exists to satisfy `Operator`.
+
+        It becomes meaningful the moment a pipeline can be built *without* a
+        source — a join's probe side fed by its parent rather than scanning.
         """
         var out = List[RecordBatch]()
         self._flow(morsel.copy(), 0, out)

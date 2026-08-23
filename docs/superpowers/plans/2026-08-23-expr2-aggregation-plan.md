@@ -110,21 +110,30 @@ against a 0.5% threshold. Attributed, not guessed:
 | | |
 |---|---|
 | ~44 KB | `Morsel` carrying `Groups` through every stage (`marrow::kernels::groupby` 1 → 13 linked symbols). **Inherent** to one executor contract. |
-| ~32 KB | `EvalOperator[V]` instantiating once per boxed value type. **Recoverable.** |
+| ~30 KB | The `DynValue`/`DynAggValue` merge. **Cause unknown — see below.** |
 
-The recoverable half is a `kind` field on `DynValue`: elementwise values share
-one `EvalOperator[DynValue]`, and only aggregates pay per-type. That is the
-Tier 2.6 `Kind` item, which was vacuous while aggregates had their own trait
-and stopped being so the moment they became values.
+**The `Kind` lever was measured and does not apply.** The plan previously said
+this half was recoverable by giving `DynValue` a `kind` field so elementwise
+values share one `EvalOperator[DynValue]` instead of instantiating one per
+boxed type. A bucket diff across the merge (`5247a0e` → `3e0fd16`) falsifies
+it: `__text` grew **+30,432** while the symbol count went **down 7**
+(`marrow::arrays` −14, `dtypes` +4, `tabular` +2, `scalars` +1). Per-type
+instantiation would appear as *many new symbols*; instead the same symbols got
+**larger**, which is inlining, not monomorphisation. Collapsing instantiations
+that do not exist would recover nothing.
+
+Whoever picks this up should start from that measurement rather than from the
+`EvalOperator` theory. The next probe worth running is *which* symbols grew —
+`nm -S` sorted by size across the two commits — not another guess.
 
 **Do not clear the gate by re-baselining.** §0 of the backlog already records
 one +55% regression that survived ten commits for exactly that reason.
 
 ## Next steps, in order
 
-1. **Spend the `Kind` lever.** Do it before adding surface, so new work is
-   measured against an honest baseline rather than a −32 KB debt.
-2. **Two audit leftovers** — a direct test for `Pipeline.drain`/`_stage` (new,
+1. ~~**Spend the `Kind` lever.**~~ **Dropped** — measured and falsified, see
+   "Standing debt". The debt is real but its cause is not what was assumed.
+2. ~~**Two audit leftovers**~~ **Done** — — a direct test for `Pipeline.drain`/`_stage` (new,
    non-trivial, covered only indirectly), and `Pipeline.push`'s docstring,
    which claims a capability the constructor forbids.
 3. **`Join`.** The largest gap and the one that tests the design: a pipeline

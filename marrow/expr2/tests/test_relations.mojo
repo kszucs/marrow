@@ -24,6 +24,8 @@ from ..logical import DynValue
 from ..physical import Datum
 from ..physical import (
     AggregateOperator,
+    BatchSourceOperator,
+    Pipeline,
     DynOperator,
     FilterOperator,
     LimitOperator,
@@ -591,3 +593,54 @@ def test_sort_then_limit_is_top_n() raises:
         )
     )
     assert_true(plan.execute().columns[0].as_int64() == array([1, 3], int64))
+
+
+# ---------------------------------------------------------------------------
+# Pipeline — a composite Operator
+# ---------------------------------------------------------------------------
+def test_a_pipeline_drains_until_spent() raises:
+    """`drain` is resumable and must eventually answer `None`.
+
+    The driver loops on it, so a pipeline that never reported spent would hang.
+    Asserted directly because `collect` hides it: `collect` stops at the first
+    `None` and would look correct even if the second call answered `Some`
+    again.
+    """
+    var pipe = Pipeline(BatchSourceOperator(_batch()))
+    var first = pipe.drain()
+    assert_true(Bool(first))
+    assert_equal(first.value().num_rows(), 4)
+    assert_true(not Bool(pipe.drain()))
+    assert_true(not Bool(pipe.drain()))
+
+
+def test_a_pipeline_cascades_through_its_stages() raises:
+    """A batch leaving stage `i` must be seen by `i+1..` before `i+1` drains.
+
+    Here the source's batch has to reach the filter, which is the same cascade
+    an aggregate under a projection depends on — checked at the `Pipeline`
+    level rather than only through `execute`.
+    """
+    var pipe = Pipeline(BatchSourceOperator(_batch()))
+    pipe.append(
+        FilterOperator(
+            DynValue(
+                Gt(Column[Int64Type]("a"), Literal[Int64Type](2))
+            ).to_operator(False),
+            ExecContext.serial(),
+        )
+    )
+    var got = pipe.drain()
+    assert_true(Bool(got))
+    assert_equal(got.value().num_rows(), 1)  # a = [1, 2, None, 4] -> only 4
+    assert_true(not Bool(pipe.drain()))
+
+
+def test_a_pipeline_is_an_operator() raises:
+    """It is a composite, not a second abstraction — so it boxes like any
+    other stage. This is what lets `Join` hold two whole sub-plans."""
+    var pipe = Pipeline(BatchSourceOperator(_batch()))
+    var boxed = DynOperator[RecordBatch](pipe^)
+    var got = boxed.drain()
+    assert_true(Bool(got))
+    assert_equal(got.value().num_rows(), 4)
