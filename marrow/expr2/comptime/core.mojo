@@ -28,6 +28,8 @@ is the first such family; string, bool, temporal and list follow the same shape.
 from ...buffers import Bitmap
 from ...dtypes import (
     BoolType,
+    PrimitiveType,
+    TemporalType,
     DataType,
     DynType,
     NumericType,
@@ -113,10 +115,29 @@ trait ComptimeValue(
 # ---------------------------------------------------------------------------
 # NumericValue — the first family, refining the base with a lane
 # ---------------------------------------------------------------------------
-trait NumericValue(ComptimeValue):
-    """A comptime node producing a fixed-width numeric column."""
+trait PrimitiveValue(ComptimeValue):
+    """A comptime node producing a fixed-width column.
 
-    comptime Type: NumericType
+    **The machinery, not a domain claim.** Everything below — `Bound`, `bind`,
+    `lane[W]`, `validity`, the fused `evaluate` — needs only that the output is
+    fixed-width: a `native` dtype, a buffer, a SIMD lane. It says nothing about
+    which *operations* the type supports.
+
+    That distinction used to be missing: this trait was `NumericValue`, and
+    `Type: NumericType` was a single bound standing for both "I can be read by
+    a lane loop" and "I support arithmetic". Two claims in one bound meant a
+    temporal column could not be read at all, because dates are not numeric —
+    even though reading one is the same instruction. `expr/` answered with a
+    second `TemporalColumn` and a duplicated set of comparison arms.
+
+    The domains are now markers on top: `NumericValue` and `TemporalValue` add
+    no members and exist so a node can require the *operations* it needs. A
+    comparison binds on this trait and serves both; arithmetic binds on
+    `NumericValue` and rejects dates at compile time. Same split as
+    `AggKernel`'s `OrderedAgg` / `ArithmeticAgg`, for the same reason.
+    """
+
+    comptime Type: PrimitiveType
 
     comptime Bound: Copyable & Deinitable
     """Everything the lane loop needs, resolved once per batch.
@@ -140,6 +161,24 @@ trait NumericValue(ComptimeValue):
         """
         ...
 
+    def out_dtype(self, bound: Self.Bound) -> Self.Type:
+        """This node's output dtype **as a value**.
+
+        `comptime Type` names the type; this produces an instance of it, and
+        the two are not interchangeable. `NumericType` is `Defaultable`, so a
+        numeric node can write `Self.Type()` — but `TemporalType` and
+        `DecimalType` are not, because a timestamp carries a unit and timezone
+        and a decimal a precision and scale. Those cannot be conjured, only
+        carried.
+
+        It takes the `Bound` because that is where the answer lives for the
+        node that has one: a column leaf reads its own bound column's dtype.
+        Everything else answers from its type, and a comparison does not
+        implement this at all — it is a `BoolValue`, and `bool` has no
+        parameters.
+        """
+        ...
+
     def evaluate(self, batch: RecordBatch) raises -> Datum:
         """One fused pass over the batch — `bind` once, then `lane` per chunk.
 
@@ -160,7 +199,9 @@ trait NumericValue(ComptimeValue):
             # Nothing to iterate — evaluate the lane once and stay lazy, which
             # is what `Shape.scalar` promises its caller.
             return Datum(
-                PrimitiveScalar[Self.Type](self.lane[1](bound, 0)[0]).to_dyn()
+                PrimitiveScalar[Self.Type](
+                    Optional(self.lane[1](bound, 0)[0]), self.out_dtype(bound)
+                ).to_dyn()
             )
         else:
             var length = batch.num_rows()
@@ -175,7 +216,7 @@ trait NumericValue(ComptimeValue):
             # Validity once, from the bound — never per lane.
             var v = self.validity(bound)
             var arr = PrimitiveArray[Self.Type](
-                dtype=Self.Type(),
+                dtype=self.out_dtype(bound),
                 length=length,
                 nulls=v.value().unset_count() if v else 0,
                 offset=0,
@@ -289,6 +330,32 @@ trait StringValue(ComptimeValue):
         """One row. The elementwise counterpart of the SIMD families'
         `lane[W]`, and the only shape a variable-width encoding admits."""
         ...
+
+
+trait NumericValue(PrimitiveValue):
+    """This value supports arithmetic.
+
+    No members — it exists only so a node can say it needs `+` rather than
+    merely a readable lane. Mojo has no conditional conformance, so a single
+    leaf cannot be numeric for `int64` and temporal for `date32`; the leaves
+    therefore differ while everything above them is shared.
+    """
+
+    comptime Type: NumericType
+    """Narrowed from `PrimitiveValue`. A sub-trait *can* narrow an associated
+    type — a conformer cannot, which is why the domains are traits and not a
+    bound on the leaf."""
+
+
+trait TemporalValue(PrimitiveValue):
+    """Marker: ordered and comparable, but not arithmetic.
+
+    `date + date` is meaningless, so temporal values are deliberately not
+    accepted by `NumericBinary`. Comparison, `min`/`max` and grouping all work,
+    because those bind on `PrimitiveValue`.
+    """
+
+    comptime Type: TemporalType
 
 
 # ---------------------------------------------------------------------------

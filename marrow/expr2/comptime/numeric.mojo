@@ -72,6 +72,11 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
     # -- ComptimeValue ------------------------------------------------------
 
+    def out_dtype(self, bound: Self.Bound) -> Self.Type:
+        # Arithmetic is numeric-only and every numeric dtype is `Defaultable`,
+        # so the promoted output type carries no parameters to preserve.
+        return Self.Type()
+
     def bind(self, batch: RecordBatch) raises -> Self.Bound:
         return (self.l.bind(batch), self.r.bind(batch))
 
