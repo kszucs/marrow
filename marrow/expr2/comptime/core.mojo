@@ -43,6 +43,14 @@ from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
 from ..logical import Shape, Value
+from .aggregates import NumericAggregate
+from ...kernels.aggregate import (
+    MaxKernel,
+    MeanKernel,
+    MinKernel,
+    ProductKernel,
+    SumKernel,
+)
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
@@ -326,6 +334,39 @@ trait NumericValue(PrimitiveValue):
     """Narrowed from `PrimitiveValue`. A sub-trait *can* narrow an associated
     type — a conformer cannot, which is why the domains are traits and not a
     bound on the leaf."""
+
+    # -- the aggregate surface ----------------------------------------------
+    #
+    # `col("amount", int64).sum()` rather than naming a kernel. Trait defaults,
+    # so every numeric node gets them for free and no leaf repeats them.
+    #
+    # They are here and not on `PrimitiveValue` because `NumericAggregate`
+    # binds its input on `NumericValue`. `min`/`max` are ordered rather than
+    # arithmetic and belong one level up the moment `AggState` accepts a
+    # non-numeric accumulator; until then they would not compile there.
+
+    def sum(self) -> NumericAggregate[SumKernel, Self]:
+        """`SUM(self)`. Integers widen to int64; floats stay float64."""
+        return NumericAggregate[SumKernel, Self](self.copy(), String("sum"))
+
+    def product(self) -> NumericAggregate[ProductKernel, Self]:
+        """`PRODUCT(self)`."""
+        return NumericAggregate[ProductKernel, Self](
+            self.copy(), String("product")
+        )
+
+    def mean(self) -> NumericAggregate[MeanKernel, Self]:
+        """`AVG(self)`. Accumulates in float64 and divides by the valid count,
+        so nulls are excluded rather than counted as zero."""
+        return NumericAggregate[MeanKernel, Self](self.copy(), String("mean"))
+
+    def min(self) -> NumericAggregate[MinKernel, Self]:
+        """`MIN(self)`. Keeps the input's type."""
+        return NumericAggregate[MinKernel, Self](self.copy(), String("min"))
+
+    def max(self) -> NumericAggregate[MaxKernel, Self]:
+        """`MAX(self)`."""
+        return NumericAggregate[MaxKernel, Self](self.copy(), String("max"))
 
 
 trait TemporalValue(PrimitiveValue):

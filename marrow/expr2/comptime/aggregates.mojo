@@ -135,6 +135,14 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
             )
         return FoldOperator[Self.K, Self.A, ScalarGrouping](self._input.copy())
 
+    def alias(self, var name: String) -> Self:
+        """Rename this aggregate. `col("x", int64).sum().alias("total")`.
+
+        Returns a copy rather than mutating, so an aggregate stays a pure
+        description and the same subtree can be named twice.
+        """
+        return Self(self._input.copy(), name^)
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self._input, ")")
 

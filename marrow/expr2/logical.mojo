@@ -29,6 +29,7 @@ from ..kernels.join import JoinKind, JOIN_INNER
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field
+from .runtime.values import column
 from .physical import (
     Datum,
     AggregateOperator,
@@ -308,6 +309,81 @@ struct DynRelation(Copyable, Movable, Writable):
 
     def to_operator(self, ctx: ExecContext) raises -> Pipeline:
         return self._virt_to_processor(self._data, ctx)
+
+    # -- the plan-building API ---------------------------------------------
+    #
+    # These are the surface a caller actually writes. Every one returns a
+    # `DynRelation`, so plans compose left to right —
+    # `t.filter(...).aggregate(...).sort_by(...)` — and no caller ever names a
+    # node type or wraps anything in `DynRelation` by hand.
+    #
+    # They live on the box rather than on `Relation` because that is where
+    # composition happens: a verb needs a *boxed* input to build its node with,
+    # and `self` already is one. Putting them on the trait would make every
+    # conformer implement eight methods it does not care about.
+
+    def filter(self, var predicate: DynValue) raises -> DynRelation:
+        """Rows where `predicate` is true. Schema-preserving."""
+        return DynRelation(Filter(self.copy(), predicate^))
+
+    def select(self, names: List[String]) raises -> DynRelation:
+        """Keep these columns, in this order.
+
+        Sugar over `project`: the values are runtime column reads, so this
+        needs no dtype from the caller. That is the runtime lane earning its
+        keep — a fused `Column[T]` would force `select` to be generic over
+        every column's type.
+        """
+        var values = List[DynValue](capacity=len(names))
+        for ref n in names:
+            values.append(column(n.copy()))
+        return DynRelation(Project(self.copy(), names.copy(), values^))
+
+    def project(
+        self, var names: List[String], var values: List[DynValue]
+    ) raises -> DynRelation:
+        """`SELECT <values> AS <names>` — new columns over the same rows."""
+        return DynRelation(Project(self.copy(), names^, values^))
+
+    def limit(self, length: Int, offset: Int = 0) raises -> DynRelation:
+        """`OFFSET offset LIMIT length`."""
+        return DynRelation(Limit(self.copy(), offset, length))
+
+    def sort_by(
+        self,
+        var keys: List[DynValue],
+        var ascending: List[Bool],
+        nulls_first: Bool = True,
+    ) raises -> DynRelation:
+        """`ORDER BY` — a pipeline breaker, so it buffers and sorts at the
+        end."""
+        return DynRelation(Sort(self.copy(), keys^, ascending^, nulls_first))
+
+    def aggregate(
+        self,
+        var aggs: List[DynValue],
+        var keys: List[DynValue] = List[DynValue](),
+    ) raises -> DynRelation:
+        """`SELECT <keys>, <aggs> ... GROUP BY <keys>`.
+
+        `keys` defaults to empty, which is a whole-table aggregate rather than
+        a special node — `sum(x)` with no `GROUP BY` is one implicit group.
+        Aggregates come first because they are the part a caller always
+        supplies.
+        """
+        return DynRelation(Aggregate(self.copy(), keys^, aggs^))
+
+    def join(
+        self,
+        var right: DynRelation,
+        var left_keys: List[Int],
+        var right_keys: List[Int],
+        kind: JoinKind = JOIN_INNER,
+    ) raises -> DynRelation:
+        """Equijoin. `self` is the build side and `right` streams."""
+        return DynRelation(
+            Join(self.copy(), right^, left_keys^, right_keys^, kind)
+        )
 
     def execute(
         self, ctx: ExecContext = ExecContext.auto()
