@@ -23,9 +23,9 @@ Unlike its `expr/` twin this projects two `int64` columns rather than an
 
 from marrow.builders import array
 from marrow.dtypes import int64
-from marrow.expr2.builders import col
-from marrow.expr2.`comptime`.numeric import Gt
-from marrow.expr2.logical import DynRelation, DynValue, InMemoryTable
+from marrow.expr.builders import col
+from marrow.expr.`comptime`.numeric import Gt
+from marrow.expr.logical import DynRelation, DynValue, InMemoryTable
 from marrow.tabular import record_batch
 
 

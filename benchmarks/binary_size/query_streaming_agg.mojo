@@ -18,15 +18,15 @@ the two is the measurement: it is exactly the cost of the aggregate identity
     pixi run binary_size
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import DynType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.aggregates import AggFunc
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import InMemoryTable, Aggregate, DynRelation
+from marrow.exprold.aggregates import AggFunc
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import InMemoryTable, Aggregate, DynRelation
 
 
 def main() raises:

@@ -25,10 +25,10 @@ this gate's job is to catch `expr2` regressing against *itself*.
 
 from marrow.builders import array
 from marrow.dtypes import int64
-from marrow.expr2.builders import col
-from marrow.expr2.`comptime`.aggregates import Min, Sum
-from marrow.expr2.logical import DynValue
-from marrow.expr2.logical import Aggregate, DynRelation, InMemoryTable
+from marrow.expr.builders import col
+from marrow.expr.`comptime`.aggregates import Min, Sum
+from marrow.expr.logical import DynValue
+from marrow.expr.logical import Aggregate, DynRelation, InMemoryTable
 from marrow.tabular import record_batch
 
 

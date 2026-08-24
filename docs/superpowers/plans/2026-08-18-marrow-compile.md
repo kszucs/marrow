@@ -4,7 +4,7 @@
 
 **Goal:** Ship `marrow compile <file> [-o out]`, a CLI that turns a Mojo file holding a marrow AOT expression into a small standalone binary whose source paths and scalar constants are supplied on the command line at run time.
 
-**Architecture:** A new `param()` builder joins `col()` and `lit()` in `marrow/expr/builders.mojo`. It returns an expression node structurally identical to the matching `*Literal` node, except the value lives behind an `ArcPointer[ParamCell]` resolved once per batch in `state()` — so the inner SIMD loop is unchanged and a parameter costs nothing per row. `param()` also records a declaration in a module-level registry; `plan.execute_cli()` drains that registry, parses `argv`, binds the cells, executes, and writes output. The Python CLI is a thin build front-end over `mojo build -O3 -g0 -I <marrow-source>` plus `strip`, with a `--bundle` mode that copies the transitive dylib closure and rewrites the rpath.
+**Architecture:** A new `param()` builder joins `col()` and `lit()` in `marrow/exprold/builders.mojo`. It returns an expression node structurally identical to the matching `*Literal` node, except the value lives behind an `ArcPointer[ParamCell]` resolved once per batch in `state()` — so the inner SIMD loop is unchanged and a parameter costs nothing per row. `param()` also records a declaration in a module-level registry; `plan.execute_cli()` drains that registry, parses `argv`, binds the cells, executes, and writes output. The Python CLI is a thin build front-end over `mojo build -O3 -g0 -I <marrow-source>` plus `strip`, with a `--bundle` mode that copies the transitive dylib closure and rewrites the rpath.
 
 **Tech Stack:** Mojo 1.1.0.dev2026081705, pixi, pytest via the repo's `conftest.py` harness, hatchling for the wheel.
 
@@ -24,7 +24,7 @@ Copied verbatim from `CLAUDE.md` and the spec. **Every task's requirements impli
 - **Never run `mojo test`, `mojo run`, or a hand-written driver.** Always go through `pytest`.
 - **Binary size is reported as the `__text` section**, via `size -m <binary>` → `Section __text`. Never file size — it is quantized to 16,384 B on Apple Silicon.
 - **Invariant 1 (small-binary DCE):** preserve closed erasure. Gate on `pixi run binary_size`.
-- **Invariant 2 (one engine, two drivers):** no feature may exist in only one lane. Enforced by `marrow/expr/tests/test_parity.mojo`.
+- **Invariant 2 (one engine, two drivers):** no feature may exist in only one lane. Enforced by `marrow/exprold/tests/test_parity.mojo`.
 - **Prefer typed aliases** (`Int32Array` over `PrimitiveArray[Int32Type]`) and typed shorthands (`.as_int32()`). Never `PrimitiveArray[bool_]` — booleans are bit-packed, use `BoolArray`.
 - **`unsafe_ptr()` is restricted** to `buffers.mojo`, `views.mojo`, `c_data.mojo`, `utils/byteorder.mojo` and the Parquet codec layer. Nothing in this plan may call it.
 - **Conventional commits** (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`), optional scope: `feat(expr): add param nodes`.
@@ -36,18 +36,18 @@ Copied verbatim from `CLAUDE.md` and the spec. **Every task's requirements impli
 ## File Structure
 
 **Created:**
-- `marrow/expr/params.mojo` — `ParamCell`, `ParamDecl`, the registry, and `PathSpec`. Pure data and lookup; imports only `dtypes` and `scalars`. No node types, no relational types, so it sits at the bottom of the `expr` import order and creates no cycle.
-- `marrow/expr/tests/test_params.mojo` — cells, registry drain, argv parsing, binding.
+- `marrow/exprold/params.mojo` — `ParamCell`, `ParamDecl`, the registry, and `PathSpec`. Pure data and lookup; imports only `dtypes` and `scalars`. No node types, no relational types, so it sits at the bottom of the `expr` import order and creates no cycle.
+- `marrow/exprold/tests/test_params.mojo` — cells, registry drain, argv parsing, binding.
 - `benchmarks/binary_size/query_param.mojo` — the invariant-1 gate.
 - `python/marrow/compile.py` — the CLI.
 - `python/marrow/tests/test_compile.py` — CLI unit tests (path resolution, arg construction) that do **not** invoke the compiler.
 
 **Modified:**
-- `marrow/expr/values.mojo` — add `NumericParam[T]`, `StringParam[T]`, `TemporalParam[T]` beside their `*Literal` counterparts (`NumericLiteral` at `:831`, `StringLiteral` at `:1793`).
-- `marrow/expr/dynamic.mojo` — add `DynValue.param()` and its `_param` eval function beside `literal` at `:909`.
-- `marrow/expr/builders.mojo` — add the `param()` overload set. **It must live here**: this module's docstring records that an overload set cannot span modules, and splitting `col`/`lit` was reverted for exactly that reason (backlog L2).
-- `marrow/expr/relations.mojo` — `ParquetScan.path: String` → `PathSpec` (`:1033`), and `execute_cli()` on `DynRelation` beside `execute()` (`:390`).
-- `marrow/expr/tests/test_parity.mojo` — the invariant-2 case.
+- `marrow/exprold/values.mojo` — add `NumericParam[T]`, `StringParam[T]`, `TemporalParam[T]` beside their `*Literal` counterparts (`NumericLiteral` at `:831`, `StringLiteral` at `:1793`).
+- `marrow/exprold/dynamic.mojo` — add `DynValue.param()` and its `_param` eval function beside `literal` at `:909`.
+- `marrow/exprold/builders.mojo` — add the `param()` overload set. **It must live here**: this module's docstring records that an overload set cannot span modules, and splitting `col`/`lit` was reverted for exactly that reason (backlog L2).
+- `marrow/exprold/relations.mojo` — `ParquetScan.path: String` → `PathSpec` (`:1033`), and `execute_cli()` on `DynRelation` beside `execute()` (`:390`).
+- `marrow/exprold/tests/test_parity.mojo` — the invariant-2 case.
 - `python/pyproject.toml` — console script, `compile` extra, wheel payload.
 - `python/build.py` — force-include `marrow/_mojo/`.
 - `CHANGELOG.md`, `docs/backlog.md`.
@@ -57,8 +57,8 @@ Copied verbatim from `CLAUDE.md` and the spec. **Every task's requirements impli
 ### Task 1: Parameter cells and the registry
 
 **Files:**
-- Create: `marrow/expr/params.mojo`
-- Create: `marrow/expr/tests/test_params.mojo`
+- Create: `marrow/exprold/params.mojo`
+- Create: `marrow/exprold/tests/test_params.mojo`
 
 **Interfaces:**
 - Consumes: `DynType` and `DynScalar` from `marrow.dtypes` / `marrow.scalars`.
@@ -86,7 +86,7 @@ Copied verbatim from `CLAUDE.md` and the spec. **Every task's requirements impli
 
 - [ ] **Step 1: Write the failing test**
 
-Create `marrow/expr/tests/test_params.mojo`:
+Create `marrow/exprold/tests/test_params.mojo`:
 
 ```mojo
 from std.testing import assert_true, assert_false, assert_raises
@@ -146,10 +146,10 @@ def test_path_spec_cell_resolves() raises:
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: FAIL — `unable to locate module` for `..params`. This takes minutes; that is normal.
 
-- [ ] **Step 3: Implement `marrow/expr/params.mojo`**
+- [ ] **Step 3: Implement `marrow/exprold/params.mojo`**
 
 Write the module against the interfaces above. Requirements the tests encode:
 - `ParamCell` holds `Optional[DynScalar]`; `get()` raises a message naming the parameter is *not* possible here (the cell does not know its name) — raise `"parameter is not bound"` and let `ParamDecl` produce the named error.
@@ -159,7 +159,7 @@ Write the module against the interfaces above. Requirements the tests encode:
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: 6 PASS.
 
 - [ ] **Step 5: Verify the tree is warning-clean**
@@ -170,7 +170,7 @@ Expected: 0 errors, 0 warnings. A new warning here is a task failure, not a foll
 - [ ] **Step 6: Commit**
 
 ```bash
-git add marrow/expr/params.mojo marrow/expr/tests/test_params.mojo
+git add marrow/exprold/params.mojo marrow/exprold/tests/test_params.mojo
 git commit -m "feat(expr): add parameter cells, declarations and the registry"
 ```
 
@@ -179,9 +179,9 @@ git commit -m "feat(expr): add parameter cells, declarations and the registry"
 ### Task 2: `NumericParam[T]` and the numeric `param()` overload
 
 **Files:**
-- Modify: `marrow/expr/values.mojo` (add beside `NumericLiteral` at `:831`)
-- Modify: `marrow/expr/builders.mojo` (add beside `lit` at `:63`)
-- Modify: `marrow/expr/tests/test_params.mojo`
+- Modify: `marrow/exprold/values.mojo` (add beside `NumericLiteral` at `:831`)
+- Modify: `marrow/exprold/builders.mojo` (add beside `lit` at `:63`)
+- Modify: `marrow/exprold/tests/test_params.mojo`
 
 **Interfaces:**
 - Consumes: `ParamCell`, `ParamDecl`, `register_param` from Task 1.
@@ -193,7 +193,7 @@ git commit -m "feat(expr): add parameter cells, declarations and the registry"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `marrow/expr/tests/test_params.mojo`:
+Append to `marrow/exprold/tests/test_params.mojo`:
 
 ```mojo
 def test_numeric_param_binds_into_a_fused_predicate() raises:
@@ -225,7 +225,7 @@ Add the imports these need: `array` from `...builders`, `record_batch` from `...
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: FAIL — `param` is undefined.
 
 - [ ] **Step 3: Add `NumericParam[T]` to `values.mojo`**
@@ -299,14 +299,14 @@ def param[
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: 8 PASS.
 
 - [ ] **Step 6: Verify warning-clean and commit**
 
 ```bash
 pixi run -e dev precompile   # 0 errors, 0 warnings
-git add marrow/expr/values.mojo marrow/expr/builders.mojo marrow/expr/params.mojo marrow/expr/tests/test_params.mojo
+git add marrow/exprold/values.mojo marrow/exprold/builders.mojo marrow/exprold/params.mojo marrow/exprold/tests/test_params.mojo
 git commit -m "feat(expr): add NumericParam and the numeric param() builder"
 ```
 
@@ -315,9 +315,9 @@ git commit -m "feat(expr): add NumericParam and the numeric param() builder"
 ### Task 3: `StringParam[T]` and `TemporalParam[T]`
 
 **Files:**
-- Modify: `marrow/expr/values.mojo` (beside `StringLiteral` at `:1793`, and beside the temporal nodes near `:2452`)
-- Modify: `marrow/expr/builders.mojo`
-- Modify: `marrow/expr/tests/test_params.mojo`
+- Modify: `marrow/exprold/values.mojo` (beside `StringLiteral` at `:1793`, and beside the temporal nodes near `:2452`)
+- Modify: `marrow/exprold/builders.mojo`
+- Modify: `marrow/exprold/tests/test_params.mojo`
 
 **Interfaces:**
 - Produces: `StringParam[T: StringLikeType](StringValue)`, `TemporalParam[T: TemporalType](TemporalValue)`, and the matching `param()` overloads returning them.
@@ -351,7 +351,7 @@ def test_string_param_default_is_used_when_unset() raises:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: FAIL — no `param` overload for `StringLikeType`.
 
 - [ ] **Step 3: Implement both nodes and both overloads**
@@ -360,14 +360,14 @@ Mirror Task 2 exactly, changing the family trait, the `State` type, the `lane` s
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: 10 PASS.
 
 - [ ] **Step 5: Verify warning-clean and commit**
 
 ```bash
 pixi run -e dev precompile
-git add marrow/expr/values.mojo marrow/expr/builders.mojo marrow/expr/tests/test_params.mojo
+git add marrow/exprold/values.mojo marrow/exprold/builders.mojo marrow/exprold/tests/test_params.mojo
 git commit -m "feat(expr): add StringParam and TemporalParam"
 ```
 
@@ -376,9 +376,9 @@ git commit -m "feat(expr): add StringParam and TemporalParam"
 ### Task 4: The runtime-lane parameter — invariant 2
 
 **Files:**
-- Modify: `marrow/expr/dynamic.mojo` (beside `literal` at `:909` and `_literal` at `:338`)
-- Modify: `marrow/expr/builders.mojo`
-- Modify: `marrow/expr/tests/test_parity.mojo`
+- Modify: `marrow/exprold/dynamic.mojo` (beside `literal` at `:909` and `_literal` at `:338`)
+- Modify: `marrow/exprold/builders.mojo`
+- Modify: `marrow/exprold/tests/test_parity.mojo`
 
 **Interfaces:**
 - Produces: `DynValue.param(var name: String) -> Self` (a `@staticmethod`, matching `column` at `:905` and `literal` at `:909`), and a `param(var name: String, dtype: DynType) -> DynValue` overload in `builders.mojo`.
@@ -389,7 +389,7 @@ git commit -m "feat(expr): add StringParam and TemporalParam"
 
 - [ ] **Step 1: Write the failing parity test**
 
-Add to `marrow/expr/tests/test_parity.mojo`, following the file's existing case style:
+Add to `marrow/exprold/tests/test_parity.mojo`, following the file's existing case style:
 
 ```mojo
 def test_parity_param_both_lanes_agree() raises:
@@ -413,7 +413,7 @@ def test_parity_param_both_lanes_agree() raises:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_parity.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_parity.mojo -v`
 Expected: FAIL — no `param` overload taking a `DynType`.
 
 - [ ] **Step 3: Implement `_param`, `DynValue.param`, and the builder overload**
@@ -430,18 +430,18 @@ Expected: FAIL — no `param` overload taking a `DynType`.
         return Self("param", Self._param, DynPayload(name^))
 ```
 
-Add `def lookup_param(name: String) raises -> ParamCell` to `marrow/expr/params.mojo`, searching a second module-level list that `register_param` also appends to and that `drain_params` does **not** clear — the runtime lane resolves by name at execute time, after the declarations have been drained. Document that asymmetry in the module docstring.
+Add `def lookup_param(name: String) raises -> ParamCell` to `marrow/exprold/params.mojo`, searching a second module-level list that `register_param` also appends to and that `drain_params` does **not** clear — the runtime lane resolves by name at execute time, after the declarations have been drained. Document that asymmetry in the module docstring.
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_parity.mojo marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_parity.mojo marrow/exprold/tests/test_params.mojo -v`
 Expected: all PASS.
 
 - [ ] **Step 5: Verify warning-clean and commit**
 
 ```bash
 pixi run -e dev precompile
-git add marrow/expr/dynamic.mojo marrow/expr/builders.mojo marrow/expr/params.mojo marrow/expr/tests/test_parity.mojo
+git add marrow/exprold/dynamic.mojo marrow/exprold/builders.mojo marrow/exprold/params.mojo marrow/exprold/tests/test_parity.mojo
 git commit -m "feat(expr): add the runtime-lane param leaf, at parity with the fused one"
 ```
 
@@ -450,8 +450,8 @@ git commit -m "feat(expr): add the runtime-lane param leaf, at parity with the f
 ### Task 5: `PathSpec` on `ParquetScan`
 
 **Files:**
-- Modify: `marrow/expr/relations.mojo:1033-1049` (the field and `__init__`), `:1060` and `:1085` (the two rebuild sites in `with_predicate` / `with_projection`)
-- Modify: `marrow/expr/tests/test_params.mojo`
+- Modify: `marrow/exprold/relations.mojo:1033-1049` (the field and `__init__`), `:1060` and `:1085` (the two rebuild sites in `with_predicate` / `with_projection`)
+- Modify: `marrow/exprold/tests/test_params.mojo`
 
 **Interfaces:**
 - Consumes: `PathSpec` from Task 1.
@@ -477,7 +477,7 @@ def test_parquet_scan_accepts_a_param_path() raises:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: FAIL — `path` does not accept a `StringParam`.
 
 - [ ] **Step 3: Change the field to `PathSpec`**
@@ -486,14 +486,14 @@ Add a `PathSpec.__init__` overload taking a `StringParam[T]` (it carries the cel
 
 - [ ] **Step 4: Run the test and the Parquet + size-gate call sites**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo marrow/parquet/tests -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo marrow/parquet/tests -v`
 Expected: all PASS, with no change required to any existing `ParquetScan(path=String(...))` call.
 
 - [ ] **Step 5: Verify warning-clean and commit**
 
 ```bash
 pixi run -e dev precompile
-git add marrow/expr/relations.mojo marrow/expr/params.mojo marrow/expr/tests/test_params.mojo
+git add marrow/exprold/relations.mojo marrow/exprold/params.mojo marrow/exprold/tests/test_params.mojo
 git commit -m "feat(expr): let ParquetScan take a late-bound path"
 ```
 
@@ -502,9 +502,9 @@ git commit -m "feat(expr): let ParquetScan take a late-bound path"
 ### Task 6: `execute_cli()`
 
 **Files:**
-- Modify: `marrow/expr/relations.mojo` (add beside `execute` at `:390`)
-- Modify: `marrow/expr/params.mojo` (the argv parser)
-- Modify: `marrow/expr/tests/test_params.mojo`
+- Modify: `marrow/exprold/relations.mojo` (add beside `execute` at `:390`)
+- Modify: `marrow/exprold/params.mojo` (the argv parser)
+- Modify: `marrow/exprold/tests/test_params.mojo`
 
 **Interfaces:**
 - Produces:
@@ -566,7 +566,7 @@ def test_render_usage_names_every_param() raises:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: FAIL — `parse_params` undefined.
 
 - [ ] **Step 3: Implement the parser, the renderers, and `execute_cli`**
@@ -575,14 +575,14 @@ Expected: FAIL — `parse_params` undefined.
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `pixi run -e dev pytest marrow/expr/tests/test_params.mojo -v`
+Run: `pixi run -e dev pytest marrow/exprold/tests/test_params.mojo -v`
 Expected: all PASS.
 
 - [ ] **Step 5: Verify warning-clean and commit**
 
 ```bash
 pixi run -e dev precompile
-git add marrow/expr/params.mojo marrow/expr/relations.mojo marrow/expr/tests/test_params.mojo
+git add marrow/exprold/params.mojo marrow/exprold/relations.mojo marrow/exprold/tests/test_params.mojo
 git commit -m "feat(expr): add execute_cli with argv binding, --help and --describe"
 ```
 
@@ -880,7 +880,7 @@ Run each and confirm the output, per `superpowers:verification-before-completion
 
 ```bash
 pixi run -e dev precompile                                   # 0 errors, 0 warnings
-pixi run -e dev pytest marrow/expr/tests -v                  # includes params + parity
+pixi run -e dev pytest marrow/exprold/tests -v                  # includes params + parity
 pixi run -e dev pytest marrow/parquet/tests -v               # PathSpec did not break the reader
 pixi run -e dev pytest python/marrow/tests/test_compile.py -v
 pixi run binary_size query_param query_scan_typed            # invariant 1

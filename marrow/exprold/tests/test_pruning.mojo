@@ -1,4 +1,4 @@
-"""Statistics-based predicate pruning (marrow.expr.pruning). A predicate is
+"""Statistics-based predicate pruning (marrow.exprold.pruning). A predicate is
 evaluated against per-column [min,max] bounds and must return maybe_true=False
 only when it provably cannot match. Covers both the runtime DynValue interpreter
 and the fused static nodes, plus the `BoxedValue` box the scan uses."""
@@ -8,16 +8,16 @@ from ... import dtypes as dt
 from ...dtypes import int64, Int64Type, Field
 from ...schema import Schema
 from ...scalars import DynScalar, Int64Scalar
-from ...expr.pruning import PruneStats
-from ...expr.values import BoxedValue
+from ...exprold.pruning import PruneStats
+from ...exprold.values import BoxedValue
 from ...scalars import StringScalar
-from ...expr.dynamic import DynValue
-from ...expr.values import StrGt
-from ...expr.builders import col, lit
-from ...expr.builders import col as dyn_col
+from ...exprold.dynamic import DynValue
+from ...exprold.values import StrGt
+from ...exprold.builders import col, lit
+from ...exprold.builders import col as dyn_col
 
 # Both lanes are covered: the runtime `DynValue` cases first, the fused
-# `marrow.expr.values` cases below. A previous note here claimed fused pruning
+# `marrow.exprold.values` cases below. A previous note here claimed fused pruning
 # was "PARKED" and the per-node overrides unported — that was false; they are at
 # `values.mojo` on `NumericColumn`, `NumericLiteral`, `NumericCompare` and
 # `BoolBinary`. Only the *tests* were missing.
@@ -114,7 +114,7 @@ def test_unknown_stats_keeps() raises:
 # ---------------------------------------------------------------------------
 # Fused lane.
 #
-# The per-node `prune` overrides *are* present in `marrow.expr.values`
+# The per-node `prune` overrides *are* present in `marrow.exprold.values`
 # (`NumericColumn`, `NumericLiteral`, `NumericCompare`, `BoolBinary`), but every
 # case above builds a runtime `DynValue` predicate, so the fused path had no
 # coverage at all. A typo in `NumericCompare.prune`'s comptime switch on

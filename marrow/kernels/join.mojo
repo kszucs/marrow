@@ -131,9 +131,9 @@ from ..utils import Hasher, RapidHash64
 # ---------------------------------------------------------------------------
 # Join kind constants — what rows appear in output
 #
-# Owned here (not in marrow.expr.relations) since these describe the join
+# Owned here (not in marrow.exprold.relations) since these describe the join
 # kernel's own algorithm/behavior; the relational-plan layer is a consumer
-# of this vocabulary, not its owner. marrow.expr.relations imports these.
+# of this vocabulary, not its owner. marrow.exprold.relations imports these.
 # ---------------------------------------------------------------------------
 
 

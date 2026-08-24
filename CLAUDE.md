@@ -17,11 +17,11 @@ upgrade, https://docs.modular.com/mojo/changelog/.
 
 Dependencies (pinned in `pixi.toml`):
 
-- `mojo >=1.1.0.dev2026081605,<2` and `max ==26.6.0.dev2026081605` — MAX is
+- `mojo >=1.1.0.dev2026082305,<2` and `max ==26.6.0.dev2026082305` — MAX is
   pinned to the matching version line, and is **load-bearing**: GPU codegen
   resolves `max.package_root`, *and* `DeviceContext`/`DeviceBuffer`/
   `HostBuffer` live in the `max.gpu.host` Mojo package while
-  `sync_parallelize`/`elementwise`/`_reduce_generator_wrapper` live in
+  `sync_parallelize`/`elementwise`/`_reduce_generator` live in
   `max.algorithm.*`. `get_gpu_target` and `vectorize` stayed in `std`.
 - `python >=3.14,<3.15` — Mojo nightlies are built against one CPython minor;
   bump it together with `mojo`.
@@ -98,7 +98,7 @@ benchmarks; `--save-benchmarks DIR` / `--benchmark-history FILE` persist results
 import the code you touched; the rest tells you nothing extra.
 
 ```bash
-pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests   # after editing expr + kernels
+pixi run -e dev pytest marrow/exprold/tests marrow/kernels/tests   # after editing expr + kernels
 pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo   # narrower still
 ```
 
@@ -120,7 +120,7 @@ Compilation dominates, and almost all of it is elaborating **marrow**, not the
 test bodies. The harness generates **one driver** for the whole selection
 (`.test_runners/_test_driver_<hash>.mojo`, content-addressed) and compiles that.
 N files in one unit cost about what 1 file costs — measured on
-`marrow/expr/tests`: all 9 files together took 4 min 43 s / 17.0 GB peak, while
+`marrow/exprold/tests`: all 9 files together took 4 min 43 s / 17.0 GB peak, while
 `test_join.mojo` alone took 3 min 18 s / 19.6 GB.
 
 - **Selecting fewer *files* saves time; selecting fewer *cases* does not.**
@@ -390,7 +390,7 @@ wider than a register.
 
 ### Expression layer
 
-`marrow/expr/` is split into **two lanes that no longer share node types**:
+`marrow/exprold/` is split into **two lanes that no longer share node types**:
 
 - **The AOT lane** (`values.mojo`, `aggregates.mojo`) — every node's operands are
   bound on a family trait (`L: NumericValue`), its output dtype is a comptime

@@ -1,293 +1,212 @@
-"""The public expression builders — `col`, `lit`, `if_else`, `coalesce`,
-`case_when`.
+"""`col` and `lit` — the one surface that spans both lanes.
 
-**The whole overload set lives here, both lanes together, and that is the
-point.** `col("a", int64)` builds a fused AOT leaf and `col("a")` builds a
-runtime-lane `DynValue`; they are deliberately the same verb, one argument
-apart. An overload set cannot span modules — splitting it makes
-`marrow/expr/__init__.mojo` re-export `col` and `lit` from two places and Mojo
-answers *"importing 'col' from multiple modules is deprecated"*, which is what
-reverted the earlier attempt (backlog L2). Keeping the set whole in one module
-above both lanes is what lets `values.mojo` stop importing `dynamic.mojo` for
-the untyped half without renaming anything.
+Every other module in this package belongs to exactly one lane. This one cannot, and
+that is deliberate rather than a compromise: `col` is a single name whose
+overloads select a lane by **what the caller knows**.
 
-So this module sits above both lanes and below `relations.mojo`: it imports
-`values` and `dynamic`, and nothing imports it except the plan layer and the
-package `__init__`.
+    col("amount", int64)   # a dtype is known  -> comptime lane, fuses
+    col("amount")          # it is not         -> runtime lane, resolves later
+
+The choice is therefore made by the caller's information, not by a flag they
+have to reason about, and neither lane has to name the other to offer it.
+
+The overload set cannot be split across the two lane packages. Mojo resolves an
+overload from the candidates visible at one name, so putting `col(name, dtype)`
+in `comptime/` and `col(name)` in `runtime/` gives two unrelated functions that
+shadow rather than overload — and which one a call site got would depend on its
+imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
-from ..dtypes import (
-    BoolType,
-    DynType,
-    FloatingType,
-    Int64Type,
-    ListLikeType,
-    NumericType,
-    StringLikeType,
-    StringType,
-    TemporalType,
-)
-from ..scalars import DynScalar, PrimitiveScalar, StringScalar
-from .dynamic import DynValue
-from .params import ParamDecl, register_param
-from .values import (
-    AggExpr,
+from .`comptime`.numeric import CaseWhen
+from .`comptime`.core import BoolValue, ListValue, NumericValue
+from .`comptime`.leaves import (
     BoolColumn,
+    Column,
     ListColumn,
-    NumericColumn,
-    NumericLiteral,
-    NumericParam,
+    ListLength,
+    TemporalColumn,
+    Literal,
     StringColumn,
     StringLiteral,
-    StringParam,
-    TemporalColumn,
-    TemporalParam,
 )
+from .logical import DynRelation, InMemoryTable, ParquetScan
+from .params import Param
+from .runtime.values import RuntimeValue, column, literal
+from ..dtypes import (
+    BoolType,
+    ListLikeType,
+    FloatingType,
+    NumericType,
+    StringLikeType,
+    TemporalType,
+)
+from ..scalars import DynScalar
+from ..schema import Schema
+from ..tabular import RecordBatch
 
 
 # ---------------------------------------------------------------------------
-# The AOT lane — a dtype argument names the fused leaf's comptime type.
+# col — a column reference
 # ---------------------------------------------------------------------------
-def col[T: NumericType](var name: String, dtype: T) -> NumericColumn[T]:
-    """Reference a numeric column by name — `col("a", int64)`."""
-    return NumericColumn[T](name^)
+def col[T: NumericType](var name: String, dtype: T) -> Column[T]:
+    """A typed column read, fused into whatever it is combined with.
+
+    `dtype` is a *value* parameter whose type carries the information — the
+    caller writes `col("a", int64)`, and `T` is deduced. It is never read at
+    run time; `Column[T].Type` answers from `T`.
+    """
+    return Column[T](name^)
 
 
 def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
-    """Reference a string column by name — `col("s", string)`."""
+    """A typed string column, fused like its numeric sibling.
+
+    A separate overload rather than a wider bound on the numeric one: strings
+    are variable-width, so `StringColumn` is a different family with a
+    width-less `lane`. Mojo picks between them from `dtype`'s type, so the
+    caller writes `col("name", string)` either way.
+    """
     return StringColumn[T](name^)
 
 
-def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
-    """Reference a list column by name — `col("l", list_(int64))`."""
-    return ListColumn[T](name^)
-
-
-def col(var name: String, dtype: BoolType) -> BoolColumn:
-    """Reference a boolean column by name — `col("flag", bool_)`.
-
-    `BoolType` is a concrete struct rather than a trait, so this overload is
-    unparameterised. Without it the fused lane could not read a `bool` column
-    at all."""
-    return BoolColumn(name^)
-
-
 def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:
-    """Reference a temporal column by name — `col("ts", timestamp(second))`."""
+    """A date/time/timestamp/duration column, fused like its numeric sibling.
+
+    A separate overload for the same reason `TemporalColumn` is a separate
+    struct: Mojo has no conditional conformance, so one leaf cannot be numeric
+    for `int64` and temporal for `date32`. The caller still writes
+    `col("d", date32)` and never sees the difference.
+    """
     return TemporalColumn[T](name^)
 
 
-def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
-    """An integral constant — `lit(10, int64)`."""
-    return NumericLiteral[T](Scalar[T.native](value))
+def col(var name: String, dtype: BoolType) -> BoolColumn:
+    """A boolean column, fused like its numeric and string siblings.
+
+    Its own overload because booleans are **bit-packed**: `BoolColumn`'s lane
+    loads through a `BitmapView` rather than a typed buffer, and `Column[T]` is
+    bound on `NumericType` and cannot take `BoolType` — the same reason
+    `PrimitiveArray[bool_]` exists nowhere in the tree.
+
+    The leaf already existed; without this overload a fused expression could
+    only reach a bool column by spelling `BoolColumn("flag")` directly, so any
+    three-valued-logic test had to synthesise its operands from comparisons.
+    `expr/` shipped without it for exactly that reason and had to add it later.
+    """
+    return BoolColumn(name^)
 
 
-def lit[T: FloatingType](value: Float64, dtype: T) -> NumericLiteral[T]:
-    """A fractional constant — `lit(3.5, float64)`.
-
-    Without this overload the only spelling took an `Int`, so `lit(3.5,
-    float64)` was unrepresentable: it truncated to 3."""
-    return NumericLiteral[T](Scalar[T.native](value))
+def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
+    """A list column. `list`, `large_list` and `map` are the same leaf."""
+    return ListColumn[T](name^)
 
 
+def col(var name: String) -> RuntimeValue:
+    """An untyped column read, resolved against the schema at evaluation.
+
+    The lane a caller falls into when the dtype is not known where the
+    expression is written — a plan parsed from Python, or built from a schema
+    only available at run time.
+    """
+    return column(name^)
+
+
+# ---------------------------------------------------------------------------
+# lit — a constant
+# ---------------------------------------------------------------------------
+def lit[T: NumericType](value: Int, dtype: T) -> Literal[T]:
+    """A typed constant. Stays `Shape.scalar`, so it never materialises unless
+    something asks it to.
+
+    Takes `Int` rather than `Scalar[T.native]` because `T` is not yet resolved
+    when the first argument is checked — the compiler reports *"cannot be
+    converted from 'Int64' to 'Scalar[T.native]', it depends on an unresolved
+    parameter 'T'"*. The dtype argument is what resolves `T`, and it is read
+    second. `expr/` reached the same two overloads by the same route.
+    """
+    return Literal[T](Scalar[T.native](value))
+
+
+def lit[T: FloatingType](value: Float64, dtype: T) -> Literal[T]:
+    """The floating counterpart, for the literals `Int` cannot spell."""
+    return Literal[T](Scalar[T.native](value))
+
+
+def lit(var value: DynScalar) -> RuntimeValue:
+    """An erased constant, broadcast on evaluation."""
+    return literal(value^)
+
+
+def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:
+    """A typed constant string, `Shape.scalar` like its numeric sibling."""
+    return StringLiteral[T](value^)
+
+
+# ---------------------------------------------------------------------------
+# conditionals
+# ---------------------------------------------------------------------------
+def if_else[
+    C: BoolValue, T: NumericValue, E: NumericValue
+](var cond: C, var then: T, var otherwise: E) -> CaseWhen[C, T, E]:
+    """`CASE WHEN cond THEN then ELSE otherwise END`, fused.
+
+    A null condition counts as **false** rather than producing a null — Arrow's
+    `ExecArrayCaseWhen` rule and PyArrow's `pc.case_when`. A selected value
+    that is itself null does stay null.
+    """
+    return CaseWhen[C, T, E](cond^, then^, otherwise^)
+
+
+def array_length[A: ListValue](var a: A) -> ListLength[A]:
+    """The number of elements in each list. A list consumed into a numeric
+    column — which is the only way a list is read, since a list element is a
+    whole sub-array rather than a value a lane can hold."""
+    return ListLength[A](a^)
+
+
+# ---------------------------------------------------------------------------
+# param — a literal whose value arrives later
+# ---------------------------------------------------------------------------
 def param[
     T: NumericType
 ](
     var name: String,
     dtype: T,
-    default: Optional[Int] = None,
     var help: String = String(),
-) raises -> NumericParam[T]:
-    """A numeric value supplied at run time — `param("min-a", int64)`.
+    var default: Optional[Scalar[T.native]] = None,
+) -> Param[T]:
+    """Declare a late-bound scalar.
 
-    Raises when this name is already declared with a different dtype; a
-    redeclaration with the *same* dtype shares the first declaration's cell
-    (see `params.mojo`), so one `--min-a` flag drives every mention of it."""
-    var dflt = Optional[DynScalar](None)
-    if default:
-        dflt = Optional(
-            PrimitiveScalar[T](Scalar[T.native](default.value())).to_dyn()
-        )
-    var cell = register_param(
-        ParamDecl(
-            name=name.copy(),
-            dtype=DynType(dtype),
-            help=help^,
-            default=dflt^,
-        )
-    )
-    return NumericParam[T](cell)
+    **Declare once and reuse it.** Copies share the cell, so binding once is
+    visible everywhere:
+
+        var min_a = param("min-a", int64)
+        t.filter(col("a", int64) > min_a).project(["m"], [min_a])
+
+    Calling `param("min-a", int64)` twice makes two *independent* parameters
+    that happen to share a name — which is why there is no registry, no
+    name-keyed dedup and no dtype-conflict check. `expr/` needs all three
+    because it declares parameters inline at each use site.
+    """
+    return Param[T](name^, help^, default^)
 
 
-def lit(value: String) -> StringLiteral[StringType]:
-    """A string constant — `lit("suffix")`. Same verb as the numeric ones; the
-    argument type picks the literal."""
-    return StringLiteral[StringType](value)
+def table(var batch: RecordBatch) raises -> DynRelation:
+    """A batch already in memory, as a plan.
+
+    The entry point the verbs need: every other verb is a method on
+    `DynRelation`, so a plan has to *start* as one. Without this a caller has
+    to name `InMemoryTable` and wrap it by hand — which is how every test in
+    the layer ended up spelling its source.
+    """
+    return InMemoryTable(batch^)
 
 
-def param[
-    T: StringLikeType
-](
-    var name: String,
-    dtype: T,
-    default: Optional[String] = None,
-    var help: String = String(),
-) raises -> StringParam[T]:
-    """A string value supplied at run time — `param("src", string)`.
+def scan(var path: String, var schema: Schema) raises -> DynRelation:
+    """A Parquet file, as a plan.
 
-    Same name/cell contract as the numeric overload above."""
-    var dflt = Optional[DynScalar](None)
-    if default:
-        dflt = Optional(StringScalar(default.value()).to_dyn())
-    var cell = register_param(
-        ParamDecl(
-            name=name.copy(),
-            dtype=DynType(dtype),
-            help=help^,
-            default=dflt^,
-        )
-    )
-    return StringParam[T](cell)
-
-
-def param[
-    T: TemporalType
-](
-    var name: String,
-    dtype: T,
-    default: Optional[Int] = None,
-    var help: String = String(),
-) raises -> TemporalParam[T]:
-    """A temporal value supplied at run time — `param("cutoff", timestamp(second))`.
-
-    `default` is the epoch integer in the dtype's own unit, which is also how
-    `parse_params` reads the `--cutoff` flag. Same name/cell contract as the
-    numeric overload above."""
-    var dflt = Optional[DynScalar](None)
-    if default:
-        dflt = Optional(
-            PrimitiveScalar[T](
-                Optional(Scalar[T.native](default.value())), dtype
-            ).to_dyn()
-        )
-    var cell = register_param(
-        ParamDecl(
-            name=name.copy(),
-            dtype=DynType(dtype),
-            help=help^,
-            default=dflt^,
-        )
-    )
-    return TemporalParam[T](cell)
-
-
-# ---------------------------------------------------------------------------
-# The runtime lane — no dtype argument, so the node is a `DynValue`.
-# ---------------------------------------------------------------------------
-def col(var name: String) -> DynValue:
-    """Reference a column whose dtype is not known here — `col("a")`.
-
-    Same verb as `col(name, dtype)`, one argument shorter, and that argument is
-    the whole difference between the lanes: with a dtype the fused
-    `NumericColumn[T]` leaf is built, without one the column's type is found on
-    the batch and this is a runtime-lane node."""
-    return DynValue.column(name^)
-
-
-def lit[T: NumericType](value: Scalar[T.native]) -> DynValue:
-    """A scalar constant for the runtime lane — `lit[Int64Type](3)`.
-
-    A literal always knows its type where it is written; what is erased here is
-    the *expression*, so the value goes in as a `DynScalar` payload."""
-    return DynValue.literal(PrimitiveScalar[T](value))
-
-
-def param(
-    var name: String,
-    dtype: DynType,
-    var default: Optional[DynScalar] = None,
-    var help: String = String(),
-) raises -> DynValue:
-    """A run-time parameter for the runtime lane — `param("min-a",
-    DynType(int64))`.
-
-    `dtype: DynType` is a concrete argument type, not one bound on
-    `NumericType`/`StringLikeType`/`TemporalType`, so this overload never
-    competes with the three fused `param[T: ...]` overloads above — `DynType`
-    conforms to none of those traits (see its docstring in `dtypes.mojo`).
-    `default` and `help` carry the same meaning as in the fused overloads —
-    `default` makes the flag optional and `help` is what `--help` /
-    `--describe` print — except that `default` is spelled as an already-erased
-    `DynScalar`, since there is no comptime dtype here to build one from.
-    Registration works the same as the fused lane's: one name is one cell (see
-    `params.mojo`), and the plan builder drains the registry once after
-    building the tree. Unlike the fused `param` overloads, this one keeps no
-    cell of its own — the returned `DynValue` carries only the name, and its
-    evaluator resolves the cell by name at execute time via `lookup_param`."""
-    _ = register_param(
-        ParamDecl(
-            name=name.copy(),
-            dtype=dtype.copy(),
-            help=help^,
-            default=default^,
-        )
-    )
-    return DynValue.param(name^)
-
-
-def count_star() -> AggExpr:
-    """`COUNT(*)` — how many rows each group has.
-
-    Not the same aggregate as `col("x").count()`, which counts the *non-null*
-    values of `x`; the two differ on any nullable column and `COUNT(*)` is what
-    ~30 of ClickBench's 43 queries ask for.
-
-    It needs no new kernel and no new aggregate. `CountKernel` counts valid
-    values, and a literal is valid on every row, so the valid-count of a
-    constant column *is* the row count. This is that expression — verified
-    against a nullable column by `test_count_star_probe_literal_counts_every_row`
-    — under the name SQL gives it, so callers stop rediscovering the trick."""
-    return lit[Int64Type](1).count().alias("count_star")
-
-
-def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
-    """Element-wise conditional — the single-branch `CaseWhen`."""
-    return DynValue.if_else(cond, then_, else_)
-
-
-def coalesce(values: List[DynValue]) raises -> DynValue:
-    """First non-null across N expressions.
-
-    Folds the binary `Coalesce` node rather than introducing an n-ary one:
-    `coalesce(a, b, c)` is `Coalesce(Coalesce(a, b), c)`, which is the same
-    result because the operation is associative and null-propagating."""
-    if len(values) == 0:
-        raise Error("coalesce: needs at least one value")
-    var acc = values[0].copy()
-    for k in range(1, len(values)):
-        acc = acc.coalesce(values[k])
-    return acc^
-
-
-def case_when(
-    conditions: List[DynValue],
-    values: List[DynValue],
-    var else_: Optional[DynValue] = None,
-) raises -> DynValue:
-    """Multi-branch `CASE WHEN`, built by nesting the single-branch `CaseWhen`.
-
-    `conditions[k]` selects `values[k]` for the first branch that is
-    valid-and-true. Nesting right-to-left gives first-match-wins, which is what
-    the interpreter's interleaved-args form computed."""
-    if len(conditions) != len(values):
-        raise Error("case_when: len(conditions) != len(values)")
-    if len(conditions) == 0:
-        raise Error("case_when: needs at least one branch")
-    # No `else_` means "null where nothing matched". `CaseWhen` always has a
-    # third operand, so the null is built from an existing node rather than a new
-    # one: `Nullif(v, v)` is `v` with every element equal to itself removed — an
-    # all-null column of the right dtype.
-    var acc = else_.value().copy() if else_ else values[0].nullif(values[0])
-    for k in range(len(conditions) - 1, -1, -1):
-        acc = DynValue.if_else(conditions[k], values[k], acc)
-    return acc^
+    The `table` of the file world: a source has to *be* a `DynRelation` before
+    any verb applies, so without this a caller names `ParquetScan` and wraps it
+    by hand.
+    """
+    return DynRelation(ParquetScan(path^, schema^))

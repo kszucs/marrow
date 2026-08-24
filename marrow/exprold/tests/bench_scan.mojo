@@ -16,7 +16,7 @@ from std.python import Python
 from ...utils.testing import Benchmark
 from ...dtypes import Field, int64, field
 from ...schema import Schema, schema
-from ...expr.relations import ParquetScan, DynRelation
+from ...exprold.relations import ParquetScan, DynRelation
 
 
 def _prepare(

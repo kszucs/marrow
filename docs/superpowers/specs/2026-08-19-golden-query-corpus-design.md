@@ -29,8 +29,8 @@ checked on every run.
 | asset | what it covers | limit |
 |---|---|---|
 | `python/marrow/tests/test_clickbench.py` | 43 ClickBench queries vs a DuckDB reference, real `hits` parquet | one dataset, one query shape, wide non-null data; each case subprocessed because of open memory-safety defects |
-| `marrow/expr/tests/` (~230 KB) | hand-written expression, plan, aggregate, join, pushdown, streaming cases | no shared notion of a *query* with an expected result |
-| `marrow/expr/tests/test_parity.mojo` | AOT vs runtime lane, four hand-picked axes | expression level only, never whole queries |
+| `marrow/exprold/tests/` (~230 KB) | hand-written expression, plan, aggregate, join, pushdown, streaming cases | no shared notion of a *query* with an expected result |
+| `marrow/exprold/tests/test_parity.mojo` | AOT vs runtime lane, four hand-picked axes | expression level only, never whole queries |
 | archery integration (14/14) | IPC and C-Data conformance | format, not query semantics |
 
 Nothing checks the two lanes against a common expectation at query level, and
@@ -142,7 +142,7 @@ fixture into an **in-memory source**:
 | lane | source |
 |---|---|
 | runtime (Python) | `marrow.memtable(batch)` |
-| AOT (Mojo) | `in_memory_table(...)` (`marrow/expr/relations.mojo:1212`) |
+| AOT (Mojo) | `in_memory_table(...)` (`marrow/exprold/relations.mojo:1212`) |
 | DuckDB twin | replacement scan over the pyarrow table |
 
 The fixture set carries the edge cases by construction rather than by whoever
@@ -284,7 +284,7 @@ configuration — the ClickHouse `SettingsRandomizer` and polars
 |---|---|---|
 | morsel size | `_DEFAULT_MORSEL_SIZE = 8192` (`python/marrow/expr.py`) | `--morsel-size 4` |
 | worker threads | `collect(num_threads=0)` (`python/marrow/expr.py:295`) | `--num-threads 8` |
-| optimizer | `optimize()` is unconditional (`marrow/expr/relations.mojo:569`) and unexposed | `--no-optimize`, needs a ~20-line binding |
+| optimizer | `optimize()` is unconditional (`marrow/exprold/relations.mojo:569`) and unexposed | `--no-optimize`, needs a ~20-line binding |
 
 These are new `pytest_addoption` entries alongside the existing
 `--mojo`/`--python`/`--cpu`/`--gpu` (`conftest.py:617`), applied by

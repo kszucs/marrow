@@ -13,16 +13,16 @@ stripped sizes is precisely the cost of a runtime aggregate identity.
     pixi run binary_size
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import DynType, Int64Type, int64, string, field
 from marrow.kernels.aggregate import NumericAgg, SumKernel, MinKernel
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.aggregates import AggFunc
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import InMemoryTable, Aggregate, DynRelation
+from marrow.exprold.aggregates import AggFunc
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import InMemoryTable, Aggregate, DynRelation
 
 
 def main() raises:

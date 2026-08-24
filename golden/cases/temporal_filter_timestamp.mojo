@@ -10,7 +10,7 @@ def plan() raises -> DynRelation:
 
     The comparison is spelled through the **runtime** lane — `col("ts")` with no
     dtype — because the AOT lane cannot express a temporal comparison at all:
-    `TemporalValue` (`marrow/expr/values.mojo`) carries the extraction,
+    `TemporalValue` (`marrow/exprold/values.mojo`) carries the extraction,
     truncation and min/max methods but no relational operators, and `lit` has no
     temporal overload, so neither `col("ts", timestamp(microsecond)) > ...` nor a
     timestamp constant compiles. Comparing the column against a truncation of

@@ -18,9 +18,9 @@ from ...tabular import record_batch, RecordBatch
 from ...buffers import Buffer
 from ...views import apply
 from .test_a1_spike import SpikeColumn
-from ...expr.values import Coalesce
-from ...expr.builders import col, lit
-from ...expr.core import into_array
+from ...exprold.values import Coalesce
+from ...exprold.builders import col, lit
+from ...exprold.core import into_array
 from ...kernels.string import LengthKernel
 from ...arrays import StringArray
 

@@ -57,7 +57,7 @@ from ...kernels.groupby import (
     GROUP_RADIX,
     GROUP_THREAD_LOCAL,
 )
-from ...expr.aggregates import (
+from ...exprold.aggregates import (
     Sum,
     Min,
     Max,
@@ -82,7 +82,7 @@ from ...kernels.distinct import count_distinct_grouped
 # `GroupBy(keys).aggregate[A]` takes one directly (the AOT path); `apply[F]`
 # resolves the column's dtype to it first (the runtime-dtype path).
 # (The runtime, string/plan-driven multi-aggregate path is covered by the
-# expression-layer tests in `marrow/expr/tests/test_streaming.mojo`.)
+# expression-layer tests in `marrow/exprold/tests/test_streaming.mojo`.)
 
 
 # ---------------------------------------------------------------------------

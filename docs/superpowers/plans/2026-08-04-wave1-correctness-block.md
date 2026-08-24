@@ -29,7 +29,7 @@ These apply to **every** task below.
   - `query_streaming_agg_fused` **3,748,532**
   - `query_streaming_agg` **4,122,292**
   - `query_join` **3,780,276**
-- **Test baseline to beat:** 1,951 passing (523 `marrow/kernels/tests`, 807 `marrow/expr/tests` + `marrow/tests`, 621 `marrow/parquet/tests` + `python/marrow/tests`).
+- **Test baseline to beat:** 1,951 passing (523 `marrow/kernels/tests`, 807 `marrow/exprold/tests` + `marrow/tests`, 621 `marrow/parquet/tests` + `python/marrow/tests`).
 - **Add a `CHANGELOG.md` entry** under `## [Unreleased]` for each of the three changes.
 - **Conventional commits**, and end each commit message with:
   `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
@@ -42,10 +42,10 @@ These apply to **every** task below.
 |---|---|---|
 | `marrow/kernels/string.mojo` | `StringPredicateKernel` trait gains `apply_scalar`; `LikeKernel`/`ILikeKernel` override it | 1 |
 | `marrow/kernels/tests/test_string.mojo` | Kernel-level agreement between `apply` and `apply_scalar` | 1 |
-| `marrow/expr/values.mojo` | `StringPredicate.prepare` takes the scalar branch when `R.OutShape == 0` | 2 |
-| `marrow/expr/tests/test_strings.mojo` | Expr-level agreement, literal vs column RHS | 2 |
+| `marrow/exprold/values.mojo` | `StringPredicate.prepare` takes the scalar branch when `R.OutShape == 0` | 2 |
+| `marrow/exprold/tests/test_strings.mojo` | Expr-level agreement, literal vs column RHS | 2 |
 | `marrow/kernels/tests/bench_groupby.mojo` | Grouped `count` benchmarks for both implementations | 3 |
-| `marrow/expr/aggregates.mojo` | `CountValid.resolve` — which implementation numeric columns get | 4 |
+| `marrow/exprold/aggregates.mojo` | `CountValid.resolve` — which implementation numeric columns get | 4 |
 | `marrow/kernels/aggregate.mojo` | `CountAgg` docstring — made true either way | 4 |
 | `marrow/dtypes.mojo` | `is_primitive()` excludes bool; `is_fixed_size()` re-adds it | 5 |
 | `marrow/tests/test_dtypes.mojo` | Pins the new predicate contract and the divergence | 5 |
@@ -246,8 +246,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ## Task 2: route scalar-RHS string predicates through `apply_scalar`
 
 **Files:**
-- Modify: `marrow/expr/values.mojo` — `StringPredicate.prepare` (around `:1753`)
-- Test: `marrow/expr/tests/test_strings.mojo`
+- Modify: `marrow/exprold/values.mojo` — `StringPredicate.prepare` (around `:1753`)
+- Test: `marrow/exprold/tests/test_strings.mojo`
 
 **Interfaces:**
 - Consumes: `StringPredicateKernel.apply_scalar` from Task 1; `Self.R.OutShape` (0 = scalar, 1 = columnar); `Context()`; `StringValue.prepare` and `StringValue.elementwise`.
@@ -257,7 +257,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `marrow/expr/tests/test_strings.mojo`:
+Append to `marrow/exprold/tests/test_strings.mojo`:
 
 ```mojo
 def test_like_with_literal_matches_like_with_column() raises:
@@ -343,7 +343,7 @@ leaving it implicit.
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-pixi run -e dev pytest marrow/expr/tests
+pixi run -e dev pytest marrow/exprold/tests
 ```
 
 Expected: these three cases FAIL if the imports resolve but behaviour differs, or the whole selection fails to compile if a name is missing. Either is an acceptable red — but read the message. If it is a missing import, fix the import and re-run so the red is a *behavioural* one before proceeding.
@@ -352,7 +352,7 @@ Note: at this point the tests may already PASS, because the array path is still 
 
 - [ ] **Step 3: Add the comptime branch**
 
-In `marrow/expr/values.mojo`, replace `StringPredicate.prepare`:
+In `marrow/exprold/values.mojo`, replace `StringPredicate.prepare`:
 
 ```mojo
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -383,7 +383,7 @@ Expected: 0 errors, 0 warnings.
 - [ ] **Step 5: Run the expr and kernel suites**
 
 ```bash
-pixi run -e dev pytest marrow/expr/tests
+pixi run -e dev pytest marrow/exprold/tests
 pixi run -e dev pytest marrow/kernels/tests
 ```
 Expected: PASS. Kernel count 523 + Task 1's 3 = 526; expr count unchanged plus the 3 added here.
@@ -402,7 +402,7 @@ Compare `__text` against the Global Constraints baselines. **Report the numbers 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add marrow/expr/values.mojo marrow/expr/tests/test_strings.mojo CHANGELOG.md
+git add marrow/exprold/values.mojo marrow/exprold/tests/test_strings.mojo CHANGELOG.md
 git commit -m "perf(expr): stop splatting a constant string operand across every row
 
 \`StringPredicate.prepare\` materialised both operands unconditionally, so
@@ -545,9 +545,9 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ## Task 4: apply the Q7.3 decision rule
 
 **Files:**
-- Modify (conditionally): `marrow/expr/aggregates.mojo` — `CountValid.resolve` (around `:152-170`)
+- Modify (conditionally): `marrow/exprold/aggregates.mojo` — `CountValid.resolve` (around `:152-170`)
 - Modify (always): `marrow/kernels/aggregate.mojo` — `CountAgg` docstring (around `:1040-1048`)
-- Test: `marrow/kernels/tests/test_groupby.mojo` or `marrow/expr/tests/test_aggregates.mojo`
+- Test: `marrow/kernels/tests/test_groupby.mojo` or `marrow/exprold/tests/test_aggregates.mojo`
 
 **Interfaces:**
 - Consumes: Task 3's four measurements.
@@ -609,7 +609,7 @@ Expected: PASS. **If it FAILS, stop.** Q7.3 is then a correctness bug, not a per
 
 Read the four numbers from Task 3 and pick the matching row of the table above.
 
-**If converging** — in `marrow/expr/aggregates.mojo`, `CountValid.resolve` becomes:
+**If converging** — in `marrow/exprold/aggregates.mojo`, `CountValid.resolve` becomes:
 
 ```mojo
     @staticmethod
@@ -632,7 +632,7 @@ and delete the now-unused `NumericAgg`/`CountKernel` imports from that file if n
 ```bash
 pixi run -e dev precompile
 pixi run -e dev pytest marrow/kernels/tests
-pixi run -e dev pytest marrow/expr/tests
+pixi run -e dev pytest marrow/exprold/tests
 ```
 Expected: 0 diagnostics; both suites PASS.
 
@@ -654,7 +654,7 @@ rested on instead of re-deriving it.
 **If you converged:**
 
 ```bash
-git add marrow/expr/aggregates.mojo marrow/kernels/aggregate.mojo marrow/kernels/tests/test_groupby.mojo CHANGELOG.md
+git add marrow/exprold/aggregates.mojo marrow/kernels/aggregate.mojo marrow/kernels/tests/test_groupby.mojo CHANGELOG.md
 git commit -m "fix(aggregate): count had two grouped implementations; now it has one
 
 \`CountAgg\`'s docstring claimed twice to be the grouped \`count\` for numeric
@@ -808,7 +808,7 @@ Expected: 0 errors, 0 warnings.
 
 ```bash
 pixi run -e dev pytest marrow/tests marrow/kernels/tests
-pixi run -e dev pytest marrow/expr/tests marrow/parquet/tests
+pixi run -e dev pytest marrow/exprold/tests marrow/parquet/tests
 pixi run -e dev pytest python/marrow/tests
 ```
 
@@ -891,7 +891,7 @@ Add the `CHANGELOG.md` entry under `### Fixes` before committing.
 rm -f .test_runners/marrow.mojoc marrow.mojoc
 pixi run -e dev precompile
 pixi run -e dev pytest marrow/tests marrow/kernels/tests
-pixi run -e dev pytest marrow/expr/tests marrow/parquet/tests
+pixi run -e dev pytest marrow/exprold/tests marrow/parquet/tests
 pixi run -e dev pytest python/marrow/tests
 pixi run binary_size
 ```

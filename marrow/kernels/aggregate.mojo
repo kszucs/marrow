@@ -18,7 +18,7 @@ Two layers, both made of types:
 
 The named aggregate functions themselves (``Sum``, ``Min``, ``Count``, …) are
 the expression layer's vocabulary, not this one's: they live in
-``marrow.expr.aggregates`` as ``AggFunction``s and resolve a runtime input dtype
+``marrow.exprold.aggregates`` as ``AggFunction``s and resolve a runtime input dtype
 onto one of the ``Aggregation`` types here. No aggregate *name* is ever compared
 in this module.
 """
@@ -46,10 +46,10 @@ from ..dtypes import (
     Float64Type,
     Int32Type,
     Int64Type,
+    IntegerType,
     NumericType,
     PrimitiveType,
     StringLikeType,
-    TemporalType,
     UInt8Type,
     float64,
     int32,
@@ -99,12 +99,18 @@ trait AggKernel(Kernel):
     drives NULL output for empty/all-null groups and the `mean` divisor); a
     richer aggregate can pair itself with a different state struct."""
 
-    comptime AccType[V: NumericType]: NumericType
+    comptime AccType[V: PrimitiveType]: PrimitiveType
     """Per-group accumulator type for input `V` (also the output type). `sum`
     widens integers to int64; `min`/`max` keep `V`; `count` is int64; `mean` is
-    float64."""
+    float64.
 
-    comptime Grouped[V: NumericType]: Aggregation
+    Bound on `PrimitiveType` at both ends, not `NumericType`: `min`/`max` keep
+    the input's type, and that input may be a timestamp or a decimal. What a
+    kernel *requires* of its input is stated separately, by the domain markers
+    (`OrderedAgg` / `ArithmeticAgg` / `IntegralAgg`) — one bound cannot say
+    both "I can be read as a lane" and "I support addition"."""
+
+    comptime Grouped[V: PrimitiveType]: Aggregation
     """The `Aggregation` that implements this kernel over a numeric column of
     type `V` — normally the typed `AggState` fold, `NumericAgg[Self, V]`. A
     kernel whose grouped form is *not* that fold (`count`, whose per-group state
@@ -126,6 +132,19 @@ trait AggKernel(Kernel):
         """Initial accumulator value."""
         ...
 
+    @staticmethod
+    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+        """The accumulator's dtype **as a value**, given the input column's.
+
+        `AccType` names the type; this names the instance, and the two are not
+        the same question. `NumericType` is `Defaultable`, so a numeric
+        accumulator can be conjured from its type alone — `TemporalType` and
+        `DecimalType` are not, because a timestamp carries a unit and timezone
+        and a decimal a precision and scale. `min`/`max` keep the input's type,
+        so their accumulator dtype is the input's dtype and can only come from
+        the column. Every caller that builds an `AggState` goes through here."""
+        ...
+
     @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
@@ -144,7 +163,7 @@ trait AggKernel(Kernel):
 
     @staticmethod
     def reduce[
-        V: NumericType
+        V: PrimitiveType
     ](
         array: PrimitiveArray[V],
         ctx: ExecContext = ExecContext.serial(),
@@ -158,11 +177,12 @@ trait AggKernel(Kernel):
         here too (`SELECT avg(col)`); `sum`/`min`/`max`/`product` override it
         with the SIMD widened fast path."""
         var n = len(array)
+        _check_domain[Self, V]()
         var gb = Int32Builder(n)
         for _ in range(n):
             gb.append(Scalar[int32.native](0))
         var gids = gb.finish()
-        var state = AggState[Self, V](Self.AccType[V]())
+        var state = AggState[Self, V](Self.acc_dtype[V](array.dtype))
         state.update(gids, array, 1)
         return state.finish(1)[0]
 
@@ -239,16 +259,17 @@ struct ProductOp(WideningOp):
 # ---------------------------------------------------------------------------
 # Input domains — what a kernel requires of the column it folds
 # ---------------------------------------------------------------------------
-# `AccType` is bound on `NumericType`, and that bound is the **intersection of
-# four different requirements**: `count` needs nothing of the type, `min`/`max`
-# need an ordering, `sum` needs addition, `mean` needs division. One bound for
-# four requirements means the most permissive kernel is constrained by the
-# least — `TemporalMinMax` exists only to work around it — and no kernel states
-# what it actually needs.
+# `AccType` used to be bound on `NumericType`, and that bound was the
+# **intersection of four different requirements**: `count` needs nothing of the
+# type, `min`/`max` need an ordering, `sum` needs addition, `mean` needs
+# division. One bound for four requirements meant the most permissive kernel
+# was constrained by the least — `TemporalMinMax` existed only to work around
+# it — and no kernel stated what it actually needs.
 #
-# These markers say it. They are declarations today and become enforceable the
-# moment the bound widens: a fold constrains itself with
-# `where conforms_to(Self.K, OrderedAgg)`, which is probed and works.
+# The bound is now `PrimitiveType` and these markers say the rest. They are
+# enforced by `_check_domain`, which every fold runs at compile time, so
+# `sum(date)` is a build error rather than a silent nonsense or a runtime
+# raise.
 #
 # **No marker means "accepts anything"** — that is `CountKernel`, which reads
 # validity and never touches a value.
@@ -264,15 +285,14 @@ struct ProductOp(WideningOp):
 # sum+sumsq+count, a quantile sketch, `StringMinMax`'s per-group index — is a
 # separate axis and stays a kernel paired with a different state struct.
 #
-# **Widening `AccType` to `PrimitiveType` is a separate change and is blocked
-# on something else.** `NumericType` is `Defaultable`; `TemporalType` and
-# `DecimalType` are not, because a timestamp carries a unit and timezone and a
-# decimal a precision and scale. `AggState` builds its accumulator with
-# `PrimitiveBuilder[Acc]()`, the no-dtype constructor, which only exists for
-# numeric types. Folding a temporal column therefore requires threading the
-# dtype *instance* into `AggState` — and in the fused lane that value is not
-# known until `bind(batch)`. Do that first; the markers below are then the
-# thing that keeps `sum(date)` from compiling.
+# **What unblocked the widening**: `NumericType` is `Defaultable`;
+# `TemporalType` and `DecimalType` are not, because a timestamp carries a unit
+# and timezone and a decimal a precision and scale. `AggState` used to build
+# its accumulator with `PrimitiveBuilder[Acc]()`, the no-dtype constructor that
+# only exists for numeric types. It now holds the dtype as a *value*, supplied
+# by `AggKernel.acc_dtype(input_dtype)` — the one place that knows whether the
+# accumulator keeps the input's dtype (`min`/`max`) or names its own
+# (`sum` -> int64/float64, `count` -> int64, `mean` -> float64).
 trait OrderedAgg(AggKernel):
     """Needs an ordering and nothing more — any fixed-width type will do.
 
@@ -303,6 +323,26 @@ trait IntegralAgg(ArithmeticAgg):
     pass
 
 
+def _check_domain[K: AggKernel, V: PrimitiveType]():
+    """Compile-time gate: reject an input type this kernel's domain excludes.
+
+    Non-raising, so it runs at comptime; a violation is a build error naming
+    the domain, not an `Error` at run time. No marker means "accepts
+    anything" — that is `CountKernel`, which reads validity and never touches
+    a value, and `OrderedAgg`, which needs only a total order and gets one from
+    every fixed-width type.
+    """
+    comptime if conforms_to(K, IntegralAgg):
+        comptime assert conforms_to(
+            V, IntegerType
+        ), "this aggregate is defined for integer columns only"
+    elif conforms_to(K, ArithmeticAgg):
+        comptime assert conforms_to(V, NumericType), (
+            "this aggregate needs arithmetic, so it is defined for numeric"
+            " columns only -- not temporal, interval or decimal"
+        )
+
+
 struct Widening[Op: WideningOp](ArithmeticAgg):
     """`sum`/`product` as one kernel: integers accumulate in int64 and floats in
     float64 so narrow inputs cannot overflow, the fold is `Op.combine`, and
@@ -310,13 +350,19 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
 
     comptime name = Self.Op.name
     comptime AccType[
-        V: NumericType
+        V: PrimitiveType
     ] = Int64Type if V.native.is_integral() else Float64Type
-    comptime Grouped[V: NumericType] = NumericAgg[Self, V]
+    comptime Grouped[V: PrimitiveType] = NumericAgg[Self, V]
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
         return Self.Op.identity[T]()
+
+    @staticmethod
+    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+        # The accumulator names its own type, so the input's dtype says
+        # nothing: int64 or float64, both `Defaultable`.
+        return Self.AccType[V]()
 
     @always_inline
     @staticmethod
@@ -330,7 +376,7 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
 
     @staticmethod
     def reduce[
-        V: NumericType
+        V: PrimitiveType
     ](
         array: PrimitiveArray[V],
         ctx: ExecContext = ExecContext.serial(),
@@ -340,6 +386,7 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
         is *fused* into the reduce (each lane is cast to `Acc` as it is loaded),
         so no widened copy of the input is materialized; when the input is
         already the accumulator width the per-lane cast is a no-op."""
+        _check_domain[Self, V]()
         comptime Acc = Self.AccType[V].native
         var identity = Self.identity[Acc]()
         var value: Scalar[Acc]
@@ -409,12 +456,18 @@ struct MinMax[Op: MinMaxOp](OrderedAgg):
     to the string path."""
 
     comptime name = Self.Op.name
-    comptime AccType[V: NumericType] = V
-    comptime Grouped[V: NumericType] = NumericAgg[Self, V]
+    comptime AccType[V: PrimitiveType] = V
+    comptime Grouped[V: PrimitiveType] = NumericAgg[Self, V]
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
         return Self.Op.identity[T]()
+
+    @staticmethod
+    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+        # The accumulator *is* the input column, so its unit, timezone,
+        # precision and scale come from the column and nowhere else.
+        return dtype.copy()
 
     @always_inline
     @staticmethod
@@ -428,12 +481,22 @@ struct MinMax[Op: MinMaxOp](OrderedAgg):
 
     @staticmethod
     def reduce[
-        V: NumericType
+        V: PrimitiveType
     ](
         array: PrimitiveArray[V],
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
-        return Self.apply(array, ctx)  # AccType == V → same-type SIMD reduce
+        # `AccType == V`, so this is the same-type SIMD reduce — but `apply`
+        # folds nulls to `identity`, and `identity` is a sentinel
+        # (`MAX_FINITE` / `MIN_FINITE`), not an answer. The minimum of nothing
+        # is NULL. The grouped path says so through its valid count; the SIMD
+        # fast path has no count, so it asks the column directly.
+        if len(array) - array.null_count() == 0:
+            return PrimitiveScalar[Self.AccType[V]](
+                None, Self.acc_dtype[V](array.dtype)
+            )
+        else:
+            return Self.apply(array, ctx)
 
 
 comptime MinKernel = MinMax[MinOp]
@@ -446,7 +509,7 @@ struct CountKernel(AggKernel):
     returned by `finalize`."""
 
     comptime name = "count"
-    comptime AccType[V: NumericType] = Int64Type
+    comptime AccType[V: PrimitiveType] = Int64Type
     comptime empty_is_null = False
     comptime needs_count = True  # the answer *is* the count
     # `K.Grouped[V]` is the validity scan for every numeric `V` — there is no
@@ -456,11 +519,15 @@ struct CountKernel(AggKernel):
     # `NumericAgg[CountKernel, V]` instead (`CountValid.resolve`,
     # `expr/aggregates.mojo`) and reaches `CountAgg` only for non-numeric
     # columns. See `CountAgg`'s docstring for why the two lanes disagree here.
-    comptime Grouped[V: NumericType] = CountAgg
+    comptime Grouped[V: PrimitiveType] = CountAgg
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
         return Scalar[T](0)
+
+    @staticmethod
+    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+        return Int64Type()
 
     @always_inline
     @staticmethod
@@ -474,7 +541,7 @@ struct CountKernel(AggKernel):
 
     @staticmethod
     def reduce[
-        V: NumericType
+        V: PrimitiveType
     ](
         array: PrimitiveArray[V],
         ctx: ExecContext = ExecContext.serial(),
@@ -487,13 +554,17 @@ struct MeanKernel(ArithmeticAgg):
     """Sums into a float64 accumulator; divides by the valid count on finish."""
 
     comptime name = "mean"
-    comptime AccType[V: NumericType] = Float64Type
-    comptime Grouped[V: NumericType] = NumericAgg[Self, V]
+    comptime AccType[V: PrimitiveType] = Float64Type
+    comptime Grouped[V: PrimitiveType] = NumericAgg[Self, V]
     comptime needs_count = True  # the divisor
 
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
         return Scalar[T](0)
+
+    @staticmethod
+    def acc_dtype[V: PrimitiveType](dtype: V) -> Self.AccType[V]:
+        return Float64Type()
 
     @always_inline
     @staticmethod
@@ -507,11 +578,12 @@ struct MeanKernel(ArithmeticAgg):
 
     @staticmethod
     def reduce[
-        V: NumericType
+        V: PrimitiveType
     ](
         array: PrimitiveArray[V],
         ctx: ExecContext = ExecContext.serial(),
     ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        _check_domain[Self, V]()
         # Vectorized widened sum divided by the valid count; null on empty.
         var cnt = len(array) - array.null_count()
         if cnt == 0:
@@ -650,7 +722,7 @@ struct AllKernel(BoolReduceKernel):
 # `(K, V)` then wraps the shared builders into a transient `AggState[K, V]` —
 # the builders are `ArcPointer`-shared, so the wrap mutates them in place.
 # ---------------------------------------------------------------------------
-struct AggState[K: AggKernel, V: NumericType](Movable):
+struct AggState[K: AggKernel, V: PrimitiveType](Movable):
     """Per-group state for a fully typed (kernel, input dtype) pair.
 
     Everything is typed: the accumulator is a `PrimitiveBuilder[Acc]`
@@ -682,10 +754,12 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
     a precision and scale — and `min`/`max` keep the input's type as the
     accumulator's (`AccType[V] = V`). So the moment this state folds a temporal
     column, `PrimitiveBuilder[Acc]()` cannot build the column it must produce,
-    and only the caller knows what to pass.
+    and only the caller knows what to pass — `AggKernel.acc_dtype(input_dtype)`
+    is where every caller gets it.
     """
 
     def __init__(out self, dtype: Self.Acc):
+        _check_domain[Self.K, Self.V]()
         self.dtype = dtype
         self.acc = PrimitiveBuilder[Self.Acc](dtype)
         self.cnt = PrimitiveBuilder[Self.Seen]()
@@ -931,10 +1005,10 @@ trait Aggregation(Kernel):
     """One aggregate over one input type — the fully resolved, monomorphized
     unit of aggregation.
 
-    Implementations are `NumericAgg[K, V]` (the typed `AggState` fold),
-    `TemporalMinMax[Op, T]`, `StringMinMax[Op, T]`, `CountAgg` and
-    `DistinctAgg[exact]`. Which one a runtime dtype maps to is decided once, by
-    `AggFunction.resolve`."""
+    Implementations are `NumericAgg[K, V]` (the typed `AggState` fold, over any
+    fixed-width column — temporal `min`/`max` included), `StringMinMax[Op, T]`,
+    `CountAgg` and `DistinctAgg[exact]`. Which one a runtime dtype maps to is
+    decided once, by `AggFunction.resolve`."""
 
     comptime InArray: Copyable & Deinitable
     """The typed input column this aggregation consumes. `DynArray` for the two
@@ -1030,7 +1104,7 @@ trait Aggregation(Kernel):
 # to know every aggregate that will ever exist.
 #
 # The functions themselves (`Sum`, `Min`, `Count`, …) are the frontend's
-# vocabulary and live in `marrow.expr.aggregates`, together with the one string
+# vocabulary and live in `marrow.exprold.aggregates`, together with the one string
 # comparison that maps a runtime name onto them. Nothing in this package turns a
 # name into behaviour.
 # ---------------------------------------------------------------------------
@@ -1043,7 +1117,7 @@ trait AggFunction(Kernel):
     picks the `Aggregation` that implements this function over a column of that
     type and hands the type to a comptime `job`. The catalog of functions
     (`Sum`, `Min`, `Count`, …) and their implementations live in
-    `marrow.expr.aggregates`; this layer only executes what it is given."""
+    `marrow.exprold.aggregates`; this layer only executes what it is given."""
 
     @staticmethod
     def resolve[
@@ -1054,12 +1128,19 @@ trait AggFunction(Kernel):
         ...
 
 
-struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
-    """Kernel `K` over a numeric column of type `V` — the typed `AggState` fold.
+struct NumericAgg[K: AggKernel, V: PrimitiveType](Aggregation):
+    """Kernel `K` over a fixed-width column of type `V` — the typed `AggState`
+    fold.
 
     The fused leaf: `InArray`, `OutArray` and the accumulator are all fixed at
     compile time, so nothing is resolved at run time and the scatter loop is
-    fully monomorphized."""
+    fully monomorphized.
+
+    `V` is any `PrimitiveType`, so this is also `min`/`max` over a temporal or
+    decimal column — the fold runs on the column's own storage and
+    `K.acc_dtype` carries its unit, timezone, precision and scale through.
+    Which kernels a non-numeric `V` is legal for is `_check_domain`'s
+    question, answered at compile time."""
 
     comptime name = Self.K.name
     comptime InArray = PrimitiveArray[Self.V]
@@ -1076,11 +1157,16 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
 
     @staticmethod
     def out_dtype(in_dtype: DynType) raises -> DynType:
-        return DynType(Self.K.AccType[Self.V]())
+        # Through `acc_dtype`, so an order-preserving fold carries the input's
+        # unit / timezone / precision / scale into the output column.
+        _check_domain[Self.K, Self.V]()
+        return DynType(Self.K.acc_dtype[Self.V](in_dtype.as_type[Self.V]()))
 
     @staticmethod
     def grouped(groups: Groups, values: Self.InArray) raises -> Self.OutArray:
-        var state = AggState[Self.K, Self.V](Self.K.AccType[Self.V]())
+        var state = AggState[Self.K, Self.V](
+            Self.K.acc_dtype[Self.V](values.dtype)
+        )
         state.update(groups.ids, values, groups.num_groups)
         return state.finish(groups.num_groups)
 
@@ -1099,7 +1185,9 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
     def partials(
         groups: Groups, values: Self.InArray
     ) raises -> Tuple[Self.OutArray, Int64Array]:
-        var state = AggState[Self.K, Self.V](Self.K.AccType[Self.V]())
+        var state = AggState[Self.K, Self.V](
+            Self.K.acc_dtype[Self.V](values.dtype)
+        )
         state.update(groups.ids, values, groups.num_groups)
         return state.into_partials()
 
@@ -1113,59 +1201,17 @@ struct NumericAgg[K: AggKernel, V: NumericType](Aggregation):
         # Exact for every kernel: the accumulator is the raw fold and the count
         # is carried separately, so `mean` merges as (Σsum, Σcount) and
         # finalizes once at the end.
-        var state = AggState[Self.K, Self.V](Self.K.AccType[Self.V]())
+        #
+        # The accumulator's dtype comes off the first partial rather than from
+        # the type: `min`/`max` keep the input's, and a timestamp's unit and
+        # timezone are not recoverable from `Acc` alone. Every partial was
+        # folded from the same column, so any of them answers.
+        if len(accs) == 0:
+            raise Error("merge: no partial states to fold")
+        var state = AggState[Self.K, Self.V](accs[0].dtype)
         for t in range(len(remap)):
             state.merge(remap[t], accs[t], cnts[t], num_groups)
         return state.finish(num_groups)
-
-
-struct TemporalMinMax[Op: MinMaxOp, T: TemporalType](Aggregation):
-    """`min`/`max` over a temporal column (date/time/timestamp/duration).
-
-    Order-preserving, so the fold runs over the column's signed-integer backing
-    — reusing the whole numeric path, SIMD reduce and typed `AggState` scatter
-    alike — and the result is relabelled to the input's own dtype, carrying its
-    unit and timezone."""
-
-    comptime name = Self.Op.name
-    comptime Backing = Int32Type if Self.T.native == DType.int32 else Int64Type
-    comptime InArray = PrimitiveArray[Self.T]
-    comptime OutArray = PrimitiveArray[Self.T]
-    comptime is_mergeable = False
-
-    @staticmethod
-    def from_any(value: DynArray) raises -> Self.InArray:
-        return value.as_primitive[Self.T]().copy()
-
-    @staticmethod
-    def to_dyn(values: Self.InArray) raises -> DynArray:
-        return values.copy().to_dyn()
-
-    @staticmethod
-    def out_dtype(in_dtype: DynType) raises -> DynType:
-        return in_dtype.copy()
-
-    @staticmethod
-    def _as_backing(
-        values: Self.InArray,
-    ) raises -> PrimitiveArray[Self.Backing]:
-        var backing = values.copy().to_dyn().view(DynType(Self.Backing()))
-        return backing.as_primitive[Self.Backing]().copy()
-
-    @staticmethod
-    def _as_temporal(
-        var folded: PrimitiveArray[Self.Backing], dtype: DynType
-    ) raises -> Self.OutArray:
-        var relabelled = folded^.to_dyn().view(dtype.copy())
-        return relabelled.as_primitive[Self.T]().copy()
-
-    @staticmethod
-    def grouped(groups: Groups, values: Self.InArray) raises -> Self.OutArray:
-        var state = AggState[MinMax[Self.Op], Self.Backing](
-            MinMax[Self.Op].AccType[Self.Backing]()
-        )
-        state.update(groups.ids, Self._as_backing(values), groups.num_groups)
-        return Self._as_temporal(state.finish(groups.num_groups), values.dtype)
 
 
 struct StringMinMax[Op: MinMaxOp, T: StringLikeType](Aggregation):
@@ -1227,7 +1273,7 @@ struct CountAgg(Aggregation):
     `count` reads validity and nothing else, so it is defined for *every* dtype
     and there is nothing to monomorphize on: the input stays erased. It does
     **not** serve numeric columns too — `CountValid.resolve`
-    (`marrow/expr/aggregates.mojo`) hands those `NumericAgg[CountKernel, V]`
+    (`marrow/exprold/aggregates.mojo`) hands those `NumericAgg[CountKernel, V]`
     instead, the typed `AggState` fold. This type serves non-numeric columns on
     that runtime-dtype lane, plus the AOT lane's `K.Grouped` (`CountKernel.Grouped`
     names it there, `values.mojo`), which has no separate numeric/non-numeric

@@ -256,7 +256,7 @@ def bench_upper_100k(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # The shape ClickBench q21 actually executes.
 #
-# The runtime expression lane (`marrow.expr.dynamic`) evaluates a literal by
+# The runtime expression lane (`marrow.exprold.dynamic`) evaluates a literal by
 # `DynScalar.repeat(num_rows)`, so `URL LIKE '%google%'` reaches the kernel as
 # array x array with n identical right-hand rows -- the `_bench_like_array`
 # shape, not the `_bench_like_scalar` one.  Dense and sparse variants of it

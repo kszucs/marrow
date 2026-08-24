@@ -1,4 +1,4 @@
-# Implementation Plan: Port AOT Value Expressions from `faszom` to `marrow/expr/`
+# Implementation Plan: Port AOT Value Expressions from `faszom` to `marrow/exprold/`
 
 ## Confirmed Decisions
 
@@ -7,7 +7,7 @@
 | **1. AOT Entry Point** | Option C: Auto-detect in `Planner.build()` + explicit `Planner.build_aot[Expr]()` |
 | **2. Column Access** | Option A: `FusedValueProcessor` captures `BufferView`s, custom evaluator inlines loads |
 | **3. Boolean Output** | Option A: Single processor, always returns `AnyArray` |
-| **4. Schema/Filter** | Move to `marrow/expr/relations.mojo` |
+| **4. Schema/Filter** | Move to `marrow/exprold/relations.mojo` |
 | **5. faszom.mojo** | Check usage → delete or keep only `RuntimeExpr` |
 | **6. SIMD Width** | Match `faszom`: `max(8, simd_byte_width() // size_of[InNative])` |
 
@@ -15,10 +15,10 @@
 
 | Step | File | Action |
 |------|------|--------|
-| **1** | `marrow/expr/values.mojo` | Add AOT traits (`AOTValue`, `AOTNumericValue`, `AOTBoolValue`) + 15 node types + factories `aot_col`, `aot_lit` |
-| **2** | `marrow/expr/executor.mojo` | Add `FusedValueProcessor[Expr: AOTValue]` + `_is_fully_aot()` + `Planner.build_aot[Expr]()` + modify `Planner.build()` auto-detection |
-| **3** | `marrow/expr/relations.mojo` | Move `FieldDescriptor`, `Field`, `field`, `_schema_find_idx`, `Schema`, `table`, `Filter` from `faszom` |
-| **4** | `marrow/expr/__init__.mojo` | Export all new AOT types and factories |
+| **1** | `marrow/exprold/values.mojo` | Add AOT traits (`AOTValue`, `AOTNumericValue`, `AOTBoolValue`) + 15 node types + factories `aot_col`, `aot_lit` |
+| **2** | `marrow/exprold/executor.mojo` | Add `FusedValueProcessor[Expr: AOTValue]` + `_is_fully_aot()` + `Planner.build_aot[Expr]()` + modify `Planner.build()` auto-detection |
+| **3** | `marrow/exprold/relations.mojo` | Move `FieldDescriptor`, `Field`, `field`, `_schema_find_idx`, `Schema`, `table`, `Filter` from `faszom` |
+| **4** | `marrow/exprold/__init__.mojo` | Export all new AOT types and factories |
 | **5** | `marrow/tests/test_expr_aot.mojo` | **New** - correctness tests |
 | **6** | `marrow/bench_expr_aot.mojo` | **New** - AOT vs runtime benchmarks |
 | **7** | `marrow/faszom.mojo` | Check `grep -r "RuntimeExpr\|faszom"` → delete or keep only `RuntimeExpr` |

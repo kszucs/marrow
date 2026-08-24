@@ -14,14 +14,14 @@ noticing.
     pixi run binary_size query_arith
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import int64, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import InMemoryTable, Project, DynRelation
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import InMemoryTable, Project, DynRelation
 
 
 def main() raises:

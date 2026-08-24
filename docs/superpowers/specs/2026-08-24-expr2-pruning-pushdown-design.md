@@ -1,6 +1,6 @@
 # expr2 — pruning and pushdown design
 
-**Status:** proposed, 2026-08-24. Target: `marrow/expr2/`, branch `expr2`.
+**Status:** proposed, 2026-08-24. Target: `marrow/expr/`, branch `expr2`.
 
 Companion to `2026-08-21-expr2-design.md` (the layer), `2026-08-21-optimizer-design.md` (§1.2 and §5 are load-bearing here) and `2026-08-22-push-engine.md` (the operator contract this hangs off).
 
@@ -8,7 +8,7 @@ Companion to `2026-08-21-expr2-design.md` (the layer), `2026-08-21-optimizer-des
 
 ## 0. Problem statement
 
-`marrow/expr2/` has 8/8 relations, 5/5 value families and `params`. It has none of the *subsystems*. `ParquetScanOperator`'s own docstring states the gap precisely (`marrow/expr2/physical.mojo:1000-1004`):
+`marrow/expr/` has 8/8 relations, 5/5 value families and `params`. It has none of the *subsystems*. `ParquetScanOperator`'s own docstring states the gap precisely (`marrow/expr/physical.mojo:1000-1004`):
 
 > **No pruning.** `expr/`'s scan skips row groups whose statistics prove no row can match, and windows several groups at once. Both need `expr/pruning.mojo`, which has no `expr2` counterpart yet. Their absence costs speed and never correctness — a `Filter` above the scan applies the predicate exactly — so this is a smaller scan, not a wrong one.
 
@@ -50,22 +50,22 @@ Four new files, one new argument, one new field, zero new slots on either box.
 ```
 marrow/kernels/bounds.mojo         NEW  Bounds[dt], BoundsKernel, the eight readings.
                                         Typed. No DynScalar. No dispatch ladder.
-marrow/expr2/pruning.mojo          NEW  Truth, PruneStats, Prunable, PrunePredicate.
+marrow/expr/pruning.mojo          NEW  Truth, PruneStats, Prunable, PrunePredicate.
                                         A leaf module, like params.mojo.
-marrow/expr2/pushdown.mojo         NEW  Pushdown — the lowering context.
-marrow/expr2/tests/test_pruning.mojo    NEW
-marrow/expr2/tests/test_pushdown.mojo   NEW
+marrow/expr/pushdown.mojo         NEW  Pushdown — the lowering context.
+marrow/expr/tests/test_pruning.mojo    NEW
+marrow/expr/tests/test_pushdown.mojo   NEW
 
-marrow/expr2/comptime/core.mojo    +   ComptimeValue refines Prunable;
+marrow/expr/comptime/core.mojo    +   ComptimeValue refines Prunable;
                                         PrimitiveValue gains `bounds`.
-marrow/expr2/comptime/*.mojo       +   `prune` / `bounds` overrides on the nodes
+marrow/expr/comptime/*.mojo       +   `prune` / `bounds` overrides on the nodes
                                         that can do better than "maybe".
-marrow/expr2/logical.mojo          +   to_operator gains a `Pushdown` argument;
+marrow/expr/logical.mojo          +   to_operator gains a `Pushdown` argument;
                                         Filter carries Optional[PrunePredicate];
                                         DynRelation.filter gains one overload.
-marrow/expr2/physical.mojo         +   ParquetScanOperator takes the predicate
+marrow/expr/physical.mojo         +   ParquetScanOperator takes the predicate
                                         and computes a read plan.
-marrow/expr2/runtime/values.mojo   +   a `_prune` thin pointer (stage 6).
+marrow/expr/runtime/values.mojo   +   a `_prune` thin pointer (stage 6).
 ```
 
 ### 1.1 Responsibilities, one line each
@@ -503,7 +503,7 @@ Each stage is independently testable and independently gated. Stages 1 and 2 add
 
 Move `Param[T]` from `params.mojo` into `comptime/leaves.mojo`. `params.mojo` keeps `Bindings` and gains a non-raising `find(name) -> Optional[DynScalar]`.
 
-*Verify:* `pixi run -e dev precompile` clean; `pixi run -e dev pytest marrow/expr2/tests`. Behaviour-neutral, so **0.00%** on all gates.
+*Verify:* `pixi run -e dev precompile` clean; `pixi run -e dev pytest marrow/expr/tests`. Behaviour-neutral, so **0.00%** on all gates.
 
 ### Stage 1 — `marrow/kernels/bounds.mojo` *(smallest independently testable increment)*
 
@@ -511,7 +511,7 @@ Move `Param[T]` from `params.mojo` into `comptime/leaves.mojo`. `params.mojo` ke
 
 *Verify:* `pixi run -e dev pytest marrow/kernels/tests/test_bounds.mojo`. Table-driven, and it must include the one-sided rules explicitly: `Ne` and `Xor` answer `maybe` for every input; `unknown` on either side answers `maybe`; a `point ∩ point` mismatch answers `never` for `Eq` and `maybe` for `Ne`; `all_null` on either side of a comparison answers `never`. Gates: **0.00%** everywhere.
 
-### Stage 2 — `marrow/expr2/pruning.mojo` and the node rules
+### Stage 2 — `marrow/expr/pruning.mojo` and the node rules
 
 `Truth`, `PruneStats`, `Prunable` (total default), `PrunePredicate`. `ComptimeValue` refines `Prunable`; `PrimitiveValue` gains `bounds`. Overrides on `Column`, `TemporalColumn`, `Literal`, `Param`, `BoolColumn`, `NumericCompare`, `TemporalCompare`, `BoolBinary`.
 
@@ -526,7 +526,7 @@ Move `Param[T]` from `params.mojo` into `comptime/leaves.mojo`. `params.mojo` ke
 - `col("a", int64) > param("min-a", int64)` with a binding -> prunes; without a binding and without a default -> `maybe`, **no raise**.
 - `col("d", date32) > lit(date32)` -> prunes (the ClickBench shape `expr/` regressed on).
 
-*Verify:* `pixi run -e dev pytest marrow/expr2/tests marrow/kernels/tests/test_bounds.mojo`. Gates: **0.00%**.
+*Verify:* `pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests/test_bounds.mojo`. Gates: **0.00%**.
 
 ### Stage 3 — delivery, row-group skipping
 

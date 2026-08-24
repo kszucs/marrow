@@ -28,7 +28,7 @@ Five standing invariants, in force for any change to this stack:
   monomorphizes to one straight-line SIMD loop, `lane[W]` inlining across
   the whole subtree with no dispatch. Preserve it for every node that fuses.
 - **No feature may live in only one lane** — the runtime lane
-  (`marrow/expr/dynamic.mojo`) must reach parity. Window functions currently
+  (`marrow/exprold/dynamic.mojo`) must reach parity. Window functions currently
   violate this; see `docs/window-functions.md`.
 - **Kernels are the shared substrate; only the driver differs.**
 - **Fusion is the default; *breaking* is what a trait marks** — the minority is
@@ -305,7 +305,7 @@ fused subtree without a node for the operation.
 | `row_number()` | `WindowFunction` `:2012` | breaker, columnar |
 | `filter`, `take`, `sort`, `group_by`, `join`, `concat` | relational operators | outside the expression layer |
 
-Line numbers are `marrow/expr/values.mojo`. Worked examples:
+Line numbers are `marrow/exprold/values.mojo`. Worked examples:
 
 ```
 upper(s1) + s2 + "!"
@@ -329,7 +329,7 @@ when they could be scheduled concurrently.
 
 The expression layer is **two lanes that share no node types**.
 
-| | AOT lane — `marrow/expr/values.mojo` | Runtime lane — `marrow/expr/dynamic.mojo` |
+| | AOT lane — `marrow/exprold/values.mojo` | Runtime lane — `marrow/exprold/dynamic.mojo` |
 |---|---|---|
 | Node | one struct per protocol, parameterized by kernel and operands | one struct, `DynValue` (`dynamic.mojo:236`) |
 | Operand types | bound on a family trait (`L: NumericValue`) | not known until execute |
@@ -371,7 +371,7 @@ inside a fused subtree.
 
 ## 5. Relations — a walkable plan that executes itself
 
-`marrow/expr/relations.mojo` holds the plan IR. `trait Relation`
+`marrow/exprold/relations.mojo` holds the plan IR. `trait Relation`
 (`relations.mojo:119`) nodes are **pure, immutable descriptions**: they hold their
 parameters and child relations, and no execution state. `DynRelation`
 (`relations.mojo:413`) erases a node behind an `ArcPointer`, so copying a plan is

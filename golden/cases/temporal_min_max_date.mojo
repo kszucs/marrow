@@ -5,7 +5,7 @@ def plan() raises -> DynRelation:
     """
     SELECT min(d) AS lo, max(d) AS hi FROM events
 
-    The int32-backed half of `TemporalMinMax`, and the null must be skipped
+    The int32-backed half of temporal `min`/`max`, and the null must be skipped
     rather than sorting to one end.
 
     -- expected

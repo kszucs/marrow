@@ -2,7 +2,7 @@
 
 Two lanes exist and they no longer share node types.
 
-`marrow.expr.values` is the **AOT lane**: every node's operands are bound on a
+`marrow.exprold.values` is the **AOT lane**: every node's operands are bound on a
 family trait (`L: NumericValue`), its output dtype is a comptime `NumericType`,
 and it fuses into a SIMD loop. Nothing there is erased.
 

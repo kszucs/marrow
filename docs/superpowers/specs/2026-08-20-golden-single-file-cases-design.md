@@ -31,8 +31,8 @@ of the two grammars and the one Python can always accept.
 ```mojo
 from golden.helpers import table
 from marrow.dtypes import bool_
-from marrow.expr.builders import col
-from marrow.expr.relations import DynRelation
+from marrow.exprold.builders import col
+from marrow.exprold.relations import DynRelation
 
 
 def plan() raises -> DynRelation:

@@ -15,7 +15,7 @@ The fused expression lane re-resolves everything it needs on **every SIMD chunk*
 every field), a `Variant` unwrap, and a `BufferView` reconstruction — 250,000
 times over a million rows, to read a column that never moves.
 
-Measured (`marrow/expr/tests/bench_fusion_gaps.mojo`, 1M rows, `a + 1`):
+Measured (`marrow/exprold/tests/bench_fusion_gaps.mojo`, 1M rows, `a + 1`):
 
 | | |
 |---|---|

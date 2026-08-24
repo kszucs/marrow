@@ -10,7 +10,7 @@ Three layers, each one narrower than the last:
   ``Count``, ``CountDistinct``, ``ApproxCountDistinct``) — an aggregate before
   its input type is known. It states which dtypes it is defined for and, for
   each, which implementation runs.
-- **`Aggregation`** (``NumericAgg[K, V]``, ``TemporalMinMax[Op, T]``,
+- **`Aggregation`** (``NumericAgg[K, V]``,
   ``StringMinMax[Op, T]``, ``CountAgg``, ``DistinctAgg[exact]``) — that function
   bound to one input type. These are *kernels* and live in
   ``marrow.kernels.aggregate``: each names its own ``InArray``/``OutArray`` and
@@ -32,7 +32,7 @@ Two ways in, one destination:
   Nothing is interpreted: no name, no dtype resolution, a direct pointer to
   ``AggState[SumKernel, Int64Type]``, everything else dead code.
 - **dynamic** — ``aggs.append("sum", value_dtype)``, which goes through
-  ``marrow.expr.aggregates.resolve_agg``: one string comparison per aggregate, once,
+  ``marrow.exprold.aggregates.resolve_agg``: one string comparison per aggregate, once,
   when the plan is built. The Python ``group_by(...).aggregate([...])`` binding
   and ``DynRelation.aggregate(...)`` start here.
 
@@ -57,7 +57,6 @@ from ..kernels.aggregate import (
     AggFunction,
     AggKernel,
     NumericAgg,
-    TemporalMinMax,
     StringMinMax,
     CountAgg,
     DistinctAgg,
@@ -108,9 +107,9 @@ struct NumericFold[K: AggKernel](AggFunction):
 
 
 struct OrderPreserving[Op: MinMaxOp](AggFunction):
-    """`min` / `max` — defined wherever a total order is: numeric columns fold
-    through `AggState`, temporal columns through their integer backing, and
-    string columns through the bytewise scan. All three keep the input dtype."""
+    """`min` / `max` — defined wherever a total order is: numeric and temporal
+    columns fold through the same typed `AggState`, string columns through the
+    bytewise scan. Both keep the input dtype."""
 
     comptime name = Self.Op.name
 
@@ -127,7 +126,7 @@ struct OrderPreserving[Op: MinMaxOp](AggFunction):
         elif value_dtype.is_temporal():
 
             def temporal[T: TemporalType](d: T) raises {imm}:
-                job[TemporalMinMax[Self.Op, T]]()
+                job[MinMax[Self.Op].Grouped[T]]()
 
             value_dtype.dispatch_temporal(temporal)
         elif value_dtype.is_string() or value_dtype.is_large_string():
@@ -303,7 +302,7 @@ struct AggFunc(Copyable, Movable, Writable):
 
     def __init__(out self, name: String, value_dtype: DynType) raises:
         """The dynamic form: resolve a function *name* over a column dtype
-        (``marrow.expr.aggregates.resolve_agg`` — the one string comparison)."""
+        (``marrow.exprold.aggregates.resolve_agg`` — the one string comparison)."""
         var box = List[AggFunc]()
 
         def make[A: Aggregation]() raises {mut box, imm}:

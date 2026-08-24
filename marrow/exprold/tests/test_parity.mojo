@@ -55,10 +55,10 @@ from ...dtypes import field
 from ...kernels.temporal import unit_day
 
 # Fused comptime algebra (values.mojo)
-from ...expr.builders import col as fcol, lit as flit, param
-from ...expr.params import drain_params, parse_params
+from ...exprold.builders import col as fcol, lit as flit, param
+from ...exprold.params import drain_params, parse_params
 from ...scalars import DynScalar, Int64Scalar
-from ...expr.values import (
+from ...exprold.values import (
     _rank,
     NumericCast,
     BoolToNum,
@@ -163,12 +163,12 @@ from ...kernels.conditional import (
     FillNullKernel,
 )
 
-from ...expr.dynamic import DynValue, _numeric_rank
-from ...expr.pruning import PruneStats
-from ...expr.values import BoxedValue
+from ...exprold.dynamic import DynValue, _numeric_rank
+from ...exprold.pruning import PruneStats
+from ...exprold.values import BoxedValue
 
 # The runtime lane's own leaves — these build `DynValue` tag nodes
-from ...expr.builders import (
+from ...exprold.builders import (
     col as dcol,
     lit as dlit,
     if_else,

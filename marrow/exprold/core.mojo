@@ -3,7 +3,7 @@
 `Datum` is the strategy-agnostic wire format between stages — Arrow's Datum /
 DataFusion's ColumnarValue — and `into_array` is the one place a scalar stops
 being lazy and becomes a column. Both are spoken by the AOT lane
-(`marrow.expr.values`) and the runtime lane (`marrow.expr.dynamic`), so neither
+(`marrow.exprold.values`) and the runtime lane (`marrow.exprold.dynamic`), so neither
 belongs to either; putting them here is what lets `dynamic` stop importing
 `values` for them.
 

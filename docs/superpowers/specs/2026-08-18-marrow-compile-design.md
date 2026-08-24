@@ -18,7 +18,7 @@ exist for users rather than only for the size gate, and it closes backlog item
 ## User-facing surface
 
 ```mojo
-from marrow.expr.builders import col, param
+from marrow.exprold.builders import col, param
 from marrow.dtypes import int64, string
 
 def main() raises:
@@ -312,7 +312,7 @@ product — worth deciding deliberately rather than discovering.
      worse than a larger one. An opt-out flag produces the minimum-size
      build. Both numbers are published so the trade is visible.
 2. **One engine, two drivers (invariant 2).** The runtime-lane param leaf is not
-   optional, and it needs a case in `marrow/expr/tests/test_parity.mojo`.
+   optional, and it needs a case in `marrow/exprold/tests/test_parity.mojo`.
 3. **Warning-clean.** `mojo precompile marrow` stays at 0 errors, 0 warnings.
 4. **CHANGELOG entry** under `## [Unreleased]`.
 

@@ -18,7 +18,7 @@ Every kernel conforms to ``CastKernel`` and so exposes the **same**
 (the arithmetic-kernel pattern). The free ``cast`` function at the bottom picks
 the target family and delegates to the matching kernel's ``dispatch``; ``safe``
 is a plain runtime flag each kernel branches at its leaf ``apply`` call. The
-fused AOT node in ``marrow.expr.values`` bypasses all of this and grabs
+fused AOT node in ``marrow.exprold.values`` bypasses all of this and grabs
 ``NumericCast.core`` directly.
 
 The uniform signature is the point of the trait, not code reuse: the ladder used

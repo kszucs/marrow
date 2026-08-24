@@ -87,7 +87,7 @@ build is `-O1` (`-O3` inlines the frames away), so these attribute *where*, not
 
 A fifth is recorded but not yet scheduled: `count_star()` allocates a
 million-element column of `1` to count rows the grouper already counted (5.4% of
-Q1). It is sequenced after O4 because both touch `marrow/expr/`.
+Q1). It is sequenced after O4 because both touch `marrow/exprold/`.
 
 ---
 

@@ -48,11 +48,11 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...expr.values import AggExpr
-from ...expr.builders import col, lit, count_star
-from ...expr.relations import DynRelation, in_memory_table
-from ...expr.values import BoxedValue
-from ...expr.builders import col as fused_col
+from ...exprold.values import AggExpr
+from ...exprold.builders import col, lit, count_star
+from ...exprold.relations import DynRelation, in_memory_table
+from ...exprold.values import BoxedValue
+from ...exprold.builders import col as fused_col
 
 
 # ---------------------------------------------------------------------------

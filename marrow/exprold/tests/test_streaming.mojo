@@ -1,4 +1,4 @@
-"""Tests for the IR-node → operator execution in ``marrow.expr.relations``.
+"""Tests for the IR-node → operator execution in ``marrow.exprold.relations``.
 
 Verifies the descriptive-plan / pull-based-operator design: ``execute`` opens a
 plan into operators over ``BoxedValue`` values (fused or interpreter). Small morsel
@@ -28,10 +28,10 @@ from ...dtypes import (
 )
 from ...schema import schema
 from ...tabular import RecordBatch, record_batch
-from ...expr.values import Gt
-from ...expr.builders import col
-from ...expr.relations import DynRelation, Sort, in_memory_table
-from ...expr.builders import col as dyn_col, lit, if_else, case_when
+from ...exprold.values import Gt
+from ...exprold.builders import col
+from ...exprold.relations import DynRelation, Sort, in_memory_table
+from ...exprold.builders import col as dyn_col, lit, if_else, case_when
 
 
 def _batch() raises -> RecordBatch:

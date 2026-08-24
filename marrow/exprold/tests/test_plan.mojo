@@ -17,8 +17,8 @@ from ...execution import ExecContext
 from ...parquet import LeafSet
 from ...schema import Schema, schema
 from ...tabular import RecordBatch, record_batch
-from ...expr import col, lit, in_memory_table
-from ...expr.relations import (
+from ...exprold import col, lit, in_memory_table
+from ...exprold.relations import (
     DynRelation,
     Filter,
     Project,

@@ -5,7 +5,7 @@
 
 ## Goal
 
-Replace the two ad-hoc plan rewrites in `marrow/expr/relations.mojo` with a
+Replace the two ad-hoc plan rewrites in `marrow/exprold/relations.mojo` with a
 mechanism whose cost is **constant in the number of rules**, so that adding the
 third, fourth and tenth rewrite does not add a third, fourth and tenth virtual
 slot to `DynRelation` — and does not cost binary size in the AOT lane, which is
@@ -34,7 +34,7 @@ a third of a different shape.
 
 ## 0. What exists today
 
-`marrow/expr/relations.mojo`, 1744 lines, holds the plan IR: eight `Relation`
+`marrow/exprold/relations.mojo`, 1744 lines, holds the plan IR: eight `Relation`
 conformers (`InMemoryTable`, `ParquetScan[leaves]`, `Filter`, `Project`,
 `Limit`, `Sort`, `Aggregate`, `Join`), erased behind `DynRelation`, an
 `ArcPointer` plus eight function-pointer trampoline slots (`:422-436`).
@@ -55,7 +55,7 @@ set with the columns its own expressions read. `execute()` (`:571`) calls it.
 inside `DynRelation.filter()` (`:696`), and therefore only when `filter()` is
 called directly on a scan.
 
-`marrow/expr/pruning.mojo` (52 lines) is `PruneStats` plus the `Value.prune()`
+`marrow/exprold/pruning.mojo` (52 lines) is `PruneStats` plus the `Value.prune()`
 protocol: statistics-based row-group and page skipping, evaluated per row group
 inside `ParquetScanProcessor`, not at plan time.
 
@@ -137,7 +137,7 @@ fine. `_virt_children` (`:436`) already proves the return direction compiles.
 
 **Rules are ordinary functions.** A rule is
 `def rule_name(rel: DynRelation) raises -> DynRelation` in a new module
-`marrow/expr/optimize.mojo`. It is not a trait, not a struct, not a box, and it
+`marrow/exprold/optimize.mojo`. It is not a trait, not a struct, not a box, and it
 is never stored in a list. It recognises the nodes it cares about with the
 existing `kind()` discriminant plus `downcast[T]()`, rebuilds them by naming the
 concrete constructor, and recurses through the framework's one new primitive.
@@ -317,7 +317,7 @@ directly-adjacent scan:
 - Stop at `Aggregate` and `Join` unconditionally.
 - The predicate is only ever pushed **as pruning metadata**; the `Filter` node
   always stays. Correctness never depends on pruning
-  (`marrow/expr/pruning.mojo`, module docstring), so an over-approximate push is
+  (`marrow/exprold/pruning.mojo`, module docstring), so an over-approximate push is
   safe and a missed push costs only time.
 - Descending through `Limit` is safe *for pruning* — pruning cannot change rows
   — even though moving a `Filter` through a `Limit` is not.
@@ -508,7 +508,7 @@ type must be computed. The precedent holds exactly as far as the split does.
 **One correctness note that must not be lost.** Splitting `a AND b` into
 `filter(a).filter(b)` is sound under Kleene logic *because `FilterProcessor`
 keeps only `True`*: `filter()` honours the mask's validity
-(`marrow/expr/execution.mojo:551-563`, and the `fix(kernels): honour mask
+(`marrow/exprold/execution.mojo:551-563`, and the `fix(kernels): honour mask
 validity in filter` commit), so `NULL` is dropped. Every three-valued
 combination agrees between the fused and the split form. Marrow has a kleene
 golden area; a `filter_and_with_nulls` case belongs alongside the rule.
@@ -546,7 +546,7 @@ DuckDB has a `LIMIT_PUSHDOWN` pass
 (`../duckdb/src/optimizer/limit_pushdown.cpp`, step 27). Marrow does not need
 one, because the engine is **pull-based**: `LimitProcessor.pull` raises
 `Exhausted` as soon as `_remaining <= 0` and never pulls its input again
-(`marrow/expr/execution.mojo:619-637`), and `ParquetScanProcessor` decodes a row
+(`marrow/exprold/execution.mojo:619-637`), and `ParquetScanProcessor` decodes a row
 group only when pulled. Laziness already delivers the entire benefit, and the
 one place a limit *could* usefully move — below a `Sort` or `Aggregate` — is
 where moving it is illegal. `topk_fold` is the legal special case and already
@@ -692,7 +692,7 @@ would be a second way to say the same thing.
 
 **Inspection.** Tests already assert on rewritten plans by walking `children()`
 and reading the scan's schema (`_scan_columns_of`,
-`marrow/expr/tests/test_pushdown.mojo:275-283`). That surface is sufficient and
+`marrow/exprold/tests/test_pushdown.mojo:275-283`). That surface is sufficient and
 stays. Two additions:
 
 - Widening `kind()` (§1.3a) makes `downcast[T]()` safe to use from a test
@@ -896,7 +896,7 @@ to establish the clean baseline against which phase 2 is judged.
 
 ## 8. Testing
 
-### Unit tests: `marrow/expr/tests/test_optimizer.mojo`
+### Unit tests: `marrow/exprold/tests/test_optimizer.mojo`
 
 One new file. It cannot share a compilation unit with `test_pushdown.mojo`
 cheaply anyway (one selection = one unit), and the existing file's subject is
@@ -962,13 +962,13 @@ fingerprint; assertions go through `kind()`.
 **Phase 1 — the mechanism, at parity.**
 `with_children` (abstract, all 8 nodes) · `kind()` widened to a complete
 discriminant · `with_scan_options` replacing `with_predicate` +
-`with_projection` · `marrow/expr/optimize.mojo` with three rules ·
+`with_projection` · `marrow/exprold/optimize.mojo` with three rules ·
 `scan_predicate_pushdown` generalised to walk to the scan · recursive
 `explain()` · `test_optimizer.mojo` · `query_runtime` and `query_scan_typed`
 added to `baseline.json`.
 
 *Review gate:* `pixi run binary_size` at **≤ +0.5% on every gate**; `nm -C`
-baseline recorded per §7; `pixi run -e dev pytest marrow/expr/tests golden` green
+baseline recorded per §7; `pixi run -e dev pytest marrow/exprold/tests golden` green
 with all 154 golden cases passing in both lanes; `mojo precompile marrow` at 0
 errors and 0 warnings. **If the size gate fails, phase 2 does not start** — a
 mechanism that costs binary size at zero new behaviour is the wrong mechanism,

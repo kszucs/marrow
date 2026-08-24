@@ -57,7 +57,7 @@ own size-gate reading, isolated from Q7.3, which moves the aggregate gates.
 
 ### Problem
 
-`StringPredicate.prepare` (`marrow/expr/values.mojo`) materializes both operands
+`StringPredicate.prepare` (`marrow/exprold/values.mojo`) materializes both operands
 unconditionally:
 
 ```mojo
@@ -99,7 +99,7 @@ StringPredicateKernel                       # marrow/kernels/string.mojo:297
     LikeKernel / ILikeKernel override:
       compile one LikePattern, then _match_pattern
 
-StringPredicate.prepare                     # marrow/expr/values.mojo:1753
+StringPredicate.prepare                     # marrow/exprold/values.mojo:1753
     comptime if Self.R.OutShape == 0:       # RHS is scalar-shaped
         evaluate R once -> String
         ctx.append(Self.K.apply_scalar(la, pat).to_dyn())
@@ -126,7 +126,7 @@ Red first. The scalar and array paths must agree on:
 - a null LHS row;
 - an empty pattern, and a pattern that is entirely wildcards.
 
-Existing `test_string.mojo` and `marrow/expr/tests` results must be unchanged.
+Existing `test_string.mojo` and `marrow/exprold/tests` results must be unchanged.
 
 ### Risk and fallback
 
@@ -150,7 +150,7 @@ measurably faster for LIKE.
 `CountAgg`'s docstring (`marrow/kernels/aggregate.mojo:1040-1048`) claims twice
 that it is the grouped `count` for numeric columns too — *"one implementation
 rather than a fold for numbers and a scan for everything else"*. `CountValid.resolve`
-(`marrow/expr/aggregates.mojo:152-170`) contradicts it:
+(`marrow/exprold/aggregates.mojo:152-170`) contradicts it:
 
 ```mojo
 if value_dtype.is_numeric():
@@ -348,7 +348,7 @@ change can reach. At the end of the block, one full pass:
 ```
 pixi run -e dev precompile                       # 0 errors, 0 warnings
 pixi run -e dev pytest marrow/tests marrow/kernels/tests
-pixi run -e dev pytest marrow/expr/tests marrow/parquet/tests
+pixi run -e dev pytest marrow/exprold/tests marrow/parquet/tests
 pixi run -e dev pytest python/marrow/tests
 pixi run binary_size                             # all four gates
 ```

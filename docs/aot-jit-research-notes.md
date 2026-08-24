@@ -4,9 +4,9 @@
 > Verified against `b2e7dae`, 2026-08-03.
 >
 > **The subject file no longer exists.** Everything below describes
-> `marrow/faszom.mojo`, which was renamed to `marrow/expr/lane.mojo` and then to
-> **`marrow/expr/values.mojo`** (`d70ad3e`). The benchmark file was
-> `marrow/bench_faszom.mojo`, renamed to `marrow/expr/tests/bench_fused.mojo`
+> `marrow/faszom.mojo`, which was renamed to `marrow/exprold/lane.mojo` and then to
+> **`marrow/exprold/values.mojo`** (`d70ad3e`). The benchmark file was
+> `marrow/bench_faszom.mojo`, renamed to `marrow/exprold/tests/bench_fused.mojo`
 > and since deleted — so **the reproduction command in "Benchmark Results"
 > cannot be run**, and the code sketches (`FilterExpr`, `GtExpr`, `Add`,
 > `Column`, `execute(expr, n)`) name types the tree no longer has. The current

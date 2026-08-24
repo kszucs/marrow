@@ -104,7 +104,6 @@ from ..kernels.numeric import (
 from ..kernels.aggregate import (
     Aggregation,
     NumericAgg,
-    TemporalMinMax,
     StringMinMax,
     CountAgg,
     DistinctAgg,
@@ -1818,7 +1817,7 @@ trait StringValue(Value):
     def ilike[Rhs: StringValue](self, o: Rhs) -> ILike[Self, Rhs]:
         return ILike(self.copy(), o.copy())
 
-    # --- aggregates (marrow.expr.aggregates) --------------------------------
+    # --- aggregates (marrow.exprold.aggregates) --------------------------------
 
     def min(self) -> AggExpr:
         return AggExpr.of[StringMinMax[MinOp, Self.OutType]](self.copy())
@@ -2436,7 +2435,17 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
     algebra `K.AccType[A.OutType]` (sum widens, mean → float64, min/max keep it).
     """
 
-    comptime OutType = Self.K.AccType[Self.A.OutType]
+    comptime OutType = downcast[Self.K.AccType[Self.A.OutType], NumericType]
+    """`K.AccType[A.OutType]`, restated as numeric.
+
+    `AccType` is bound on `PrimitiveType` at both ends — `min`/`max` keep the
+    input's type, and that input may be a timestamp or a decimal. Here the
+    input *is* numeric (`A: NumericValue`), so the accumulator is too, for
+    every kernel in the module: `sum`/`product` widen to int64/float64, `mean`
+    is float64, `count` is int64, `min`/`max` keep a numeric `V`. The compiler
+    cannot see that through the projection, and this states it — the same
+    `downcast` `PrimitiveScalar` uses to recover `Defaultable` under a `where`
+    guard."""
     comptime OutShape = 0
     comptime State = PrimitiveScalar[Self.OutType]
     """The folded scalar, kept whole rather than unwrapped to its value: an
@@ -2731,13 +2740,13 @@ trait TemporalValue(Value):
         `CalendarUnit` and an unsupported spelling fails at construction."""
         return DateTrunc(self.copy(), CalendarUnit.parse(unit))
 
-    # --- aggregates (marrow.expr.aggregates) --------------------------------
+    # --- aggregates (marrow.exprold.aggregates) --------------------------------
 
     def min(self) -> AggExpr:
-        return AggExpr.of[TemporalMinMax[MinOp, Self.OutType]](self.copy())
+        return AggExpr.of[NumericAgg[MinKernel, Self.OutType]](self.copy())
 
     def max(self) -> AggExpr:
-        return AggExpr.of[TemporalMinMax[MaxOp, Self.OutType]](self.copy())
+        return AggExpr.of[NumericAgg[MaxKernel, Self.OutType]](self.copy())
 
     def count(self) -> AggExpr:
         return AggExpr.of[CountAgg](self.copy())

@@ -1,7 +1,7 @@
 """Binary-size demo: interpreter values through the fat-node relational layer.
 
 Same query as the other variants (`SELECT a, name WHERE a > b`), same
-self-executing `marrow.expr.relations` fat nodes as `query_streaming` — but the
+self-executing `marrow.exprold.relations` fat nodes as `query_streaming` — but the
 values are built the Python way (via `col()` + operators) and boxed into
 `DynValue`. Those are now the *same* nodes the fused gates build — an erased
 `Add`/`Gt` rather than an interpreter tag. Constructing one links its
@@ -11,14 +11,14 @@ boxes fused nodes, stays tiny. That delta is the unification's DCE proof.
     pixi run binary_size
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import InMemoryTable, Project, DynRelation
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import InMemoryTable, Project, DynRelation
 
 
 def main() raises:

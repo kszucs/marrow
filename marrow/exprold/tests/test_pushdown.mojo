@@ -17,16 +17,16 @@ from ...dtypes import Int64Type, int64, string, field
 from ...schema import Schema, schema
 from ...scalars import DynScalar
 from ...parquet import read_table, ParquetFile, LeafSet
-from ...expr.relations import (
+from ...exprold.relations import (
     ParquetScan,
     parquet_scan,
     DynRelation,
     Filter,
     RELATION_PARQUET_SCAN,
 )
-from ...expr.builders import col, count_star, lit
-from ...expr.values import BoxedValue
-from ...expr.pruning import PruneStats
+from ...exprold.builders import col, count_star, lit
+from ...exprold.values import BoxedValue
+from ...exprold.pruning import PruneStats
 
 
 def _write_sorted(path: String, n: Int, rgsize: Int) raises:

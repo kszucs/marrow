@@ -15,7 +15,7 @@ The aggregates used to be the worst of it —
 `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x).alias("total")` — and needed
 nine shims. It turned out marrow already had `col("v", int64).sum()`, on
 `NumericValue`, documented in `Relation.aggregate` and used throughout
-`marrow/expr/tests`; the corpus was simply spelling it the long way. That is
+`marrow/exprold/tests`; the corpus was simply spelling it the long way. That is
 the shape of the remaining work: check whether the nicer spelling already
 exists before designing one.
 
@@ -322,7 +322,7 @@ class _Relation:
         past the Python sugar rather than reconstructing it.
         """
         return _Relation(
-            marrow.expr.LazyTable.wrap(
+            marrow.exprold.LazyTable.wrap(
                 self._lazy.unwrap().sort(
                     [k.unwrap() for k in keys], list(ascending), nulls_first, True
                 )

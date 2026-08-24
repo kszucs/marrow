@@ -38,7 +38,7 @@ plan is data and the analysis is non-raising, **the optimizer is one function
 that runs at compile time for the AOT lane and at run time for the runtime
 lane.**
 
-`marrow/expr2/comptime/core.mojo` states the opposite as a law of the AOT lane:
+`marrow/expr/comptime/core.mojo` states the opposite as a law of the AOT lane:
 *"Nothing outside can inspect the structure. A rewriter cannot open a type …
 Interior rewrites belong to the runtime lane alone."* That is true of design A
 and false of design B. It is the single largest capability difference between
@@ -54,7 +54,7 @@ answer. The same function is callable on a runtime `Expr`.
 
 Each type has one job. Anything not on this list is not written.
 
-### The representation — `marrow/expr/plan.mojo`
+### The representation — `marrow/exprold/plan.mojo`
 
 | type | single responsibility |
 |---|---|
@@ -71,7 +71,7 @@ comptime struct parameter, its methods run at comptime, and reading a field into
 runtime code needs an explicit `comptime(…)` wrapper — which is the guarantee
 we want, not a wart.
 
-### The compile-time reader — `marrow/expr/compiled.mojo`
+### The compile-time reader — `marrow/exprold/compiled.mojo`
 
 | type | single responsibility |
 |---|---|
@@ -142,7 +142,7 @@ cannot be reduced at the struct's *definition* site where `p` and `i` are still
 free. Statelessness is the constraint that makes the family legal, and it turns
 out to be the better design anyway.
 
-### The runtime reader — `marrow/expr/interp.mojo`
+### The runtime reader — `marrow/exprold/interp.mojo`
 
 | type | single responsibility |
 |---|---|
@@ -166,7 +166,7 @@ whose `EvalFn` is `NumNode[P, root].evaluate`. A runtime-composed plan holding
 comptime-fused expressions — expr2's headline 1.46 MB vs 4.91 MB result — is
 just a plan with some compiled ops in its table. **There is no `DynValue`.**
 
-### Execution — `marrow/expr/pipeline.mojo`
+### Execution — `marrow/exprold/pipeline.mojo`
 
 | type | single responsibility |
 |---|---|

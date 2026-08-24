@@ -12,7 +12,7 @@ driver runs from.
 
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType, bool_, float64, int32, int64
-from marrow.expr.relations import DynRelation, in_memory_table
+from marrow.exprold.relations import DynRelation, in_memory_table
 from marrow.ipc import read_ipc_file
 from marrow.tabular import RecordBatch
 

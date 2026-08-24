@@ -1,10 +1,10 @@
-# `marrow.expr2` — the second expression system
+# `marrow.expr` — the second expression system
 
 *2026-08-21*
 
 ## Why a second system rather than a refactor
 
-`marrow/expr/` works and is fast. What it lacks is a spine: seven trampoline
+`marrow/exprold/` works and is fast. What it lacks is a spine: seven trampoline
 slots on `BoxedValue` and eight on `DynRelation` accreted one at a time, each
 added to serve one caller, none of them designed together. Two of those slots
 (`with_predicate`, `with_projection`) are an optimizer that was never built,
@@ -217,7 +217,7 @@ one place.
 ## Layout
 
 ```
-marrow/expr2/
+marrow/expr/
 ├── core.mojo              Analyzable · Evaluable · Value · DynValue
 │
 ├── comptime/              structure lives in the TYPE
@@ -253,7 +253,7 @@ Placement rule:
 `comptime` is a reserved word, so `expr2/__init__.mojo` writes
 ``from .`comptime` import ...``. Verified: that is the *only* line that needs
 it, plus whatever imports both lanes directly. Inside `comptime/` the package
-name never appears, and consumers import from `marrow.expr2`.
+name never appears, and consumers import from `marrow.expr`.
 
 ## Pipelines
 

@@ -57,7 +57,7 @@ from ...kernels.temporal import (
     unit_hour,
 )
 from ...tabular import RecordBatch, record_batch
-from ...expr import (
+from ...exprold import (
     BoxedValue,
     DynValue,
     col,
@@ -65,7 +65,7 @@ from ...expr import (
     if_else,
 )
 
-from ...expr.builders import coalesce, case_when
+from ...exprold.builders import coalesce, case_when
 
 
 def _exec(expr: DynValue, batch: RecordBatch) raises -> Int64Array:

@@ -231,7 +231,7 @@ Fold both onto the constant.
 
 ---
 
-## 3. Expr layer (`marrow/expr/`)
+## 3. Expr layer (`marrow/exprold/`)
 
 ### 3.1 Three hand-rolled erasure boxes duplicate the same trampoline machinery
 `AnyValue` (`values.mojo:736-802`), `AnyRelation` (`relations.mojo:120-207`),

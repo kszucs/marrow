@@ -13,7 +13,7 @@ rel.filter(not_in(col("dept", int64), dept_ids))         # dept NOT IN (SELECT d
 rel.filter(col("v", int64) > scalar_value(avg_v, int64)) # v > (SELECT avg(v) FROM t)
 ```
 
-Today none of these can be written. `marrow/expr/relations.mojo` has
+Today none of these can be written. `marrow/exprold/relations.mojo` has
 `InMemoryTable / ParquetScan / Filter / Project / Limit / Sort / Aggregate /
 Join`, and a `Join` already executes semi and anti correctly — but there is no
 node, no expression and no builder that takes a *relation* as a predicate's
@@ -111,7 +111,7 @@ consider this settled.
 ### One predicate family, four kinds
 
 ```mojo
-struct SubqueryPredicate:          # in marrow/expr/relations.mojo
+struct SubqueryPredicate:          # in marrow/exprold/relations.mojo
     var kind: UInt8                # IN | NOT_IN | EXISTS | NOT_EXISTS
     var subplan: DynRelation
     var left_key: BoxedValue
@@ -226,7 +226,7 @@ The precedent exists and is good: `Value.bound_column(schema) -> Int` is a
 defaulted trait method returning `-1`, one trampoline field on `BoxedValue`,
 and it is how the relational layer asks "are you a bare column?" without
 reaching into a representation it should not know about
-(`marrow/expr/values.mojo:421`, `:608`). The analogue would be
+(`marrow/exprold/values.mojo:421`, `:608`). The analogue would be
 `Value.subquery() -> Optional[...]`, defaulting to `None`.
 
 It has one hard constraint and one cost.
@@ -234,7 +234,7 @@ It has one hard constraint and one cost.
 **The constraint — and the CLAUDE.md limit it steers around.** The trampoline's
 field type may **not** mention `DynRelation`. `DynRelation` already mentions
 `BoxedValue` in `_virt_with_predicate`
-(`marrow/expr/relations.mojo:430-432`), so a `BoxedValue` field whose function
+(`marrow/exprold/relations.mojo:430-432`), so a `BoxedValue` field whose function
 type mentioned `DynRelation` closes a mutual cycle and Mojo rejects it —
 *"struct has recursive reference to itself"*. That failure has been hit three
 times in this tree and is documented at each site:
@@ -322,7 +322,7 @@ sugar and `NOT IN` is not: under negation, UNKNOWN and FALSE stop being
 interchangeable.
 
 **Beware the value-level `isin`, which is a different operation.**
-`IsIn`/`IsInKernel` (`marrow/expr/values.mojo:2243`,
+`IsIn`/`IsInKernel` (`marrow/exprold/values.mojo:2243`,
 `marrow/kernels/membership.mojo:20-25`) implement PyArrow's default
 `null_matching_behavior="match"`: the output is never null, and a NULL input is
 **true** when the value set contains a NULL. Arrow C++ enumerates four modes and
@@ -366,7 +366,7 @@ Before #19635 a plain `LeftAnti` gave wrong answers.
 
 For `left.key NOT IN (right.key)`, where marrow builds the **left** side into
 the hash table and probes with the **right**
-(`marrow/expr/execution.mojo:959-987`):
+(`marrow/exprold/execution.mojo:959-987`):
 
 1. **Probe side empty** → emit every left row, **including** rows with a NULL
    key. `NULL NOT IN ()` is TRUE. DataFusion carves this out explicitly
@@ -387,7 +387,7 @@ keeps only TRUE, so only mark = FALSE survives — which is precisely rule 3.
 ### Why it is nearly free
 
 `JoinProcessor._blocks_on_probe_side` already collects the whole probe side
-before emitting for `ANTI` (`marrow/expr/execution.mojo:936-967`), so all three
+before emitting for `ANTI` (`marrow/exprold/execution.mojo:936-967`), so all three
 rules are decidable at `_emit_unmatched` time. Rule 1 is `right_rows == 0`,
 which is already a parameter. Rule 2 is `null_count() > 0` on the single probe
 key column — an O(1) read of a cached field, computed once in
@@ -449,9 +449,9 @@ value, and that value is broadcast into the predicate.
 marrow already has a leaf that is *"a scalar bound after the plan is built,
 resolved in `state()` rather than `lane()`, so the lane splats a plain `Scalar`
 byte-identical to a literal's and a parameter costs nothing per row"* —
-`NumericParam`/`StringParam`/`TemporalParam` (`marrow/expr/values.mojo:863-894`),
+`NumericParam`/`StringParam`/`TemporalParam` (`marrow/exprold/values.mojo:863-894`),
 backed by `ParamCell`, *"a shared, mutable box for one late-bound scalar value"*
-(`marrow/expr/params.mojo:93-129`). The runtime lane has the same thing by name
+(`marrow/exprold/params.mojo:93-129`). The runtime lane has the same thing by name
 (`DynValue.param`, `dynamic.mojo:961-966`).
 
 **A scalar subquery is a `ParamCell` whose binder is a subplan instead of
@@ -481,7 +481,7 @@ standing `FIXME: should use something else besides cross product`
 ### The node
 
 ```mojo
-struct ScalarSubquery(Relation):    # in marrow/expr/relations.mojo
+struct ScalarSubquery(Relation):    # in marrow/exprold/relations.mojo
     var input: DynRelation
     var subplan: DynRelation
     var cell: ArcPointer[ParamCell]
@@ -667,7 +667,7 @@ for the stated reason; spec reviewed.*
 lowering, the Python `isin`/`exists` wrappers and the `filter_subquery` binding.
 **This adds no capability, only spelling** — every case it turns green passes
 today when written as an explicit join.
-*Gate: `pixi run -e dev pytest golden marrow/expr/tests`; `pixi run binary_size`
+*Gate: `pixi run -e dev pytest golden marrow/exprold/tests`; `pixi run binary_size`
 unchanged within noise; the `IN`/`EXISTS`/`NOT EXISTS` xfails removed.*
 
 **Phase 2 — `NOT IN` (M).**
@@ -740,7 +740,7 @@ rather than from first principles.
   `MATCH` behaviour as a **deliberate** divergence from SQL, with the reason.
   It cannot live in golden, because golden's oracle is DuckDB and DuckDB
   answers SQL.
-- `marrow/expr/tests/` — a pushdown case asserting a predicate still reaches a
+- `marrow/exprold/tests/` — a pushdown case asserting a predicate still reaches a
   `ParquetScan` through a `ScalarSubquery`, and a parity case running the same
   subquery through both lanes.
 - `python/marrow/tests/` — the ibis-shaped `t["x"].isin(sub)` / `~…` spellings

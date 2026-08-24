@@ -5,11 +5,11 @@ def plan() raises -> DynRelation:
     """
     SELECT min(ts) AS lo, max(ts) AS hi FROM events
 
-    `min`/`max` over a timestamp is a third kernel again — not the numeric
-    fold and not the bytewise string one. `TemporalMinMax` folds over the signed
-    integer backing and relabels the result with the input dtype, unit and
-    timezone intact, so `hi` must come back as timestamp[us] carrying the last
-    microsecond of 2021 rather than a truncated second.
+    `min`/`max` over a timestamp is the *same* typed fold the numeric path
+    uses — `NumericAgg[MinKernel, TimestampType]` — and not the bytewise string
+    one. The accumulator keeps the input's dtype, so `hi` must come back as
+    timestamp[us] carrying the last microsecond of 2021 rather than a truncated
+    second.
 
     -- expected
     lo:timestamp	hi:timestamp

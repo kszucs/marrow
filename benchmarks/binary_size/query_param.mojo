@@ -30,13 +30,13 @@ two rows.
     pixi run binary_size query_param query_scan_typed
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.parquet import leaf_of
 from marrow.schema import schema
-from marrow.expr.builders import col, param
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import ParquetScan, Project, DynRelation
+from marrow.exprold.builders import col, param
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import ParquetScan, Project, DynRelation
 
 
 def main() raises:

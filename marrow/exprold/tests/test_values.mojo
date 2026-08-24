@@ -1,4 +1,4 @@
-"""Tests for marrow.expr.values — the staged, strategy-pluggable fusion engine.
+"""Tests for marrow.exprold.values — the staged, strategy-pluggable fusion engine.
 
 Covers the four value families and the `BoxedValue` erasure box:
   * numeric — vectorized SIMD fusion (`Add`/`Mul`/…, reductions, casts, windows)
@@ -36,9 +36,9 @@ from ...tabular import record_batch, RecordBatch
 from ...scalars import DynScalar
 from ...kernels.temporal import unit_day
 
-from ...expr.builders import col, lit
-from ...expr.core import into_array
-from ...expr.values import (
+from ...exprold.builders import col, lit
+from ...exprold.core import into_array
+from ...exprold.values import (
     Add,
     Sub,
     Mul,
@@ -98,8 +98,8 @@ from ...expr.values import (
     DayOfWeek,
     DayOfYear,
 )
-from ...expr.builders import col as dyn_col
-from ...expr.values import BoxedValue
+from ...exprold.builders import col as dyn_col
+from ...exprold.values import BoxedValue
 
 
 # instantiation is a COMPILE-TIME proof the operand is a fused `NumericValue` node

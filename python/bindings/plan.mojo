@@ -5,7 +5,7 @@ description of a query that `execute()` opens into a fresh operator tree. The
 plan itself is never mutated, so a `Plan` is a reusable template and every verb
 returns a new one.
 
-The friendly lazy surface (``marrow.expr.LazyTable``, keyword aggregates,
+The friendly lazy surface (``marrow.exprold.LazyTable``, keyword aggregates,
 ``order_by`` sugar) lives in pure Python; these entry points stay strict — no
 optional arguments, no defaults.
 
@@ -29,14 +29,14 @@ from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
 from marrow.execution import ExecContext
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import (
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import (
     DynRelation,
     in_memory_table as _in_memory_table,
     parquet_scan as _parquet_scan,
 )
-from marrow.expr.values import AggExpr, BoxedValue
+from marrow.exprold.values import AggExpr, BoxedValue
 from expressions import unwrap as _unwrap_expr, unwrap_agg as _unwrap_agg
 from marrow.kernels.join import JOIN_ALL, JOIN_ANY, JoinKind
 from marrow.parquet import ParquetFile

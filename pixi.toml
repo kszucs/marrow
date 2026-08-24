@@ -17,8 +17,8 @@ version = "0.1.0"
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
 [package.build-dependencies]
-mojo-compiler = "==1.1.0.dev2026081705"
-mojo = "==1.1.0.dev2026081705"
+mojo-compiler = "==1.1.0.dev2026082305"
+mojo = "==1.1.0.dev2026082305"
 
 [package.run-dependencies]
 # Mojo builds are compiled against a specific CPython minor version; update the
@@ -237,7 +237,7 @@ docker = { features = ["docker"], no-default-feature = true }
 wheel = { features = ["wheel"], solve-group = "default" }
 
 [dependencies]
-mojo = ">=1.1.0.dev2026081705,<2"
+mojo = ">=1.1.0.dev2026082305,<2"
 # MAX is a hard dependency, in two independent ways:
 #
 #  1. Since mojo 1.0.0b3.dev2026072406, GPU codegen resolves `max.package_root`
@@ -252,7 +252,7 @@ mojo = ">=1.1.0.dev2026081705,<2"
 # (1) alone was once considered a toolchain regression worth retrying without
 # the pin; (2) makes that moot — do not drop it.  MAX uses its own version
 # line; upstream pins the pair together (mojo 1.1.0.dev ↔ max 26.6.0.dev).
-max = "==26.6.0.dev2026081705"
+max = "==26.6.0.dev2026082305"
 # Mojo builds are compiled against a specific CPython minor version; update the
 # minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"

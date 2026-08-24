@@ -36,10 +36,10 @@ from ...dtypes import DynType, Int64Type, int64, string, field
 from ...schema import schema
 from ...tabular import record_batch, RecordBatch
 from ...kernels.aggregate import NumericAgg, SumKernel, MinKernel
-from ...expr.aggregates import AggFunc
-from ...expr.builders import col
-from ...expr.values import BoxedValue
-from ...expr.relations import (
+from ...exprold.aggregates import AggFunc
+from ...exprold.builders import col
+from ...exprold.values import BoxedValue
+from ...exprold.relations import (
     InMemoryTable,
     Aggregate,
     DynRelation,

@@ -55,7 +55,7 @@ called with `And(And(Leaf("a"), Leaf("b")), Leaf("c"))` yields
 `and(a, b) | c`. Both the parametric-alias spelling `And[L, R]` and the direct
 `BinOp[AndK, L, R]` deduce identically — which matters, because **marrow has no
 `And` type**: `comptime And = BoolBinary[AndKernel, AndInterval, _, _]`
-(`marrow/expr/values.mojo:1446`).
+(`marrow/exprold/values.mojo:1446`).
 
 Nesting is unbounded. **[compiled]** Two levels deduce in one signature:
 
@@ -346,7 +346,7 @@ error: cannot implicitly convert 'NotOp[_Self]' value to '_Self.Negated'
 
 This is CLAUDE.md's *"a trait-level default method cannot return
 `Self.AssocType`… every conformer must implement it in the same commit"*,
-confirmed. **`marrow/expr/values.mojo` has 34 `Value`-family conformer structs**
+confirmed. **`marrow/exprold/values.mojo` has 34 `Value`-family conformer structs**
 plus `DynValue`. Any distributed type-level rewrite is therefore a 35-struct
 change with no incremental path — and each new node type added later must
 implement it or fail to compile.

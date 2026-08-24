@@ -169,7 +169,7 @@ one +55% regression that survived ten commits for exactly that reason.
    variable-width — a state-shape difference, not a domain one.
 7. **Temporal and list families**, then `param` (`expr/params.mojo`, 564 lines,
    no counterpart) and `if_else` / `coalesce` / `case_when`.
-8. **Repoint the Python bindings.** Nothing outside `marrow/expr2/` imports it
+8. **Repoint the Python bindings.** Nothing outside `marrow/expr/` imports it
    today, so it ships to no one. Until that changes `expr/` is the product and
    `expr2` is a parallel tree.
 

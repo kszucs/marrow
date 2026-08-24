@@ -20,7 +20,7 @@ from .kernels.join import (
 )
 from .execution import ExecContext
 from .kernels.groupby import GroupBy
-from .expr.aggregates import FoldedAggregates
+from .exprold.aggregates import FoldedAggregates
 from .kernels.sort import sort
 
 
@@ -247,7 +247,7 @@ struct RecordBatch(
 
         This lived in `python/bindings/tabular.mojo`: name resolution, join-kind
         parsing and result assembly existed **only** for Python callers, and the
-        binding imported `marrow.expr.relations` inside a function body to reach
+        binding imported `marrow.exprold.relations` inside a function body to reach
         the kind constants. Joining two batches is core behaviour, so it lives
         with the type; the binding now just marshals Python values."""
         var left_on = self._key_indices(keys, "Left")

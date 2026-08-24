@@ -1,10 +1,10 @@
 # Binary size: what each relational/expression feature costs an AOT binary
 
 `query_streaming.mojo` is the floor: `SELECT a, name FROM orders WHERE a > b`
-over a 5-row in-memory batch, built from `marrow.expr.relations`'s
+over a 5-row in-memory batch, built from `marrow.exprold.relations`'s
 self-executing nodes (`InMemoryTable`/`Filter`/`Project`, no central planner)
 with a fused comptime predicate (`col("a") > col("b")`, boxed via `BoxedValue`
-from `marrow.expr.values`). Every other gate in this directory is that same
+from `marrow.exprold.values`). Every other gate in this directory is that same
 shape plus exactly one feature, so the `__text` delta against the floor is
 what that one feature costs:
 
@@ -24,7 +24,7 @@ what that one feature costs:
 - **`query_dynvalue.mojo`** — the same fat relational nodes as
   `query_streaming.mojo`, but the predicate is built the "runtime" way
   (`col("a") > col("b")` via operators) and boxed into `DynValue`
-  (`marrow.expr.values`) instead of being constructed as a fused node directly.
+  (`marrow.exprold.values`) instead of being constructed as a fused node directly.
 - **`query_runtime.mojo`** — the full type-erased entry point end to end:
   `marrow.expr`'s `in_memory_table(batch).filter(...).select(...)` then
   `plan.execute()`.
@@ -143,7 +143,7 @@ against the stale table above.
 Far past the ~20 KB a parameter alone should cost (a `NumericParam`/
 `StringParam` node is structurally a literal plus a pointer dereference
 resolved once per batch — see `values.mojo`). Investigating the first number:
-`_write_parquet_output` / `_write_ipc_output` in `marrow/expr/relations.mojo`
+`_write_parquet_output` / `_write_ipc_output` in `marrow/exprold/relations.mojo`
 pulled in the Parquet writer, the IPC writer, and the codec layer behind them
 unconditionally, even though neither gate program calls either format. Both
 are now gated behind `comptime CLI_WRITERS_ENABLED =
@@ -178,7 +178,7 @@ faintly negative. It is neither.
 ## Historical note (osx-arm64, Mojo 1.0.0b3.dev2026070506) — page-quantized, not reproducible
 
 Before `marrow.aot` and `marrow.dyn` were folded into today's
-`marrow.expr.{values,relations,dynamic}`, this directory ran a four-way
+`marrow.exprold.{values,relations,dynamic}`, this directory ran a four-way
 comparison to answer one question: does a runtime, rewritable plan tree have
 to pay for its type-erasure, or can it stay as small as a fully-monomorphized
 one? The four binaries were `query_comptime` (the monomorphized layer, no
@@ -207,7 +207,7 @@ planner, landed within a few hundred bytes of the fully-monomorphized
 independent, and the win comes from a closed (non-exhaustive) driver plus
 fused-only values, not from encoding the plan in the type system.
 
-That conclusion is still the architecture today (`marrow.expr.relations`'s
+That conclusion is still the architecture today (`marrow.exprold.relations`'s
 self-executing nodes, `BoxedValue`'s fused-only box) — see
 `docs/architecture.md` for the current, maintained "erasure boundary = fusion
 boundary" framing, rather than this retired four-binary experiment.

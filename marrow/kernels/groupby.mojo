@@ -450,7 +450,7 @@ struct GroupBy(Movable):
     is the multi-column counterpart: it groups once and emits one column per
     value column through a caller-supplied *comptime* aggregator. No aggregate
     name or tag ever reaches this module — mapping one onto an ``Aggregation``
-    is the expression layer's job (``marrow.expr.aggregates``).
+    is the expression layer's job (``marrow.exprold.aggregates``).
 
     The execution **strategy** is picked once at construction — from the row
     count, the worker budget (``ctx``), and a cheap one-time cardinality estimate

@@ -6,7 +6,7 @@ from ...arrays import DynArray
 from ...builders import array, PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, float64, Int64Type
 from ...tabular import record_batch, RecordBatch
-from ...expr import (
+from ...exprold import (
     BoxedValue,
     col,
     lit,

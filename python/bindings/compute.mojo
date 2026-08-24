@@ -15,7 +15,7 @@ import marrow.kernels as mk
 from marrow.kernels.filter import filter as _filter_kernel
 from marrow.kernels.boolean import IsNullKernel, NotNullKernel
 from marrow.execution import ExecContext
-from marrow.expr.aggregates import (
+from marrow.exprold.aggregates import (
     Sum,
     Product,
     Mean,

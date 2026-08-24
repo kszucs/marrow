@@ -13,7 +13,7 @@ performance regression — both must be resolved before anything is built on top
 
 ### Defect A — the tag came back as a string
 
-`marrow/expr/aggregates.mojo:104`:
+`marrow/exprold/aggregates.mojo:104`:
 
 ```mojo
 comptime if K.name == "min" or K.name == "max":
@@ -203,9 +203,9 @@ Run all; report real numbers; a negative result is valuable.
 1. `pixi run -e dev check_lib` — known false positives: `'main()' is not supported within
    packages`, some `invalid call to 'bitmap_and'`. Nothing else.
 2. `pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo marrow/kernels/tests/test_aggregate.mojo` — baseline **55 passed**.
-3. `pixi run -e dev check marrow/expr/tests/test_streaming.mojo` **and** `check marrow/expr/tests/test_values.mojo`.
+3. `pixi run -e dev check marrow/exprold/tests/test_streaming.mojo` **and** `check marrow/exprold/tests/test_values.mojo`.
    A green `check` on **one** file is not proof the library builds — this has bitten us twice.
-4. `pixi run -e dev pytest marrow/expr/tests/test_streaming.mojo` — baseline **43 passed**.
+4. `pixi run -e dev pytest marrow/exprold/tests/test_streaming.mojo` — baseline **43 passed**.
 5. `pixi run test_parallel` — baseline **1848 passed / 314 skipped / 0 failed**, ~5–6 min
    (vs 38 min serial). Drive this yourself; do not delegate it.
 6. `pixi run -e bench pytest --benchmark --competition python/marrow/tests/bench_groupby.py` —
@@ -249,9 +249,9 @@ single source of truth for status. Do not read the ordering below as live:
 > **Corrections (verified at `b2e7dae`, 2026-08-03).** The rest of this file
 > stands; three facts in it have moved.
 >
-> 1. **`resolve_agg` is at `marrow/expr/aggregates.mojo:194`**, not
->    `marrow/expr/dynamic.mojo` as the "Layering" bullet below says.
-> 2. **The `AggFunction` catalog is in `marrow/expr/aggregates.mojo:84-191`**
+> 1. **`resolve_agg` is at `marrow/exprold/aggregates.mojo:194`**, not
+>    `marrow/exprold/dynamic.mojo` as the "Layering" bullet below says.
+> 2. **The `AggFunction` catalog is in `marrow/exprold/aggregates.mojo:84-191`**
 >    (`NumericFold`, `OrderPreserving`, `CountValid`, `DistinctCount`, and the
 >    aliases `Sum`/`Product`/`Mean`/`Min`/`Max`/`Count`/`CountDistinct`/
 >    `ApproxCountDistinct`) — *not* in `marrow/kernels` as the same bullet
@@ -290,9 +290,9 @@ the rule.
 - **Layering.** `marrow/kernels` executes — `AggKernel`, `AggState`, the
   `Aggregation` implementations *and* the `AggFunction` catalog, because
   "which implementation for which dtype" is kernel selection, the same shape
-  `cast.mojo` already has. `marrow/expr/aggregates.mojo` holds the erased boxes
+  `cast.mojo` already has. `marrow/exprold/aggregates.mojo` holds the erased boxes
   (`AggFunc`, `AggFold`) and `Aggregates`, the set that owns the
-  multi-aggregate drivers; `marrow/expr/dynamic.mojo` holds `resolve_agg`, the
+  multi-aggregate drivers; `marrow/exprold/dynamic.mojo` holds `resolve_agg`, the
   one string comparison. (`docs/tasks-expr-kernels-layering.md` L1 argues for
   the catalog going the other way — see `docs/tasks-aggregate-followups.md` §6.)
 - `GroupBy`'s serial and radix strategies were the same algorithm written four

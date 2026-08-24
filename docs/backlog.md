@@ -43,7 +43,7 @@ obvious. Read before planning anything.
    `pixi run binary_size`.
 2. **One engine, two drivers.** No feature may exist in only one lane. Windows
    currently violate this (AOT-only) — see M2.3. Enforced by
-   `marrow/expr/tests/test_parity.mojo` across four axes — op names read off the
+   `marrow/exprold/tests/test_parity.mojo` across four axes — op names read off the
    kernel, pruning, values, aggregates through a keyless plan — so a new op adds
    its case there.
 3. **PyArrow-shaped naming** in the core types and the bindings.
@@ -392,7 +392,7 @@ The nine gates that do not touch `expr2` are unaffected — `pixi run
 binary_size` builds all twelve of its programs and reports normally. So the
 deadlock is specific to what these two files instantiate, which makes them the
 reproduction: they are ~40 lines each and the only `-O3` programs that build a
-plan from `marrow.expr2`.
+plan from `marrow.expr`.
 
 Consequence: **`expr2` currently has no size gate.** `check_gate.py` lists both
 in `baseline.json`, so `pixi run -e dev python3 benchmarks/binary_size/check_gate.py`
@@ -755,7 +755,7 @@ capabilities those two milestones require.
 | **M2.5** | **Spill.** Zero occurrences of `spill` in the tree; no memory-budget tracking and no disk I/O anywhere. Required by H2O at 50 GB. Grace hash join, a spilling grouper, and a memory budget on `ExecContext` to trigger either. Note both blocking operators buffer unboundedly today: `AggregateProcessor` (`execution.mojo:699`) keeps every morsel's group ids and evaluated value columns, and `JoinProcessor` collects the whole left side. | not started | L |
 | **M2.6** | **String manipulation and regex — the single largest kernel hole.** There is no regex engine in the repo. Missing: `match_substring_regex`, `replace_substring(_regex)`, `extract_regex`, `split_pattern(_regex)`, `count_substring`, `find_substring`, `utf8_slice_codeunits`/substring, `lpad`/`rpad`, `binary_join`, the whole `utf8_is_*` classification family, trim-with-charset. Also: string kernels dispatch on `is_string_like()` only, so `binary`/`large_binary` are excluded from string comparison. **Engine chosen 2026-08-18 (`docs/alpha-findings/g2-regex-evaluation.md`): `dlopen` PCRE2, on the pattern `parquet/codecs.mojo` already uses for zstd/snappy/lz4/brotli.** `mojo-regex` was evaluated and **rejected on correctness**, not on version drift — it builds fine against our pinned Mojo, but an optional group is never entered, so `(?:www\.)?` is skipped and ClickBench Q29 returns `www.example.com` where pyarrow and CPython return `example.com`; 10 of 25 `sub()` cases disagree with CPython (minimal repro `sub("(?:foo)?bar", "B", "foobar") -> "fooB"`). It is also on no conda channel (vendoring 15,433 lines) and costs +493,792 bytes of `__text`, +10.1% on `query_dynvalue` against a 0.5% gate. PCRE2 measured correct on every case, **10.6x faster** (5,850,314 vs 551,315 rows/s), **zero `__text`** since the engine lives in the shared library, and resolves from conda-forge for osx-arm64 and linux-64. Estimated 2-3 days: `utils/regex.mojo` FFI shim, `kernels/regex.mojo` typed-first kernels, runtime-lane-only wiring so the fused gates keep contributing zero symbols. Q29 is the forcing function, not the benefit — marrow has no regex kernel at all and PyArrow ships seven. | engine chosen, not started | L |
 | **M2.7** | **Temporal completeness** — `strftime`/`strptime` (and **string↔timestamp cast raises**, `cast.mojo:1028`), timezone-aware extraction (everything decomposes as UTC and a non-UTC `tz` is silently ignored, `temporal.mojo:36-39`), `week`/`iso_week`/`iso_year`, `millisecond`/`microsecond`/`nanosecond`, `is_leap_year`, `ceil_temporal`/`round_temporal`, and the `*_between` family. Temporal **arithmetic** belongs here too — date ± interval, `date_diff`, `now` — which H2O and TPC-H date logic both need and which nothing implements. | not started | M |
-| **M2.8** | **Multi-file / dataset scan.** `ParquetScan.path` is a single `String`. No glob, no dataset, no partition discovery, no fan-out. Also: **bloom filters are fully implemented in the reader and never consulted by the scan** (zero `bloom` hits in `marrow/expr/`) — cheapest remaining pruning tier, do it with this. Two known-safe-but-lossy behaviours ride along: predicate pruning switches *off* entirely for nested files rather than risk misaligning statistics with the projection, and Hive-style `col=val` directory discovery does not exist. | not started | M |
+| **M2.8** | **Multi-file / dataset scan.** `ParquetScan.path` is a single `String`. No glob, no dataset, no partition discovery, no fan-out. Also: **bloom filters are fully implemented in the reader and never consulted by the scan** (zero `bloom` hits in `marrow/exprold/`) — cheapest remaining pruning tier, do it with this. Two known-safe-but-lossy behaviours ride along: predicate pruning switches *off* entirely for nested files rather than risk misaligning statistics with the projection, and Hive-style `col=val` directory discovery does not exist. | not started | M |
 | **M2.9** | **Join on computed keys.** Every join key must be a bare column reference; a computed expression raises at `relations.mojo:597` and `:606`. H2O and TPC-H both need it. | raises today | M |
 | **M2.10** | **Plan-level parallelism.** The kernels are parallel; the pull loop is not — `collect()` drains one morsel at a time on the calling thread and nothing schedules operators across workers. Pairs with M3.3, which is the one-line half of the same gap. | not started | L |
 | **M2.11** | **`CoalesceBatches`.** Nothing compacts small morsels after a selective `Filter`, so every downstream operator pays vector-at-a-time overhead on sparse batches. No such node or processor exists. | not started | S |
@@ -939,7 +939,7 @@ Recorded so the audits stop pulling. Each is real; none pays into M1.
   lane). Deleting them now would only have to be undone.
 - **`tabular → expr`, the one cross-layer import edge** (abs §1.7, org §1.7).
   S1 did **not** fix this: it restructured inside `marrow.expr` and left
-  `tabular.mojo:23`'s `from .expr.aggregates import FoldedAggregates` alone. The
+  `tabular.mojo:23`'s `from .exprold.aggregates import FoldedAggregates` alone. The
   fix is to move the aggregate *catalog* (`Sum`, `Min`, `Count`, … and the fold)
   down to `kernels/aggregate.mojo`, which already owns `AggFunction` — nothing
   about "the aggregate named `sum` over an int64 column" is an expression
@@ -1321,7 +1321,7 @@ outside the boxes' own dispatch, and the four conformances were load-bearing
 only for each other. See `docs/dyn-conformance-removal.md`. **`Breaker` as
 marker-by-conformance** was removed by `7d57398`; there is no `Breaker` trait,
 and a breaker is now simply a node whose `State` is its materialized column.
-`marrow/tabular` also has an up-edge into `marrow.expr.aggregates`, so the
+`marrow/tabular` also has an up-edge into `marrow.exprold.aggregates`, so the
 one-directional claim holds for `kernels` but not tree-wide — §5.1 has the fix
 and why it is deferred.
 

@@ -143,7 +143,7 @@
 
 - **Aggregates use the fluent API, which marrow already had.** The corpus
   spelled every aggregate `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x)`,
-  and so did `marrow/expr/tests/test_aggregates.mojo` — but `.sum()`,
+  and so did `marrow/exprold/tests/test_aggregates.mojo` — but `.sum()`,
   `.mean()`, `.min()`, `.max()` and `.count()` have been on `NumericValue`,
   `StringValue` and `TemporalValue` all along, documented in
   `Relation.aggregate`'s own docstring. Every case now reads
@@ -315,6 +315,54 @@
 
 ### Refactors
 
+- **`AggKernel.AccType` is bound on `PrimitiveType`, and `TemporalMinMax` is
+  gone.** The bound used to be `NumericType` at both ends, which was the
+  *intersection* of four unrelated requirements — `count` needs nothing of the
+  type, `min`/`max` need an ordering, `sum` needs addition, `mean` needs
+  division — so the most permissive kernel was constrained by the least, and
+  `min`/`max` over a timestamp needed its own `Aggregation` that reinterpreted
+  the column through its integer backing and relabelled the result.
+
+  Temporal `min`/`max` is now the same `NumericAgg[MinKernel, T]` fold every
+  numeric column takes, with no view, no relabel and no second code path; it is
+  also mergeable now, which `TemporalMinMax` was not. What each kernel actually
+  requires is stated by the domain markers that were already declared and
+  inert (`OrderedAgg` / `ArithmeticAgg` / `IntegralAgg`) and is enforced by
+  `_check_domain`, so `sum(date)` is a **build error** rather than a runtime
+  raise. `StringMinMax` stays: it keeps a per-group *index* rather than a
+  scalar accumulator, which is a state-shape difference, not a domain one.
+
+  The enabler is `AggKernel.acc_dtype(input_dtype)`, the new one-line
+  companion to `AccType`: `AccType` names the accumulator's *type*, `acc_dtype`
+  names its *value*. `NumericType` is `Defaultable` and `TemporalType` /
+  `DecimalType` are not, so an accumulator that keeps the input's type can only
+  get its unit, timezone, precision and scale from the column. Every caller
+  that builds an `AggState` now goes through it.
+
+- **Fixed while widening: `min`/`max` of an all-null or empty column answered
+  its identity sentinel, not NULL.** `MinMax.reduce` took the SIMD fast path,
+  which folds nulls to `identity` (`MAX_FINITE` / `MIN_FINITE`) and returns a
+  *valid* scalar — so `SELECT min(x)` over an all-null column answered
+  9223372036854775807. The grouped path was always right, because its valid
+  count says the group was never touched; the whole-array path had no count and
+  now asks the column directly. It surfaced as `min(date)` regressing when
+  temporal folding moved onto the numeric path, and it was wrong for numeric
+  columns the whole time. `Reduction`'s own docstring already claimed the fixed
+  behaviour.
+
+- **Toolchain moved to Mojo 1.1.0.dev2026082305 / MAX 26.6.0.dev2026082305**
+  (from `dev2026081705`). One migration: upstream deleted
+  `max.algorithm.reduction._reduce_generator_wrapper` in `327e2cc25e` as
+  "unused", having looked only inside `modular` — `views._reduce_dispatch`
+  was calling it. The wrapper only refined dtypes around `_reduce_generator`,
+  whose lambdas are parameterised on their own `dtype` while everything in
+  `_reduce_dispatch` is fixed to `T`, so the three shims it provided are now
+  written at the call site.
+
+  That arm is behind `comptime if`, so a default CPU build does **not**
+  type-check it: verified separately with
+  `mojo build -D MARROW_GPU=true`.
+
 - **`Value.params()` is gone**, with `DynParam` and the `merged` overload that
   keyed on it. Sixteen implementations, fifteen of them pure plumbing, plus two
   thin-fn slots on `DynValue` and `DynRelation` — and every caller outside a
@@ -344,7 +392,7 @@
   "an `AggValue`" — both were left stale by an earlier rename, and the name
   the relational node was promised was occupied. Renamed to `AggValue` /
   `DynAggValue`, which is what the prose says and what frees `Aggregate` for
-  the plan node added above. Contained entirely within `marrow/expr2/`, which
+  the plan node added above. Contained entirely within `marrow/expr/`, which
   nothing outside the package imports.
 
 ### Fixes
@@ -733,7 +781,7 @@
   entirely, so re-entering the drain does not strand names already in the
   table.
 
-- **`marrow.expr.params` — late-bound query parameter cells and a registry.**
+- **`marrow.exprold.params` — late-bound query parameter cells and a registry.**
   `ParamCell` is a shared, mutable box for a scalar that starts unbound and is
   filled in after a plan is built; `ParamDecl` is the declaration (name,
   dtype, optional help/default) plus the `ArcPointer[ParamCell]` expression
@@ -754,7 +802,7 @@
   reading an unbound cell raises, which is correct since pruning cannot run
   before binding. `param("min-a", int64)` builds the node and registers a
   `ParamDecl` in the same call, alongside `col`/`lit` in
-  `marrow/expr/builders.mojo`.
+  `marrow/exprold/builders.mojo`.
 
 - **`StringParam[T]`/`TemporalParam[T]` and their `param()` overloads — the
   string and temporal counterparts of `NumericParam`.** `StringParam` mirrors
@@ -966,7 +1014,7 @@
   `ConditionalBinary` breaker under a new alias, beside `Coalesce` and `Nullif`.
   `is_nan`/`is_inf`/`is_null`/`is_valid` were already expressible there.
 
-- **`count_star()`** (`marrow/expr/builders.mojo`) — `COUNT(*)`, the row count,
+- **`count_star()`** (`marrow/exprold/builders.mojo`) — `COUNT(*)`, the row count,
   as distinct from `count(col)`, which skips nulls. It needs no new kernel: a
   literal is valid on every row, so the valid-count of a constant column is the
   row count. Verified against a nullable column rather than assumed. See
@@ -1168,7 +1216,7 @@
   unconditionally by `_write_parquet_output`/`_write_ipc_output` even though
   neither gate program calls either format. Both are now gated behind
   `comptime CLI_WRITERS_ENABLED = get_defined_bool["MARROW_CLI_WRITERS",
-  False]()` in `marrow/expr/relations.mojo` — off by default, the same
+  False]()` in `marrow/exprold/relations.mojo` — off by default, the same
   posture as `GPU_ENABLED`: `-o out.parquet`/`-o out.arrow` raise unless the
   binary is built with `-D MARROW_CLI_WRITERS=true`, `--format table`/stdout
   is unaffected. Re-measured with the flag off: **+196,700 bytes**, all of it
@@ -2197,7 +2245,7 @@
 ### Docs
 
 - **`CountAgg`'s docstring claimed to be the grouped `count` for numeric columns
-  too; it is not.** `CountValid.resolve` (`marrow/expr/aggregates.mojo`) hands
+  too; it is not.** `CountValid.resolve` (`marrow/exprold/aggregates.mojo`) hands
   numeric columns `NumericAgg[CountKernel, V]`, the typed `AggState` fold —
   `CountAgg` serves non-numeric columns on that lane, plus the AOT lane's
   `K.Grouped`. Measured before deciding whether to converge them (1M rows,
@@ -2423,15 +2471,15 @@
   promise a comptime `OutType: NumericType` and a `vectorwise` lane, and the box supplied
   a placeholder `native = DType.bool` and a stub returning zero. The compiler reported it
   as `attempt to resolve a recursive reference to declaration 'DynValue.__gt__'`, which is
-  what forced the fluent surface into a `NumericOps` sub-trait. Now: `marrow.expr.values`
-  is the AOT lane, every operand bound on its family trait; `marrow.expr.dynamic` is the
+  what forced the fluent surface into a `NumericOps` sub-trait. Now: `marrow.exprold.values`
+  is the AOT lane, every operand bound on its family trait; `marrow.exprold.dynamic` is the
   runtime lane, where `DynValue` is a tag, its children and an optional payload; and
-  `BoxedValue` (`marrow.expr.relations`) is the one box both erase into, so each
+  `BoxedValue` (`marrow.exprold.relations`) is the one box both erase into, so each
   relational operator still compiles exactly once. `IsErased`, all 14 `_erased` methods,
   and `NumericOps` are deleted, and `DynType` drops the 8 family-trait conformances that
   told the same lie about `native`. `values.mojo` loses 595 lines.
 
-  **API change:** `marrow.expr.DynValue` now names the *runtime expression node*, not the
+  **API change:** `marrow.exprold.DynValue` now names the *runtime expression node*, not the
   box. Plan APIs that took a `DynValue` — `filter`, `project`, `aggregate`, `sort`, `join`,
   and the `Processor`s — take a `BoxedValue`; both a fused node and a `DynValue` convert
   implicitly. `Value.is_deterministic` is removed (a default returning True, with no
@@ -2750,7 +2798,7 @@
 - **One compilation unit per test selection.** The harness used to build one runner per
   `.mojo` file, paying marrow's elaboration once per file. `conftest.py` now generates a
   single driver (`.test_runners/_test_driver_<hash>.mojo`) that imports every selected case
-  and hands it to `TestSuite.run`, then compiles that once. Measured on `marrow/expr/tests`
+  and hands it to `TestSuite.run`, then compiles that once. Measured on `marrow/exprold/tests`
   (9 files, 280 cases): **4m43s for all nine together against ~200s *each* separately**, and
   the aggregate peaks *below* a single file's memory — the cost is elaborating marrow, not
   the test bodies. Consequences: narrowing the selection by *file* saves time, narrowing to a
@@ -2820,7 +2868,7 @@
 
 ### Tests
 
-- `marrow/expr/tests/test_aggregates.mojo` — aggregation through the expression API only
+- `marrow/exprold/tests/test_aggregates.mojo` — aggregation through the expression API only
   (plan-build + `execute`), so the machinery underneath stays refactorable, plus AOT/fused
   cases that must agree with the dynamic ones column for column.
 - `bench_groupby.mojo` gains `g1k` / `g100k` cases: cardinality is what picks the execution
@@ -2849,7 +2897,7 @@
   `_reduce_widened` pair are all deleted; `Reduction` in the fused value tower now calls
   the typed `K.reduce[V]`.
 - **The runtime→comptime boundary is one switch, in the dynamic layer.**
-  `marrow.expr.dynamic.resolve_agg(name, value_dtype)` is the only place a string is
+  `marrow.exprold.dynamic.resolve_agg(name, value_dtype)` is the only place a string is
   compared, and it happens once per aggregate at plan-build time — the aggregate
   counterpart of `DynValue`'s tag switch. It resolves the *dtype* at the same moment, so
   the plan holds a pointer to a fully monomorphized aggregation and no `dispatch_numeric`
@@ -2923,7 +2971,7 @@
   documented `for_agg_tag` as "the one place a runtime function name resolves to a comptime
   `AggKernel`" while `AggKernel`'s own docstring says such selection "lives in the expression
   layer, never here". The `AGG_*` tags, `agg_tag_from_name`, `agg_is_distinct`, `for_agg_tag`
-  and `agg_out_dtype` now live in the new **`marrow/expr/aggregates.mojo`**, together with the
+  and `agg_out_dtype` now live in the new **`marrow/exprold/aggregates.mojo`**, together with the
   runtime multi-aggregate drivers that were `GroupBy.aggregate_runtime` / `aggregate_column` /
   `aggregate_whole` / `_agg_name` / `_serial_multi` / `_radix_multi` / `_thread_local_multi`.
   No `UInt8` aggregate tag crosses into `marrow/kernels/` any more. `GroupBy` keeps only
@@ -3250,7 +3298,7 @@
 
 ### Tests
 
-- **Cross-driver parity harness** (`marrow/expr/tests/test_parity.mojo`):
+- **Cross-driver parity harness** (`marrow/exprold/tests/test_parity.mojo`):
   `assert_parity` runs a fused `Value` and an equivalent `DynValue` against one
   batch and asserts equal results, so the runtime interpreter can never silently
   diverge from the fused algebra. Covers arithmetic, comparisons, cast, if_else,
@@ -3279,7 +3327,7 @@
   `agg_out_dtype(tag, value_dtype)` in `kernels/aggregate.mojo`, replacing
   `AggregateProcessor.out_dtype`, so plan-time schemas and the kernels can never
   disagree.
-- **The staged, strategy-pluggable fusion engine is now `marrow.expr.values`
+- **The staged, strategy-pluggable fusion engine is now `marrow.exprold.values`
   and drives the relational engine.** The from-scratch engine (previously
   prototyped as `lane.mojo`) replaces the old `values.mojo`: `execution.mojo`
   and `relations.mojo` execute plans over its `AnyValue`, which dual-boxes
@@ -3289,7 +3337,7 @@
   `test_values`; the redundant `test_erased` / `test_relations` (old comptime
   `Table`/`AnyValue` surface) are removed, their unique `AnyValue`
   interchange/`write_to` coverage folded into `test_values`.
-- **`marrow.expr.values`: family-refined `execute` eliminates all consumption
+- **`marrow.exprold.values`: family-refined `execute` eliminates all consumption
   `rebind`s.** Each value family now refines `execute`'s return to its concrete
   array — `NumericValue` → `PrimitiveArray[Self.OutType]`, `StringValue` →
   `BinaryLikeArray[Self.OutType]`, `ListValue` → `ListLikeArray[Self.OutType]`
@@ -3308,7 +3356,7 @@
   `len - null_count` off the typed operand directly — both drop the erase →
   dispatch → downcast round-trip.
 
-- **`marrow.expr.ibis` merged into `marrow.expr.values`**: the ibis-designed
+- **`marrow.exprold.ibis` merged into `marrow.exprold.values`**: the ibis-designed
   comptime expression system is now the canonical `values.mojo` (the old fused
   algebra is replaced). `AnyValue` and every node evaluate via `.execute()`
   (`to_array` removed everywhere — `dynamic.DynValue`, `execution.mojo`). The
@@ -3323,7 +3371,7 @@
 
 ### Features
 
-- **Cross-family casts in the expr system** (`marrow.expr.values`): `.cast(target)`
+- **Cross-family casts in the expr system** (`marrow.exprold.values`): `.cast(target)`
   is overloaded on every value family and dispatches by the target dtype's family,
   wiring the `marrow.kernels.cast` kernels into expressions — numeric↔string↔bool
   in every direction (`NumToBool`, `StringToBool`, `NumToString`, `BoolToString`,
@@ -3331,7 +3379,7 @@
   staying the existing fused `Cast`. String parse casts take a comptime `safe`
   (default null-on-failure). Each cast node conforms to its *target* family and
   materializes through the kernel.
-- **Prepare-then-fuse: boundary nodes re-enter the numeric lane** (`marrow.expr.values`):
+- **Prepare-then-fuse: boundary nodes re-enter the numeric lane** (`marrow.exprold.values`):
   numeric execution is two phases — a one-time `prepare(batch)` where *boundary*
   nodes with no SIMD lane (string/bool→numeric casts, string/list byte-length)
   materialize their column once into a per-node cache, then the usual fused `core`
@@ -3343,7 +3391,7 @@
   numeric node fuses; the family/value type carries the whole story. Reductions
   stay non-lane `Value` (length-1 can't fuse element-wise).
 
-- **Expr floor division and element-wise min/max** (`marrow.expr.values`):
+- **Expr floor division and element-wise min/max** (`marrow.exprold.values`):
   wire the previously-unexposed `FloordivKernel` and the binary element-wise
   `arithmetic.MinKernel`/`MaxKernel` into the numeric lane — `a // b`
   (`__floordiv__`, integer floor keeping the wider operand dtype) and
@@ -3351,26 +3399,26 @@
   from the whole-column `min()`/`max()` reductions). All three fuse as
   `NumericBinary` nodes (single vectorized pass).
 
-- **List `contains()`** (`marrow.kernels.nested`, `marrow.expr.values`):
+- **List `contains()`** (`marrow.kernels.nested`, `marrow.exprold.values`):
   `ArrayContainsKernel` implements element-wise membership `elem[i] ∈ list[i]` →
   `BoolArray` (each row scans its sublist; null list rows propagate to null;
   numeric element types). The expr `ListContains` node materializes both operands
   (a literal element broadcasts) and applies it, so `col("l", list_(t)).contains(x)`
   runs end-to-end. Removes the now-dead generic `BoolBinary`/`StringBinary` nodes.
 
-- **List `length()`** (`marrow.kernels.nested`, `marrow.expr.values`):
+- **List `length()`** (`marrow.kernels.nested`, `marrow.exprold.values`):
   `ArrayLengthKernel` counts elements per list → `Int32Array` (offset subtraction,
   vectorized — the list analogue of `string.LengthKernel`). `ListColumn.execute`
   now resolves the list column from the batch (via a new `AnyArray.as_list_like`),
   and the `Counting` node folds `.length()` over it, so `col("l", list_(t)).length()`
   runs end-to-end.
 
-- **Fused numeric `cast`** (`marrow.expr.values`): `NumericValue.cast(target)`
+- **Fused numeric `cast`** (`marrow.exprold.values`): `NumericValue.cast(target)`
   adds a `Cast` node that reinterprets the operand's SIMD lane at the target
   dtype, so `col.cast(int64) + other` stays a single vectorized pass. Truncating
   (unchecked), matching the fused cast-kernel path.
 
-- **`any`/`all` reductions and string `==`/`!=`** (`marrow.expr.values`,
+- **`any`/`all` reductions and string `==`/`!=`** (`marrow.exprold.values`,
   `marrow.kernels.string`): `BoolValue` gains `.any()`/`.all()` (new `BoolReduce`
   node folding a bool column to a length-1 result via the optimized
   `kernels.aggregate` bitmap reductions). String `==`/`!=` now execute through the
@@ -3381,7 +3429,7 @@
   the validity bitmap.
 
 - **Boolean predicate kernels + expr wiring** (`marrow.kernels.boolean`,
-  `marrow.expr.values`): the marker structs `XorKernel`, `IsNullKernel`,
+  `marrow.exprold.values`): the marker structs `XorKernel`, `IsNullKernel`,
   `NotNullKernel`, `IsNanKernel`, `IsInfKernel` are now real kernels. `xor`
   becomes a `BoolBinaryKernel` (bit-packed word op) routed through `BoolLogic`.
   The four unary predicates implement a new `UnaryPredicateKernel` trait
@@ -3403,7 +3451,7 @@
   `dispatch(AnyArray)`. The free-standing `string_lengths` function is removed
   (callers use `LengthKernel`).
 
-- **`marrow.expr.values` reduction execution**: the aggregate boundary nodes now
+- **`marrow.exprold.values` reduction execution**: the aggregate boundary nodes now
   execute (previously `_not_wired` stubs). `sum()`/`product()` (widen to
   int64/float64), `mean()` (float64), and `min()`/`max()` (operand dtype
   preserved) share a single `Reduce[K, A]` node whose output dtype is the
@@ -3415,7 +3463,7 @@
   up to the operand, which is computed in full, then reduced. `AnyValue` erases
   and executes them like any other node.
 
-- **`marrow.expr.ibis` string execution**: the `StringValue` family now
+- **`marrow.exprold.ibis` string execution**: the `StringValue` family now
   executes by materializing — `StringColumn` resolves from the batch,
   `StringConst` broadcasts, `StringUnary` applies a `StringMapKernel`,
   `Counting` (`length`) applies `LengthKernel`, and the new `StringPredicate`
@@ -3433,7 +3481,7 @@
   companion — e.g. a leaf can hold `T.ScalarType` and construct it via a helper
   bound on the provider trait.
 
-- **`marrow.expr.ibis` fused execution**: the numeric family now *executes*,
+- **`marrow.exprold.ibis` fused execution**: the numeric family now *executes*,
   hooked to the real `marrow.kernels` — `NumericValue` **is** the numeric lane
   (refines `OutType` to `NumericType`, carries a `core[W]` SIMD primitive, and its
   `execute` vectorizes `core` across the whole tree in a **single fused pass**).
@@ -3451,7 +3499,7 @@
   not-implemented marker in `kernels.string`/`kernels.nested`/…) — none defined in
   the expression layer.
 
-- **`marrow.expr.ibis` typed expression architecture**: value families are
+- **`marrow.exprold.ibis` typed expression architecture**: value families are
   traits (`NumericValue` / `BoolValue` / `StringValue`), operations are node
   structs, and kernels are pure name markers — promotion lives entirely in the
   value hierarchy (one node struct per `(family, output-dtype rule)`:
@@ -3534,7 +3582,7 @@
   `numpy.astype`, while `safe=True` (the default, matching PyArrow) raises on any
   lossy conversion. Bool casts use `x != 0` / `True→1`; temporal casts reinterpret
   to the underlying integer or scale by the unit ratio (e.g. `date32↔date64`,
-  `timestamp[s]↔[ms]`). Fused cast expression nodes (`marrow.expr.values`) —
+  `timestamp[s]↔[ms]`). Fused cast expression nodes (`marrow.exprold.values`) —
   numeric→numeric (`Cast`), numeric→bool (`NumToBoolValue`), and bool→numeric
   (`BoolToNumValue`), all reached through a single `.cast(dtype)` method on the
   `NumericValue`/`BoolValue` nodes — plus a `DynValue.cast(to)` runtime node let
@@ -3902,8 +3950,8 @@
   version compiles ~33x smaller (stripped). `pixi run binary_size` runs
   `compare.py`, which builds, strips, and reports a size/symbol-count table
   plus a per-module symbol breakdown.
-- **String `Length` expression node + `.length()`** (`marrow/expr/values.mojo`,
-  `marrow/expr/runtime.mojo`, `marrow/kernels/string.mojo`): computes
+- **String `Length` expression node + `.length()`** (`marrow/exprold/values.mojo`,
+  `marrow/exprold/runtime.mojo`, `marrow/kernels/string.mojo`): computes
   per-element string byte lengths through both expression layers. Adds a
   `StringValue` trait (mirrors `NumericValue` but resolves to a `StringArray`
   instead of a per-lane SIMD `core[W]()`) and a `StringColumn` leaf node; the
@@ -4132,7 +4180,7 @@
 - **Hashing kernel** (`marrow/kernels/hashing.mojo`): `hash_` for primitive,
   string, and struct arrays; `hash_identity` for bool/uint8/int8.
 
-- **Expression execution system** (`marrow/expr/`): pull-based streaming query
+- **Expression execution system** (`marrow/exprold/`): pull-based streaming query
   executor with `col()`, `lit()`, `if_else()`, relational plan nodes
   (`InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate`), and
   `execute()` to collect `RecordBatch` results.

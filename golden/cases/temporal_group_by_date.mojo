@@ -12,7 +12,7 @@ def plan() raises -> DynRelation:
     **The two lanes disagree here, and this case is the record of it.**
     `Relation.aggregate` names a key after its source column when
     `BoxedValue.bound_column(schema)` finds one, and `key<i>` when it does not
-    (`marrow/expr/relations.mojo`). `NumericColumn`, `BoolColumn` and
+    (`marrow/exprold/relations.mojo`). `NumericColumn`, `BoolColumn` and
     `StringColumn` each override `bound_column`; `TemporalColumn` and
     `ListColumn` do not, so they inherit the `Value` default that always
     answers -1. A date or timestamp group key therefore comes back as `key0`

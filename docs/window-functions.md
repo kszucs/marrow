@@ -14,8 +14,8 @@ Grounded in ibis (`func: Analytic | Reduction`), DataFusion (`WindowExpr`,
 
 ## 1. Current state — a two-node toy
 
-Everything window-related in the tree is `marrow/expr/values.mojo:1975-2039`,
-plus two cases in `marrow/expr/tests/test_values.mojo`. Verified at `265df9b`:
+Everything window-related in the tree is `marrow/exprold/values.mojo:1975-2039`,
+plus two cases in `marrow/exprold/tests/test_values.mojo`. Verified at `265df9b`:
 
 - **`WindowSpec` (`:1981`) carries frame bounds only** — `start` and `end`, and
   its own docstring says "the toy carries frame bounds only". There is **no
@@ -44,7 +44,7 @@ What *is* right about the toy, and worth keeping: `WindowFunction`
 (`:2028-2036`) loads that column per lane. So **arithmetic already fuses above a
 window** — `row_number() + 1` is one fused pass over a staged column, not two
 eager applies (`test_arithmetic_above_window_materializes`,
-`marrow/expr/tests/test_values.mojo:226`).
+`marrow/exprold/tests/test_values.mojo:226`).
 
 ## 2. Target design
 

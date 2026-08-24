@@ -3,7 +3,7 @@
     SELECT a, name FROM orders WHERE a > b
 
 built with the `DynRelation`/`DynValue` layer
-(`marrow.expr.relations`, `marrow.expr.dynamic`, `marrow.expr.execution`)
+(`marrow.exprold.relations`, `marrow.exprold.dynamic`, `marrow.exprold.execution`)
 -- `in_memory_table(batch).filter(...).select(...)` then `plan.execute()`,
 which builds each node's own processor via `Relation.to_operator()` into a
 pull-based pipeline. Filter comes before select in the chain because
@@ -19,7 +19,7 @@ Build + strip + compare against the other gates:
 from marrow.builders import array
 from marrow.dtypes import int64
 from marrow.tabular import record_batch
-from marrow.expr import col, in_memory_table
+from marrow.exprold import col, in_memory_table
 
 
 def main() raises:

@@ -477,4 +477,4 @@ from ._expr_column import (  # noqa: E402
 # and `_Wrapper` back out of this module. `LazyTable` is deliberately not
 # `Table` — that name is the eager, PyArrow-shaped one above.
 from . import expr  # noqa: E402
-from .expr import LazyTable, memtable, read_parquet  # noqa: E402
+from .exprold import LazyTable, memtable, read_parquet  # noqa: E402
