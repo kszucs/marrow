@@ -53,7 +53,7 @@ from ...views import apply
 from ..logical import Shape, Value
 from ..params import Bindings
 from .aggregates import NumericAggregate
-from .numeric import Add, Sub, Mul, Gt, Lt
+from .numeric import Add, Sub, Mul, Eq, Ne, Lt, Le, Gt, Ge
 from .boolean import And, Not, Or, Xor
 from .strings import StrEq, StrNe, StrLt, StrGt
 from ...kernels.aggregate import (
@@ -439,11 +439,27 @@ trait NumericValue(PrimitiveValue):
     def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
         return Mul(self.copy(), o.copy())
 
-    def __gt__[Rhs: NumericValue](self, o: Rhs) -> Gt[Self, Rhs]:
-        return Gt(self.copy(), o.copy())
+    # All six comparisons, not just the ordering pair. `Eq` in particular is
+    # the shape statistics pruning and Parquet bloom filters both key on, so a
+    # lane missing it cannot prune the most common predicate there is.
+
+    def __eq__[Rhs: NumericValue](self, o: Rhs) -> Eq[Self, Rhs]:
+        return Eq(self.copy(), o.copy())
+
+    def __ne__[Rhs: NumericValue](self, o: Rhs) -> Ne[Self, Rhs]:
+        return Ne(self.copy(), o.copy())
 
     def __lt__[Rhs: NumericValue](self, o: Rhs) -> Lt[Self, Rhs]:
         return Lt(self.copy(), o.copy())
+
+    def __le__[Rhs: NumericValue](self, o: Rhs) -> Le[Self, Rhs]:
+        return Le(self.copy(), o.copy())
+
+    def __gt__[Rhs: NumericValue](self, o: Rhs) -> Gt[Self, Rhs]:
+        return Gt(self.copy(), o.copy())
+
+    def __ge__[Rhs: NumericValue](self, o: Rhs) -> Ge[Self, Rhs]:
+        return Ge(self.copy(), o.copy())
 
 
 trait TemporalValue(PrimitiveValue):

@@ -13,8 +13,12 @@ kernel in every binary that builds any expression.
 from ...dtypes import DataType, DynType, NumericType
 from ...kernels.numeric import (
     AddKernel,
+    EqKernel,
+    GeKernel,
     GtKernel,
+    LeKernel,
     LtKernel,
+    NeKernel,
     NumericCompareKernel,
     BinaryNumericKernel,
     MulKernel,
@@ -170,8 +174,12 @@ struct NumericCompare[
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
 
-comptime Gt = NumericCompare[GtKernel, _, _]
+comptime Eq = NumericCompare[EqKernel, _, _]
+comptime Ne = NumericCompare[NeKernel, _, _]
 comptime Lt = NumericCompare[LtKernel, _, _]
+comptime Le = NumericCompare[LeKernel, _, _]
+comptime Gt = NumericCompare[GtKernel, _, _]
+comptime Ge = NumericCompare[GeKernel, _, _]
 
 
 struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
@@ -373,5 +381,9 @@ struct TemporalCompare[
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
 
-comptime TemporalGt = TemporalCompare[GtKernel, _, _]
+comptime TemporalEq = TemporalCompare[EqKernel, _, _]
+comptime TemporalNe = TemporalCompare[NeKernel, _, _]
 comptime TemporalLt = TemporalCompare[LtKernel, _, _]
+comptime TemporalLe = TemporalCompare[LeKernel, _, _]
+comptime TemporalGt = TemporalCompare[GtKernel, _, _]
+comptime TemporalGe = TemporalCompare[GeKernel, _, _]

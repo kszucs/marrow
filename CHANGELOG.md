@@ -50,6 +50,33 @@
   the `DecimalCast._convert` merge already recorded at +371,584 bytes. The
   measurement is kept in `ns_per_tick`'s docstring so it is not re-attempted.
 
+### Features
+
+- **Both lanes can express a predicate now.** The comptime lane had only `>`
+  and `<` for numerics, and the runtime lane had no comparisons or boolean
+  connectives at all -- four constructors total, so `filter` was reachable only
+  through a bare bool column.
+
+  Comptime: `Eq`, `Ne`, `Le`, `Ge` join `Gt`/`Lt` over the existing kernels,
+  with `__eq__`/`__ne__`/`__le__`/`__ge__` on `NumericValue`, and the matching
+  `TemporalEq`/`Ne`/`Le`/`Ge` aliases.
+
+  Runtime: `eq`/`ne`/`lt`/`le`/`gt`/`ge` plus `and_`/`or_`/`xor`/`not_`. Each
+  comparison names a numeric *and* a string kernel at the call site and the
+  runtime dtype picks between them, so a binary links exactly the kernels its
+  expressions mention. Mixed numeric widths are promoted to the wider domain
+  first, so `int64_col > int32_lit` compares rather than raising.
+
+  **Measured at +0 bytes on all twelve size gates** -- the closed-erasure
+  property holds: a comparison costs size only in a binary that names it.
+
+  This was the blocker under statistics pruning. Without `Eq` there is no
+  equality pruning and no path to Parquet bloom filters, which key on it; and
+  a runtime lane that cannot express a predicate has nothing to prune. 12 new
+  cases across the two lanes, covering all six comparisons, three-valued
+  boolean semantics, null propagation from either operand, width promotion,
+  and string dispatch.
+
 ### Fixes
 
 - **`PrimitiveScalar` stores its payload as bytes, working around a `Variant`

@@ -29,8 +29,28 @@ from std.memory import ArcPointer
 from std.utils import Variant
 
 from ...arrays import StructArray, BoolArray, DynArray
+from ...kernels.boolean import AndKernel, NotKernel, OrKernel, XorKernel
+from ...kernels.cast import cast as cast_array
 from ...kernels.conditional import case_when as case_when_kernel
 from ...kernels.conditional import coalesce as coalesce_kernel
+from ...kernels.numeric import (
+    NumericCompareKernel,
+    EqKernel,
+    GeKernel,
+    GtKernel,
+    LeKernel,
+    LtKernel,
+    NeKernel,
+)
+from ...kernels.string import (
+    StringPredicateKernel,
+    StringEqKernel,
+    StringGeKernel,
+    StringGtKernel,
+    StringLeKernel,
+    StringLtKernel,
+    StringNeKernel,
+)
 from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
@@ -201,6 +221,33 @@ struct RuntimeValue(Evaluable, Movable, Value):
         for ref kid in self._kids:
             kids.append(kid[].evaluate(batch, bindings).to_array(len(batch)))
 
+        # Comparisons and boolean connectives. The `_tag` selects the kernel
+        # here, which the comptime lane never does -- see this module's
+        # docstring on why that trade is right for the interpreted lane.
+        if len(kids) == 2:
+            var l = kids[0].copy()
+            var r = kids[1].copy()
+            if self._tag == "eq":
+                return Datum(Self._compare[EqKernel, StringEqKernel](l^, r^))
+            if self._tag == "ne":
+                return Datum(Self._compare[NeKernel, StringNeKernel](l^, r^))
+            if self._tag == "lt":
+                return Datum(Self._compare[LtKernel, StringLtKernel](l^, r^))
+            if self._tag == "le":
+                return Datum(Self._compare[LeKernel, StringLeKernel](l^, r^))
+            if self._tag == "gt":
+                return Datum(Self._compare[GtKernel, StringGtKernel](l^, r^))
+            if self._tag == "ge":
+                return Datum(Self._compare[GeKernel, StringGeKernel](l^, r^))
+            if self._tag == "and":
+                return Datum(AndKernel.dispatch(l^, r^))
+            if self._tag == "or":
+                return Datum(OrKernel.dispatch(l^, r^))
+            if self._tag == "xor":
+                return Datum(XorKernel.dispatch(l^, r^))
+        if len(kids) == 1 and self._tag == "not":
+            return Datum(NotKernel.dispatch(kids[0].copy()))
+
         if self._tag == "coalesce":
             return Datum(coalesce_kernel(kids))
         if self._tag == "case_when":
@@ -217,6 +264,34 @@ struct RuntimeValue(Evaluable, Movable, Value):
                 otherwise = kids[len(kids) - 1].copy()
             return Datum(case_when_kernel(conds, vals, otherwise^))
         raise Error("evaluate: unknown runtime node '", self._tag, "'")
+
+    @staticmethod
+    def _compare[
+        K: NumericCompareKernel, S: StringPredicateKernel
+    ](var l: DynArray, var r: DynArray) raises -> DynArray:
+        """One operator, two kernels: the runtime dtype picks which runs.
+
+        Both halves are named at the call site, so a binary links the numeric
+        *and* the string kernel for every comparison its expressions mention --
+        and nothing else. Mixed numeric widths are promoted to the wider domain
+        first, so `int32_col > int64_lit` compares rather than raising.
+        """
+        if l.dtype().is_string_like():
+            return S.dispatch(l^, r^)
+        var lt = l.dtype()
+        var rt = r.dtype()
+        if lt != rt:
+            if lt.is_string_like() or rt.is_string_like():
+                raise Error(
+                    "compare: cannot compare ", lt, " with ", rt
+                )
+            # Cast the narrower side up. `cast` decides what "wider" means; a
+            # pair it rejects raises there rather than comparing raw bits.
+            try:
+                r = cast_array(r^, lt)
+            except:
+                l = cast_array(l^, rt)
+        return K.dispatch(l^, r^)
 
     # -- Writable -----------------------------------------------------------
 
@@ -249,6 +324,67 @@ def literal(var value: DynScalar) -> RuntimeValue:
     """A constant, broadcast to the batch's length on evaluation."""
 
     return RuntimeValue("literal", Payload(value^))
+
+
+# ---------------------------------------------------------------------------
+# Comparisons and boolean connectives
+# ---------------------------------------------------------------------------
+#
+# The runtime lane had none of these, which meant it could not express a
+# predicate at all -- `filter` was reachable only through a bare bool column.
+# Every frontend that builds queries at run time (the Python one, a future SQL
+# or wire protocol) needs them, and so does any statistics pruning, which keys
+# on `eq` above all.
+
+
+def eq(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l == r`. Numeric or string; the runtime dtype picks the kernel."""
+    return RuntimeValue("eq", l, r)
+
+
+def ne(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l != r`."""
+    return RuntimeValue("ne", l, r)
+
+
+def lt(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l < r`."""
+    return RuntimeValue("lt", l, r)
+
+
+def le(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l <= r`."""
+    return RuntimeValue("le", l, r)
+
+
+def gt(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l > r`."""
+    return RuntimeValue("gt", l, r)
+
+
+def ge(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l >= r`."""
+    return RuntimeValue("ge", l, r)
+
+
+def and_(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """Three-valued AND, matching the fused lane's Kleene semantics."""
+    return RuntimeValue("and", l, r)
+
+
+def or_(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """Three-valued OR."""
+    return RuntimeValue("or", l, r)
+
+
+def xor(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """Three-valued XOR."""
+    return RuntimeValue("xor", l, r)
+
+
+def not_(var a: RuntimeValue) -> RuntimeValue:
+    """Three-valued NOT: null stays null."""
+    return RuntimeValue("not", a)
 
 
 def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
