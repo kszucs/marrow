@@ -376,7 +376,7 @@ of the above is local evidence only.
 
 ---
 
-### Both `expr2` binary-size gates deadlock the compiler — **open, 2026-08-24**
+### Both `expr2` binary-size gates deadlock the compiler — **root-caused 2026-08-24, fix open**
 
 `query_expr2_streaming` and `query_expr2_agg_fused` no longer build. A single
 `mojo build -O3 -g0 -I . benchmarks/binary_size/query_expr2_streaming.mojo`
@@ -400,6 +400,119 @@ hangs rather than failing — it must be run with the two removed, or bisected
 against `pixi run binary_size`, until this is fixed. The two recorded
 regressions (`query_expr2_streaming` +3.268%, `query_expr2_agg_fused` +6.339%)
 therefore remain unattributed and unverified.
+
+**Root cause, bisected and confirmed 2026-08-24.** The trigger is
+**`18ca792`** ("feat(expr2): late-bound parameters, resolved at bind time").
+Its parent `8223882` builds; `18ca792`, `ed70012` and `74b72f6` all hang.
+Seven commits before it were tested and all build (`e01b201`, `8d68e8e`,
+`d078447`, `43a32b3`, `68bff20`, `1641e1e`, `8223882`).
+
+**Mechanism — narrowed to one field, with the tempting explanations ruled
+out.** `18ca792` gave `Bindings` a `Dict[String, DynScalar]`
+(`expr2/params.mojo:76`) and threaded `Bindings` through
+`DynValue._to_operator`'s thin-fn signature, so it reaches *every* boxed
+expression including a plan with no parameters at all — `query_expr2_streaming`
+uses none. The fingerprint is identical to the `dispatch` card below: **11 `🔥`
+runtime worker threads, 14 frames in `semaphore_wait_trap`**, CPU time frozen
+across a sampling window (`0:14.67` → `0:14.67`) with flat RSS.
+
+**It is the `Dict[String, DynScalar]` field specifically — not `DynScalar`
+being reachable, and not `Dict` over `DynScalar` on its own.** Both of those
+were the obvious readings and both are false:
+
+| hypothesis | probe | verdict |
+|---|---|---|
+| `DynScalar` becoming *reachable* is the trigger | `nm -U` on the binaries that **build** | **no** — 6 `DynScalar` symbols, `ListScalar` and `StructScalar` among them, are already linked at `e01b201`, `1641e1e` and `8223882` |
+| `Dict[String, DynScalar]` cannot be compiled at `-O3` | standalone 5-line program, `-I` a clean HEAD tree | **no** — builds |
+| any container over `DynScalar` | `List[DynScalar]` standalone | **no** — builds |
+| any erased container in a `Dict` | `Dict[String, DynArray]` standalone | **no** — builds |
+| bare `DynScalar` | standalone | **no** — builds |
+| `Param.bind`'s `as_primitive[T]()` variant dispatch | HEAD, keep the `Dict`, delete only the consult | **no** — still hangs |
+
+**Two ingredients, both necessary, neither sufficient.** Narrowing from the
+plan side against the HEAD tree isolates the second one to `Filter`:
+
+| program | verdict |
+|---|---|
+| `InMemoryTable(b).execute()` | BUILD |
+| `.project(["a"], [col("a", int64)])` | BUILD |
+| `.project(["p"], [Gt(col("a", int64), lit(2, int64))])` | BUILD |
+| `.filter(Gt(col("a", int64), lit(2, int64)))` | **HANG** |
+| `.filter(col("f", bool_))` — bare bool column, no binary node | **HANG** |
+| `.filter(Gt(...))`, *identical source*, built against the `Dict[String, Int]` tree | BUILD |
+
+Projecting the **same** `Gt` expression builds, so the fused binary node is not
+it; and filtering a bare bool column hangs, so predicate complexity is
+irrelevant. What `Filter` does that `Project` does not is
+`physical.mojo:506` — `filter(batch.columns[i].copy(), mask.copy(), ctx)` on a
+**`DynArray`**, the erased free function that instantiates the whole per-dtype
+ladder. That is the same shape S20 records for `hashtable.mojo` (`filter` exists
+only as a `DynArray` free function; the typed layer is `Filter.apply`).
+
+So the trigger is **the erased `filter` ladder plus `Bindings`-over-`DynScalar`,
+in one narrow `-O3` unit**. Either alone compiles: `expr/`'s `query_streaming`
+filters and builds, and every probe above that omits one of the two builds.
+That is consistent with the `dispatch` card's paradox (a wider unit compiles
+what a narrow one cannot), and it means **there is still no marrow-free
+reproducer** — a thin-fn box carrying a `Dict[String, DynScalar]`, a `List` or
+`Dict` of `DynScalar`, and a full plan co-resident with one were each probed
+and each builds.
+
+**Minimal reproduction** (~10 lines, against HEAD):
+
+```mojo
+var flags: List[Optional[Bool]] = [True, False, True]
+var batch = record_batch([array(flags)], names=["f"])
+var r: DynRelation = InMemoryTable(batch^)
+print(r.filter(col("f", bool_)).execute())
+```
+
+**Two independent fix avenues**, therefore, not one:
+
+1. Narrow `Bindings` to a fixed-width `(dtype code, payload)` pair — all
+   `Param[T: NumericType]` can ever hold.
+2. Route `FilterOperator` through the typed `Filter.apply` instead of the
+   erased free function — the same fix S20 applied to `hashtable.mojo`, which
+   recovered **439,232 bytes** there. Harder here, because a `RecordBatch`
+   column is genuinely runtime-typed, so the dispatch is inherent; but it can
+   be done once per column rather than through the erased ladder.
+
+Note independently of the deadlock: `Param[T: NumericType]` can only ever hold
+a fixed-width numeric scalar, so `ListScalar`, `StructScalar`,
+`DictionaryScalar` and `StringScalar` are carried for nothing. Narrowing the
+field is right on binary-size grounds whatever the compiler does.
+
+**Isolated by two one-variable experiments at `74b72f6`**, run because the
+first attempt changed two things at once and was not interpretable:
+
+- **A** — keep `Dict[String, DynScalar]`, remove only `Param.bind`'s
+  `as_primitive` consult → **hangs**. The dispatch call is not the trigger.
+- **B** — `Dict[String, Int]`, keep the consult → **builds** (5,917,840 bytes).
+  Removing `DynScalar` from the field is sufficient.
+
+Both deliberately break parameter binding; they are diagnostics, not fixes.
+
+**Still reproduces on `dev2026082305`**, so the toolchain bump does not clear
+it. The compiler bug is upstream and unfixed; `18ca792` is what newly reaches
+it, which means marrow can dodge it by not making `DynScalar` reachable from
+every plan.
+
+**Repro harness** (non-destructive — never touches the working tree): extract a
+commit with `git archive <sha> marrow benchmarks/binary_size/query_expr2_streaming.mojo | tar -x -C $D`,
+copy the current `marrow/views.mojo` over it (unchanged across the whole
+window, so one toolchain patch applies at every commit), then
+`mojo build -O3 -g0 -I $D $D/benchmarks/binary_size/query_expr2_streaming.mojo`.
+Deadlocked builds sit at ~725-790 MB and 0% CPU, so several can be run in
+parallel to bisect in one round. **Verify a hang by CPU time, not `%CPU`** —
+§0 records that an idle parent over a working child reads identically.
+
+**Fix not yet chosen.** Candidates: narrow `Bindings` to a fixed-width
+`(dtype code, payload)` pair matching what `Param` can hold; or erase
+per-bound-type behind thin fn slots the way `DynValue` itself does. Moving
+`Bindings` out of `to_operator` was considered and rejected — it walks back the
+design decision in `DynValue`'s docstring that values travel *through* an
+execution rather than being substituted into a rewritten plan. **What remains:**
+pick a fix, and file the eight-line upstream repro alongside the `dispatch` one.
 
 ### `dispatch` hangs a narrow compilation unit — **open, blocks `test_distinct`**
 
