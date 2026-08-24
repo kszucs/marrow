@@ -291,7 +291,18 @@ def case_when(
     if len(conditions) == 0:
         raise Error("case_when: needs at least one condition")
 
-    var kids = List[RuntimeValue]()
+    # Capacity reserved up front, and that is load-bearing rather than tidy:
+    # a `RuntimeValue` carries a `Payload`, and when a `List` holding one grows
+    # it moves its elements -- which resets `Variant`'s discriminant to 0, so
+    # already-stored payloads come back as the variant's *first* member. Five
+    # appends into an unreserved list read back as `int64,null,int64,null,
+    # int64`. Same reason `StructArray.__getitem__` pre-allocates
+    # (`arrays.mojo:1930`), and it is necessary but *not* sufficient here --
+    # see `docs/backlog.md` on the separate temporary-lifetime miscompile that
+    # corrupts this function's arguments before it ever runs.
+    var kids = List[RuntimeValue](
+        capacity=len(conditions) + len(values) + (1 if else_ else 0)
+    )
     for ref c in conditions:
         kids.append(c.copy())
     for ref v in values:

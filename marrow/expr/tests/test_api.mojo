@@ -38,7 +38,7 @@ from ..runtime.values import case_when, coalesce, column, literal
 from ...scalars import DynScalar, Int64Scalar
 from ..logical import DynRelation, DynValue, InMemoryTable
 from ..`comptime`.leaves import Column, Literal
-from ..`comptime`.numeric import Add, Gt, Lt, TemporalGt
+from ..`comptime`.numeric import Add, Gt, Lt, TemporalGt, TemporalLt
 
 
 def _orders() raises -> RecordBatch:
@@ -321,6 +321,33 @@ def test_a_temporal_column_can_be_filtered() raises:
     )
     # 19000 > 19002 false; 19005 > 19002 true; the null does not select
     assert_equal(out.num_rows(), 1)
+
+
+def test_temporal_less_than_filters_on_the_other_side() raises:
+    """`TemporalLt` is the mirror of `TemporalGt` and shares its `bind`, so the
+    only thing this pins that the `>` case does not is that the kernel
+    parameter actually reaches the lane — a swapped alias would still pass a
+    one-sided test."""
+    var d = Date32Builder(date32(), 3)
+    d.append(Int32(19000))
+    d.append(Int32(19005))
+    d.append_null()
+    var e = Date32Builder(date32(), 3)
+    e.append(Int32(19002))
+    e.append(Int32(19002))
+    e.append(Int32(19002))
+    var batch = record_batch(
+        [d.finish().to_dyn(), e.finish().to_dyn()], names=["d", "cutoff"]
+    )
+
+    var out = (
+        table(batch^)
+        .filter(TemporalLt(col("d", date32()), col("cutoff", date32())))
+        .execute()
+    )
+    # 19000 < 19002 true; 19005 < 19002 false; the null does not select
+    assert_equal(out.num_rows(), 1)
+    assert_true(out.columns[0].as_date32()[0].value() == 19000)
 
 
 def test_temporal_comparison_rejects_mismatched_units() raises:

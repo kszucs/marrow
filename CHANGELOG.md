@@ -8,7 +8,34 @@
 > findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
 > which indexes all twenty.
 
+### Fixes
+
+- **`case_when` reserved no capacity for its child list, and `List` growth
+  resets a `Variant`'s discriminant.** A `RuntimeValue` carries a `Payload`
+  variant, so five appends into an unreserved list read back as
+  `int64,null,int64,null,int64` -- already-stored payloads come back as the
+  variant's *first* member. `StructArray.__getitem__` pre-allocates for exactly
+  this reason (`arrays.mojo:1930`); this call site had missed it.
+
+  **This is necessary but not sufficient**, and `marrow/expr/tests/test_api.mojo`
+  still aborts. A second, separate miscompile corrupts `case_when`'s arguments
+  before its body runs: passing two function-returned `List` values to one call
+  destroys the first argument's elements, which read back as freed memory. One
+  list parameter is fine, and so are bracket literals at the call site;
+  reserving capacity, binding the arguments to locals, index loops, `extend`
+  without per-element copies, and borrowed rather than owned parameters all
+  fail to avoid it.
+
 ### Tests
+
+- **Three gaps closed in the comptime string suite, and a `TemporalLt` case.**
+  `!=` asserted only its null element and never the true/false bits; there was
+  no empty-batch case; and every comparison case was column-vs-literal, so
+  `Bitmap.intersect` with two genuinely nullable operands was never exercised.
+  The `TemporalLt` case asserts the surviving *value*, not just the row count --
+  the existing `TemporalGt` case passes even if the two aliases are swapped,
+  since both filter three rows down to one.
+
 
 - **26 new golden cases, covering sixteen scalar expression methods that had
   none.** The numeric maps (`abs`, `sign`, `floor`, `ceil`, `round`, `sqrt`,
