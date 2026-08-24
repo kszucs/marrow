@@ -222,12 +222,6 @@ struct DynBuilder(ImplicitlyCopyable, Movable):
     def __init__(out self, *, copy: Self):
         self._ptr = copy._ptr.copy()
 
-    # Explicit (empty) destructor so this type is Deinitable despite
-    # the `StructBuilder -> List[DynBuilder] -> DynBuilder` reference cycle; the
-    # ArcPointer field is still destroyed automatically after the body runs.
-    def __deinit__(deinit self):
-        pass
-
     def __init__(out self, dtype: DynType, capacity: Int = 0) raises:
         if dtype.is_null():
             self = NullBuilder(capacity)

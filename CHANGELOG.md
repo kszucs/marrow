@@ -52,6 +52,57 @@
 
 ### Fixes
 
+- **`PrimitiveScalar` stores its payload as bytes, working around a `Variant`
+  layout miscompile that silently dropped list elements.** `Scalar[int128]` is
+  16-byte aligned and `Scalar[int256]` 32-byte, which made `DynScalar` — the
+  `Variant` over every scalar — more strictly aligned (96/32) than its largest
+  member (`StructScalar`, 72 bytes, align 8). For that shape the compiler's
+  `size_of` disagrees with the type's real allocation stride (96 vs 112), so a
+  `List` of it **loses every other element when it grows**: five appends read
+  back as `int64 null int64 null int64`.
+
+  Storing the value as `Array[Byte, size_of[NativeScalar]()]` and converting
+  with `SIMD.as_bytes`/`from_bytes` makes every scalar align 1, which takes
+  `DynScalar` to 80/8 and the two layout computations back into agreement.
+  **No Arrow types were dropped** — decimal128 and decimal256 both stay. The
+  decode is hoisted out of `repeat()`'s loop, so it is one conversion per
+  scalar rather than one per element.
+
+  This is the root cause of the `RuntimeValue` corruption that made
+  `marrow/expr/tests/test_api.mojo` abort 18/18 with
+  `get: wrong variant type` — `RuntimeValue`'s payload variant contains a
+  `DynScalar`. That suite now passes 18/18. `DynArray` (144/8) and `ArrayData`
+  (152/8) were never affected: every member is pointer-backed, so nothing
+  raises their alignment.
+
+  Root-caused to `VariantType::getTypeSize` in KGEN, which rounds the variant's
+  content to the *discriminant's* alignment instead of the *union's*. Two
+  reproducers are in `docs/repros/` — one marrow-free and upstream-ready. The
+  field carries a TODO checklist for reverting once it is fixed upstream;
+  step 2 of that checklist, asserting `align_of[DynScalar]() == 8`, is the one
+  that matters, because a scalar's alignment climbing back above 8 reintroduces
+  the bug with no compile error.
+
+  **Not memory corruption**, despite how it reads: under ASAN the values are
+  equally wrong and there is *no* diagnostic. ASAN also perturbs it — some
+  shapes pass under ASAN and fail without — so it is not a useful confirmation
+  tool for this class.
+
+- **`BoolScalar` implements `write_to` and `write_repr_to`.** It was the only
+  scalar implementing neither, falling back to `Writable`'s reflection default
+  while all eight of its siblings spell both out.
+
+### Refactors
+
+- **`DynBuilder`'s empty `__deinit__` removed.** Verified redundant by removing
+  it and recompiling: `StructBuilder`'s own explicit destructor already breaks
+  the `StructBuilder -> List[DynBuilder] -> DynBuilder` cycle. The other seven
+  empty destructors in the tree were each tested the same way and are all
+  load-bearing — they are the only mechanism that breaks a `Deinitable` cycle,
+  since `ArcPointer[T]` *requires* `T: Deinitable` and `List[T]`/`OwnedPointer[T]`
+  propagate it conditionally.
+
+
 - **`case_when` reserved no capacity for its child list, and `List` growth
   resets a `Variant`'s discriminant.** A `RuntimeValue` carries a `Payload`
   variant, so five appends into an unreserved list read back as

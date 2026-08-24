@@ -21,6 +21,8 @@ ArrowScalar trait:
   `arrays` <-> `dtypes` circular imports.)
 """
 
+from std.collections import Array
+from std.sys.info import size_of
 from std.utils import Variant
 
 from std.python import Python, PythonObject
@@ -157,6 +159,22 @@ struct BoolScalar(ArrowScalar):
         """Get the underlying boolean value. Undefined if null."""
         return self._value
 
+    # Spelled out rather than left to `Writable`'s reflection default. The
+    # default walks every field at comptime, and `BoolScalar` is a member of
+    # `DynScalar.VariantType` -- which is mutually recursive through
+    # `StructScalar -> List[DynScalar] -> DynScalar`. The trait's own docs call
+    # that out: for such a cycle the reflection default must be overridden on
+    # at least one type in it. Every other scalar here already does; this one
+    # was the gap.
+    def write_to[W: Writer](self, mut writer: W):
+        if self._is_valid:
+            writer.write(self._value)
+        else:
+            writer.write("null")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
 
 # ---------------------------------------------------------------------------
 # PrimitiveScalar[T]
@@ -172,7 +190,32 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     comptime NativeScalar = Scalar[Self.T.native]
 
-    var _value: Self.NativeScalar
+    # TODO: remove `_Bytes` and store `Self.NativeScalar` directly once the
+    # `Variant` layout bug is fixed upstream. Checklist for whoever does it:
+    #   1. `var _value: Self.NativeScalar`, drop the `as_bytes()`/`from_bytes()`
+    #      round trips in the three constructors, `value()`, `write_to`, and the
+    #      hoisted decode in `repeat()`.
+    #   2. Assert `align_of[DynScalar]() == 8` -- if a scalar's alignment climbs
+    #      above 8 again the bug returns silently, with no compile error.
+    #   3. Run `docs/repros/dynscalar_list_growth.mojo`; it must print
+    #      `int64 int64 int64 int64 int64`.
+    comptime _Bytes = Array[Byte, size_of[Self.NativeScalar]()]
+
+    var _value: Self._Bytes
+    """The value as raw bytes, **deliberately not as `Self.NativeScalar`**.
+
+    A `Scalar[int128]` is 16-byte aligned and a `Scalar[int256]` 32-byte, which
+    would make `DynScalar` -- the `Variant` over every scalar -- more strictly
+    aligned than its largest member (`StructScalar`, 72 bytes, align 8). That
+    shape hits a compiler layout bug: `Variant`'s `size_of` disagrees with its
+    real allocation stride, and a `List` of it silently drops every other
+    element when it grows. Byte storage is align 1, so no scalar raises
+    `DynScalar`'s alignment above 8 and the two layouts agree.
+
+    See `docs/repros/variant_misaligned_list_growth.mojo` for the reproducer and
+    the faulty line in `VariantType::getTypeSize`. Revert this to a plain
+    `Self.NativeScalar` once that is fixed upstream -- and re-check
+    `align_of[DynScalar]()` when you do."""
     var _dtype: Self.T
     var _is_valid: Bool
 
@@ -181,7 +224,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
     ) where conforms_to(Self.T, Defaultable):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
-        self._value = value
+        self._value = value.as_bytes()
         self._is_valid = True
 
     def __init__(
@@ -190,18 +233,18 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
         if value:
-            self._value = value.value()
+            self._value = value.value().as_bytes()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0)
+            self._value = Self.NativeScalar(0).as_bytes()
             self._is_valid = False
 
     def __init__(out self, value: Optional[Self.NativeScalar], dtype: Self.T):
         if value:
-            self._value = value.value()
+            self._value = value.value().as_bytes()
             self._is_valid = True
         else:
-            self._value = Self.NativeScalar(0)
+            self._value = Self.NativeScalar(0).as_bytes()
             self._is_valid = False
         self._dtype = dtype.copy()
 
@@ -213,14 +256,15 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     def value(self) -> Self.NativeScalar:
         """Get the underlying native value. Undefined if null."""
-        return self._value
+        return Self.NativeScalar.from_bytes(self._value)
 
     def repeat(self, times: Int) raises -> PrimitiveArray[Self.T]:
         """Broadcast this scalar into an array of length `times`."""
         var builder = PrimitiveBuilder[Self.T](self._dtype.copy(), times)
         if self._is_valid:
+            var v = self.value()  # hoisted: one byte decode, not `times` of them
             for _ in range(times):
-                builder.unsafe_append(self._value)
+                builder.unsafe_append(v)
         else:
             for _ in range(times):
                 builder.unsafe_append_null()
@@ -228,7 +272,7 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
-            writer.write(self._value)
+            writer.write(self.value())
         else:
             writer.write("null")
 
