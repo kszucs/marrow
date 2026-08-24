@@ -93,7 +93,7 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
         self.l = l^
         self.r = r^
 
-    # -- Analyzable ---------------------------------------------------------
+    # -- Value --------------------------------------------------------------
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
@@ -104,10 +104,13 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
+    def resolve(self, bindings: Bindings) raises -> Self:
+        return Self(self.l.resolve(bindings), self.r.resolve(bindings))
+
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
-        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        return (self.l.bind(batch), self.r.bind(batch))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Null-in, null-out: valid exactly where both operands are.

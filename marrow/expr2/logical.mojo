@@ -30,7 +30,7 @@ from ..kernels.join import JoinKind, JOIN_INNER
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field
-from .params import Bindings, DynParam
+from .params import Bindings
 from .runtime.values import column
 from .physical import (
     Datum,
@@ -87,9 +87,10 @@ struct Shape(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
 trait Value(Copyable, Deinitable, Writable):
     """What every expression is, in both lanes.
 
-    Five members: what it reads, what it is called, what type it produces,
-    whether it yields one value or one per row, and how to turn it into
-    something that runs.
+    Six members: what it reads, what it is called, what type it produces,
+    whether it yields one value or one per row, how to substitute this
+    execution's parameter values into it, and how to turn it into something
+    that runs.
 
     **One trait, not three.** This was `Analyzable & Executable & Writable`, a
     composite alias split that way in reaction to `expr/`'s nine-responsibility
@@ -103,9 +104,13 @@ trait Value(Copyable, Deinitable, Writable):
     The comptime lane ignores the argument and answers from its own type; that
     asymmetry is the price of one box holding both lanes.
 
-    `to_operator` is the only way to run a value — see `physical.mojo`. There
-    is deliberately no `evaluate` here: a logical node is stateless and has no
-    business exposing a way to run itself.
+    `to_operator` is the only way to *run* a value — see `physical.mojo`. There
+    is deliberately no `evaluate` here. That is not a claim that a node is
+    inert: in the comptime lane the node **is** the executable form, and the
+    fused `bind`/`lane` machinery lives on the family traits precisely so a
+    subtree stays one type and inlines into one loop. What this trait says is
+    narrower and true — a node carries no *state*, so nothing outside a lane
+    can run one, and two executions of the same plan cannot interfere.
     """
 
     comptime shape: Shape
@@ -126,20 +131,20 @@ trait Value(Copyable, Deinitable, Writable):
         """The type this produces, without running anything."""
         ...
 
-    def params(self) -> List[DynParam]:
-        """The late-bound parameters this expression reads, first-seen order.
+    def resolve(self, bindings: Bindings) raises -> Self:
+        """This node with this execution's parameter values substituted in.
 
-        A sibling to `columns()` and the same walk, which is what makes a
-        plan's parameters a property *of the plan*. `expr/` answers this from a
-        process-global registry instead, and inherits two limitations from it:
-        a plan built but never executed leaks its declarations into the next
-        plan's `--help`, and the globals are unsynchronised. Neither exists
-        when the answer comes from the tree.
+        The plan's one rewrite. `to_operator` calls it once, so `Param` is
+        gone by the time a batch arrives and the per-batch path never sees a
+        `Bindings` — an unbound parameter fails at lowering, naming itself,
+        rather than partway through a stream.
 
-        Defaulted to empty because almost nothing has parameters — only a
-        `Param` leaf, and the composite nodes that carry one up.
+        Returning `Self` is what keeps it free: the type does not change, so a
+        fused subtree stays fused, and a leaf that contains no parameter needs
+        no implementation at all. Only composites — which must rebuild with
+        resolved children — and `Param` itself override this.
         """
-        return List[DynParam]()
+        return self.copy()
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
@@ -147,9 +152,8 @@ trait Value(Copyable, Deinitable, Writable):
         """The stateful thing that runs this value.
 
         `grouped` picks a fold's placement and is ignored by everything else.
-        `bindings` supplies this execution's parameter values — a `Param`
-        resolves against them here, which is why a plan holds no parameter
-        state and two executions cannot interfere.
+        `bindings` is consumed *here*, by a single `resolve` call, and does not
+        reach any per-batch method.
         """
         ...
 
@@ -167,13 +171,21 @@ struct DynValue(Copyable, Movable, Writable):
     and no Python frontend can build) and runtime expressions everywhere (which
     is the 4.91 MB configuration).
 
-    Six slots, each traceable to a named asker: four for `Analyzable`, one for
-    `Executable`, one for `Writable`. `expr/` carried seven and had no `dtype`,
-    computing output types by evaluating against a zero-row batch instead.
-    Dropped: `name()`, which duplicated what `name` and `write` already
-    answered, and `resolve_names`, a rewrite that is a no-op in the comptime
-    lane and therefore belongs on the runtime value rather than on every boxed
-    expression in every binary.
+    Five function slots — `columns`, `name`, `dtype`, `write`, `to_operator` —
+    plus `shape`, read once at construction because it is a comptime constant.
+    `expr/` carried seven and had no `dtype`, computing output types by
+    evaluating against a zero-row batch instead.
+
+    `expr/`'s two extra slots were `name()`, which duplicated what `name` and
+    `write` already answered, and `resolve_names` — a *rewrite*, carried by
+    every boxed expression in every binary though it is a no-op in the comptime
+    lane.
+
+    `resolve` is a rewrite too and takes no slot, for the reason that argument
+    always implied: it runs inside `to_operator`, one level down, where the
+    boxed type is still known. A `_resolve` slot would have to hand back a
+    re-boxed `DynValue` — an allocation, to produce something the box has no
+    use for.
 
     Deliberately **not** conforming to the traits it erases. A box may hold a
     trait-bound value; it should not be one. `DynValue` exposes the same
@@ -185,9 +197,8 @@ struct DynValue(Copyable, Movable, Writable):
     var _columns: def(ArcPointer[NoneType]) thin -> List[String]
     var _name: def(ArcPointer[NoneType]) thin -> String
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
-    var _params: def(ArcPointer[NoneType]) thin -> List[DynParam]
     var _write: def(ArcPointer[NoneType]) thin -> String
-    var _to_processor: def(
+    var _to_operator: def(
         ArcPointer[NoneType], Bool, Bindings
     ) thin raises -> DynOperator[Datum]
     var _shape: Shape
@@ -212,16 +223,12 @@ struct DynValue(Copyable, Movable, Writable):
         return rebind[ArcPointer[V]](ptr)[].dtype(schema)
 
     @staticmethod
-    def _to_processor_tramp[
+    def _to_operator_tramp[
         V: Value
     ](
         ptr: ArcPointer[NoneType], grouped: Bool, bindings: Bindings
     ) raises -> DynOperator[Datum]:
         return rebind[ArcPointer[V]](ptr)[].to_operator(grouped, bindings)
-
-    @staticmethod
-    def _params_tramp[V: Value](ptr: ArcPointer[NoneType]) -> List[DynParam]:
-        return rebind[ArcPointer[V]](ptr)[].params()
 
     @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -235,8 +242,7 @@ struct DynValue(Copyable, Movable, Writable):
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
         self._write = Self._write_tramp[V]
-        self._params = Self._params_tramp[V]
-        self._to_processor = Self._to_processor_tramp[V]
+        self._to_operator = Self._to_operator_tramp[V]
         self._shape = V.shape
 
     # -- the erased surface -------------------------------------------------
@@ -250,9 +256,6 @@ struct DynValue(Copyable, Movable, Writable):
     def dtype(self, schema: Schema) raises -> DynType:
         return self._dtype(self._boxed, schema)
 
-    def params(self) -> List[DynParam]:
-        return self._params(self._boxed)
-
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator[Datum]:
@@ -263,7 +266,7 @@ struct DynValue(Copyable, Movable, Writable):
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
-        return self._to_processor(self._boxed, grouped, bindings)
+        return self._to_operator(self._boxed, grouped, bindings)
 
     def shape(self) -> Shape:
         """The boxed value's `shape`, read at construction.
@@ -279,12 +282,12 @@ struct DynValue(Copyable, Movable, Writable):
 
 
 # ---------------------------------------------------------------------------
-# merged — the one shape every analysis traversal shares
+# merged — order-preserving union, the shape `columns()` folds with
 # ---------------------------------------------------------------------------
-# `columns()` and `params()` both fold a node's children into a list that is
-# deduplicated but **order-preserving**: first-seen order is part of the
-# contract (`test_runtime_columns_are_deduped_in_first_seen_order` asserts it),
-# so a plain `Set` cannot answer either on its own.
+# `columns()` folds a node's children into a list that is deduplicated but
+# **order-preserving**: first-seen order is part of the contract
+# (`test_runtime_columns_are_deduped_in_first_seen_order` asserts it), so a
+# plain `Set` cannot answer it on its own.
 #
 # A `List` carries the order and a `Set` answers membership, which also makes
 # this linear — the loop it replaces rescanned the accumulated list once per
@@ -307,18 +310,6 @@ def merged(var into: List[String], extra: List[String]) -> List[String]:
     return into^
 
 
-def merged(var into: List[DynParam], extra: List[DynParam]) -> List[DynParam]:
-    """The same, keyed on a parameter's name — which is its identity."""
-    var seen = Set[String]()
-    for ref p in into:
-        seen.add(p.name.copy())
-    for ref p in extra:
-        if p.name not in seen:
-            seen.add(p.name.copy())
-            into.append(p.copy())
-    return into^
-
-
 trait Relation(Copyable, Deinitable, Movable):
     """An immutable description of a query."""
 
@@ -331,15 +322,6 @@ trait Relation(Copyable, Deinitable, Movable):
         """
         ...
 
-    def params(self) -> List[DynParam]:
-        """The late-bound parameters this relation and its inputs read.
-
-        Defaulted to empty so a leaf need not implement it; the nodes holding
-        values override it. This is what makes `plan.params()` answerable from
-        the tree rather than from a global registry.
-        """
-        return List[DynParam]()
-
     def to_operator(
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
@@ -349,6 +331,9 @@ trait Relation(Copyable, Deinitable, Movable):
         become different physical ones — a hash join or a merge join, a CPU or
         a GPU pass. Nothing exercises that yet; the argument is here because
         removing the seam is the part that would be hard to undo.
+
+        `bindings` is threaded down to the values this plan contains and is
+        consumed there, by `Value.resolve`. A relation never reads one.
         """
         ...
 
@@ -362,11 +347,10 @@ struct DynRelation(Copyable, Movable, Writable):
 
     var _data: ArcPointer[NoneType]
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
-    var _virt_to_processor: def(
+    var _virt_to_operator: def(
         ArcPointer[NoneType], ExecContext, Bindings
     ) thin raises -> Pipeline
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
-    var _virt_params: def(ArcPointer[NoneType]) thin -> List[DynParam]
 
     @staticmethod
     def _schema_tramp[
@@ -375,18 +359,12 @@ struct DynRelation(Copyable, Movable, Writable):
         return rebind[ArcPointer[R]](ptr)[].schema()
 
     @staticmethod
-    def _to_processor_tramp[
+    def _to_operator_tramp[
         R: Relation
     ](
         ptr: ArcPointer[NoneType], ctx: ExecContext, bindings: Bindings
     ) raises -> Pipeline:
         return rebind[ArcPointer[R]](ptr)[].to_operator(ctx, bindings)
-
-    @staticmethod
-    def _params_tramp[
-        R: Relation & Writable
-    ](ptr: ArcPointer[NoneType]) -> List[DynParam]:
-        return rebind[ArcPointer[R]](ptr)[].params()
 
     @staticmethod
     def _write_tramp[
@@ -399,28 +377,18 @@ struct DynRelation(Copyable, Movable, Writable):
         var ptr = ArcPointer[R](value.copy())
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_schema = Self._schema_tramp[R]
-        self._virt_to_processor = Self._to_processor_tramp[R]
+        self._virt_to_operator = Self._to_operator_tramp[R]
         self._virt_write = Self._write_tramp[R]
-        self._virt_params = Self._params_tramp[R]
 
     def schema(self) -> Schema:
         return self._virt_schema(self._data)
 
-    def params(self) -> List[DynParam]:
-        """Every parameter this plan reads, first-seen order, deduped by name.
-
-        Walking the tree rather than draining a registry is what makes this a
-        property of the plan: two plans in one process cannot see each other's
-        parameters, and a plan that is built but never run leaks nothing.
-        """
-        return self._virt_params(self._data)
-
     def to_operator(
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
-        return self._virt_to_processor(self._data, ctx, bindings)
+        return self._virt_to_operator(self._data, ctx, bindings)
 
-    # -- the plan-building API ---------------------------------------------
+    # -- the plan-building API ----------------------------------------------
     #
     # These are the surface a caller actually writes. Every one returns a
     # `DynRelation`, so plans compose left to right —
@@ -549,11 +517,6 @@ struct Filter(Relation, Writable):
     def schema(self) -> Schema:
         return self._input.schema()
 
-    def params(self) -> List[DynParam]:
-        """Union of the operands', deduped by name — the same fold as
-        `columns()`, which is why parameters need no registry."""
-        return merged(self._input.params(), self._predicate.params())
-
     def to_operator(
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
@@ -639,12 +602,6 @@ struct Project(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def params(self) -> List[DynParam]:
-        var out = self._input.params()
-        for ref v in self._values:
-            out = merged(out^, v.params())
-        return out^
-
     def to_operator(
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
@@ -669,7 +626,7 @@ struct Aggregate(Relation, Writable):
 
     The output schema is the key fields followed by the aggregate fields, in
     that order. Everything downstream depends on that ordering — the
-    processor reads its key fields back off the front of it, and a `Filter`
+    operator reads its key fields back off the front of it, and a `Filter`
     above this node is exactly `HAVING`.
 
     An empty `keys` is **not** a different node: it is `SELECT sum(x) FROM t`,
@@ -722,14 +679,6 @@ struct Aggregate(Relation, Writable):
     def schema(self) -> Schema:
         return self._schema.copy()
 
-    def params(self) -> List[DynParam]:
-        var out = self._input.params()
-        for ref v in self._keys:
-            out = merged(out^, v.params())
-        for ref v in self._aggs:
-            out = merged(out^, v.params())
-        return out^
-
     def to_operator(
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
@@ -774,9 +723,6 @@ struct Limit(Relation, Writable):
 
     def schema(self) -> Schema:
         return self._input.schema()
-
-    def params(self) -> List[DynParam]:
-        return self._input.params()
 
     def to_operator(
         self, ctx: ExecContext, bindings: Bindings = Bindings()
@@ -835,9 +781,6 @@ struct Sort(Relation, Writable):
 
     def schema(self) -> Schema:
         return self._input.schema()
-
-    def params(self) -> List[DynParam]:
-        return self._input.params()
 
     def to_operator(
         self, ctx: ExecContext, bindings: Bindings = Bindings()

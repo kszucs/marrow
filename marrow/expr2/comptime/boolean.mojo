@@ -31,7 +31,7 @@ from ...kernels.boolean import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape, merged
-from ..params import Bindings, DynParam
+from ..params import Bindings
 from ..physical import Datum
 from .core import ComptimeValue
 
@@ -85,15 +85,10 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         self.l = l^
         self.r = r^
 
-    # -- Analyzable ---------------------------------------------------------
+    # -- Value --------------------------------------------------------------
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
-    def params(self) -> List[DynParam]:
-        """Union of the operands', deduped by name — the same fold as
-        `columns()`, which is why parameters need no registry."""
-        return merged(self.l.params(), self.r.params())
 
     def name(self) -> String:
         return String()
@@ -101,9 +96,12 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    # -- Executable ----------------------------------------------------------
+    def resolve(self, bindings: Bindings) raises -> Self:
+        return Self(self.l.resolve(bindings), self.r.resolve(bindings))
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         """Materialise both operands, then let the kernel decide the nulls.
 
         `K.apply` is Kleene-correct for `AND` and `OR` — a known-false operand
@@ -111,8 +109,8 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         here re-derives that rule; deriving it twice is how two copies drift.
         """
         var n = batch.num_rows()
-        var lhs = _as_bool(self.l.evaluate(batch, bindings), n)
-        var rhs = _as_bool(self.r.evaluate(batch, bindings), n)
+        var lhs = _as_bool(self.l.evaluate(batch), n)
+        var rhs = _as_bool(self.r.evaluate(batch), n)
         return Self.K.apply(lhs, rhs).to_dyn()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -150,21 +148,19 @@ struct Not[A: ComptimeValue](ComptimeValue):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def params(self) -> List[DynParam]:
-        return self.a.params()
-
     def name(self) -> String:
         return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def resolve(self, bindings: Bindings) raises -> Self:
+        return Self(self.a.resolve(bindings))
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         var n = batch.num_rows()
         return Datum(
-            NotKernel.apply(
-                _as_bool(self.a.evaluate(batch, bindings), n)
-            ).to_dyn()
+            NotKernel.apply(_as_bool(self.a.evaluate(batch), n)).to_dyn()
         )
 
     def write_to[W: Writer](self, mut writer: W):

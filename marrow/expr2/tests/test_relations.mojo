@@ -1,8 +1,8 @@
-"""Plan nodes and the processors they become.
+"""Plan nodes and the operators they become.
 
 `logical.mojo` and `physical.mojo` are covered together because neither is
 observable alone: a `Relation` is a description, so the only way to ask whether
-it described the right thing is to run the `Processor` it builds. Each test
+it described the right thing is to run the `Operator` it builds. Each test
 therefore states a claim about the plan and checks it against the rows.
 
 The recurring failure these guard is a **schema that disagrees with the data** —
@@ -276,7 +276,7 @@ def test_an_aggregate_groups_by_its_key() raises:
 def test_aggregate_schema_is_keys_then_aggregates() raises:
     """The ordering every consumer depends on, asserted where it is decided.
 
-    The processor reads its key fields straight off the front of this schema,
+    The operator reads its key fields straight off the front of this schema,
     so a change that appended keys last would mis-type the grouper rather than
     fail loudly.
     """

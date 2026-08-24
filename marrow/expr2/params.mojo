@@ -37,29 +37,27 @@ threads is a data race.
 
 None of that exists here. Sharing is structural rather than name-keyed, so
 there is no registry to leak and no global to race on, and one declaration
-cannot conflict with itself. What a plan's parameters *are* is answered by
-walking the plan — `Value.params()`, a sibling to `columns()` — which makes
-them a property of a plan rather than of a process.
+cannot conflict with itself.
 
-The cell is an `ArcPointer[Optional[Scalar[...]]]` and not a struct: there is
-nothing for one to hold beyond the value. `expr/`'s `ParamCell` raises
-"parameter is not bound" *without naming it*, and its docstring explains that
-the cell cannot know the name it is being read through. Here the node knows its
-own name, so the error names it.
+There is deliberately **no `params()` traversal**. Asking a plan which
+parameters it takes is a sixteen-method walk that only a `--help` surface
+would use, and nothing outside a test ever asked. Add it back when something
+does; until then a plan's parameters are discovered the way its columns are
+resolved — by binding it and being told, by name, which one is missing.
+`expr/`'s `ParamCell` raises "parameter is not bound" *without* naming it,
+because a cell cannot know the name it is read through. Here the node **is**
+the parameter, so it can.
 """
 
-from std.hashlib import Hasher
-from std.memory import ArcPointer
 from std.collections import Dict
 
 from ..buffers import Bitmap
-from ..dtypes import DynType, NumericType, StringLikeType
-from ..scalars import DynScalar, PrimitiveScalar, StringScalar
+from ..dtypes import DynType, NumericType
+from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .logical import DynOperator, Shape, Value
+from .logical import Shape
 from .`comptime`.core import NumericValue
-from .physical import Datum, EvalOperator, Morsel, Operator
 
 
 struct Bindings(Copyable, Movable):
@@ -90,65 +88,12 @@ struct Bindings(Copyable, Movable):
         return None
 
 
-struct DynParam(Copyable, Equatable, Hashable, Movable, Writable):
-    """A parameter's declaration, erased so a CLI can list parameters of
-    different types together.
-
-    Pure metadata: name, dtype, help, default. There is nothing to *bind*
-    through it, because a value is no longer stored anywhere in the plan — a
-    CLI reads these to render `--help` and to parse argv, then hands the parsed
-    values to `execute` as `Bindings`.
-    """
-
-    var name: String
-    var dtype: DynType
-    var help: String
-    var default: Optional[DynScalar]
-
-    def __init__(
-        out self,
-        var name: String,
-        var dtype: DynType,
-        var help: String,
-        var default: Optional[DynScalar],
-    ):
-        self.name = name^
-        self.dtype = dtype^
-        self.help = help^
-        self.default = default^
-
-    def __eq__(self, other: Self) -> Bool:
-        """A parameter's identity is its **name**.
-
-        Not a shortcut: "one name is one parameter" is the semantics, so two
-        declarations sharing a name are the same parameter however their help
-        text differs. Saying so here is what lets `merged` be one generic
-        function over anything with an identity, rather than one overload per
-        key.
-        """
-        return self.name == other.name
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.name != other.name
-
-    def __hash__[H: Hasher](self, mut hasher: H):
-        # Hashes the name and nothing else, so it agrees with `__eq__`.
-        self.name.__hash__(hasher)
-
-    def is_required(self) -> Bool:
-        """A parameter with no default must be supplied at execution."""
-        return not self.default
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("--", self.name, " <", self.dtype, ">")
-
-
 struct Param[T: NumericType](NumericValue):
     """A late-bound numeric scalar — `Literal[T]` whose value arrives later.
 
-    Immutable. It knows its name, dtype, help and default; the *value* is
-    supplied to `to_operator` through `Bindings` and lives in the operator that
-    results. `Shape.scalar`, so a predicate over a parameter costs one
+    Immutable. It knows its name, dtype, help and default; the *value* arrives
+    through `Bindings` at `to_operator`, and `resolve` returns a new `Param`
+    holding it. `Shape.scalar`, so a predicate over a parameter costs one
     broadcast, exactly as a literal does.
 
     An unbound parameter with no default raises **naming itself** — the node is
@@ -158,12 +103,15 @@ struct Param[T: NumericType](NumericValue):
     comptime Type = Self.T
     comptime shape = Shape.scalar
     comptime Bound = Scalar[Self.T.native]
-    """The resolved value. `bind` does not resolve it — `to_operator` did, and
-    the operator carries it."""
+    """The value, already substituted. `bind` does not look anything up —
+    `resolve` did, at lowering."""
 
     var _name: String
     var _help: String
-    var _default: Optional[Scalar[Self.T.native]]
+    var _value: Optional[Scalar[Self.T.native]]
+    """The value to use: the declared default until `resolve` replaces it with
+    this execution's binding. Empty means neither exists, which `resolve`
+    reports as an error naming this parameter."""
 
     def __init__(
         out self,
@@ -173,15 +121,7 @@ struct Param[T: NumericType](NumericValue):
     ):
         self._name = name^
         self._help = help^
-        self._default = default^
-
-    def to_dyn_param(self) -> DynParam:
-        var default = Optional[DynScalar](None)
-        if self._default:
-            default = PrimitiveScalar[Self.T](self._default.value()).to_dyn()
-        return DynParam(
-            self._name.copy(), DynType(Self.T()), self._help.copy(), default^
-        )
+        self._value = default^
 
     # -- Value --------------------------------------------------------------
 
@@ -194,27 +134,40 @@ struct Param[T: NumericType](NumericValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
 
-    def params(self) -> List[DynParam]:
-        return [self.to_dyn_param()]
+    def resolve(self, bindings: Bindings) raises -> Self:
+        """Substitute this execution's value — the one node that does.
 
-    # -- PrimitiveValue -----------------------------------------------------
-
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
-        """Resolve against this execution's values.
-
-        **Here and not at `to_operator`.** `to_operator` copies a node without
-        descending into it, so a parameter nested inside `a > min_a` would
-        never be reached — resolving there needs every composite node to
-        rebuild itself with resolved children, a second traversal of the whole
-        tree. `bind` already walks it and already carries per-execution state,
-        so this is where a value belongs.
+        Called once, from `to_operator`, so a parameter is gone before the
+        first batch arrives and an unbound one fails at lowering rather than
+        partway through a stream. Every composite node above this one rebuilds
+        with resolved children, which is how a parameter nested inside
+        `a > min_a` is reached at all; the leaf that is not a parameter takes
+        `Value.resolve`'s default and costs nothing.
         """
         var got = bindings.get(self._name)
         if got:
-            return got.value().as_primitive[Self.T]().value()
-        if self._default:
-            return self._default.value()
-        raise Error("parameter '", self._name, "' is not bound")
+            return Param[Self.T](
+                self._name.copy(),
+                self._help.copy(),
+                Optional(got.value().as_primitive[Self.T]().value()),
+            )
+        if self._value:
+            return self.copy()
+        raise Error(
+            "parameter '",
+            self._name,
+            "' is not bound",
+            (": " + self._help) if self._help else "",
+        )
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+        # `resolve` filled this or raised; the guard is for a `Param` reached
+        # without going through `to_operator`, which nothing does.
+        if self._value:
+            return self._value.value()
+        raise Error("parameter '", self._name, "' was not resolved")
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return None

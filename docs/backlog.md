@@ -376,6 +376,31 @@ of the above is local evidence only.
 
 ---
 
+### Both `expr2` binary-size gates deadlock the compiler — **open, 2026-08-24**
+
+`query_expr2_streaming` and `query_expr2_agg_fused` no longer build. A single
+`mojo build -O3 -g0 -I . benchmarks/binary_size/query_expr2_streaming.mojo`
+parks at **0.0% CPU with RSS pinned at 791 MB** and never finishes; `sample`
+shows 14 frames in `semaphore_wait_trap`. That is the deadlock signature §0
+records — flat RSS at 0% CPU, not a runaway elaboration — and it produces no
+diagnostic.
+
+**It is not caused by the `resolve` change**: reproduced at `HEAD` with that
+work stashed, with no other `mojo` process running, in a fresh single build.
+
+The nine gates that do not touch `expr2` are unaffected — `pixi run
+binary_size` builds all twelve of its programs and reports normally. So the
+deadlock is specific to what these two files instantiate, which makes them the
+reproduction: they are ~40 lines each and the only `-O3` programs that build a
+plan from `marrow.expr2`.
+
+Consequence: **`expr2` currently has no size gate.** `check_gate.py` lists both
+in `baseline.json`, so `pixi run -e dev python3 benchmarks/binary_size/check_gate.py`
+hangs rather than failing — it must be run with the two removed, or bisected
+against `pixi run binary_size`, until this is fixed. The two recorded
+regressions (`query_expr2_streaming` +3.268%, `query_expr2_agg_fused` +6.339%)
+therefore remain unattributed and unverified.
+
 ### `dispatch` hangs a narrow compilation unit — **open, blocks `test_distinct`**
 
 `RapidHashKernel.dispatch` (the 37-arm runtime dtype fan-out) hangs the Mojo

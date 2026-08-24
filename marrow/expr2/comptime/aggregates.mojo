@@ -84,7 +84,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
         self._input = input^
         self._name = name^
 
-    # -- Analyzable ---------------------------------------------------------
+    # -- Value --------------------------------------------------------------
 
     def columns(self) -> List[String]:
         return self._input.columns()
@@ -95,13 +95,16 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    # -- Executable ----------------------------------------------------------
+    def resolve(self, bindings: Bindings) raises -> Self:
+        return Self(self._input.resolve(bindings), self._name.copy())
 
     comptime shape = Shape.scalar
     """An aggregate yields one value per group, so it is scalar-shaped in the
     same sense a literal is: it does not produce a value per input row."""
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         """An aggregate has no per-batch value, and saying so is the point.
 
         Folding needs every batch, so there is nothing to answer here — the
@@ -121,7 +124,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
             ),
         )
 
-    # -- to_operator -------------------------------------------------------
+    # -- to_operator --------------------------------------------------------
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
@@ -134,10 +137,10 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
         """
         if grouped:
             return FoldOperator[Self.K, Self.A, HashGrouping](
-                self._input.copy(), bindings.copy()
+                self._input.resolve(bindings)
             )
         return FoldOperator[Self.K, Self.A, ScalarGrouping](
-            self._input.copy(), bindings.copy()
+            self._input.resolve(bindings)
         )
 
     def alias(self, var name: String) -> Self:
@@ -197,10 +200,8 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
     """
 
     var _input: Self.A
-    var _bindings: Bindings
-    """This execution's parameter values — held by the operator, as
-    `EvalOperator` holds them, so a parameter inside the folded subtree
-    resolves at `bind` time."""
+    """The folded subtree, with its parameters already substituted — `resolve`
+    ran at `to_operator`, so nothing here looks a binding up."""
     var _state: AggState[Self.K, Self.A.Type]
     var _num_groups: Int
     var _emitted: Bool
@@ -213,9 +214,8 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
     contract: an operator that cannot say "spent" cannot be driven generically.
     """
 
-    def __init__(out self, var input: Self.A, var bindings: Bindings):
+    def __init__(out self, var input: Self.A):
         self._input = input^
-        self._bindings = bindings^
         # One implicit slot when this fold does not scatter, including over an
         # input that yields nothing: `sum` of no rows is one NULL, not no rows.
         self._num_groups = 1 if not Self.G.scatters else 0
@@ -242,7 +242,7 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         if n == 0:
             return None
         comptime W = Self.W
-        var bound = self._input.bind(batch, self._bindings)
+        var bound = self._input.bind(batch)
         var v = self._input.validity(bound)
 
         # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop

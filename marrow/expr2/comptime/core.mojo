@@ -70,7 +70,7 @@ trait ComptimeValue(Evaluable, Value):
 
     This is where `evaluate` lives — **not** on `Value`. A logical node is
     stateless and has no business exposing a way to run itself; `evaluate` here
-    is the *lane's fused driver*, the thing this lane's processor calls once it
+    is the *lane's fused driver*, the thing this lane's operator calls once it
     has been handed a batch. It is invisible to `DynValue` and to every
     consumer outside the lane, which reach a value only through
     `to_operator`.
@@ -81,7 +81,7 @@ trait ComptimeValue(Evaluable, Value):
     materialises a `DynArray` per node, so it can answer neither.
     """
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         """One fused pass over the batch. The lane's driver, called by
         `EvalOperator`; each family below supplies the default body."""
         ...
@@ -92,8 +92,12 @@ trait ComptimeValue(Evaluable, Value):
         """Every comptime node becomes the same operator — one that forwards
         each batch to the fused driver. `grouped` is ignored: an elementwise
         value has no placement. Aggregates override this with a `FoldOperator`.
+
+        `resolve` runs exactly here, once, and `bindings` goes no further: the
+        operator holds a tree with its parameters already substituted, so the
+        per-batch path never looks a name up.
         """
-        return EvalOperator[Self](self.copy(), bindings.copy())
+        return EvalOperator[Self](self.resolve(bindings))
 
     comptime Type: DataType
     """This node's output type, known without a schema.
@@ -168,7 +172,7 @@ trait PrimitiveValue(ComptimeValue):
     an expression and a per-element read.
     """
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
         """Resolve this subtree against `batch`, once, before the lane loop.
 
         Every schema lookup and every `Variant` unwrap happens here so that
@@ -176,7 +180,7 @@ trait PrimitiveValue(ComptimeValue):
         """
         ...
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         """One fused pass over the batch — `bind` once, then `lane` per chunk.
 
         A trait **default**, not a free driver, because it is the same for
@@ -190,7 +194,7 @@ trait PrimitiveValue(ComptimeValue):
         a fresh buffer, and a literal stays a scalar.
         """
         comptime native = Self.Type.native
-        var bound = self.bind(batch, bindings)
+        var bound = self.bind(batch)
 
         comptime if Self.shape == Shape.scalar:
             # Nothing to iterate — evaluate the lane once and stay lazy, which
@@ -283,11 +287,11 @@ trait StringValue(ComptimeValue):
     `NumericValue.Bound`, and declared per concrete struct for the same
     reason."""
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
         """Resolve this subtree against `batch`, once, before the lane loop."""
         ...
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         """One fused pass — `bind` once, then `lane` per row.
 
         A builder rather than `apply`: `apply` writes fixed-width elements into
@@ -298,7 +302,7 @@ trait StringValue(ComptimeValue):
         Leaves override this: a column hands back its own array rather than
         copying every byte through a fresh builder.
         """
-        var bound = self.bind(batch, bindings)
+        var bound = self.bind(batch)
         var length = batch.num_rows()
         var builder = BinaryLikeBuilder[Self.Type](length)
         var v = self.validity(bound)
@@ -421,9 +425,7 @@ trait ListValue(ComptimeValue):
     # keeps `ArrayLengthKernel` able to infer its own `T`, which an opaque
     # associated type defeats.
 
-    def bind(
-        self, batch: RecordBatch, bindings: Bindings
-    ) raises -> ListLikeArray[Self.Type]:
+    def bind(self, batch: RecordBatch) raises -> ListLikeArray[Self.Type]:
         ...
 
     def validity(
@@ -461,7 +463,7 @@ trait BoolValue(ComptimeValue):
     an expression and a per-element read.
     """
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch) raises -> Self.Bound:
         """Resolve this subtree against `batch`, once, before the lane loop.
 
         Every schema lookup and every `Variant` unwrap happens here so that
@@ -478,7 +480,7 @@ trait BoolValue(ComptimeValue):
     into. A node with two operands of different widths takes the wider.
     """
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         """One fused bool pass: bit-pack a `Bitmap` from `lane`.
 
         The numeric default's sibling, and separate for the one reason above —
@@ -486,7 +488,7 @@ trait BoolValue(ComptimeValue):
         and the lane width comes from `NativeType`.
         """
         var length = batch.num_rows()
-        var bound = self.bind(batch, bindings)
+        var bound = self.bind(batch)
         var bits = Bitmap.alloc_uninit(length)
 
         @always_inline

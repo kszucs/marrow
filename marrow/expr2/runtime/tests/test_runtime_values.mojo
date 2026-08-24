@@ -14,7 +14,6 @@ from ....dtypes import int64
 from ....scalars import DynScalar, Int64Scalar
 from ....tabular import RecordBatch, record_batch
 from ...logical import Shape
-from ...params import Bindings
 from ..values import Payload, RuntimeValue, column, literal
 
 
@@ -63,13 +62,13 @@ def test_runtime_dtype_agrees_with_evaluation() raises:
     then produces."""
     var b = _batch()
     var v = column("b")
-    var produced = v.evaluate(b, Bindings()).to_array(b.num_rows()).dtype()
+    var produced = v.evaluate(b).to_array(b.num_rows()).dtype()
     assert_true(v.dtype(b.schema) == produced)
 
 
 def test_runtime_column_reads_the_named_column() raises:
     var b = _batch()
-    var got = column("b").evaluate(b, Bindings()).to_array(b.num_rows())
+    var got = column("b").evaluate(b).to_array(b.num_rows())
     assert_true(got == b.column("b"))
 
 
@@ -78,9 +77,7 @@ def test_runtime_literal_broadcasts_to_the_batch_length() raises:
     stays a scalar until something asks."""
     var b = _batch()
     var got = (
-        literal(DynScalar(Int64Scalar(7)))
-        .evaluate(b, Bindings())
-        .to_array(b.num_rows())
+        literal(DynScalar(Int64Scalar(7))).evaluate(b).to_array(b.num_rows())
     )
     assert_equal(len(got), 4)
     assert_true(got == array([7, 7, 7, 7], int64))

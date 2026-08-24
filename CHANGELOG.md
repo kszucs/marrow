@@ -315,6 +315,31 @@
 
 ### Refactors
 
+- **`expr2` parameters are substituted at lowering, not on every batch.**
+  `Value` gained `resolve(bindings) -> Self`, a structural rewrite defaulted to
+  `self.copy()`, and `to_operator` — which already received the `Bindings` —
+  now calls it once. Three consequences: `bind` and `evaluate` lost their
+  `bindings` argument across 34 signatures, four of which had ignored it;
+  `EvalOperator` and `FoldOperator` no longer hold a `Bindings`, so nothing on
+  the per-batch path looks a name up; and an unbound parameter raises from
+  `to_operator`, naming itself, instead of partway through a stream.
+
+  Returning `Self` is what makes it cheap — the type does not change, so a
+  fused subtree stays one type, and a leaf that contains no parameter needs no
+  implementation. Only the nine composites and `Param` override it.
+
+- **`Value.params()` is gone**, with `DynParam` and the `merged` overload that
+  keyed on it. Sixteen implementations, fifteen of them pure plumbing, plus two
+  thin-fn slots on `DynValue` and `DynRelation` — and every caller outside a
+  node's own recursion was a test. It was built for a `--help` surface that
+  does not exist. Reintroducing it costs the same sixteen methods, no more.
+
+- **`expr2`'s `to_processor` slots are named `to_operator`,** matching the
+  method they dispatch to. `DynProcessor` was renamed to `DynOperator` earlier;
+  the trampoline slots, the trampolines themselves, and eight prose references
+  kept the old word. The stale `# -- Analyzable` / `# -- Executable` section
+  headers now name the traits that exist (`Value`, `Evaluable`).
+
 - **`kernels.core.Grouping` is now `Groups`.** It holds the *result* of
   grouping — dense ids plus a group count — and the name was needed for the
   placement *strategy* the aggregation architecture specifies as

@@ -51,7 +51,6 @@ from ..utils import RapidHash64
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .params import Bindings
 
 
 # ---------------------------------------------------------------------------
@@ -246,14 +245,14 @@ struct DynOperator[Out: Copyable](Movable):
 
 
 trait Evaluable(Copyable, Deinitable):
-    """A lane's fused driver — the one thing a processor needs to call.
+    """A lane's fused driver — the one thing an operator needs to call.
 
     Deliberately *not* `Value`. `evaluate` is execution, so it does not belong
     on a logical trait; this names the internal capability each lane offers its
-    own processor, and nothing outside a lane is bound on it.
+    own operator, and nothing outside a lane is bound on it.
     """
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: RecordBatch) raises -> Datum:
         ...
 
 
@@ -277,22 +276,13 @@ struct EvalOperator[V: Evaluable](Operator):
     comptime Out = Datum
 
     var _value: Self.V
-    var _bindings: Bindings
-    """This execution's parameter values.
+    """The value, with its parameters already substituted."""
 
-    Held by the *operator*, not the node: that is what keeps a plan a
-    description and lets two executions bind different values. `bind` receives
-    them and a `Param` reads them there — which is also the only place they can
-    reach a parameter nested inside a subtree, since `to_operator` copies a
-    node without descending into it.
-    """
-
-    def __init__(out self, var value: Self.V, var bindings: Bindings):
+    def __init__(out self, var value: Self.V):
         self._value = value^
-        self._bindings = bindings^
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        return self._value.evaluate(morsel.batch, self._bindings)
+        return self._value.evaluate(morsel.batch)
 
     def drain(mut self) raises -> Optional[Datum]:
         return None
@@ -560,7 +550,7 @@ struct AggregateOperator(Operator):
     `RecordBatch`, so each state binds its own input subtree and folds lanes
     straight out of the morsel — `sum(a * 2 + b)` never materialises
     `a * 2 + b`, and no per-aggregate chunk list is ever built. `expr/`'s
-    processor buffers one evaluated column per aggregate per morsel and
+    operator buffers one evaluated column per aggregate per morsel and
     `concat`s them at emit time; this one keeps only the grouper's key
     builders, which grow with the number of *groups* rather than the number of
     rows.
