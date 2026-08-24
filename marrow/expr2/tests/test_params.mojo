@@ -2,8 +2,8 @@
 
 A parameter is a literal whose value arrives later, so these cases check the
 two things that distinguish it from `Literal`: that binding reaches every use
-site — including one nested inside a fused subtree — and that it happens when
-the plan is lowered, not once per batch.
+site — including one nested inside a fused subtree — and that the value
+belongs to an execution rather than to the plan.
 """
 
 from std.testing import assert_true
@@ -11,7 +11,6 @@ from std.testing import assert_true
 from ...builders import array
 from ...dtypes import Int64Type, int64
 from ...scalars import Int64Scalar
-from ...execution import ExecContext
 from ...tabular import record_batch
 from ..builders import param
 from ..params import Bindings
@@ -54,12 +53,12 @@ def test_a_value_is_supplied_per_execution() raises:
 
 
 def test_binding_reaches_a_nested_parameter() raises:
-    """`resolve` rebuilds every composite with resolved children.
+    """`bind` walks the whole tree, so depth does not matter.
 
     The parameter here is the right operand of a `Gt` that is itself the
-    operand of a `Not` — two composites deep. A design that substituted only
-    at the root would leave it unbound, which is what makes this the case
-    worth stating.
+    operand of a `Not` — two composites deep. `to_operator` copies a node
+    without descending into it, so binding at that seam would leave this one
+    unread; the per-batch walk is what reaches it.
     """
     var t = param("t", int64)
     var plan = _table().filter(
@@ -75,12 +74,7 @@ def test_binding_reaches_a_nested_parameter() raises:
 def test_an_unbound_parameter_names_itself() raises:
     """`expr/`'s cell raises "parameter is not bound" without naming it,
     because a cell cannot know the name it is read through. Here the node is
-    the parameter, so it can.
-
-    It raises from `to_operator` — before a single batch is read — because
-    that is where `resolve` runs. Resolving per batch would report this
-    partway through a stream instead.
-    """
+    the parameter, so it can."""
     var missing = param("threshold", int64)
     var plan = _table().filter(
         DynValue(Gt(Column[Int64Type]("a"), missing.copy()))
@@ -88,7 +82,7 @@ def test_an_unbound_parameter_names_itself() raises:
 
     var raised = False
     try:
-        _ = plan.to_operator(ExecContext.auto())
+        _ = plan.execute()
     except e:
         raised = True
         assert_true("threshold" in String(e))

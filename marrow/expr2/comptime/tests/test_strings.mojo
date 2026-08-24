@@ -9,6 +9,7 @@ and drives a `Filter` unchanged.
 
 from std.testing import assert_equal, assert_true
 
+from ...params import Bindings
 from ....builders import array, StringBuilder
 from ....arrays import StringArray
 from ....dtypes import (
@@ -50,13 +51,15 @@ def test_a_string_column_evaluates_to_itself() raises:
     """A leaf hands back its own array rather than copying every byte through
     a builder — the reason the trait default is overridable."""
     var b = _batch()
-    var got = StringColumn[StringType]("name").evaluate(b).to_array(4)
+    var got = (
+        StringColumn[StringType]("name").evaluate(b, Bindings()).to_array(4)
+    )
     assert_true(got.as_string() == _names())
 
 
 def test_a_string_literal_stays_scalar() raises:
     var lit = StringLiteral[StringType]("pear")
-    assert_true(lit.evaluate(_batch()).is_scalar())
+    assert_true(lit.evaluate(_batch(), Bindings()).is_scalar())
     assert_equal(len(lit.columns()), 0)
 
 
@@ -67,7 +70,7 @@ def test_string_equality_bit_packs_like_a_numeric_comparison() raises:
     var pred = StrEq(
         StringColumn[StringType]("name"), StringLiteral[StringType]("pear")
     )
-    var got = pred.evaluate(b).to_array(4).as_bool().copy()
+    var got = pred.evaluate(b, Bindings()).to_array(4).as_bool().copy()
     assert_true(got[0].value())
     assert_true(not got[1].value())
     assert_true(got.is_null(2))  # NULL = 'pear' is NULL, not false
@@ -84,7 +87,7 @@ def test_a_null_string_compares_to_null_not_false() raises:
             StringColumn[StringType]("name"), StringLiteral[StringType]("pear")
         )
     ]:
-        var got = pred.evaluate(b).to_array(4).as_bool().copy()
+        var got = pred.evaluate(b, Bindings()).to_array(4).as_bool().copy()
         assert_true(got.is_null(2))
 
 
@@ -94,7 +97,7 @@ def test_string_ordering() raises:
         StrLt(
             StringColumn[StringType]("name"), StringLiteral[StringType]("pear")
         )
-        .evaluate(b)
+        .evaluate(b, Bindings())
         .to_array(4)
         .as_bool()
         .copy()
@@ -106,7 +109,7 @@ def test_string_ordering() raises:
         StrGt(
             StringColumn[StringType]("name"), StringLiteral[StringType]("pear")
         )
-        .evaluate(b)
+        .evaluate(b, Bindings())
         .to_array(4)
         .as_bool()
         .copy()

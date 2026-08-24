@@ -48,6 +48,7 @@ from ..parquet.reader import LeafSet, ParquetFile
 from ..parquet.source import MappedFile
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
+from .params import Bindings
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -252,7 +253,7 @@ trait Evaluable(Copyable, Deinitable):
     own operator, and nothing outside a lane is bound on it.
     """
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         ...
 
 
@@ -276,13 +277,17 @@ struct EvalOperator[V: Evaluable](Operator):
     comptime Out = Datum
 
     var _value: Self.V
-    """The value, with its parameters already substituted."""
+    var _bindings: Bindings
+    """This execution's parameter values. Held by the *operator*, not the node:
+    that is what keeps a plan a description and lets two executions bind
+    different values."""
 
-    def __init__(out self, var value: Self.V):
+    def __init__(out self, var value: Self.V, var bindings: Bindings):
         self._value = value^
+        self._bindings = bindings^
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        return self._value.evaluate(morsel.batch)
+        return self._value.evaluate(morsel.batch, self._bindings)
 
     def drain(mut self) raises -> Optional[Datum]:
         return None

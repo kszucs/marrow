@@ -9,6 +9,7 @@ the whole point: `FALSE AND NULL` is `FALSE`, not `NULL`.
 from std.testing import assert_equal, assert_true
 
 from ....arrays import BoolArray
+from ...params import Bindings
 from ....builders import BoolBuilder, array
 from ....dtypes import Int64Type, int64
 from ....tabular import RecordBatch, record_batch
@@ -42,7 +43,7 @@ def _bools(codes: List[Int]) raises -> BoolArray:
 
 
 def _eval(v: Some[ComptimeValue], b: RecordBatch) raises -> BoolArray:
-    return v.evaluate(b).to_array(b.num_rows()).as_bool().copy()
+    return v.evaluate(b, Bindings()).to_array(b.num_rows()).as_bool().copy()
 
 
 def test_and_follows_the_kleene_truth_table() raises:

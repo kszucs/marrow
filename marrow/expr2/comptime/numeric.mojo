@@ -64,13 +64,10 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        return Self(self.l.resolve(bindings), self.r.resolve(bindings))
-
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        return (self.l.bind(batch), self.r.bind(batch))
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Arithmetic is null-in, null-out: the result is valid where both
@@ -146,13 +143,10 @@ struct NumericCompare[
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        return Self(self.l.resolve(bindings), self.r.resolve(bindings))
-
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        return (self.l.bind(batch), self.r.bind(batch))
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """A comparison is null-in, null-out: valid where both operands are.
@@ -230,24 +224,19 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return self.then.dtype(schema)
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        return Self(
-            self.cond.resolve(bindings),
-            self.then.resolve(bindings),
-            self.otherwise.resolve(bindings),
-        )
-
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         var n = batch.num_rows()
         var conditions = List[BoolArray]()
         conditions.append(
-            self.cond.evaluate(batch).to_array(n).as_bool().copy()
+            self.cond.evaluate(batch, bindings).to_array(n).as_bool().copy()
         )
         var values = List[DynArray]()
-        values.append(self.then.evaluate(batch).to_array(n))
-        var else_ = Optional(self.otherwise.evaluate(batch).to_array(n))
+        values.append(self.then.evaluate(batch, bindings).to_array(n))
+        var else_ = Optional(
+            self.otherwise.evaluate(batch, bindings).to_array(n)
+        )
         return (
             case_when(conditions, values, else_^)
             .as_primitive[Self.Type]()
@@ -326,12 +315,9 @@ struct TemporalCompare[
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        return Self(self.l.resolve(bindings), self.r.resolve(bindings))
-
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
         # Same width is not the same type: `date32` and `time32[s]` are both
         # int32, and `timestamp[s]` and `timestamp[ms]` differ only in a unit
         # the width cannot see. Checked once per batch, not per row.
@@ -343,7 +329,7 @@ struct TemporalCompare[
                 String(self.r.dtype(batch.schema)),
                 ": units must match, coercion is not implemented",
             )
-        return (self.l.bind(batch), self.r.bind(batch))
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         """Null-in, null-out — as `NumericCompare`. The lane compares whatever

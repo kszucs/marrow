@@ -171,7 +171,11 @@ struct RuntimeValue(Evaluable, Movable, Value):
             return schema.fields[i].dtype.copy()
         if self._tag == "literal" and self._payload.isa[DynScalar]():
             return self._payload[DynScalar].type()
-        return self.evaluate(RecordBatch.empty(schema)).to_array(0).dtype()
+        return (
+            self.evaluate(RecordBatch.empty(schema), Bindings())
+            .to_array(0)
+            .dtype()
+        )
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
@@ -180,15 +184,14 @@ struct RuntimeValue(Evaluable, Movable, Value):
         same adapter the comptime lane uses — the lanes differ in how they
         compute, not in how they are turned into something that runs.
 
-        `resolve` is `Value`'s default here — a copy. This lane has no `Param`
-        node and a `RuntimeValue`'s children are `RuntimeValue`s, so there is
-        nothing in one of these trees for a binding to reach.
+        `bindings` is carried for symmetry and reaches nothing: this lane has
+        no `Param` node, and a `RuntimeValue`'s children are `RuntimeValue`s.
         """
-        return EvalOperator[Self](self.resolve(bindings))
+        return EvalOperator[Self](self.copy(), bindings.copy())
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         # Leaf spelled out — see `columns`. There is no switch here: which
         # kernel runs was decided when the node was built, by which `EvalFn`
         # the constructing method named.
@@ -197,7 +200,9 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
         var kids = List[DynArray]()
         for ref kid in self._kids:
-            kids.append(kid[].evaluate(batch).to_array(batch.num_rows()))
+            kids.append(
+                kid[].evaluate(batch, bindings).to_array(batch.num_rows())
+            )
         return self._eval(kids, self._payload, batch)
 
     # -- Writable -----------------------------------------------------------

@@ -23,8 +23,9 @@ state, and it made executing one plan on two threads with two values a data
 race: the same defect `expr/`'s process-global registry has, relocated into the
 node rather than removed.
 
-Resolving at `to_operator` time instead means the plan stays immutable, two
-executions with different values cannot interfere, and there is no cell.
+Passing the values *through* the execution instead means the plan stays
+immutable, two executions with different values cannot interfere, and there is
+no cell.
 
 That one property removes an entire subsystem. `expr/` declares parameters
 *inline* at each use — `col("a") > param("min-a", int64)` written twice must
@@ -42,11 +43,11 @@ cannot conflict with itself.
 There is deliberately **no `params()` traversal**. Asking a plan which
 parameters it takes is a sixteen-method walk that only a `--help` surface
 would use, and nothing outside a test ever asked. Add it back when something
-does; until then a plan's parameters are discovered the way its columns are
-resolved — by binding it and being told, by name, which one is missing.
-`expr/`'s `ParamCell` raises "parameter is not bound" *without* naming it,
-because a cell cannot know the name it is read through. Here the node **is**
-the parameter, so it can.
+does; until then a plan's parameters are discovered the way its columns are —
+by binding it and being told, by name, which one is missing. `expr/`'s
+`ParamCell` raises "parameter is not bound" *without* naming it, because a
+cell cannot know the name it is read through. Here the node **is** the
+parameter, so it can.
 """
 
 from std.collections import Dict
@@ -92,8 +93,8 @@ struct Param[T: NumericType](NumericValue):
     """A late-bound numeric scalar — `Literal[T]` whose value arrives later.
 
     Immutable. It knows its name, dtype, help and default; the *value* arrives
-    through `Bindings` at `to_operator`, and `resolve` returns a new `Param`
-    holding it. `Shape.scalar`, so a predicate over a parameter costs one
+    through `Bindings`, which the operator carries and hands back down to
+    `bind`. `Shape.scalar`, so a predicate over a parameter costs one
     broadcast, exactly as a literal does.
 
     An unbound parameter with no default raises **naming itself** — the node is
@@ -103,15 +104,14 @@ struct Param[T: NumericType](NumericValue):
     comptime Type = Self.T
     comptime shape = Shape.scalar
     comptime Bound = Scalar[Self.T.native]
-    """The value, already substituted. `bind` does not look anything up —
-    `resolve` did, at lowering."""
+    """This execution's value, looked up once per batch — the same stage at
+    which a column leaf resolves its column."""
 
     var _name: String
     var _help: String
-    var _value: Optional[Scalar[Self.T.native]]
-    """The value to use: the declared default until `resolve` replaces it with
-    this execution's binding. Empty means neither exists, which `resolve`
-    reports as an error naming this parameter."""
+    var _default: Optional[Scalar[Self.T.native]]
+    """Used when nothing binds this name. Absent means the parameter is
+    required, and `bind` says so naming it."""
 
     def __init__(
         out self,
@@ -121,7 +121,7 @@ struct Param[T: NumericType](NumericValue):
     ):
         self._name = name^
         self._help = help^
-        self._value = default^
+        self._default = default^
 
     # -- Value --------------------------------------------------------------
 
@@ -134,40 +134,28 @@ struct Param[T: NumericType](NumericValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        """Substitute this execution's value — the one node that does.
+    # -- PrimitiveValue -----------------------------------------------------
 
-        Called once, from `to_operator`, so a parameter is gone before the
-        first batch arrives and an unbound one fails at lowering rather than
-        partway through a stream. Every composite node above this one rebuilds
-        with resolved children, which is how a parameter nested inside
-        `a > min_a` is reached at all; the leaf that is not a parameter takes
-        `Value.resolve`'s default and costs nothing.
+    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+        """Read this execution's value — the one leaf that reads `bindings`.
+
+        **Here, rather than as a rewrite at `to_operator`.** Substituting at
+        lowering would need every composite node to rebuild itself with
+        resolved children, one method per node for a concern one node has.
+        `bind` already walks the whole tree and already carries per-execution
+        state, so this costs nothing that was not already being paid.
         """
         var got = bindings.get(self._name)
         if got:
-            return Param[Self.T](
-                self._name.copy(),
-                self._help.copy(),
-                Optional(got.value().as_primitive[Self.T]().value()),
-            )
-        if self._value:
-            return self.copy()
+            return got.value().as_primitive[Self.T]().value()
+        if self._default:
+            return self._default.value()
         raise Error(
             "parameter '",
             self._name,
             "' is not bound",
             (": " + self._help) if self._help else "",
         )
-
-    # -- PrimitiveValue -----------------------------------------------------
-
-    def bind(self, batch: RecordBatch) raises -> Self.Bound:
-        # `resolve` filled this or raised; the guard is for a `Param` reached
-        # without going through `to_operator`, which nothing does.
-        if self._value:
-            return self._value.value()
-        raise Error("parameter '", self._name, "' was not resolved")
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return None

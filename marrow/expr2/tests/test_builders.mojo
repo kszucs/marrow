@@ -7,6 +7,7 @@ differs is only what the caller had to know, and when it is resolved.
 
 from std.testing import assert_equal, assert_true
 
+from ..params import Bindings
 from ...builders import Date32Builder, array
 from ...dtypes import Date32Type, DynType, Int64Type, bool_, date32, int64
 from ...scalars import DynScalar, Int64Scalar
@@ -44,8 +45,8 @@ def test_col_without_dtype_takes_the_runtime_lane() raises:
 def test_both_col_overloads_evaluate_alike() raises:
     """The two lanes are different machinery, not different answers."""
     var b = _batch()
-    var typed = col("b", int64).evaluate(b).to_array(b.num_rows())
-    var erased = col("b").evaluate(b).to_array(b.num_rows())
+    var typed = col("b", int64).evaluate(b, Bindings()).to_array(b.num_rows())
+    var erased = col("b").evaluate(b, Bindings()).to_array(b.num_rows())
     assert_true(typed == erased)
     assert_true(typed == b.column("b"))
 
@@ -55,7 +56,7 @@ def test_lit_with_dtype_stays_scalar() raises:
     buys, and it is the difference from the runtime lane below."""
     var v = lit(7, int64)
     assert_true(v.shape == Shape.scalar)
-    var d = v.evaluate(_batch())
+    var d = v.evaluate(_batch(), Bindings())
     assert_true(d.is_scalar())
 
 
@@ -69,7 +70,7 @@ def test_lit_without_dtype_broadcasts() raises:
     var b = _batch()
     var v = lit(DynScalar(Int64Scalar(7)))
     assert_true(v.shape == Shape.columnar)
-    var arr = v.evaluate(b).to_array(b.num_rows())
+    var arr = v.evaluate(b, Bindings()).to_array(b.num_rows())
     assert_equal(len(arr), 4)
     assert_true(arr == array([7, 7, 7, 7], int64))
 

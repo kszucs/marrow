@@ -87,10 +87,9 @@ struct Shape(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
 trait Value(Copyable, Deinitable, Writable):
     """What every expression is, in both lanes.
 
-    Six members: what it reads, what it is called, what type it produces,
-    whether it yields one value or one per row, how to substitute this
-    execution's parameter values into it, and how to turn it into something
-    that runs.
+    Five members: what it reads, what it is called, what type it produces,
+    whether it yields one value or one per row, and how to turn it into
+    something that runs.
 
     **One trait, not three.** This was `Analyzable & Executable & Writable`, a
     composite alias split that way in reaction to `expr/`'s nine-responsibility
@@ -131,29 +130,16 @@ trait Value(Copyable, Deinitable, Writable):
         """The type this produces, without running anything."""
         ...
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        """This node with this execution's parameter values substituted in.
-
-        The plan's one rewrite. `to_operator` calls it once, so `Param` is
-        gone by the time a batch arrives and the per-batch path never sees a
-        `Bindings` — an unbound parameter fails at lowering, naming itself,
-        rather than partway through a stream.
-
-        Returning `Self` is what keeps it free: the type does not change, so a
-        fused subtree stays fused, and a leaf that contains no parameter needs
-        no implementation at all. Only composites — which must rebuild with
-        resolved children — and `Param` itself override this.
-        """
-        return self.copy()
-
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator[Datum]:
         """The stateful thing that runs this value.
 
         `grouped` picks a fold's placement and is ignored by everything else.
-        `bindings` is consumed *here*, by a single `resolve` call, and does not
-        reach any per-batch method.
+        `bindings` supplies this execution's parameter values — the operator
+        carries them and hands them back down to `bind`, where a `Param` reads
+        them. That is why a plan holds no parameter state and two executions
+        of it cannot interfere.
         """
         ...
 
@@ -179,13 +165,9 @@ struct DynValue(Copyable, Movable, Writable):
     `expr/`'s two extra slots were `name()`, which duplicated what `name` and
     `write` already answered, and `resolve_names` — a *rewrite*, carried by
     every boxed expression in every binary though it is a no-op in the comptime
-    lane.
-
-    `resolve` is a rewrite too and takes no slot, for the reason that argument
-    always implied: it runs inside `to_operator`, one level down, where the
-    boxed type is still known. A `_resolve` slot would have to hand back a
-    re-boxed `DynValue` — an allocation, to produce something the box has no
-    use for.
+    lane. Nothing here is a rewrite: parameter values travel *through* an
+    execution rather than being substituted into a copy of the plan, so the
+    box never has to hand back a re-boxed `DynValue`.
 
     Deliberately **not** conforming to the traits it erases. A box may hold a
     trait-bound value; it should not be one. `DynValue` exposes the same
@@ -333,7 +315,7 @@ trait Relation(Copyable, Deinitable, Movable):
         removing the seam is the part that would be hard to undo.
 
         `bindings` is threaded down to the values this plan contains and is
-        consumed there, by `Value.resolve`. A relation never reads one.
+        consumed there, by `Param.bind`. A relation never reads one.
         """
         ...
 

@@ -13,6 +13,7 @@ Lane-specific behaviour lives with its lane — `comptime/tests/` and
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...arrays import DynArray
+from ..params import Bindings
 from ...builders import array
 from ...dtypes import DynType, Int64Type, int64
 from ...scalars import DynScalar
@@ -127,11 +128,11 @@ def test_shape_agrees_with_evaluation() raises:
 
     var lit = Literal[Int64Type](7)
     assert_true(lit.shape == Shape.scalar)
-    assert_true(lit.evaluate(b).is_scalar())
+    assert_true(lit.evaluate(b, Bindings()).is_scalar())
 
     var col = Column[Int64Type]("a")
     assert_true(col.shape == Shape.columnar)
-    assert_false(col.evaluate(b).is_scalar())
+    assert_false(col.evaluate(b, Bindings()).is_scalar())
 
     # The runtime lane cannot be lazy, and says so.
     assert_true(RuntimeValue.shape == Shape.columnar)

@@ -96,12 +96,9 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        return Self(self.l.resolve(bindings), self.r.resolve(bindings))
-
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         """Materialise both operands, then let the kernel decide the nulls.
 
         `K.apply` is Kleene-correct for `AND` and `OR` — a known-false operand
@@ -109,8 +106,8 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         here re-derives that rule; deriving it twice is how two copies drift.
         """
         var n = batch.num_rows()
-        var lhs = _as_bool(self.l.evaluate(batch), n)
-        var rhs = _as_bool(self.r.evaluate(batch), n)
+        var lhs = _as_bool(self.l.evaluate(batch, bindings), n)
+        var rhs = _as_bool(self.r.evaluate(batch, bindings), n)
         return Self.K.apply(lhs, rhs).to_dyn()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -154,13 +151,12 @@ struct Not[A: ComptimeValue](ComptimeValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def resolve(self, bindings: Bindings) raises -> Self:
-        return Self(self.a.resolve(bindings))
-
-    def evaluate(self, batch: RecordBatch) raises -> Datum:
+    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
         var n = batch.num_rows()
         return Datum(
-            NotKernel.apply(_as_bool(self.a.evaluate(batch), n)).to_dyn()
+            NotKernel.apply(
+                _as_bool(self.a.evaluate(batch, bindings), n)
+            ).to_dyn()
         )
 
     def write_to[W: Writer](self, mut writer: W):
