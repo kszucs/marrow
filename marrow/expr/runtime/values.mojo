@@ -50,17 +50,6 @@ to it should be a decision someone makes rather than something a caller can do
 from outside.
 """
 
-comptime EvalFn = def(
-    List[DynArray], Payload, StructArray
-) thin raises -> DynArray
-"""How one node computes its column, given its children's already-computed
-columns, its payload, and the batch.
-
-A `thin` pointer, bound at construction, so a binary links exactly the kernels
-its expressions name and nothing else.
-"""
-
-
 struct RuntimeValue(Evaluable, Movable, Value):
     """A runtime-built expression.
 
@@ -90,23 +79,20 @@ struct RuntimeValue(Evaluable, Movable, Value):
     makes copying a subtree O(1)."""
 
     var _payload: Payload
-    var _eval: EvalFn
 
     # -- construction -------------------------------------------------------
 
-    def __init__(out self, var tag: String, ev: EvalFn, var payload: Payload):
+    def __init__(out self, var tag: String, var payload: Payload):
         self._tag = tag^
         self._kids = List[ArcPointer[Self]]()
         self._payload = payload^
-        self._eval = ev
 
-    def __init__(out self, var tag: String, ev: EvalFn, a: Self):
+    def __init__(out self, var tag: String, a: Self):
         self._tag = tag^
         self._kids = [ArcPointer(a.copy())]
         self._payload = Payload(NoneType())
-        self._eval = ev
 
-    def __init__(out self, var tag: String, ev: EvalFn, var kids: List[Self]):
+    def __init__(out self, var tag: String, var kids: List[Self]):
         """N children. `if_else` needs three and `case_when` needs `2n + 1`, so
         the fixed-arity constructors below do not cover everything."""
         self._tag = tag^
@@ -114,13 +100,11 @@ struct RuntimeValue(Evaluable, Movable, Value):
         for ref k in kids:
             self._kids.append(ArcPointer(k.copy()))
         self._payload = Payload(NoneType())
-        self._eval = ev
 
-    def __init__(out self, var tag: String, ev: EvalFn, a: Self, b: Self):
+    def __init__(out self, var tag: String, a: Self, b: Self):
         self._tag = tag^
         self._kids = [ArcPointer(a.copy()), ArcPointer(b.copy())]
         self._payload = Payload(NoneType())
-        self._eval = ev
 
     # -- Value --------------------------------------------------------------
 
@@ -194,16 +178,45 @@ struct RuntimeValue(Evaluable, Movable, Value):
     # -- Evaluable ----------------------------------------------------------
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        # Leaf spelled out — see `columns`. There is no switch here: which
-        # kernel runs was decided when the node was built, by which `EvalFn`
-        # the constructing method named.
-        if len(self._kids) == 0:
-            return self._eval(List[DynArray](), self._payload, batch)
+        """Interpret this node.
 
-        var kids = List[DynArray]()
+        A switch on `_tag`, not a per-node function pointer. The pointer bought
+        pay-per-use kernel linking — a binary linked only the kernels its
+        expressions named — but it also put a thin fn field in a
+        self-referential struct that already holds a nested variant, which is
+        miscompiled. The switch costs binary size *in binaries that use this
+        lane at all*; the typed API builds comptime nodes and never reaches it.
+        """
+        # Leaves spelled out before the recursion — see `columns`. Without the
+        # guard the compiler reads the recursion below as unconditional and
+        # warns `self recursive call will cause an infinite loop`.
+        if len(self._kids) == 0:
+            if self._tag == "column":
+                return Datum(batch.field(self._payload[String]).copy())
+            if self._tag == "literal":
+                return Datum(self._payload[DynScalar].repeat(len(batch)))
+            raise Error("evaluate: unknown runtime leaf '", self._tag, "'")
+
+        var kids = List[DynArray](capacity=len(self._kids))
         for ref kid in self._kids:
             kids.append(kid[].evaluate(batch, bindings).to_array(len(batch)))
-        return self._eval(kids, self._payload, batch)
+
+        if self._tag == "coalesce":
+            return Datum(coalesce_kernel(kids))
+        if self._tag == "case_when":
+            var has_else = len(kids) % 2 == 1
+            var n = (len(kids) - 1) // 2 if has_else else len(kids) // 2
+            var conds = List[BoolArray](capacity=n)
+            for i in range(n):
+                conds.append(kids[i].as_bool().copy())
+            var vals = List[DynArray](capacity=n)
+            for i in range(n):
+                vals.append(kids[n + i].copy())
+            var otherwise = Optional[DynArray](None)
+            if has_else:
+                otherwise = kids[len(kids) - 1].copy()
+            return Datum(case_when_kernel(conds, vals, otherwise^))
+        raise Error("evaluate: unknown runtime node '", self._tag, "'")
 
     # -- Writable -----------------------------------------------------------
 
@@ -229,23 +242,13 @@ struct RuntimeValue(Evaluable, Movable, Value):
 def column(var name: String) -> RuntimeValue:
     """Read `name` from the batch."""
 
-    def eval(
-        kids: List[DynArray], p: Payload, b: StructArray
-    ) raises -> DynArray:
-        return b.field(p[String]).copy()
-
-    return RuntimeValue("column", eval, Payload(name^))
+    return RuntimeValue("column", Payload(name^))
 
 
 def literal(var value: DynScalar) -> RuntimeValue:
     """A constant, broadcast to the batch's length on evaluation."""
 
-    def eval(
-        kids: List[DynArray], p: Payload, b: StructArray
-    ) raises -> DynArray:
-        return p[DynScalar].repeat(len(b))
-
-    return RuntimeValue("literal", eval, Payload(value^))
+    return RuntimeValue("literal", Payload(value^))
 
 
 def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
@@ -258,12 +261,7 @@ def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
     if len(values) == 0:
         raise Error("coalesce: needs at least one value")
 
-    def eval(
-        kids: List[DynArray], p: Payload, b: StructArray
-    ) raises -> DynArray:
-        return coalesce_kernel(kids)
-
-    return RuntimeValue("coalesce", eval, values^)
+    return RuntimeValue("coalesce", values^)
 
 
 def case_when(
@@ -293,22 +291,6 @@ def case_when(
     if len(conditions) == 0:
         raise Error("case_when: needs at least one condition")
 
-    def eval(
-        kids: List[DynArray], p: Payload, b: StructArray
-    ) raises -> DynArray:
-        var has_else = len(kids) % 2 == 1
-        var n = (len(kids) - 1) // 2 if has_else else len(kids) // 2
-        var conds = List[BoolArray](capacity=n)
-        for i in range(n):
-            conds.append(kids[i].as_bool().copy())
-        var vals = List[DynArray](capacity=n)
-        for i in range(n):
-            vals.append(kids[n + i].copy())
-        var otherwise = Optional[DynArray](None)
-        if has_else:
-            otherwise = kids[len(kids) - 1].copy()
-        return case_when_kernel(conds, vals, otherwise^)
-
     var kids = List[RuntimeValue]()
     for ref c in conditions:
         kids.append(c.copy())
@@ -316,4 +298,4 @@ def case_when(
         kids.append(v.copy())
     if else_:
         kids.append(else_.value().copy())
-    return RuntimeValue("case_when", eval, kids^)
+    return RuntimeValue("case_when", kids^)

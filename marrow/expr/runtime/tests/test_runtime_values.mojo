@@ -28,12 +28,6 @@ def _batch() raises -> RecordBatch:
     )
 
 
-def _unevaluated(
-    kids: List[DynArray], p: Payload, b: StructArray
-) raises -> DynArray:
-    """A stand-in `EvalFn` for nodes built to be analysed, never run."""
-    raise Error("_unevaluated: this node exists for structural assertions only")
-
 
 def test_runtime_shape_is_always_columnar() raises:
     """The lane materialises unconditionally, so it answers truthfully rather
@@ -48,9 +42,8 @@ def test_runtime_columns_are_deduped_in_first_seen_order() raises:
     reorder would build a schema in the wrong order."""
     var v = RuntimeValue(
         "add",
-        _unevaluated,
         column("b"),
-        RuntimeValue("add", _unevaluated, column("a"), column("b")),
+        RuntimeValue("add", column("a"), column("b")),
     )
     var cols = v.columns()
     assert_equal(len(cols), 2)
@@ -97,7 +90,7 @@ def test_runtime_literal_broadcasts_to_the_batch_length() raises:
 def test_runtime_a_subtree_copies_in_constant_time() raises:
     """Children sit behind `ArcPointer`, so copying a plan shares rather than
     clones. Equality of what the copy reports is the observable half."""
-    var v = RuntimeValue("add", _unevaluated, column("a"), column("b"))
+    var v = RuntimeValue("add", column("a"), column("b"))
     var w = v.copy()
     assert_equal(len(w.columns()), 2)
     assert_equal(w.columns()[0], "a")

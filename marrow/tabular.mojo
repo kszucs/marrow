@@ -374,10 +374,33 @@ struct RecordBatch(
         the execution layer uses at its boundary, so operators can work in
         struct arrays and still hand back a `RecordBatch`.
         """
-        return RecordBatch(
-            schema=Schema.from_dtype(array.dtype),
-            columns=array.children.copy(),
-        )
+        # A batch has no struct-level validity: it is a schema plus columns,
+        # each with its own. There is nowhere to record "this row is null *as a
+        # struct*", so a struct array carrying one cannot round-trip and this
+        # raises rather than dropping it. `Filter`'s struct arm does compute
+        # such a bitmap, so this is reachable rather than theoretical.
+        if array.nulls != 0 or array.bitmap:
+            raise Error(
+                "from_struct_array: a struct array with struct-level validity"
+                " has no RecordBatch representation"
+            )
+        var nfields = len(array.dtype.as_struct().fields)
+        if nfields != len(array.children):
+            raise Error(
+                "from_struct_array: dtype names ",
+                nfields,
+                " fields but the array has ",
+                len(array.children),
+                " children",
+            )
+        # The children carry the *parent's* offset/length: a struct array is
+        # sliced by moving its own window, not by rewriting its children, so
+        # taking `children` verbatim silently discards the slice. `Filter`'s
+        # struct arm applies the same rule.
+        var cols = List[DynArray](capacity=len(array.children))
+        for ref c in array.children:
+            cols.append(c.slice(array.offset, array.length))
+        return RecordBatch(schema=Schema.from_dtype(array.dtype), columns=cols^)
 
     def to_struct_array(self) -> StructArray:
         """Converts this RecordBatch to a StructArray (columns become fields).

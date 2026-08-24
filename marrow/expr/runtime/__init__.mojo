@@ -1,1 +1,1 @@
-from .values import Payload, EvalFn, RuntimeValue
+from .values import Payload, RuntimeValue

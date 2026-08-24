@@ -409,9 +409,22 @@ statistics-based predicate pruning for row groups and pages.
 
 Two standing constraints:
 
-- **Keep `marrow.expr` small-binary** — preserve the closed-erasure/DCE property
-  (no open dispatchers, fused-only value boxes, closed per-dtype kernels) and
-  gate changes on `benchmarks/binary_size/` (`pixi run binary_size`).
+- **Keep `marrow.expr` small-binary — for the *comptime* lane.** Preserve the
+  closed-erasure/DCE property (no open dispatchers, fused-only value boxes,
+  closed per-dtype kernels) and gate changes on `benchmarks/binary_size/`
+  (`pixi run binary_size`).
+
+  **The constraint is about the AOT lane, not the runtime one.** A program
+  built from `col("a", int64)` and the fused nodes is a size-critical AOT
+  binary and must not pay for kernels it never names. A program that builds
+  expressions *at run time* has already accepted an interpreter — it cannot
+  know its kernels at compile time, and a frontend that constructs queries
+  dynamically will reach most of them anyway. So `runtime/values.mojo`
+  interprets by switching on `_tag`, and that is deliberate: it costs size only
+  in binaries that use the runtime lane at all, and the comptime lane never
+  reaches it. Do not reintroduce a per-node function pointer to shave that
+  cost — the previous one put a thin fn field in a self-referential struct and
+  the compiler miscompiled it (see `docs/backlog.md`).
 - **The box is the erasure boundary — a node never needs an erased variant.**
   `DynValue` erases; the nodes do not. Before adding a `Dyn*` node, check the
   existing one: either its type is known where it is constructed (a literal, a

@@ -893,7 +893,11 @@ struct JoinOperator(Operator):
             self._kind,
             self._strictness,
         )
-        return result^
+        # Re-typed with the *declared* schema: the kernel names its output from
+        # the arrays it joined, while `Join.schema()` is what the plan promised
+        # its consumers. Handing back the kernel's dtype makes
+        # `plan.schema() != plan.execute().schema`.
+        return _struct_of(self._schema, result.children.copy(), len(result))
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         self._ensure_built()

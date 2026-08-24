@@ -376,6 +376,57 @@ of the above is local evidence only.
 
 ---
 
+### `RuntimeValue` is miscompiled — **open, 2026-08-24**
+
+Two or more `RuntimeValue`s (`expr/runtime/values.mojo`) built in one program
+corrupt memory. The only marrow code that hits it is `case_when` with two or
+more branches, because it is the one node that builds several runtime nodes in
+one expression — 17 cases in `expr/tests/test_api.mojo`. Everything else in
+`marrow/expr` passes.
+
+**Symptom depends on the struct's shape.** With the per-node `EvalFn` field it
+was allocator corruption: a tcmalloc freelist crash
+(`SizeMap::num_objects_to_move`) in whatever allocated *next*, so the reported
+stack was always innocent code. With `EvalFn` removed (the layer now
+interprets on `_tag`) the corruption is gone and what remains is a *transient
+aliasing* read:
+
+```
+c right after building ->  'lo', 'mid'     <- correct
+c after building v[0]  ->  'lo', ''        <- blank
+c after building v[1]  ->  'lo', 'mid'     <- correct again
+```
+
+A value that comes back was never lost: `c[1]`'s payload `String` transiently
+reads memory reused by another list's allocation. It surfaces as
+`ABORT: get: wrong variant type` when `case_when` reads a child mid-window.
+
+**Needed all three fields, when it was still crashing.** Recursion
+(`List[ArcPointer[Self]]`), the `Payload` variant, and the thin fn field —
+*every pair is fine*, and a marrow-free recursive struct does not reproduce.
+`Payload` is a `Variant` whose arms include two more large variants: `DynArray`,
+and `DynScalar`, itself recursive through `StructScalar` -> `List[DynScalar]`.
+
+Ruled out by direct experiment: reserving capacity, list comprehension,
+copy-vs-move (both fail), `Optional[Self]`, the `_tag` field, the fn signature
+mentioning `Payload`, destruction/teardown (all exit 0), `Array`-literal ->
+`List` conversion, an explicit `copy()` instead of the synthesized one, and
+boxing the payload (which only *moved* the crash). A minimal replica with the
+same four fields does **not** reproduce, so it needs more of the real type's
+surface than has been isolated so far.
+
+**Do not reintroduce a per-node function pointer.** Removing it measured
+**+0 bytes** on both AOT gates — the fused lane never constructs a
+`RuntimeValue`, so the interpreter is dead-code-eliminated out of it entirely.
+It bought nothing where size matters and put a thin fn field in a
+self-referential struct.
+
+**What remains:** file upstream. The code is legal and idiomatic; the compiler
+mishandles this struct shape. Note the Mojo manual steers self-referential
+structs toward `Pointer[Self, MutUntrackedOrigin]` with manual allocation
+(`manual/structs/reference.mdx`) rather than value-nested containers, and
+`_kids` was *already* forced behind `ArcPointer` by a compiler rejection.
+
 ### Both `expr2` binary-size gates deadlock the compiler — **root-caused 2026-08-24, fix open**
 
 `query_expr2_streaming` and `query_expr2_agg_fused` no longer build. A single
