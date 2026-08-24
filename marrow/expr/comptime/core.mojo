@@ -38,6 +38,7 @@ from ...dtypes import (
 )
 from ...schema import Schema
 from ...arrays import (
+    Array,
     StructArray,
     BinaryLikeArray,
     BoolArray,
@@ -592,3 +593,94 @@ trait BoolValue(ComptimeValue):
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         ...
+
+
+# ---------------------------------------------------------------------------
+# Unnamed, ColumnBound — what the families cut across
+# ---------------------------------------------------------------------------
+# The two traits below are **not** families. A family answers "what shape does
+# this produce" and every node belongs to exactly one; these answer two
+# narrower questions that recur *across* families, and a node opts into each
+# independently. `NumericCompare` is a `BoolValue` and `Unnamed`; `ListLength`
+# is a `NumericValue`, `Unnamed` *and* `ColumnBound`.
+#
+# They exist because the answers were copied: nine nodes across four files
+# spelled `return String()`, and seven spelled
+# `return bound.to_data().owned_validity()` — byte-identical bodies a reader
+# has to diff to know are the same. A trait default states it once, and the
+# conformance list says which nodes mean it.
+#
+# **What could not be factored, and why.** `columns()` duplicates just as
+# widely — five nodes spell `[self._name.copy()]`, five spell
+# `merged(self.l.columns(), self.r.columns())` — and it stays duplicated,
+# because both bodies read a *field*. Mojo rejects a `var` requirement on a
+# trait outright ("traits do not support 'var' fields; use 'comptime' to
+# declare associated types"), so no default can reach `self._name` or
+# `self.l`; routing through an abstract accessor would only trade one one-line
+# body per node for another. The two below are factorable precisely because
+# neither reads `self`: `Unnamed.name` reads nothing, and
+# `ColumnBound.validity` reads only its `bound` argument.
+
+
+trait Unnamed(ComptimeValue):
+    """This node has no name of its own.
+
+    Every computed node -- arithmetic, comparison, boolean, `CASE WHEN`,
+    `array_length` -- answers `name()` with the empty string, because a name is
+    something a *reference* carries and a computation does not. The planner
+    supplies one where output needs a label.
+
+    The conformance is the documentation. Before this trait a reader could only
+    learn that `NumericBinary` and `StringCompare` agree by comparing their
+    bodies; now the two say so in their conformance list, and a node that
+    genuinely has a name (`Column`, `Literal`) is visibly absent from it.
+
+    A same-signature override of a trait default is ordinary -- `Column` and
+    `Literal` simply do not conform here rather than overriding. What is
+    forbidden, and what this deliberately does not do, is a default whose
+    *return type* a conformer must change: those become competing overloads and
+    every call site reports `ambiguous call to 'name'`.
+    """
+
+    def name(self) -> String:
+        return String()
+
+
+trait ColumnBound(ComptimeValue):
+    """This node's `Bound` is an array, so its validity is that array's.
+
+    The families disagree about where validity comes from, which is why
+    `validity` is declared on each of them rather than on `ComptimeValue`.
+    This trait names the case where the answer is trivial: the bound *is* a
+    materialised column, so the result's nulls are already recorded in it and
+    there is nothing to intersect.
+
+    Two quite different nodes land here, and it is worth being explicit that
+    they are the same case:
+
+    - **A leaf** -- `Column`, `TemporalColumn`, `BoolColumn`, `StringColumn`,
+      `ListColumn`. `bind` resolved the column out of the batch, and the column
+      carries its own bitmap. No second lookup, no re-read.
+    - **A node that computed its result in `bind`** -- `ListLength` and
+      `CaseWhen`. Neither fuses element-wise: each runs a kernel over the whole
+      batch and `lane` reads the answer back. `CaseWhen`'s validity is
+      emphatically *not* structural -- a row is null when the **selected**
+      branch was null -- but that is exactly why it belongs here: the rule was
+      already applied by the kernel, so the answer lives in the bound result
+      and nowhere else.
+
+    That is the honest boundary. A node whose validity is *structural* --
+    `NumericBinary`, `NumericCompare`, `TemporalCompare`, `StringCompare` --
+    intersects its operands' bitmaps and does not conform, because its `Bound`
+    is a tuple of its operands' bounds and not a column at all.
+
+    `Bound` is narrowed from the family's `Copyable & Deinitable` to `Array`,
+    which is what lets the default body call `to_data()`. A sub-trait may
+    narrow an associated type; a conformer may not, which is why this is a
+    trait rather than a bound written on each node.
+    """
+
+    comptime Bound: Array
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return bound.to_data().owned_validity()

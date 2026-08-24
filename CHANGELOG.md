@@ -342,6 +342,45 @@
 
 ### Refactors
 
+- **`Unnamed` and `ColumnBound`: two cross-family traits that delete sixteen
+  copied method bodies from the comptime lane.** Nine nodes across four files
+  answered `name()` with `return String()`, and seven answered `validity()`
+  with `return bound.to_data().owned_validity()` — byte-identical bodies a
+  reader had to diff to know were the same. Both are now trait defaults, and a
+  node's conformance list says which it means: `NumericCompare` is a
+  `BoolValue` and `Unnamed`; `ListLength` is a `NumericValue`, `Unnamed` *and*
+  `ColumnBound`.
+
+  Neither is a family. A family answers what shape a node produces and every
+  node belongs to exactly one; these answer two narrower questions that recur
+  across families, and a node opts into each independently. `ColumnBound`
+  narrows the family's `Bound: Copyable & Deinitable` to `Bound: Array`, which
+  is what lets its default call `to_data()` — a sub-trait may narrow an
+  associated type where a conformer may not. It covers two cases that look
+  different and are not: a leaf whose `bind` resolved a column, and a node
+  (`ListLength`, `CaseWhen`) that ran a kernel in `bind` and reads the answer
+  back. `CaseWhen`'s validity is emphatically not structural — a row is null
+  when the *selected* branch was null — but that rule was already applied by
+  the kernel, so the answer lives in the bound result exactly as a leaf's does.
+  The four nodes whose validity really is structural (`NumericBinary`,
+  `NumericCompare`, `TemporalCompare`, `StringCompare`) intersect their
+  operands' bitmaps and deliberately do not conform.
+
+  **Byte-for-byte identical binary size** across all twelve gates in
+  `benchmarks/binary_size/`, per-module symbol counts included: a trait default
+  monomorphises exactly as the per-node body did. This is not the
+  `variant_dispatch` shape that cost +662,740 bytes — there is no narrowing
+  closure and no dispatch ladder involved.
+
+  **`columns()` stays duplicated, and the reason is a compiler limit worth
+  recording.** Five nodes spell `[self._name.copy()]` and five spell
+  `merged(self.l.columns(), self.r.columns())`, but both read a *field*, and
+  Mojo rejects a `var` requirement on a trait outright — *"traits do not
+  support 'var' fields; use 'comptime' to declare associated types"*. So no
+  default can reach `self._name` or `self.l`, and routing through an abstract
+  accessor would only trade one one-line body per node for another. The two
+  members that were factorable are exactly the two that never read `self`.
+
 - **`AggKernel.AccType` is bound on `PrimitiveType`, and `TemporalMinMax` is
   gone.** The bound used to be `NumericType` at both ends, which was the
   *intersection* of four unrelated requirements — `count` needs nothing of the

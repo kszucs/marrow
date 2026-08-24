@@ -31,14 +31,16 @@ from ..params import Bindings
 from ..physical import Datum
 from .core import (
     BoolValue,
+    ColumnBound,
     ListValue,
     NumericValue,
     StringValue,
     TemporalValue,
+    Unnamed,
 )
 
 
-struct Column[T: NumericType](NumericValue):
+struct Column[T: NumericType](ColumnBound, NumericValue):
     """A numeric column, resolved by name once per batch."""
 
     comptime Type = Self.T
@@ -78,10 +80,6 @@ struct Column[T: NumericType](NumericValue):
         # column. Every leaf goes through it for that reason.
         return batch.field(self._name).as_primitive[Self.T]().copy()
 
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        # The bound column already carries it — no second lookup, no re-read.
-        return bound.to_data().owned_validity()
-
     @always_inline
     def lane[
         W: Int
@@ -92,7 +90,7 @@ struct Column[T: NumericType](NumericValue):
         writer.write("col(", self._name, ")")
 
 
-struct TemporalColumn[T: TemporalType](TemporalValue):
+struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
     """A date/time/timestamp/duration column, resolved by name once per batch.
 
     **Byte-for-byte the same lane as `Column[T]`** — temporal dtypes are
@@ -152,9 +150,6 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return batch.field(self._name).as_primitive[Self.T]().copy()
-
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        return bound.to_data().owned_validity()
 
     @always_inline
     def lane[
@@ -218,7 +213,7 @@ struct Literal[T: NumericType](NumericValue):
         writer.write("lit(", self._value, ")")
 
 
-struct BoolColumn(BoolValue):
+struct BoolColumn(BoolValue, ColumnBound):
     """A boolean column, resolved by name once per batch.
 
     Separate from `Column[T]` because booleans are **bit-packed**: the `Bound`
@@ -263,9 +258,6 @@ struct BoolColumn(BoolValue):
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return batch.field(self._name).as_bool().copy()
 
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        return bound.to_data().owned_validity()
-
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         return bound.values().load[W](idx)
@@ -274,7 +266,7 @@ struct BoolColumn(BoolValue):
         writer.write(self._name)
 
 
-struct StringColumn[T: StringLikeType](StringValue):
+struct StringColumn[T: StringLikeType](ColumnBound, StringValue):
     """A string column, resolved by name once per batch.
 
     Parameterised on `StringLikeType` rather than fixed to `string`, so
@@ -314,9 +306,6 @@ struct StringColumn[T: StringLikeType](StringValue):
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return batch.field(self._name).as_type[Self.Bound]().copy()
 
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        return bound.to_data().owned_validity()
-
     @always_inline
     def lane(self, bound: Self.Bound, idx: Int) -> String:
         return String(bound.unsafe_get(UInt(idx)))
@@ -325,7 +314,7 @@ struct StringColumn[T: StringLikeType](StringValue):
         writer.write("col(", self._name, ")")
 
 
-struct StringLiteral[T: StringLikeType](StringValue):
+struct StringLiteral[T: StringLikeType](StringValue, Unnamed):
     """A constant string. Stays `Shape.scalar`, so it never materialises
     unless something asks it to."""
 
@@ -342,9 +331,6 @@ struct StringLiteral[T: StringLikeType](StringValue):
 
     def columns(self) -> List[String]:
         return List[String]()
-
-    def name(self) -> String:
-        return String("")
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.T())
@@ -371,7 +357,7 @@ struct StringLiteral[T: StringLikeType](StringValue):
         writer.write('"', self._value, '"')
 
 
-struct ListColumn[T: ListLikeType](ListValue):
+struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
     """A list column, resolved by name once per batch.
 
     Parameterised on `ListLikeType`, so `list`, `large_list` and `map` are the
@@ -384,6 +370,11 @@ struct ListColumn[T: ListLikeType](ListValue):
 
     comptime Type = Self.T
     comptime shape = Shape.columnar
+    comptime Bound = ListLikeArray[Self.T]
+    """`ListValue` declares no `Bound` — a list is only ever read from a
+    column, so naming it there would be a variable with one value. It is named
+    *here* because `ColumnBound` needs something to narrow to `Array`, and this
+    leaf is the one place the answer is fixed."""
 
     var _name: String
 
@@ -413,16 +404,11 @@ struct ListColumn[T: ListLikeType](ListValue):
     ) raises -> ListLikeArray[Self.Type]:
         return batch.field(self._name).as_type[ListLikeArray[Self.T]]().copy()
 
-    def validity(
-        self, bound: ListLikeArray[Self.Type]
-    ) raises -> Optional[Bitmap[mut=False]]:
-        return bound.to_data().owned_validity()
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
 
 
-struct ListLength[A: ListValue](NumericValue):
+struct ListLength[A: ListValue](ColumnBound, NumericValue, Unnamed):
     """`array_length(list)` — a list consumed into a fixed-width column.
 
     The shape every list operation takes: it binds a `ListValue` and produces a
@@ -448,9 +434,6 @@ struct ListLength[A: ListValue](NumericValue):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def name(self) -> String:
-        return String()
-
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Int32Type())
 
@@ -458,10 +441,6 @@ struct ListLength[A: ListValue](NumericValue):
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return ArrayLengthKernel.apply(self.a.bind(batch, bindings))
-
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        # A null list has no length, so validity is the list's own.
-        return bound.to_data().owned_validity()
 
     @always_inline
     def lane[

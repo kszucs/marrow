@@ -17,7 +17,7 @@ from ..params import Bindings
 from ..physical import Datum
 
 from .rules import widest_shape
-from .core import BoolValue, StringValue
+from .core import BoolValue, StringValue, Unnamed
 
 
 trait StringCompareKernel:
@@ -70,7 +70,7 @@ struct StrGtKernel(StringCompareKernel):
 
 
 struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
-    BoolValue
+    BoolValue, Unnamed
 ):
     """A comparison over two string operands, producing packed bits.
 
@@ -98,9 +98,6 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
-    def name(self) -> String:
-        return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())

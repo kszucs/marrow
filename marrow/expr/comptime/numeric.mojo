@@ -30,11 +30,17 @@ from ..params import Bindings
 from ..physical import Datum
 
 from .rules import promote, wider, widest_shape
-from .core import BoolValue, NumericValue, TemporalValue
+from .core import (
+    BoolValue,
+    ColumnBound,
+    NumericValue,
+    TemporalValue,
+    Unnamed,
+)
 
 
 struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
-    NumericValue
+    NumericValue, Unnamed
 ):
     """A binary arithmetic node over two fused operands."""
 
@@ -56,10 +62,6 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
-    def name(self) -> String:
-        # Computed, so it has no name of its own — the planner supplies one.
-        return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
@@ -103,7 +105,7 @@ comptime Mul = NumericBinary[MulKernel, _, _]
 
 struct NumericCompare[
     K: NumericCompareKernel, L: NumericValue, R: NumericValue
-](BoolValue):
+](BoolValue, Unnamed):
     """A comparison over two numeric operands, producing packed bits.
 
     `Type` is not declared: `BoolValue` fixes it, because a comparison has no
@@ -136,9 +138,6 @@ struct NumericCompare[
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
-    def name(self) -> String:
-        return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
@@ -175,7 +174,9 @@ comptime Gt = NumericCompare[GtKernel, _, _]
 comptime Lt = NumericCompare[LtKernel, _, _]
 
 
-struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
+struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
+    ColumnBound, NumericValue, Unnamed
+):
     """`CASE WHEN cond THEN then ELSE otherwise END`, over numeric branches.
 
     **Not element-wise fused, deliberately.** `bind` computes the whole result
@@ -218,9 +219,6 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
             self.otherwise.columns(),
         )
 
-    def name(self) -> String:
-        return String()
-
     def dtype(self, schema: Schema) raises -> DynType:
         return self.then.dtype(schema)
 
@@ -243,11 +241,6 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
             .copy()
         )
 
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        # Not structural: a row is null when the *selected* branch was null, so
-        # the answer lives in the computed result and nowhere else.
-        return bound.to_data().owned_validity()
-
     @always_inline
     def lane[
         W: Int
@@ -262,7 +255,7 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
 
 struct TemporalCompare[
     K: NumericCompareKernel, L: TemporalValue, R: TemporalValue
-](BoolValue):
+](BoolValue, Unnamed):
     """A comparison over two temporal operands, producing packed bits.
 
     Separate from `NumericCompare` for one reason: `NumericCompare.ArgType` is
@@ -308,9 +301,6 @@ struct TemporalCompare[
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
-    def name(self) -> String:
-        return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())

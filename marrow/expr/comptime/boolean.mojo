@@ -33,7 +33,7 @@ from ...tabular import RecordBatch
 from ..logical import Shape, merged
 from ..params import Bindings
 from ..physical import Datum
-from .core import ComptimeValue
+from .core import ComptimeValue, Unnamed
 
 
 def _as_bool(d: Datum, n: Int) raises -> BoolArray:
@@ -65,7 +65,7 @@ def _as_bool(d: Datum, n: Int) raises -> BoolArray:
 
 
 struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
-    ComptimeValue
+    ComptimeValue, Unnamed
 ):
     """`AND` / `OR` / `XOR` over two boolean operands."""
 
@@ -89,9 +89,6 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
-    def name(self) -> String:
-        return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
@@ -119,7 +116,7 @@ comptime Or = BoolBinary[OrKernel, _, _]
 comptime Xor = BoolBinary[XorKernel, _, _]
 
 
-struct Not[A: ComptimeValue](ComptimeValue):
+struct Not[A: ComptimeValue](ComptimeValue, Unnamed):
     """`NOT`, which is three-valued too: `NOT NULL` is `NULL`.
 
     Unlike `AND`/`OR`, negation's validity *is* structural — the result is null
@@ -144,9 +141,6 @@ struct Not[A: ComptimeValue](ComptimeValue):
 
     def columns(self) -> List[String]:
         return self.a.columns()
-
-    def name(self) -> String:
-        return String()
 
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
