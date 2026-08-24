@@ -1,14 +1,14 @@
 """The API a caller actually writes.
 
 Every other test file in this package builds plan nodes directly —
-`DynRelation(Filter(DynRelation(InMemoryTable(b)), DynValue(Gt(...))))` — which
+`table(b).filter(Gt(...))` — which
 is how the layer is *assembled*, not how it is *used*. These cases exercise the
 surface instead: verbs that compose left to right, and aggregates spelled
 `col("a", int64).sum()` rather than by naming a kernel.
 
 That is the spelling CLAUDE.md mandates, and it is worth testing separately for
 a reason beyond style: the verbs are the only place a caller never writes
-`DynRelation(...)` or `DynValue(...)` by hand, so they are where a missing
+`DynRelation(...)` or `...` by hand, so they are where a missing
 implicit conversion or a wrong argument order actually shows up.
 """
 
@@ -33,7 +33,7 @@ from ...dtypes import (
 )
 from ...kernels.join import JOIN_INNER, JOIN_LEFT
 from ...tabular import RecordBatch, record_batch
-from ..builders import array_length, col, if_else, lit
+from ..builders import array_length, col, if_else, lit, table
 from ..runtime.values import case_when, coalesce, column, literal
 from ...scalars import DynScalar, Int64Scalar
 from ..logical import DynRelation, DynValue, InMemoryTable
@@ -53,7 +53,7 @@ def _orders() raises -> RecordBatch:
 
 
 def _table() raises -> DynRelation:
-    return DynRelation(InMemoryTable(_orders()))
+    return table(_orders())
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +63,7 @@ def test_filter_then_limit_reads_left_to_right() raises:
     """The property the verbs exist for: a plan is a sentence, not a nest."""
     var out = (
         _table()
-        .filter(
-            DynValue(Gt(Column[Int64Type]("amount"), Literal[Int64Type](5)))
-        )
+        .filter(Gt(col("amount", int64), lit(5, int64)))
         .limit(2)
         .execute()
     )
@@ -85,13 +83,7 @@ def test_project_computes_a_new_column() raises:
         _table()
         .project(
             ["doubled"],
-            [
-                DynValue(
-                    Add(
-                        Column[Int64Type]("amount"), Column[Int64Type]("amount")
-                    )
-                )
-            ],
+            [(col("amount", int64) + col("amount", int64))],
         )
         .execute()
     )
@@ -109,7 +101,7 @@ def test_sort_by_then_limit_is_top_n() raises:
     """
     var top_null = (
         _table()
-        .sort_by([DynValue(Column[Int64Type]("amount"))], [False])
+        .sort_by([col("amount", int64)], [False])
         .limit(1)
         .execute()
     )
@@ -117,9 +109,7 @@ def test_sort_by_then_limit_is_top_n() raises:
 
     var top_value = (
         _table()
-        .sort_by(
-            [DynValue(Column[Int64Type]("amount"))], [False], nulls_first=False
-        )
+        .sort_by([col("amount", int64)], [False], nulls_first=False)
         .limit(1)
         .execute()
     )
@@ -133,7 +123,7 @@ def test_a_whole_table_aggregate_needs_no_keys() raises:
     """`rel.aggregate([...])` with no key list at all — one implicit group."""
     var out = (
         _table()
-        .aggregate([DynValue(col("amount", int64).sum().alias("total"))])
+        .aggregate([col("amount", int64).sum().alias("total")])
         .execute()
     )
     assert_equal(out.num_rows(), 1)
@@ -145,8 +135,8 @@ def test_group_by_with_the_fluent_aggregate() raises:
     var out = (
         _table()
         .aggregate(
-            [DynValue(col("amount", int64).sum().alias("total"))],
-            [DynValue(col("customer", int64))],
+            [col("amount", int64).sum().alias("total")],
+            [col("customer", int64)],
         )
         .execute()
     )
@@ -163,10 +153,10 @@ def test_every_aggregate_has_a_fluent_spelling() raises:
         _table()
         .aggregate(
             [
-                DynValue(col("amount", int64).sum().alias("s")),
-                DynValue(col("amount", int64).min().alias("lo")),
-                DynValue(col("amount", int64).max().alias("hi")),
-                DynValue(col("amount", int64).mean().alias("avg")),
+                col("amount", int64).sum().alias("s"),
+                col("amount", int64).min().alias("lo"),
+                col("amount", int64).max().alias("hi"),
+                col("amount", int64).mean().alias("avg"),
             ]
         )
         .execute()
@@ -196,12 +186,10 @@ def test_having_is_a_filter_after_aggregate() raises:
     var out = (
         _table()
         .aggregate(
-            [DynValue(col("amount", int64).sum().alias("total"))],
-            [DynValue(col("customer", int64))],
+            [col("amount", int64).sum().alias("total")],
+            [col("customer", int64)],
         )
-        .filter(
-            DynValue(Gt(Column[Int64Type]("total"), Literal[Int64Type](50)))
-        )
+        .filter(Gt(col("total", int64), lit(50, int64)))
         .execute()
     )
     assert_equal(out.num_rows(), 1)
@@ -212,14 +200,10 @@ def test_having_is_a_filter_after_aggregate() raises:
 # join
 # ---------------------------------------------------------------------------
 def test_join_composes_with_the_other_verbs() raises:
-    var customers = DynRelation(
-        InMemoryTable(
-            record_batch(
+    var customers = table(record_batch(
                 [array([1, 2], int64).copy(), array([100, 200], int64).copy()],
                 names=["customer", "credit"],
-            )
-        )
-    )
+            ))
     var out = customers.join(_table(), [0], [0], JOIN_INNER).execute()
     assert_equal(out.num_rows(), 4)
     assert_equal(out.num_columns(), 4)
@@ -233,15 +217,13 @@ def test_a_full_query_reads_as_one_sentence() raises:
     """
     var out = (
         _table()
-        .filter(
-            DynValue(Gt(Column[Int64Type]("amount"), Literal[Int64Type](5)))
-        )
+        .filter(Gt(col("amount", int64), lit(5, int64)))
         .aggregate(
-            [DynValue(col("amount", int64).sum().alias("total"))],
-            [DynValue(col("customer", int64))],
+            [col("amount", int64).sum().alias("total")],
+            [col("customer", int64)],
         )
-        .filter(DynValue(Gt(Column[Int64Type]("total"), Literal[Int64Type](5))))
-        .sort_by([DynValue(Column[Int64Type]("total"))], [False])
+        .filter(Gt(col("total", int64), lit(5, int64)))
+        .sort_by([col("total", int64)], [False])
         .limit(1)
         .execute()
     )
@@ -264,12 +246,10 @@ def test_if_else_selects_per_row() raises:
         .project(
             ["capped"],
             [
-                DynValue(
-                    if_else(
-                        Gt(Column[Int64Type]("amount"), Literal[Int64Type](15)),
-                        Literal[Int64Type](99),
-                        Column[Int64Type]("amount"),
-                    )
+                if_else(
+                    Gt(col("amount", int64), lit(15, int64)),
+                    lit(99, int64),
+                    col("amount", int64),
                 )
             ],
         )
@@ -305,8 +285,8 @@ def test_array_length_consumes_a_list_into_a_number() raises:
     var batch = record_batch([lists.finish().to_dyn()], names=["xs"])
 
     var out = (
-        DynRelation(InMemoryTable(batch^))
-        .project(["n"], [DynValue(array_length(col("xs", list_(int64))))])
+        table(batch^)
+        .project(["n"], [array_length(col("xs", list_(int64)))])
         .execute()
     )
     ref got = out.columns[0].as_int32()
@@ -335,10 +315,8 @@ def test_a_temporal_column_can_be_filtered() raises:
     )
 
     var out = (
-        DynRelation(InMemoryTable(batch^))
-        .filter(
-            DynValue(TemporalGt(col("d", date32()), col("cutoff", date32())))
-        )
+        table(batch^)
+        .filter(TemporalGt(col("d", date32()), col("cutoff", date32())))
         .execute()
     )
     # 19000 > 19002 false; 19005 > 19002 true; the null does not select
@@ -363,12 +341,8 @@ def test_temporal_comparison_rejects_mismatched_units() raises:
     var raised = False
     try:
         _ = (
-            DynRelation(InMemoryTable(batch^))
-            .filter(
-                DynValue(
-                    TemporalGt(col("d", date32()), col("t", time32(second)))
-                )
-            )
+            table(batch^)
+            .filter(TemporalGt(col("d", date32()), col("t", time32(second))))
             .execute()
         )
     except e:
@@ -389,10 +363,10 @@ def test_coalesce_takes_the_first_non_null() raises:
         names=["a", "b", "c"],
     )
     var out = (
-        DynRelation(InMemoryTable(b^))
+        table(b^)
         .project(
             ["first"],
-            [DynValue(coalesce([column("a"), column("b"), column("c")]))],
+            [coalesce([column("a"), column("b"), column("c")])],
         )
         .execute()
     )
@@ -425,19 +399,17 @@ def test_case_when_picks_the_first_true_branch() raises:
         names=["lo", "mid", "v"],
     )
     var out = (
-        DynRelation(InMemoryTable(b^))
+        table(b^)
         .project(
             ["bucket"],
             [
-                DynValue(
-                    case_when(
-                        [column("lo"), column("mid")],
-                        [
-                            literal(DynScalar(Int64Scalar(1))),
-                            literal(DynScalar(Int64Scalar(2))),
-                        ],
-                        literal(DynScalar(Int64Scalar(9))),
-                    )
+                case_when(
+                    [column("lo"), column("mid")],
+                    [
+                        literal(DynScalar(Int64Scalar(1))),
+                        literal(DynScalar(Int64Scalar(2))),
+                    ],
+                    literal(DynScalar(Int64Scalar(9))),
                 )
             ],
         )

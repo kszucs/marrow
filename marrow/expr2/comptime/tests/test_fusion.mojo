@@ -9,6 +9,7 @@ fused result with the nulls it should have kept.
 
 from std.testing import assert_equal, assert_false, assert_true
 
+from ...builders import col, lit
 from ...params import Bindings
 from ....builders import array
 from ....dtypes import DynType, Int64Type, int64
@@ -38,12 +39,12 @@ def test_dtype_agrees_with_evaluation_comptime() raises:
     answers being equal is the property, not an implementation detail.
     """
     var b = _batch()
-    var v = DynValue(Column[Int64Type]("a"))
+    var v = col("a", int64)
     # A value is reached only through `to_operator` now: it is a stateless
     # description, and running it is the operator's job.
     var op = v.to_operator(False)
     var produced = (
-        op.push(Morsel.ungrouped(b.copy()))
+        op.push(Morsel.ungrouped(b.to_struct_array()))
         .value()
         .to_array(b.num_rows())
         .dtype()
@@ -59,8 +60,8 @@ def test_validity_matches_the_bound_column() raises:
     pass `expr/` needed; the property is that it still reports the same nulls.
     """
     var b = _batch()
-    var c = Column[Int64Type]("a")
-    var bound = c.bind(b, Bindings())
+    var c = col("a", int64)
+    var bound = c.bind(b.to_struct_array(), Bindings())
     var v = c.validity(bound)
 
     assert_true(v)
@@ -71,8 +72,8 @@ def test_validity_matches_the_bound_column() raises:
 
 def test_a_literal_is_never_null() raises:
     var b = _batch()
-    var l = Literal[Int64Type](7)
-    assert_false(Bool(l.validity(l.bind(b, Bindings()))))
+    var l = lit(7, int64)
+    assert_false(Bool(l.validity(l.bind(b.to_struct_array(), Bindings()))))
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +90,10 @@ def test_a_comparison_over_a_null_is_null_not_false() raises:
     each other in `expr/`.
     """
     var b = _batch()  # a = [1, 2, None, 4]
-    var pred = Gt(Column[Int64Type]("a"), Literal[Int64Type](2))
-    var arr = pred.evaluate(b, Bindings()).to_array(b.num_rows())
+    var pred = col("a", int64) > lit(2, int64)
+    var arr = pred.evaluate(b.to_struct_array(), Bindings()).to_array(
+        b.num_rows()
+    )
     ref out = arr.as_bool()
 
     assert_equal(out.null_count(), 1)
@@ -104,8 +107,10 @@ def test_a_comparison_over_a_null_is_null_not_false() raises:
 def test_arithmetic_propagates_nulls_through_fusion() raises:
     """Null in, null out — across a fused subtree, not just one node."""
     var b = _batch()
-    var sum = Add(Column[Int64Type]("a"), Column[Int64Type]("b"))
-    var arr = sum.evaluate(b, Bindings()).to_array(b.num_rows())
+    var sum = col("a", int64) + col("b", int64)
+    var arr = sum.evaluate(b.to_struct_array(), Bindings()).to_array(
+        b.num_rows()
+    )
     ref out = arr.as_int64()
 
     assert_equal(out.null_count(), 1)
@@ -122,11 +127,10 @@ def test_a_fused_subtree_is_one_expression() raises:
     fused pass has to preserve.
     """
     var b = _batch()
-    var pred = Gt(
-        Add(Column[Int64Type]("a"), Column[Int64Type]("b")),
-        Literal[Int64Type](10),
+    var pred = (col("a", int64) + col("b", int64)) > lit(10, int64)
+    var arr = pred.evaluate(b.to_struct_array(), Bindings()).to_array(
+        b.num_rows()
     )
-    var arr = pred.evaluate(b, Bindings()).to_array(b.num_rows())
     ref out = arr.as_bool()
 
     assert_equal(out.null_count(), 1)
@@ -139,9 +143,9 @@ def test_a_literal_only_expression_stays_scalar() raises:
     """`Shape.scalar` must survive composition, or every constant folds into a
     column before it is used."""
     var b = _batch()
-    var both = Add(Literal[Int64Type](1), Literal[Int64Type](2))
+    var both = lit(1, int64) + lit(2, int64)
     assert_true(both.shape == Shape.scalar)
-    assert_true(both.evaluate(b, Bindings()).is_scalar())
+    assert_true(both.evaluate(b.to_struct_array(), Bindings()).is_scalar())
 
 
 # ---------------------------------------------------------------------------
@@ -157,16 +161,12 @@ def test_sub_and_mul_fuse_like_add() raises:
     while still type-checking.
     """
     var b = _batch()
-    var op = DynValue(
-        Sub(Column[Int64Type]("b"), Column[Int64Type]("a"))
-    ).to_operator(False)
-    var got = op.push(Morsel.ungrouped(b.copy())).value().to_array(4)
+    var op = (col("b", int64) - col("a", int64)).to_operator(False)
+    var got = op.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(4)
     # b = [10, 20, 30, 40], a = [1, 2, None, 4]
     assert_true(got.as_int64()[0].value() == 9)
     assert_true(got.as_int64().is_null(2))
 
-    var m = DynValue(
-        Mul(Column[Int64Type]("a"), Literal[Int64Type](3))
-    ).to_operator(False)
-    var prod = m.push(Morsel.ungrouped(b.copy())).value().to_array(4)
+    var m = (col("a", int64) * lit(3, int64)).to_operator(False)
+    var prod = m.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(4)
     assert_true(prod.as_int64()[1].value() == 6)

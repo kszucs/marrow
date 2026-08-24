@@ -12,7 +12,7 @@ from ...builders import array
 from ...dtypes import Int64Type, int64
 from ...scalars import Int64Scalar
 from ...tabular import record_batch
-from ..builders import param
+from ..builders import col, param, table
 from ..params import Bindings
 from ..logical import DynRelation, DynValue, InMemoryTable
 from ..`comptime`.leaves import Column
@@ -21,11 +21,7 @@ from ..`comptime`.numeric import Gt
 
 
 def _table() raises -> DynRelation:
-    return DynRelation(
-        InMemoryTable(
-            record_batch([array([1, 5, 9], int64).copy()], names=["a"])
-        )
-    )
+    return table(record_batch([array([1, 5, 9], int64).copy()], names=["a"]))
 
 
 def test_a_value_is_supplied_per_execution() raises:
@@ -37,17 +33,15 @@ def test_a_value_is_supplied_per_execution() raises:
     built plan and changed what it computed.
     """
     var min_a = param("min-a", int64)
-    var plan = _table().filter(
-        DynValue(Gt(Column[Int64Type]("a"), min_a.copy()))
-    )
+    var plan = _table().filter((col("a", int64) > min_a.copy()))
 
     var low = plan.execute(
-        bindings=Bindings().set("min-a", Int64Scalar(4).to_dyn())
+        bindings={"min-a": Int64Scalar(4).to_dyn()}
     )
     assert_true(low.columns[0].as_int64() == array([5, 9], int64))
 
     var high = plan.execute(
-        bindings=Bindings().set("min-a", Int64Scalar(8).to_dyn())
+        bindings={"min-a": Int64Scalar(8).to_dyn()}
     )
     assert_true(high.columns[0].as_int64() == array([9], int64))
 
@@ -61,12 +55,10 @@ def test_binding_reaches_a_nested_parameter() raises:
     unread; the per-batch walk is what reaches it.
     """
     var t = param("t", int64)
-    var plan = _table().filter(
-        DynValue(Not(Gt(Column[Int64Type]("a"), t.copy())))
-    )
+    var plan = _table().filter(Not((col("a", int64) > t.copy())))
 
     var got = plan.execute(
-        bindings=Bindings().set("t", Int64Scalar(4).to_dyn())
+        bindings={"t": Int64Scalar(4).to_dyn()}
     )
     assert_true(got.columns[0].as_int64() == array([1], int64))
 
@@ -76,9 +68,7 @@ def test_an_unbound_parameter_names_itself() raises:
     because a cell cannot know the name it is read through. Here the node is
     the parameter, so it can."""
     var missing = param("threshold", int64)
-    var plan = _table().filter(
-        DynValue(Gt(Column[Int64Type]("a"), missing.copy()))
-    )
+    var plan = _table().filter((col("a", int64) > missing.copy()))
 
     var raised = False
     try:
@@ -91,10 +81,10 @@ def test_an_unbound_parameter_names_itself() raises:
 
 def test_a_default_is_used_until_something_binds() raises:
     var t = param("t", int64, default=Optional(Int64(4)))
-    var plan = _table().filter(DynValue(Gt(Column[Int64Type]("a"), t.copy())))
+    var plan = _table().filter((col("a", int64) > t.copy()))
     assert_true(plan.execute().columns[0].as_int64() == array([5, 9], int64))
 
     var bound = plan.execute(
-        bindings=Bindings().set("t", Int64Scalar(8).to_dyn())
+        bindings={"t": Int64Scalar(8).to_dyn()}
     )
     assert_true(bound.columns[0].as_int64() == array([9], int64))

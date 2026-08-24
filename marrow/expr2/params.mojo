@@ -52,6 +52,7 @@ parameter, so it can.
 
 from std.collections import Dict
 
+from ..arrays import StructArray
 from ..buffers import Bitmap
 from ..dtypes import DynType, NumericType
 from ..scalars import DynScalar
@@ -61,34 +62,22 @@ from .logical import Shape
 from .`comptime`.core import NumericValue
 
 
-struct Bindings(Copyable, Movable):
-    """Parameter values for one execution.
+comptime Bindings = Dict[String, DynScalar]
+"""Parameter values for one execution: a plain name -> scalar map.
 
-    Passed to `to_operator`, not stored on the plan, which is what keeps a plan
-    immutable and lets two executions use different values without
-    interfering.
+An alias, not a struct. It only ever wrapped a `Dict[String, DynScalar]` with
+a `set`/`get` pair that `Dict` already provides — and `Dict.get` does not even
+raise, where the wrapper's did. Being an alias means a caller writes a dict
+literal:
 
-    Missing names are not an error here — a parameter with a default is
-    satisfied without one, and `Param` raises naming itself when it has
-    neither.
-    """
+    plan.execute(bindings={"min-a": Int64Scalar(4).to_dyn()})
 
-    var _values: Dict[String, DynScalar]
+Passed to `to_operator`, not stored on the plan, which is what keeps a plan
+immutable and lets two executions use different values without interfering.
 
-    def __init__(out self):
-        self._values = Dict[String, DynScalar]()
-
-    def set(var self, var name: String, var value: DynScalar) -> Self:
-        """Bind one name. Returns self so bindings chain."""
-        self._values[name^] = value^
-        return self^
-
-    def get(self, name: String) raises -> Optional[DynScalar]:
-        if name in self._values:
-            return Optional(self._values[name].copy())
-        return None
-
-
+Missing names are not an error here — a parameter with a default is satisfied
+without one, and `Param` raises naming itself when it has neither.
+"""
 struct Param[T: NumericType](NumericValue):
     """A late-bound numeric scalar — `Literal[T]` whose value arrives later.
 
@@ -136,7 +125,7 @@ struct Param[T: NumericType](NumericValue):
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         """Read this execution's value — the one leaf that reads `bindings`.
 
         **Here, rather than as a rewrite at `to_operator`.** Substituting at

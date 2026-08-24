@@ -21,7 +21,7 @@ from ...dtypes import (
     TemporalType,
 )
 from ...scalars import PrimitiveScalar, StringScalar
-from ...arrays import Int32Array
+from ...arrays import StructArray, Int32Array
 from ...dtypes import Int32Type
 from ...kernels.nested import ArrayLengthKernel
 from ...schema import Schema
@@ -64,19 +64,19 @@ struct Column[T: NumericType](NumericValue):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         # A leaf returns its column as-is, validity included; the fused loop
         # above it decides what nulls mean.
-        return batch.column(self._name).copy()
+        return batch.field(self._name).copy()
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         # `RecordBatch.column(name)` owns the missing-name diagnostic:
         # `get_field_index` answers -1, and indexing a column list with that
         # trips a bounds assert that aborts the process instead of naming the
         # column. Every leaf goes through it for that reason.
-        return batch.column(self._name).as_primitive[Self.T]().copy()
+        return batch.field(self._name).as_primitive[Self.T]().copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         # The bound column already carries it — no second lookup, no re-read.
@@ -104,8 +104,7 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
 
     That is the whole duplication, and the point of the split is that it stops
     at the leaf: everything above binds on `PrimitiveValue`, where `expr/`
-    needs `TemporalColumn` *plus* duplicated comparison arms *plus*
-    `TemporalMinMax`.
+    needs `TemporalColumn` *plus* duplicated comparison arms.
 
     **What works today: projection and grouping.** Comparison does not — the
     node exists but is still bound on `NumericValue`. The blocker is named
@@ -146,13 +145,13 @@ struct TemporalColumn[T: TemporalType](TemporalValue):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
-        return batch.column(self._name).copy()
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
-        return batch.column(self._name).as_primitive[Self.T]().copy()
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_primitive[Self.T]().copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return bound.to_data().owned_validity()
@@ -194,7 +193,7 @@ struct Literal[T: NumericType](NumericValue):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         # Stays a scalar. `Shape == 0` tells the caller so, and `Datum.to_array`
         # is the one place it stops being lazy — a predicate over a constant
         # never allocates a column.
@@ -202,7 +201,7 @@ struct Literal[T: NumericType](NumericValue):
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return NoneType()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -256,13 +255,13 @@ struct BoolColumn(BoolValue):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         # As with `Column[T]`: hand back the column rather than re-packing an
         # identical bitmap through the fused driver.
-        return batch.column(self._name).copy()
+        return batch.field(self._name).copy()
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
-        return batch.column(self._name).as_bool().copy()
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_bool().copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return bound.to_data().owned_validity()
@@ -305,15 +304,15 @@ struct StringColumn[T: StringLikeType](StringValue):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         # Hand back the column rather than copying every byte through a
         # builder — the whole reason the trait default is overridable.
-        return batch.column(self._name).copy()
+        return batch.field(self._name).copy()
 
     # -- StringValue --------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
-        return batch.column(self._name).as_type[Self.Bound]().copy()
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return batch.field(self._name).as_type[Self.Bound]().copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return bound.to_data().owned_validity()
@@ -352,12 +351,12 @@ struct StringLiteral[T: StringLikeType](StringValue):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         return Datum(StringScalar(self._value.copy()).to_dyn())
 
     # -- StringValue --------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         # Nothing to resolve: a constant reads no column.
         return False
 
@@ -404,15 +403,15 @@ struct ListColumn[T: ListLikeType](ListValue):
         # be conjured from `Self.T()` any more than a timestamp's unit can.
         return schema.fields[schema.get_field_index(self._name)].dtype.copy()
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
-        return batch.column(self._name).copy()
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return batch.field(self._name).copy()
 
     # -- ListValue ----------------------------------------------------------
 
     def bind(
-        self, batch: RecordBatch, bindings: Bindings
+        self, batch: StructArray, bindings: Bindings
     ) raises -> ListLikeArray[Self.Type]:
-        return batch.column(self._name).as_type[ListLikeArray[Self.T]]().copy()
+        return batch.field(self._name).as_type[ListLikeArray[Self.T]]().copy()
 
     def validity(
         self, bound: ListLikeArray[Self.Type]
@@ -457,7 +456,7 @@ struct ListLength[A: ListValue](NumericValue):
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return ArrayLengthKernel.apply(self.a.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:

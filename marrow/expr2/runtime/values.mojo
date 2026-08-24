@@ -28,7 +28,7 @@ operators out of a plan.
 from std.memory import ArcPointer
 from std.utils import Variant
 
-from ...arrays import BoolArray, DynArray
+from ...arrays import StructArray, BoolArray, DynArray
 from ...kernels.conditional import case_when as case_when_kernel
 from ...kernels.conditional import coalesce as coalesce_kernel
 from ...dtypes import DynType
@@ -51,7 +51,7 @@ from outside.
 """
 
 comptime EvalFn = def(
-    List[DynArray], Payload, RecordBatch
+    List[DynArray], Payload, StructArray
 ) thin raises -> DynArray
 """How one node computes its column, given its children's already-computed
 columns, its payload, and the batch.
@@ -172,14 +172,16 @@ struct RuntimeValue(Evaluable, Movable, Value):
         if self._tag == "literal" and self._payload.isa[DynScalar]():
             return self._payload[DynScalar].type()
         return (
-            self.evaluate(RecordBatch.empty(schema), Bindings())
+            self.evaluate(
+                RecordBatch.empty(schema).to_struct_array(), Bindings()
+            )
             .to_array(0)
             .dtype()
         )
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
-    ) raises -> DynOperator[Datum]:
+    ) raises -> DynOperator:
         """The runtime lane's half of the same contract. Its operator is the
         same adapter the comptime lane uses — the lanes differ in how they
         compute, not in how they are turned into something that runs.
@@ -191,7 +193,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         # Leaf spelled out — see `columns`. There is no switch here: which
         # kernel runs was decided when the node was built, by which `EvalFn`
         # the constructing method named.
@@ -200,9 +202,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
         var kids = List[DynArray]()
         for ref kid in self._kids:
-            kids.append(
-                kid[].evaluate(batch, bindings).to_array(batch.num_rows())
-            )
+            kids.append(kid[].evaluate(batch, bindings).to_array(len(batch)))
         return self._eval(kids, self._payload, batch)
 
     # -- Writable -----------------------------------------------------------
@@ -230,9 +230,9 @@ def column(var name: String) -> RuntimeValue:
     """Read `name` from the batch."""
 
     def eval(
-        kids: List[DynArray], p: Payload, b: RecordBatch
+        kids: List[DynArray], p: Payload, b: StructArray
     ) raises -> DynArray:
-        return b.column(p[String]).copy()
+        return b.field(p[String]).copy()
 
     return RuntimeValue("column", eval, Payload(name^))
 
@@ -241,9 +241,9 @@ def literal(var value: DynScalar) -> RuntimeValue:
     """A constant, broadcast to the batch's length on evaluation."""
 
     def eval(
-        kids: List[DynArray], p: Payload, b: RecordBatch
+        kids: List[DynArray], p: Payload, b: StructArray
     ) raises -> DynArray:
-        return p[DynScalar].repeat(b.num_rows())
+        return p[DynScalar].repeat(len(b))
 
     return RuntimeValue("literal", eval, Payload(value^))
 
@@ -259,7 +259,7 @@ def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
         raise Error("coalesce: needs at least one value")
 
     def eval(
-        kids: List[DynArray], p: Payload, b: RecordBatch
+        kids: List[DynArray], p: Payload, b: StructArray
     ) raises -> DynArray:
         return coalesce_kernel(kids)
 
@@ -294,7 +294,7 @@ def case_when(
         raise Error("case_when: needs at least one condition")
 
     def eval(
-        kids: List[DynArray], p: Payload, b: RecordBatch
+        kids: List[DynArray], p: Payload, b: StructArray
     ) raises -> DynArray:
         var has_else = len(kids) % 2 == 1
         var n = (len(kids) - 1) // 2 if has_else else len(kids) // 2

@@ -45,8 +45,16 @@ def test_col_without_dtype_takes_the_runtime_lane() raises:
 def test_both_col_overloads_evaluate_alike() raises:
     """The two lanes are different machinery, not different answers."""
     var b = _batch()
-    var typed = col("b", int64).evaluate(b, Bindings()).to_array(b.num_rows())
-    var erased = col("b").evaluate(b, Bindings()).to_array(b.num_rows())
+    var typed = (
+        col("b", int64)
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+    )
+    var erased = (
+        col("b")
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+    )
     assert_true(typed == erased)
     assert_true(typed == b.column("b"))
 
@@ -56,7 +64,7 @@ def test_lit_with_dtype_stays_scalar() raises:
     buys, and it is the difference from the runtime lane below."""
     var v = lit(7, int64)
     assert_true(v.shape == Shape.scalar)
-    var d = v.evaluate(_batch(), Bindings())
+    var d = v.evaluate(_batch().to_struct_array(), Bindings())
     assert_true(d.is_scalar())
 
 
@@ -70,7 +78,7 @@ def test_lit_without_dtype_broadcasts() raises:
     var b = _batch()
     var v = lit(DynScalar(Int64Scalar(7)))
     assert_true(v.shape == Shape.columnar)
-    var arr = v.evaluate(b, Bindings()).to_array(b.num_rows())
+    var arr = v.evaluate(b.to_struct_array(), Bindings()).to_array(b.num_rows())
     assert_equal(len(arr), 4)
     assert_true(arr == array([7, 7, 7, 7], int64))
 
@@ -86,8 +94,8 @@ def test_col_with_bool_dtype_takes_the_comptime_lane() raises:
     could only be reached by naming the node type directly."""
     var b = record_batch([array([True, False, True]).copy()], names=["flag"])
     var v = col("flag", bool_)
-    var op = DynValue(v).to_operator(False)
-    var got = op.push(Morsel.ungrouped(b.copy())).value().to_array(3)
+    var op = v.to_operator(False)
+    var got = op.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(3)
     assert_true(got.as_bool()[0].value())
     assert_true(not got.as_bool()[1].value())
 
@@ -106,8 +114,8 @@ def test_col_with_temporal_dtype_takes_the_comptime_lane() raises:
     d.append(Int32(19002))
     var b = record_batch([d.finish().to_dyn()], names=["d"])
     var v = col("d", date32())
-    var op = DynValue(v).to_operator(False)
-    var got = op.push(Morsel.ungrouped(b.copy())).value().to_array(3)
+    var op = v.to_operator(False)
+    var got = op.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(3)
     assert_true(got.dtype() == DynType(date32()))
     assert_true(got.as_primitive[Date32Type]()[0].value() == 19000)
 

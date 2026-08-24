@@ -20,7 +20,7 @@ from ...kernels.numeric import (
     MulKernel,
     SubKernel,
 )
-from ...arrays import BoolArray, DynArray, PrimitiveArray
+from ...arrays import StructArray, BoolArray, DynArray, PrimitiveArray
 from ...kernels.conditional import case_when
 from ...schema import Schema
 from ...tabular import RecordBatch
@@ -66,7 +66,7 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -145,7 +145,7 @@ struct NumericCompare[
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
@@ -226,8 +226,8 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
-        var n = batch.num_rows()
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var n = len(batch)
         var conditions = List[BoolArray]()
         conditions.append(
             self.cond.evaluate(batch, bindings).to_array(n).as_bool().copy()
@@ -317,16 +317,18 @@ struct TemporalCompare[
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         # Same width is not the same type: `date32` and `time32[s]` are both
         # int32, and `timestamp[s]` and `timestamp[ms]` differ only in a unit
         # the width cannot see. Checked once per batch, not per row.
-        if self.l.dtype(batch.schema) != self.r.dtype(batch.schema):
+        if self.l.dtype(Schema.from_dtype(batch.dtype)) != self.r.dtype(
+            Schema.from_dtype(batch.dtype)
+        ):
             raise Error(
                 "temporal comparison between ",
-                String(self.l.dtype(batch.schema)),
+                String(self.l.dtype(Schema.from_dtype(batch.dtype))),
                 " and ",
-                String(self.r.dtype(batch.schema)),
+                String(self.r.dtype(Schema.from_dtype(batch.dtype))),
                 ": units must match, coercion is not implemented",
             )
         return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))

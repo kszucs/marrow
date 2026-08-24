@@ -7,8 +7,8 @@ a grouper's table, an accumulator's slots.
 **The engine pushes.** An operator is handed a batch and answers with what it
 produced, if anything:
 
-    push(batch) -> Optional[RecordBatch]
-    finish()    -> Optional[RecordBatch]
+    push(batch) -> Optional[StructArray]
+    finish()    -> Optional[StructArray]
 
 That one interface covers streaming and blocking alike, because **blocking
 stops being a type distinction and becomes *when you return `Some`***. `Filter`
@@ -91,6 +91,18 @@ struct Datum(Copyable, Movable):
         """
         return self._v.isa[DynScalar]()
 
+    def struct_array(self) raises -> StructArray:
+        """The batch a relational stage produced.
+
+        Relational stages put their struct array here and this takes it back
+        out; both directions are refcount bumps. It raises if a scalar-shaped
+        datum reaches a relational position — that is a bug in the plan, not a
+        shape worth handling.
+        """
+        if self.is_scalar():
+            raise Error("struct_array: expected a batch, got a scalar")
+        return self._v[DynArray].as_struct().copy()
+
     def to_array(self, n: Int) raises -> DynArray:
         """This value as a column of length `n`, broadcasting a scalar.
 
@@ -121,15 +133,15 @@ struct Morsel(Copyable, Movable):
     say "everything is group 0" is exactly the cost `ScalarGrouping` avoids.
     """
 
-    var batch: RecordBatch
+    var batch: StructArray
     var groups: Groups
 
-    def __init__(out self, var batch: RecordBatch, var groups: Groups):
+    def __init__(out self, var batch: StructArray, var groups: Groups):
         self.batch = batch^
         self.groups = groups^
 
     @staticmethod
-    def ungrouped(var batch: RecordBatch) raises -> Morsel:
+    def ungrouped(var batch: StructArray) raises -> Morsel:
         """A morsel with the trivial one-slot assignment, for the relational
         chain and for a query with no `GROUP BY`."""
         var empty = Int32Builder(0)
@@ -154,15 +166,11 @@ trait Operator(Deinitable, Movable):
     real runtime cost paid for a nominal unification.
     """
 
-    comptime Out: Copyable
-    """What this stage produces — `RecordBatch` relationally, a column for a
-    value."""
-
-    def push(mut self, morsel: Morsel) raises -> Optional[Self.Out]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Consume one morsel; answer what it produced, if anything."""
         ...
 
-    def drain(mut self) raises -> Optional[Self.Out]:
+    def drain(mut self) raises -> Optional[Datum]:
         """Produce whatever is available **without new input**; `None` when
         there is nothing left.
 
@@ -191,11 +199,11 @@ trait Operator(Deinitable, Movable):
         return False
 
 
-struct DynOperator[Out: Copyable](Movable):
+struct DynOperator(Movable):
     """An `Operator` of any stage, erased — **one box, parameterised on `Out`**.
 
-    `DynOperator[RecordBatch]` carries the relational chain and
-    `DynOperator[Datum]` carries a value's, but they are two instantiations of
+    `DynOperator` carries the relational chain and
+    `DynOperator` carries a value's, but they are two instantiations of
     one definition rather than two hand-written boxes, so the erasure surface
     stays single.
 
@@ -206,21 +214,21 @@ struct DynOperator[Out: Copyable](Movable):
 
     var _data: ArcPointer[NoneType]
     var _virt_push: def(ArcPointer[NoneType], Morsel) thin raises -> Optional[
-        Self.Out
+        Datum
     ]
-    var _virt_drain: def(ArcPointer[NoneType]) thin raises -> Optional[Self.Out]
+    var _virt_drain: def(ArcPointer[NoneType]) thin raises -> Optional[Datum]
     var _virt_done: def(ArcPointer[NoneType]) thin -> Bool
 
     @staticmethod
     def _push_tramp[
         O: Operator
-    ](ptr: ArcPointer[NoneType], morsel: Morsel) raises -> Optional[O.Out]:
+    ](ptr: ArcPointer[NoneType], morsel: Morsel) raises -> Optional[Datum]:
         return rebind[ArcPointer[O]](ptr)[].push(morsel)
 
     @staticmethod
     def _drain_tramp[
         O: Operator
-    ](ptr: ArcPointer[NoneType]) raises -> Optional[O.Out]:
+    ](ptr: ArcPointer[NoneType]) raises -> Optional[Datum]:
         return rebind[ArcPointer[O]](ptr)[].drain()
 
     @staticmethod
@@ -228,17 +236,17 @@ struct DynOperator[Out: Copyable](Movable):
         return rebind[ArcPointer[O]](ptr)[].done()
 
     @implicit
-    def __init__[O: Operator](out self: DynOperator[O.Out], var value: O):
+    def __init__[O: Operator](out self, var value: O):
         var ptr = ArcPointer[O](value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_push = Self._push_tramp[O]
         self._virt_drain = Self._drain_tramp[O]
         self._virt_done = Self._done_tramp[O]
 
-    def push(mut self, morsel: Morsel) raises -> Optional[Self.Out]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         return self._virt_push(self._data, morsel)
 
-    def drain(mut self) raises -> Optional[Self.Out]:
+    def drain(mut self) raises -> Optional[Datum]:
         return self._virt_drain(self._data)
 
     def done(self) -> Bool:
@@ -253,7 +261,7 @@ trait Evaluable(Copyable, Deinitable):
     own operator, and nothing outside a lane is bound on it.
     """
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         ...
 
 
@@ -273,8 +281,6 @@ struct EvalOperator[V: Evaluable](Operator):
     compiled `LIKE` automaton, an `IsIn` hash set. It has none today, and the
     slot existing is the point: `evaluate(batch)` alone had nowhere to put one.
     """
-
-    comptime Out = Datum
 
     var _value: Self.V
     var _bindings: Bindings
@@ -323,29 +329,27 @@ struct Pipeline(Operator):
     buys something, flat where it does not.
     """
 
-    comptime Out = RecordBatch
-
-    var _ops: List[DynOperator[RecordBatch]]
+    var _ops: List[DynOperator]
     var _stage: Int
     """How far `drain` has walked. A composite operator has to remember its own
     position, because `drain` answers one batch per call."""
 
-    var _pending: List[RecordBatch]
+    var _pending: List[StructArray]
 
-    def __init__(out self, var source: DynOperator[RecordBatch]):
-        self._ops = List[DynOperator[RecordBatch]]()
+    def __init__(out self, var source: DynOperator):
+        self._ops = List[DynOperator]()
         self._ops.append(source^)
         self._stage = 0
-        self._pending = List[RecordBatch]()
+        self._pending = List[StructArray]()
 
-    def append(mut self, var op: DynOperator[RecordBatch]):
+    def append(mut self, var op: DynOperator):
         self._ops.append(op^)
 
     def _flow(
         mut self,
         var morsel: Morsel,
         start: Int,
-        mut out: List[RecordBatch],
+        mut out: List[StructArray],
     ) raises:
         """Push one batch through stages `start..` and collect what survives.
 
@@ -358,7 +362,7 @@ struct Pipeline(Operator):
             if cur:
                 var produced = self._ops[i].push(cur.value())
                 if produced:
-                    cur = Morsel.ungrouped(produced.value().copy())
+                    cur = Morsel.ungrouped(produced.value().struct_array())
                 else:
                     cur = None
             else:
@@ -366,7 +370,7 @@ struct Pipeline(Operator):
         if cur:
             out.append(cur.value().batch.copy())
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Push a morsel through every stage.
 
         **Vestigial today, and the docstring should say so rather than imply a
@@ -378,13 +382,13 @@ struct Pipeline(Operator):
         It becomes meaningful the moment a pipeline can be built *without* a
         source — a join's probe side fed by its parent rather than scanning.
         """
-        var out = List[RecordBatch]()
+        var out = List[StructArray]()
         self._flow(morsel.copy(), 0, out)
         if len(out) == 0:
             return None
         for i in range(1, len(out)):
             self._pending.append(out[i].copy())
-        return out[0].copy()
+        return Datum(out[0].copy().to_dyn())
 
     def done(self) -> Bool:
         for i in range(len(self._ops)):
@@ -392,7 +396,7 @@ struct Pipeline(Operator):
                 return True
         return False
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         """One batch of whatever the chain still has, `None` when spent.
 
         Walks the stages in order, draining each dry and cascading what it
@@ -402,14 +406,14 @@ struct Pipeline(Operator):
         """
         while True:
             if len(self._pending) > 0:
-                return self._pending.pop(0)
+                return Datum(self._pending.pop(0).to_dyn())
             if self._stage >= len(self._ops):
                 return None
             var produced = self._ops[self._stage].drain()
             if produced:
-                var out = List[RecordBatch]()
+                var out = List[StructArray]()
                 self._flow(
-                    Morsel.ungrouped(produced.value().copy()),
+                    Morsel.ungrouped(produced.value().struct_array()),
                     self._stage + 1,
                     out,
                 )
@@ -423,7 +427,7 @@ struct Pipeline(Operator):
             else:
                 self._stage += 1
 
-    def collect(mut self, schema: Schema) raises -> RecordBatch:
+    def collect(mut self, schema: Schema) raises -> StructArray:
         """Run the chain to completion and drain it into one batch.
 
         **One loop, not two.** Driving the source and flushing the chain used
@@ -438,37 +442,20 @@ struct Pipeline(Operator):
         through `i+1..` before stage `i+1` is drained. A projection over an
         aggregate returns nothing without this.
         """
-        var out = List[RecordBatch]()
+        var out = List[StructArray]()
         while True:
             var b = self.drain()
             if b:
-                out.append(b.value().copy())
+                out.append(b.value().struct_array())
             else:
                 break
 
-        if len(out) == 0:
-            # An empty result must still be a *well-formed* batch: one
-            # zero-length column per field. A schema naming fields beside an
-            # empty column list leaves `num_columns()` at 0, so anything
-            # walking columns by schema index runs off the end.
-            var cols = List[DynArray](capacity=len(schema.fields))
-            for ref f in schema.fields:
-                var b = DynBuilder(f.dtype)
-                cols.append(b.finish())
-            return RecordBatch(schema=schema.copy(), columns=cols^)
-        if len(out) == 1:
-            return out.pop()
-
-        var sch = out[0].schema.copy()
-        var cols = List[DynArray](capacity=len(sch.fields))
-        for i in range(len(sch.fields)):
-            var parts = List[DynArray]()
-            for ref b in out:
-                parts.append(b.columns[i].copy())
-            # Serial: this runs once at the end over already-materialised
-            # morsels, so there is nothing for workers to overlap with.
-            cols.append(concat(parts, ExecContext.serial()))
-        return RecordBatch(schema=sch^, columns=cols^)
+        # Serial: this runs once at the end over already-materialised morsels,
+        # so there is nothing for workers to overlap with. An empty result is
+        # still a *well-formed* batch — `RecordBatch.empty` gives one
+        # zero-length column per field, so anything walking columns by schema
+        # index stays in bounds.
+        return _concat_batches(out, schema, ExecContext.serial())
 
 
 # ---------------------------------------------------------------------------
@@ -477,18 +464,14 @@ struct Pipeline(Operator):
 struct FilterOperator(Operator):
     """Keeps rows where the predicate is true."""
 
-    comptime Out = RecordBatch
-
-    var _predicate: DynOperator[Datum]
+    var _predicate: DynOperator
     var _ctx: ExecContext
 
-    def __init__(
-        out self, var predicate: DynOperator[Datum], var ctx: ExecContext
-    ):
+    def __init__(out self, var predicate: DynOperator, var ctx: ExecContext):
         self._predicate = predicate^
         self._ctx = ctx^
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Evaluate the predicate, then compact every column.
 
         A morsel that filters to nothing answers `None` rather than an empty
@@ -500,34 +483,31 @@ struct FilterOperator(Operator):
         var produced = self._predicate.push(morsel)
         if not produced:
             return None
-        var mask = produced.value().to_array(batch.num_rows())
-        var cols = List[DynArray]()
-        for i in range(batch.num_columns()):
-            cols.append(filter(batch.columns[i].copy(), mask.copy(), self._ctx))
-        var out = RecordBatch(schema=batch.schema.copy(), columns=cols^)
-        if out.num_rows() > 0:
-            return out^
+        var mask = produced.value().to_array(len(batch))
+        var out = (
+            filter(batch.copy().to_dyn(), mask.copy(), self._ctx)
+            .as_struct()
+            .copy()
+        )
+        if len(out) > 0:
+            return Datum(out^.to_dyn())
         return None
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         return None
 
 
 struct ProjectOperator(Operator):
     """Evaluates each projected value against every morsel."""
 
-    comptime Out = RecordBatch
-
-    var _values: List[DynOperator[Datum]]
+    var _values: List[DynOperator]
     var _schema: Schema
 
-    def __init__(
-        out self, var values: List[DynOperator[Datum]], var schema: Schema
-    ):
+    def __init__(out self, var values: List[DynOperator], var schema: Schema):
         self._values = values^
         self._schema = schema^
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         ref batch = morsel.batch
         var cols = List[DynArray](capacity=len(self._values))
         # Indexed: an operator is move-only, so a `List` of them cannot be
@@ -536,10 +516,10 @@ struct ProjectOperator(Operator):
             var d = self._values[i].push(morsel)
             # `Datum.to_array` is where a scalar-shaped value stops being lazy:
             # a projection of a constant materialises here and nowhere earlier.
-            cols.append(d.value().to_array(batch.num_rows()))
-        return RecordBatch(schema=self._schema.copy(), columns=cols^)
+            cols.append(d.value().to_array(len(batch)))
+        return Datum(_struct_of(self._schema, cols^, len(batch)).to_dyn())
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         return None
 
 
@@ -569,10 +549,8 @@ struct AggregateOperator(Operator):
     `Pipeline.collect` delivers.
     """
 
-    comptime Out = RecordBatch
-
-    var _keys: List[DynOperator[Datum]]
-    var _folds: List[DynOperator[Datum]]
+    var _keys: List[DynOperator]
+    var _folds: List[DynOperator]
     var _schema: Schema
     var _grouping: HashGrouping
     var _keyless: Bool
@@ -582,8 +560,8 @@ struct AggregateOperator(Operator):
 
     def __init__(
         out self,
-        var keys: List[DynOperator[Datum]],
-        var folds: List[DynOperator[Datum]],
+        var keys: List[DynOperator],
+        var folds: List[DynOperator],
         var schema: Schema,
         var ctx: ExecContext,
     ):
@@ -615,14 +593,14 @@ struct AggregateOperator(Operator):
         fold's, and it is what a fold-shaped-as-an-independent-operator design
         would have to give up.
         """
-        var n = morsel.batch.num_rows()
+        var n = len(morsel.batch)
         var children = List[DynArray](capacity=len(self._keys))
         for i in range(len(self._keys)):
             var d = self._keys[i].push(morsel)
             children.append(d.value().to_array(n))
         return children^
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Assign the rows to slots **once**, then hand the same morsel to
         every fold.
 
@@ -647,7 +625,7 @@ struct AggregateOperator(Operator):
 
         ref batch = morsel.batch
         var groups = self._grouping.assign(
-            self._key_columns(morsel), batch.num_rows()
+            self._key_columns(morsel), len(batch)
         )
         self._num_groups = groups.num_groups
         var forwarded = Morsel(batch.copy(), groups^)
@@ -655,7 +633,7 @@ struct AggregateOperator(Operator):
             _ = self._folds[i].push(forwarded)
         return None
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         if self._emitted:
             return None
         self._emitted = True
@@ -666,7 +644,7 @@ struct AggregateOperator(Operator):
             var col = self._folds[i].drain()
             if col:
                 cols.append(col.value().to_array(self._num_groups))
-        return RecordBatch(schema=self._schema.copy(), columns=cols^)
+        return Datum(_struct_of(self._schema, cols^, self._num_groups).to_dyn())
 
 
 struct LimitOperator(Operator):
@@ -680,8 +658,6 @@ struct LimitOperator(Operator):
     than compacting.
     """
 
-    comptime Out = RecordBatch
-
     var _offset: Int
     var _length: Int
     var _skipped: Int
@@ -693,9 +669,9 @@ struct LimitOperator(Operator):
         self._skipped = 0
         self._emitted = 0
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         ref batch = morsel.batch
-        var n = batch.num_rows()
+        var n = len(batch)
         var start = 0
         if self._skipped < self._offset:
             var skip = min(self._offset - self._skipped, n)
@@ -708,9 +684,9 @@ struct LimitOperator(Operator):
         if wanted <= 0:
             return None
         self._emitted += wanted
-        return batch.slice(start, wanted)
+        return Datum(batch.slice(start, wanted).to_dyn())
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         return None
 
     def done(self) -> Bool:
@@ -731,18 +707,16 @@ struct SortOperator(Operator):
     the single-column `sort_indices` kernel could not express anyway.
     """
 
-    comptime Out = RecordBatch
-
-    var _keys: List[DynOperator[Datum]]
+    var _keys: List[DynOperator]
     var _ascending: List[Bool]
     var _nulls_first: Bool
-    var _batches: List[RecordBatch]
+    var _batches: List[StructArray]
     var _ctx: ExecContext
     var _emitted: Bool
 
     def __init__(
         out self,
-        var keys: List[DynOperator[Datum]],
+        var keys: List[DynOperator],
         var ascending: List[Bool],
         nulls_first: Bool,
         var ctx: ExecContext,
@@ -750,27 +724,21 @@ struct SortOperator(Operator):
         self._keys = keys^
         self._ascending = ascending^
         self._nulls_first = nulls_first
-        self._batches = List[RecordBatch]()
+        self._batches = List[StructArray]()
         self._ctx = ctx^
         self._emitted = False
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         self._batches.append(morsel.batch.copy())
         return None
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         if self._emitted or len(self._batches) == 0:
             return None
         self._emitted = True
 
-        var schema = self._batches[0].schema.copy()
-        var cols = List[DynArray](capacity=len(schema.fields))
-        for i in range(len(schema.fields)):
-            var parts = List[DynArray]()
-            for ref b in self._batches:
-                parts.append(b.columns[i].copy())
-            cols.append(concat(parts, self._ctx))
-        var whole = RecordBatch(schema=schema^, columns=cols^)
+        var schema = Schema.from_dtype(self._batches[0].dtype)
+        var whole = _concat_batches(self._batches, schema, self._ctx)
 
         var order = Optional[Int32Array](None)
         for k in range(len(self._keys) - 1, -1, -1):
@@ -778,7 +746,7 @@ struct SortOperator(Operator):
                 self._keys[k]
                 .push(Morsel.ungrouped(whole.copy()))
                 .value()
-                .to_array(whole.num_rows())
+                .to_array(len(whole))
             )
             if order:
                 key = take(key, order.value(), self._ctx)
@@ -799,13 +767,8 @@ struct SortOperator(Operator):
                 order = pass_order^
 
         if not order:
-            return whole^
-        var sorted = List[DynArray](capacity=whole.num_columns())
-        for i in range(whole.num_columns()):
-            sorted.append(
-                take(whole.columns[i].copy(), order.value(), self._ctx)
-            )
-        return RecordBatch(schema=whole.schema.copy(), columns=sorted^)
+            return Datum(whole^.to_dyn())
+        return Datum(take(whole.copy().to_dyn(), order.value(), self._ctx))
 
 
 struct BatchSourceOperator(Operator):
@@ -819,31 +782,29 @@ struct BatchSourceOperator(Operator):
     abstraction the whole layer has to carry.
     """
 
-    comptime Out = RecordBatch
-
-    var _batch: RecordBatch
+    var _batch: StructArray
     var _done: Bool
 
-    def __init__(out self, var batch: RecordBatch):
+    def __init__(out self, var batch: StructArray):
         self._batch = batch^
         self._done = False
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         # A source consumes nothing; the driver never calls this.
         return None
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         if self._done:
             return None
         self._done = True
-        return self._batch.copy()
+        return Datum(self._batch.copy().to_dyn())
 
 
 struct JoinOperator(Operator):
     """Equijoin — **the operator with two inputs**, and the one the push
     interface had to be checked against.
 
-    Its build side is a whole sub-plan, held as a `DynOperator[RecordBatch]`.
+    Its build side is a whole sub-plan, held as a `DynOperator`.
     That only became expressible when `Pipeline` started conforming to
     `Operator`: before, a chain of stages was a different kind of thing from a
     stage, so there was nowhere to put a second one.
@@ -865,9 +826,7 @@ struct JoinOperator(Operator):
     and this carries it over deliberately.
     """
 
-    comptime Out = RecordBatch
-
-    var _build: DynOperator[RecordBatch]
+    var _build: DynOperator
     var _left_keys: List[Int]
     var _right_keys: List[Int]
     var _kind: JoinKind
@@ -875,12 +834,12 @@ struct JoinOperator(Operator):
     var _schema: Schema
     var _ctx: ExecContext
     var _index: Optional[HashJoin[RapidHash64]]
-    var _buffered: List[RecordBatch]
+    var _buffered: List[StructArray]
     var _emitted: Bool
 
     def __init__(
         out self,
-        var build: DynOperator[RecordBatch],
+        var build: DynOperator,
         var left_keys: List[Int],
         var right_keys: List[Int],
         kind: JoinKind,
@@ -896,7 +855,7 @@ struct JoinOperator(Operator):
         self._schema = schema^
         self._ctx = ctx^
         self._index = None
-        self._buffered = List[RecordBatch]()
+        self._buffered = List[StructArray]()
         self._emitted = False
 
     def _blocks_on_probe_side(self) -> Bool:
@@ -910,16 +869,16 @@ struct JoinOperator(Operator):
         """Drain the build side and index it, once."""
         if self._index:
             return
-        var parts = List[RecordBatch]()
+        var parts = List[StructArray]()
         while True:
             var b = self._build.drain()
             if b:
-                parts.append(b.value().copy())
+                parts.append(b.value().struct_array())
             else:
                 break
         var left = _concat_batches(parts, self._build_schema(), self._ctx)
         var index = HashJoin[RapidHash64](self._ctx.copy())
-        index.build(left.to_struct_array(), self._left_keys)
+        index.build(left.copy(), self._left_keys)
         self._index = index^
 
     def _build_schema(self) -> Schema:
@@ -927,25 +886,23 @@ struct JoinOperator(Operator):
         prefix of the output schema for every kind that emits them."""
         return self._schema.copy()
 
-    def _probe(mut self, batch: RecordBatch) raises -> RecordBatch:
+    def _probe(mut self, batch: StructArray) raises -> StructArray:
         var result = self._index.value().probe(
-            batch.to_struct_array(),
+            batch.copy(),
             self._right_keys,
             self._kind,
             self._strictness,
         )
-        return RecordBatch(
-            schema=self._schema.copy(), columns=result.children.copy()
-        )
+        return result^
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         self._ensure_built()
         if self._blocks_on_probe_side():
             self._buffered.append(morsel.batch.copy())
             return None
-        return self._probe(morsel.batch)
+        return Datum(self._probe(morsel.batch).to_dyn())
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         if self._emitted:
             return None
         self._emitted = True
@@ -957,29 +914,40 @@ struct JoinOperator(Operator):
         var whole = _concat_batches(
             self._buffered, self._schema.copy(), self._ctx
         )
-        return self._probe(whole)
+        return Datum(self._probe(whole).to_dyn())
+
+
+def _struct_of(
+    schema: Schema, var columns: List[DynArray], length: Int
+) raises -> StructArray:
+    """A struct array over `columns`, typed by `schema`.
+
+    The execution layer works in struct arrays; this is how an operator that
+    produced a fresh column list says so. `RecordBatch` appears only at the
+    boundary (`BatchSourceOperator` in, `Pipeline.collect` out).
+    """
+    return StructArray(
+        dtype=struct_(schema.fields.copy()),
+        length=length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        children=columns^,
+    )
 
 
 def _concat_batches(
-    batches: List[RecordBatch], schema: Schema, ctx: ExecContext
-) raises -> RecordBatch:
+    batches: List[StructArray], schema: Schema, ctx: ExecContext
+) raises -> StructArray:
     """Join both phases need one contiguous side; this is where that happens."""
     if len(batches) == 1:
         return batches[0].copy()
     if len(batches) == 0:
-        var cols = List[DynArray](capacity=len(schema.fields))
-        for ref f in schema.fields:
-            var b = DynBuilder(f.dtype)
-            cols.append(b.finish())
-        return RecordBatch(schema=schema.copy(), columns=cols^)
-    var s = batches[0].schema.copy()
-    var cols = List[DynArray](capacity=len(s.fields))
-    for i in range(len(s.fields)):
-        var parts = List[DynArray]()
-        for ref b in batches:
-            parts.append(b.columns[i].copy())
-        cols.append(concat(parts, ctx))
-    return RecordBatch(schema=s^, columns=cols^)
+        return RecordBatch.empty(schema).to_struct_array()
+    var parts = List[DynArray](capacity=len(batches))
+    for ref b in batches:
+        parts.append(b.copy().to_dyn())
+    return concat(parts^, ctx).as_struct().copy()
 
 
 struct ParquetScanOperator(Operator):
@@ -1004,26 +972,24 @@ struct ParquetScanOperator(Operator):
     predicate exactly — so this is a smaller scan, not a wrong one.
     """
 
-    comptime Out = RecordBatch
-
     var _path: String
     var _schema: Schema
     var _file: Optional[ParquetFile[MappedFile, LeafSet.all()]]
     var _next_group: Int
-    var _pending: List[RecordBatch]
+    var _pending: List[StructArray]
 
     def __init__(out self, var path: String, var schema: Schema):
         self._path = path^
         self._schema = schema^
         self._file = None
         self._next_group = 0
-        self._pending = List[RecordBatch]()
+        self._pending = List[StructArray]()
 
-    def push(mut self, morsel: Morsel) raises -> Optional[RecordBatch]:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         # A source consumes nothing; the driver never calls this.
         return None
 
-    def drain(mut self) raises -> Optional[RecordBatch]:
+    def drain(mut self) raises -> Optional[Datum]:
         while len(self._pending) == 0:
             if not self._file:
                 # Opened on first use, not at plan time: a `Relation` is a
@@ -1047,5 +1013,5 @@ struct ParquetScanOperator(Operator):
             # A row group can decode to several chunks; each becomes a morsel
             # rather than being concatenated back together.
             for ref b in table.to_batches():
-                self._pending.append(b.copy())
-        return self._pending.pop(0)
+                self._pending.append(b.to_struct_array())
+        return Datum(self._pending.pop(0).to_dyn())

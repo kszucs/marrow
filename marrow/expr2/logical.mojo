@@ -132,7 +132,7 @@ trait Value(Copyable, Deinitable, Writable):
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
-    ) raises -> DynOperator[Datum]:
+    ) raises -> DynOperator:
         """The stateful thing that runs this value.
 
         `grouped` picks a fold's placement and is ignored by everything else.
@@ -182,7 +182,7 @@ struct DynValue(Copyable, Movable, Writable):
     var _write: def(ArcPointer[NoneType]) thin -> String
     var _to_operator: def(
         ArcPointer[NoneType], Bool, Bindings
-    ) thin raises -> DynOperator[Datum]
+    ) thin raises -> DynOperator
     var _shape: Shape
 
     # -- trampolines --------------------------------------------------------
@@ -209,7 +209,7 @@ struct DynValue(Copyable, Movable, Writable):
         V: Value
     ](
         ptr: ArcPointer[NoneType], grouped: Bool, bindings: Bindings
-    ) raises -> DynOperator[Datum]:
+    ) raises -> DynOperator:
         return rebind[ArcPointer[V]](ptr)[].to_operator(grouped, bindings)
 
     @staticmethod
@@ -240,7 +240,7 @@ struct DynValue(Copyable, Movable, Writable):
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
-    ) raises -> DynOperator[Datum]:
+    ) raises -> DynOperator:
         """The stateful thing that runs this value.
 
         The slot `DynAggValue._acc` used to occupy, on the one box that now
@@ -384,7 +384,7 @@ struct DynRelation(Copyable, Movable, Writable):
 
     def filter(self, var predicate: DynValue) raises -> DynRelation:
         """Rows where `predicate` is true. Schema-preserving."""
-        return DynRelation(Filter(self.copy(), predicate^))
+        return Filter(self.copy(), predicate^)
 
     def select(self, names: List[String]) raises -> DynRelation:
         """Keep these columns, in this order.
@@ -397,17 +397,17 @@ struct DynRelation(Copyable, Movable, Writable):
         var values = List[DynValue](capacity=len(names))
         for ref n in names:
             values.append(column(n.copy()))
-        return DynRelation(Project(self.copy(), names.copy(), values^))
+        return Project(self.copy(), names.copy(), values^)
 
     def project(
         self, var names: List[String], var values: List[DynValue]
     ) raises -> DynRelation:
         """`SELECT <values> AS <names>` — new columns over the same rows."""
-        return DynRelation(Project(self.copy(), names^, values^))
+        return Project(self.copy(), names^, values^)
 
     def limit(self, length: Int, offset: Int = 0) raises -> DynRelation:
         """`OFFSET offset LIMIT length`."""
-        return DynRelation(Limit(self.copy(), offset, length))
+        return Limit(self.copy(), offset, length)
 
     def sort_by(
         self,
@@ -417,7 +417,7 @@ struct DynRelation(Copyable, Movable, Writable):
     ) raises -> DynRelation:
         """`ORDER BY` — a pipeline breaker, so it buffers and sorts at the
         end."""
-        return DynRelation(Sort(self.copy(), keys^, ascending^, nulls_first))
+        return Sort(self.copy(), keys^, ascending^, nulls_first)
 
     def aggregate(
         self,
@@ -431,7 +431,7 @@ struct DynRelation(Copyable, Movable, Writable):
         Aggregates come first because they are the part a caller always
         supplies.
         """
-        return DynRelation(Aggregate(self.copy(), keys^, aggs^))
+        return Aggregate(self.copy(), keys^, aggs^)
 
     def join(
         self,
@@ -441,9 +441,7 @@ struct DynRelation(Copyable, Movable, Writable):
         kind: JoinKind = JOIN_INNER,
     ) raises -> DynRelation:
         """Equijoin. `self` is the build side and `right` streams."""
-        return DynRelation(
-            Join(self.copy(), right^, left_keys^, right_keys^, kind)
-        )
+        return Join(self.copy(), right^, left_keys^, right_keys^, kind)
 
     def execute(
         self,
@@ -452,7 +450,9 @@ struct DynRelation(Copyable, Movable, Writable):
     ) raises -> RecordBatch:
         """Run this plan and drain it into one batch."""
         var p = self.to_operator(ctx, bindings)
-        return p.collect(self.schema())
+        # The shim: operators work in struct arrays, the public API hands back
+        # a batch. Cheap — children move, schema comes off the struct dtype.
+        return RecordBatch.from_struct_array(p.collect(self.schema()))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write(self._data))
@@ -473,7 +473,7 @@ struct InMemoryTable(Relation, Writable):
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
         """The one relation that *creates* a pipeline; every other appends."""
-        return Pipeline(BatchSourceOperator(self._batch.copy()))
+        return Pipeline(BatchSourceOperator(self._batch.to_struct_array()))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("InMemoryTable(", self._batch.num_rows(), " rows)")
@@ -588,7 +588,7 @@ struct Project(Relation, Writable):
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
         var pipe = self._input.to_operator(ctx, bindings)
-        var values = List[DynOperator[Datum]](capacity=len(self._values))
+        var values = List[DynOperator](capacity=len(self._values))
         for ref v in self._values:
             values.append(v.to_operator(False, bindings))
         pipe.append(ProjectOperator(values^, self._schema.copy()))
@@ -665,11 +665,11 @@ struct Aggregate(Relation, Writable):
         self, ctx: ExecContext, bindings: Bindings = Bindings()
     ) raises -> Pipeline:
         var grouped = len(self._keys) > 0
-        var folds = List[DynOperator[Datum]](capacity=len(self._aggs))
+        var folds = List[DynOperator](capacity=len(self._aggs))
         for ref a in self._aggs:
             folds.append(a.to_operator(grouped, bindings))
         var pipe = self._input.to_operator(ctx, bindings)
-        var keys = List[DynOperator[Datum]](capacity=len(self._keys))
+        var keys = List[DynOperator](capacity=len(self._keys))
         for ref k in self._keys:
             keys.append(k.to_operator(False, bindings))
         pipe.append(
@@ -788,14 +788,14 @@ struct Sort(Relation, Writable):
 
 def _to_operators(
     values: List[DynValue], bindings: Bindings
-) raises -> List[DynOperator[Datum]]:
+) raises -> List[DynOperator]:
     """Turn a list of logical values into the operators that run them.
 
     Built **once**, when the plan becomes physical — not per batch. That is the
     whole point of the split: anything a value needs to resolve or cache before
     the first row arrives has a place to live now.
     """
-    var out = List[DynOperator[Datum]](capacity=len(values))
+    var out = List[DynOperator](capacity=len(values))
     for ref v in values:
         out.append(v.to_operator(False, bindings))
     return out^

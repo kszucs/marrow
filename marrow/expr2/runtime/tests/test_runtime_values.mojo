@@ -8,7 +8,7 @@ and a wrong one is silent — a plan that narrows the wrong columns still runs.
 
 from std.testing import assert_equal, assert_true
 
-from ....arrays import DynArray
+from ....arrays import StructArray, DynArray
 from ...params import Bindings
 from ....builders import array
 from ....dtypes import int64
@@ -29,7 +29,7 @@ def _batch() raises -> RecordBatch:
 
 
 def _unevaluated(
-    kids: List[DynArray], p: Payload, b: RecordBatch
+    kids: List[DynArray], p: Payload, b: StructArray
 ) raises -> DynArray:
     """A stand-in `EvalFn` for nodes built to be analysed, never run."""
     raise Error("_unevaluated: this node exists for structural assertions only")
@@ -63,13 +63,21 @@ def test_runtime_dtype_agrees_with_evaluation() raises:
     then produces."""
     var b = _batch()
     var v = column("b")
-    var produced = v.evaluate(b, Bindings()).to_array(b.num_rows()).dtype()
+    var produced = (
+        v.evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .dtype()
+    )
     assert_true(v.dtype(b.schema) == produced)
 
 
 def test_runtime_column_reads_the_named_column() raises:
     var b = _batch()
-    var got = column("b").evaluate(b, Bindings()).to_array(b.num_rows())
+    var got = (
+        column("b")
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+    )
     assert_true(got == b.column("b"))
 
 
@@ -79,7 +87,7 @@ def test_runtime_literal_broadcasts_to_the_batch_length() raises:
     var b = _batch()
     var got = (
         literal(DynScalar(Int64Scalar(7)))
-        .evaluate(b, Bindings())
+        .evaluate(b.to_struct_array(), Bindings())
         .to_array(b.num_rows())
     )
     assert_equal(len(got), 4)

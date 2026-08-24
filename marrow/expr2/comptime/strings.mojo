@@ -7,6 +7,7 @@ just width, so `name = 'x' AND amount > 10` is still one pass with no
 per-node materialisation.
 """
 
+from ...arrays import StructArray
 from ...buffers import Bitmap
 from ...dtypes import DynType, StringLikeType
 from ...schema import Schema
@@ -106,7 +107,7 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
 
     # -- ComptimeValue ------------------------------------------------------
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:

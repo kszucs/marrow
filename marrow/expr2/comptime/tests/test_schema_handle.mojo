@@ -14,7 +14,8 @@ trait bound — so the cost of not having these as tests is already demonstrated
 
 from std.testing import assert_equal, assert_true
 
-from ....dtypes import Float64Type, Int64Type
+from ...builders import col
+from ....dtypes import Float64Type, Int64Type, int64
 from ..leaves import Column
 
 
@@ -97,7 +98,7 @@ def test_handle_column_is_a_normal_fused_leaf() raises:
     """The inferred type is a real `Column[T]`, not something merely shaped like
     one — it reports the shape the fusion driver keys off."""
     var t = Handle[SCHEMA]()
-    assert_true(type_of(t.a).shape == type_of(Column[Int64Type]("a")).shape)
+    assert_true(type_of(t.a).shape == type_of(col("a", int64)).shape)
     assert_equal(len(t.a.columns()), 1)
     assert_equal(t.a.columns()[0], "a")
 

@@ -29,6 +29,7 @@ from .`comptime`.leaves import (
     StringColumn,
     StringLiteral,
 )
+from .logical import DynRelation, InMemoryTable, ParquetScan
 from .params import Param
 from .runtime.values import RuntimeValue, column, literal
 from ..dtypes import (
@@ -40,6 +41,8 @@ from ..dtypes import (
     TemporalType,
 )
 from ..scalars import DynScalar
+from ..schema import Schema
+from ..tabular import RecordBatch
 
 
 # ---------------------------------------------------------------------------
@@ -186,3 +189,24 @@ def param[
     because it declares parameters inline at each use site.
     """
     return Param[T](name^, help^, default^)
+
+
+def table(var batch: RecordBatch) raises -> DynRelation:
+    """A batch already in memory, as a plan.
+
+    The entry point the verbs need: every other verb is a method on
+    `DynRelation`, so a plan has to *start* as one. Without this a caller has
+    to name `InMemoryTable` and wrap it by hand — which is how every test in
+    the layer ended up spelling its source.
+    """
+    return InMemoryTable(batch^)
+
+
+def scan(var path: String, var schema: Schema) raises -> DynRelation:
+    """A Parquet file, as a plan.
+
+    The `table` of the file world: a source has to *be* a `DynRelation` before
+    any verb applies, so without this a caller names `ParquetScan` and wraps it
+    by hand.
+    """
+    return DynRelation(ParquetScan(path^, schema^))

@@ -38,6 +38,7 @@ from ...dtypes import (
 )
 from ...schema import Schema
 from ...arrays import (
+    StructArray,
     BinaryLikeArray,
     BoolArray,
     ListLikeArray,
@@ -51,6 +52,9 @@ from ...views import apply
 from ..logical import Shape, Value
 from ..params import Bindings
 from .aggregates import NumericAggregate
+from .numeric import Add, Sub, Mul, Gt, Lt
+from .boolean import And, Not, Or, Xor
+from .strings import StrEq, StrNe, StrLt, StrGt
 from ...kernels.aggregate import (
     MaxKernel,
     MeanKernel,
@@ -81,14 +85,14 @@ trait ComptimeValue(Evaluable, Value):
     materialises a `DynArray` per node, so it can answer neither.
     """
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """One fused pass over the batch. The lane's driver, called by
         `EvalOperator`; each family below supplies the default body."""
         ...
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
-    ) raises -> DynOperator[Datum]:
+    ) raises -> DynOperator:
         """Every comptime node becomes the same operator — one that forwards
         each batch to the fused driver. `grouped` is ignored: an elementwise
         value has no placement. Aggregates override this with a `FoldOperator`.
@@ -131,10 +135,29 @@ trait ComptimeValue(Evaluable, Value):
     # how `expr/` ended up with two methods (`validity` and `state_validity`)
     # and evaluated `coalesce`/`nullif`/`case_when` twice per fused pass.
 
+    # ---------------------------------------------------------------------------
+    # NumericValue — the first family, refining the base with a lane
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# NumericValue — the first family, refining the base with a lane
-# ---------------------------------------------------------------------------
+    # -- boolean operators --------------------------------------------------
+    # On `ComptimeValue`, not `BoolValue`: `And`/`Or`/`Xor` bind their operands
+    # on `ComptimeValue`, and `BoolValue` means *fusable* — which boolean
+    # binaries deliberately are not, because `_kleene`'s bitmap algebra beats
+    # per-lane Kleene by 4-10x.
+
+    def __and__[Rhs: ComptimeValue](self, o: Rhs) -> And[Self, Rhs]:
+        return And(self.copy(), o.copy())
+
+    def __or__[Rhs: ComptimeValue](self, o: Rhs) -> Or[Self, Rhs]:
+        return Or(self.copy(), o.copy())
+
+    def __xor__[Rhs: ComptimeValue](self, o: Rhs) -> Xor[Self, Rhs]:
+        return Xor(self.copy(), o.copy())
+
+    def __invert__(self) -> Not[Self]:
+        return Not(self.copy())
+
+
 trait PrimitiveValue(ComptimeValue):
     """A comptime node producing a fixed-width column.
 
@@ -173,7 +196,7 @@ trait PrimitiveValue(ComptimeValue):
     an expression and a per-element read.
     """
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         """Resolve this subtree against `batch`, once, before the lane loop.
 
         Every schema lookup and every `Variant` unwrap happens here so that
@@ -181,7 +204,7 @@ trait PrimitiveValue(ComptimeValue):
         """
         ...
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """One fused pass over the batch — `bind` once, then `lane` per chunk.
 
         A trait **default**, not a free driver, because it is the same for
@@ -203,11 +226,13 @@ trait PrimitiveValue(ComptimeValue):
             return Datum(
                 PrimitiveScalar[Self.Type](
                     Optional(self.lane[1](bound, 0)[0]),
-                    self.dtype(batch.schema).as_type[Self.Type](),
+                    self.dtype(Schema.from_dtype(batch.dtype)).as_type[
+                        Self.Type
+                    ](),
                 ).to_dyn()
             )
         else:
-            var length = batch.num_rows()
+            var length = len(batch)
             var buf = Buffer.alloc_uninit[native](length)
 
             @always_inline
@@ -219,7 +244,9 @@ trait PrimitiveValue(ComptimeValue):
             # Validity once, from the bound — never per lane.
             var v = self.validity(bound)
             var arr = PrimitiveArray[Self.Type](
-                dtype=self.dtype(batch.schema).as_type[Self.Type](),
+                dtype=self.dtype(Schema.from_dtype(batch.dtype)).as_type[
+                    Self.Type
+                ](),
                 length=length,
                 nulls=v.value().unset_count() if v else 0,
                 offset=0,
@@ -288,11 +315,11 @@ trait StringValue(ComptimeValue):
     `NumericValue.Bound`, and declared per concrete struct for the same
     reason."""
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         """Resolve this subtree against `batch`, once, before the lane loop."""
         ...
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """One fused pass — `bind` once, then `lane` per row.
 
         A builder rather than `apply`: `apply` writes fixed-width elements into
@@ -304,7 +331,7 @@ trait StringValue(ComptimeValue):
         copying every byte through a fresh builder.
         """
         var bound = self.bind(batch, bindings)
-        var length = batch.num_rows()
+        var length = len(batch)
         var builder = BinaryLikeBuilder[Self.Type](length)
         var v = self.validity(bound)
         if v:
@@ -333,6 +360,20 @@ trait StringValue(ComptimeValue):
         """One row. The elementwise counterpart of the SIMD families'
         `lane[W]`, and the only shape a variable-width encoding admits."""
         ...
+
+    # -- operators ----------------------------------------------------------
+
+    def __eq__[Rhs: StringValue](self, o: Rhs) -> StrEq[Self, Rhs]:
+        return StrEq(self.copy(), o.copy())
+
+    def __ne__[Rhs: StringValue](self, o: Rhs) -> StrNe[Self, Rhs]:
+        return StrNe(self.copy(), o.copy())
+
+    def __lt__[Rhs: StringValue](self, o: Rhs) -> StrLt[Self, Rhs]:
+        return StrLt(self.copy(), o.copy())
+
+    def __gt__[Rhs: StringValue](self, o: Rhs) -> StrGt[Self, Rhs]:
+        return StrGt(self.copy(), o.copy())
 
 
 trait NumericValue(PrimitiveValue):
@@ -382,6 +423,27 @@ trait NumericValue(PrimitiveValue):
         """`MAX(self)`."""
         return NumericAggregate[MaxKernel, Self](self.copy(), String("max"))
 
+    # -- operators ----------------------------------------------------------
+    # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`
+    # rather than `Gt(...)` by hand. `Rhs`, not `R`, because a trait default's
+    # parameter must not collide with a conformer's struct parameter — the
+    # binary nodes already bind `L`/`R`.
+
+    def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
+        return Add(self.copy(), o.copy())
+
+    def __sub__[Rhs: NumericValue](self, o: Rhs) -> Sub[Self, Rhs]:
+        return Sub(self.copy(), o.copy())
+
+    def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
+        return Mul(self.copy(), o.copy())
+
+    def __gt__[Rhs: NumericValue](self, o: Rhs) -> Gt[Self, Rhs]:
+        return Gt(self.copy(), o.copy())
+
+    def __lt__[Rhs: NumericValue](self, o: Rhs) -> Lt[Self, Rhs]:
+        return Lt(self.copy(), o.copy())
+
 
 trait TemporalValue(PrimitiveValue):
     """Marker: ordered and comparable, but not arithmetic.
@@ -427,7 +489,7 @@ trait ListValue(ComptimeValue):
     # associated type defeats.
 
     def bind(
-        self, batch: RecordBatch, bindings: Bindings
+        self, batch: StructArray, bindings: Bindings
     ) raises -> ListLikeArray[Self.Type]:
         ...
 
@@ -466,7 +528,7 @@ trait BoolValue(ComptimeValue):
     an expression and a per-element read.
     """
 
-    def bind(self, batch: RecordBatch, bindings: Bindings) raises -> Self.Bound:
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         """Resolve this subtree against `batch`, once, before the lane loop.
 
         Every schema lookup and every `Variant` unwrap happens here so that
@@ -483,14 +545,14 @@ trait BoolValue(ComptimeValue):
     into. A node with two operands of different widths takes the wider.
     """
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """One fused bool pass: bit-pack a `Bitmap` from `lane`.
 
         The numeric default's sibling, and separate for the one reason above —
         the destination is a bitmap, so `apply` takes its bit-packing overload
         and the lane width comes from `NativeType`.
         """
-        var length = batch.num_rows()
+        var length = len(batch)
         var bound = self.bind(batch, bindings)
         var bits = Bitmap.alloc_uninit(length)
 

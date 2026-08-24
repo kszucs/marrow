@@ -15,6 +15,7 @@ from std.testing import assert_equal, assert_false, assert_true
 from ...arrays import DynArray
 from ..params import Bindings
 from ...builders import array
+from ..builders import col, lit
 from ...dtypes import DynType, Int64Type, int64
 from ...scalars import DynScalar
 from ...tabular import RecordBatch, record_batch
@@ -46,8 +47,8 @@ def test_both_lanes_box_together() raises:
     separation collapses.
     """
     var boxed = List[DynValue]()
-    boxed.append(DynValue(Column[Int64Type]("a")))
-    boxed.append(DynValue(column("a")))
+    boxed.append(col("a", int64))
+    boxed.append(column("a"))
 
     for ref v in boxed:
         assert_equal(v.name(), "a")
@@ -68,23 +69,23 @@ def test_is_column_separates_the_three_cases() raises:
     exists that writes it more than once. It only works if a literal is
     *named* but reads no columns — which is why `lit(7).name()` is `"7"`.
     """
-    var col = DynValue(Column[Int64Type]("a"))
-    var lit = DynValue(Literal[Int64Type](7))
+    var c = col("a", int64)
+    var l = lit(7, int64)
 
-    assert_true(col.name() != "" and len(col.columns()) == 1)
-    assert_equal(col.name(), "a")
-    assert_equal(len(col.columns()), 1)
+    assert_true(c.name() != "" and len(c.columns()) == 1)
+    assert_equal(c.name(), "a")
+    assert_equal(len(c.columns()), 1)
 
     # Named, but reads nothing — so not a column.
-    assert_false(lit.name() != "" and len(lit.columns()) == 1)
-    assert_equal(lit.name(), "7")
-    assert_equal(len(lit.columns()), 0)
+    assert_false(l.name() != "" and len(l.columns()) == 1)
+    assert_equal(l.name(), "7")
+    assert_equal(len(l.columns()), 0)
 
 
 def test_literal_is_named_as_sql_names_it() raises:
     """`SELECT 1` yields a column called `1`; so does `lit(1)`."""
-    assert_equal(DynValue(Literal[Int64Type](1)).name(), "1")
-    assert_equal(DynValue(Literal[Int64Type](-42)).name(), "-42")
+    assert_equal(lit(1, int64).name(), "1")
+    assert_equal(lit(-42, int64).name(), "-42")
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +93,7 @@ def test_literal_is_named_as_sql_names_it() raises:
 
 
 def test_a_literal_reads_no_columns() raises:
-    assert_equal(len(DynValue(Literal[Int64Type](3)).columns()), 0)
+    assert_equal(len(lit(3, int64).columns()), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +105,7 @@ def test_dtype_of_a_missing_column_names_the_column() raises:
     `get_field_index` answers -1, and indexing a column list with that trips an
     assert that kills the process instead of saying which column was wrong.
     """
-    var v = DynValue(column("nope"))
+    var v = column("nope")
     var raised = False
     try:
         _ = v.dtype(_batch().schema)
@@ -126,13 +127,13 @@ def test_shape_agrees_with_evaluation() raises:
     """
     var b = _batch()
 
-    var lit = Literal[Int64Type](7)
-    assert_true(lit.shape == Shape.scalar)
-    assert_true(lit.evaluate(b, Bindings()).is_scalar())
+    var l = lit(7, int64)
+    assert_true(l.shape == Shape.scalar)
+    assert_true(l.evaluate(b.to_struct_array(), Bindings()).is_scalar())
 
-    var col = Column[Int64Type]("a")
-    assert_true(col.shape == Shape.columnar)
-    assert_false(col.evaluate(b, Bindings()).is_scalar())
+    var c = col("a", int64)
+    assert_true(c.shape == Shape.columnar)
+    assert_false(c.evaluate(b.to_struct_array(), Bindings()).is_scalar())
 
     # The runtime lane cannot be lazy, and says so.
     assert_true(RuntimeValue.shape == Shape.columnar)

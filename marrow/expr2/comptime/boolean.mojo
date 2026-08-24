@@ -19,7 +19,7 @@ take another `AND` as an operand — the fusing families and this one share only
 the base, and only the part of it that matters (`Type`).
 """
 
-from ...arrays import BoolArray, DynArray
+from ...arrays import StructArray, BoolArray, DynArray
 from ...dtypes import BoolType, DynType
 from ...kernels.boolean import (
     AndKernel,
@@ -98,14 +98,14 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """Materialise both operands, then let the kernel decide the nulls.
 
         `K.apply` is Kleene-correct for `AND` and `OR` — a known-false operand
         forces a valid `FALSE`, a known-true one forces a valid `TRUE`. Nothing
         here re-derives that rule; deriving it twice is how two copies drift.
         """
-        var n = batch.num_rows()
+        var n = len(batch)
         var lhs = _as_bool(self.l.evaluate(batch, bindings), n)
         var rhs = _as_bool(self.r.evaluate(batch, bindings), n)
         return Self.K.apply(lhs, rhs).to_dyn()
@@ -151,8 +151,8 @@ struct Not[A: ComptimeValue](ComptimeValue):
     def dtype(self, schema: Schema) raises -> DynType:
         return DynType(Self.Type())
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
-        var n = batch.num_rows()
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        var n = len(batch)
         return Datum(
             NotKernel.apply(
                 _as_bool(self.a.evaluate(batch, bindings), n)

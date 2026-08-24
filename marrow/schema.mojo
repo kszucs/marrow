@@ -5,7 +5,7 @@
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.reflection import reflect
-from .dtypes import DataType, Field
+from .dtypes import DataType, DynType, Field
 
 
 def _construct_default[D: Defaultable & DataType]() -> D:
@@ -31,6 +31,21 @@ struct Schema(
     Writable,
 ):
     var fields: List[Field]
+
+    @staticmethod
+    def from_dtype(dtype: DynType) raises -> Schema:
+        """Read a schema off a `struct` dtype.
+
+        A struct type already carries one `Field` per child, so this is the
+        inverse of building `struct_(schema.fields)` — the conversion the
+        execution layer needs when it works in struct arrays and has to hand
+        back something schema-shaped.
+        """
+        var fields = List[Field]()
+        for ref f in dtype.as_struct().fields:
+            fields.append(f.copy())
+        return Schema(fields=fields^)
+
     var metadata: Dict[String, String]
 
     def __init__(

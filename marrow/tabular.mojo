@@ -265,12 +265,7 @@ struct RecordBatch(
             kind,
             ctx=ctx,
         )
-        var fields = List[Field]()
-        for ref f in joined.dtype.as_struct().fields:
-            fields.append(f.copy())
-        return RecordBatch(
-            schema=Schema(fields=fields^), columns=joined.children.copy()
-        )
+        return RecordBatch.from_struct_array(joined^)
 
     def _agg_columns(
         self, values: List[String], funcs: List[String], who: String
@@ -368,6 +363,20 @@ struct RecordBatch(
             fields.append(f.copy())
         return RecordBatch(
             schema=Schema(fields=fields^), columns=sorted_sa.children.copy()
+        )
+
+    @staticmethod
+    def from_struct_array(var array: StructArray) raises -> RecordBatch:
+        """Wrap a struct array as a batch — the inverse of `to_struct_array`.
+
+        Cheap: the children move across and the schema is read off the struct
+        dtype, which already carries one `Field` per child. This is the shim
+        the execution layer uses at its boundary, so operators can work in
+        struct arrays and still hand back a `RecordBatch`.
+        """
+        return RecordBatch(
+            schema=Schema.from_dtype(array.dtype),
+            columns=array.children.copy(),
         )
 
     def to_struct_array(self) -> StructArray:

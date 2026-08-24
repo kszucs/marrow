@@ -32,7 +32,7 @@ from ...dtypes import DynType, NumericType
 from ...kernels.groupby import Grouping, HashGrouping, ScalarGrouping
 from std.sys.info import simd_width_of
 
-from ...arrays import Int32Array
+from ...arrays import StructArray, Int32Array
 from ...kernels.aggregate import (
     AggKernel,
     AggState,
@@ -93,7 +93,11 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
         return self._name.copy()
 
     def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
+        # Through `acc_dtype` rather than `Self.Type()`: an accumulator dtype
+        # is not always constructible from its type, and `min`/`max` keep the
+        # input's. `A.Type()` is available because the fused lane's input is
+        # numeric — the same assumption `to_operator` records.
+        return DynType(Self.K.acc_dtype[Self.A.Type](Self.A.Type()))
 
     comptime shape = Shape.scalar
     """An aggregate yields one value per group, so it is scalar-shaped in the
@@ -101,7 +105,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
 
     # -- Evaluable ----------------------------------------------------------
 
-    def evaluate(self, batch: RecordBatch, bindings: Bindings) raises -> Datum:
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """An aggregate has no per-batch value, and saying so is the point.
 
         Folding needs every batch, so there is nothing to answer here — the
@@ -125,7 +129,7 @@ struct NumericAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
 
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
-    ) raises -> DynOperator[Datum]:
+    ) raises -> DynOperator:
         """Pick the placement, once, when the plan is built.
 
         A runtime `Bool` in, a comptime *type* out: whether the query has keys
@@ -221,13 +225,13 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         # input that yields nothing: `sum` of no rows is one NULL, not no rows.
         self._num_groups = 1 if not Self.G.scatters else 0
         self._emitted = False
-        # The accumulator's dtype as a value. `A.Type()` is constructible
-        # today because the fused lane is numeric, and that is precisely the
-        # constraint this has to shed: when `A` can be temporal, the dtype is
-        # not known until `bind(batch)` and must come from the bound column
-        # rather than from the type.
+        # The accumulator's dtype as a value, from `AggKernel.acc_dtype`.
+        # `A.Type()` is constructible today because the fused lane is numeric,
+        # and that is precisely the constraint this has to shed: when `A` can
+        # be temporal, the input dtype is not known until `bind(batch)` and
+        # must come from the bound column rather than from the type.
         self._state = AggState[Self.K, Self.A.Type](
-            Self.K.AccType[Self.A.Type]()
+            Self.K.acc_dtype[Self.A.Type](Self.A.Type())
         )
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -239,7 +243,7 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         comptime if Self.G.scatters:
             self._num_groups = morsel.groups.num_groups
         var num_groups = self._num_groups
-        var n = batch.num_rows()
+        var n = len(batch)
         if n == 0:
             return None
         comptime W = Self.W
