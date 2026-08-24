@@ -271,6 +271,32 @@ struct TemporalCompare[
     the widths agree on. Cross-unit comparison is deliberately not silently
     wrong — it raises, and adding it means choosing coercion rules (Arrow C++'s
     `common_temporal_resolution` is the prior art). Backlog S21.
+
+    **Merging this with `NumericCompare` into one node parameterised over the
+    argument type was tried three ways and none is clean** (measured against
+    `mojo precompile`, 2026-08-24), so the shared bodies stay duplicated:
+
+    - `ArgType = L.Type if TEMPORAL else promote[L.Type, R.Type]` over a common
+      `L: PrimitiveValue` bound fails at the *declaration* — `parameter 'L' has
+      'NumericType' type, but value has type 'PrimitiveType'`. The branch that
+      never runs still has to be well-formed.
+    - Making it total by widening `promote` to `PrimitiveType` does compile,
+      and the conditional does reduce and does carry the `NumericType` bound.
+      But that is exactly the change `TemporalColumn`'s docstring defers — a
+      decision about promotion semantics, not a bound to widen — and it makes
+      `Gt(date32_col, time32_col)` compile, where today it is rejected.
+    - Passing the argument type as a parameter, `Compare[K, A, L, R]` with
+      narrow-bounded aliases supplying `A`, keeps every bound and compiles, but
+      `A` appears nowhere in `__init__` and so cannot be inferred: `Gt(col(...),
+      lit(...))` fails with *value passed to 'l' cannot be converted from
+      'Column[...]' to 'GtKernel'*. Only the explicit `Gt[L, R](...)` spelling
+      survives, and every call site uses the inferred one.
+
+    So what separates the two nodes is the operand *bounds*, not the bodies:
+    they are what make `NumericCompare` over temporal operands — and a
+    temporal-versus-numeric comparison — unrepresentable rather than merely
+    wrong. Both are rejected at compile time today; every unification that
+    preserves the call syntax demotes at least one to a runtime error.
     """
 
     comptime ArgType = Self.L.Type

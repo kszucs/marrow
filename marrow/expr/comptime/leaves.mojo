@@ -104,9 +104,9 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
     at the leaf: everything above binds on `PrimitiveValue`, where `expr/`
     needs `TemporalColumn` *plus* duplicated comparison arms.
 
-    **What works today: projection and grouping.** Comparison does not — the
-    node exists but is still bound on `NumericValue`. The blocker is named
-    rather than hidden: `NumericCompare.ArgType` is
+    **Comparison works too, but through its own node.** `TemporalCompare` is
+    separate from `NumericCompare` rather than a shared one, and the reason is
+    named rather than hidden: `NumericCompare.ArgType` is
     `promote[L.Type, R.Type]`, and `promote` is bound on `NumericType` because
     it encodes *numeric* widening (signedness, int-to-float). Those rules do
     not generalise to temporal, and `wider[L.native, R.native]` is not a
