@@ -1,7 +1,7 @@
 """Binary-size demo: fused values through the fat-node relational layer.
 
 Same query as the other variants (`SELECT a, name FROM orders WHERE a > b`),
-built with `marrow.expr.relations` — the self-executing fat nodes (`InMemoryTable`
+built with `marrow.exprold.relations` — the self-executing fat nodes (`InMemoryTable`
 /`Filter`/`Project`, `pull()`-based, no `Planner`) over fused `DynValue` values.
 Only fused comptime nodes (`col`/`>`) are boxed, so the erased lane and
 its per-dtype kernel fanout are dead-code-eliminated — this should land near the
@@ -26,14 +26,14 @@ execution is unnecessary in principle (see Q0.5 in
 `docs/backlog.md`); if that lands, these can be converted.
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import InMemoryTable, Project, DynRelation
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import InMemoryTable, Project, DynRelation
 
 
 def main() raises:

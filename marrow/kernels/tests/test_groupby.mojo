@@ -46,15 +46,18 @@ from ...dtypes import (
 )
 from ...arrays import Int32Array
 from ...execution import ExecContext
-from ...kernels.core import Grouping
+from ...kernels.core import Groups
 from ...kernels.groupby import (
     GroupBy,
+    Grouping,
+    HashGrouping,
+    ScalarGrouping,
     GroupedColumns,
     GROUP_SERIAL,
     GROUP_RADIX,
     GROUP_THREAD_LOCAL,
 )
-from ...expr.aggregates import (
+from ...exprold.aggregates import (
     Sum,
     Min,
     Max,
@@ -79,7 +82,7 @@ from ...kernels.distinct import count_distinct_grouped
 # `GroupBy(keys).aggregate[A]` takes one directly (the AOT path); `apply[F]`
 # resolves the column's dtype to it first (the runtime-dtype path).
 # (The runtime, string/plan-driven multi-aggregate path is covered by the
-# expression-layer tests in `marrow/expr/tests/test_streaming.mojo`.)
+# expression-layer tests in `marrow/exprold/tests/test_streaming.mojo`.)
 
 
 # ---------------------------------------------------------------------------
@@ -571,9 +574,7 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     var values = List[DynArray]()
     values.append(vals.copy())
 
-    def exact(
-        _j: Int, groups: Grouping, col: DynArray
-    ) raises {imm} -> DynArray:
+    def exact(_j: Int, groups: Groups, col: DynArray) raises {imm} -> DynArray:
         return count_distinct_grouped(groups, col)
 
     var ctx = ExecContext.parallel(4)
@@ -825,3 +826,76 @@ def test_groupby_string_keys_thread_local() raises:
     """The case that always worked — the only one the offset-width shortcut
     happened to name correctly. Guards against fixing binary by breaking it."""
     _check_bytes_keys[StringType](GROUP_THREAD_LOCAL)
+
+
+# ---------------------------------------------------------------------------
+# Grouping — the placement axis
+# ---------------------------------------------------------------------------
+def _int_key(values: List[Int]) raises -> List[DynArray]:
+    var b = Int64Builder(len(values))
+    for v in values:
+        b.append(Int64(v))
+    var cols = List[DynArray]()
+    cols.append(b.finish().to_dyn())
+    return cols^
+
+
+def test_scalar_grouping_allocates_no_ids() raises:
+    """One implicit slot, and deliberately no zero vector to say so.
+
+    A fold whose `scatters` is False never reads the ids, so materialising one
+    `Int32` per row to communicate a constant is exactly the cost this
+    conformer exists to avoid — measured at 14.6x against the register fold.
+    """
+    var g = ScalarGrouping()
+    assert_true(not ScalarGrouping.scatters)
+    var groups = g.assign(_int_key([1, 2, 3, 4]), 4)
+    assert_equal(groups.num_groups, 1)
+    assert_equal(len(groups.ids), 0)  # not four zeros
+    assert_equal(g.num_groups(), 1)
+    assert_equal(len(g.key_columns(List[Field]())), 0)
+
+
+def test_hash_grouping_assigns_dense_ids_in_first_appearance_order() raises:
+    var g = HashGrouping()
+    assert_true(HashGrouping.scatters)
+    var groups = g.assign(_int_key([7, 9, 7, 9, 7]), 5)
+    assert_equal(groups.num_groups, 2)
+    assert_true(groups.ids == array([0, 1, 0, 1, 0], int32))
+    assert_equal(g.num_groups(), 2)
+
+
+def test_hash_grouping_ids_stay_stable_across_batches() raises:
+    """The property every accumulator depends on.
+
+    A state that folded batch N keeps its slots when N+1 introduces new groups;
+    ids already handed out are never renumbered, so `AggState._grow` can extend
+    in place rather than rebuild a fold.
+    """
+    var g = HashGrouping()
+    var first = g.assign(_int_key([7, 9]), 2)
+    assert_equal(first.num_groups, 2)
+
+    var second = g.assign(_int_key([9, 4, 7]), 3)
+    assert_equal(second.num_groups, 3)
+    # 9 and 7 keep the ids they were given in the first batch; only 4 is new.
+    assert_true(second.ids == array([1, 2, 0], int32))
+
+    var keys = g.key_columns([Field("k", int64)])
+    assert_equal(len(keys), 1)
+    assert_true(keys[0].as_int64() == array([7, 9, 4], int64))
+
+
+def test_a_grouping_is_usable_through_the_trait() raises:
+    """Placement composes as a comptime type parameter, not a branch.
+
+    This is what lets `PartitionGrouping` and a sorted or radix placement land
+    as conformers rather than as further branches inside `GroupBy`.
+    """
+
+    def slots[G: Grouping](var g: G) raises -> Int:
+        var groups = g.assign(_int_key([5, 5, 6]), 3)
+        return groups.num_groups
+
+    assert_equal(slots(ScalarGrouping()), 1)
+    assert_equal(slots(HashGrouping()), 2)

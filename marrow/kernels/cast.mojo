@@ -18,7 +18,7 @@ Every kernel conforms to ``CastKernel`` and so exposes the **same**
 (the arithmetic-kernel pattern). The free ``cast`` function at the bottom picks
 the target family and delegates to the matching kernel's ``dispatch``; ``safe``
 is a plain runtime flag each kernel branches at its leaf ``apply`` call. The
-fused AOT node in ``marrow.expr.values`` bypasses all of this and grabs
+fused AOT node in ``marrow.exprold.values`` bypasses all of this and grabs
 ``NumericCast.core`` directly.
 
 The uniform signature is the point of the trait, not code reuse: the ladder used
@@ -56,10 +56,10 @@ from ..dtypes import (
     IntegerType,
     FloatingType,
     StringLikeType,
-    TimeUnit,
     int32,
 )
 from .core import Kernel
+from .temporal import ticks_per_second
 from ..execution import ExecContext, GPU_ENABLED
 from .filter import take
 
@@ -407,34 +407,28 @@ struct TemporalCast(CastKernel):
             )
 
     @staticmethod
-    def _unit_ns(u: TimeUnit) -> Int64:
-        """Nanoseconds per tick for a sub-second time unit."""
-        if u.value == 0:
-            return 1_000_000_000  # second
-        elif u.value == 1:
-            return 1_000_000  # millisecond
-        elif u.value == 2:
-            return 1_000  # microsecond
-        else:
-            return 1  # nanosecond
-
-    @staticmethod
     def ns_per_tick(dt: DynType) raises -> Int64:
         """Nanoseconds represented by one tick of a temporal dtype — drives the
-        reinterpret-vs-scale choice and the scale factor."""
+        reinterpret-vs-scale choice and the scale factor.
+
+        The reciprocal of `temporal.ticks_per_second`, which already walks the
+        same five dtypes and the same four `TimeUnit`s. Every resolution Arrow
+        defines divides 1e9 exactly, so the division is not lossy. `date32` is
+        the one dtype that helper rejects -- a day is not a sub-second tick --
+        so it is answered here.
+
+        Folding `_scale_checked` into `_map_scalar` was tried alongside this and
+        **reverted**: it removed 49 source lines and cost **+10,560 bytes of
+        `__text`** on `query_sort`, `query_dynvalue` and `query_runtime`, because
+        `_map_scalar` carries the allocation and the `ArrayData` relabel inside
+        every `[SrcN, DstN]` instantiation while `_scale` has them once. Same
+        shape as the `DecimalCast._convert` merge recorded below. This change,
+        measured alone, is +64 bytes on one gate and +0 on the other eleven."""
         if dt.is_date32():
             return 86_400_000_000_000  # days
-        elif dt.is_date64():
-            return 1_000_000  # milliseconds
-        elif dt.is_timestamp():
-            return Self._unit_ns(dt.as_timestamp().unit)
-        elif dt.is_duration():
-            return Self._unit_ns(dt.as_duration().unit)
-        elif dt.is_time32():
-            return Self._unit_ns(dt.as_time32().unit)
-        elif dt.is_time64():
-            return Self._unit_ns(dt.as_time64().unit)
-        raise Error(t"cast: {dt} is not a temporal type")
+        if not dt.is_temporal():
+            raise Error(t"cast: {dt} is not a temporal type")
+        return 1_000_000_000 // Int64(ticks_per_second(dt))
 
     @staticmethod
     def _scale_checked[

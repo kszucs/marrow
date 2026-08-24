@@ -25,6 +25,7 @@ back together is only safe while that import stays where it is.
 import ast
 import re
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import pyarrow as pa
@@ -171,6 +172,61 @@ TABLES = {
             "country": pa.array(["ca", "mx", None], pa.string()),
         }
     ),
+    # Floating-point edge values, for the scalar kernels that only get
+    # interesting here: NaN (which is not null, and is not equal to itself),
+    # both infinities, and a negative zero that compares equal to +0.0 while
+    # having a different sign bit. `y` has no zero, so a division case asks
+    # about arithmetic rather than about what marrow and DuckDB each do with
+    # division by zero — a separate question, and one they answer differently.
+    "floats": pa.table(
+        {
+            "x": pa.array(
+                [
+                    1.5,
+                    -2.0,
+                    0.0,
+                    -0.0,
+                    float("nan"),
+                    float("inf"),
+                    float("-inf"),
+                    None,
+                ],
+                pa.float64(),
+            ),
+            "y": pa.array([2.0, 4.0, 8.0, 1.0, 1.0, 2.0, 2.0, None], pa.float64()),
+            "n": pa.array([4, -9, 0, 1, 2, 3, -1, None], pa.int64()),
+        }
+    ),
+    # Temporal inputs. Naive (zone-free) timestamps, so nothing here depends on
+    # a DST rule or a tz database. Covers a leap day, the last microsecond of a
+    # year, a repeated instant so grouping has something to do, and a null.
+    "events": pa.table(
+        {
+            "ts": pa.array(
+                [
+                    datetime(2021, 1, 1, 0, 0, 0),
+                    datetime(2021, 6, 15, 12, 30, 45),
+                    datetime(2021, 6, 15, 12, 30, 45),
+                    None,
+                    datetime(2020, 2, 29, 23, 59, 59),
+                    datetime(2021, 12, 31, 23, 59, 59, 999999),
+                ],
+                pa.timestamp("us"),
+            ),
+            "d": pa.array(
+                [
+                    date(2021, 1, 1),
+                    date(2021, 6, 15),
+                    None,
+                    date(2020, 2, 29),
+                    date(2021, 12, 31),
+                    date(2021, 6, 15),
+                ],
+                pa.date32(),
+            ),
+            "label": pa.array(["a", "b", "a", None, "c", "b"], pa.string()),
+        }
+    ),
     # Cast inputs. `f` holds values where truncation and rounding disagree
     # (1.7, -2.7, 0.5); `s` holds one string that does not parse; `i` holds a
     # value too wide for int32 is deliberately absent — 300 fits, so the
@@ -220,6 +276,12 @@ TYPES = {
     "int32": pa.int32(),
     "double": pa.float64(),
     "bool": pa.bool_(),
+    "date32": pa.date32(),
+    # Microseconds, which is what DuckDB's `TIMESTAMP` is and what the
+    # `events` fixture holds. A unit belongs in the *value*, not the type
+    # name: an expectation written as `timestamp` and read back as some other
+    # unit would compare equal on the numbers while meaning different instants.
+    "timestamp": pa.timestamp("us"),
 }
 _NAMES = {str(v): k for k, v in TYPES.items()}
 
@@ -243,6 +305,13 @@ def render_value(value):
     """
     if value is None:
         return NULL
+    if isinstance(value, (date, datetime)):
+        # ISO 8601, quoted like a string for the same reason. `datetime`
+        # subclasses `date`, and each one's own `isoformat` is the right
+        # spelling, so a single branch covers both. `isoformat` keeps
+        # microseconds when there are any (`23:59:59.999999`) and omits the
+        # fractional part when there are none, which round-trips exactly.
+        return repr(value.isoformat())
     if isinstance(value, (str, float)):
         return repr(value)
     return str(value)
@@ -253,7 +322,14 @@ def parse_value(text, dtype):
         return None
     if dtype == pa.bool_():
         return text == "True"
-    return ast.literal_eval(text)
+    value = ast.literal_eval(text)
+    # The temporal cells arrive as quoted ISO strings, so the literal_eval
+    # above yields the text and the constructor below yields the value.
+    if dtype == pa.date32():
+        return date.fromisoformat(value)
+    if dtype == pa.timestamp("us"):
+        return datetime.fromisoformat(value)
+    return value
 
 
 def render_expected(table):

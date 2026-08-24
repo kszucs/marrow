@@ -20,7 +20,7 @@ from ..dtypes import int32, uint64
 
 from .numeric import EqKernel
 from ..execution import ExecContext
-from .filter import Take, filter
+from .filter import Take, Filter
 from .hashing import HashKernel
 from ..utils import Hasher, RapidHash64
 
@@ -644,12 +644,26 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
         # the lookup; doing that here would mean teaching the CSR build, the
         # probe loop and the unmatched-row scan about it for a saving on rows a
         # join is not supposed to match anyway.
-        var verifier = mask^.to_dyn()
-        var build_matched = filter(build_indices.copy().to_dyn(), verifier)
-        var probe_matched = filter(probe_indices.copy().to_dyn(), verifier)
+        #
+        # **Selection stays on the typed path.** The rule is "a null entry does
+        # not select", which is just *data AND valid* — so it is applied by
+        # ANDing validity into the mask, not by routing these `Int32Array`s
+        # through the `DynArray`-only `filter`. Going through `filter` cost
+        # **+450,112 bytes (+29.7%)** on `query_join`: it instantiates the
+        # per-dtype ladder and makes it reachable from every binary that joins
+        # (`marrow::kernels::filter` 98 -> 121 symbols, dragging `views`,
+        # `arrays` and `execution` with it). That is the same reachability
+        # explosion as hashing reaching `cast`, which cost ~2.4 MB. Backlog S20.
+        var valid = mask.validity()
+        if valid:
+            var selected = mask.values() & valid.value()
+            return (
+                Filter.apply(build_indices, selected.view()),
+                Filter.apply(probe_indices, selected.view()),
+            )
         return (
-            build_matched.as_int32().copy(),
-            probe_matched.as_int32().copy(),
+            Filter.apply(build_indices, mask.values()),
+            Filter.apply(probe_indices, mask.values()),
         )
 
     def num_keys(self) -> Int:

@@ -60,9 +60,9 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Conditional: `case_when`, `coalesce`, `nullif`, `fill_null`; membership: `is_in`; nested: `array_length`, `array_contains`
 
 **Expression execution** (`marrow.expr`) — two lanes behind one relational API
-- **Runtime lane** — the `DynValue` node (`marrow/expr/dynamic.mojo`). Its operand *dtypes* are resolved at run time, but its operation is not: each node carries a pointer to its evaluator, so a binary links exactly the kernels its expressions mention. Build expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …).
-- **AOT lane** — the comptime-typed algebra (`marrow/expr/values.mojo`), fully monomorphized: every operand is bound on a family trait, the output dtype is a comptime type, and a subtree fuses into one SIMD loop with no dispatch.
-- **One plan IR over both.** `BoxedValue` (`marrow/expr/relations.mojo`) is the single box both lanes erase into, so each relational operator compiles exactly once. Plan nodes `InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Limit`, `Sort`, `Aggregate`, `Join` chain via `.filter()`, `.select()`, `.aggregate()`, `.sort()`, `.limit()`, `.join()`; `plan.execute()` opens a pull-based processor tree. A `.filter` directly above a `ParquetScan` pushes its predicate into the scan for row-group and page pruning.
+- **Runtime lane** — the `DynValue` node (`marrow/exprold/dynamic.mojo`). Its operand *dtypes* are resolved at run time, but its operation is not: each node carries a pointer to its evaluator, so a binary links exactly the kernels its expressions mention. Build expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …).
+- **AOT lane** — the comptime-typed algebra (`marrow/exprold/values.mojo`), fully monomorphized: every operand is bound on a family trait, the output dtype is a comptime type, and a subtree fuses into one SIMD loop with no dispatch.
+- **One plan IR over both.** `BoxedValue` (`marrow/exprold/relations.mojo`) is the single box both lanes erase into, so each relational operator compiles exactly once. Plan nodes `InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Limit`, `Sort`, `Aggregate`, `Join` chain via `.filter()`, `.select()`, `.aggregate()`, `.sort()`, `.limit()`, `.join()`; `plan.execute()` opens a pull-based processor tree. A `.filter` directly above a `ParquetScan` pushes its predicate into the scan for row-group and page pruning.
 - The AOT lane's whole point is that the closed world is dead-code-eliminable: the fused gate binary is several times smaller in `__text` than the runtime equivalent. `benchmarks/binary_size/` is the live gate — trust it over any ratio quoted in prose.
 - **Late-bound parameters, in both lanes.** `param("min-a", int64)` is a constant supplied at run time rather than compile time — structurally a literal whose value sits behind a cell resolved once per batch, so the fused inner loop is unchanged and a parameter costs nothing per row. `plan.execute_cli()` then binds them from `argv`, which is what makes a query compilable into a standalone binary — see **Compiled queries (AOT)** below.
 
@@ -257,7 +257,7 @@ paths late-bound. `param()` sits beside `col()` and `lit()`: `col` reads from
 data, `lit` is a constant, `param` is a constant supplied later.
 
 ```mojo
-from marrow.expr.builders import col, param
+from marrow.exprold.builders import col, param
 from marrow.dtypes import int64, string
 
 def main() raises:
@@ -417,7 +417,7 @@ var result = GroupBy(keys).sum(vals)   # RecordBatch: key=[1,2], sum=[90.0, 60.0
 ### Expression execution
 
 ```mojo
-from marrow.expr import col, lit, in_memory_table, execute
+from marrow.exprold import col, lit, in_memory_table, execute
 from marrow.tabular import record_batch
 
 var batch = record_batch(

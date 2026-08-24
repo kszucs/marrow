@@ -11,14 +11,14 @@ into it), so this links the top-K path rather than a full sort plus a slice.
     pixi run binary_size query_sort
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.relations import InMemoryTable, Sort, DynRelation
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.relations import InMemoryTable, Sort, DynRelation
 
 
 def main() raises:

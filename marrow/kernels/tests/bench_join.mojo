@@ -227,7 +227,7 @@ def bench_join_shape_10m_x_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # morsel-probe matrix — the shape the plan layer actually produces
 #
-# `JoinProcessor` (marrow/expr/execution.mojo) streams the *probe* side in
+# `JoinProcessor` (marrow/exprold/execution.mojo) streams the *probe* side in
 # 8192-row morsels against a build side that may be arbitrarily large. Every
 # bench above probes with a single big batch, so none of them can see the cost
 # of a per-call fan-out decision: they amortize one dispatch over 1M rows,

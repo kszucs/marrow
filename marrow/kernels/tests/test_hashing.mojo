@@ -32,7 +32,7 @@ from ...dtypes import (
 )
 from ...arrays import StructArray
 from ...dtypes import Field, struct_
-from ...expr.aggregates import Sum
+from ...exprold.aggregates import Sum
 from ...kernels.groupby import GroupBy
 
 from ...arrays import UInt64Array

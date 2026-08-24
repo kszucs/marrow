@@ -41,7 +41,7 @@ from ..dtypes import (
 
 from ..utils import CompressionLibs
 from .codecs import Encoding, Rle, Plain, Dictionary, Compression
-from ..utils import LittleEndian, Crc32
+from ..utils import Epoch, LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .source import ByteSource, MappedFile
 from .schema import SchemaMapping, DecodedLeaf, LeafColumn
@@ -441,10 +441,6 @@ def _finish_primitive(
     )
 
 
-comptime _JULIAN_DAY_OF_EPOCH = 2440588  # Julian day number of 1970-01-01
-comptime _NANOS_PER_DAY = 86_400_000_000_000
-
-
 def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
     """Decode a 12-byte INT96 timestamp to nanoseconds since the Unix epoch: the
     first 8 bytes are the little-endian nanoseconds within the day, the last 4
@@ -454,7 +450,7 @@ def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
     var julian_day = LittleEndian.fixed[DType.int32](span, off + 8)
     return (
         nanos_of_day
-        + Int64(Int(julian_day) - _JULIAN_DAY_OF_EPOCH) * _NANOS_PER_DAY
+        + Int64(Int(julian_day) - Epoch.JULIAN_DAY) * Epoch.NANOS_PER_DAY
     )
 
 

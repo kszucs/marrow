@@ -27,7 +27,7 @@ from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
 from max.algorithm.functional import sync_parallelize
 from max.algorithm.functional import elementwise
-from max.algorithm.reduction import _reduce_generator_wrapper
+from max.algorithm.reduction import _reduce_generator
 from std.math import ceildiv
 from std.utils.index import IndexList
 from std.utils.coord import Coord
@@ -2092,7 +2092,7 @@ def _reduce_dispatch[
     """Dispatch a scalar reduction to GPU or CPU (serial / parallel) based on
     ``ctx``.
 
-    - **GPU** — Mojo's ``_reduce_generator_wrapper[target="gpu"]``, allocating
+    - **GPU** — Mojo's ``_reduce_generator[target="gpu"]``, allocating
       a 1-element device buffer and reading back via ``Buffer.to_cpu``.
     - **CPU multi-thread** — each worker computes a partial reduction over its
       slice using ``vectorize`` with a SIMD accumulator; the host thread folds
@@ -2106,7 +2106,7 @@ def _reduce_dispatch[
 
     if ctx.is_gpu():
         # float16 triggers an internal f32→f16 rebind failure in the GPU
-        # reduction backend (_reduce_generator_wrapper uses f32 accumulators
+        # reduction backend (_reduce_generator uses f32 accumulators
         # for f16 and cannot rebind back); bool fails Metal IR verification in
         # the same backend. Exclude both until the stdlib fixes them (they fall
         # through to the CPU path, which is correct — the reducer reads host
@@ -2135,11 +2135,40 @@ def _reduce_dispatch[
             ](idx: IndexList[rank], val: SIMD[T, W]):
                 dev_view.store[1](0, val[0])
 
-            _reduce_generator_wrapper[
-                T,
-                input_fn,
-                output_fn_gpu,
-                combine_capturing,
+            # The three dtype-generic shims below are what
+            # `_reduce_generator_wrapper` used to do for us: `_reduce_generator`
+            # parameterises its lambdas on their own `dtype`, while everything
+            # here is fixed to `T`, so each one refines in and back out. Upstream
+            # deleted the wrapper in 327e2cc25e as "unused" — it had no callers
+            # inside `modular`, and did not look outside it.
+
+            @always_inline
+            @__parameter
+            def input_refined[
+                _dtype: DType, W: Int, rank: Int
+            ](idx: IndexList[rank]) -> SIMD[_dtype, W]:
+                return input_fn[W, rank](idx)._refine[_dtype]()
+
+            @always_inline
+            @__parameter
+            def output_refined[
+                _dtype: DType, W: SIMDLength, rank: Int
+            ](idx: IndexList[rank], val: SIMD[_dtype, W]):
+                output_fn_gpu[W, rank](idx, val._refine[T]())
+
+            @always_inline
+            @__parameter
+            def combine_refined[
+                ty: DType, W: SIMDLength
+            ](a: SIMD[ty, W], b: SIMD[ty, W]) -> SIMD[ty, W]:
+                return combine_capturing[W](
+                    a._refine[T](), b._refine[T]()
+                )._refine[ty]()
+
+            _reduce_generator[
+                input_refined,
+                output_refined,
+                combine_refined,
                 target="gpu",
                 reduce_dim=0,
             ](Coord(length), identity, ctx.device.value())

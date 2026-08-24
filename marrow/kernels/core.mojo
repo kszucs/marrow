@@ -44,7 +44,7 @@ trait Kernel:
 
 
 @fieldwise_init
-struct Grouping(Copyable, Movable):
+struct Groups(Copyable, Movable):
     """A batch's rows assigned to dense group ids, with how many groups exist.
 
     The two always travel together: `ids[i]` is row `i`'s group, and
@@ -57,6 +57,10 @@ struct Grouping(Copyable, Movable):
 
     Sibling of `JoinIndex`, which named `Tuple[Int32Array, Int32Array]` for the
     same reason.
+
+    Named `Groups` rather than `Grouping` because `Grouping` is the *strategy*
+    that produces this — `ScalarGrouping`, `HashGrouping` in `groupby.mojo`.
+    The trait is the grouping; this is the groups it assigned.
     """
 
     var ids: Int32Array

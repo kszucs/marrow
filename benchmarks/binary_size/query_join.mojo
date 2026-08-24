@@ -16,7 +16,7 @@ from marrow.builders import array
 from marrow.dtypes import int64, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.relations import InMemoryTable, Join, DynRelation
+from marrow.exprold.relations import InMemoryTable, Join, DynRelation
 from marrow.kernels.join import JOIN_INNER
 
 

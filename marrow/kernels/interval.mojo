@@ -19,7 +19,7 @@ an operator has no useful interval rule, the answer is "maybe true". A caller
 may only ever skip data it has *proven* cannot match, so a wrong "maybe" costs
 time and a wrong "no" costs correctness.
 
-`marrow.expr.pruning` is the consumer: it turns a row group's or page's column
+`marrow.exprold.pruning` is the consumer: it turns a row group's or page's column
 statistics into `Interval`s and drives these kernels over an expression tree.
 """
 

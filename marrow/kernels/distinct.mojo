@@ -26,7 +26,7 @@ from ..builders import Int64Builder
 from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
 from ..execution import ExecContext
-from .core import Grouping
+from .core import Groups
 from .hashing import RapidHashKernel
 from ..utils import RapidHash64
 from .hashtable import SwissHashTable
@@ -165,7 +165,7 @@ def approx_count_distinct(
 
 
 def count_distinct_grouped(
-    groups: Grouping,
+    groups: Groups,
     value: DynArray,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int64Array:
@@ -213,7 +213,7 @@ def count_distinct_grouped(
 
 
 def approx_count_distinct_grouped(
-    groups: Grouping,
+    groups: Groups,
     value: DynArray,
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> Int64Array:

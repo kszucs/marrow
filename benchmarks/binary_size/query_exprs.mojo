@@ -14,7 +14,7 @@ by *any* gate. If one family later needs its own attribution, split it out then.
     pixi run binary_size query_exprs
 """
 
-from marrow.expr.values import BoxedValue
+from marrow.exprold.values import BoxedValue
 from marrow.builders import array, TimestampBuilder
 from marrow.dtypes import (
     Float64Type,
@@ -28,16 +28,16 @@ from marrow.dtypes import (
 )
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.builders import col
-from marrow.expr.dynamic import DynValue
-from marrow.expr.values import (
+from marrow.exprold.builders import col
+from marrow.exprold.dynamic import DynValue
+from marrow.exprold.values import (
     NumericCast,
     Like,
     IsIn,
     Coalesce,
     Year,
 )
-from marrow.expr.relations import InMemoryTable, Project, DynRelation
+from marrow.exprold.relations import InMemoryTable, Project, DynRelation
 
 
 def main() raises:

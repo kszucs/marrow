@@ -87,6 +87,9 @@
 - Aggregates written on the expression they aggregate --
   `col("amount", int64).sum().alias("total")` -- with GROUP BY,
   HAVING, computed keys and computed inputs.
+- A push-based execution engine: `Operator.push(batch)` answers with what
+  it produced and `drain()` with what is left, one operator per plan
+  node, with early termination.
 - Late-bound parameters in both lanes. `param("min-a", int64)` is a
   literal whose value arrives at execution time through `Bindings`,
   carried through the execution rather than substituted into a copy of

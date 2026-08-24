@@ -1,7 +1,7 @@
 """Python bindings for the runtime expression lane.
 
-Exposes `marrow.expr.dynamic.DynValue` as the Python type ``Expr`` and
-`marrow.expr.values.AggExpr` as ``Agg``. Only the *runtime* lane is bindable:
+Exposes `marrow.exprold.dynamic.DynValue` as the Python type ``Expr`` and
+`marrow.exprold.values.AggExpr` as ``Agg``. Only the *runtime* lane is bindable:
 the AOT lane's nodes are parameterised on comptime dtypes, so there is no
 single Mojo type a Python object could hold. `AggExpr` is the exception, and
 deliberately so — it is the one aggregate type *both* lanes produce, carrying
@@ -23,7 +23,7 @@ module owns two one-field boxes, `Expr` and `Agg`, which override
 binding module (the plan bindings) goes through to reach the value inside.
 
 The alternative is a two-line `write_repr_to` on `DynValue` and `AggExpr` in
-`marrow/expr/`, which would delete both boxes. Worth doing once those files are
+`marrow/exprold/`, which would delete both boxes. Worth doing once those files are
 free to edit.
 
 **Named methods, not operators.** ``Expr`` exposes ``add`` / ``lt`` / ``and_``
@@ -46,9 +46,9 @@ from std.python.bindings import PythonModuleBuilder
 
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType
-from marrow.expr import DynValue
-from marrow.expr.values import AggExpr
-from marrow.expr.builders import count_star as _count_star
+from marrow.exprold import DynValue
+from marrow.exprold.values import AggExpr
+from marrow.exprold.builders import count_star as _count_star
 from marrow.tabular import RecordBatch
 
 
@@ -292,7 +292,7 @@ def expr_count_star() raises -> PythonObject:
     A module-level constructor rather than a method, because it is the one
     aggregate that is not *of* an expression: `col("x").count()` counts the
     non-null values of ``x``, and those two differ on every nullable column.
-    `marrow.expr.builders.count_star` owns the definition — a valid literal
+    `marrow.exprold.builders.count_star` owns the definition — a valid literal
     counted per row — so this binding adds nothing but the box."""
     return wrap_agg(_count_star())
 

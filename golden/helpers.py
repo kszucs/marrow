@@ -15,7 +15,7 @@ The aggregates used to be the worst of it —
 `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x).alias("total")` — and needed
 nine shims. It turned out marrow already had `col("v", int64).sum()`, on
 `NumericValue`, documented in `Relation.aggregate` and used throughout
-`marrow/expr/tests`; the corpus was simply spelling it the long way. That is
+`marrow/exprold/tests`; the corpus was simply spelling it the long way. That is
 the shape of the remaining work: check whether the nicer spelling already
 exists before designing one.
 
@@ -49,6 +49,15 @@ SHIMS = {
     "Float64Type",
     "StringType",
     "BoolType",
+    # `timestamp(microsecond)` vs `marrow.timestamp("us")`: Mojo names the
+    # unit with a `TimeUnit` constant, Python with the string the Arrow spec
+    # uses. `date32` and `timestamp` themselves are *not* shims — both lanes
+    # call the same-named constructor — so only the unit is listed.
+    "microsecond",
+    # Not a lane disagreement but a binding defect: `marrow.timestamp("us")`
+    # raises because the declared `tz=None` default is dropped by
+    # `def_function`. See the wrapper below.
+    "timestamp",
     # fused string nodes vs. Python methods
     "Upper",
     "Lower",
@@ -108,6 +117,28 @@ Int32Type = int32
 Float64Type = float64
 StringType = string
 BoolType = bool_
+
+# The temporal types are the other way round: `date32` and `timestamp` are
+# *constructors* in both lanes (`date32()`, `timestamp(microsecond)`), because
+# Mojo has no comptime singleton for a type carrying a runtime unit. So they
+# pass straight through, and only the unit needs a spelling.
+date32 = marrow.date32
+microsecond = "us"
+
+
+def timestamp(unit, tz=None):
+    """`marrow.timestamp` with its own declared default actually applied.
+
+    `python/bindings/dtypes.mojo` declares `tz: PythonObject = None`, but the
+    default does not survive `def_function`, so `marrow.timestamp("us")`
+    raises `TypeError: <mojo function>() missing 1 required positional
+    argument` while `marrow.timestamp("us", None)` works. PyArrow's
+    `pa.timestamp("us")` takes one argument, and the Mojo lane's
+    `timestamp(microsecond)` does too, so the corpus keeps the one-argument
+    spelling and this wrapper supplies what the binding drops. Delete it when
+    the binding honours its default.
+    """
+    return marrow.timestamp(unit, tz)
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +322,7 @@ class _Relation:
         past the Python sugar rather than reconstructing it.
         """
         return _Relation(
-            marrow.expr.LazyTable.wrap(
+            marrow.exprold.LazyTable.wrap(
                 self._lazy.unwrap().sort(
                     [k.unwrap() for k in keys], list(ascending), nulls_first, True
                 )
@@ -373,6 +404,9 @@ NAMESPACE = {
     "Float64Type": Float64Type,
     "StringType": StringType,
     "BoolType": BoolType,
+    "date32": date32,
+    "timestamp": timestamp,
+    "microsecond": microsecond,
     "Upper": Upper,
     "Lower": Lower,
     "Strip": Strip,

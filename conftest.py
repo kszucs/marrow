@@ -248,11 +248,25 @@ class MojoRunner:
             + lm
         )
 
+    #: Mojo keywords that are legal directory names but illegal in an import
+    #: path unless backticked.  ``marrow/expr/comptime/`` is a deliberate
+    #: package name (the AOT lane), so the driver has to spell it ``\`comptime\```
+    #: or the import fails with ``expected module name``.
+    RESERVED = {"comptime", "fn", "def", "var", "trait", "struct", "alias"}
+
     @staticmethod
     def module_path(rootpath, fspath):
-        """``marrow/expr/tests/test_values.mojo`` -> ``marrow.expr.tests.test_values``."""
+        """``marrow/exprold/tests/test_values.mojo`` -> ``marrow.exprold.tests.test_values``.
+
+        A path component that is a Mojo keyword is backticked, so
+        ``marrow/expr/comptime/tests/x.mojo`` becomes
+        ``marrow.expr.`comptime`.tests.x``.
+        """
         rel = Path(fspath).resolve().relative_to(Path(rootpath).resolve())
-        return ".".join(rel.with_suffix("").parts)
+        return ".".join(
+            f"`{part}`" if part in MojoRunner.RESERVED else part
+            for part in rel.with_suffix("").parts
+        )
 
     @staticmethod
     def write_driver(rootpath, groups, kind):
@@ -261,7 +275,7 @@ class MojoRunner:
         The compiler accepts a single input file per invocation and
         re-elaborates all of marrow for each one, so compiling per test file
         costs that elaboration N times over.  Collapsing the selection into one
-        unit pays it once: the nine ``marrow/expr/tests`` files (280 cases) take
+        unit pays it once: the nine ``marrow/exprold/tests`` files (280 cases) take
         4m43s together, against ~200s *each* when built separately.
 
         Output is deterministic — modules sorted, cases in source order — so an
@@ -1454,7 +1468,14 @@ def test_module_path(tmp):
     path = Path(tmp) / "marrow" / "expr" / "tests" / "test_values.mojo"
     path.parent.mkdir(parents=True)
     path.touch()
-    assert MojoRunner.module_path(tmp, path) == "marrow.expr.tests.test_values"
+    assert MojoRunner.module_path(tmp, path) == "marrow.exprold.tests.test_values"
+
+    reserved = tmp / "marrow" / "expr2" / "comptime" / "tests" / "test_x.mojo"
+    reserved.parent.mkdir(parents=True, exist_ok=True)
+    reserved.touch()
+    assert (
+        MojoRunner.module_path(tmp, reserved) == "marrow.expr.`comptime`.tests.test_x"
+    )
 
 
 def _driver_groups(tmp):

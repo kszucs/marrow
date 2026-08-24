@@ -26,7 +26,7 @@ from ..arrays import (
 )
 from ..builders import DynBuilder, Int32Builder
 from ..dtypes import Field, struct_
-from .core import Grouping
+from .core import Groups
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import RapidHashKernel
@@ -157,6 +157,126 @@ struct HashGrouper(Movable):
             self._key_builders[k].extend(gathered.children[k])
 
 
+# ---------------------------------------------------------------------------
+# Grouping — the placement axis
+# ---------------------------------------------------------------------------
+trait Grouping(Deinitable, Movable):
+    """Which slot does a row contribute to?
+
+    The *strategy*; `Groups` is the assignment it produces. One of the four
+    axes an aggregation composes from — algebra x input x placement x emission
+    — and the one that decides whether a fold scatters at all.
+
+    A trait rather than a flag, so window partitions and a sorted or radix
+    placement arrive as **conformers** rather than as further branches inside
+    `GroupBy`. Placement is a comptime type parameter of a fold, so the loop a
+    placement implies is chosen when the plan is built, not per batch.
+
+    Takes **already-evaluated key columns**, never a `RecordBatch`: `kernels`
+    must not depend on the expression layer, and evaluating a key expression is
+    the caller's job. That is also what lets one grouping serve every aggregate
+    in a query — the keys are hashed once, not once per aggregate.
+    """
+
+    comptime scatters: Bool
+    """Whether a fold must scatter into per-slot accumulators.
+
+    False for a single implicit slot, which lets a fold accumulate in registers
+    and reduce once at the end. Not a micro-optimisation: scattering at one
+    group measured **14.6x** worse than the register fold, which is the whole
+    reason `ScalarGrouping` is its own conformer rather than `HashGrouping`
+    with one key.
+    """
+
+    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
+        """Place this batch's rows, extending the grouping with any new slots.
+
+        Ids are dense and stable across calls, so an accumulator that folded an
+        earlier batch keeps its slots when a later one introduces new groups.
+        """
+        ...
+
+    def num_groups(self) -> Int:
+        """How many slots exist so far — the size of a per-slot accumulator."""
+        ...
+
+    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
+        """One column per key field, one row per slot.
+
+        Empty when there are no keys. Call once, at emit time — it finishes the
+        key builders.
+        """
+        ...
+
+
+struct ScalarGrouping(Grouping):
+    """One slot for every row — `SELECT sum(x) FROM t`, with no `GROUP BY`.
+
+    Holds nothing and allocates nothing per batch. In particular it does **not**
+    build a zero vector to say "every row is group 0": a fold whose `scatters`
+    is False never reads the ids, and materialising one `Int32` per row to
+    communicate a constant is exactly the cost this conformer exists to avoid.
+    """
+
+    comptime scatters = False
+
+    def __init__(out self):
+        pass
+
+    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
+        var empty = Int32Builder(0)
+        return Groups(empty.finish(), 1)
+
+    def num_groups(self) -> Int:
+        return 1
+
+    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
+        return List[DynArray]()
+
+
+struct HashGrouping(Grouping):
+    """Dense ids from a keys-only hash table, accumulated across batches.
+
+    Wraps `HashGrouper`, which already owns the hashing, the dense-id
+    assignment and the unique-key materialisation. This adds the `Grouping`
+    surface over it so a fold can be parameterised on placement.
+    """
+
+    comptime scatters = True
+
+    var _grouper: HashGrouper
+
+    def __init__(out self):
+        self._grouper = HashGrouper()
+
+    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
+        """Hash the key columns and resolve dense ids.
+
+        The field names built here are positional and deliberately arbitrary —
+        `HashGrouper` keys on the *values*, and the caller supplies the real
+        fields at `key_columns` time, where they reach the output schema.
+        """
+        var fields = List[Field](capacity=len(keys))
+        for i in range(len(keys)):
+            fields.append(Field("k" + String(i), keys[i].dtype()))
+        var st = StructArray(
+            dtype=struct_(fields^),
+            length=num_rows,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            children=keys.copy(),
+        )
+        var ids = self._grouper.consume_keys(st)
+        return Groups(ids^, self._grouper.num_groups())
+
+    def num_groups(self) -> Int:
+        return self._grouper.num_groups()
+
+    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
+        return self._grouper.key_columns(fields)
+
+
 trait ColumnAggregator(Copyable, Deinitable, Movable):
     """What to compute per value column, for a grouping this layer drives.
 
@@ -177,13 +297,13 @@ trait ColumnAggregator(Copyable, Deinitable, Movable):
         ...
 
     def grouped(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> DynArray:
         """Aggregate one value column over precomputed group ids."""
         ...
 
     def partials(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         """One thread's raw per-group accumulator + valid counts."""
         ...
@@ -219,12 +339,12 @@ struct OneAggregation[A: Aggregation](ColumnAggregator):
         return Self.A.is_mergeable
 
     def grouped(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> DynArray:
         return Self.A.grouped(groups, Self.A.from_any(values)).to_dyn()
 
     def partials(
-        self, column: Int, groups: Grouping, values: DynArray
+        self, column: Int, groups: Groups, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
         var parts = Self.A.partials(groups, Self.A.from_any(values))
         return (parts[0].copy().to_dyn(), parts[1].copy())
@@ -313,7 +433,7 @@ comptime _CARD_SAMPLE_ROWS = 4096
 comptime GROUP_SERIAL: UInt8 = 0
 comptime GROUP_THREAD_LOCAL: UInt8 = 1
 comptime GROUP_RADIX: UInt8 = 2
-"""Grouping execution strategies — see `GroupBy` for what each trades off.
+"""Groups execution strategies — see `GroupBy` for what each trades off.
 
 Public so a driver layered on top (the expression layer's runtime, multi-
 aggregate group-by) can reuse the same strategy decision instead of making its
@@ -330,7 +450,7 @@ struct GroupBy(Movable):
     is the multi-column counterpart: it groups once and emits one column per
     value column through a caller-supplied *comptime* aggregator. No aggregate
     name or tag ever reaches this module — mapping one onto an ``Aggregation``
-    is the expression layer's job (``marrow.expr.aggregates``).
+    is the expression layer's job (``marrow.exprold.aggregates``).
 
     The execution **strategy** is picked once at construction — from the row
     count, the worker budget (``ctx``), and a cheap one-time cardinality estimate
@@ -496,7 +616,7 @@ struct GroupBy(Movable):
             )
 
         def by_column(
-            j: Int, groups: Grouping, value: DynArray
+            j: Int, groups: Groups, value: DynArray
         ) raises {imm} -> DynArray:
             return agg.grouped(j, groups, value)
 
@@ -551,7 +671,7 @@ struct GroupBy(Movable):
                 for j in range(na):
                     var parts = agg.partials(
                         j,
-                        Grouping(gids.copy(), ng),
+                        Groups(gids.copy(), ng),
                         values[j].slice(start, length),
                     )
                     accs.append(parts[0].copy())
@@ -609,7 +729,7 @@ struct GroupBy(Movable):
         return GroupedColumns(key_cols^, agg_cols^)
 
     def aggregate_columns[
-        ColAgg: def(Int, Grouping, DynArray) raises -> DynArray
+        ColAgg: def(Int, Groups, DynArray) raises -> DynArray
     ](self, values: List[DynArray], col_agg: ColAgg) raises -> GroupedColumns:
         """Group the keys once, then emit ``col_agg(j, gids, values[j], ng)`` as
         output column ``j`` — the multi-aggregate driver.
@@ -628,7 +748,7 @@ struct GroupBy(Movable):
 
     @staticmethod
     def _by_partition[
-        ColAgg: def(Int, Grouping, DynArray) raises -> DynArray,
+        ColAgg: def(Int, Groups, DynArray) raises -> DynArray,
     ](
         keys: StructArray,
         values: List[DynArray],
@@ -698,13 +818,13 @@ struct GroupBy(Movable):
                     agg_cols.append(
                         col_agg(
                             j,
-                            Grouping(gids.copy(), ng),
+                            Groups(gids.copy(), ng),
                             take(values[j], rows),
                         )
                     )
                 else:
                     agg_cols.append(
-                        col_agg(j, Grouping(gids.copy(), ng), values[j])
+                        col_agg(j, Groups(gids.copy(), ng), values[j])
                     )
             return (first^, agg_cols^)
 

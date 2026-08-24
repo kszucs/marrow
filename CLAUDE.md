@@ -17,11 +17,11 @@ upgrade, https://docs.modular.com/mojo/changelog/.
 
 Dependencies (pinned in `pixi.toml`):
 
-- `mojo >=1.1.0.dev2026081605,<2` and `max ==26.6.0.dev2026081605` — MAX is
+- `mojo >=1.1.0.dev2026082305,<2` and `max ==26.6.0.dev2026082305` — MAX is
   pinned to the matching version line, and is **load-bearing**: GPU codegen
   resolves `max.package_root`, *and* `DeviceContext`/`DeviceBuffer`/
   `HostBuffer` live in the `max.gpu.host` Mojo package while
-  `sync_parallelize`/`elementwise`/`_reduce_generator_wrapper` live in
+  `sync_parallelize`/`elementwise`/`_reduce_generator` live in
   `max.algorithm.*`. `get_gpu_target` and `vectorize` stayed in `std`.
 - `python >=3.14,<3.15` — Mojo nightlies are built against one CPython minor;
   bump it together with `mojo`.
@@ -98,7 +98,7 @@ benchmarks; `--save-benchmarks DIR` / `--benchmark-history FILE` persist results
 import the code you touched; the rest tells you nothing extra.
 
 ```bash
-pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests   # after editing expr + kernels
+pixi run -e dev pytest marrow/exprold/tests marrow/kernels/tests   # after editing expr + kernels
 pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo   # narrower still
 ```
 
@@ -120,7 +120,7 @@ Compilation dominates, and almost all of it is elaborating **marrow**, not the
 test bodies. The harness generates **one driver** for the whole selection
 (`.test_runners/_test_driver_<hash>.mojo`, content-addressed) and compiles that.
 N files in one unit cost about what 1 file costs — measured on
-`marrow/expr/tests`: all 9 files together took 4 min 43 s / 17.0 GB peak, while
+`marrow/exprold/tests`: all 9 files together took 4 min 43 s / 17.0 GB peak, while
 `test_join.mojo` alone took 3 min 18 s / 19.6 GB.
 
 - **Selecting fewer *files* saves time; selecting fewer *cases* does not.**
@@ -389,7 +389,7 @@ wider than a register.
 
 ### Expression layer
 
-`marrow/expr/` is split into **two lanes that no longer share node types**:
+`marrow/exprold/` is split into **two lanes that no longer share node types**:
 
 - **The AOT lane** (`values.mojo`, `aggregates.mojo`) — every node's operands are
   bound on a family trait (`L: NumericValue`), its output dtype is a comptime
@@ -408,17 +408,35 @@ statistics-based predicate pruning for row groups and pages.
 
 Two standing constraints:
 
-- **Keep `marrow.expr` small-binary** — preserve the closed-erasure/DCE property
-  (no open dispatchers, fused-only value boxes, closed per-dtype kernels) and
-  gate changes on `benchmarks/binary_size/` (`pixi run binary_size`).
+- **Keep `marrow.expr` small-binary — for the *comptime* lane.** Preserve the
+  closed-erasure/DCE property (no open dispatchers, fused-only value boxes,
+  closed per-dtype kernels) and gate changes on `benchmarks/binary_size/`
+  (`pixi run binary_size`).
+
+  **The constraint is about the AOT lane, not the runtime one.** A program
+  built from `col("a", int64)` and the fused nodes is a size-critical AOT
+  binary and must not pay for kernels it never names. A program that builds
+  expressions *at run time* has already accepted an interpreter — it cannot
+  know its kernels at compile time, and a frontend that constructs queries
+  dynamically will reach most of them anyway. So `runtime/values.mojo`
+  interprets by switching on `_tag`, and that is deliberate: it costs size
+  only in binaries that use the runtime lane at all, and the comptime lane
+  never reaches it. Do not reintroduce a per-node function pointer to shave
+  that cost — the previous one put a thin fn field in a self-referential
+  struct and the compiler miscompiled it.
 - **The box is the erasure boundary — a node never needs an erased variant.**
   `DynValue` erases; the nodes do not. Before adding a `Dyn*` node, check the
   existing one: either its type is known where it is constructed (a literal, a
   cast target — resolve a runtime dtype with `dispatch_*` and box each arm), or
   it does not depend on the type at all (a column read by name).
   `DynColumn`/`DynLiteral`/`DynCast` were all added and all removed for this
-  reason. `DynValue` conforms to every value family, so fused nodes take it as an
-  operand with no bound relaxed; a node keys off `comptime IsErased` (propagated,
+  reason. **`DynValue` conforms to `Value` and to nothing else** — its own docstring
+  says so, and the struct declares `(Copyable, Movable, Value, Writable)`.
+  This entry used to claim it "conforms to every value family", which is
+  false. Fused nodes take a runtime operand because the three that accept
+  one bind on `Value` itself — `IsIn[A: Value]`,
+  `NullPredicate[K, A: Value]`, `WindowFunction[Func, A: Value]` — not
+  because the families are satisfied; a node keys off `comptime IsErased` (propagated,
   not defaulted) to pick dispatch over fusion.
 
 ### Interop and tabular
@@ -751,11 +769,32 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   type is `ImplicitlyCopyable` — and marrow's array types deliberately are not.
   So a protocol carrying non-implicitly-copyable state cannot be rolled out
   behind defaults; every conformer must implement it in the same commit.
-- **A comptime conditional type carries no trait conformance** and does not
-  reduce at a return site, even inside a `comptime if` that selected the branch.
-  `rebind` cannot bridge it. Usable as an annotation only — which is why
-  `promote[L, R]` works and "wrap this operand only when it needs converting"
-  does not.
+- **A conditional comptime *associated type* reduces, and carries its trait
+  bound** — provided **both branches are always well-formed**. Verified
+  2026-08-21: `comptime Simplified = Self.A.Inner.Simplified if
+  Self.A.KIND == 1 else Neg[Self.A.Simplified]` recurses to a fixpoint
+  (`Neg^4[Leaf]` -> `Leaf`, `Neg^3[Leaf]` -> `Neg`) and its members are
+  reachable. The enabling trick is **totality**: every node declares every
+  structural projection, leaves answering with `Self`, so neither arm can
+  name a type that does not exist — the type-level form of `bound_column`
+  returning `-1`. An earlier attempt concluded "conditionality does not
+  reduce"; the real blocker was an ill-formed branch. This makes a
+  compile-time plan rewrite possible in principle; its compile-time and
+  binary-size cost at marrow's scale is **unmeasured**.
+- **A comptime conditional type *does* reduce at a return site, and *does*
+  carry its trait bound — when both branches are always well-formed.** Verified
+  2026-08-22: `def __getattr_param__[name: String](self) -> Column[Int64Type if
+  s.codes[s.index_of(name)] == 0 else Float64Type]` compiles, satisfies
+  `Column[T: NumericType]`, and gives `t.a` and `t.b` genuinely different types.
+  This entry previously said the opposite — "carries no trait conformance and
+  does not reduce at a return site" — which is **false**, and false for the same
+  reason an earlier "conditionality does not reduce" claim about associated
+  types was: the blocker in both original incidents was an **ill-formed
+  branch**, not conditionality. Totality is the enabling condition, exactly as
+  in the associated-type entry above. What genuinely does not work is bridging a
+  conditional type to a *different* representation — `rebind` cannot, which is
+  why `promote[L, R]` works and "wrap this operand only when it needs
+  converting" does not.
 - **A reflected field type is opaque inside the generic function that reflects
   it.** Route construction through a separately-instantiated generic bound on
   the trait — `_construct_default[D: Defaultable & DataType]()`
@@ -772,20 +811,51 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   off an externally-bound generic parameter** (though `Self.name` inside the
   concrete type works, and `Self.K.name` on a kernel parameter does resolve).
   Expose the constant through a method.
-- **A struct method does not *override* a trait default** — the two become
-  competing overloads and every call reports `ambiguous call to 'x'`, at the
-  call site rather than at either definition. So a trait default that returns a
-  *concrete node type* dictates representation to every conformer. `Value`
-  carried `isnull`/`notnull` returning the fused `NullPredicate`, which made
-  `DynValue.is_null() -> Self` unwritable; they moved onto `DynValue`, whose
-  callers they all already were.
+- **A trait default whose return type a conformer must change cannot be
+  overridden** — the two become competing overloads and every call reports
+  `ambiguous call to 'x'`, at the call site rather than at either definition.
+  So a trait default that returns a *concrete node type* dictates
+  representation to every conformer. `Value` carried `isnull`/`notnull`
+  returning the fused `NullPredicate`, which made `DynValue.is_null() -> Self`
+  unwritable; they moved onto `DynValue`, whose callers they all already were.
+  **This was once written as the broader "a struct method does not override a
+  trait default", and that is false.** A *same-signature* override is ordinary
+  and works — `Value.prune`, `name` and `bound_column` are each a trait
+  default overridden by conformers throughout `values.mojo`.
 - **A trait default method's parameter name must not collide with a
   *conformer's* struct parameter**, or that struct fails with `name conflict
   between parameter 'R' in the default trait method and a parameter in the
   struct`. This is why every binary operator on `NumericValue` names its
   parameter `Rhs`: `NumericBinary`/`FloatBinary`/`ConditionalBinary` already use
   `L`/`R`.
-- **`comptime` is a reserved keyword and cannot be a module name.**
+- **`constrained` is gone; the compile-time assertion is `comptime assert`.**
+  `comptime assert i >= 0, "unknown column: " + String(name)` fails the
+  build with `constraint failed: unknown column: nope`, message included.
+- **A struct holding heap-allocated fields can be a comptime parameter.**
+  `comptime SCHEMA = MiniSchema([...])` passed as `[s: MiniSchema]` works,
+  so a schema can be a compile-time value and a bad column reference can
+  be a compile error. That is *not* the reflection limit below, which is
+  about reflecting field types and still stands.
+- **A function that can `raise` cannot run at comptime.** Marrow mandates
+  `def`, which is fine — a `def` without `raises` is comptime-eligible.
+  But it decides which analysis methods are reusable at compile time:
+  `referenced_columns`, `name` and `render` are non-raising and can be;
+  `bound_column` and `prune` declare `raises` and cannot, until the
+  not-found case becomes a `comptime assert` instead of an `Error`.
+  **One `def` can serve both worlds** — verified: the same `index_of` ran
+  at comptime and at runtime, which is how one analysis can back both
+  expression lanes.
+- **`comptime` is a reserved keyword, so a module named `comptime` must be
+  escaped with backticks at every import site** — `from pkg.`comptime`.x
+  import y` compiles and runs (verified 2026-08-21). This entry used to say
+  it "cannot be a module name", which is false; the cost is the escaping,
+  not impossibility. **And the cost is one line, not every import.** Inside
+  `expr/comptime/` the package name never appears, so its own relative imports
+  (`from .leaves import Column`) are plain; consumers import from `marrow.expr`,
+  which re-exports. Only the boundary crossing escapes — the parent
+  `__init__.mojo`, plus whatever imports both lanes directly (`builders.mojo`,
+  `aggregates.mojo`). Verified end to end: a backticked subpackage with an
+  `__init__.mojo` re-exported through its parent compiles and runs.
 - There is **no runtime `__getattr__`**; the comptime `__getattr_param__` hook
   fires only for missing attributes and needs a handle type.
 - Keep recursive and nested ops **out of kernel structs** — a binding-compiler
