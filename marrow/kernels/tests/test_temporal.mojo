@@ -348,7 +348,7 @@ def test_cross_check_date_trunc_pyarrow() raises:
 def test_date_trunc_duration() raises:
     """`date_trunc` accepts a duration, which the old five-arm ladder rejected.
 
-    `DurationType` is a `TemporalType`, and `_ticks_per_second` always handled
+    `DurationType` is a `TemporalType`, and `ticks_per_second` always handled
     it -- only the hand-written ladder had forgotten it. Walking the family
     closed that gap, so this pins the behaviour rather than leaving it an
     untested side effect: 3661 seconds floored to the hour is 3600.

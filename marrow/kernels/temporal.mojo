@@ -26,11 +26,12 @@ milliseconds, `timestamp[unit]` = `unit` ticks since the Unix epoch, `time32` /
 epoch* (an `Int` per element), then split into ``days`` since epoch and
 ``tod`` (seconds-of-day, in ``[0, 86400)``).
 
-The civil-date decomposition (days-since-epoch → year/month/day) uses Howard
-Hinnant's ``civil_from_days`` algorithm (the same one Arrow C++ and arrow-rs
-use); ``day_of_year`` inverts it with ``days_from_civil``. Both use truncating
-integer math kept non-negative by construction, so they are correct regardless
-of ``//`` rounding. ``quarter = (month - 1) / 3 + 1`` and ``day_of_week`` returns
+The civil-date decomposition (days-since-epoch → year/month/day) is
+``CivilDate`` in ``marrow/utils/datetime.mojo`` — Howard Hinnant's algorithm,
+the same one Arrow C++ and arrow-rs use, so extraction agrees with them by
+construction. It lives there rather than here because ``parquet/reader.mojo``
+needs the same epoch arithmetic, and ``utils/`` is the only layer both can
+depend on. ``quarter = (month - 1) / 3 + 1`` and ``day_of_week`` returns
 ISO weekday with Monday = 0 (matching PyArrow's default).
 
 **Timezone caveat**: timezones are treated as UTC. A `timestamp` with a non-UTC
@@ -51,21 +52,12 @@ from ..arrays import (
 from ..buffers import Buffer, Bitmap
 from ..dtypes import DynType, DType, TemporalType, TimeUnit
 from .core import Kernel
+from ..utils import CivilDate, floor_div
 
 
 # ---------------------------------------------------------------------------
 # Integer helpers
 # ---------------------------------------------------------------------------
-
-
-@always_inline
-def _fdiv(a: Int, b: Int) -> Int:
-    """Floor division for a positive divisor ``b``, independent of ``//``
-    rounding semantics."""
-    var q = a // b
-    if a - q * b < 0:
-        q -= 1
-    return q
 
 
 @always_inline
@@ -82,9 +74,12 @@ def _unit_tps(u: TimeUnit) -> Int:
         return 1_000_000_000
 
 
-def _ticks_per_second(dt: DynType) raises -> Int:
+def ticks_per_second(dt: DynType) raises -> Int:
     """Ticks per second for a temporal dtype whose one tick is <= 1 second
-    (date64, timestamp, time32, time64, duration)."""
+    (date64, timestamp, time32, time64, duration).
+
+    Public because `cast.mojo` derives nanoseconds-per-tick from it. That
+    direction is the only one: `temporal` imports nothing from `cast`."""
     if dt.is_date64():
         return 1_000  # milliseconds
     elif dt.is_timestamp():
@@ -96,41 +91,6 @@ def _ticks_per_second(dt: DynType) raises -> Int:
     elif dt.is_duration():
         return _unit_tps(dt.as_duration().unit)
     raise Error(t"temporal: {dt} has no sub-second tick resolution")
-
-
-# ---------------------------------------------------------------------------
-# Civil-date algorithm (Howard Hinnant)
-# ---------------------------------------------------------------------------
-
-
-@always_inline
-def _civil_from_days(z: Int) -> Tuple[Int, Int, Int]:
-    """Days since 1970-01-01 -> (year, month, day). Hinnant's civil_from_days.
-    """
-    var zz = z + 719468
-    var era = _fdiv(zz, 146097)
-    var doe = zz - era * 146097  # [0, 146096]
-    var yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
-    var y = yoe + era * 400
-    var doy = doe - (365 * yoe + yoe // 4 - yoe // 100)  # [0, 365]
-    var mp = (5 * doy + 2) // 153  # [0, 11]
-    var d = doy - (153 * mp + 2) // 5 + 1  # [1, 31]
-    var m = mp + 3 if mp < 10 else mp - 9  # [1, 12]
-    var year = y + 1 if m <= 2 else y
-    return (year, m, d)
-
-
-@always_inline
-def _days_from_civil(y: Int, m: Int, d: Int) -> Int:
-    """(year, month, day) -> days since 1970-01-01. Inverse of civil_from_days.
-    """
-    var yy = y - 1 if m <= 2 else y
-    var era = _fdiv(yy, 400)
-    var yoe = yy - era * 400  # [0, 399]
-    var mp = m - 3 if m > 2 else m + 9
-    var doy = (153 * mp + 2) // 5 + d - 1  # [0, 365]
-    var doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
-    return era * 146097 + doe - 719468
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +115,7 @@ def _extract[
 
     # Normalisation: total seconds = raw * mul / div.
     var mul = 86400 if dt.is_date32() else 1
-    var div = 1 if dt.is_date32() else _ticks_per_second(dt)
+    var div = 1 if dt.is_date32() else ticks_per_second(dt)
 
     var n = len(array)
     var out = Buffer.alloc_uninit[DType.int32](n)
@@ -163,8 +123,8 @@ def _extract[
     var src = array.values()
     for i in range(n):
         var raw = Int(src.unsafe_get(i))
-        var total = _fdiv(raw * mul, div)
-        var days = _fdiv(total, 86400)
+        var total = floor_div(raw * mul, div)
+        var days = floor_div(total, 86400)
         var tod = total - days * 86400  # [0, 86400)
         dst.unsafe_set(i, component(days, tod))
 
@@ -210,7 +170,7 @@ trait TemporalExtractKernel(Kernel):
 
         This used to be a five-arm ladder over date32/date64/timestamp/time32/
         time64 -- and it had already drifted: `DurationType` is a `TemporalType`
-        that `_ticks_per_second` handles and the ladder had forgotten, so a
+        that `ticks_per_second` handles and the ladder had forgotten, so a
         duration column reported "expected a temporal array" while being one.
         Walking the family closes that by construction: a temporal type is
         registered once, and every kernel here picks it up. (Duration still
@@ -238,8 +198,7 @@ struct YearKernel(TemporalExtractKernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
-        var c = _civil_from_days(days)
-        return Int32(c[0])
+        return Int32(CivilDate.from_days(days).year)
 
 
 struct MonthKernel(TemporalExtractKernel):
@@ -248,8 +207,7 @@ struct MonthKernel(TemporalExtractKernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
-        var c = _civil_from_days(days)
-        return Int32(c[1])
+        return Int32(CivilDate.from_days(days).month)
 
 
 struct DayKernel(TemporalExtractKernel):
@@ -258,8 +216,7 @@ struct DayKernel(TemporalExtractKernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
-        var c = _civil_from_days(days)
-        return Int32(c[2])
+        return Int32(CivilDate.from_days(days).day)
 
 
 struct QuarterKernel(TemporalExtractKernel):
@@ -268,8 +225,7 @@ struct QuarterKernel(TemporalExtractKernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
-        var c = _civil_from_days(days)
-        return Int32((c[1] - 1) // 3 + 1)
+        return Int32(CivilDate.from_days(days).quarter())
 
 
 struct DayOfYearKernel(TemporalExtractKernel):
@@ -278,8 +234,7 @@ struct DayOfYearKernel(TemporalExtractKernel):
 
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
-        var c = _civil_from_days(days)
-        return Int32(days - _days_from_civil(c[0], 1, 1) + 1)
+        return Int32(CivilDate.from_days(days).day_of_year())
 
 
 struct DayOfWeekKernel(TemporalExtractKernel):
@@ -289,7 +244,7 @@ struct DayOfWeekKernel(TemporalExtractKernel):
     @staticmethod
     def component(days: Int, tod: Int) -> Scalar[DType.int32]:
         # ISO weekday, Monday = 0 (PyArrow default). 1970-01-01 is a Thursday.
-        var dow = days - _fdiv(days, 7) * 7  # [0, 6]
+        var dow = days - floor_div(days, 7) * 7  # [0, 6]
         var w = dow + 3
         if w >= 7:
             w -= 7
@@ -440,7 +395,7 @@ def _trunc[
     for i in range(n):
         var raw = Int(src.unsafe_get(i))
         dst.unsafe_set(
-            i, Scalar[N](_fdiv(raw, ticks_per_unit) * ticks_per_unit)
+            i, Scalar[N](floor_div(raw, ticks_per_unit) * ticks_per_unit)
         )
 
     var vbm: Optional[Bitmap[mut=False]] = None
@@ -464,19 +419,16 @@ def _floor_civil(days: Int, unit: CalendarUnit) -> Int:
     """Floor a day count to the start of its month, quarter or year.
 
     Goes through the civil calendar because these units have no fixed length:
-    decompose to (y, m, d), zero the finer fields, recompose. `_civil_from_days`
-    and `_days_from_civil` are Hinnant's algorithms, already used by the
+    decompose to (y, m, d), zero the finer fields, recompose. `CivilDate`
+    (`utils/datetime.mojo`) is Hinnant's algorithm, already used by the
     extraction kernels, so this adds no new date arithmetic.
     """
-    var c = _civil_from_days(days)
-    var y = c[0]
-    var m = c[1]
+    var c = CivilDate.from_days(days)
     if unit == unit_year:
-        m = 1
-    elif unit == unit_quarter:
-        # 1-3 -> 1, 4-6 -> 4, 7-9 -> 7, 10-12 -> 10.
-        m = ((m - 1) // 3) * 3 + 1
-    return _days_from_civil(y, m, 1)
+        return c.start_of_year().to_days()
+    if unit == unit_quarter:
+        return c.start_of_quarter().to_days()
+    return c.start_of_month().to_days()
 
 
 def _trunc_calendar[
@@ -495,8 +447,8 @@ def _trunc_calendar[
     for i in range(n):
         var raw = Int(src.unsafe_get(i))
         # Floor-divide, so pre-epoch instants land on the day containing them
-        # rather than the day after -- the same reason `_trunc` uses `_fdiv`.
-        var days = _fdiv(raw, ticks_per_day)
+        # rather than the day after -- the same reason `_trunc` uses `floor_div`.
+        var days = floor_div(raw, ticks_per_day)
         dst.unsafe_set(i, Scalar[N](_floor_civil(days, unit) * ticks_per_day))
 
     var vbm: Optional[Bitmap[mut=False]] = None
@@ -540,7 +492,7 @@ struct DateTruncKernel(Kernel):
         if unit.is_calendar():
             # date32 counts days directly; everything else counts sub-day ticks.
             var ticks_per_day = (
-                1 if dt.is_date32() else _ticks_per_second(dt) * 86400
+                1 if dt.is_date32() else ticks_per_second(dt) * 86400
             )
             if width == 4:
                 return _trunc_calendar[DType.int32](
@@ -553,7 +505,7 @@ struct DateTruncKernel(Kernel):
             else:
                 raise Self.error(t"{dt} is {width} bytes wide; expected 4 or 8")
 
-        var ticks_per_unit = _ticks_per_second(dt) * unit.seconds()
+        var ticks_per_unit = ticks_per_second(dt) * unit.seconds()
         if width == 4:  # time32
             return _trunc[DType.int32](data, dt, ticks_per_unit, n)
         elif width == 8:  # date64 / timestamp / time64

@@ -8,6 +8,48 @@
 > findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
 > which indexes all twenty.
 
+### Refactors
+
+- **`marrow/utils/datetime.mojo` — the calendar primitives, extracted and
+  covered.** Hinnant's `civil_from_days` / `days_from_civil` lived inside
+  `kernels/temporal.mojo` as private free functions returning
+  `Tuple[Int, Int, Int]`, which every one of their six call sites indexed
+  positionally (`c[0]`, `c[1]`, `c[2]`); `day_of_year` had to spell its own
+  inverse. `parquet/reader.mojo` separately carried its own
+  `_JULIAN_DAY_OF_EPOCH` and `_NANOS_PER_DAY`.
+
+  Now `CivilDate` (named `year`/`month`/`day`, plus `to_days`, `day_of_year`,
+  `quarter`, `is_leap` and the three `start_of_*`), `Epoch`, and `floor_div`.
+  **Shaped for hot loops**: three `Int`s, no heap state, register-passable,
+  every method `@always_inline` — the extraction kernels call these once per
+  element. Measured at **+0 bytes on eleven gates and +64 on one**, so the
+  struct costs nothing over the free functions.
+
+  It lives in `utils/` because that is the only layer `kernels/` and
+  `parquet/` can share, and it keeps that directory's leaf property: it
+  imports nothing from `marrow`. The resolution lookups (`ticks_per_second`,
+  `ns_per_tick`) deliberately stay with the kernels — they are keyed on
+  `marrow.dtypes` types, and importing those here would trade the leaf
+  property for two small ladders.
+
+  13 new cases, including a full 400-year round trip over every day of the
+  Gregorian leap cycle, the pre-epoch branch `floor_div` exists for, and the
+  century/400-year leap boundaries.
+
+- **`TemporalCast.ns_per_tick` derived rather than duplicated.** Its 26-line
+  dtype-and-`TimeUnit` ladder was the exact reciprocal of
+  `temporal.ticks_per_second`, which already walked the same five dtypes and
+  four units; `date32` is the one case that helper rejects, so it stays local.
+  `ticks_per_second` is now public.
+
+  **Folding `_scale_checked` into `_map_scalar` was tried alongside this and
+  reverted.** It removed 49 source lines and cost **+10,560 bytes of `__text`**
+  on `query_sort`, `query_dynvalue` and `query_runtime`, because `_map_scalar`
+  carries the allocation and the `ArrayData` relabel inside every
+  `[SrcN, DstN]` instantiation while `_scale` has them once — the same shape as
+  the `DecimalCast._convert` merge already recorded at +371,584 bytes. The
+  measurement is kept in `ns_per_tick`'s docstring so it is not re-attempted.
+
 ### Fixes
 
 - **`case_when` reserved no capacity for its child list, and `List` growth

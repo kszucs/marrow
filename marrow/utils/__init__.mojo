@@ -7,6 +7,7 @@ out on its own:
 | module | what |
 |---|---|
 | `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
+| `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` — the ISO-3309 / zlib / gzip checksum |
 | `hashing` | `Hasher` plus `RapidHash64`, `XxHash64`, `AHash64` |
 | `compression` | `CompressionLibs` — `dlopen`ed zstd / snappy / lz4 / zlib / brotli |
@@ -32,4 +33,5 @@ whether there is a device.
 from .byteorder import LittleEndian
 from .checksum import Crc32
 from .compression import CompressionLibs
+from .datetime import CivilDate, Epoch, floor_div
 from .hashing import AHash64, Hasher, RapidHash64, RapidSecret, XxHash64
