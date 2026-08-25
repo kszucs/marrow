@@ -79,6 +79,43 @@
 
 ### Fixes
 
+- **Parquet statistics a reader must refuse.** Six defects in the
+  statistics-decoding path, each of which let a stored min/max, null_count or
+  raw byte string reach the pruner as if it bounded the column it names.
+
+  - **A statistic's byte length is now checked against the physical width.**
+    `LittleEndian.fixed` is documented as not bounds-checked, and
+    `Statistics.decode` was its one caller that never validated: a file
+    declaring `int64` with a 4-byte `min_value` read four bytes of adjacent
+    heap and returned them as the bound. An all-null page reaches the same
+    read with an *empty* byte string — marrow's own writer emits exactly that
+    — because the reader's null-page guard short-circuits when
+    `null_pages` is shorter than `min_values`. The width is now required to
+    match (and an FLBA decimal to fit its storage width); anything else
+    decodes to an absent bound, which prunes nothing.
+  - **INT96 statistics are refused.** The leaf maps to `timestamp(ns)`, so
+    decoding read the low 8 bytes of the 12-byte value — nanoseconds *within
+    the day* (~8.6e13) against values that are full epoch nanoseconds
+    (~1.7e18). `ts > '2020-01-01'` pruned every row group and returned
+    nothing. Per parquet-format INT96's ColumnOrder is UNDEFINED, so there is
+    no bound to recover.
+  - **A NaN bound is dropped, along with its partner.** The writer already
+    skipped NaN; the reader trusted whatever it found. With
+    `Interval._three_way` reporting an unordered pair as *equal*, a NaN `min`
+    was enough to prune a group that matched.
+  - **A leaf inside a list, map or struct reports no statistics at all.** Its
+    `null_count` and bounds count *elements* while `RowGroup.num_rows` counts
+    rows, and it carries only the bare Parquet element name (`x`, `element`,
+    `key`) — so a lookup keyed by column position handed `s.x`'s bounds to a
+    top-level `x`. `ParquetFile._trusted_leaf` now requires the chunk to be a
+    whole top-level column, resolved through `SchemaMapping.nodes` (the same
+    tree the projection uses) rather than by name.
+  - **`column_orders` (footer field 7) is read.** The writer had emitted it
+    since page-index support landed, but `FileMetaData.read` skipped it —
+    and "without column_orders, the meaning of the min_value and max_value
+    fields is undefined". A leaf whose ColumnOrder is absent or is not
+    `TypeDefinedOrder` now reports no statistics.
+
 - **`PrimitiveScalar` stores its payload as bytes, working around a `Variant`
   layout miscompile that silently dropped list elements.** `Scalar[int128]` is
   16-byte aligned and `Scalar[int256]` 32-byte, which made `DynScalar` — the

@@ -40,8 +40,11 @@ from ..scalars import (
     FixedSizeBinaryScalar,
 )
 from .codecs import Plain
+from .format import PhysicalType
 from .schema import (
+    LeafColumn,
     physical_type,
+    flba_width,
     is_wide_decimal,
     has_plain_physical,
 )
@@ -294,20 +297,37 @@ struct Statistics:
             return False
 
     @staticmethod
-    def decode(dtype: dt.DynType, b: List[UInt8]) raises -> Optional[DynScalar]:
+    def decode(leaf: LeafColumn, b: List[UInt8]) raises -> Optional[DynScalar]:
         """Decode one PLAIN-encoded min/max value to a typed scalar, mirroring the
         writer's encoding (`LittleEndian.fixed` reads `size_of[dt]` LE bytes and
-        reinterprets — the inverse of the writer's byte emission). Returns None for
-        types this reader does not yet decode (raw bytes stay in `read_metadata`).
+        reinterprets — the inverse of the writer's byte emission).
+
+        Returns None — an absent bound, which prunes nothing — for a type this
+        reader does not decode, for a byte string whose length does not match the
+        leaf's physical width, and for a NaN float bound. The length check is
+        what makes the read safe: `LittleEndian.fixed` is not bounds-checked, so
+        a file declaring `int64` with a 4-byte `min_value` (or an all-null page's
+        empty one) would otherwise reinterpret adjacent heap bytes as the bound.
         """
+        # INT96's ColumnOrder is UNDEFINED per parquet-format, and its 12-byte
+        # value is (nanoseconds-within-the-day, Julian day) — the low 8 bytes are
+        # not the epoch nanoseconds the Arrow `timestamp(ns)` dtype claims, so
+        # decoding them yields a bound ~4 orders of magnitude below the values.
+        if leaf.physical == PhysicalType.INT96:
+            return None
+        ref dtype = leaf.dtype
         var s = Span(b)
         if dtype == dt.bool_:
-            return BoolScalar(len(b) > 0 and b[0] != 0).to_dyn()
+            if len(b) != 1:
+                return None
+            return BoolScalar(b[0] != 0).to_dyn()
         elif dtype.is_string():
             return StringScalar(
                 String(StringSlice(unsafe_from_utf8=Span(b)))
             ).to_dyn()
         elif dtype.is_fixed_size_binary():
+            if len(b) != dtype.as_fixed_size_binary().byte_width:
+                return None
             return FixedSizeBinaryScalar(
                 List[UInt8](s), dtype.as_fixed_size_binary().byte_width
             ).to_dyn()
@@ -321,17 +341,27 @@ struct Statistics:
                 T: dt.PrimitiveType
             ](witness: T) raises {imm} -> Optional[DynScalar]:
                 comptime if is_wide_decimal[T]:
-                    # big-endian two's-complement FIXED_LEN_BYTE_ARRAY
+                    # big-endian two's-complement FIXED_LEN_BYTE_ARRAY: any
+                    # width up to the storage width sign-extends, but a wider
+                    # (or empty) statistic does not belong to this column
+                    if len(b) == 0 or len(b) > flba_width[T]:
+                        return None
                     return PrimitiveScalar[T](
                         Plain.decode_be_flba[T.native](s, 0, len(b)), witness
                     ).to_dyn()
                 else:
-                    return PrimitiveScalar[T](
-                        LittleEndian.fixed[physical_type[T]](s, 0).cast[
-                            T.native
-                        ](),
-                        witness,
-                    ).to_dyn()
+                    if len(b) != size_of[Scalar[physical_type[T]]]():
+                        return None
+                    var v = LittleEndian.fixed[physical_type[T]](s, 0).cast[
+                        T.native
+                    ]()
+                    comptime if T.native.is_floating_point():
+                        # a NaN bound orders nothing; per parquet-format the
+                        # writer must not emit one, and a reader that trusts it
+                        # prunes matching rows away
+                        if isnan(v):
+                            return None
+                    return PrimitiveScalar[T](v, witness).to_dyn()
 
             return dtype.dispatch_primitive(decode_fixed)
         else:

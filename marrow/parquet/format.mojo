@@ -1303,6 +1303,11 @@ struct FileMetaData(Copyable, Movable):
     var row_groups: List[RowGroup]
     var key_value_metadata: List[KeyValue]
     var created_by: String
+    var column_orders: List[Bool]
+    """One entry per leaf column: True when the footer declares that leaf's
+    ColumnOrder to be `TypeDefinedOrder`. Empty when the footer omits field 7 —
+    and then, per parquet-format, "the meaning of the min_value and max_value
+    fields is undefined", so a reader must not use them."""
 
     def __init__(out self):
         self.version = 1
@@ -1311,6 +1316,7 @@ struct FileMetaData(Copyable, Movable):
         self.row_groups = List[RowGroup]()
         self.key_value_metadata = List[KeyValue]()
         self.created_by = String()
+        self.column_orders = List[Bool]()
 
     @staticmethod
     def read[
@@ -1337,6 +1343,18 @@ struct FileMetaData(Copyable, Movable):
                     out.key_value_metadata.append(KeyValue.read(r))
             elif f.id == 6:
                 out.created_by = r.read_string()
+            elif f.id == 7:
+                var _, n = r.read_list_header()
+                for _ in range(n):
+                    # ColumnOrder is a union whose only member is field 1,
+                    # TypeDefinedOrder (an empty struct). A future member — or
+                    # an empty union — leaves this leaf's ordering undefined.
+                    var type_defined = False
+                    var uf = FieldHeader()
+                    while r.next_field(uf):
+                        type_defined = type_defined or uf.id == 1
+                        r.skip(uf.type)
+                    out.column_orders.append(type_defined)
             else:
                 r.skip(f.type)
         return out^
