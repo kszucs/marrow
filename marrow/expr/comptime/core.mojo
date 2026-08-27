@@ -57,6 +57,7 @@ from .numeric import Add, Sub, Mul, Eq, Ne, Lt, Le, Gt, Ge
 from .boolean import And, Not, Or, Xor
 from .strings import StrEq, StrNe, StrLt, StrGt
 from ...kernels.aggregate import (
+    CountKernel,
     MaxKernel,
     MeanKernel,
     MinKernel,
@@ -423,6 +424,14 @@ trait NumericValue(PrimitiveValue):
     def max(self) -> NumericAggregate[MaxKernel, Self]:
         """`MAX(self)`."""
         return NumericAggregate[MaxKernel, Self](self.copy(), String("max"))
+
+    def count(self) -> NumericAggregate[CountKernel, Self]:
+        """`COUNT(self)` — the *non-null* values of `self`, not the row count.
+
+        `COUNT(*)` is `count_star()` in `builders.mojo`, which is this same
+        aggregate over a literal.
+        """
+        return NumericAggregate[CountKernel, Self](self.copy(), String("count"))
 
     # -- operators ----------------------------------------------------------
     # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`

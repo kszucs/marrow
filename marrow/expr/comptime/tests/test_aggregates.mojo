@@ -2,7 +2,7 @@
 
 from std.testing import assert_equal, assert_true
 
-from ...builders import col, lit
+from ...builders import col, count_star, lit
 from ....arrays import Int32Array
 from ....builders import array, arange
 from ....dtypes import Int32Type, Int64Type, int32, int64
@@ -10,7 +10,7 @@ from ....tabular import RecordBatch, record_batch
 from ....kernels.core import Groups
 from ...logical import DynValue
 from ...physical import Morsel
-from ..aggregates import Max, Mean, Min, Product, Sum
+from ..aggregates import Count, Max, Mean, Min, Product, Sum
 from ..leaves import Column, Literal
 from ..numeric import Mul
 
@@ -161,3 +161,46 @@ def test_product_folds() raises:
     var s = Product(col("a", int64), "p").to_operator(False)
     _ = s.push(_m(_b([2, 3, 4]), _groups(List[Optional[Int]]()), 1))
     assert_true(s.drain().value().to_array(1) == array([24], int64))
+
+
+def test_count_skips_nulls() raises:
+    """`COUNT(x)` is the *valid* count, which is what separates it from
+    `COUNT(*)` on any nullable column."""
+    var s = col("a", int64).count().to_operator(False)
+    _ = s.push(_m(_b([1, None, 3, None, 5]), _groups(List[Optional[Int]]()), 1))
+    assert_true(s.drain().value().to_array(1) == array([3], int64))
+
+
+def test_count_star_counts_every_row_including_nulls() raises:
+    """`count_star()` is `CountKernel` over a literal, and a literal is valid
+    on every row — so the valid-count of a constant column is the row count.
+    The trick is only correct if it survives a *nullable* input column, which
+    is the whole point of testing it against one.
+    """
+    var s = count_star().to_operator(False)
+    _ = s.push(_m(_b([1, None, 3, None, 5]), _groups(List[Optional[Int]]()), 1))
+    assert_true(s.drain().value().to_array(1) == array([5], int64))
+
+
+def test_count_and_count_star_disagree_on_a_nullable_column() raises:
+    """Stated as one case because the two are constantly confused, and a test
+    that pins each separately does not show that they must differ."""
+    var batch = _b([1, None, 3])
+    var ids = _groups(List[Optional[Int]]())
+
+    var counted = col("a", int64).count().to_operator(False)
+    _ = counted.push(_m(batch.copy(), ids.copy(), 1))
+
+    var starred = count_star().to_operator(False)
+    _ = starred.push(_m(batch.copy(), ids.copy(), 1))
+
+    assert_true(counted.drain().value().to_array(1) == array([2], int64))
+    assert_true(starred.drain().value().to_array(1) == array([3], int64))
+
+
+def test_count_is_named_and_aliasable() raises:
+    """`count_star()` arrives pre-aliased; `.count()` takes the kernel's name
+    until something renames it."""
+    assert_equal(col("a", int64).count().name(), "count")
+    assert_equal(count_star().name(), "count_star")
+    assert_equal(col("a", int64).count().alias("n").name(), "n")

@@ -36,6 +36,7 @@ from ...arrays import StructArray, Int32Array
 from ...kernels.aggregate import (
     AggKernel,
     AggState,
+    CountKernel,
     MaxKernel,
     MeanKernel,
     MinKernel,
@@ -161,6 +162,7 @@ comptime Product = NumericAggregate[ProductKernel, _]
 comptime Min = NumericAggregate[MinKernel, _]
 comptime Max = NumericAggregate[MaxKernel, _]
 comptime Mean = NumericAggregate[MeanKernel, _]
+comptime Count = NumericAggregate[CountKernel, _]
 
 
 struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
