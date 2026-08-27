@@ -88,53 +88,85 @@ that does not run from the repo root. The breakage survived 9 commits because
 package when CWD is the repo root, so `import marrow` silently succeeds and
 resolves to the wrong thing.
 
-### 0.2 — Close the lane gap
+### 0.2 — The migration, measured
 
-Three binding modules import `marrow.exprold`:
+`expr` is not a near-complete lane needing a few gaps closed. Measured
+2026-08-27:
 
-| module | binds | needs from `expr` |
+**17 of the 18 value node types `golden/prelude.mojo` imports do not exist in
+`expr`** — `BoolToNum`, `Coalesce`, `EndsWith`, `FillNull`, `ILike`, `IsNull`,
+`Like`, `Lower`, `NotNull`, `NumToBool`, `NumToString`, `NumericCast`,
+`StartsWith`, `StringLength`, `StringToNum`, `Strip`, `Upper`. Only `CaseWhen`
+is present.
+
+| | `exprold` | `expr` |
 |---|---|---|
-| `python/bindings/expressions.mojo:49-51` | `DynValue`→`Expr`, `AggExpr`→`Agg`, `count_star` | `RuntimeValue`/`DynValue`, an aggregate expression type, `count_star` |
-| `python/bindings/plan.mojo:32-39` | `DynRelation`→`Plan` | verbs `.filter .select .project .aggregate .join .limit .drop .execute .schema` |
-| `python/bindings/compute.mojo:18-26` | named aggregates | `Sum Product Mean Min Max CountDistinct ApproxCountDistinct` |
+| non-test lines | ~7,300 | ~3,700 |
+| params / CLI | 564 — `ParamCell`, `ParamDecl`, registry, `PathSpec`, `parse_params`, `render_usage`, `render_describe` | 159 — `Param[T]` alone |
+| aggregates | 554, incl. `FoldedAggregates`, distinct, approx-distinct | 369 |
+| scan side | pruning, page pushdown, row-group windowing | none |
+| window functions, `NullPredicate`, `Coalesce`/`FillNull` | present | absent |
 
-Verified gaps:
+Neither lane has subqueries (`2026-08-21-subqueries-design.md` was never
+implemented) or `Between`, so neither is a regression.
 
-- **`.drop`** — `plan.mojo` calls it; `expr`'s `DynRelation` exposes
-  `aggregate execute filter join limit project schema select sort_by`. Confirm
-  whether this is the relational verb or `Deinitable.drop`; if the former,
-  it is `select` over the complement.
-- **Aggregates** — `marrow/expr/comptime/aggregates.mojo` is 369 lines against
-  `marrow/exprold/aggregates.mojo`'s 21.2K. `CountDistinct` /
-  `ApproxCountDistinct` in particular need checking.
-- **`sort_by`** — present in `expr`, not called by `plan.mojo`; `LazyTable`
-  reaches it through `order_by` sugar. Confirm the path.
+**Consumers to re-point:** 3 Python binding modules · 12 of the 14 binary-size
+gates · `golden/prelude.mojo` and 154 cases · `marrow/tabular.mojo:23`, a real
+up-edge from a core module (`from .exprold.aggregates import FoldedAggregates`)
+· 3 kernel test files.
 
-### 0.3 — Descope the AOT CLI, explicitly
+### 0.3 — It is a translation, not a copy
 
-`marrow/expr/params.mojo` is 159 lines and holds `Param[T: NumericType]` alone.
-`marrow/exprold/params.mojo` is 564 and holds `ParamCell`, `ParamDecl`, the
-module-level registry, `drain_params`, `lookup_param`, `PathSpec`,
-`parse_params`, `render_usage`, `render_describe`. That surface serves
-`python/marrow/compile.py` (24K) and `marrow compile`, not the lazy frontend.
+The lanes have different protocols, and `expr`'s is the better one. Porting is
+rewriting each node in the new idiom:
 
-**`compile.py` stays on `exprold` for now.** Porting the CLI parameter system is
-a separate change with its own justification, and coupling it to this one turns
-a measurable step into an open-ended one. Record it in `docs/backlog.md`.
+| `exprold` | `expr` |
+|---|---|
+| `OutType` / `OutShape` / `State` | `Type` / `shape` / `Bound` |
+| `referenced_columns()` | `columns()` |
+| `state(batch)` | `bind(batch, bindings)` |
+| `validity(batch)` **and** `state_validity(batch, state)` | one `validity(bound)` |
+| `render()` | `write_to[W: Writer]` |
 
-### 0.4 — Flip and re-measure
+**The two-validity-method split must not come across.** `comptime/core.mojo:275-286`
+records it as what made `exprold` evaluate `coalesce`/`nullif`/`case_when` twice
+per fused pass. A node that needs data-dependent validity belongs with the
+Kleene family, which materialises through a kernel, not with the fusing families.
 
-Point the three binding modules at `marrow.expr`, rename
-`python/marrow/exprold.py` → `python/marrow/lazy.py` (neither `expr` nor
-`exprold`, so the Python name stops tracking a Mojo package name that has now
-changed twice), and re-run.
+### 0.4 — Two decisions taken
 
-**Acceptance:** the pass count from 0.1, unchanged. **Expect a ClickBench
-regression** — the new lane has neither pruning nor row-group windowing nor
-projection pushdown. Record the number; it is the baseline Phase B is measured
-against, and it is the argument for doing projection pushdown and windowing next.
+**The pruner is written once, in the new architecture** (§2, §4) — not ported
+and then replaced. `expr` therefore has no pruning until Phase B lands, which is
+already true today, so nothing regresses relative to `expr`; what regresses is
+the *frontend*, once it moves off `exprold`. That window is the cost of not
+writing the pruner twice, and it is bounded by Phase B.
 
----
+**The params/CLI system is in scope.** `marrow compile` and
+`python/marrow/compile.py` keep working, and `exprold` deletes in one piece
+rather than surviving as a stub.
+
+### 0.5 — Order, and what each step is proved by
+
+Each step is independently green and independently reviewable. Golden is the
+forcing function: it cannot be re-pointed until the nodes it imports exist, and
+when it is, 154 cases either pass or name exactly what is missing.
+
+| | step | proved by |
+|---|---|---|
+| 1a | casts — `NumericCast`, `NumToString`, `StringToNum`, `BoolToNum`, `NumToBool` | `marrow/expr/comptime/tests/` |
+| 1b | strings — `Lower`, `Upper`, `Strip`, `StringLength`, `StartsWith`, `EndsWith`, `Like`, `ILike` | same |
+| 1c | null handling — `IsNull`, `NotNull`, `Coalesce`, `FillNull` | same, plus: one `validity`, no second method |
+| 2 | aggregates — `FoldedAggregates`, distinct, approx-distinct, window | resolves `marrow/tabular.mojo:23` |
+| 3 | params / CLI | `python/marrow/tests/test_compile.py` |
+| 4 | **re-point `golden/`** — prelude + 154 cases | 154 cases green on `expr` |
+| 5 | re-point the 3 Python binding modules, drop `compile.py` back to parity | 676 Python tests green |
+| 6 | index layer + pruning (§2–§4) | §2's acceptance test, then rows decoded 1,000,000 → 549,440 |
+| 7 | re-point the 12 binary-size gates; re-baseline | `pixi run binary_size` |
+| 8 | delete `marrow/exprold/` | `precompile` clean; nothing references it |
+
+**The size gate is unreadable between steps 1a and 7**, because 12 of its 14
+gates measure the old lane. Until step 7, measure only against
+`query_expr2_streaming` and `query_expr2_agg_fused`, which already track `expr`.
 
 ## 2. Phase A — the index layer
 
@@ -362,15 +394,20 @@ matching must compare a parameter.
 
 ## 7. Sequencing
 
+**Step 0.1 is done** (`436837f`): the Python package imports again, 16 collection
+errors → 676 passing. The migration order is §0.5; step 6 there expands into the
+index and pruning steps below.
+
 | | step | gate |
 |---|---|---|
-| 0.1 | repair the Python import | `import marrow` works; record the `--python` pass count |
-| 0.2–0.4 | port the bindings onto `marrow.expr`; leave `compile.py` on `exprold` | same pass count; record the ClickBench regression |
+| 1a–3 | port the nodes, aggregates and params (§0.5) | per-group tests; `precompile` clean |
+| 4–5 | re-point `golden/` and the Python bindings | 154 golden cases; 676 Python tests |
 | A1 | `ParquetFile` per-(rg, leaf) narrowings | whole-file methods reimplemented on top |
 | A2–A4 | value types, `Facts`, `DynFacts`, `RowRanges`, `RowGroupFacts` | `align_of` assertion; capacity reserved on every `List[Bounds]` |
 | A5 | acceptance: 450,560 rows pruned, no pruner in existence | test passes without importing `exprold` |
 | — | **size gate**: `DynValue` slot, calling nothing | delta against 6,792 bytes |
 | B | `fold`, the overrides, `read_plan`, the scan seam | rows decoded 1,000,000 → 549,440 |
+| 7–8 | re-point the 12 gates, re-baseline, delete `marrow/exprold/` | `pixi run binary_size`; `precompile` clean |
 | — | `like` atom + re-measure | 63.4% becomes measured or falsified |
 
 **Two items outrank everything above them from step A onward**: projection
