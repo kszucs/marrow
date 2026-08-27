@@ -3,7 +3,7 @@
 Its counterpart is `comptime/aggregates.mojo`, which holds the same aggregates
 as **types**: `LaneAggregate[K, A]` for the fused folds and
 `ColumnAggregate[Agg, A]` for the ones that materialise. Both lanes share one
-vocabulary — `ColumnAggregation` in `kernels/aggregate.mojo` — and differ only
+vocabulary — `AggKernel` in `kernels/aggregate.mojo` — and differ only
 in when the aggregate is chosen.
 
 This module is what a caller uses when the aggregate is a **string**: a plan
@@ -14,7 +14,7 @@ its column expression at run time too.
 
 **One resolution, not two.** `RuntimeAggregate.resolve` answers the output
 dtype and the implementation *together*, from one name x dtype ladder, and
-takes both off the same `ColumnAggregation`. Two free functions with the same
+takes both off the same `AggKernel`. Two free functions with the same
 parameters answering different aspects of one thing were methods on a missing
 type — and, worse, two independently hand-written ladders that could silently
 disagree. `min` over `timestamp[us]` declaring `timestamp[s]` is a `Variant`
@@ -33,34 +33,33 @@ mandatory:
   operator in this tree already holds its node (`FoldOperator._input`,
   `EvalOperator._value`), so `resolve` can simply be a method on it.
 
-Discarding a `ColumnFold` at plan time is one function-pointer assignment, and
+Discarding a `AggregateFn` at plan time is one function-pointer assignment, and
 paying it is what buys a single ladder.
 
 **Non-generic on purpose.** A `resolve[Job: def[A: ...]()]` form instantiates
 once per closure type — the `_arith[K]` shape, measured at +115,600 bytes. This
 resolver has no type parameter, so it is one instantiation for the whole tree,
 and the comptime lane's DCE property holds because nothing there names it: a
-program built from `col("a", int64)` reaches `ColumnAggregation` conformers
+program built from `col("a", int64)` reaches `AggKernel` conformers
 directly and never this ladder.
 """
 
 from ...arrays import DynArray, StructArray
 from ...dtypes import DynType, int64
 from ...kernels.aggregate import (
-    ColumnAggregation,
-    ColumnFold,
+    AggKernel,
+    AggregateFn,
     DistinctCount,
     MaxKernel,
     MaxOp,
     MeanKernel,
     MinKernel,
     MinOp,
-    PrimitiveFold,
+    Fold,
     ProductKernel,
     StringExtremum,
     SumKernel,
-    ValidityCount,
-    column_fold,
+    ValidCount,
 )
 from ...schema import Schema
 from ..logical import DynValue, Shape, Value, merged
@@ -88,31 +87,30 @@ struct ResolvedAggregate(Copyable, Movable):
 
     A named pair rather than a `Tuple`, for the reason `Groups` and `JoinIndex`
     are named types: two fields that must agree with each other should not be
-    positional. Here the agreement is load-bearing — `out_dtype` reaches the
+    positional. Here the agreement is load-bearing — `dtype` reaches the
     output schema and `fold` produces the column, and a mismatch is a `Variant`
     misaccess at emit rather than a raise.
     """
 
     var dtype: DynType
-    """What the fold's column will be typed as.
+    """What the produced column will be typed as.
 
-    Not `out_dtype`: there is no *input* dtype in this struct for the prefix to
-    disambiguate against. `ColumnAggregation.out_dtype(in_dtypes)` keeps it,
-    because there the inputs are the argument and the prefix does real work.
+    Bare `dtype`, because there is no *input* dtype in this struct for a prefix
+    to disambiguate against — the inputs were consumed by `resolve`.
     """
 
-    var fold: ColumnFold
+    var grouped: AggregateFn
     """The implementation. Carries no identity — a `thin` fn cannot be asked
     which aggregate it is — which is why `of` is the only thing that builds
     one."""
 
-    def __init__(out self, var dtype: DynType, fold: ColumnFold):
+    def __init__(out self, var dtype: DynType, grouped: AggregateFn):
         self.dtype = dtype^
-        self.fold = fold
+        self.grouped = grouped
 
     @staticmethod
-    def of[Agg: ColumnAggregation](in_dtypes: List[DynType]) raises -> Self:
-        """Both halves of a resolution, off **one** `ColumnAggregation`.
+    def of[Agg: AggKernel](in_dtypes: List[DynType]) raises -> Self:
+        """Both halves of a resolution, off **one** `AggKernel`.
 
         This is what makes the dtype and the implementation unable to
         disagree: naming `Agg` once produces both, so there is no second table
@@ -120,7 +118,7 @@ struct ResolvedAggregate(Copyable, Movable):
         `_resolved[Agg]` helper — same instantiation count, but it reads as
         construction instead of as a loose generic beside the type it builds.
         """
-        return Self(Agg.out_dtype(in_dtypes), column_fold[Agg]())
+        return Self(Agg.dtype(in_dtypes), Agg.grouped)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +135,7 @@ struct RuntimeAggregate(Evaluable, Value):
     Mojo source: `col("region", string).count_distinct()` gives the fused-operand
     node instead.
 
-    **No `_dtype` and no `_fold` field.** Neither is available where the node
+    **No `_dtype` and no `_grouped` field.** Neither is available where the node
     is built: `col("ts", timestamp(us)).min()` is written where no schema
     exists, and a temporal dtype is not constructible from its type. The node
     stores the *function* and resolves twice — once for the schema, once for
@@ -145,7 +143,7 @@ struct RuntimeAggregate(Evaluable, Value):
     """
 
     var _inputs: List[DynValue]
-    """The operands, erased. A `List` because `ColumnFold` takes one."""
+    """The operands, erased. A `List` because `AggregateFn` takes one."""
 
     var _name: String
     """The aggregate's own name, and the resolver key. **Validated in
@@ -201,7 +199,7 @@ struct RuntimeAggregate(Evaluable, Value):
         is what lets one type carry both the plan-time and the execution-time
         answer instead of a separate function object beside it.
 
-        Each arm names a single `ColumnAggregation` and takes **both** answers
+        Each arm names a single `AggKernel` and takes **both** answers
         from it, so the output dtype and the implementation cannot disagree —
         they come from the same type on the same branch. Two hand-written
         tables could, and `min` over `timestamp[us]` declaring `timestamp[s]`
@@ -209,7 +207,7 @@ struct RuntimeAggregate(Evaluable, Value):
 
         `List[DynType]` rather than one dtype because `string_agg(x, sep)` has
         two different input dtypes; every aggregate resolved today takes one,
-        which each conformer's `out_dtype` states for itself.
+        which each conformer's `dtype` states for itself.
         """
         if self._name == COUNT_DISTINCT:
             return ResolvedAggregate.of[DistinctCount[True]](in_dtypes)
@@ -217,19 +215,19 @@ struct RuntimeAggregate(Evaluable, Value):
             return ResolvedAggregate.of[DistinctCount[False]](in_dtypes)
         elif self._name == COUNT:
             # A validity scan, defined for every dtype — which is why it is
-            # not a `PrimitiveFold[CountKernel]` here. The comptime lane still
-            # fuses numeric `count`; see `ValidityCount`.
-            return ResolvedAggregate.of[ValidityCount](in_dtypes)
+            # not a `Fold[CountKernel]` here. The comptime lane still
+            # fuses numeric `count`; see `ValidCount`.
+            return ResolvedAggregate.of[ValidCount](in_dtypes)
         elif self._name == SUM:
-            return ResolvedAggregate.of[PrimitiveFold[SumKernel]](in_dtypes)
+            return ResolvedAggregate.of[Fold[SumKernel]](in_dtypes)
         elif self._name == PRODUCT:
-            return ResolvedAggregate.of[PrimitiveFold[ProductKernel]](in_dtypes)
+            return ResolvedAggregate.of[Fold[ProductKernel]](in_dtypes)
         elif self._name == MEAN:
-            return ResolvedAggregate.of[PrimitiveFold[MeanKernel]](in_dtypes)
+            return ResolvedAggregate.of[Fold[MeanKernel]](in_dtypes)
         elif self._name == MIN or self._name == MAX:
             # The only place a *dtype* selects an implementation. A string
-            # extremum is a bytewise scan and a fixed-width one is a fold, and
-            # they are two `ColumnAggregation`s rather than one with a runtime
+            # extremum is a bytewise scan and a fixed-width one is a grouped, and
+            # they are two `AggKernel`s rather than one with a runtime
             # branch, so neither compiles the other's body.
             if len(in_dtypes) != 1:
                 raise Error(
@@ -246,17 +244,17 @@ struct RuntimeAggregate(Evaluable, Value):
                     return ResolvedAggregate.of[StringExtremum[MinOp]](
                         in_dtypes
                     )
-                return ResolvedAggregate.of[PrimitiveFold[MinKernel]](in_dtypes)
+                return ResolvedAggregate.of[Fold[MinKernel]](in_dtypes)
             else:
                 if stringly:
                     return ResolvedAggregate.of[StringExtremum[MaxOp]](
                         in_dtypes
                     )
-                return ResolvedAggregate.of[PrimitiveFold[MaxKernel]](in_dtypes)
+                return ResolvedAggregate.of[Fold[MaxKernel]](in_dtypes)
         else:
             raise Error("unknown aggregate '", self._name, "'")
 
-    def over_no_input(self) raises -> Optional[DynArray]:
+    def empty(self) raises -> Optional[DynArray]:
         """This aggregate's answer over an input that produced no column at
         all, or `None` when it has none.
 
@@ -269,10 +267,10 @@ struct RuntimeAggregate(Evaluable, Value):
         slot.
         """
         if self._name == COUNT_DISTINCT or self._name == APPROX_COUNT_DISTINCT:
-            return DistinctCount[True].over_no_input()
+            return DistinctCount[True].empty()
         elif self._name == COUNT:
-            return ValidityCount.over_no_input()
-        return PrimitiveFold[SumKernel].over_no_input()
+            return ValidCount.empty()
+        return Fold[SumKernel].empty()
 
     # -- Value --------------------------------------------------------------
 
@@ -288,7 +286,7 @@ struct RuntimeAggregate(Evaluable, Value):
     def dtype(self, schema: Schema) raises -> DynType:
         """Resolve from schema-derived dtypes and keep only the output type.
 
-        The `ColumnFold` this also produces is discarded, deliberately: it is
+        The `AggregateFn` this also produces is discarded, deliberately: it is
         one function-pointer assignment, and paying it is what makes the dtype
         and the implementation come from the same branch.
         """

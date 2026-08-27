@@ -10,6 +10,49 @@
 
 ### Refactors
 
+- **`marrow/kernels/aggregate.mojo` — one aggregate vocabulary instead of
+  four.** The package described the same four aggregates twice: `Aggregation`
+  (typed, carrying `InArray`/`OutArray`/`from_any`/`to_dyn`/`is_mergeable`)
+  with `NumericAgg`/`StringMinMax`/`CountAgg`/`DistinctAgg`, and
+  `ColumnAggregation` (erased) with `PrimitiveFold`/`StringExtremum`/
+  `ValidityCount`/`DistinctCount`. Every consumer picked one column and ignored
+  the other — `marrow/expr` used only the erased one, `exprold`, `groupby` and
+  the bindings only the typed one.
+
+  There are now two levels, and they answer different questions. `FoldKernel`
+  (renamed from `AggKernel`) is the *lane algebra* — `AccType`, `identity`,
+  `combine`, `finalize` — which exists only for the aggregates that are folds
+  and is what the comptime lane fuses. `AggKernel` is *one aggregate, whole*,
+  over erased columns: `dtype(inputs)`, `grouped(groups, inputs)`, `empty()`,
+  plus `partials`/`merge` behind `comptime mergeable`. Its four conformers are
+  named for what they compute rather than for what they consume — `Fold[K]`,
+  `StringExtremum[Op]`, `ValidCount`, `DistinctCount[exact]`.
+
+  `PrimitiveFold` was the sharpest symptom: a struct whose name claimed a type
+  it did not have, since `grouped` took `List[DynArray]`, sitting beside a
+  *function-pointer alias* called `ColumnFold`. The pointer is now
+  `AggregateFn` and documented as what it is — `AggKernel.grouped`, erased,
+  which Mojo needs because it has no dynamic dispatch.
+
+  Deleted outright: `AggFunction` (name → behaviour is the expression layer's
+  job and moved there), `GroupBy.apply[F]` (which existed only to resolve a
+  name before the typed path), and `OneAggregation` (an adapter whose whole
+  purpose was erasing a typed `Aggregation`). `GroupBy.aggregate[A]` now takes
+  an erased column and is the single entry point. `ColumnAggregator` is
+  `AggregateSet`.
+
+  Every free-standing function in the module is gone — `column_fold`,
+  `_string_extremum`, `_fold_typed` and `_check_domain` were struct bodies and
+  a trait method in disguise; the file now declares no module-level `def` at
+  all.
+
+  One behaviour narrowed: `AggregateFn` carries no `ExecContext`, so the
+  whole-table path resolves parallelism from `ExecContext.auto()` rather than
+  the caller's context. `count_distinct` previously went radix-parallel against
+  the caller's worker budget, and a GPU device could be handed down; both now
+  come from `auto()`.
+
+
 - **`marrow/utils/datetime.mojo` — the calendar primitives, extracted and
   covered.** Hinnant's `civil_from_days` / `days_from_civil` lived inside
   `kernels/temporal.mojo` as private free functions returning

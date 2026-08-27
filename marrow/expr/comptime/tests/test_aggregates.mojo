@@ -257,7 +257,7 @@ def test_count_is_named_and_aliasable() raises:
 #
 # Two failure modes are specific to this node and each has cases of its own:
 #
-# - `Agg.out_dtype` reaches the plan's schema and `Agg.grouped` produces the
+# - `Agg.dtype` reaches the plan's schema and `Agg.grouped` produces the
 #   column. `grouped` returns `DynArray`, so a disagreement is a `Variant`
 #   misaccess at emit rather than a raise — every case asserts the *schema*
 #   dtype equals the *produced* dtype.

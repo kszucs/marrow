@@ -43,7 +43,7 @@ from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter, take
 from ..kernels.core import Groups
-from ..kernels.aggregate import ColumnFold
+from ..kernels.aggregate import AggregateFn
 from ..kernels.groupby import HashGrouping
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile
@@ -534,12 +534,12 @@ struct AggregateOperator(Operator):
     pull design this needed a different trait from `Filter` and `Project`, and
     therefore a second erased box.
 
-    **A fused fold buffers nothing; a `ColumnFold` buffers O(rows).** Which of
+    **A fused fold buffers nothing; a `AggregateFn` buffers O(rows).** Which of
     the two a query pays for is decided per aggregate, not here.
     `FoldOperator` binds its own input subtree and folds lanes straight out of
     the morsel, so `sum(a * 2 + b)` never materialises `a * 2 + b` and this
     stage keeps only the grouper's key builders, which grow with the number of
-    *groups*. `ColumnAggregateOperator` cannot: a `ColumnFold` is one-shot
+    *groups*. `ColumnAggregateOperator` cannot: a `AggregateFn` is one-shot
     over the whole input, so it accumulates each morsel's evaluated columns
     and ids and calls the fold once at `drain`. Any query containing a
     `count_distinct`, or a `min`/`max` over a string or temporal column, is
@@ -618,11 +618,11 @@ struct AggregateOperator(Operator):
         """Assign the rows to slots **once**, then hand the same morsel to
         every fold.
 
-        This is why placement belongs to the operator rather than to each fold:
+        This is why placement belongs to the operator rather than to each grouped:
         N aggregates over one `GROUP BY` hash the keys once between them, where
         N folds each owning a grouping would hash N times.
 
-        Placement is a runtime choice here and a comptime one inside the fold,
+        Placement is a runtime choice here and a comptime one inside the grouped,
         and that split is measured. Parameterising *this* operator on
         `Grouping` instantiates it once per conformer for **+24,432 bytes** and
         buys nothing: its branch runs once per batch, while the 14.6x
@@ -691,7 +691,7 @@ struct ColumnAggregateOperator(Operator):
     evaluate the operand: `_inputs` holds the operand's *own* operator, which
     for a comptime subtree is a fully monomorphised `EvalOperator[A]`.
 
-    **It buffers, and that is inherent.** A `ColumnFold` is one-shot over the
+    **It buffers, and that is inherent.** A `AggregateFn` is one-shot over the
     whole input, so each morsel's evaluated columns and group ids are kept and
     `concat`ed at `drain`. Concatenating ids across morsels is sound because
     `HashGrouping` assigns dense ids that are stable across batches — batch
@@ -703,16 +703,16 @@ struct ColumnAggregateOperator(Operator):
     special-casing this operator among the values it holds, which is the
     uniformity that made "every value answers `to_operator`" work at all.
 
-    **Exactly one of `_fold` and `_node` is set at construction, and which one
-    says which lane built this.** The comptime lane knows its
-    `ColumnAggregation` at compile time and supplies `_fold` directly — which
-    is what keeps a binary that only ever aggregates a comptime expression
-    from linking the name ladder at all, and that DCE property is what the
-    whole two-node design turns on. The runtime lane knows only a name, so it
-    supplies `_node` and `_fold` is filled on **first push**, from the morsel's
-    real dtypes; it cannot be filled earlier, because a `RuntimeValue` operand
-    has no dtype until a schema is in hand. `_fold` is therefore `Some` from
-    the first push onward in both cases, which is the invariant `drain` reads.
+    **Exactly one of `_grouped` and `_node` is set at construction, and which
+    one says which lane built this.** The comptime lane knows its `AggKernel`
+    at compile time and supplies `_grouped` directly — which is what keeps a
+    binary that only ever aggregates a comptime expression from linking the
+    name ladder at all, and that DCE property is what the whole two-node design
+    turns on. The runtime lane knows only a name, so it supplies `_node` and
+    `_grouped` is filled on **first push**, from the morsel's real dtypes; it
+    cannot be filled earlier, because a `RuntimeValue` operand has no dtype
+    until a schema is in hand. `_grouped` is therefore `Some` from the first
+    push onward in both cases, which is the invariant `drain` reads.
 
     Two nullable fields rather than a `Variant`: the alignment hazard
     CLAUDE.md records for `Variant` is not worth paying for two small members,
@@ -720,7 +720,7 @@ struct ColumnAggregateOperator(Operator):
     """
 
     var _inputs: List[DynOperator]
-    var _fold: Optional[ColumnFold]
+    var _grouped: Optional[AggregateFn]
     """The implementation. `Some` from the first push onward, in both lanes."""
 
     var _node: Optional[RuntimeAggregate]
@@ -750,7 +750,7 @@ struct ColumnAggregateOperator(Operator):
     def __init__(
         out self,
         var inputs: List[DynOperator],
-        fold: ColumnFold,
+        grouped: AggregateFn,
         var empty: Optional[DynArray],
         scatters: Bool,
     ):
@@ -760,7 +760,7 @@ struct ColumnAggregateOperator(Operator):
         for _ in range(len(inputs)):
             self._chunks.append(List[DynArray]())
         self._inputs = inputs^
-        self._fold = fold
+        self._grouped = grouped
         self._node = None
         self._empty = empty^
         self._scatters = scatters
@@ -781,8 +781,8 @@ struct ColumnAggregateOperator(Operator):
         for _ in range(len(inputs)):
             self._chunks.append(List[DynArray]())
         self._inputs = inputs^
-        self._fold = None
-        self._empty = node.over_no_input()
+        self._grouped = None
+        self._empty = node.empty()
         self._node = node^
         self._scatters = scatters
         self._ids = List[DynArray]()
@@ -803,11 +803,11 @@ struct ColumnAggregateOperator(Operator):
         for i in range(len(self._inputs)):
             var d = self._inputs[i].push(morsel)
             self._chunks[i].append(d.value().to_array(n))
-        if not self._fold:
+        if not self._grouped:
             var in_dtypes = List[DynType](capacity=len(self._chunks))
             for i in range(len(self._chunks)):
                 in_dtypes.append(self._chunks[i][0].dtype())
-            self._fold = self._node.value().resolve(in_dtypes).fold
+            self._grouped = self._node.value().resolve(in_dtypes).grouped
         self._rows += n
         if self._scatters:
             self._ids.append(morsel.groups.ids.copy().to_dyn())
@@ -836,7 +836,7 @@ struct ColumnAggregateOperator(Operator):
             )
         else:
             groups = Groups.single(self._rows)
-        return Datum(self._fold.value()(groups, columns))
+        return Datum(self._grouped.value()(groups, columns))
 
 
 struct LimitOperator(Operator):

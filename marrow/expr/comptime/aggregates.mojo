@@ -34,9 +34,9 @@ from std.sys.info import simd_width_of
 
 from ...arrays import StructArray, Int32Array
 from ...kernels.aggregate import (
-    AggKernel,
+    FoldKernel,
     AggState,
-    ColumnAggregation,
+    AggKernel,
     CountKernel,
     MaxKernel,
     MeanKernel,
@@ -60,7 +60,7 @@ from ..physical import (
 from .core import ComptimeValue, NumericValue
 
 
-struct LaneAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
+struct LaneAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
     """Folds its operand's **lanes** straight into registers; the operand is
     never materialised.
 
@@ -90,7 +90,7 @@ struct LaneAggregate[K: AggKernel, A: NumericValue](Evaluable, Value):
     comptime Type = Self.K.AccType[Self.A.Type]
     """The accumulator's type, not the input's: summing `int32` yields `int64`.
 
-    Delegating to `AggKernel.AccType` keeps that widening rule in one place.
+    Delegating to `FoldKernel.AccType` keeps that widening rule in one place.
     It must never appear **unerased** in a signature — it is a comptime
     conditional type, which reduces inside the struct but fails to unify at a
     return site. That is why `finish` answers `DynArray`.
@@ -183,7 +183,7 @@ comptime Mean = LaneAggregate[MeanKernel, _]
 comptime Count = LaneAggregate[CountKernel, _]
 
 
-struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
+struct FoldOperator[K: FoldKernel, A: NumericValue, G: Grouping](Operator):
     """The fold in progress: this aggregate's input, plus the kernel's state.
 
     Three axes, all comptime: the **algebra** (`K`), the whole **input**
@@ -245,7 +245,7 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
         # input that yields nothing: `sum` of no rows is one NULL, not no rows.
         self._num_groups = 1 if not Self.G.scatters else 0
         self._emitted = False
-        # The accumulator's dtype as a value, from `AggKernel.acc_dtype`.
+        # The accumulator's dtype as a value, from `FoldKernel.acc_dtype`.
         # `A.Type()` is constructible today because the fused lane is numeric,
         # and that is precisely the constraint this has to shed: when `A` can
         # be temporal, the input dtype is not known until `bind(batch)` and
@@ -393,9 +393,7 @@ struct FoldOperator[K: AggKernel, A: NumericValue, G: Grouping](Operator):
 # ColumnAggregate — the aggregates that materialise, with the operand still
 # fused.
 # ---------------------------------------------------------------------------
-struct ColumnAggregate[Agg: ColumnAggregation, A: ComptimeValue](
-    Evaluable, Value
-):
+struct ColumnAggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
     """Materialises its operand once and computes over the column.
 
     **Not "the non-numeric one".** `col("v", int64).count_distinct()` lands
@@ -411,7 +409,7 @@ struct ColumnAggregate[Agg: ColumnAggregation, A: ComptimeValue](
     which is a loss nothing forces. So `A` stays a type parameter and the
     operand builds its own `EvalOperator[A]`.
 
-    `Agg` is a `ColumnAggregation` rather than an `AggKernel` because these
+    `Agg` is an `AggKernel` rather than a `FoldKernel` because these
     aggregates have no identity, no combine and no finalize — there is
     genuinely no algebra to parameterise on, which is why `LaneAggregate`
     could not be widened to cover them.
@@ -444,7 +442,7 @@ struct ColumnAggregate[Agg: ColumnAggregation, A: ComptimeValue](
         return self._alias.copy()
 
     def dtype(self, schema: Schema) raises -> DynType:
-        """Through `Agg.out_dtype`, from the *operand's* dtype.
+        """Through `Agg.dtype`, from the *operand's* dtype.
 
         Not from `A.Type()`: a temporal dtype is not constructible from its
         type — a timestamp carries a unit and a timezone — which is exactly
@@ -452,7 +450,7 @@ struct ColumnAggregate[Agg: ColumnAggregation, A: ComptimeValue](
         """
         var in_dtypes = List[DynType](capacity=1)
         in_dtypes.append(self._input.dtype(schema))
-        return Self.Agg.out_dtype(in_dtypes)
+        return Self.Agg.dtype(in_dtypes)
 
     comptime shape = Shape.scalar
     """One value per group, so scalar-shaped in the same sense a literal is."""
@@ -489,7 +487,7 @@ struct ColumnAggregate[Agg: ColumnAggregation, A: ComptimeValue](
         var inputs = List[DynOperator](capacity=1)
         inputs.append(self._input.to_operator(False, bindings))
         return ColumnAggregateOperator(
-            inputs^, Self.Agg.grouped, Self.Agg.over_no_input(), grouped
+            inputs^, Self.Agg.grouped, Self.Agg.empty(), grouped
         )
 
     def alias(self, var name: String) -> Self:

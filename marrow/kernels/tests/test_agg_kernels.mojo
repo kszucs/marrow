@@ -1,10 +1,10 @@
-"""`ColumnAggregation` — the aggregates that consume columns, at both slot counts.
+"""`AggKernel` — the aggregates that consume columns, at both slot counts.
 
 Every case here exists because of one hazard: the one-slot assignment carries
 **no ids**, and every per-group body in this package is a
 `for i in range(len(groups.ids))` loop. Handed `Groups.single(n)` such a loop
 does not execute and answers `[0]` or `[null]` — a wrong answer, not a crash.
-So each `ColumnFold` is exercised at one slot *and* at many, and the one-slot
+So each `AggregateFn` is exercised at one slot *and* at many, and the one-slot
 expectation is always the whole-input answer rather than the identity.
 """
 
@@ -23,9 +23,8 @@ from ..aggregate import (
     MaxOp,
     MinKernel,
     MinOp,
-    PrimitiveFold,
+    Fold,
     StringExtremum,
-    column_fold,
 )
 from ..core import Groups
 
@@ -35,7 +34,7 @@ def _ids(values: List[Optional[Int]]) raises -> Int32Array:
 
 
 def _one(var column: DynArray) -> List[DynArray]:
-    """A `ColumnFold` takes a *list* of inputs; every fold today takes one."""
+    """A `AggregateFn` takes a *list* of inputs; every fold today takes one."""
     var out = List[DynArray](capacity=1)
     out.append(column^)
     return out^
@@ -61,7 +60,7 @@ def _timestamps(var values: List[Int]) raises -> DynArray:
 # ---------------------------------------------------------------------------
 # Groups
 # ---------------------------------------------------------------------------
-def test_column_fold_groups_single_holds_no_ids() raises:
+def test_agg_groups_single_holds_no_ids() raises:
     """The convention every fold branches on: empty ids, one slot.
 
     Materialising `n` zeros to say "everything is group 0" is exactly the cost
@@ -73,7 +72,7 @@ def test_column_fold_groups_single_holds_no_ids() raises:
     assert_equal(g.num_groups, 1)
 
 
-def test_column_fold_groups_assignment_is_not_single() raises:
+def test_agg_groups_assignment_is_not_single() raises:
     var g = Groups(_ids([0, 0, 1]), 2)
     assert_true(not g.is_single())
 
@@ -81,7 +80,7 @@ def test_column_fold_groups_assignment_is_not_single() raises:
 # ---------------------------------------------------------------------------
 # count_distinct
 # ---------------------------------------------------------------------------
-def test_column_fold_count_distinct_one_slot_numeric() raises:
+def test_agg_count_distinct_one_slot_numeric() raises:
     """The path that silently answers `[0]` if the `is_single` branch is
     missing — `count_distinct_grouped` loops over ids there are none of."""
     var out = DistinctCount[True].grouped(
@@ -90,7 +89,7 @@ def test_column_fold_count_distinct_one_slot_numeric() raises:
     assert_true(out.as_int64() == array([3], int64))
 
 
-def test_column_fold_count_distinct_one_slot_string() raises:
+def test_agg_count_distinct_one_slot_string() raises:
     var out = DistinctCount[True].grouped(
         Groups.single(5),
         _one(_strings(["a", "b", "a", "c", "b"])),
@@ -98,7 +97,7 @@ def test_column_fold_count_distinct_one_slot_string() raises:
     assert_true(out.as_int64() == array([3], int64))
 
 
-def test_column_fold_count_distinct_grouped_string() raises:
+def test_agg_count_distinct_grouped_string() raises:
     """Group 0 sees a, b, a; group 1 sees c, c."""
     var out = DistinctCount[True].grouped(
         Groups(_ids([0, 0, 0, 1, 1]), 2),
@@ -107,7 +106,7 @@ def test_column_fold_count_distinct_grouped_string() raises:
     assert_true(out.as_int64() == array([2, 1], int64))
 
 
-def test_column_fold_count_distinct_grouped_numeric() raises:
+def test_agg_count_distinct_grouped_numeric() raises:
     var out = DistinctCount[True].grouped(
         Groups(_ids([0, 1, 0, 1, 0]), 2),
         _one(array([7, 5, 7, 6, 8], int64).to_dyn()),
@@ -115,7 +114,7 @@ def test_column_fold_count_distinct_grouped_numeric() raises:
     assert_true(out.as_int64() == array([2, 2], int64))
 
 
-def test_column_fold_count_distinct_excludes_nulls_at_one_slot() raises:
+def test_agg_count_distinct_excludes_nulls_at_one_slot() raises:
     """SQL `COUNT(DISTINCT x)` / PyArrow `only_valid`: a null is not a value."""
     var out = DistinctCount[True].grouped(
         Groups.single(4), _one(_strings(["a", None, "a", "b"]))
@@ -123,7 +122,7 @@ def test_column_fold_count_distinct_excludes_nulls_at_one_slot() raises:
     assert_true(out.as_int64() == array([2], int64))
 
 
-def test_column_fold_count_distinct_excludes_nulls_when_grouped() raises:
+def test_agg_count_distinct_excludes_nulls_when_grouped() raises:
     var out = DistinctCount[True].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
         _one(_strings(["a", None, None, "b"])),
@@ -131,7 +130,7 @@ def test_column_fold_count_distinct_excludes_nulls_when_grouped() raises:
     assert_true(out.as_int64() == array([1, 1], int64))
 
 
-def test_column_fold_approx_count_distinct_one_slot() raises:
+def test_agg_approx_count_distinct_one_slot() raises:
     """A HyperLogLog is exact at these cardinalities — linear counting takes
     over well below the register count."""
     var out = DistinctCount[False].grouped(
@@ -140,7 +139,7 @@ def test_column_fold_approx_count_distinct_one_slot() raises:
     assert_true(out.as_int64() == array([3], int64))
 
 
-def test_column_fold_approx_count_distinct_grouped() raises:
+def test_agg_approx_count_distinct_grouped() raises:
     var out = DistinctCount[False].grouped(
         Groups(_ids([0, 0, 0, 1, 1]), 2),
         _one(_strings(["a", "b", "a", "c", "c"])),
@@ -151,7 +150,7 @@ def test_column_fold_approx_count_distinct_grouped() raises:
 # ---------------------------------------------------------------------------
 # string min / max
 # ---------------------------------------------------------------------------
-def test_column_fold_string_min_max_one_slot() raises:
+def test_agg_string_min_max_one_slot() raises:
     """`StringMinMax` has no `whole` of its own — this branch is the only
     thing standing between the whole-input answer and an empty loop."""
     var values = _strings(["b", "a", "c"])
@@ -163,7 +162,7 @@ def test_column_fold_string_min_max_one_slot() raises:
     assert_true(hi.as_string() == array(["c"]))
 
 
-def test_column_fold_string_min_max_grouped() raises:
+def test_agg_string_min_max_grouped() raises:
     var values = _strings(["b", "d", "a", "c"])
     var lo = StringExtremum[MinOp].grouped(
         Groups(_ids([0, 0, 1, 1]), 2), _one(values.copy())
@@ -175,14 +174,14 @@ def test_column_fold_string_min_max_grouped() raises:
     assert_true(hi.as_string() == array(["d", "c"]))
 
 
-def test_column_fold_string_min_skips_nulls_at_one_slot() raises:
+def test_agg_string_min_skips_nulls_at_one_slot() raises:
     var out = StringExtremum[MinOp].grouped(
         Groups.single(3), _one(_strings([None, "b", "a"]))
     )
     assert_true(out.as_string() == array(["a"]))
 
 
-def test_column_fold_string_min_of_all_nulls_is_null() raises:
+def test_agg_string_min_of_all_nulls_is_null() raises:
     var out = StringExtremum[MinOp].grouped(
         Groups.single(2), _one(_strings([None, None]))
     )
@@ -193,24 +192,22 @@ def test_column_fold_string_min_of_all_nulls_is_null() raises:
 # ---------------------------------------------------------------------------
 # fold_column — a fold algebra over a fixed-width column
 # ---------------------------------------------------------------------------
-def test_column_fold_temporal_min_max_keeps_unit_and_timezone() raises:
+def test_agg_temporal_min_max_keeps_unit_and_timezone() raises:
     """The capability the materialising path exists to add. `MinMax.acc_dtype`
     returns the *input* dtype, so a timestamp's unit and timezone must survive
     — and a dtype that disagreed with the schema would be a `Variant`
     misaccess at emit rather than a raise."""
     var values = _timestamps([30, 10, 20])
-    var lo = PrimitiveFold[MinKernel].grouped(
-        Groups.single(3), _one(values.copy())
-    )
-    var hi = PrimitiveFold[MaxKernel].grouped(Groups.single(3), _one(values^))
+    var lo = Fold[MinKernel].grouped(Groups.single(3), _one(values.copy()))
+    var hi = Fold[MaxKernel].grouped(Groups.single(3), _one(values^))
     assert_true(lo.dtype() == DynType(timestamp(microsecond, "UTC")))
     assert_true(hi.dtype() == DynType(timestamp(microsecond, "UTC")))
     assert_equal(Int(lo.as_timestamp()[0].value()), 10)
     assert_equal(Int(hi.as_timestamp()[0].value()), 30)
 
 
-def test_column_fold_temporal_min_grouped() raises:
-    var out = PrimitiveFold[MinKernel].grouped(
+def test_agg_temporal_min_grouped() raises:
+    var out = Fold[MinKernel].grouped(
         Groups(_ids([0, 0, 1, 1]), 2), _one(_timestamps([30, 10, 50, 40]))
     )
     assert_true(out.dtype() == DynType(timestamp(microsecond, "UTC")))
@@ -219,22 +216,20 @@ def test_column_fold_temporal_min_grouped() raises:
     assert_equal(Int(out.as_timestamp()[1].value()), 40)
 
 
-def test_column_fold_numeric_min_one_slot_and_grouped() raises:
+def test_agg_numeric_min_one_slot_and_grouped() raises:
     var values = array([3, 1, 4, 1], int64).to_dyn()
-    var whole = PrimitiveFold[MinKernel].grouped(
-        Groups.single(4), _one(values.copy())
-    )
-    var grouped = PrimitiveFold[MinKernel].grouped(
+    var whole = Fold[MinKernel].grouped(Groups.single(4), _one(values.copy()))
+    var grouped = Fold[MinKernel].grouped(
         Groups(_ids([0, 0, 1, 1]), 2), _one(values^)
     )
     assert_true(whole.as_int64() == array([1], int64))
     assert_true(grouped.as_int64() == array([1, 1], int64))
 
 
-def test_column_fold_rejects_a_dtype_it_has_no_arm_for() raises:
+def test_agg_rejects_a_dtype_it_has_no_arm_for() raises:
     var raised = False
     try:
-        _ = PrimitiveFold[MinKernel].grouped(
+        _ = Fold[MinKernel].grouped(
             Groups.single(2), _one(_strings(["a", "b"]))
         )
     except:
@@ -243,13 +238,13 @@ def test_column_fold_rejects_a_dtype_it_has_no_arm_for() raises:
 
 
 # ---------------------------------------------------------------------------
-# out_dtype must agree with what grouped produces
+# dtype must agree with what grouped produces
 # ---------------------------------------------------------------------------
-def test_column_fold_out_dtype_agrees_with_the_column_produced() raises:
+def test_agg_out_dtype_agrees_with_the_column_produced() raises:
     """The pairing the compiler used to enforce and no longer does.
 
-    `Aggregation.out_dtype` had to agree with `grouped`'s *return type* or the
-    build failed. `ColumnAggregation.grouped` returns `DynArray`, so a
+    `Aggregation.dtype` had to agree with `grouped`'s *return type* or the
+    build failed. `AggKernel.grouped` returns `DynArray`, so a
     disagreement is a `Variant` misaccess at emit rather than a raise — one
     case per (aggregate, dtype-family) pair is what replaces the check.
     """
@@ -265,35 +260,31 @@ def test_column_fold_out_dtype_agrees_with_the_column_produced() raises:
     number_dtypes.append(numbers.dtype())
 
     assert_true(
-        DistinctCount[True].out_dtype(string_dtypes)
+        DistinctCount[True].dtype(string_dtypes)
         == DistinctCount[True]
         .grouped(Groups.single(3), _one(strings.copy()))
         .dtype()
     )
     assert_true(
-        StringExtremum[MinOp].out_dtype(string_dtypes)
+        StringExtremum[MinOp].dtype(string_dtypes)
         == StringExtremum[MinOp]
         .grouped(Groups.single(3), _one(strings^))
         .dtype()
     )
     assert_true(
-        PrimitiveFold[MaxKernel].out_dtype(stamp_dtypes)
-        == PrimitiveFold[MaxKernel]
-        .grouped(Groups.single(3), _one(stamps^))
-        .dtype()
+        Fold[MaxKernel].dtype(stamp_dtypes)
+        == Fold[MaxKernel].grouped(Groups.single(3), _one(stamps^)).dtype()
     )
     assert_true(
-        PrimitiveFold[MinKernel].out_dtype(number_dtypes)
-        == PrimitiveFold[MinKernel]
-        .grouped(Groups.single(3), _one(numbers^))
-        .dtype()
+        Fold[MinKernel].dtype(number_dtypes)
+        == Fold[MinKernel].grouped(Groups.single(3), _one(numbers^)).dtype()
     )
 
 
-def test_column_fold_erased_face_answers_the_same() raises:
-    """`column_fold[Agg]()` is what the runtime lane holds — the same static
+def test_agg_erased_face_answers_the_same() raises:
+    """`Agg.grouped` is what the runtime lane holds — the same static
     method behind a thin pointer, so it must answer identically."""
-    var fold = column_fold[DistinctCount[True]]()
+    var fold = DistinctCount[True].grouped
     var erased = fold(Groups.single(3), _one(_strings(["a", "b", "a"])))
     var direct = DistinctCount[True].grouped(
         Groups.single(3), _one(_strings(["a", "b", "a"]))
@@ -301,11 +292,11 @@ def test_column_fold_erased_face_answers_the_same() raises:
     assert_true(erased.as_int64() == direct.as_int64())
 
 
-def test_column_fold_over_no_input_only_the_counts_answer() raises:
+def test_agg_over_no_input_only_the_counts_answer() raises:
     """An input that produced no column at all: a cardinality is still 0, an
     extremum has no dtype to be null of and declines."""
-    var counted = DistinctCount[True].over_no_input()
+    var counted = DistinctCount[True].empty()
     assert_true(Bool(counted))
     assert_true(counted.value().as_int64() == array([0], int64))
-    assert_true(not StringExtremum[MinOp].over_no_input())
-    assert_true(not PrimitiveFold[MaxKernel].over_no_input())
+    assert_true(not StringExtremum[MinOp].empty())
+    assert_true(not Fold[MaxKernel].empty())

@@ -61,7 +61,7 @@ from ...kernels.aggregate import (
     DistinctCount,
     MaxOp,
     MinOp,
-    PrimitiveFold,
+    Fold,
     StringExtremum,
     MaxKernel,
     MeanKernel,
@@ -213,7 +213,7 @@ trait PrimitiveValue(ComptimeValue):
     no members and exist so a node can require the *operations* it needs. A
     comparison binds on this trait and serves both; arithmetic binds on
     `NumericValue` and rejects dates at compile time. Same split as
-    `AggKernel`'s `OrderedAgg` / `ArithmeticAgg`, for the same reason.
+    `FoldKernel`'s `OrderedAgg` / `ArithmeticAgg`, for the same reason.
     """
 
     comptime Type: PrimitiveType
@@ -415,7 +415,7 @@ trait StringValue(ComptimeValue):
     #
     # A `ColumnAggregate`, not a `LaneAggregate`: `min` over a string is a
     # bytewise scan keeping the index of the best row, not a scalar fold, so
-    # there is no `AggKernel` to parameterise a fused node on. The **operand**
+    # there is no `FoldKernel` to parameterise a fused node on. The **operand**
     # stays typed, so `min(upper(name))` still fuses `upper(name)`.
 
     def min(self) -> ColumnAggregate[StringExtremum[MinOp], Self]:
@@ -542,15 +542,15 @@ trait TemporalValue(PrimitiveValue):
     # lane is correct but materialises; moving the accumulator dtype out of
     # `__init__` and into first push is what would fuse it, and is owed.
 
-    def min(self) -> ColumnAggregate[PrimitiveFold[MinKernel], Self]:
+    def min(self) -> ColumnAggregate[Fold[MinKernel], Self]:
         """`MIN(self)`. Keeps the input's dtype — unit and timezone
         included."""
-        return ColumnAggregate[PrimitiveFold[MinKernel], Self](self.copy())
+        return ColumnAggregate[Fold[MinKernel], Self](self.copy())
 
-    def max(self) -> ColumnAggregate[PrimitiveFold[MaxKernel], Self]:
+    def max(self) -> ColumnAggregate[Fold[MaxKernel], Self]:
         """`MAX(self)`. Keeps the input's dtype — unit and timezone
         included."""
-        return ColumnAggregate[PrimitiveFold[MaxKernel], Self](self.copy())
+        return ColumnAggregate[Fold[MaxKernel], Self](self.copy())
 
 
 # ---------------------------------------------------------------------------

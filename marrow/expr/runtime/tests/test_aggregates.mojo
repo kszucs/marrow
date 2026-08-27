@@ -5,7 +5,7 @@ its operand can stay fused. This covers the other one: the aggregate arrives as
 a **string**, from a frontend that built the whole query after the program
 started, so both the aggregate and its operands are erased.
 
-The claim under test is that both roads reach the same `ColumnAggregation`, and
+The claim under test is that both roads reach the same `AggKernel`, and
 that `RuntimeAggregate` refuses a name it cannot serve at the point it is
 written rather than on the first morsel.
 """
@@ -50,8 +50,8 @@ def test_named_aggregate_rejects_an_unknown_name_where_it_is_written() raises:
 def test_named_aggregate_resolution_answers_dtype_and_fold_together() raises:
     """One ladder, so the schema dtype and the implementation cannot disagree.
 
-    Both come off the same `ColumnAggregation` on the same branch — which is
-    what replaces the compiler check `Aggregation.out_dtype` used to get from
+    Both come off the same `AggKernel` on the same branch — which is
+    what replaces the compiler check `Aggregation.dtype` used to get from
     having to match `grouped`'s return type.
     """
     var dtypes = List[DynType](capacity=1)
@@ -110,8 +110,8 @@ def test_named_aggregate_covers_the_folds_the_comptime_lane_fuses() raises:
     """`sum`/`mean`/`count` are reachable by name as well as by type.
 
     The comptime lane fuses these into `LaneAggregate`; a frontend that only
-    has a string reaches the same algebra through `PrimitiveFold` and
-    `ValidityCount` instead. Same answers, one materialised column.
+    has a string reaches the same algebra through `Fold` and
+    `ValidCount` instead. Same answers, one materialised column.
     """
     var plan = table(_batch()).aggregate(
         [
