@@ -102,14 +102,14 @@ from ..kernels.numeric import (
     LogKernel,
 )
 from ..kernels.aggregate import (
-    Aggregation,
-    NumericAgg,
-    StringMinMax,
-    CountAgg,
-    DistinctAgg,
+    AggKernel,
+    Fold,
+    StringExtremum,
+    ValidCount,
+    DistinctCount,
     MinOp,
     MaxOp,
-    AggKernel,
+    FoldKernel,
     SumKernel,
     MeanKernel,
     MinKernel,
@@ -459,10 +459,10 @@ trait Value(Copyable, Deinitable, Movable):
     # conflicting defaults and will not compile, which is how `DynValue` found
     # them.
     def count_distinct(self) -> AggExpr:
-        return AggExpr.of[DistinctAgg[True]](self.copy())
+        return AggExpr.of[DistinctCount[True]](self.copy())
 
     def approx_count_distinct(self) -> AggExpr:
-        return AggExpr.of[DistinctAgg[False]](self.copy())
+        return AggExpr.of[DistinctCount[False]](self.copy())
 
     # `is_null`/`is_valid` are deliberately *not* here.
     #
@@ -1820,13 +1820,13 @@ trait StringValue(Value):
     # --- aggregates (marrow.exprold.aggregates) --------------------------------
 
     def min(self) -> AggExpr:
-        return AggExpr.of[StringMinMax[MinOp, Self.OutType]](self.copy())
+        return AggExpr.of[StringExtremum[MinOp]](self.copy())
 
     def max(self) -> AggExpr:
-        return AggExpr.of[StringMinMax[MaxOp, Self.OutType]](self.copy())
+        return AggExpr.of[StringExtremum[MaxOp]](self.copy())
 
     def count(self) -> AggExpr:
-        return AggExpr.of[CountAgg](self.copy())
+        return AggExpr.of[ValidCount](self.copy())
 
 
 struct StringColumn[T: StringLikeType](StringValue):
@@ -2335,7 +2335,7 @@ struct AggExpr(Copyable, Movable, Writable):
 
     @implicit
     def __init__[
-        K: AggKernel, In: NumericValue
+        K: FoldKernel, In: NumericValue
     ](out self, var reduction: Reduction[K, In]):
         """From a fused reduction: ``col("amount", int64).sum()`` is a scalar
         `Reduction` inside an expression and this aggregate in a `GROUP BY` —
@@ -2346,7 +2346,7 @@ struct AggExpr(Copyable, Movable, Writable):
         there is no `OutType` to name one with, so the aggregate is carried by
         name and resolved against the column's dtype at plan build — the same
         split as `Reduction.alias`."""
-        self = AggExpr.of[K.Grouped[In.OutType]](reduction.a.copy())
+        self = AggExpr.of[Fold[K]](reduction.a.copy())
 
     def __init__(out self, var func: String, var input: DynValue):
         """From the runtime lane: keep the function's *name*, resolve it
@@ -2379,7 +2379,7 @@ struct AggExpr(Copyable, Movable, Writable):
         self._of = of
 
     @staticmethod
-    def of[A: Aggregation, In: Value](var input: In) -> AggExpr:
+    def of[A: AggKernel, In: Value](var input: In) -> AggExpr:
         """From the fused lane: the aggregation is named, not looked up."""
         return AggExpr(
             out_name=String(A.name),
@@ -2430,7 +2430,7 @@ struct AggExpr(Copyable, Movable, Writable):
 
 # ---------------------------------------------------------------------------
 @fieldwise_init
-struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
+struct Reduction[K: FoldKernel, A: NumericValue](NumericValue):
     """Whole-array reduction → a scalar. Output dtype is the kernel's accumulator
     algebra `K.AccType[A.OutType]` (sum widens, mean → float64, min/max keep it).
     """
@@ -2462,9 +2462,7 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
         override `sum` (it is defaulted in exactly one family, so a second
         candidate is ambiguous rather than an override), and it does not need
         to."""
-        return AggExpr.of[NumericAgg[Self.K, Self.A.OutType]](
-            self.a.copy()
-        ).alias(name^)
+        return AggExpr.of[Fold[Self.K]](self.a.copy()).alias(name^)
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
@@ -2743,13 +2741,13 @@ trait TemporalValue(Value):
     # --- aggregates (marrow.exprold.aggregates) --------------------------------
 
     def min(self) -> AggExpr:
-        return AggExpr.of[NumericAgg[MinKernel, Self.OutType]](self.copy())
+        return AggExpr.of[Fold[MinKernel]](self.copy())
 
     def max(self) -> AggExpr:
-        return AggExpr.of[NumericAgg[MaxKernel, Self.OutType]](self.copy())
+        return AggExpr.of[Fold[MaxKernel]](self.copy())
 
     def count(self) -> AggExpr:
-        return AggExpr.of[CountAgg](self.copy())
+        return AggExpr.of[ValidCount](self.copy())
 
 
 struct TemporalColumn[T: TemporalType](TemporalValue):

@@ -322,7 +322,7 @@ class _Relation:
         past the Python sugar rather than reconstructing it.
         """
         return _Relation(
-            marrow.exprold.LazyTable.wrap(
+            marrow.lazy.LazyTable.wrap(
                 self._lazy.unwrap().sort(
                     [k.unwrap() for k in keys], list(ascending), nulls_first, True
                 )

@@ -648,7 +648,10 @@ def test_factory_array_bool_with_nulls() raises:
 
 
 def test_factory_array_bool_all_nulls() raises:
-    var a = array([None, None, None])
+    # Spelled out: a bare `[None, None, None]` matches both the `Bool` and the
+    # `String` factory since `array` gained the nullable string overload.
+    var values: List[Optional[Bool]] = [None, None, None]
+    var a = array(values)
     assert_equal(len(a), 3)
     assert_equal(a.null_count(), 3)
 

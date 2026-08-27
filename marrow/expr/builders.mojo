@@ -17,6 +17,7 @@ shadow rather than overload — and which one a call site got would depend on it
 imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
+from .`comptime`.aggregates import FusedAggregate
 from .`comptime`.numeric import CaseWhen
 from .`comptime`.core import BoolValue, ListValue, NumericValue
 from .`comptime`.leaves import (
@@ -34,12 +35,15 @@ from .params import Param
 from .runtime.values import RuntimeValue, column, literal
 from ..dtypes import (
     BoolType,
+    Int64Type,
     ListLikeType,
     FloatingType,
     NumericType,
     StringLikeType,
     TemporalType,
+    int64,
 )
+from ..kernels.aggregate import CountKernel
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -210,3 +214,18 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     by hand.
     """
     return DynRelation(ParquetScan(path^, schema^))
+
+
+def count_star() -> FusedAggregate[CountKernel, Literal[Int64Type]]:
+    """`COUNT(*)` — how many rows each group has.
+
+    Not the same aggregate as `col("x", int64).count()`, which counts the
+    *non-null* values of `x`; the two differ on any nullable column, and
+    `COUNT(*)` is what ~30 of ClickBench's 43 queries ask for.
+
+    It needs no new kernel and no new node. `CountKernel` counts valid values
+    and a literal is valid on every row, so the valid-count of a constant
+    column *is* the row count. This is that expression, under the name SQL
+    gives it, so callers stop rediscovering the trick.
+    """
+    return lit(1, int64).count().alias("count_star")

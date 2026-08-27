@@ -11,14 +11,14 @@ from ...builders import PrimitiveBuilder, Int32Builder, Float64Builder
 from ...dtypes import int32, float64, Int32Type, Float64Type
 from ...kernels.groupby import GroupBy
 from ...kernels.aggregate import (
-    Aggregation,
+    AggKernel,
     SumKernel,
     MinKernel,
     MaxKernel,
     MeanKernel,
-    NumericAgg,
+    Fold,
     CountKernel,
-    CountAgg,
+    ValidCount,
 )
 
 
@@ -40,10 +40,10 @@ def _make_vals(n: Int) raises -> DynArray:
 
 
 def _bench_group_by[
-    A: Aggregation
+    A: AggKernel
 ](mut b: Benchmark, n: Int, num_groups: Int = 10) raises:
     var keys = _make_keys(n, num_groups)
-    var vals = A.from_any(_make_vals(n))
+    var vals = _make_vals(n)
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
@@ -61,15 +61,15 @@ def _bench_group_by[
 
 
 def bench_groupby_sum_10k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 10_000)
+    _bench_group_by[Fold[SumKernel]](b, 10_000)
 
 
 def bench_groupby_sum_100k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 100_000)
+    _bench_group_by[Fold[SumKernel]](b, 100_000)
 
 
 def bench_groupby_sum_1m(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 1_000_000)
+    _bench_group_by[Fold[SumKernel]](b, 1_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -84,15 +84,15 @@ def bench_groupby_sum_1m(mut b: Benchmark) raises:
 
 
 def bench_groupby_sum_1m_g1k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 1_000_000, 1_000)
+    _bench_group_by[Fold[SumKernel]](b, 1_000_000, 1_000)
 
 
 def bench_groupby_sum_1m_g100k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[SumKernel, Float64Type]](b, 1_000_000, 100_000)
+    _bench_group_by[Fold[SumKernel]](b, 1_000_000, 100_000)
 
 
 def bench_groupby_mean_1m_g100k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[MeanKernel, Float64Type]](b, 1_000_000, 100_000)
+    _bench_group_by[Fold[MeanKernel]](b, 1_000_000, 100_000)
 
 
 # ---------------------------------------------------------------------------
@@ -101,15 +101,15 @@ def bench_groupby_mean_1m_g100k(mut b: Benchmark) raises:
 
 
 def bench_groupby_min_100k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[MinKernel, Float64Type]](b, 100_000)
+    _bench_group_by[Fold[MinKernel]](b, 100_000)
 
 
 def bench_groupby_max_100k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[MaxKernel, Float64Type]](b, 100_000)
+    _bench_group_by[Fold[MaxKernel]](b, 100_000)
 
 
 def bench_groupby_mean_100k(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[MeanKernel, Float64Type]](b, 100_000)
+    _bench_group_by[Fold[MeanKernel]](b, 100_000)
 
 
 def _make_vals_nulls(n: Int) raises -> DynArray:
@@ -125,10 +125,10 @@ def _make_vals_nulls(n: Int) raises -> DynArray:
 
 
 def _bench_group_by_nulls[
-    A: Aggregation
+    A: AggKernel
 ](mut b: Benchmark, n: Int, num_groups: Int = 10) raises:
     var keys = _make_keys(n, num_groups)
-    var vals = A.from_any(_make_vals_nulls(n))
+    var vals = _make_vals_nulls(n)
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
@@ -144,14 +144,14 @@ def _bench_group_by_nulls[
 # grouped count — the A/B for Q7.3.
 #
 # Two implementations exist and the two expression lanes disagree about which
-# to use: `CountValid.resolve` picks `NumericAgg[CountKernel, V]` for numeric
-# columns, while the AOT lane uses `CountKernel.Grouped`, which is `CountAgg`.
+# to use: `CountValid.resolve` picks `Fold[CountKernel]` for numeric
+# columns, while the AOT lane uses `CountKernel.Grouped`, which is `ValidCount`.
 #
-# They are not obviously ordered. `CountAgg` takes a `DynArray` and calls
+# They are not obviously ordered. `ValidCount` takes a `DynArray` and calls
 # `values.is_valid(i)` per row — erased dispatch — but skips it entirely when
 # the column is null-free, in which case it never loads a value at all.
 # `AggState` pays a typed validity check and does load the value. So null-free
-# should favour `CountAgg` and nullable may favour `AggState`.
+# should favour `ValidCount` and nullable may favour `AggState`.
 #
 # Both live in this one binary so the harness interleaves them: measuring one
 # variant, rebuilding, then measuring the other invents regressions that are not
@@ -162,18 +162,16 @@ def _bench_group_by_nulls[
 
 
 def bench_groupby_count_1m_g100k_aggstate(mut b: Benchmark) raises:
-    _bench_group_by[NumericAgg[CountKernel, Float64Type]](b, 1_000_000, 100_000)
+    _bench_group_by[Fold[CountKernel]](b, 1_000_000, 100_000)
 
 
 def bench_groupby_count_1m_g100k_countagg(mut b: Benchmark) raises:
-    _bench_group_by[CountAgg](b, 1_000_000, 100_000)
+    _bench_group_by[ValidCount](b, 1_000_000, 100_000)
 
 
 def bench_groupby_count_nulls_1m_g100k_aggstate(mut b: Benchmark) raises:
-    _bench_group_by_nulls[NumericAgg[CountKernel, Float64Type]](
-        b, 1_000_000, 100_000
-    )
+    _bench_group_by_nulls[Fold[CountKernel]](b, 1_000_000, 100_000)
 
 
 def bench_groupby_count_nulls_1m_g100k_countagg(mut b: Benchmark) raises:
-    _bench_group_by_nulls[CountAgg](b, 1_000_000, 100_000)
+    _bench_group_by_nulls[ValidCount](b, 1_000_000, 100_000)

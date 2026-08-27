@@ -9,16 +9,16 @@ fused result with the nulls it should have kept.
 
 from std.testing import assert_equal, assert_false, assert_true
 
-from ...builders import col, lit
+from ...builders import col, lit, table
 from ...params import Bindings
 from ....builders import array
 from ....dtypes import DynType, Int64Type, int64
 from ....tabular import RecordBatch, record_batch
 from ....scalars import DynScalar
 from ...logical import DynValue, Shape
-from ...physical import Morsel
+from ...physical import Evaluable, Morsel
 from ..leaves import Column, Literal
-from ..numeric import Add, Gt, Mul, Sub
+from ..numeric import Add, Eq, Ge, Gt, Le, Lt, Mul, Ne, Sub
 
 
 def _batch() raises -> RecordBatch:
@@ -170,3 +170,44 @@ def test_sub_and_mul_fuse_like_add() raises:
     var m = (col("a", int64) * lit(3, int64)).to_operator(False)
     var prod = m.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(4)
     assert_true(prod.as_int64()[1].value() == 6)
+
+
+def _bits[V: Evaluable](v: V, b: RecordBatch) raises -> String:
+    """Render a fused predicate as `t`/`f`/`?` per row."""
+    var got = (
+        v.evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .as_bool()
+        .copy()
+    )
+    var out = String()
+    for i in range(len(got)):
+        if got.is_null(i):
+            out += "?"
+        else:
+            out += "t" if got[i].value() else "f"
+    return out^
+
+
+def test_all_six_numeric_comparisons_fuse() raises:
+    """The comptime lane had only `>` and `<`, so a fused plan could not
+    express equality at all -- the shape statistics pruning and Parquet bloom
+    filters both key on. All six now go through the same `NumericCompare`."""
+    var b = _batch()  # a = [1, 2, None, 4]; the null sits at index 2
+    assert_equal(_bits(col("a", int64) == lit(2, int64), b), "ft?f")
+    assert_equal(_bits(col("a", int64) != lit(2, int64), b), "tf?t")
+    assert_equal(_bits(col("a", int64) < lit(2, int64), b), "tf?f")
+    assert_equal(_bits(col("a", int64) <= lit(2, int64), b), "tt?f")
+    assert_equal(_bits(col("a", int64) > lit(2, int64), b), "ff?t")
+    assert_equal(_bits(col("a", int64) >= lit(2, int64), b), "ft?t")
+
+
+def test_the_new_comparisons_still_fuse_into_a_filter() raises:
+    """`==` composes with the verbs exactly like `>` already did."""
+    var b = record_batch(
+        [array([1, 2, 3, 2], int64).copy(), array([9, 8, 7, 6], int64).copy()],
+        names=["a", "b"],
+    )
+    var out = table(b^).filter(col("a", int64) == lit(2, int64)).execute()
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[1].as_int64() == array([8, 6], int64))

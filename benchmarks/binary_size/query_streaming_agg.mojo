@@ -11,7 +11,7 @@ aggregate-set — exactly the change that can blow code size up — and without 
 aggregate query in the gate that regression would go unnoticed.
 
 Its pair, `query_streaming_agg_fused.mojo`, expresses the **same** query with
-comptime aggregations (`AggFunc.of[NumericAgg[SumKernel, Int64Type]]()`). The delta between
+comptime aggregations (`AggFunc.of[Fold[SumKernel]]()`). The delta between
 the two is the measurement: it is exactly the cost of the aggregate identity
 (and the input dtype) being runtime rather than comptime.
 

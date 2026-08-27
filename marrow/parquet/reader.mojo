@@ -44,7 +44,7 @@ from .codecs import Encoding, Rle, Plain, Dictionary, Compression
 from ..utils import Epoch, LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .source import ByteSource, MappedFile
-from .schema import SchemaMapping, DecodedLeaf, LeafColumn
+from .schema import SchemaMapping, DecodedLeaf, LeafColumn, NODE_LEAF
 from .statistics import Statistics
 from .format import (
     FileMetaData,
@@ -2261,21 +2261,50 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
             batches.append(RecordBatch.empty(Schema(copy=plan.schema)))
         return Table.from_batches(Schema(copy=plan.schema), batches)
 
+    def _trusted_leaf(self, ci: Int) -> Optional[LeafColumn]:
+        """The leaf behind column chunk `ci`, when its stored statistics
+        describe something a row-level predicate can use — otherwise None, which
+        every caller turns into an absent statistic (and an absent statistic
+        prunes nothing).
+
+        Two conditions. **The leaf must be a whole top-level column.** A leaf
+        inside a struct, list or map carries only its bare Parquet element name
+        (`x`, `element`, `key`), so a lookup that keys statistics by column
+        position hands `s.x`'s bounds to a top-level `x`; and under a repeated
+        field `null_count` and the min/max count *elements* while
+        `RowGroup.num_rows` counts rows, so they bound nothing a row predicate
+        names. **The footer must declare this leaf's ColumnOrder.** Without
+        `column_orders` (field 7) parquet-format leaves the meaning of
+        `min_value` / `max_value` undefined, and that verdict covers the whole
+        statistic rather than being split per member."""
+        if ci >= len(self._meta.column_orders) or not (
+            self._meta.column_orders[ci]
+        ):
+            return None
+        for ref n in self._mapping.nodes:
+            if n.kind == NODE_LEAF and n.leaf_index == ci:
+                return self._mapping.leaves[ci].copy()
+        return None
+
     def statistics(self) raises -> List[List[ColumnStatistics]]:
         """Per-(row group, leaf column) decoded column-chunk statistics, indexed
         `result[row_group][leaf]`. `min`/`max` are typed scalars matching each
         column's Arrow type (each `None` when the file stored no bound or the
-        type's bounds are not yet decoded); `null_count` is -1 if absent."""
+        type's bounds are not yet decoded); `null_count` is -1 if absent. A leaf
+        `_trusted_leaf` rejects reports no statistics at all."""
         var out = List[List[ColumnStatistics]]()
         for ref rg in self._meta.row_groups:
             var row = List[ColumnStatistics]()
             for ci in range(len(rg.columns)):
-                row.append(
-                    ColumnStatistics.from_metadata(
-                        self._mapping.leaves[ci].dtype,
-                        rg.columns[ci].meta_data,
+                var leaf = self._trusted_leaf(ci)
+                if leaf:
+                    row.append(
+                        ColumnStatistics.from_metadata(
+                            leaf.value(), rg.columns[ci].meta_data
+                        )
                     )
-                )
+                else:
+                    row.append(ColumnStatistics())
             out.append(row^)
         return out^
 
@@ -2347,7 +2376,7 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
                 if pi.offset_index and pi.column_index:
                     ref oi = pi.offset_index.value()
                     ref cix = pi.column_index.value()
-                    ref dtype = self._mapping.leaves[ci].dtype
+                    var leaf = self._trusted_leaf(ci)
                     var np = len(oi.page_locations)
                     for p in range(np):
                         var first = oi.page_locations[p].first_row_index
@@ -2358,11 +2387,23 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
                         var mn: Optional[DynScalar] = None
                         var mx: Optional[DynScalar] = None
                         # an all-null page (or a missing bound) prunes nothing
-                        if not (p < len(cix.null_pages) and cix.null_pages[p]):
+                        if leaf and not (
+                            p < len(cix.null_pages) and cix.null_pages[p]
+                        ):
                             if p < len(cix.min_values):
-                                mn = Statistics.decode(dtype, cix.min_values[p])
+                                mn = Statistics.decode(
+                                    leaf.value(), cix.min_values[p]
+                                )
                             if p < len(cix.max_values):
-                                mx = Statistics.decode(dtype, cix.max_values[p])
+                                mx = Statistics.decode(
+                                    leaf.value(), cix.max_values[p]
+                                )
+                            # a half this reader cannot trust taints the other:
+                            # a NaN or unreadable bound means the page carries
+                            # no statistic, not half of one
+                            if not (Bool(mn) and Bool(mx)):
+                                mn = None
+                                mx = None
                         pages.append(PageBounds(nxt - first, mn^, mx^))
                 per_col.append(pages^)
             out.append(per_col^)
@@ -2541,14 +2582,14 @@ struct ColumnStatistics(Copyable, Movable):
         self.max = None
 
     @staticmethod
-    def from_metadata(dtype: dt.DynType, cm: ColumnMetaData) raises -> Self:
+    def from_metadata(leaf: LeafColumn, cm: ColumnMetaData) raises -> Self:
         """Decode a column chunk's `ColumnMetaData` statistics: `null_count` plus
         the min/max bounds as typed scalars (kept only when both decode)."""
         var cs = Self()
         cs.null_count = cm.null_count
         if cm.has_min_max:
-            var mn = Statistics.decode(dtype, cm.min_value)
-            var mx = Statistics.decode(dtype, cm.max_value)
+            var mn = Statistics.decode(leaf, cm.min_value)
+            var mx = Statistics.decode(leaf, cm.max_value)
             if Bool(mn) and Bool(mx):
                 cs.min = mn^
                 cs.max = mx^

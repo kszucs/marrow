@@ -24,8 +24,11 @@ from ...dtypes import BoolType, DynType
 from ...kernels.boolean import (
     AndKernel,
     BoolBinaryKernel,
+    IsNullKernel,
     NotKernel,
+    NotNullKernel,
     OrKernel,
+    UnaryPredicateKernel,
     XorKernel,
 )
 from ...schema import Schema
@@ -33,7 +36,7 @@ from ...tabular import RecordBatch
 from ..logical import Shape, merged
 from ..params import Bindings
 from ..physical import Datum
-from .core import ComptimeValue, Unnamed
+from .core import BoolValue, ColumnBound, ComptimeValue, Unnamed
 
 
 def _as_bool(d: Datum, n: Int) raises -> BoolArray:
@@ -155,3 +158,72 @@ struct Not[A: ComptimeValue](ComptimeValue, Unnamed):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(NotKernel.name, "(", self.a, ")")
+
+
+# ---------------------------------------------------------------------------
+# NullPredicate — is_null / not_null
+# ---------------------------------------------------------------------------
+struct NullPredicate[K: UnaryPredicateKernel, A: ComptimeValue](
+    BoolValue, ColumnBound, Unnamed
+):
+    """`is_null` / `not_null` — the only nodes that read an operand's *validity*
+    rather than its values.
+
+    The operand is bound on `ComptimeValue`, not on a family, for the same
+    reason `BoolBinary`'s are: this asks its operand for a column and never for
+    a lane, so any family will do. That is also why it is a breaker —
+    `UnaryPredicateKernel.apply` takes a `DynArray`, because reading a bitmap
+    is one operation whatever the dtype underneath it is.
+
+    **The result is never null**, which is the whole content of a validity
+    predicate: `is_null(NULL)` is `TRUE`, a perfectly good value. The kernel
+    produces an all-valid `BoolArray` and `ColumnBound` reports it, so nothing
+    here has to state the rule twice.
+
+    Only the two validity predicates are aliased below. `is_nan` / `is_inf` are
+    `UnaryPredicateKernel`s too, but they read *values* and are meaningful only
+    over floating operands, so they need a narrower operand bound than
+    `ComptimeValue` and therefore their own node.
+    """
+
+    comptime NativeType = DType.int32
+    """Sizes the bit-pack driver's lane. The operand has no relevant width —
+    `lane` reads bits out of a `BoolArray` the kernel already produced."""
+
+    comptime shape = Shape.columnar
+    """Always columnar: `bind` materialises a length-N `BoolArray` whatever the
+    operand's shape was. Propagating the operand's shape would claim a scalar
+    result this never produces."""
+
+    comptime Bound = BoolArray
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(BoolType())
+
+    # -- BoolValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return Self.K.apply(
+            self.a.evaluate(batch, bindings).to_array(len(batch))
+        )
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ")")
+
+
+comptime IsNull = NullPredicate[IsNullKernel, _]
+comptime NotNull = NullPredicate[NotNullKernel, _]

@@ -4,15 +4,14 @@ Two-phase group-by:
   1. **Phase 1** — ``HashGrouper`` hashes the key columns and resolves every row
      to a dense group index, storing the unique key rows.
   2. **Phase 2** — aggregate accumulation, layered on top by the caller through
-     an ``Aggregation`` (``aggregate.mojo``).
+     an ``AggKernel`` (``aggregate.mojo``).
 
-The grouper itself is **aggregate-agnostic**: aggregates are ``Aggregation``
-types — a kernel already bound to its input type — and mapping a runtime
-function *name* onto one lives in the expression layer (``marrow/expr``). The
-``GroupBy`` type below ties the two together: ``aggregate[A]`` takes a typed
-column and is fully monomorphized end to end, ``apply[F]`` is the runtime-dtype
-convenience on top of it, and the serial / thread-local / radix execution
-strategy is picked from row count + cardinality.
+The grouper itself is **aggregate-agnostic**: aggregates are ``AggKernel``
+types, and mapping a runtime function *name* onto one lives in the expression
+layer (``marrow/expr``). The ``GroupBy`` type below ties the two together:
+``aggregate[A]`` runs one aggregate, ``aggregate_all`` runs a whole
+``AggregateSet``, and the serial / thread-local / radix execution strategy is
+picked from row count + cardinality.
 """
 
 from max.algorithm.functional import sync_parallelize
@@ -25,7 +24,7 @@ from ..arrays import (
     Int64Array,
 )
 from ..builders import DynBuilder, Int32Builder
-from ..dtypes import Field, struct_
+from ..dtypes import DynType, Field, struct_
 from .core import Groups
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
@@ -34,7 +33,7 @@ from ..utils import RapidHash64
 from ..execution import ExecContext
 from .filter import Take, take
 from .concat import concat
-from .aggregate import Aggregation, AggFunction
+from .aggregate import AggKernel
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +223,7 @@ struct ScalarGrouping(Grouping):
         pass
 
     def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
-        var empty = Int32Builder(0)
-        return Groups(empty.finish(), 1)
+        return Groups.single(num_rows)
 
     def num_groups(self) -> Int:
         return 1
@@ -277,7 +275,7 @@ struct HashGrouping(Grouping):
         return self._grouper.key_columns(fields)
 
 
-trait ColumnAggregator(Copyable, Deinitable, Movable):
+trait AggregateSet(Copyable, Deinitable, Movable):
     """What to compute per value column, for a grouping this layer drives.
 
     The grouper knows how to split rows and resolve them to group ids; it does
@@ -320,34 +318,40 @@ trait ColumnAggregator(Copyable, Deinitable, Movable):
         ...
 
 
-struct OneAggregation[A: Aggregation](ColumnAggregator):
-    """A single statically-known aggregation, as a one-column aggregator.
+struct OneAggregate[A: AggKernel](AggregateSet):
+    """A single statically-known aggregate, as a one-column set.
 
-    The typed path (`GroupBy.aggregate[A]`) and the runtime path (a set of N
-    erased aggregates) want the same three strategies, so they run the same
-    driver; this is the adapter that lets a comptime `A` in. `A` stays comptime
-    inside every method, so nothing is interpreted — the column index is the
-    only thing that became a runtime value, and there is exactly one."""
+    The one-aggregate entry point (`GroupBy.aggregate[A]`) and the N-aggregate
+    one want the same three strategies, so they run the same driver; this is
+    what lets a single `A` in. `A` stays comptime inside every method, so
+    nothing is interpreted — the column index is the only thing that became a
+    runtime value, and there is exactly one.
 
-    def __init__(out self):
-        pass
+    It holds the input dtype because `merge` needs it and only ever sees
+    accumulators: a widening fold loses the input type on the way out, so
+    `sum(int32)` hands back an int64 column that cannot say what it was folded
+    from."""
+
+    var _in_dtype: DynType
+
+    def __init__(out self, var in_dtype: DynType):
+        self._in_dtype = in_dtype^
 
     def num_columns(self) -> Int:
         return 1
 
     def mergeable(self) -> Bool:
-        return Self.A.is_mergeable
+        return Self.A.mergeable
 
     def grouped(
         self, column: Int, groups: Groups, values: DynArray
     ) raises -> DynArray:
-        return Self.A.grouped(groups, Self.A.from_any(values)).to_dyn()
+        return Self.A.grouped(groups, [values.copy()])
 
     def partials(
         self, column: Int, groups: Groups, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
-        var parts = Self.A.partials(groups, Self.A.from_any(values))
-        return (parts[0].copy().to_dyn(), parts[1].copy())
+        return Self.A.partials(self._in_dtype, groups, [values.copy()])
 
     def merge(
         self,
@@ -357,10 +361,7 @@ struct OneAggregation[A: Aggregation](ColumnAggregator):
         cnts: List[Int64Array],
         num_groups: Int,
     ) raises -> DynArray:
-        var typed = List[Self.A.OutArray]()
-        for t in range(len(accs)):
-            typed.append(Self.A.OutArray(accs[t].to_data()))
-        return Self.A.merge(remap, typed, cnts, num_groups).to_dyn()
+        return Self.A.merge(self._in_dtype, remap, accs, cnts, num_groups)
 
 
 struct ThreadPartials(Copyable, Movable):
@@ -444,13 +445,12 @@ struct GroupBy(Movable):
     """Grouped aggregation over a fixed set of key columns.
 
     Mirrors PyArrow's ``table.group_by(keys)``: build once from the key columns,
-    then aggregate. ``aggregate[A]`` takes a statically-known ``Aggregation`` and
-    a typed column, so the whole path is monomorphized; ``apply[F]`` resolves a
-    column's runtime dtype to that ``Aggregation`` first. ``aggregate_columns``
-    is the multi-column counterpart: it groups once and emits one column per
-    value column through a caller-supplied *comptime* aggregator. No aggregate
-    name or tag ever reaches this module — mapping one onto an ``Aggregation``
-    is the expression layer's job (``marrow.exprold.aggregates``).
+    then aggregate. ``aggregate[A]`` runs one statically-known ``AggKernel``;
+    ``aggregate_all`` runs a whole ``AggregateSet``. ``aggregate_columns`` is
+    the open-coded counterpart: it groups once and emits one column per value
+    column through a caller-supplied *comptime* lane. No aggregate name or tag
+    ever reaches this module — mapping one onto an ``AggKernel`` is the
+    expression layer's job (``marrow.expr``).
 
     The execution **strategy** is picked once at construction — from the row
     count, the worker budget (``ctx``), and a cheap one-time cardinality estimate
@@ -551,31 +551,23 @@ struct GroupBy(Movable):
         ``GROUP_THREAD_LOCAL`` / ``GROUP_RADIX``)."""
         return self._strategy
 
-    def aggregate[
-        A: Aggregation
-    ](self, value: A.InArray) raises -> GroupedColumns:
-        """Aggregate a typed ``value`` column per group with aggregation ``A``.
+    def aggregate[A: AggKernel](self, value: DynArray) raises -> GroupedColumns:
+        """Aggregate one ``value`` column per group with aggregate ``A``.
 
-        Returns the unique key columns and the aggregate column. ``A`` fixes the
-        kernel *and* the input type, so the fold itself is monomorphized; the
-        strategy choice is the shared one (`aggregate_all`), because there is no
-        reason for a single aggregate to pick differently from a set of them."""
+        Returns the unique key columns and the aggregate column. ``A`` is fixed
+        at compile time, so the fold it wraps is monomorphized after one
+        dispatch; the strategy choice is the shared one (`aggregate_all`),
+        because there is no reason for a single aggregate to pick differently
+        from a set of them.
+
+        This used to be two methods — a typed one taking `A.InArray` and an
+        erased `apply[F]` that resolved a *name* first. `AggKernel` takes an
+        erased column already, and no kernel in this package turns a name into
+        behaviour, so both collapsed into this.
+        """
         var values = List[DynArray]()
-        values.append(A.to_dyn(value))
-        return self.aggregate_all(OneAggregation[A](), values)
-
-    def apply[F: AggFunction](self, value: DynArray) raises -> GroupedColumns:
-        """Aggregate an erased ``value`` column with function ``F``: resolve the
-        column's dtype to the ``Aggregation`` implementing ``F`` over it, then
-        run the typed path above. The runtime-dtype entry point; the AOT path
-        names its ``Aggregation`` directly and calls ``aggregate``."""
-        var box = List[GroupedColumns]()
-
-        def run[A: Aggregation]() raises {mut box, imm}:
-            box.append(self.aggregate[A](A.from_any(value)))
-
-        F.resolve(value.dtype(), run)
-        return box[0].copy()
+        values.append(value.copy())
+        return self.aggregate_all(OneAggregate[A](value.dtype()), values)
 
     @staticmethod
     def _is_high_cardinality(keys: StructArray, n: Int) raises -> Bool:
@@ -598,7 +590,7 @@ struct GroupBy(Movable):
         return table.num_keys() * 2 > s
 
     def aggregate_all[
-        C: ColumnAggregator
+        C: AggregateSet
     ](self, agg: C, values: List[DynArray]) raises -> GroupedColumns:
         """Group the keys once and apply ``agg`` to every value column.
 
@@ -624,7 +616,7 @@ struct GroupBy(Movable):
 
     @staticmethod
     def _thread_local_columns[
-        C: ColumnAggregator
+        C: AggregateSet
     ](
         keys: StructArray, agg: C, values: List[DynArray], ctx: ExecContext
     ) raises -> GroupedColumns:

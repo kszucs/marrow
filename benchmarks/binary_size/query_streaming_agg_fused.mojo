@@ -1,7 +1,7 @@
 """Binary-size gate for a fully **fused** aggregation.
 
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name` — the same query as
-`query_streaming_agg.mojo`, but the aggregates are `AggFunc.of[NumericAgg[K, V]]()`:
+`query_streaming_agg.mojo`, but the aggregates are `AggFunc.of[Fold[K]]()`:
 kernel *and* input dtype are comptime, so the plan holds a direct pointer to
 `AggState[SumKernel, Int64Type]` / `AggState[MinKernel, Int64Type]`.
 
@@ -16,7 +16,7 @@ stripped sizes is precisely the cost of a runtime aggregate identity.
 from marrow.exprold.values import BoxedValue
 from marrow.builders import array
 from marrow.dtypes import DynType, Int64Type, int64, string, field
-from marrow.kernels.aggregate import NumericAgg, SumKernel, MinKernel
+from marrow.kernels.aggregate import Fold, SumKernel, MinKernel
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.exprold.aggregates import AggFunc
@@ -41,8 +41,8 @@ def main() raises:
     aggs.append(BoxedValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
-    funcs.append(AggFunc.of[NumericAgg[SumKernel, Int64Type]](DynType(int64)))
-    funcs.append(AggFunc.of[NumericAgg[MinKernel, Int64Type]](DynType(int64)))
+    funcs.append(AggFunc.of[Fold[SumKernel]](DynType(int64)))
+    funcs.append(AggFunc.of[Fold[MinKernel]](DynType(int64)))
 
     var agg = Aggregate(
         input=DynRelation(InMemoryTable(batch=batch)),

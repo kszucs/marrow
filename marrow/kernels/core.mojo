@@ -11,6 +11,7 @@ inherits it by conforming rather than by copying the message.
 """
 
 from ..arrays import Int32Array
+from ..builders import Int32Builder
 from ..dtypes import DynType
 
 
@@ -69,6 +70,32 @@ struct Groups(Copyable, Movable):
     var num_groups: Int
     """How many distinct groups exist — the size of a per-group accumulator."""
 
-    def __len__(self) -> Int:
-        """Number of rows assigned, not number of groups."""
-        return len(self.ids)
+    @staticmethod
+    def single(num_rows: Int) raises -> Groups:
+        """The one-slot assignment: every row contributes to group 0.
+
+        `ids` is **empty**, not a `num_rows`-long run of zeros. Materialising
+        one `Int32` per row to communicate a constant is exactly the cost
+        `ScalarGrouping` exists to avoid, and `Morsel.ungrouped` already
+        establishes the convention. `num_rows` is therefore accepted and not
+        stored — it says what extent the caller is asserting over, the same
+        way `Morsel.ungrouped` takes the batch whose length it never records.
+
+        Read it back with `is_single`, never with `len(self.ids)`.
+        """
+        var empty = Int32Builder(0)
+        return Groups(empty.finish(), 1)
+
+    def is_single(self) -> Bool:
+        """Whether this is the one-slot assignment — no `GROUP BY`.
+
+        **Every implementation that loops over rows must branch on this
+        first.** A per-group loop is written `for i in range(len(self.ids))`,
+        and the one-slot assignment holds no ids at all, so such a loop does
+        not execute and answers `[0]` or `[null]` instead of the whole-input
+        aggregate. That is a wrong answer rather than a crash, which is why
+        `__len__` was removed from this struct: `len(groups)` returned
+        `len(self.ids)` and read as "how many rows", so `range(len(groups))`
+        was a silently empty loop waiting to be written.
+        """
+        return len(self.ids) == 0 and self.num_groups == 1

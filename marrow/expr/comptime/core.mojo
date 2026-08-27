@@ -52,11 +52,17 @@ from ...tabular import RecordBatch
 from ...views import apply
 from ..logical import Shape, Value
 from ..params import Bindings
-from .aggregates import NumericAggregate
-from .numeric import Add, Sub, Mul, Gt, Lt
+from .aggregates import BufferedAggregate, FusedAggregate
+from .numeric import Add, Sub, Mul, Eq, Ne, Lt, Le, Gt, Ge
 from .boolean import And, Not, Or, Xor
 from .strings import StrEq, StrNe, StrLt, StrGt
 from ...kernels.aggregate import (
+    CountKernel,
+    DistinctCount,
+    MaxOp,
+    MinOp,
+    Fold,
+    StringExtremum,
     MaxKernel,
     MeanKernel,
     MinKernel,
@@ -96,7 +102,7 @@ trait ComptimeValue(Evaluable, Value):
     ) raises -> DynOperator:
         """Every comptime node becomes the same operator — one that forwards
         each batch to the fused driver. `grouped` is ignored: an elementwise
-        value has no placement. Aggregates override this with a `FoldOperator`.
+        value has no placement. Aggregates override this with a `FusedAggregateOperator`.
 
         `bindings` is handed to the operator, which passes it back down through
         `evaluate` -> `bind`. A `Param` reads it there, which is also the only
@@ -104,6 +110,35 @@ trait ComptimeValue(Evaluable, Value):
         copies the node without descending into it.
         """
         return EvalOperator[Self](self.copy(), bindings.copy())
+
+    # -- the lane-agnostic aggregate surface --------------------------------
+    #
+    # One default each, on the base trait rather than three copies on the
+    # family traits: a cardinality is an int64 whatever was counted, so there
+    # is no per-family variation to express. Every family gets them, including
+    # the ones with no lane at all.
+    #
+    # They return a `BufferedAggregate`, which **materialises the aggregate but
+    # not the operand**: `count_distinct(upper(region))` still compiles
+    # `upper(region)` into one fused loop and only the distinct count runs over
+    # a column. `count_distinct` has no fold algebra — no identity, no combine,
+    # no finalize — so there is no `K` a fully fused node could be
+    # parameterised on, and that is the one thing being given up.
+    #
+    # It is a one-way door: CLAUDE.md records that a trait default whose return
+    # type a conformer must change becomes an ambiguous overload at every call
+    # site, so `NumericValue` can never later specialise these to a fused form.
+
+    def count_distinct(self) -> BufferedAggregate[DistinctCount[True], Self]:
+        """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
+        return BufferedAggregate[DistinctCount[True], Self](self.copy())
+
+    def approx_count_distinct(
+        self,
+    ) -> BufferedAggregate[DistinctCount[False], Self]:
+        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
+        standard error, nulls excluded."""
+        return BufferedAggregate[DistinctCount[False], Self](self.copy())
 
     comptime Type: DataType
     """This node's output type, known without a schema.
@@ -178,7 +213,7 @@ trait PrimitiveValue(ComptimeValue):
     no members and exist so a node can require the *operations* it needs. A
     comparison binds on this trait and serves both; arithmetic binds on
     `NumericValue` and rejects dates at compile time. Same split as
-    `AggKernel`'s `OrderedAgg` / `ArithmeticAgg`, for the same reason.
+    `FoldKernel`'s `OrderedAgg` / `ArithmeticAgg`, for the same reason.
     """
 
     comptime Type: PrimitiveType
@@ -376,6 +411,23 @@ trait StringValue(ComptimeValue):
     def __gt__[Rhs: StringValue](self, o: Rhs) -> StrGt[Self, Rhs]:
         return StrGt(self.copy(), o.copy())
 
+    # -- aggregates ---------------------------------------------------------
+    #
+    # A `BufferedAggregate`, not a `FusedAggregate`: `min` over a string is a
+    # bytewise scan keeping the index of the best row, not a scalar fold, so
+    # there is no `FoldKernel` to parameterise a fused node on. The **operand**
+    # stays typed, so `min(upper(name))` still fuses `upper(name)`.
+
+    def min(self) -> BufferedAggregate[StringExtremum[MinOp], Self]:
+        """`MIN(self)` — lexicographic (bytewise), matching Arrow's
+        `hash_min`. Keeps the input's type."""
+        return BufferedAggregate[StringExtremum[MinOp], Self](self.copy())
+
+    def max(self) -> BufferedAggregate[StringExtremum[MaxOp], Self]:
+        """`MAX(self)` — lexicographic (bytewise), matching Arrow's
+        `hash_max`."""
+        return BufferedAggregate[StringExtremum[MaxOp], Self](self.copy())
+
 
 trait NumericValue(PrimitiveValue):
     """This value supports arithmetic.
@@ -396,33 +448,41 @@ trait NumericValue(PrimitiveValue):
     # `col("amount", int64).sum()` rather than naming a kernel. Trait defaults,
     # so every numeric node gets them for free and no leaf repeats them.
     #
-    # They are here and not on `PrimitiveValue` because `NumericAggregate`
+    # They are here and not on `PrimitiveValue` because `FusedAggregate`
     # binds its input on `NumericValue`. `min`/`max` are ordered rather than
     # arithmetic and belong one level up the moment `AggState` accepts a
     # non-numeric accumulator; until then they would not compile there.
 
-    def sum(self) -> NumericAggregate[SumKernel, Self]:
+    def sum(self) -> FusedAggregate[SumKernel, Self]:
         """`SUM(self)`. Integers widen to int64; floats stay float64."""
-        return NumericAggregate[SumKernel, Self](self.copy(), String("sum"))
+        return FusedAggregate[SumKernel, Self](self.copy(), String("sum"))
 
-    def product(self) -> NumericAggregate[ProductKernel, Self]:
+    def product(self) -> FusedAggregate[ProductKernel, Self]:
         """`PRODUCT(self)`."""
-        return NumericAggregate[ProductKernel, Self](
+        return FusedAggregate[ProductKernel, Self](
             self.copy(), String("product")
         )
 
-    def mean(self) -> NumericAggregate[MeanKernel, Self]:
+    def mean(self) -> FusedAggregate[MeanKernel, Self]:
         """`AVG(self)`. Accumulates in float64 and divides by the valid count,
         so nulls are excluded rather than counted as zero."""
-        return NumericAggregate[MeanKernel, Self](self.copy(), String("mean"))
+        return FusedAggregate[MeanKernel, Self](self.copy(), String("mean"))
 
-    def min(self) -> NumericAggregate[MinKernel, Self]:
+    def min(self) -> FusedAggregate[MinKernel, Self]:
         """`MIN(self)`. Keeps the input's type."""
-        return NumericAggregate[MinKernel, Self](self.copy(), String("min"))
+        return FusedAggregate[MinKernel, Self](self.copy(), String("min"))
 
-    def max(self) -> NumericAggregate[MaxKernel, Self]:
+    def max(self) -> FusedAggregate[MaxKernel, Self]:
         """`MAX(self)`."""
-        return NumericAggregate[MaxKernel, Self](self.copy(), String("max"))
+        return FusedAggregate[MaxKernel, Self](self.copy(), String("max"))
+
+    def count(self) -> FusedAggregate[CountKernel, Self]:
+        """`COUNT(self)` — the *non-null* values of `self`, not the row count.
+
+        `COUNT(*)` is `count_star()` in `builders.mojo`, which is this same
+        aggregate over a literal.
+        """
+        return FusedAggregate[CountKernel, Self](self.copy(), String("count"))
 
     # -- operators ----------------------------------------------------------
     # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`
@@ -439,11 +499,27 @@ trait NumericValue(PrimitiveValue):
     def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
         return Mul(self.copy(), o.copy())
 
-    def __gt__[Rhs: NumericValue](self, o: Rhs) -> Gt[Self, Rhs]:
-        return Gt(self.copy(), o.copy())
+    # All six comparisons, not just the ordering pair. `Eq` in particular is
+    # the shape statistics pruning and Parquet bloom filters both key on, so a
+    # lane missing it cannot prune the most common predicate there is.
+
+    def __eq__[Rhs: NumericValue](self, o: Rhs) -> Eq[Self, Rhs]:
+        return Eq(self.copy(), o.copy())
+
+    def __ne__[Rhs: NumericValue](self, o: Rhs) -> Ne[Self, Rhs]:
+        return Ne(self.copy(), o.copy())
 
     def __lt__[Rhs: NumericValue](self, o: Rhs) -> Lt[Self, Rhs]:
         return Lt(self.copy(), o.copy())
+
+    def __le__[Rhs: NumericValue](self, o: Rhs) -> Le[Self, Rhs]:
+        return Le(self.copy(), o.copy())
+
+    def __gt__[Rhs: NumericValue](self, o: Rhs) -> Gt[Self, Rhs]:
+        return Gt(self.copy(), o.copy())
+
+    def __ge__[Rhs: NumericValue](self, o: Rhs) -> Ge[Self, Rhs]:
+        return Ge(self.copy(), o.copy())
 
 
 trait TemporalValue(PrimitiveValue):
@@ -455,6 +531,26 @@ trait TemporalValue(PrimitiveValue):
     """
 
     comptime Type: TemporalType
+
+    # -- aggregates ---------------------------------------------------------
+    #
+    # `min`/`max` over a temporal column *is* a genuine `AggState` fold — the
+    # accumulator keeps the input dtype and `MinMax.acc_dtype` carries its unit
+    # and timezone through. It cannot be the **fused** one today:
+    # `FusedAggregateOperator.__init__` builds its accumulator dtype from `Self.A.Type()`
+    # and a `TemporalType` is not `Defaultable`. Routing through the runtime
+    # lane is correct but materialises; moving the accumulator dtype out of
+    # `__init__` and into first push is what would fuse it, and is owed.
+
+    def min(self) -> BufferedAggregate[Fold[MinKernel], Self]:
+        """`MIN(self)`. Keeps the input's dtype — unit and timezone
+        included."""
+        return BufferedAggregate[Fold[MinKernel], Self](self.copy())
+
+    def max(self) -> BufferedAggregate[Fold[MaxKernel], Self]:
+        """`MAX(self)`. Keeps the input's dtype — unit and timezone
+        included."""
+        return BufferedAggregate[Fold[MaxKernel], Self](self.copy())
 
 
 # ---------------------------------------------------------------------------

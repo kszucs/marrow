@@ -68,6 +68,18 @@ errors no selected test happens to import and surfaces **all** errors and
 warnings in one pass. `mojo precompile` rejects `-D`, so it always builds the
 CPU-only configuration.
 
+**`precompile` stops at `marrow/`, and three other trees import it.**
+`python/bindings/`, `golden/` and `benchmarks/` are *not* compiled by it, so a
+signature change inside `marrow/` can leave `precompile` at 0/0 and every
+`marrow/**/tests` case passing while the tree is broken. Renaming a kernel
+trait did exactly that: `python/bindings/compute.mojo` still imported the old
+name, and the break only surfaced when `pytest golden` tried to build
+`libmarrow.so` and bailed out of the whole session before running a case —
+reported as `exit code 0`, which reads like a pass. After any change to a
+public name under `marrow/`, run `pixi run build_python` (bindings) and
+`pixi run -e dev pytest golden` (154 cases), and grep `benchmarks/binary_size/`
+for the name.
+
 A single test file **cannot** be compiled on its own: with no `main()` there is
 nothing to build (`mojo build` reports `module does not contain a 'main'
 function`). Run it through `pytest`, which generates a driver for the selection.
@@ -708,6 +720,63 @@ In addition:
   second entry path for a name to resolve along. Cases import from it, never
   from `golden/helpers.mojo`, whose own imports would otherwise leak into every
   case.
+- **A `List` whose element is a `Variant` where the *largest* member is not the
+  *most-aligned* member loses every other element when it grows.** Elements at
+  odd indices come back holding the variant's **first** member -- discriminant
+  reads 0. Reserving capacity up front avoids it, which places the fault in
+  `List`'s reallocation path. Reproducers: `docs/repros/`.
+
+  **Both properties are required, and neither explains it alone.** A variant of
+  96 bytes / align 32 whose largest member *is* the 32-aligned one is correct;
+  an all-8-aligned variant is correct; the *same* 96/32 layout with a 72-byte
+  align-8 largest member and a 64-byte align-32 member is corrupt. Identical
+  size and alignment, different answer.
+
+  In marrow this is **`DynScalar`** (96/32): `StructScalar` is 72 bytes at
+  align 8, `Decimal256Scalar` is 64 bytes at align 32. Drop `Decimal256Scalar`
+  and the variant is 80/8 and correct. `DynArray` (144/8) and `ArrayData`
+  (152/8) are immune -- every member is pointer-backed. `RuntimeValue` is hit
+  only because its payload variant holds a `DynScalar`, which is why
+  `case_when` and `StructArray.__getitem__` pre-allocate.
+
+  **It is not a memory-safety bug**: under ASAN the values are equally wrong and
+  there is *no* diagnostic -- no overflow, no use-after-free. It is a miscompile
+  of the move, and ASAN perturbs it (one shape passes under ASAN, fails
+  without). Do not reach for ASAN to confirm this class.
+
+  Ruled out by experiment, so do not re-derive: recursion (`ArrayData` is
+  self-referential and fine), the explicit `__deinit__` (`DynArray` has an
+  identical one and is fine), `IsTriviallyDeinitable` (both `False`), the
+  `Writable` reflection defaults, and variant member count.
+
+- **A recursive type must spell out *both* `write_to` and `write_repr_to`.**
+  `Writable` gives both a **reflection-based default** that walks every field at
+  comptime. The trait's own docstring says that for mutually recursive types —
+  "struct `A` has a field of type `List[B]` and struct `B` has a field of type
+  `A`" — the default "creates an infinite monomorphization cycle that causes the
+  compiler to hang", and that at least one type in the cycle must override it.
+  Marrow is full of exactly that shape: `DynScalar -> StructScalar ->
+  List[DynScalar]`, `DynArray -> StructArray -> List[DynArray]`, `DynType ->
+  DictionaryType -> OwnedPointer[DynType]`, `ArrayData -> List[ArrayData]`.
+  `write_repr_to` has its own default and its own cycle, so overriding only
+  `write_to` does not cover it. `ArrayData` is exempt because it is not
+  `Writable` at all — the hazard needs the conformance, not just the recursion.
+
+  **Measured 2026-08-24: it does not currently fire here, and the tree
+  deliberately leaves it that way.** 26 of `dtypes.mojo`'s 28 structs override
+  only `write_to` and inherit the reflection `write_repr_to`; `repr()` on a
+  recursive dtype returns rather than hanging, because the walk stops at the
+  `OwnedPointer`/`List` boundary. Implementing all 26 was tried and reverted —
+  it bought nothing but 26 near-identical methods and made `repr()` identical
+  to `str()`. The cost of leaving it is cosmetic: `repr(list_(int64))` prints
+  `ListType(item=OwnedPointer[Field](...))` and never shows the element type.
+  Revisit only if a genuine hang appears.
+
+  **This entry once blamed the reflection defaults for the `DynScalar` element
+  loss. That was wrong** — the cause was `Variant`'s size/stride disagreement
+  (see the entry above). Adding the 26 overrides did not change the corruption
+  at all.
+
 - **An `__eq__` that compares *elements* of an erased container deadlocks the
   compiler.** Fixed 2026-08-19; recorded because the shape recurs. Comparing a
   nested array element by element materialises a `DynArray` per element, so
@@ -795,6 +864,20 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   conditional type to a *different* representation — `rebind` cannot, which is
   why `promote[L, R]` works and "wrap this operand only when it needs
   converting" does not.
+- **A trait-valued associated type reduces, but cannot type a stored field.**
+  Verified 2026-08-27. `comptime Operand: type_of(SomeTrait)` declares fine,
+  `struct Node[I: Impl, A: I.Operand]` binds, and `Self.A`'s own trait surface
+  is reachable through the projection — so "a projection off another
+  parameter's associated *trait* does not reduce" is **false**. What fails is
+  storage: `var _input: Self.A` errors with *"field has non-'Deinitable' type
+  'A'"*, because the projected bound carries no conformance, and it cannot be
+  refined — `A: Self.I.Operand` reports *"'Self' type is not available in this
+  context"* and `A: I.Operand & Deinitable` does not parse. So the mechanism
+  serves arguments and return values, not fields. This is what blocks merging
+  `FusedAggregate` and `BufferedAggregate` (`expr/comptime/aggregates.mojo`)
+  behind one node parameterised on its operand bound: both must *store* their
+  operand.
+
 - **A reflected field type is opaque inside the generic function that reflects
   it.** Route construction through a separately-instantiated generic bound on
   the trait — `_construct_default[D: Defaultable & DataType]()`
