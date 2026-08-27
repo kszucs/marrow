@@ -1,11 +1,27 @@
 # Pruning and indexing — preliminary findings
 
-**Status: findings only. No design is approved and nothing is implemented.**
+**Status: §1–§5 stand and are the evidence base. §6–§8 are superseded by
+`2026-08-27-index-and-pruning-plan.md`**, which was written after four
+independent design passes (storage, Mojo mechanics, YAGNI, extensibility) and
+which corrects five claims that were believed and acted on here or in the
+discussion around it — see its §0.
+
 This records what was measured, what the reference implementations actually do,
 and where four adversarial reviews left the design. It supersedes the analysis
 in `2026-08-24-expr2-pruning-pushdown-design.md`, which predates the
 `expr2` → `expr` rename and builds on the `_eval` function pointer that
 `d8ccc48` removed.
+
+**§1's numbers were re-verified on 2026-08-27 and hold.** In particular the
+`prefix`/`contains`/`match` row and the page-level row are properties of *this
+file* (`parquet-cpp 1.5.1-SNAPSHOT`, two row groups of 450,560 and 549,440, no
+ColumnIndex, no OffsetIndex), not of the format. A later measurement simulating
+8,192-row granules produced much larger figures — 57.7% on `CounterID`, 63.4% on
+`URL LIKE '%google%'` — which are **not reachable by any reader on this file**
+and are statements about page sizing (`marrow/parquet/writer.mojo:63,396`) and
+about a rewritten fixture. At the file's real boundaries: `CounterID = 62`
+prunes 1 of 2 groups; both `LIKE` predicates prune 0 of 2. **The 1.04x ceiling
+below is correct.**
 
 ---
 
@@ -222,6 +238,15 @@ last was **stopped mid-run** and its question is unanswered.
 ---
 
 ## 6. Current proposal — abstract interpretation
+
+> **Superseded by `2026-08-27-index-and-pruning-plan.md`.** The abstract-interpretation
+> shape survived; the `Abstract` struct below did not. `Optional[DynScalar]` in a
+> struct held in a `List` is the `c2bb828` alignment miscompile class (open
+> question 3 below, now answered: use explicit presence flags). The `trait Stats`
+> below is unboxable as written — a generic method cannot be a trampoline slot.
+> And the domain is missing two fields whose absence is a *soundness* hole rather
+> than a precision one: a `relaxed` bit for query-side widening, and ⊥ for an
+> all-null page. Read the plan's §2 instead.
 
 Pruning is the same expression evaluated in a different domain: concrete is
 rows → values, abstract is one container → what its values could be. The
