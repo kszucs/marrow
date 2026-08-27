@@ -3,7 +3,7 @@
 **Supersedes `2026-08-22-aggregation-architecture.md`.** Written after four
 independent reviews on 2026-08-27 (naming, layer purity, Mojo mechanics/size,
 minimality). Every claim below was checked against the tree or against binaries
-on disk; the ones that were checked and *failed* are recorded in §7, because
+on disk; the ones that were checked and *failed* are recorded in §8, because
 three of them were mine.
 
 `marrow/exprold/` is being deleted. Nothing here ports from it; it is cited only
@@ -160,16 +160,31 @@ count aggregate while deliberately not serving numeric columns
 ```
 FoldKernel          the algebra of a fold: AccType, identity, combine, finalize
 FoldState[K,V]      per-group accumulator + counts; accumulate[W], push_lane,
-                    push_scalar, combine_at, flush, finish
-Groups              rows assigned to dense ids
+                    push_scalar, combine_at, flush, merge, finish
+Groups              rows assigned to dense ids; is_single() for the one-slot case
 HashGrouping        the single producer of Groups (a plain struct, no trait)
 
 # the general aggregate: one signature, no trait, no type
-comptime ColumnFold = def(Groups, DynArray) thin raises -> DynArray
+comptime ColumnFold = def(Groups, List[DynArray]) thin raises -> DynArray
 
 count_distinct_column · approx_count_distinct_column
 string_min_max_column[Op] · validity_count_column · fold_column[K]
 ```
+
+**`List[DynArray]`, not `DynArray`, from the start.** `corr(x, y)`, `covar`,
+weighted mean and `string_agg(x, sep)` take two inputs, and `docs/backlog.md`
+M2.4 already schedules statistical aggregates. The signature is the
+expensive-to-change part — widening it later touches every implementation and
+the box — while widening it now costs nothing: the operator owns the list and
+passes it by borrow, so there is no per-call allocation.
+
+**No synthesised zeros array for the ungrouped case.** `Morsel.ungrouped`
+already establishes the convention — `Groups(empty_ids, 1)` — and a `ColumnFold`
+that builds `Groups(zeros(n), 1)` would reintroduce the exact defect being
+deleted from `FoldKernel.reduce` (§3.1). That convention is currently
+**unwritten**, which is a trap on a struct whose whole docstring is about
+preventing silent id/count mismatches. `Groups.is_single()` makes it a stated
+invariant every implementation can test.
 
 **`ColumnFold` is the entire extension point.** Every non-fold aggregate —
 `count_distinct`, string and temporal min/max, non-numeric count, and the future
@@ -190,14 +205,22 @@ struct NumericFold[K: FoldKernel, A: NumericValue](Evaluable, Value)
 struct FoldOperator[K: FoldKernel, A: NumericValue, scatters: Bool](Operator)
 
 # everything else: zero parameters, one instantiation for the whole program
-struct ColumnAggregate(Evaluable, Value):
-    var _input: DynValue
+struct RuntimeAggregate(Evaluable, Value):
+    var _inputs: List[DynValue]
     var _name: String
     var _dtype: DynType
     var _fold: ColumnFold
 
-struct ColumnFoldOperator(Operator)    # zero parameters
+struct RuntimeFoldOperator(Operator)    # zero parameters
 ```
+
+**Named for the lane, because that is what it is.** Nothing about
+`RuntimeAggregate` is comptime: it holds erased operands and a function pointer,
+and it materialises. `col("region", string).count_distinct()` therefore *is* the
+point where the comptime lane hands off to the runtime one — the operand was a
+comptime `StringColumn`, and an aggregate with no fold algebra cannot carry it
+any further. Stating that in the name stops the next reader looking for a
+fusion that was never possible.
 
 **Why two nodes, stated correctly.** Not "the operand bound differs and Mojo has
 no conditional conformance" — conditional conformance *is* available
@@ -214,27 +237,36 @@ into `Aggregate._aggs`. `RuntimeValue` never holds one, `evaluate` gains no case
 and the zero-row-batch dtype probe never special-cases a node that cannot be
 evaluated.
 
-### 4.4 Resolution — split by capability
-
-**One fat box reproduces a measured +3.2 MB (+24%)** (`exprold/aggregates.mojo:248-252`).
-So four non-generic resolvers, and a binary links only the ladders it calls:
+### 4.4 Resolution — one function, and it constructs the node
 
 ```mojo
-def resolve_out_dtype(name: String, in_dtype: DynType) raises -> DynType
-def resolve_grouped(name: String, in_dtype: DynType) raises -> AggColumn
-def resolve_fold(name: String, in_dtype: DynType) raises -> Optional[FoldBox]
-def resolve_stream(name, in_dtype, var input: DynOperator, grouped: Bool) raises -> DynOperator
+def resolve_aggregate(
+    name: String, var inputs: List[DynValue], in_dtype: DynType
+) raises -> DynValue
 ```
+
+That is the whole surface. It resolves the name against the input dtype, picks
+the `ColumnFold`, and returns a boxed `RuntimeAggregate`. There is no separate
+`AggColumn`/`FoldBox` pair and no per-capability split, because **there is only
+one consumer shape**: a plan node. The eager driver that would have needed the
+other shape is repointed at the plan lane in the same work (§6), so it never
+exists.
 
 **Non-generic on purpose.** A `resolve[Job: def[A: …]()]` form is instantiated
 per closure type — the `_arith[K]` shape, measured at **+115,600 bytes** — and
-there are ≥5 distinct `Job` types in-tree today. A resolver with no type
+there are ≥5 distinct `Job` types in `exprold` today. A resolver with no type
 parameter is one instantiation for the whole tree.
 
-**Mergeability by presence, not by a flag.** `resolve_fold` returns `None` for
-non-mergeable aggregates, so they need no `partials`/`merge` bodies at all and a
-binary that never merges links no `FoldState.into_partials` — an `nm`-assertable
-property rather than a comment.
+**One box, and it is the node.** `exprold` split `AggFunc` from `AggFold`
+because merging them measured **+3.2 MB (+24%)** — but that split existed to
+keep fold code out of a *plan* that held resolved aggregates in lists. This plan
+holds `DynValue`s and erases at `to_operator`, so the fat-box hazard does not
+arise: `RuntimeAggregate` carries one `ColumnFold` and nothing else.
+
+**Mergeability is expressed by the operator, not by a flag.** Parallel
+aggregation (§6 step B) is N `FoldOperator`s over disjoint morsels plus
+`FoldState.merge`; an aggregate that cannot merge is one the operator does not
+run in parallel. No `is_mergeable` bit, no raising stubs.
 
 ---
 
@@ -256,52 +288,84 @@ no path either.
 
 Temporal min/max is a genuine fold blocked only by `FoldOperator.__init__`
 calling `Self.A.Type()` — `TemporalType` and `DecimalType` are not `Defaultable`.
-Routing it through `ColumnAggregate` is correct but slow; the real fix is moving
+Routing it through `RuntimeAggregate` is correct but slow; the real fix is moving
 the accumulator dtype out of `__init__` and into first push, which
 `FoldOperator`'s own comment already anticipates. **Record it as owed.**
 
 ---
 
-## 6. Sequence, with the one hard ordering constraint
+## 6. Soundness of the layering
+
+**One trait in `kernels/`.** `FoldKernel`, and it has one job: the algebra of a
+fold. Everything else is plain structs, free functions and one function-pointer
+alias. Deleting `FoldKernel.Grouped[V]` removes the only forward edge from the
+algebra to the resolved layer, so `kernels` has no internal cycle, and
+`expr → kernels` is one-directional (verified: no `from ..expr` import exists
+in `kernels/` today).
+
+**Extension is honest.** A new fold is one `FoldKernel`. A new non-fold is one
+function. Neither touches a trait.
+
+**One regression, and it must be paid for explicitly.** `ColumnFold` takes
+`List[DynArray]`, so a dtype mismatch is a `Variant` misaccess — an **abort**,
+not a catchable `Error`. Today `Aggregation.from_any` is declared `raises`, so
+the type system provides a second line of defence; after the cut, the resolver
+is the *only* thing tying a kernel to a column's dtype. This is the failure mode
+`boolean.mojo`'s `_as_bool` exists to prevent, and whose docstring records the
+abort taking down a whole test file. Two requirements, not hopes:
+
+1. **`resolve_aggregate` is the sole constructor of a `ColumnFold`.** Nothing
+   else may build one, so there is exactly one place the pairing can be wrong.
+2. **One test per (name, dtype-family) pair**, asserting the resolved aggregate
+   produces the expected dtype and value. That test is the second line of
+   defence the trait used to provide.
+
+**What the layering deliberately cannot express.** An aggregate that must see
+rows in order — `lag`, `lead`, `first`/`last` without a sort. Those are window
+functions: they emit one row per *input* row, so their operator differs
+regardless, and no aggregate abstraction should stretch to cover them.
+
+---
+
+## 7. Sequence
+
+No bridge types and no temporary surfaces: every step lands the shape the end
+state keeps. `exprold` stays untouched until the step that replaces it, which is
+not scaffolding — it is declining to delete something before its replacement
+works.
 
 | | step | gate |
 |---|---|---|
-| A | **Fix the measurement tooling first.** Add both expr2 gates to `compare.py:NAMES` (today `compare.py query_expr2_agg_fused` exits *unknown gate*); replace the four dead `MODULE_BUCKETS` entries (`expr::values/dynamic/relations/execution`, 0 symbols each) with `expr::logical/physical/comptime/runtime` (29/28/37); add a `query_expr2_agg_named` gate — **the resolver ladder is ungated in every configuration today** | `compare.py` builds all gates; buckets non-empty |
-| B | `ColumnFold` + `count_distinct_column` + `ColumnAggregate` + `ColumnFoldOperator` + `.count_distinct()` on `StringValue` | `agg_count_distinct_string` green |
-| C | `string_min_max_column`, temporal min/max via the same node; `.min()/.max()` on `StringValue`/`TemporalValue` | 3 more golden cases green |
-| D | Move `FoldOperator.push`'s SIMD body into `FoldState.push_lane/push_scalar/flush` | `__text` measured tip-vs-merge-base; behaviour unchanged |
-| E | The four resolvers + `RuntimeAggregate`; repoint the Python bindings | 676 Python tests green |
-| F | **Parallel aggregation in `AggregateOperator`** | group-by benches vs today |
-| G | Repoint `tabular.mojo` at the plan lane; delete `GroupBy`'s aggregate surface | benches no worse than F |
-| H | The renames (§4.1), one mechanical commit | `precompile` clean |
+| A | **Fix the measurement tooling.** Add both expr2 gates to `compare.py:NAMES` (today `compare.py query_expr2_agg_fused` exits *unknown gate*); replace the four dead `MODULE_BUCKETS` entries (`expr::values/dynamic/relations/execution`, **0 symbols each**) with `expr::logical/physical/comptime/runtime` (29/28/37); add a `query_expr2_agg_named` gate — **the resolver ladder is ungated in every configuration today**; wire the two `nm` reachability assertions into `check_gate.py` | `compare.py` builds every gate; buckets non-empty |
+| B | `ColumnFold` · `count_distinct_column` · `RuntimeAggregate` · `RuntimeFoldOperator` · `resolve_aggregate` · `.count_distinct()` on `StringValue` | `agg_count_distinct_string` green; `nm ... grep -c resolve_` still 0 on the fused gate |
+| C | `string_min_max_column[Op]`, temporal min/max through the same node; `.min()`/`.max()` on `StringValue` and `TemporalValue` | 3 more golden cases green |
+| D | Move `FoldOperator.push`'s SIMD body into `FoldState.push_lane`/`push_scalar`/`flush` (§3.2) | `__text` tip-vs-merge-base; behaviour unchanged |
+| E | **Parallel aggregation in `AggregateOperator`**: N `FoldOperator`s over disjoint morsels plus `FoldState.merge(other, remap)` | group-by benches vs today |
+| F | Repoint `tabular.mojo` **at the plan lane** and the Python bindings at `marrow.expr`; delete `Aggregation`, `AggFunction`, `Grouped[V]`, `ColumnAggregator`, `OneAggregation`, and `GroupBy`'s aggregate surface | 676 Python tests green; benches no worse than E |
+| G | The renames (§4.1), one mechanical commit | `precompile` clean |
 
-**The constraint: F before G.** `RecordBatch.group_by` is a shipped Python API,
-and it currently reaches `GroupBy._thread_local_columns` and the radix path via
-`FoldedAggregates` — **the only parallel group-by in the tree**.
-`AggregateOperator` is single-threaded. Doing G first makes a shipped API
-slower.
+**The one hard constraint: E before F.** `RecordBatch.group_by` is a shipped
+Python API whose only parallel path is `GroupBy._thread_local_columns` — the
+thing F deletes. `AggregateOperator` is single-threaded until E. Reversing the
+order makes a shipped API slower, and that is the whole reason the bridge types
+looked necessary; ordering removes the need for them.
 
-**Do not preserve `FoldState.merge`'s current signature to "keep the option
-open".** `merge(remap, part_acc, part_cnt, num_groups)` derives from a
-whole-input, columns-of-partials model; a morsel-parallel operator wants
-`merge(other: FoldState[K,V], remap)`. Deleting it is better than keeping a
-signature the future must break. Same for `_by_partition`, which takes the whole
-keys `StructArray` at construction and cannot be lifted into a push engine.
+**Write `FoldState.merge` once, in E, with the right signature.** The current
+`merge(remap, part_acc, part_cnt, num_groups)` derives from a whole-input,
+columns-of-partials model; a morsel-parallel operator wants
+`merge(other: FoldState[K,V], remap)`. Do not preserve the old one "to keep the
+option open" — it is a signature the future must break. Same for
+`_by_partition`, which takes the entire keys `StructArray` at construction and
+therefore cannot be lifted into a push engine at all.
 
 **Measurement protocol.** The baseline is **58 commits stale and red on 4 of 7
 gates** (`query_expr2_streaming` by +7.3%). Measure **tip vs merge-base**, never
 tip vs `baseline.json`, same machine and `pixi.lock`, `__text` only. Do **not**
-`--update` to clear the pre-existing reds — that erases the signal. Add the
-reachability assertions to `check_gate.py`:
-
-```
-nm -C query_expr2_agg_fused | grep -ci distinct     # must stay 0
-nm -C query_expr2_agg_fused | grep -c  resolve_     # must stay 0
-```
+`--update` to clear the pre-existing reds — that erases the signal.
 
 ---
 
-## 7. Claims that failed review
+## 8. Claims that failed review
 
 Recorded because each was believed and acted on.
 
@@ -314,7 +378,7 @@ Recorded because each was believed and acted on.
 | "the aggregate catalog should move down to `kernels/aggregate.mojo`" (`docs/backlog.md:990-999`) | wrong under §1. **Delete that backlog entry** rather than leave it to mislead |
 | "de-genericising the group-by drivers is the real size win" | they are in **no** AOT gate (verified: `aggregate_all:0`, `by_partition:0`); only in `libmarrow.so`, which nothing measures |
 
-## 8. Open, ranked by (chance the design dies) × (cost of finding out late)
+## 9. Open, ranked by (chance the design dies) × (cost of finding out late)
 
 1. **Can a move-only `DynOperator` leave a `dispatch_*` closure?** Every resolver
    arm constructs inside `{mut box, imm}` and hands the result out. Proven for
@@ -323,7 +387,7 @@ Recorded because each was believed and acted on.
 2. **Does `comptime ColumnFold = def(...) thin raises -> ...` work as a field
    type?** Nothing in the tree aliases a function type; every box writes it
    longhand. ~10-line spike.
-3. **Does `ColumnFoldOperator` compile holding a move-only `FoldState`?**
+3. **Does `RuntimeFoldOperator` compile holding a move-only `FoldState`?**
    Two-level move through `DynOperator`. ~40-line spike.
 4. **Does `min`/`max` over `timestamp` survive `FoldState`?** The capability the
    whole materialising path exists to add, and nothing exercises it. Test only.
