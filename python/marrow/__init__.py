@@ -473,8 +473,14 @@ from ._expr_column import (  # noqa: E402
     lit,
 )
 
-# The lazy relational frontend, for the same reason: `expr` pulls RecordBatch
+# The lazy relational frontend, for the same reason: `lazy` pulls RecordBatch
 # and `_Wrapper` back out of this module. `LazyTable` is deliberately not
 # `Table` — that name is the eager, PyArrow-shaped one above.
-from . import expr  # noqa: E402
-from .exprold import LazyTable, memtable, read_parquet  # noqa: E402
+#
+# `lazy`, not `expr`: this module is named after what it *is*, never after the
+# Mojo package that happens to back it. That package has been `expr`, `expr2`
+# and now `exprold`, and tracking it is what broke `import marrow` — `ebd4c4c`
+# renamed the Mojo side and updated this import to `.exprold` while the file
+# was still `expr.py`.
+from . import lazy  # noqa: E402
+from .lazy import LazyTable, memtable, read_parquet  # noqa: E402

@@ -79,6 +79,27 @@
 
 ### Fixes
 
+- **`import marrow` was broken for nine commits, and the test suite could not
+  see it.** `ebd4c4c` renamed the Mojo package `expr` → `exprold` and pointed
+  `python/marrow/__init__.py` at `.exprold`, but the Python file was still
+  `expr.py`, so importing the package raised `ModuleNotFoundError`. The whole
+  Python suite was 16 collection errors; it is now 676 passing.
+
+  It stayed hidden because the suite always runs from the repo root, where the
+  Mojo source directory `marrow/` shadows `python/marrow/` as an implicit
+  namespace package — `import marrow` then *succeeds*, resolving to a package
+  with no `__file__` and no names.
+
+  The Python module is now `marrow/lazy.py`, named after what it is rather than
+  after the Mojo package backing it. That package has been `expr`, `expr2` and
+  now `exprold`, and tracking it is what caused this; `lazy` also ends the
+  `marrow.expr`-in-Python versus `marrow.expr`-in-Mojo collision.
+
+  `test_build.py` gains `test_import_from_a_neutral_directory`, which runs the
+  import in a subprocess with `cwd` outside the repo — the one test here that
+  must not run from the root. It was verified to fail, with the original
+  `ModuleNotFoundError`, when the bad import is reintroduced.
+
 - **Parquet statistics a reader must refuse.** Six defects in the
   statistics-decoding path, each of which let a stored min/max, null_count or
   raw byte string reach the pruner as if it bounded the column it names.

@@ -5,7 +5,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import marrow
-from marrow.exprold import _HAVE_EXPRESSIONS
+from marrow.lazy import _HAVE_EXPRESSIONS
 
 needs_expressions = pytest.mark.skipif(
     not _HAVE_EXPRESSIONS,
