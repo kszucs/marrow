@@ -488,18 +488,38 @@ Recorded because each was believed and acted on.
 | "`RecordBatch.group_by`'s only parallel path is `_thread_local_columns`" | `_by_partition(partition=True)` is a second one, and the only one `count_distinct` can use |
 | "de-genericising the group-by drivers is the real size win" | they are in **no** AOT gate (verified: `aggregate_all:0`, `by_partition:0`); only in `libmarrow.so`, which nothing measures |
 
-## 9. Open, ranked by (chance the design dies) × (cost of finding out late)
+## 9. Settled by spike, and what is still open
 
-1. **Can a move-only `DynOperator` leave a `dispatch_*` closure?** Every resolver
-   arm constructs inside `{mut box, imm}` and hands the result out. Proven for
-   *copyable* results (`GroupBy.apply:572-578`); `DynOperator` is move-only.
-   ~25-line spike.
-2. **Does `comptime ColumnFold = def(...) thin raises -> ...` work as a field
-   type?** Nothing in the tree aliases a function type; every box writes it
-   longhand. ~10-line spike.
-3. **Does `RuntimeFoldOperator` compile holding a move-only `FoldState`?**
-   Two-level move through `DynOperator`. ~40-line spike.
-4. **Does `min`/`max` over `timestamp` survive `FoldState`?** The capability the
-   whole materialising path exists to add, and nothing exercises it. Test only.
-5. **`K.AccType[V]` in a `List[PrimitiveArray[Self.Acc]]` argument position** —
-   the struct-level alias form is proven (`aggregate.mojo:909`); this one is not.
+A throwaway spike (`/tmp/agg_spike.mojo`, built `mojo build -I .`) settled the
+three load-bearing mechanics questions. All three **compile and run**:
+
+| | question | result |
+|---|---|---|
+| Q1 | `comptime ColumnFold = def(Groups, List[DynArray]) thin raises -> DynArray` — as an alias, as a **struct field type**, as a **parameter type**, and **callable through the field** | ✅ all four |
+| Q2 | a **move-only** `DynOperator` constructed inside a `dispatch_numeric` closure captured `{mut box, imm}`, escaping via `List.pop()` | ✅ |
+| Q3 | an `Operator` holding a move-only `AggState[SumKernel, Int64Type]` taken by `var`, then boxed into `DynOperator` — two levels of move | ✅ |
+
+Q1 is the important one: the extension point is expressible exactly as written,
+so `ColumnFold` needs no longhand repetition and no restatement. Q2 is what
+`resolve_fold` is built on. Q3 is what `RuntimeAggregateOperator` is built on.
+
+**Deliberately not tested, and still open:**
+
+1. **`AggState[SumKernel, T]` with `T` narrowed by the dispatch.** The spike used
+   a fixed `Int64Type` to isolate the *escape* question from the `AccType[V]`
+   projection. `NumericAggregate.Type`'s docstring warns that `K.AccType[V]`
+   "reduces inside the struct but fails to unify at a return site", and
+   `FoldState.finish -> PrimitiveArray[Self.Acc]` proves only the struct-level
+   alias form. A `List[PrimitiveArray[Self.Acc]]` **argument** is unproven.
+2. **`min`/`max` over a `timestamp` column through `FoldState`** — the capability
+   the whole materialising path exists to add, and nothing exercises it. A test,
+   not a spike.
+3. **The `ComptimeValue` trait default returning a concrete node type.** Legal
+   today, but CLAUDE.md records that a default whose return type a conformer
+   must change becomes an ambiguous overload at every call site — so
+   `NumericValue` could never later specialise `.count_distinct()` to a fused
+   form. Acceptable; worth knowing it is a one-way door.
+4. **The pre-existing +10.1% on `query_expr2_agg_fused`** — undiagnosed, on a
+   60-commit-stale baseline, and it is the gate whose DCE property §2 turns into
+   an invariant. Making it an invariant on an untrusted instrument is not sound.
+   One `git bisect run` against `check_gate.py` settles it.
