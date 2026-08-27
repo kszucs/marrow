@@ -10,6 +10,32 @@
 
 ### Refactors
 
+- **`marrow/expr` — one `Aggregate` node instead of two.** `FusedAggregate` and
+  `BufferedAggregate` were one aggregate wearing two node types: of eight
+  members six were identical, and the split had to be restated by hand at every
+  fluent method. `col("v", int64).min()` and `col("ts", timestamp(us)).min()`
+  are the *same* aggregate, and now spell the same type —
+  `Aggregate[Fold[MinKernel], _]` — differing only in whether the operand can
+  be read as a lane.
+
+  Whether an instantiation fuses is **computed**, from two independent comptime
+  facts: does `Agg` have a lane algebra (`conforms_to(Agg, Foldable)`), and is
+  the operand lane-readable (`conforms_to(A, NumericValue)`). `Foldable` is a
+  new one-member sub-trait of `AggKernel` that only `Fold[K]` conforms to,
+  naming the `FoldKernel` it wraps.
+
+  The node stores its operand at the *looser* bound, `A: ComptimeValue`, and
+  recovers the tight one inside `to_operator`. That ordering is load-bearing: a
+  trait-valued associated type (`A: Agg.Operand`) reduces and its members
+  resolve, but cannot type a stored field — now recorded in CLAUDE.md with the
+  exact compiler errors.
+
+  Dead-code elimination survives, which was the risk: `query_expr2_agg_fused`
+  links **zero** `BufferedAggregateOperator` symbols, so the non-fusing branch
+  is eliminated per instantiation, and `__text` moves +0.14% against a 0.5%
+  gate. `query_expr2_streaming` is byte-identical.
+
+
 - **`marrow/expr` — the aggregate nodes are named for what they cost.**
   `LaneAggregate` / `ColumnAggregate` named a mechanism and a non-distinction:
   every aggregate aggregates a column, so `Column` said nothing, and `Lane` was

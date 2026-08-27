@@ -1,8 +1,8 @@
 """Aggregates named at run time — the runtime lane's half of aggregation.
 
 Its counterpart is `comptime/aggregates.mojo`, which holds the same aggregates
-as **types**: `FusedAggregate[K, A]` for the fused folds and
-`BufferedAggregate[Agg, A]` for the ones that materialise. Both lanes share one
+as **types**: `Aggregate[Agg, A]`, which fuses or materialises according to
+`Agg` and `A`. Both lanes share one
 vocabulary — `AggKernel` in `kernels/aggregate.mojo` — and differ only
 in when the aggregate is chosen.
 
@@ -128,7 +128,7 @@ struct RuntimeAggregate(Evaluable, Value):
     """An aggregate resolved by name, over erased operands.
 
     The runtime lane's aggregate node, and the counterpart of
-    `BufferedAggregate[Agg, A]`. That one keeps its operand **typed**, so
+    `Aggregate[Agg, A]`. That one keeps its operand **typed**, so
     `count_distinct(upper(region))` still fuses `upper(region)` into one loop;
     this one cannot, because a caller who names its aggregate with a string
     built its operand at run time too. Reach for it from a frontend, not from
@@ -303,7 +303,7 @@ struct RuntimeAggregate(Evaluable, Value):
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """An aggregate has no per-batch value, and saying so is the point.
 
-        The same message `FusedAggregate.evaluate` raises, for the same
+        The same message `Aggregate.evaluate` raises, for the same
         reason: an aggregate reached through an elementwise path is a mistake
         in the plan, and naming it beats half-computing it.
         """

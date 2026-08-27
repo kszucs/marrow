@@ -1020,7 +1020,9 @@ trait AggKernel(Kernel):
 
     Four implementations, named for what they compute rather than for what they
     consume: `Fold[K]` (any fixed-width column, via `K`'s lane algebra),
-    `StringExtremum[Op]`, `ValidCount` and `DistinctCount[exact]`.
+    `StringExtremum[Op]`, `ValidCount` and `DistinctCount[exact]`. `Fold[K]`
+    additionally conforms to `Foldable`, which is how a caller asks at compile
+    time whether an aggregate can fuse.
 
     No associated types, deliberately. That is what lets one vocabulary serve
     both expression lanes: the comptime lane takes the trait as a parameter and
@@ -1106,7 +1108,24 @@ trait AggKernel(Kernel):
         )
 
 
-struct Fold[K: FoldKernel](AggKernel):
+trait Foldable(AggKernel):
+    """An `AggKernel` that wraps a lane algebra, and can name it.
+
+    `Fold[K]` is the only conformer, and `Lane` is the `K` it was built from.
+    `StringExtremum` and `DistinctCount` deliberately do not conform: a bytewise
+    scan and a hash set have no identity, combine or finalize.
+
+    This exists so the expression layer can ask *at compile time* whether an
+    aggregate is capable of fusing, without a second parallel hierarchy of
+    nodes. A node holds an `AggKernel`; `comptime if conforms_to(Agg, Foldable)`
+    is what decides whether it can hand `Agg.Lane` to the fused operator.
+    """
+
+    comptime Lane: FoldKernel
+    """The lane algebra this aggregate folds with."""
+
+
+struct Fold[K: FoldKernel](Foldable):
     """The aggregate expressible as a lane fold, over any fixed-width column —
     `sum`, `product`, `mean`, `min`, `max`, `count`.
 
@@ -1122,6 +1141,7 @@ struct Fold[K: FoldKernel](AggKernel):
 
     comptime name = Self.K.name
     comptime mergeable = True
+    comptime Lane = Self.K
 
     @staticmethod
     def _domain(inputs: List[DynType]) raises -> DynType:
@@ -1399,7 +1419,8 @@ struct ValidCount(AggKernel):
     the count as the accumulator.
 
     The comptime lane does **not** route numeric `count` here — it fuses
-    `FusedAggregate[CountKernel, A]`, which pays one typed `bitmap.test()` per
+    `Aggregate[Fold[CountKernel], A]` when its operand is numeric, which pays
+    one typed `bitmap.test()` per
     row where this pays a `DynArray._dispatch` walk: a linear `comptime for`
     over 37 variant arms plus an indirect call *per row*, inside an already
     cache-hostile random-write loop. Measured at 1M rows / 100k groups on a

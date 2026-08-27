@@ -2,10 +2,10 @@
 
 Two nodes, on one axis — what the aggregate consumes:
 
-- `FusedAggregate` folds its operand's **lanes** into registers and never
+- A fusing `Aggregate` folds its operand's **lanes** into registers and never
   materialises it. That is the 14.6x, and it is why `A` must be a
   `NumericValue`: a lane is a `SIMD`, which needs a fixed width.
-- `BufferedAggregate` materialises the operand **once** and computes over the
+- A non-fusing one materialises the operand **once** and computes over the
   column, for the aggregates that have no fold algebra to fuse into. Its
   operand stays typed, so `count_distinct(upper(s))` still fuses `upper(s)`.
 
@@ -253,7 +253,7 @@ def test_count_is_named_and_aliasable() raises:
 
 
 # ---------------------------------------------------------------------------
-# BufferedAggregate — count_distinct
+# Aggregate that cannot fuse — count_distinct
 #
 # Two failure modes are specific to this node and each has cases of its own:
 #
@@ -458,7 +458,8 @@ def test_column_agg_string_min_over_no_rows_is_null() raises:
 # the operand keeps its fusion
 # ---------------------------------------------------------------------------
 def test_column_agg_counts_distinct_over_a_fused_operand() raises:
-    """The point of `BufferedAggregate[Agg, A]` keeping `A` typed.
+    """The point of `Aggregate[Agg, A]` keeping `A` typed.
+
 
     `Upper[StringColumn[StringType]]` is a type, so `upper(s)` compiles to one
     loop and reaches the aggregate as a column; only the distinct count

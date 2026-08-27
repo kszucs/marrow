@@ -37,6 +37,8 @@ from ...kernels.aggregate import (
     FoldKernel,
     AggState,
     AggKernel,
+    Fold,
+    Foldable,
     CountKernel,
     MaxKernel,
     MeanKernel,
@@ -60,50 +62,76 @@ from ..physical import (
 from .core import ComptimeValue, NumericValue
 
 
-struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
-    """Folds its operand's **lanes** straight into registers; the operand is
-    never materialised.
+struct Aggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
+    """One aggregate over one operand — every aggregate, both ways of running.
 
-    That, and not "the numeric one", is what this node is. `A: NumericValue`
-    is a *consequence*: a lane is `SIMD[Type.native, W]`, which needs a
-    fixed-width element. `sum(a * 2 + b)` never builds `a * 2 + b` — measured
-    at 1.17-1.68x over materialise-then-scatter when grouped, and **14.6x**
-    when not — and that is the whole reason the pair of nodes exists.
+    **Whether this fuses is computed, not declared.** `to_operator` asks two
+    independent comptime questions, and there is no runtime test:
 
-    Its counterpart is `BufferedAggregate`, which accumulates its operand's
-    output across morsels and runs the aggregate once at the end. The names are
-    that difference: this node **buffers nothing** — the accumulator is a
-    scalar per group — while its counterpart holds O(rows).
+    - does `Agg` have a lane algebra — `conforms_to(Agg, Foldable)`? A hash
+      set and a bytewise scan do not.
+    - is the operand lane-readable — `conforms_to(A, NumericValue)`? A lane is
+      `SIMD[Type.native, W]`, so it needs a fixed-width element.
+
+    Both yes, and the fold is fused into the operand's loop: `sum(a * 2 + b)`
+    never builds `a * 2 + b`, worth 1.17-1.68x grouped and **14.6x** ungrouped.
+    Otherwise the operand is evaluated to a column and the aggregate runs over
+    it.
+
+    That is why this is one struct rather than two. `col("v", int64).min()` and
+    `col("ts", timestamp(us)).min()` are the *same aggregate* — both spell
+    `Aggregate[Fold[MinKernel], _]` — and differ only in whether their operand
+    can be read as a lane. The previous `FusedAggregate` / `BufferedAggregate`
+    pair made that one difference into two node types, so every fluent method
+    had to restate the split by hand and get it right.
+
+    **The operand is never erased.** Only the aggregation step can
+    materialise; `upper(region)` stays a fused string subtree that compiles to
+    one loop even though `min` over it cannot fuse. Boxing the operand into a
+    `DynValue` here would throw away the operand's fusion along with the
+    aggregate's, which is a loss nothing forces. So `A` stays a type parameter
+    and the operand builds its own `EvalOperator[A]`.
+
+    **`A: ComptimeValue` — the looser bound — is load-bearing.** It is a
+    concrete trait rather than a projection off `Agg`, and that is what makes
+    `_input` storable: a trait-valued associated type (`A: Agg.Operand`) does
+    reduce and its members do resolve, but it cannot type a *field*. See
+    CLAUDE.md's associated-types section. The tight bound is recovered inside
+    `to_operator`, where `comptime if conforms_to` is enough to hand `Self.A`
+    to an operator that requires `NumericValue`.
 
     **An ordinary `Value`.** It conforms to exactly what `x + 1` conforms to
     and is boxed by the same `DynValue`. There is no `AggValue` trait: once
     every logical node answers `to_operator`, an aggregate stopped being a
     different *kind* of node and became one that answers from
-    `Operator.finish` rather than from `Operator.push`.
-
-    That difference is behavioural, not structural, and it is deliberately not
-    encoded as a marker trait — a trait constraining nothing documents nothing,
-    since this struct satisfies `Value` either way. When a planner needs to
-    *check* it (to reject `project([col("a").sum()])` by inspection rather than
-    by raising), the mechanism is a comptime `kind` on `Analyzable`, not a
-    parallel hierarchy.
+    `Operator.finish` rather than from `Operator.push`. That difference is
+    behavioural, not structural, and is deliberately not encoded as a marker
+    trait — a trait constraining nothing documents nothing. When a planner
+    needs to *check* it (to reject `project([col("a").sum()])` by inspection
+    rather than by raising), the mechanism is a comptime `kind` on
+    `Analyzable`, not a parallel hierarchy.
     """
 
-    comptime Type = Self.K.AccType[Self.A.Type]
-    """The accumulator's type, not the input's: summing `int32` yields `int64`.
+    comptime fuses = conforms_to(Self.Agg, Foldable) and conforms_to(
+        Self.A, NumericValue
+    )
+    """Whether this instantiation folds lanes or evaluates a column.
 
-    Delegating to `FoldKernel.AccType` keeps that widening rule in one place.
-    It must never appear **unerased** in a signature — it is a comptime
-    conditional type, which reduces inside the struct but fails to unify at a
-    return site. That is why `finish` answers `DynArray`.
+    Stated once and read by `to_operator`. It is also the honest answer to "is
+    this aggregate cheap?": a fused fold keeps one scalar per group, while the
+    other path accumulates every morsel's column and ids until `drain` and is
+    therefore **O(rows)** in the aggregate's input.
     """
 
     var _input: Self.A
     var _alias: String
-    """What `Value.name()` answers. The kernel is `K`, a comptime parameter, so
-    `alias` cannot possibly change which fold runs — the same structural split
-    `BufferedAggregate` has, and that `RuntimeAggregate` has to enforce at run
-    time."""
+    """What `Value.name()` answers. The aggregate itself is `Agg`, a comptime
+    parameter, so `alias` cannot possibly change which kernel runs — the
+    two-field split `RuntimeAggregate` needs is structural here."""
+
+    def __init__(out self, var input: Self.A):
+        self._input = input^
+        self._alias = String(Self.Agg.name)
 
     def __init__(out self, var input: Self.A, var name: String):
         self._input = input^
@@ -118,11 +146,17 @@ struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
         return self._alias.copy()
 
     def dtype(self, schema: Schema) raises -> DynType:
-        # Through `acc_dtype` rather than `Self.Type()`: an accumulator dtype
-        # is not always constructible from its type, and `min`/`max` keep the
-        # input's. `A.Type()` is available because the fused lane's input is
-        # numeric — the same assumption `to_operator` records.
-        return DynType(Self.K.acc_dtype[Self.A.Type](Self.A.Type()))
+        """Through `Agg.dtype`, from the *operand's* dtype.
+
+        Not from `A.Type()`, even where this fuses: a temporal dtype is not
+        constructible from its type — a timestamp carries a unit and a
+        timezone — which is exactly why `TemporalColumn.dtype` reads the
+        schema. `Agg.dtype` applies the same widening rule either way, so
+        `sum(int32)` still answers int64.
+        """
+        var in_dtypes = List[DynType](capacity=1)
+        in_dtypes.append(self._input.dtype(schema))
+        return Self.Agg.dtype(in_dtypes)
 
     comptime shape = Shape.scalar
     """An aggregate yields one value per group, so it is scalar-shaped in the
@@ -137,9 +171,9 @@ struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
         result exists only once the stream ends, which is what `to_operator`
         and `Operator.finish` express. Raising makes
         `project([col("a").sum()])` a **plan-time** error naming the mistake,
-        which is what DuckDB, DataFusion and Polars all do. The alternative,
-        a compile-time rejection, is what a `Kind` on the trait would buy and
-        is not worth a second erased box.
+        which is what DuckDB, DataFusion and Polars all do. The alternative, a
+        compile-time rejection, is what a `Kind` on the trait would buy and is
+        not worth a second erased box.
         """
         raise Error(
             "aggregate '",
@@ -155,19 +189,34 @@ struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
     def to_operator(
         self, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
-        """Pick the placement, once, when the plan is built.
+        """Pick the machine and the placement, once, when the plan is built.
 
-        A runtime `Bool` in, a comptime *type* out: whether the query has keys
-        is a property of the plan, and resolving it here is what keeps it out
+        Both decisions resolve to comptime *types*: whether the query has keys
+        is a property of the plan, and whether this aggregate can fuse is a
+        property of `Agg` and `A`. Resolving them here is what keeps them out
         of the inner loop.
+
+        `BufferedAggregateOperator` has no type parameters on purpose. It does
+        not evaluate the operand — `EvalOperator[A]` does, and stays fused — so
+        parameterising it on `[Agg, A]` would buy one direct call over one
+        indirect call, once per column per batch. `FusedAggregateOperator`'s
+        parameters earn their instantiation because its body *is* the per-row
+        loop; this one's body is a `concat` and a call.
         """
-        if grouped:
-            return FusedAggregateOperator[Self.K, Self.A, HashGrouping](
-                self._input.copy(), bindings.copy()
+        comptime if Self.fuses:
+            if grouped:
+                return FusedAggregateOperator[
+                    Self.Agg.Lane, Self.A, HashGrouping
+                ](self._input.copy(), bindings.copy())
+            return FusedAggregateOperator[
+                Self.Agg.Lane, Self.A, ScalarGrouping
+            ](self._input.copy(), bindings.copy())
+        else:
+            var inputs = List[DynOperator](capacity=1)
+            inputs.append(self._input.to_operator(False, bindings))
+            return BufferedAggregateOperator(
+                inputs^, Self.Agg.grouped, Self.Agg.empty(), grouped
             )
-        return FusedAggregateOperator[Self.K, Self.A, ScalarGrouping](
-            self._input.copy(), bindings.copy()
-        )
 
     def alias(self, var name: String) -> Self:
         """Rename this aggregate. `col("x", int64).sum().alias("total")`.
@@ -178,15 +227,15 @@ struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
         return Self(self._input.copy(), name^)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(Self.K.name, "(", self._input, ")")
+        writer.write(Self.Agg.name, "(", self._input, ")")
 
 
-comptime Sum = FusedAggregate[SumKernel, _]
-comptime Product = FusedAggregate[ProductKernel, _]
-comptime Min = FusedAggregate[MinKernel, _]
-comptime Max = FusedAggregate[MaxKernel, _]
-comptime Mean = FusedAggregate[MeanKernel, _]
-comptime Count = FusedAggregate[CountKernel, _]
+comptime Sum = Aggregate[Fold[SumKernel], _]
+comptime Product = Aggregate[Fold[ProductKernel], _]
+comptime Min = Aggregate[Fold[MinKernel], _]
+comptime Max = Aggregate[Fold[MaxKernel], _]
+comptime Mean = Aggregate[Fold[MeanKernel], _]
+comptime Count = Aggregate[Fold[CountKernel], _]
 
 
 struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](
@@ -395,118 +444,3 @@ struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](
             return None
         self._emitted = True
         return Datum(self._state.finish(self._num_groups).to_dyn())
-
-
-# ---------------------------------------------------------------------------
-# BufferedAggregate — the aggregates that must see the whole column, with the
-# operand still fused.
-# ---------------------------------------------------------------------------
-struct BufferedAggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
-    """Accumulates its operand's output across morsels, then runs the
-    aggregate once over the whole column.
-
-    **Not "the non-numeric one".** `col("v", int64).count_distinct()` lands
-    here over a perfectly numeric column, because *distinct* has no fold
-    algebra — no identity, no combine, no finalize — not because its input is
-    not numeric. The axis is whether an aggregate can be finished incrementally:
-    a fold keeps one scalar per group and can, so `FusedAggregate` buffers
-    nothing; a hash set, a sketch or a best-row index cannot, so this one keeps
-    every morsel's column and ids until `drain` — **O(rows)**. That cost is
-    what the name is for, and it is the reason to prefer the fused node
-    wherever an aggregate has a fold algebra.
-
-    **The operand is not erased, and that is the whole point.** Only the
-    *aggregation* has to materialise; `upper(region)` is still a fused string
-    subtree that compiles to one loop. Boxing the operand into a `DynValue`
-    here would throw away the operand's fusion along with the aggregate's,
-    which is a loss nothing forces. So `A` stays a type parameter and the
-    operand builds its own `EvalOperator[A]`.
-
-    `Agg` is an `AggKernel` rather than a `FoldKernel` because these
-    aggregates have no identity, no combine and no finalize — there is
-    genuinely no algebra to parameterise on, which is why `FusedAggregate`
-    could not be widened to cover them.
-
-    `NumericValue.sum/min/max/...` are untouched and still build
-    `FusedAggregate`: they fuse, and a fused fold beats a materialised one by
-    14.6x ungrouped.
-    """
-
-    var _input: Self.A
-    var _alias: String
-    """What `Value.name()` answers. The aggregate itself is `Agg`, a comptime
-    parameter, so `alias` cannot possibly change which kernel runs — the
-    two-field split `RuntimeAggregate` needs is structural here."""
-
-    def __init__(out self, var input: Self.A):
-        self._input = input^
-        self._alias = String(Self.Agg.name)
-
-    def __init__(out self, var input: Self.A, var name: String):
-        self._input = input^
-        self._alias = name^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return self._input.columns()
-
-    def name(self) -> String:
-        return self._alias.copy()
-
-    def dtype(self, schema: Schema) raises -> DynType:
-        """Through `Agg.dtype`, from the *operand's* dtype.
-
-        Not from `A.Type()`: a temporal dtype is not constructible from its
-        type — a timestamp carries a unit and a timezone — which is exactly
-        why `TemporalColumn.dtype` reads the schema.
-        """
-        var in_dtypes = List[DynType](capacity=1)
-        in_dtypes.append(self._input.dtype(schema))
-        return Self.Agg.dtype(in_dtypes)
-
-    comptime shape = Shape.scalar
-    """One value per group, so scalar-shaped in the same sense a literal is."""
-
-    # -- Evaluable ----------------------------------------------------------
-
-    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        """An aggregate has no per-batch value — the same answer, and the same
-        reason, as `FusedAggregate.evaluate`."""
-        raise Error(
-            "aggregate '",
-            self._alias,
-            (
-                "' cannot be evaluated per batch; use .aggregate() rather than"
-                " projecting or filtering on it"
-            ),
-        )
-
-    # -- to_operator --------------------------------------------------------
-
-    def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
-    ) raises -> DynOperator:
-        """The operand gets its own fully monomorphised operator; the
-        aggregation step is shared.
-
-        `BufferedAggregateOperator` has no type parameters on purpose. It does
-        not evaluate the operand — `EvalOperator[A]` does, and stays fused —
-        so parameterising it on `[Agg, A]` would buy one direct call over one
-        indirect call, once per column per batch. `FusedAggregateOperator`'s parameters
-        earn their instantiation because its body *is* the per-row loop; this
-        one's body is a `concat` and a call.
-        """
-        var inputs = List[DynOperator](capacity=1)
-        inputs.append(self._input.to_operator(False, bindings))
-        return BufferedAggregateOperator(
-            inputs^, Self.Agg.grouped, Self.Agg.empty(), grouped
-        )
-
-    def alias(self, var name: String) -> Self:
-        """Rename this aggregate, without mutating: an aggregate stays a pure
-        description and the same subtree can be named twice."""
-        return Self(self._input.copy(), name^)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(Self.Agg.name, "(", self._input, ")")

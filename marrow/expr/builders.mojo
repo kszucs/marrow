@@ -17,7 +17,7 @@ shadow rather than overload — and which one a call site got would depend on it
 imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
-from .`comptime`.aggregates import FusedAggregate
+from .`comptime`.aggregates import Aggregate
 from .`comptime`.numeric import CaseWhen
 from .`comptime`.core import BoolValue, ListValue, NumericValue
 from .`comptime`.leaves import (
@@ -43,7 +43,7 @@ from ..dtypes import (
     TemporalType,
     int64,
 )
-from ..kernels.aggregate import CountKernel
+from ..kernels.aggregate import CountKernel, Fold
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -216,7 +216,7 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     return DynRelation(ParquetScan(path^, schema^))
 
 
-def count_star() -> FusedAggregate[CountKernel, Literal[Int64Type]]:
+def count_star() -> Aggregate[Fold[CountKernel], Literal[Int64Type]]:
     """`COUNT(*)` — how many rows each group has.
 
     Not the same aggregate as `col("x", int64).count()`, which counts the
