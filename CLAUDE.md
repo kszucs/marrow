@@ -867,6 +867,20 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   conditional type to a *different* representation — `rebind` cannot, which is
   why `promote[L, R]` works and "wrap this operand only when it needs
   converting" does not.
+- **A trait-valued associated type reduces, but cannot type a stored field.**
+  Verified 2026-08-27. `comptime Operand: type_of(SomeTrait)` declares fine,
+  `struct Node[I: Impl, A: I.Operand]` binds, and `Self.A`'s own trait surface
+  is reachable through the projection — so "a projection off another
+  parameter's associated *trait* does not reduce" is **false**. What fails is
+  storage: `var _input: Self.A` errors with *"field has non-'Deinitable' type
+  'A'"*, because the projected bound carries no conformance, and it cannot be
+  refined — `A: Self.I.Operand` reports *"'Self' type is not available in this
+  context"* and `A: I.Operand & Deinitable` does not parse. So the mechanism
+  serves arguments and return values, not fields. This is what blocks merging
+  `FusedAggregate` and `BufferedAggregate` (`expr/comptime/aggregates.mojo`)
+  behind one node parameterised on its operand bound: both must *store* their
+  operand.
+
 - **A reflected field type is opaque inside the generic function that reflects
   it.** Route construction through a separately-instantiated generic bound on
   the trait — `_construct_default[D: Defaultable & DataType]()`

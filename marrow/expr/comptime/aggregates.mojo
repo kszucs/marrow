@@ -99,11 +99,15 @@ struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
     """
 
     var _input: Self.A
-    var _name: String
+    var _alias: String
+    """What `Value.name()` answers. The kernel is `K`, a comptime parameter, so
+    `alias` cannot possibly change which fold runs — the same structural split
+    `BufferedAggregate` has, and that `RuntimeAggregate` has to enforce at run
+    time."""
 
     def __init__(out self, var input: Self.A, var name: String):
         self._input = input^
-        self._name = name^
+        self._alias = name^
 
     # -- Value --------------------------------------------------------------
 
@@ -111,7 +115,7 @@ struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
         return self._input.columns()
 
     def name(self) -> String:
-        return self._name.copy()
+        return self._alias.copy()
 
     def dtype(self, schema: Schema) raises -> DynType:
         # Through `acc_dtype` rather than `Self.Type()`: an accumulator dtype
@@ -139,7 +143,7 @@ struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
         """
         raise Error(
             "aggregate '",
-            self._name,
+            self._alias,
             (
                 "' cannot be evaluated per batch; use .aggregate() rather than"
                 " projecting or filtering on it"
