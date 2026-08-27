@@ -55,10 +55,11 @@ from ...dtypes import DynType
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Shape, Value, merged
+from ..logical import DynValue, Shape, Value, merged
 from ..params import Bindings
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
+from .aggregates import AggregateFunction, RuntimeAggregate
 
 
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
@@ -69,6 +70,7 @@ A closed variant rather than an erased box: the set is small, known, and adding
 to it should be a decision someone makes rather than something a caller can do
 from outside.
 """
+
 
 struct RuntimeValue(Evaluable, Movable, Value):
     """A runtime-built expression.
@@ -282,9 +284,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         var rt = r.dtype()
         if lt != rt:
             if lt.is_string_like() or rt.is_string_like():
-                raise Error(
-                    "compare: cannot compare ", lt, " with ", rt
-                )
+                raise Error("compare: cannot compare ", lt, " with ", rt)
             # Cast the narrower side up. `cast` decides what "wider" means; a
             # pair it rejects raises there rather than comparing raw bits.
             try:
@@ -294,6 +294,59 @@ struct RuntimeValue(Evaluable, Movable, Value):
         return K.dispatch(l^, r^)
 
     # -- Writable -----------------------------------------------------------
+
+    # -- the aggregate surface ----------------------------------------------
+    #
+    # The mirror of `ComptimeValue`'s, and that symmetry is the point: the same
+    # fluent expression works in either lane, chosen by whether the caller knew
+    # a dtype.
+    #
+    #     col("s", string).count_distinct()   # comptime, operand fuses
+    #     col("s").count_distinct()           # runtime,  operand erased
+    #
+    # Every one of them raises, because `AggregateFunction` validates its name
+    # at construction — which is what makes an unknown aggregate impossible to
+    # build from here, and keeps each verb's name literal in exactly one place.
+
+    def sum(self) raises -> RuntimeAggregate:
+        """`SUM(self)`. Integers widen to int64; floats stay float64."""
+        return RuntimeAggregate(DynValue(self), AggregateFunction("sum"))
+
+    def product(self) raises -> RuntimeAggregate:
+        """`PRODUCT(self)`."""
+        return RuntimeAggregate(DynValue(self), AggregateFunction("product"))
+
+    def mean(self) raises -> RuntimeAggregate:
+        """`AVG(self)`. Accumulates in float64 over the valid values, so nulls
+        are excluded rather than counted as zero."""
+        return RuntimeAggregate(DynValue(self), AggregateFunction("mean"))
+
+    def min(self) raises -> RuntimeAggregate:
+        """`MIN(self)`. Keeps the input's dtype — a timestamp's unit and
+        timezone included; lexicographic over a string column."""
+        return RuntimeAggregate(DynValue(self), AggregateFunction("min"))
+
+    def max(self) raises -> RuntimeAggregate:
+        """`MAX(self)`."""
+        return RuntimeAggregate(DynValue(self), AggregateFunction("max"))
+
+    def count(self) raises -> RuntimeAggregate:
+        """`COUNT(self)` — the *non-null* values of `self`, not the row
+        count."""
+        return RuntimeAggregate(DynValue(self), AggregateFunction("count"))
+
+    def count_distinct(self) raises -> RuntimeAggregate:
+        """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
+        return RuntimeAggregate(
+            DynValue(self), AggregateFunction("count_distinct")
+        )
+
+    def approx_count_distinct(self) raises -> RuntimeAggregate:
+        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
+        standard error, nulls excluded."""
+        return RuntimeAggregate(
+            DynValue(self), AggregateFunction("approx_count_distinct")
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         var named = self.name()

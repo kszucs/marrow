@@ -14,7 +14,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit
 from ...params import Bindings
-from ....builders import Int64Builder, StringBuilder, array
+from ....builders import Int64Builder, array
 from ....arrays import Int64Array, StringArray
 from ....dtypes import (
     BoolType,
@@ -45,12 +45,8 @@ def _ints() raises -> Int64Array:
 def _strings() raises -> StringArray:
     """`"x"` is unparseable and `None` is already null — the two ways a parsed
     column acquires a null, which the cases below keep apart."""
-    var b = StringBuilder(4)
-    b.append("12")
-    b.append("x")
-    b.append_null()
-    b.append("-5")
-    return b.finish()
+    var values: List[Optional[String]] = ["12", "x", None, "-5"]
+    return array(values)
 
 
 def _batch() raises -> RecordBatch:

@@ -1952,14 +1952,6 @@ def array(values: List[Optional[Bool]]) raises -> BoolArray:
     return b.finish()
 
 
-def array(values: List[String]) raises -> StringArray:
-    """Create a string array from a list of strings."""
-    var b = StringBuilder(len(values))
-    for i in range(len(values)):
-        b.append(values[i])
-    return b.finish()
-
-
 def nulls[T: NumericType](size: Int, type: T) raises -> PrimitiveArray[T]:
     """Create a primitive array of `size` null values.
 
@@ -1968,6 +1960,40 @@ def nulls[T: NumericType](size: Int, type: T) raises -> PrimitiveArray[T]:
     var b = PrimitiveBuilder[T](capacity=size)
     b.append_nulls(size)
     return b.finish()
+
+
+def array(values: List[Optional[String]]) raises -> StringArray:
+    """Create a string array from a list of strings (`None` → null).
+
+    **One overload, `Optional`-taking**, exactly as the numeric factories are:
+    `array([1, None, 3], int64)` goes through `List[Optional[Int]]` and there
+    is no non-`Optional` sibling. A second `List[String]` overload cannot
+    coexist — `array(["a", "b"])` matches both and the call is ambiguous —
+    and it is the nullable form that is load-bearing, since without it every
+    test needing a nullable string column grows its own `StringBuilder` loop.
+    """
+    var b = StringBuilder(len(values))
+    for ref v in values:
+        if v:
+            b.append(v.value())
+        else:
+            b.append_null()
+    return b.finish()
+
+
+def nulls(size: Int, dtype: DynType) raises -> DynArray:
+    """`size` nulls of a runtime dtype — the erased counterpart of the typed
+    overload above.
+
+    The same typed-first / erased-on-top pairing `array` already has
+    (`array[T](values, type)` beside `array(dtype)`): a caller holding a
+    `Field`'s dtype rather than a type parameter needs this, and the
+    alternative is each of them growing its own `DynBuilder` loop.
+    """
+    var builder = DynBuilder(dtype, size)
+    for _ in range(size):
+        builder.append_null()
+    return builder.finish()
 
 
 def arange[T: NumericType](start: Int, end: Int) raises -> PrimitiveArray[T]:

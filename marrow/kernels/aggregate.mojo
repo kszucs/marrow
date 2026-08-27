@@ -50,6 +50,7 @@ from ..dtypes import (
     NumericType,
     PrimitiveType,
     StringLikeType,
+    TemporalType,
     UInt8Type,
     float64,
     int32,
@@ -1408,3 +1409,360 @@ struct DistinctAgg[exact: Bool](Aggregation):
             return count_distinct(values, ctx).repeat(1)
         else:
             return approx_count_distinct(values, ctx).repeat(1)
+
+
+# ---------------------------------------------------------------------------
+# ColumnAggregation — the aggregates that compute over columns, not lanes.
+#
+# `AggKernel` is the algebra of a *fold*: identity, combine, finalize, one
+# value at a time. Three aggregates have no such algebra — a distinct count
+# keeps a hash set or a sketch, a string min/max keeps the index of the best
+# row — and a fourth (fixed-width min/max at a runtime dtype) has one but
+# cannot reach the fused loop because its accumulator dtype is not
+# constructible from its type.
+#
+# All four take **materialised columns**, so they share one shape: dtypes in
+# for the plan, columns in for the answer. That shape is stated once, as a
+# trait with two static methods and no associated types, which is what lets it
+# be a comptime parameter for the fused lane *and* erase to a plain function
+# pointer for the runtime one.
+#
+# This is not a revival of `Aggregation`: no `InArray`/`OutArray`, no
+# `from_any`/`to_dyn` plumbing, no `is_mergeable`, no `partials`/`merge`, and
+# `name` is display only. It is pure compute.
+# ---------------------------------------------------------------------------
+
+
+comptime ColumnFold = def(Groups, List[DynArray]) thin raises -> DynArray
+"""One aggregate over one input: the assignment, its columns, one value per
+slot out. The **erased face** of `ColumnAggregation`.
+
+`List[DynArray]` rather than a single column from the start. No multi-input
+aggregate is scheduled, but the signature is the expensive-to-change part —
+every implementation plus every caller — and widening it costs nothing while
+the operator owns the list and lends it.
+
+`thin`, so it carries no captures and no identity: if the wrong arm is handed
+over, nothing downstream can name which aggregate it holds. Whoever builds one
+is the only place that pairing can be checked.
+"""
+
+
+trait ColumnAggregation(Kernel):
+    """An aggregate that computes over materialised columns rather than lanes.
+
+    Two static methods and no associated types, deliberately. That is what
+    makes one vocabulary serve both expression lanes: the comptime lane takes
+    the *trait* as a parameter and calls `grouped` directly, the runtime lane
+    takes `grouped` as a `ColumnFold` and calls it through a pointer. A single
+    associated type would break the second half, because an erased caller
+    cannot name it.
+    """
+
+    @staticmethod
+    def out_dtype(in_dtypes: List[DynType]) raises -> DynType:
+        """The column this produces, from its inputs' dtypes alone.
+
+        Answered before any data exists — a plan's output schema is built from
+        it — which is why it takes dtypes and not arrays.
+        """
+        ...
+
+    @staticmethod
+    def grouped(groups: Groups, values: List[DynArray]) raises -> DynArray:
+        """One value per slot.
+
+        **`groups.is_single()` must be its first branch.** The one-slot
+        assignment carries no ids, and a per-group body is a
+        `for i in range(len(groups.ids))` loop, which over an empty id array
+        does not execute at all — `[0]` or `[null]` where the whole-input
+        answer belongs. A wrong answer, not a crash.
+        """
+        ...
+
+    @staticmethod
+    def over_no_input() raises -> Optional[DynArray]:
+        """The one-row answer over an input that produced **no column at
+        all**, or `None` when there is no such answer.
+
+        A filter that keeps nothing answers with no batch rather than an empty
+        one, so an aggregate above it never sees a dtype. `COUNT(DISTINCT x)`
+        of nothing is still `0` — SQL's answer and PyArrow's — and needs no
+        dtype to say so. An extremum does need one, so it declines here and
+        the caller supplies a null from the plan's schema.
+        """
+        return None
+
+
+def column_fold[Agg: ColumnAggregation]() -> ColumnFold:
+    """`Agg.grouped` as a `ColumnFold` — the trait's erased face.
+
+    One line, and it is where the erasure happens: a caller that knows `Agg`
+    calls `Agg.grouped` directly and pays nothing, a caller that resolved a
+    name gets this.
+    """
+    return Agg.grouped
+
+
+struct DistinctCount[exact: Bool](ColumnAggregation):
+    """`COUNT(DISTINCT x)` exactly, or a HyperLogLog estimate of it.
+
+    Not a fold at all — the per-slot state is a hash set or a sketch, not a
+    scalar accumulator — which is why there is no `AggKernel` for it and no
+    fused form to fall back to. Nulls are excluded (SQL semantics, PyArrow's
+    `only_valid`).
+    """
+
+    comptime name = "count_distinct" if Self.exact else "approx_count_distinct"
+
+    @staticmethod
+    def out_dtype(in_dtypes: List[DynType]) raises -> DynType:
+        if len(in_dtypes) != 1:
+            raise Self.error(t"takes exactly one input, got {len(in_dtypes)}")
+        # A cardinality, whatever was counted.
+        return DynType(int64)
+
+    @staticmethod
+    def grouped(groups: Groups, values: List[DynArray]) raises -> DynArray:
+        comptime if Self.exact:
+            if groups.is_single():
+                # Not an optimisation: `count_distinct_grouped` loops over ids
+                # there are none of. It is also where the whole-array
+                # radix-parallel path lives.
+                return (
+                    count_distinct(values[0], ExecContext.auto())
+                    .repeat(1)
+                    .to_dyn()
+                )
+            return count_distinct_grouped(groups, values[0]).to_dyn()
+        else:
+            if groups.is_single():
+                return (
+                    approx_count_distinct(values[0], ExecContext.auto())
+                    .repeat(1)
+                    .to_dyn()
+                )
+            return approx_count_distinct_grouped(groups, values[0]).to_dyn()
+
+    @staticmethod
+    def over_no_input() raises -> Optional[DynArray]:
+        return Int64Scalar(Int64(0)).repeat(1).to_dyn()
+
+
+def _string_extremum[
+    Op: MinMaxOp, T: StringLikeType
+](groups: Groups, values: BinaryLikeArray[T]) raises -> BinaryLikeArray[T]:
+    """The bytewise scan at one slot or at many.
+
+    The many-slot half is `StringMinMax[Op, T].grouped`. The one-slot half has
+    no counterpart there: on the resolved path it was reached through
+    `Aggregation.whole`, which synthesised an all-zeros id array first. There
+    is no such synthesis here, so the single-slot scan is written out — the
+    same comparison, without the id load.
+    """
+    var has_null = values.null_count() > 0
+    if groups.is_single():
+        var best = -1
+        for i in range(len(values)):
+            if has_null and not values.is_valid(i):
+                continue
+            if best == -1:
+                best = i
+            else:
+                var candidate = values.unsafe_get(UInt(i))
+                var incumbent = values.unsafe_get(UInt(best))
+                var better = (candidate < incumbent) if Op.is_min else (
+                    incumbent < candidate
+                )
+                if better:
+                    best = i
+        var out = BinaryLikeBuilder[T](capacity=1)
+        if best == -1:
+            out.append_null()
+        else:
+            out.append(values.unsafe_get(UInt(best)))
+        return out.finish()
+    return StringMinMax[Op, T].grouped(groups, values)
+
+
+struct StringExtremum[Op: MinMaxOp](ColumnAggregation):
+    """`min`/`max` over a string column — a bytewise (lexicographic) scan,
+    matching Arrow's `hash_min`/`hash_max`.
+
+    Named `StringExtremum` rather than `StringMinMax` only because that name is
+    still taken by the `Aggregation` conformer `marrow.exprold` resolves
+    against; the two share the many-slot body rather than duplicating it.
+
+    Nulls are excluded and an empty or all-null slot yields null.
+    """
+
+    comptime name = Self.Op.name
+
+    @staticmethod
+    def out_dtype(in_dtypes: List[DynType]) raises -> DynType:
+        if len(in_dtypes) != 1:
+            raise Self.error(t"takes exactly one input, got {len(in_dtypes)}")
+        ref dtype = in_dtypes[0]
+        if not (dtype.is_string() or dtype.is_large_string()):
+            raise Self.error(t"is not defined for {dtype} columns")
+        # An extremum *is* one of the input's values, so it keeps its type.
+        return dtype.copy()
+
+    @staticmethod
+    def grouped(groups: Groups, values: List[DynArray]) raises -> DynArray:
+        def stringly[T: StringLikeType](dtype: T) raises {imm} -> DynArray:
+            var out = _string_extremum[Self.Op, T](
+                groups, values[0].as_binary_like[T]().copy()
+            )
+            return out^.to_dyn()
+
+        return values[0].dtype().dispatch_stringlike(stringly)
+
+
+def _fold_typed[
+    K: AggKernel, V: PrimitiveType
+](groups: Groups, value: DynArray) raises -> DynArray:
+    """One fixed-width column folded by `K`, at one slot or at many."""
+    var column = value.as_primitive[V]().copy()
+    if groups.is_single():
+        # The vectorized whole-array reduce, not the scatter loop over an id
+        # array that does not exist.
+        return NumericAgg[K, V].whole(column).to_dyn()
+    return NumericAgg[K, V].grouped(groups, column).to_dyn()
+
+
+struct PrimitiveFold[K: AggKernel](ColumnAggregation):
+    """A fold algebra over a fixed-width column at a **runtime** dtype —
+    `sum`, `product`, `mean`, `min`, `max`, `count`.
+
+    The same `AggState` fold the comptime lane fuses, reached the slow way.
+    Two things send an aggregate here rather than into `FoldOperator`: the
+    query named it with a string, or its input is temporal.
+    `FoldOperator.__init__` builds its accumulator dtype from `Self.A.Type()`,
+    and `TemporalType` and `DecimalType` are not `Defaultable` — a timestamp
+    carries a unit and a timezone, a decimal a precision and a scale — so a
+    temporal `min` cannot be constructed there today. Moving that construction
+    out of `__init__` and into first push is what would fuse it.
+
+    `K.acc_dtype` decides the output dtype, so `sum(int32)` widens to int64,
+    `mean` answers float64, and `min`/`max` keep the input's unit, timezone,
+    precision and scale.
+    """
+
+    comptime name = Self.K.name
+
+    @staticmethod
+    def _check(in_dtypes: List[DynType]) raises -> DynType:
+        """The arity and domain gate both entry points share."""
+        if len(in_dtypes) != 1:
+            raise Self.error(t"takes exactly one input, got {len(in_dtypes)}")
+        ref dtype = in_dtypes[0]
+        # The runtime half of `_check_domain`: an arithmetic fold is numeric
+        # only, and instantiating it over a temporal column is a *build* error
+        # rather than a raise, so the two must agree.
+        comptime if conforms_to(Self.K, ArithmeticAgg):
+            if not dtype.is_numeric():
+                raise Self.error(
+                    t"needs arithmetic, so it is not defined for"
+                    t" {dtype} columns"
+                )
+        else:
+            if not (dtype.is_numeric() or dtype.is_temporal()):
+                raise Self.error(t"is not defined for {dtype} columns")
+        return dtype.copy()
+
+    @staticmethod
+    def out_dtype(in_dtypes: List[DynType]) raises -> DynType:
+        var dtype = Self._check(in_dtypes)
+
+        def numeric[V: NumericType](d: V) raises {imm} -> DynType:
+            return DynType(Self.K.acc_dtype[V](d))
+
+        comptime if conforms_to(Self.K, ArithmeticAgg):
+            return dtype.dispatch_numeric(numeric)
+        else:
+            if dtype.is_numeric():
+                return dtype.dispatch_numeric(numeric)
+
+            def temporal[V: TemporalType](d: V) raises {imm} -> DynType:
+                return DynType(Self.K.acc_dtype[V](d))
+
+            return dtype.dispatch_temporal(temporal)
+
+    @staticmethod
+    def grouped(groups: Groups, values: List[DynArray]) raises -> DynArray:
+        # Numeric and temporal are separate dispatch arms rather than one
+        # `dispatch_primitive`, so a kernel whose domain excludes temporal
+        # columns is never instantiated over one — `_check_domain` would fail
+        # the build rather than raise.
+        var dtype = values[0].dtype()
+
+        def numeric[V: NumericType](d: V) raises {imm} -> DynArray:
+            return _fold_typed[Self.K, V](groups, values[0])
+
+        comptime if conforms_to(Self.K, ArithmeticAgg):
+            if not dtype.is_numeric():
+                raise Self.error(t"is not defined for {dtype} columns")
+            return dtype.dispatch_numeric(numeric)
+        else:
+            if dtype.is_numeric():
+                return dtype.dispatch_numeric(numeric)
+            elif dtype.is_temporal():
+
+                def temporal[V: TemporalType](d: V) raises {imm} -> DynArray:
+                    return _fold_typed[Self.K, V](groups, values[0])
+
+                return dtype.dispatch_temporal(temporal)
+            else:
+                raise Self.error(t"is not defined for {dtype} columns")
+
+
+struct ValidityCount(ColumnAggregation):
+    """`COUNT(x)` — the *non-null* values of `x`, over a column of any type.
+
+    A validity scan and nothing else, so it is defined for every dtype and
+    there is nothing to monomorphize on: the input stays erased. An empty slot
+    counts 0 and is never null, matching SQL.
+
+    The comptime lane does **not** route numeric `count` here — it fuses
+    `LaneAggregate[CountKernel, A]`, which pays one typed `bitmap.test()`
+    per row where this pays a `DynArray._dispatch` walk. Measured at 1M rows /
+    100k groups on a nullable column: 1.7159 ms against 8.3555 ms. This is the
+    path for the dtypes that fold cannot serve, and for a `count` named at run
+    time.
+    """
+
+    comptime name = CountKernel.name
+
+    @staticmethod
+    def out_dtype(in_dtypes: List[DynType]) raises -> DynType:
+        if len(in_dtypes) != 1:
+            raise Self.error(t"takes exactly one input, got {len(in_dtypes)}")
+        return DynType(int64)
+
+    @staticmethod
+    def grouped(groups: Groups, values: List[DynArray]) raises -> DynArray:
+        ref column = values[0]
+        if groups.is_single():
+            # A valid count is metadata. Losing this branch would turn
+            # `count(x)` with no GROUP BY from O(1) into O(n).
+            return (
+                Int64Scalar(Int64(len(column) - column.null_count()))
+                .repeat(1)
+                .to_dyn()
+            )
+        var counts = List[Int64](length=groups.num_groups, fill=0)
+        var gids = groups.ids.values()
+        var has_null = column.null_count() > 0
+        for i in range(len(groups.ids)):
+            if has_null and not column.is_valid(i):
+                continue
+            counts[Int(gids[i])] += 1
+        var out = Int64Builder(groups.num_groups)
+        for g in range(groups.num_groups):
+            out.append(Scalar[int64.native](counts[g]))
+        return out.finish().to_dyn()
+
+    @staticmethod
+    def over_no_input() raises -> Optional[DynArray]:
+        return Int64Scalar(Int64(0)).repeat(1).to_dyn()

@@ -1,11 +1,33 @@
-"""Fused aggregates, and the cases a single-batch test would miss."""
+"""The comptime lane's aggregates.
+
+Two nodes, on one axis — what the aggregate consumes:
+
+- `LaneAggregate` folds its operand's **lanes** into registers and never
+  materialises it. That is the 14.6x, and it is why `A` must be a
+  `NumericValue`: a lane is a `SIMD`, which needs a fixed width.
+- `ColumnAggregate` materialises the operand **once** and computes over the
+  column, for the aggregates that have no fold algebra to fuse into. Its
+  operand stays typed, so `count_distinct(upper(s))` still fuses `upper(s)`.
+
+Plus the cases a single-batch test would miss.
+"""
 
 from std.testing import assert_equal, assert_true
 
-from ...builders import col, count_star, lit
+from ...builders import col, count_star, lit, table
 from ....arrays import Int32Array
 from ....builders import array, arange
-from ....dtypes import Int32Type, Int64Type, int32, int64
+from ....dtypes import (
+    DynType,
+    Int32Type,
+    Int64Type,
+    int32,
+    int64,
+    microsecond,
+    string,
+    timestamp,
+)
+from ....builders import TimestampBuilder
 from ....tabular import RecordBatch, record_batch
 from ....kernels.core import Groups
 from ...logical import DynValue
@@ -13,6 +35,30 @@ from ...physical import Morsel
 from ..aggregates import Count, Max, Mean, Min, Product, Sum
 from ..leaves import Column, Literal
 from ..numeric import Mul
+from ..strings import Upper
+
+
+def _strings(var values: List[Optional[String]]) raises -> RecordBatch:
+    return record_batch([array(values).to_dyn()], names=["s"])
+
+
+def _keyed() raises -> RecordBatch:
+    """`g` groups rows 0-2 and rows 3-4; `s` is what the aggregates read."""
+    var values: List[Optional[String]] = ["a", "b", "a", "c", "c"]
+    return record_batch(
+        [array([1, 1, 1, 2, 2], int64).to_dyn(), array(values).to_dyn()],
+        names=["g", "s"],
+    )
+
+
+def _stamps(var values: List[Int]) raises -> RecordBatch:
+    var b = TimestampBuilder(timestamp(microsecond, "UTC"), len(values))
+    for v in values:
+        b.append(Scalar[int64.native](v))
+    return record_batch(
+        [array([1, 1, 2, 2], int64).to_dyn(), b.finish().to_dyn()],
+        names=["g", "ts"],
+    )
 
 
 def _b(var v: List[Optional[Int]]) raises -> RecordBatch:
@@ -204,3 +250,235 @@ def test_count_is_named_and_aliasable() raises:
     assert_equal(col("a", int64).count().name(), "count")
     assert_equal(count_star().name(), "count_star")
     assert_equal(col("a", int64).count().alias("n").name(), "n")
+
+
+# ---------------------------------------------------------------------------
+# ColumnAggregate — count_distinct
+#
+# Two failure modes are specific to this node and each has cases of its own:
+#
+# - `Agg.out_dtype` reaches the plan's schema and `Agg.grouped` produces the
+#   column. `grouped` returns `DynArray`, so a disagreement is a `Variant`
+#   misaccess at emit rather than a raise — every case asserts the *schema*
+#   dtype equals the *produced* dtype.
+# - The keyless query is the one that carries no group ids, so it is the one
+#   that silently answers `[0]` if an implementation forgets its
+#   `Groups.is_single()` branch.
+# ---------------------------------------------------------------------------
+def test_column_agg_count_distinct_keyless_string() raises:
+    """No `GROUP BY`, so the morsel carries the one-slot assignment and the
+    fold sees an **empty** id array. Get the branch wrong and this is 0."""
+    var plan = table(_strings(["a", "b", "a", "c", "b"])).aggregate(
+        [col("s", string).count_distinct()], List[DynValue]()
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)
+    assert_true(out.columns[0].as_int64() == array([3], int64))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_column_agg_count_distinct_keyless_numeric() raises:
+    """The trait default is on `ComptimeValue`, so a numeric node has it too —
+    and a cardinality is int64 whatever was counted."""
+    var batch = record_batch(
+        [array([10, 20, 10, 30, 20], int64).to_dyn()], names=["n"]
+    )
+    var plan = table(batch^).aggregate(
+        [col("n", int64).count_distinct()], List[DynValue]()
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([3], int64))
+    assert_true(plan.schema().fields[0].dtype == DynType(int64))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_column_agg_count_distinct_grouped_string() raises:
+    """Group 1 sees a, b, a; group 2 sees c, c."""
+    var plan = table(_keyed()).aggregate(
+        [col("s", string).count_distinct().alias("distinct_s")],
+        [col("g", int64)],
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[0].as_int64() == array([1, 2], int64))
+    assert_true(out.columns[1].as_int64() == array([2, 1], int64))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_column_agg_count_distinct_excludes_nulls() raises:
+    """SQL `COUNT(DISTINCT x)` counts values, and NULL is not one."""
+    var plan = table(_strings(["a", None, "a", "b", None])).aggregate(
+        [col("s", string).count_distinct()], List[DynValue]()
+    )
+    assert_true(plan.execute().columns[0].as_int64() == array([2], int64))
+
+
+def test_column_agg_approx_count_distinct_keyless() raises:
+    """Exact at this cardinality — linear counting takes over far below the
+    HyperLogLog register count."""
+    var plan = table(_strings(["a", "b", "a", "c", "b"])).aggregate(
+        [col("s", string).approx_count_distinct()], List[DynValue]()
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([3], int64))
+    assert_true(plan.schema() == out.schema)
+
+
+# ---------------------------------------------------------------------------
+# string min / max
+# ---------------------------------------------------------------------------
+def test_column_agg_string_min_max_keyless() raises:
+    """Lexicographic (bytewise), matching Arrow's `hash_min`/`hash_max`. The
+    output keeps the input's dtype, so the schema must say `string`."""
+    var plan = table(_strings(["b", "a", "c"])).aggregate(
+        [
+            col("s", string).min().alias("lo"),
+            col("s", string).max().alias("hi"),
+        ],
+        List[DynValue](),
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_string() == array(["a"]))
+    assert_true(out.columns[1].as_string() == array(["c"]))
+    assert_true(plan.schema().fields[0].dtype == DynType(string))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_column_agg_string_min_max_grouped() raises:
+    var plan = table(_keyed()).aggregate(
+        [
+            col("s", string).min().alias("lo"),
+            col("s", string).max().alias("hi"),
+        ],
+        [col("g", int64)],
+    )
+    var out = plan.execute()
+    assert_true(out.columns[1].as_string() == array(["a", "c"]))
+    assert_true(out.columns[2].as_string() == array(["b", "c"]))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_column_agg_string_min_skips_nulls() raises:
+    var plan = table(_strings([None, "b", "a"])).aggregate(
+        [col("s", string).min()], List[DynValue]()
+    )
+    assert_true(plan.execute().columns[0].as_string() == array(["a"]))
+
+
+# ---------------------------------------------------------------------------
+# temporal min / max
+# ---------------------------------------------------------------------------
+def test_column_agg_timestamp_min_keeps_unit_and_timezone() raises:
+    """The pairing the compiler no longer checks. `MinMax.acc_dtype` answers
+    with the *input* dtype, so `aggregate_out_dtype` must too — a schema
+    saying `timestamp[s]` over a `timestamp[us]` column would be a `Variant`
+    misaccess at emit, not a raise."""
+    var plan = table(_stamps([30, 10, 50, 40])).aggregate(
+        [col("ts", timestamp(microsecond, "UTC")).min().alias("first_seen")],
+        List[DynValue](),
+    )
+    var out = plan.execute()
+    var expected = DynType(timestamp(microsecond, "UTC"))
+    assert_true(plan.schema().fields[0].dtype == expected)
+    assert_true(out.columns[0].dtype() == expected)
+    assert_true(plan.schema() == out.schema)
+    assert_equal(Int(out.columns[0].as_timestamp()[0].value()), 10)
+
+
+def test_column_agg_timestamp_max_grouped_keeps_unit() raises:
+    var plan = table(_stamps([30, 10, 50, 40])).aggregate(
+        [col("ts", timestamp(microsecond, "UTC")).max().alias("last_seen")],
+        [col("g", int64)],
+    )
+    var out = plan.execute()
+    var expected = DynType(timestamp(microsecond, "UTC"))
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[1].dtype() == expected)
+    assert_true(plan.schema() == out.schema)
+    assert_equal(Int(out.columns[1].as_timestamp()[0].value()), 30)
+    assert_equal(Int(out.columns[1].as_timestamp()[1].value()), 50)
+
+
+# ---------------------------------------------------------------------------
+# naming
+# ---------------------------------------------------------------------------
+def test_column_agg_alias_renames_without_changing_the_function() raises:
+    """`alias` cannot change which kernel runs, structurally.
+
+    The aggregate is `Agg`, a comptime parameter, so the only thing an alias
+    can touch is the name the output schema reads — which is why this node
+    needs no second name field where `RuntimeAggregate` does.
+    """
+    var plain = col("s", string).count_distinct()
+    var renamed = plain.alias("n")
+    assert_equal(plain.name(), "count_distinct")
+    assert_equal(renamed.name(), "n")
+    assert_true(String(renamed).startswith("count_distinct("))
+
+    var plan = table(_strings(["a", "b", "a"])).aggregate(
+        [renamed.copy()], List[DynValue]()
+    )
+    assert_equal(plan.schema().fields[0].name, "n")
+    # Still the same aggregate: two distinct values, not a renamed no-op.
+    assert_true(plan.execute().columns[0].as_int64() == array([2], int64))
+
+
+# ---------------------------------------------------------------------------
+# an input that yields no morsel at all
+# ---------------------------------------------------------------------------
+def test_column_agg_count_distinct_over_no_rows_is_zero() raises:
+    """A filter that keeps nothing answers `None` rather than an empty batch,
+    so the fold is never pushed and never learns its input dtype. `COUNT
+    (DISTINCT x)` of nothing is 0 — the one answer that needs no dtype."""
+    var plan = (
+        table(_strings(["a", "b"]))
+        .filter(col("s", string) > lit(String("zzz"), string))
+        .aggregate([col("s", string).count_distinct()], List[DynValue]())
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)
+    assert_true(out.columns[0].as_int64() == array([0], int64))
+
+
+def test_column_agg_string_min_over_no_rows_is_null() raises:
+    """`min` of nothing is NULL, and its dtype is only still known to the
+    aggregate stage's output schema."""
+    var plan = (
+        table(_strings(["a", "b"]))
+        .filter(col("s", string) > lit(String("zzz"), string))
+        .aggregate([col("s", string).min()], List[DynValue]())
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)
+    assert_true(out.columns[0].dtype() == DynType(string))
+    assert_true(out.columns[0].is_null(0))
+
+
+# ---------------------------------------------------------------------------
+# the operand keeps its fusion
+# ---------------------------------------------------------------------------
+def test_column_agg_counts_distinct_over_a_fused_operand() raises:
+    """The point of `ColumnAggregate[Agg, A]` keeping `A` typed.
+
+    `Upper[StringColumn[StringType]]` is a type, so `upper(s)` compiles to one
+    loop and reaches the aggregate as a column; only the distinct count
+    materialises. Boxing the operand into a `DynValue` would have thrown that
+    away too, which nothing here requires.
+
+    Case-folding collapses `A`/`a` and `B`/`b`, so five values become two.
+    """
+    var plan = table(_strings(["a", "A", "b", "B", "a"])).aggregate(
+        [Upper(col("s", string)).count_distinct().alias("n")],
+        List[DynValue](),
+    )
+    var out = plan.execute()
+    assert_true(out.columns[0].as_int64() == array([2], int64))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_column_agg_min_over_a_fused_operand() raises:
+    """Same for an extremum: `min(upper(s))` is `"A"`, not `"a"`."""
+    var plan = table(_strings(["b", "a", "C"])).aggregate(
+        [Upper(col("s", string)).min().alias("lo")], List[DynValue]()
+    )
+    assert_true(plan.execute().columns[0].as_string() == array(["A"]))

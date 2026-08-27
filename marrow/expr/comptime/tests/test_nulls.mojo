@@ -19,7 +19,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit, table
 from ...params import Bindings
-from ....builders import Int64Builder, StringBuilder
+from ....builders import Int64Builder, array
 from ....arrays import Int64Array, StringArray
 from ....dtypes import int64, string
 from ....tabular import RecordBatch, record_batch
@@ -46,12 +46,8 @@ def _b() raises -> Int64Array:
 
 
 def _s() raises -> StringArray:
-    var b = StringBuilder(4)
-    b.append("x")
-    b.append_null()
-    b.append("z")
-    b.append("w")
-    return b.finish()
+    var values: List[Optional[String]] = ["x", None, "z", "w"]
+    return array(values)
 
 
 def _batch() raises -> RecordBatch:

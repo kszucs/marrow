@@ -224,8 +224,7 @@ struct ScalarGrouping(Grouping):
         pass
 
     def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
-        var empty = Int32Builder(0)
-        return Groups(empty.finish(), 1)
+        return Groups.single(num_rows)
 
     def num_groups(self) -> Int:
         return 1

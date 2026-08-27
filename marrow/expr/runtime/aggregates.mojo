@@ -1,0 +1,346 @@
+"""Aggregates named at run time — the runtime lane's half of aggregation.
+
+Its counterpart is `comptime/aggregates.mojo`, which holds the same aggregates
+as **types**: `LaneAggregate[K, A]` for the fused folds and
+`ColumnAggregate[Agg, A]` for the ones that materialise. Both lanes share one
+vocabulary — `ColumnAggregation` in `kernels/aggregate.mojo` — and differ only
+in when the aggregate is chosen.
+
+This module is what a caller uses when the aggregate is a **string**: a plan
+parsed from Python, a `("count_distinct", "x")` pair, anything built after the
+program started. Both the aggregate *and* its operands are erased here, which
+is the honest encoding — a frontend that names its aggregate at run time named
+its column expression at run time too.
+
+**One resolution, not two.** `AggregateFunction.resolve` answers the output
+dtype and the implementation *together*, from one name x dtype ladder, and
+takes both off the same `ColumnAggregation`. Two free functions with the same
+parameters answering different aspects of one thing were methods on a missing
+type — and, worse, two independently hand-written ladders that could silently
+disagree. `min` over `timestamp[us]` declaring `timestamp[s]` is a `Variant`
+misaccess at emit, not a raise, so agreement cannot be left to review; taking
+both answers from one type makes disagreement unrepresentable.
+
+Resolution still happens **twice, at two different times**, and that part is
+mandatory:
+
+- `Aggregate._output_schema` calls `a.dtype(schema)` before any batch exists,
+  so it resolves from schema-derived dtypes and keeps only its `dtype`.
+- `ColumnAggregateOperator` resolves again on first push, from the morsel's
+  real dtypes, and keeps only `fold`. It cannot resolve earlier: a
+  `RuntimeValue` operand has no dtype until a schema is in hand.
+
+Discarding a `ColumnFold` at plan time is one function-pointer assignment, and
+paying it is what buys a single ladder.
+
+**Non-generic on purpose.** A `resolve[Job: def[A: ...]()]` form instantiates
+once per closure type — the `_arith[K]` shape, measured at +115,600 bytes. This
+resolver has no type parameter, so it is one instantiation for the whole tree,
+and the comptime lane's DCE property holds because nothing there names it: a
+program built from `col("a", int64)` reaches `ColumnAggregation` conformers
+directly and never this ladder.
+"""
+
+from ...arrays import DynArray, StructArray
+from ...dtypes import DynType, int64
+from ...kernels.aggregate import (
+    ColumnAggregation,
+    ColumnFold,
+    DistinctCount,
+    MaxKernel,
+    MaxOp,
+    MeanKernel,
+    MinKernel,
+    MinOp,
+    PrimitiveFold,
+    ProductKernel,
+    StringExtremum,
+    SumKernel,
+    ValidityCount,
+    column_fold,
+)
+from ...schema import Schema
+from ..logical import DynValue, Shape, Value, merged
+from ..params import Bindings
+from ..physical import (
+    ColumnAggregateOperator,
+    Datum,
+    DynOperator,
+    Evaluable,
+)
+
+
+comptime SUM = "sum"
+comptime PRODUCT = "product"
+comptime MEAN = "mean"
+comptime COUNT = "count"
+comptime COUNT_DISTINCT = "count_distinct"
+comptime APPROX_COUNT_DISTINCT = "approx_count_distinct"
+comptime MIN = "min"
+comptime MAX = "max"
+
+
+struct ResolvedAggregate(Copyable, Movable):
+    """What a named aggregate becomes once its input types are known.
+
+    A named pair rather than a `Tuple`, for the reason `Groups` and `JoinIndex`
+    are named types: two fields that must agree with each other should not be
+    positional. Here the agreement is load-bearing — `out_dtype` reaches the
+    output schema and `fold` produces the column, and a mismatch is a `Variant`
+    misaccess at emit rather than a raise.
+    """
+
+    var dtype: DynType
+    """What the fold's column will be typed as.
+
+    Not `out_dtype`: there is no *input* dtype in this struct for the prefix to
+    disambiguate against. `ColumnAggregation.out_dtype(in_dtypes)` keeps it,
+    because there the inputs are the argument and the prefix does real work.
+    """
+
+    var fold: ColumnFold
+    """The implementation. Carries no identity — a `thin` fn cannot be asked
+    which aggregate it is — which is why `of` is the only thing that builds
+    one."""
+
+    def __init__(out self, var dtype: DynType, fold: ColumnFold):
+        self.dtype = dtype^
+        self.fold = fold
+
+    @staticmethod
+    def of[Agg: ColumnAggregation](in_dtypes: List[DynType]) raises -> Self:
+        """Both halves of a resolution, off **one** `ColumnAggregation`.
+
+        This is what makes the dtype and the implementation unable to
+        disagree: naming `Agg` once produces both, so there is no second table
+        to keep in step. A static constructor rather than a free
+        `_resolved[Agg]` helper — same instantiation count, but it reads as
+        construction instead of as a loose generic beside the type it builds.
+        """
+        return Self(Agg.out_dtype(in_dtypes), column_fold[Agg]())
+
+
+struct AggregateFunction(Copyable, Movable, Writable):
+    """A named aggregate, before its input types are known.
+
+    **The name is validated at construction**, so `AggregateFunction("summ")`
+    raises where it was written rather than deep inside execution on the first
+    morsel. A `String` field alone could not promise that.
+    """
+
+    var name: String
+
+    def __init__(out self, var name: String) raises:
+        if not (
+            name == SUM
+            or name == PRODUCT
+            or name == MEAN
+            or name == COUNT
+            or name == COUNT_DISTINCT
+            or name == APPROX_COUNT_DISTINCT
+            or name == MIN
+            or name == MAX
+        ):
+            raise Error("unknown aggregate '", name, "'")
+        self.name = name^
+
+    def resolve(self, in_dtypes: List[DynType]) raises -> ResolvedAggregate:
+        """The one name x dtype ladder in the system.
+
+        Each arm names a single `ColumnAggregation` and takes **both** answers
+        from it, so the output dtype and the implementation cannot disagree —
+        they come from the same type on the same branch. Two hand-written
+        tables could, and `min` over `timestamp[us]` declaring `timestamp[s]`
+        is a `Variant` misaccess at emit rather than a raise.
+
+        `List[DynType]` rather than one dtype because `string_agg(x, sep)` has
+        two different input dtypes; every aggregate resolved today takes one,
+        which each conformer's `out_dtype` states for itself.
+        """
+        if self.name == COUNT_DISTINCT:
+            return ResolvedAggregate.of[DistinctCount[True]](in_dtypes)
+        elif self.name == APPROX_COUNT_DISTINCT:
+            return ResolvedAggregate.of[DistinctCount[False]](in_dtypes)
+        elif self.name == COUNT:
+            # A validity scan, defined for every dtype — which is why it is
+            # not a `PrimitiveFold[CountKernel]` here. The comptime lane still
+            # fuses numeric `count`; see `ValidityCount`.
+            return ResolvedAggregate.of[ValidityCount](in_dtypes)
+        elif self.name == SUM:
+            return ResolvedAggregate.of[PrimitiveFold[SumKernel]](in_dtypes)
+        elif self.name == PRODUCT:
+            return ResolvedAggregate.of[PrimitiveFold[ProductKernel]](in_dtypes)
+        elif self.name == MEAN:
+            return ResolvedAggregate.of[PrimitiveFold[MeanKernel]](in_dtypes)
+        elif self.name == MIN or self.name == MAX:
+            # The only place a *dtype* selects an implementation. A string
+            # extremum is a bytewise scan and a fixed-width one is a fold, and
+            # they are two `ColumnAggregation`s rather than one with a runtime
+            # branch, so neither compiles the other's body.
+            if len(in_dtypes) != 1:
+                raise Error(
+                    "aggregate '",
+                    self.name,
+                    "' takes exactly one input, got ",
+                    len(in_dtypes),
+                )
+            var stringly = (
+                in_dtypes[0].is_string() or in_dtypes[0].is_large_string()
+            )
+            if self.name == MIN:
+                if stringly:
+                    return ResolvedAggregate.of[StringExtremum[MinOp]](
+                        in_dtypes
+                    )
+                return ResolvedAggregate.of[PrimitiveFold[MinKernel]](in_dtypes)
+            else:
+                if stringly:
+                    return ResolvedAggregate.of[StringExtremum[MaxOp]](
+                        in_dtypes
+                    )
+                return ResolvedAggregate.of[PrimitiveFold[MaxKernel]](in_dtypes)
+        else:
+            raise Error("unknown aggregate '", self.name, "'")
+
+    def over_no_input(self) raises -> Optional[DynArray]:
+        """This aggregate's answer over an input that produced no column at
+        all, or `None` when it has none.
+
+        Delegates to the same conformers `resolve` names, and needs no dtypes —
+        which is the whole point. A filter that keeps nothing answers with no
+        batch, so the aggregate above it never learns its input's type.
+        `COUNT(x)` and `COUNT(DISTINCT x)` of nothing are 0 regardless; `sum`,
+        `mean` and the extrema are NULL, and their *dtype* is known only to the
+        plan's schema, so they decline here and `AggregateOperator` fills the
+        slot.
+        """
+        if self.name == COUNT_DISTINCT or self.name == APPROX_COUNT_DISTINCT:
+            return DistinctCount[True].over_no_input()
+        elif self.name == COUNT:
+            return ValidityCount.over_no_input()
+        return PrimitiveFold[SumKernel].over_no_input()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.name)
+
+
+# ---------------------------------------------------------------------------
+# RuntimeAggregate — the node
+# ---------------------------------------------------------------------------
+struct RuntimeAggregate(Evaluable, Value):
+    """An aggregate resolved by name, over erased operands.
+
+    The runtime lane's aggregate node, and the counterpart of
+    `ColumnAggregate[Agg, A]`. That one keeps its operand **typed**, so
+    `count_distinct(upper(region))` still fuses `upper(region)` into one loop;
+    this one cannot, because a caller who names its aggregate with a string
+    built its operand at run time too. Reach for it from a frontend, not from
+    Mojo source: `col("region", string).count_distinct()` gives the fused-operand
+    node instead.
+
+    **No `_dtype` and no `_fold` field.** Neither is available where the node
+    is built: `col("ts", timestamp(us)).min()` is written where no schema
+    exists, and a temporal dtype is not constructible from its type. The node
+    stores the *function* and resolves twice — once for the schema, once for
+    the columns.
+    """
+
+    var _inputs: List[DynValue]
+    """The operands, erased. A `List` because `ColumnFold` takes one."""
+
+    var _func: AggregateFunction
+    """The aggregate itself, name validated. Never changed by `alias` — one
+    combined name field would make `write_to` print `n(region)` after
+    `.alias("n")` and send the resolver looking for an aggregate called `n`."""
+
+    var _alias: String
+    """What `Value.name()` answers, and what `Aggregate._output_schema` reads.
+    Defaults to the function's own name, the same way `col("a", int64).sum()`
+    is named `"sum"`."""
+
+    def __init__(out self, var input: DynValue, var func: AggregateFunction):
+        self._inputs = [input^]
+        self._alias = func.name.copy()
+        self._func = func^
+
+    def __init__(
+        out self,
+        var inputs: List[DynValue],
+        var func: AggregateFunction,
+        var display: String,
+    ):
+        self._inputs = inputs^
+        self._func = func^
+        self._alias = display^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        var out = List[String]()
+        for ref i in self._inputs:
+            out = merged(out^, i.columns())
+        return out^
+
+    def name(self) -> String:
+        return self._alias.copy()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        """Resolve from schema-derived dtypes and keep only the output type.
+
+        The `ColumnFold` this also produces is discarded, deliberately: it is
+        one function-pointer assignment, and paying it is what makes the dtype
+        and the implementation come from the same branch.
+        """
+        var in_dtypes = List[DynType](capacity=len(self._inputs))
+        for ref i in self._inputs:
+            in_dtypes.append(i.dtype(schema))
+        return self._func.resolve(in_dtypes).dtype.copy()
+
+    comptime shape = Shape.scalar
+    """One value per group, so scalar-shaped in the same sense a literal is."""
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        """An aggregate has no per-batch value, and saying so is the point.
+
+        The same message `LaneAggregate.evaluate` raises, for the same
+        reason: an aggregate reached through an elementwise path is a mistake
+        in the plan, and naming it beats half-computing it.
+        """
+        raise Error(
+            "aggregate '",
+            self._alias,
+            (
+                "' cannot be evaluated per batch; use .aggregate() rather than"
+                " projecting or filtering on it"
+            ),
+        )
+
+    # -- to_operator --------------------------------------------------------
+
+    def to_operator(
+        self, grouped: Bool, bindings: Bindings = Bindings()
+    ) raises -> DynOperator:
+        """`grouped` stays a runtime `Bool` here rather than becoming a
+        comptime placement: there is no fused loop for the choice to
+        specialise, and the operator only needs to know whether to keep the
+        group ids."""
+        var inputs = List[DynOperator](capacity=len(self._inputs))
+        for ref i in self._inputs:
+            inputs.append(i.to_operator(False, bindings))
+        return ColumnAggregateOperator(inputs^, self._func.copy(), grouped)
+
+    def alias(self, var name: String) -> Self:
+        """Rename this aggregate. Changes **only** `_alias`, so the resolver
+        still sees the function and `.alias("n")` cannot change which kernel
+        runs."""
+        return Self(self._inputs.copy(), self._func.copy(), name^)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._func, "(")
+        for i in range(len(self._inputs)):
+            if i > 0:
+                writer.write(", ")
+            writer.write(self._inputs[i])
+        writer.write(")")

@@ -52,12 +52,17 @@ from ...tabular import RecordBatch
 from ...views import apply
 from ..logical import Shape, Value
 from ..params import Bindings
-from .aggregates import NumericAggregate
+from .aggregates import ColumnAggregate, LaneAggregate
 from .numeric import Add, Sub, Mul, Eq, Ne, Lt, Le, Gt, Ge
 from .boolean import And, Not, Or, Xor
 from .strings import StrEq, StrNe, StrLt, StrGt
 from ...kernels.aggregate import (
     CountKernel,
+    DistinctCount,
+    MaxOp,
+    MinOp,
+    PrimitiveFold,
+    StringExtremum,
     MaxKernel,
     MeanKernel,
     MinKernel,
@@ -105,6 +110,35 @@ trait ComptimeValue(Evaluable, Value):
         copies the node without descending into it.
         """
         return EvalOperator[Self](self.copy(), bindings.copy())
+
+    # -- the lane-agnostic aggregate surface --------------------------------
+    #
+    # One default each, on the base trait rather than three copies on the
+    # family traits: a cardinality is an int64 whatever was counted, so there
+    # is no per-family variation to express. Every family gets them, including
+    # the ones with no lane at all.
+    #
+    # They return a `ColumnAggregate`, which **materialises the aggregate but
+    # not the operand**: `count_distinct(upper(region))` still compiles
+    # `upper(region)` into one fused loop and only the distinct count runs over
+    # a column. `count_distinct` has no fold algebra — no identity, no combine,
+    # no finalize — so there is no `K` a fully fused node could be
+    # parameterised on, and that is the one thing being given up.
+    #
+    # It is a one-way door: CLAUDE.md records that a trait default whose return
+    # type a conformer must change becomes an ambiguous overload at every call
+    # site, so `NumericValue` can never later specialise these to a fused form.
+
+    def count_distinct(self) -> ColumnAggregate[DistinctCount[True], Self]:
+        """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
+        return ColumnAggregate[DistinctCount[True], Self](self.copy())
+
+    def approx_count_distinct(
+        self,
+    ) -> ColumnAggregate[DistinctCount[False], Self]:
+        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
+        standard error, nulls excluded."""
+        return ColumnAggregate[DistinctCount[False], Self](self.copy())
 
     comptime Type: DataType
     """This node's output type, known without a schema.
@@ -377,6 +411,23 @@ trait StringValue(ComptimeValue):
     def __gt__[Rhs: StringValue](self, o: Rhs) -> StrGt[Self, Rhs]:
         return StrGt(self.copy(), o.copy())
 
+    # -- aggregates ---------------------------------------------------------
+    #
+    # A `ColumnAggregate`, not a `LaneAggregate`: `min` over a string is a
+    # bytewise scan keeping the index of the best row, not a scalar fold, so
+    # there is no `AggKernel` to parameterise a fused node on. The **operand**
+    # stays typed, so `min(upper(name))` still fuses `upper(name)`.
+
+    def min(self) -> ColumnAggregate[StringExtremum[MinOp], Self]:
+        """`MIN(self)` — lexicographic (bytewise), matching Arrow's
+        `hash_min`. Keeps the input's type."""
+        return ColumnAggregate[StringExtremum[MinOp], Self](self.copy())
+
+    def max(self) -> ColumnAggregate[StringExtremum[MaxOp], Self]:
+        """`MAX(self)` — lexicographic (bytewise), matching Arrow's
+        `hash_max`."""
+        return ColumnAggregate[StringExtremum[MaxOp], Self](self.copy())
+
 
 trait NumericValue(PrimitiveValue):
     """This value supports arithmetic.
@@ -397,41 +448,41 @@ trait NumericValue(PrimitiveValue):
     # `col("amount", int64).sum()` rather than naming a kernel. Trait defaults,
     # so every numeric node gets them for free and no leaf repeats them.
     #
-    # They are here and not on `PrimitiveValue` because `NumericAggregate`
+    # They are here and not on `PrimitiveValue` because `LaneAggregate`
     # binds its input on `NumericValue`. `min`/`max` are ordered rather than
     # arithmetic and belong one level up the moment `AggState` accepts a
     # non-numeric accumulator; until then they would not compile there.
 
-    def sum(self) -> NumericAggregate[SumKernel, Self]:
+    def sum(self) -> LaneAggregate[SumKernel, Self]:
         """`SUM(self)`. Integers widen to int64; floats stay float64."""
-        return NumericAggregate[SumKernel, Self](self.copy(), String("sum"))
+        return LaneAggregate[SumKernel, Self](self.copy(), String("sum"))
 
-    def product(self) -> NumericAggregate[ProductKernel, Self]:
+    def product(self) -> LaneAggregate[ProductKernel, Self]:
         """`PRODUCT(self)`."""
-        return NumericAggregate[ProductKernel, Self](
+        return LaneAggregate[ProductKernel, Self](
             self.copy(), String("product")
         )
 
-    def mean(self) -> NumericAggregate[MeanKernel, Self]:
+    def mean(self) -> LaneAggregate[MeanKernel, Self]:
         """`AVG(self)`. Accumulates in float64 and divides by the valid count,
         so nulls are excluded rather than counted as zero."""
-        return NumericAggregate[MeanKernel, Self](self.copy(), String("mean"))
+        return LaneAggregate[MeanKernel, Self](self.copy(), String("mean"))
 
-    def min(self) -> NumericAggregate[MinKernel, Self]:
+    def min(self) -> LaneAggregate[MinKernel, Self]:
         """`MIN(self)`. Keeps the input's type."""
-        return NumericAggregate[MinKernel, Self](self.copy(), String("min"))
+        return LaneAggregate[MinKernel, Self](self.copy(), String("min"))
 
-    def max(self) -> NumericAggregate[MaxKernel, Self]:
+    def max(self) -> LaneAggregate[MaxKernel, Self]:
         """`MAX(self)`."""
-        return NumericAggregate[MaxKernel, Self](self.copy(), String("max"))
+        return LaneAggregate[MaxKernel, Self](self.copy(), String("max"))
 
-    def count(self) -> NumericAggregate[CountKernel, Self]:
+    def count(self) -> LaneAggregate[CountKernel, Self]:
         """`COUNT(self)` — the *non-null* values of `self`, not the row count.
 
         `COUNT(*)` is `count_star()` in `builders.mojo`, which is this same
         aggregate over a literal.
         """
-        return NumericAggregate[CountKernel, Self](self.copy(), String("count"))
+        return LaneAggregate[CountKernel, Self](self.copy(), String("count"))
 
     # -- operators ----------------------------------------------------------
     # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`
@@ -480,6 +531,26 @@ trait TemporalValue(PrimitiveValue):
     """
 
     comptime Type: TemporalType
+
+    # -- aggregates ---------------------------------------------------------
+    #
+    # `min`/`max` over a temporal column *is* a genuine `AggState` fold — the
+    # accumulator keeps the input dtype and `MinMax.acc_dtype` carries its unit
+    # and timezone through. It cannot be the **fused** one today:
+    # `FoldOperator.__init__` builds its accumulator dtype from `Self.A.Type()`
+    # and a `TemporalType` is not `Defaultable`. Routing through the runtime
+    # lane is correct but materialises; moving the accumulator dtype out of
+    # `__init__` and into first push is what would fuse it, and is owed.
+
+    def min(self) -> ColumnAggregate[PrimitiveFold[MinKernel], Self]:
+        """`MIN(self)`. Keeps the input's dtype — unit and timezone
+        included."""
+        return ColumnAggregate[PrimitiveFold[MinKernel], Self](self.copy())
+
+    def max(self) -> ColumnAggregate[PrimitiveFold[MaxKernel], Self]:
+        """`MAX(self)`. Keeps the input's dtype — unit and timezone
+        included."""
+        return ColumnAggregate[PrimitiveFold[MaxKernel], Self](self.copy())
 
 
 # ---------------------------------------------------------------------------

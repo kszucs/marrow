@@ -52,6 +52,78 @@
 
 ### Features
 
+- **Aggregation, on one axis: what the aggregate consumes.** `count_distinct`,
+  `min`/`max` over a string column, and `min`/`max` over a temporal column had
+  no path in `marrow/expr` at all -- the fluent aggregate surface existed only
+  on `NumericValue`, so 4 of golden's 6 `.max()` and 4 of its 5 `.min()` uses
+  were unreachable. The gap is not "non-numeric aggregates": it is that these
+  have **no fold algebra**. `count_distinct` has no identity, no combine and no
+  finalize, so there is no `AggKernel` to parameterise a fused node on, at any
+  operand bound.
+
+  `ColumnAggregation` (`kernels/aggregate.mojo`) is that shape stated once --
+  `out_dtype(in_dtypes)` and `grouped(groups, values)`, two static methods and
+  no associated types, which is what lets it be a comptime parameter for one
+  lane *and* erase to a plain `ColumnFold` function pointer for the other.
+  Conformers: `DistinctCount[exact]`, `StringExtremum[Op]`,
+  `PrimitiveFold[K]` and `ValidityCount`.
+
+  Two nodes, named for what they consume rather than for their operand's type
+  family: `LaneAggregate[K, A]` (renamed from `NumericAggregate`) folds its
+  operand's lanes into registers and never materialises it -- the 14.6x, and
+  the reason `A` must be a `NumericValue`, since a lane is a `SIMD` and needs a
+  fixed width. `ColumnAggregate[Agg, A]` materialises the operand **once** and
+  computes over the column. It is not "the non-numeric one":
+  `col("v", int64).count_distinct()` lands there over a perfectly numeric
+  column. Critically **`A` stays typed**, so `count_distinct(upper(s))` still
+  compiles `upper(s)` into one fused loop -- only the aggregation
+  materialises.
+
+  New fluent verbs: `.count_distinct()` / `.approx_count_distinct()` as one
+  trait default each on `ComptimeValue` (every family gets them, and a
+  cardinality is int64 whatever was counted), and `.min()` / `.max()` on
+  `StringValue` and `TemporalValue`. `NumericValue.sum/product/mean/min/max/
+  count` are untouched and still fuse.
+
+  `RuntimeValue` gained the same eight verbs, so **one spelling works in both
+  lanes** -- `col("s", string).count_distinct()` fuses its operand,
+  `col("s").count_distinct()` does not, and the caller picks by whether they
+  passed a dtype.
+
+- **`AggregateFunction` -- one name x dtype ladder, validated at
+  construction.** `AggregateFunction("summ")` raises where it is written
+  rather than on the first morsel of a long scan, and `resolve(in_dtypes)`
+  answers the output dtype and the implementation **together**, taking both
+  off one `ColumnAggregation` via `ResolvedAggregate.of[Agg]`. That matters
+  because a `ColumnFold` takes `List[DynArray]`: a dtype the fold does not
+  expect is a `Variant` misaccess -- an abort, not a catchable `Error` -- and
+  `Aggregation.out_dtype` used to be checked against `grouped`'s return type
+  by the compiler. Producing both from one type makes disagreement
+  unrepresentable rather than merely tested.
+
+- **`Groups.single(n)` / `Groups.is_single()`, and `Groups.__len__` deleted.**
+  The one-slot assignment is empty `ids` with `num_groups == 1` -- the
+  convention `Morsel.ungrouped` and `ScalarGrouping.assign` already
+  established, and both now say so by calling `Groups.single`. `__len__` had
+  zero callers, returned `len(self.ids)`, and its docstring said "number of
+  rows assigned", so `for i in range(len(groups))` was a silently empty loop
+  waiting to be written -- which is exactly the failure mode
+  `ColumnAggregation.grouped` has to branch away from.
+
+- **`ColumnAggregateOperator`** (`expr/physical.mojo`), zero type parameters,
+  shared by both lanes. It buffers each morsel's evaluated columns and group
+  ids, concats at `drain`, and calls one `ColumnFold`. The operand keeps its
+  fusion because this operator does not evaluate the operand -- the operand's
+  own `EvalOperator[A]` does.
+
+- **`array(values: List[Optional[String]])` and `nulls(size, dtype)`**
+  (`marrow/builders.mojo`). `array` had a nullable overload for every element
+  type except strings, which is why four test files had grown their own
+  `StringBuilder` loops; `nulls` had only its typed half. The non-`Optional`
+  `array(List[String])` overload is **gone**, because the two are ambiguous on
+  a `["a", "b"]` literal -- the same single-overload shape the numeric
+  factories already have.
+
 - **Both lanes can express a predicate now.** The comptime lane had only `>`
   and `<` for numerics, and the runtime lane had no comparisons or boolean
   connectives at all -- four constructors total, so `filter` was reachable only

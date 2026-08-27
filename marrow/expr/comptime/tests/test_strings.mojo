@@ -11,7 +11,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit, table
 from ...params import Bindings
-from ....builders import array, Int64Builder, StringBuilder
+from ....builders import array, Int64Builder
 from ....arrays import StringArray
 from ....dtypes import (
     DynType,
@@ -44,14 +44,8 @@ from ..strings import (
 
 
 def _names() raises -> StringArray:
-    """`array()` has no `Optional[String]` overload, so a nullable string
-    column is built through the builder."""
-    var b = StringBuilder(4)
-    b.append("pear")
-    b.append("quince")
-    b.append_null()
-    b.append("apple")
-    return b.finish()
+    var values: List[Optional[String]] = ["pear", "quince", None, "apple"]
+    return array(values)
 
 
 def _batch() raises -> RecordBatch:
@@ -164,12 +158,13 @@ def _others() raises -> StringArray:
     """A second nullable string column whose null sits at a *different* index
     than `_names()`, so a column-vs-column comparison has to intersect two
     distinct validity bitmaps rather than copy one."""
-    var b = StringBuilder(4)
-    b.append("pear")  # == name[0]
-    b.append_null()  # null here, name[1] valid
-    b.append("fig")  # valid here, name[2] null
-    b.append("banana")  # != name[3]
-    return b.finish()
+    var values: List[Optional[String]] = [
+        "pear",  # == name[0]
+        None,  # null here, name[1] valid
+        "fig",  # valid here, name[2] null
+        "banana",  # != name[3]
+    ]
+    return array(values)
 
 
 def test_string_comparison_intersects_both_operand_validities() raises:
@@ -198,10 +193,10 @@ def test_a_string_comparison_over_an_empty_batch() raises:
     wrong where a SIMD path cannot: the offsets buffer of an empty
     `StringArray` still holds one entry, so a length-driven loop is the only
     thing keeping this from reading it."""
-    var name = StringBuilder(0)
+    var empty = List[Optional[String]]()
     var a = Int64Builder(0)
     var b = record_batch(
-        [name.finish().to_dyn(), a.finish().to_dyn()], names=["name", "a"]
+        [array(empty).to_dyn(), a.finish().to_dyn()], names=["name", "a"]
     )
     var got = (
         (col("name", string) > lit("b", string))
@@ -238,10 +233,8 @@ def test_string_lower_and_strip_compose_without_materialising() raises:
     """`Strip(Lower(col)) == lit` is one builder pass — the intermediate
     `lower(col)` never becomes a column. Observable as the right answer with
     the operands nested, which is what this pins."""
-    var pad = StringBuilder(2)
-    pad.append("  PeAr  ")
-    pad.append("  Quince")
-    var b = record_batch([pad.finish().to_dyn()], names=["name"])
+    var pad: List[Optional[String]] = ["  PeAr  ", "  Quince"]
+    var b = record_batch([array(pad).to_dyn()], names=["name"])
     var got = (
         (Strip(Lower(col("name", string))) == lit("pear", string))
         .evaluate(b.to_struct_array(), Bindings())
@@ -372,14 +365,10 @@ def test_string_ilike_ignores_case() raises:
 def test_string_like_against_a_column_pattern() raises:
     """The non-scalar branch: a per-row pattern cannot be compiled once, so
     this goes through `apply` instead of `apply_scalar`."""
-    var pats = StringBuilder(2)
-    pats.append("p%")
-    pats.append("z%")
-    var names = StringBuilder(2)
-    names.append("pear")
-    names.append("quince")
+    var pats: List[Optional[String]] = ["p%", "z%"]
+    var names: List[Optional[String]] = ["pear", "quince"]
     var b = record_batch(
-        [names.finish().to_dyn(), pats.finish().to_dyn()],
+        [array(names).to_dyn(), array(pats).to_dyn()],
         names=["name", "pat"],
     )
     var got = (
