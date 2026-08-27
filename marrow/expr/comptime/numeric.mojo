@@ -25,7 +25,13 @@ from ...kernels.numeric import (
     SubKernel,
 )
 from ...arrays import StructArray, BoolArray, DynArray, PrimitiveArray
-from ...kernels.conditional import case_when
+from ...kernels.conditional import (
+    BinaryConditionalKernel,
+    CoalesceKernel,
+    FillNullKernel,
+    NullifKernel,
+    case_when,
+)
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
@@ -387,3 +393,81 @@ comptime TemporalLt = TemporalCompare[LtKernel, _, _]
 comptime TemporalLe = TemporalCompare[LeKernel, _, _]
 comptime TemporalGt = TemporalCompare[GtKernel, _, _]
 comptime TemporalGe = TemporalCompare[GeKernel, _, _]
+
+
+# ---------------------------------------------------------------------------
+# ConditionalBinary — coalesce / nullif / fill_null
+# ---------------------------------------------------------------------------
+struct ConditionalBinary[
+    K: BinaryConditionalKernel, L: NumericValue, R: NumericValue
+](ColumnBound, NumericValue, Unnamed):
+    """`coalesce` / `nullif` / `fill_null` over two same-dtype numeric operands.
+
+    A breaker, and the one whose validity is the point rather than a detail.
+    These nodes decide their nulls from the operands' *values* — `coalesce`
+    takes the second operand exactly where the first was null, `nullif`
+    manufactures a null where two values are equal — so validity cannot be
+    derived by intersecting bitmaps and must come from the computed result.
+
+    **That is why this conforms to `ColumnBound`**, and it is what
+    `comptime/core.mojo` is referring to when it says `exprold` needed two
+    validity methods and evaluated `coalesce`/`nullif`/`case_when` twice per
+    fused pass: its `validity` took the batch, so it re-ran `combine` over both
+    operands to recover a bitmap the result already carried
+    (`marrow/exprold/values.mojo:2578-2588`). Here `bind` computes once and
+    `validity` reads the bound.
+    """
+
+    comptime Type = Self.L.Type
+    comptime shape = Shape.columnar
+    """Columnar regardless of the operands. The kernel runs over columns, so
+    this reports what it does — as `CaseWhen` does."""
+
+    comptime Bound = PrimitiveArray[Self.Type]
+
+    var l: Self.L
+    var r: Self.R
+
+    def __init__(out self, var l: Self.L, var r: Self.R):
+        self.l = l^
+        self.r = r^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return merged(self.l.columns(), self.r.columns())
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.l.dtype(schema)
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var n = len(batch)
+        return (
+            Self.K.combine(
+                self.l.evaluate(batch, bindings).to_array(n),
+                self.r.evaluate(batch, bindings).to_array(n),
+            )
+            .as_primitive[Self.Type]()
+            .copy()
+        )
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
+
+
+comptime Coalesce = ConditionalBinary[CoalesceKernel, _, _]
+comptime Nullif = ConditionalBinary[NullifKernel, _, _]
+comptime FillNull = ConditionalBinary[FillNullKernel, _, _]
+"""`fill_null(l, r)` — `l` with its nulls taken from `r`.
+
+For two operands this computes what `Coalesce` does, and it is kept as its own
+name because that is the verb PyArrow and Polars users reach for, and because
+the kernel additionally pins both operands to one dtype."""
