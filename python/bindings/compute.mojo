@@ -24,10 +24,9 @@ from marrow.exprold.aggregates import (
     CountDistinct,
     ApproxCountDistinct,
 )
-from marrow.kernels.aggregate import (
-    Aggregation,
-    AggFunction,
-)
+from marrow.exprold.aggregates import AggFunction
+from marrow.kernels.aggregate import AggKernel
+from marrow.kernels.core import Groups
 
 from helpers import pyfunction
 
@@ -68,21 +67,21 @@ def cast(
 
 
 # Whole-column aggregates. The column's dtype is a runtime value here, so each
-# one resolves its `AggFunction` to the `Aggregation` implementing it (the same
+# one resolves its `AggFunction` to the `AggKernel` implementing it (the same
 # path a `GROUP BY` plan takes, with one implicit group) and reads the single
 # row back out — the thin `(DynArray, ExecContext) -> DynScalar` shape
 # `pykernel` expects.
+#
+# `ctx` is accepted but no longer reaches the aggregate: `AggKernel.grouped`
+# carries no context, so each one resolves its own parallelism from
+# `ExecContext.auto()`. The signature stays because `pykernel` pins it.
 def aggregate[
     F: AggFunction
 ](array: DynArray, ctx: ExecContext) raises -> DynScalar:
     var box = List[DynScalar]()
 
-    def run[A: Aggregation]() raises {mut box, imm}:
-        box.append(
-            # `ctx` whole, not `ctx.resolved_num_threads()` — destructuring
-            # here dropped the device off a Python-supplied GPU context.
-            A.whole(A.from_any(array), ctx).to_dyn()[0]
-        )
+    def run[A: AggKernel]() raises {mut box, imm}:
+        box.append(A.grouped(Groups.single(len(array)), [array.copy()])[0])
 
     F.resolve(array.dtype(), run)
     return box[0].copy()

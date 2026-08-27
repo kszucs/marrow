@@ -68,6 +68,18 @@ errors no selected test happens to import and surfaces **all** errors and
 warnings in one pass. `mojo precompile` rejects `-D`, so it always builds the
 CPU-only configuration.
 
+**`precompile` stops at `marrow/`, and three other trees import it.**
+`python/bindings/`, `golden/` and `benchmarks/` are *not* compiled by it, so a
+signature change inside `marrow/` can leave `precompile` at 0/0 and every
+`marrow/**/tests` case passing while the tree is broken. Renaming a kernel
+trait did exactly that: `python/bindings/compute.mojo` still imported the old
+name, and the break only surfaced when `pytest golden` tried to build
+`libmarrow.so` and bailed out of the whole session before running a case —
+reported as `exit code 0`, which reads like a pass. After any change to a
+public name under `marrow/`, run `pixi run build_python` (bindings) and
+`pixi run -e dev pytest golden` (154 cases), and grep `benchmarks/binary_size/`
+for the name.
+
 A single test file **cannot** be compiled on its own: with no `main()` there is
 nothing to build (`mojo build` reports `module does not contain a 'main'
 function`). Run it through `pytest`, which generates a driver for the selection.

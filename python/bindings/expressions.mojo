@@ -5,7 +5,7 @@ Exposes `marrow.exprold.dynamic.DynValue` as the Python type ``Expr`` and
 the AOT lane's nodes are parameterised on comptime dtypes, so there is no
 single Mojo type a Python object could hold. `AggExpr` is the exception, and
 deliberately so — it is the one aggregate type *both* lanes produce, carrying
-either a function name to resolve or an already-named `Aggregation`. Python
+either a function name to resolve or an already-named `AggKernel`. Python
 only ever builds the former.
 
 **`DynValue` and `AggExpr` cannot be registered directly.** `add_type[T]`
