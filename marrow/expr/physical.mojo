@@ -50,7 +50,7 @@ from ..parquet.reader import LeafSet, ParquetFile
 from ..parquet.source import MappedFile
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
-from .runtime.aggregates import AggregateFunction
+from .runtime.aggregates import RuntimeAggregate
 from .params import Bindings
 from ..kernels.sort import sort_indices
 from ..schema import Schema
@@ -685,7 +685,8 @@ struct ColumnAggregateOperator(Operator):
 
     **Zero type parameters, shared by both lanes.** The comptime lane hands it
     `Agg.grouped` — a statically known method taken as a thin pointer — and the
-    runtime lane hands it an `AggregateFunction` to resolve on first push. The
+    runtime lane hands it the `RuntimeAggregate` node to resolve on first push.
+    The
     operand keeps its fusion either way, because this operator does not
     evaluate the operand: `_inputs` holds the operand's *own* operator, which
     for a comptime subtree is a fully monomorphised `EvalOperator[A]`.
@@ -702,13 +703,13 @@ struct ColumnAggregateOperator(Operator):
     special-casing this operator among the values it holds, which is the
     uniformity that made "every value answers `to_operator`" work at all.
 
-    **Exactly one of `_fold` and `_func` is set at construction, and which one
+    **Exactly one of `_fold` and `_node` is set at construction, and which one
     says which lane built this.** The comptime lane knows its
     `ColumnAggregation` at compile time and supplies `_fold` directly — which
     is what keeps a binary that only ever aggregates a comptime expression
     from linking the name ladder at all, and that DCE property is what the
     whole two-node design turns on. The runtime lane knows only a name, so it
-    supplies `_func` and `_fold` is filled on **first push**, from the morsel's
+    supplies `_node` and `_fold` is filled on **first push**, from the morsel's
     real dtypes; it cannot be filled earlier, because a `RuntimeValue` operand
     has no dtype until a schema is in hand. `_fold` is therefore `Some` from
     the first push onward in both cases, which is the invariant `drain` reads.
@@ -722,8 +723,10 @@ struct ColumnAggregateOperator(Operator):
     var _fold: Optional[ColumnFold]
     """The implementation. `Some` from the first push onward, in both lanes."""
 
-    var _func: Optional[AggregateFunction]
-    """The resolver, for the lane that has a name instead of a type."""
+    var _node: Optional[RuntimeAggregate]
+    """The node itself, for the lane that has a name instead of a type — an
+    operator here already holds its node (`FoldOperator._input`,
+    `EvalOperator._value`), so the ladder needs no object of its own."""
 
     var _empty: Optional[DynArray]
     """This aggregate's answer over an input that produced no column at all.
@@ -758,7 +761,7 @@ struct ColumnAggregateOperator(Operator):
             self._chunks.append(List[DynArray]())
         self._inputs = inputs^
         self._fold = fold
-        self._func = None
+        self._node = None
         self._empty = empty^
         self._scatters = scatters
         self._ids = List[DynArray]()
@@ -769,7 +772,7 @@ struct ColumnAggregateOperator(Operator):
     def __init__(
         out self,
         var inputs: List[DynOperator],
-        var func: AggregateFunction,
+        var node: RuntimeAggregate,
         scatters: Bool,
     ) raises:
         """The runtime lane's constructor: the aggregate is a name, so the
@@ -779,8 +782,8 @@ struct ColumnAggregateOperator(Operator):
             self._chunks.append(List[DynArray]())
         self._inputs = inputs^
         self._fold = None
-        self._empty = func.over_no_input()
-        self._func = func^
+        self._empty = node.over_no_input()
+        self._node = node^
         self._scatters = scatters
         self._ids = List[DynArray]()
         self._num_groups = 0 if scatters else 1
@@ -804,7 +807,7 @@ struct ColumnAggregateOperator(Operator):
             var in_dtypes = List[DynType](capacity=len(self._chunks))
             for i in range(len(self._chunks)):
                 in_dtypes.append(self._chunks[i][0].dtype())
-            self._fold = self._func.value().resolve(in_dtypes).fold
+            self._fold = self._node.value().resolve(in_dtypes).fold
         self._rows += n
         if self._scatters:
             self._ids.append(morsel.groups.ids.copy().to_dyn())

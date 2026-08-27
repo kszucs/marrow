@@ -6,7 +6,7 @@ a **string**, from a frontend that built the whole query after the program
 started, so both the aggregate and its operands are erased.
 
 The claim under test is that both roads reach the same `ColumnAggregation`, and
-that `AggregateFunction` refuses a name it cannot serve at the point it is
+that `RuntimeAggregate` refuses a name it cannot serve at the point it is
 written rather than on the first morsel.
 """
 
@@ -17,7 +17,8 @@ from ....dtypes import DynType, int64, string
 from ....tabular import RecordBatch, record_batch
 from ...builders import col, table
 from ...logical import DynValue, Shape
-from ..aggregates import AggregateFunction
+from ..aggregates import RuntimeAggregate
+from ..values import column
 
 
 def _batch() raises -> RecordBatch:
@@ -29,17 +30,21 @@ def _batch() raises -> RecordBatch:
 
 
 def test_named_aggregate_rejects_an_unknown_name_where_it_is_written() raises:
-    """Validation at construction is the whole reason `AggregateFunction` is a
-    type rather than a `String` field: `"summ"` fails here, not on the first
-    morsel of a long scan."""
+    """Validation in `__init__` is why the name is not just a `String` field:
+    `"summ"` fails where the node is built, not on the first morsel of a long
+    scan.
+
+    Constructed directly rather than through the fluent surface, because the
+    fluent surface cannot produce a bad name — which is the point of it.
+    """
     var raised = False
     try:
-        _ = AggregateFunction("summ")
+        _ = RuntimeAggregate(DynValue(column("s")), String("summ"))
     except:
         raised = True
     assert_true(raised)
     # And a real one does not.
-    _ = AggregateFunction("count_distinct")
+    _ = RuntimeAggregate(DynValue(column("s")), String("count_distinct"))
 
 
 def test_named_aggregate_resolution_answers_dtype_and_fold_together() raises:
@@ -51,10 +56,10 @@ def test_named_aggregate_resolution_answers_dtype_and_fold_together() raises:
     """
     var dtypes = List[DynType](capacity=1)
     dtypes.append(DynType(string))
-    var counted = AggregateFunction("count_distinct").resolve(dtypes)
+    var counted = col("s").count_distinct().resolve(dtypes)
     assert_true(counted.dtype == DynType(int64))
 
-    var extremum = AggregateFunction("min").resolve(dtypes)
+    var extremum = col("s").min().resolve(dtypes)
     assert_true(extremum.dtype == DynType(string))
 
 

@@ -59,7 +59,7 @@ from ..logical import DynValue, Shape, Value, merged
 from ..params import Bindings
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
-from .aggregates import AggregateFunction, RuntimeAggregate
+from .aggregates import RuntimeAggregate
 
 
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
@@ -304,49 +304,45 @@ struct RuntimeValue(Evaluable, Movable, Value):
     #     col("s", string).count_distinct()   # comptime, operand fuses
     #     col("s").count_distinct()           # runtime,  operand erased
     #
-    # Every one of them raises, because `AggregateFunction` validates its name
-    # at construction — which is what makes an unknown aggregate impossible to
+    # Every one of them raises, because `RuntimeAggregate` validates its name
+    # in `__init__` — which is what makes an unknown aggregate impossible to
     # build from here, and keeps each verb's name literal in exactly one place.
 
     def sum(self) raises -> RuntimeAggregate:
         """`SUM(self)`. Integers widen to int64; floats stay float64."""
-        return RuntimeAggregate(DynValue(self), AggregateFunction("sum"))
+        return RuntimeAggregate(DynValue(self), String("sum"))
 
     def product(self) raises -> RuntimeAggregate:
         """`PRODUCT(self)`."""
-        return RuntimeAggregate(DynValue(self), AggregateFunction("product"))
+        return RuntimeAggregate(DynValue(self), String("product"))
 
     def mean(self) raises -> RuntimeAggregate:
         """`AVG(self)`. Accumulates in float64 over the valid values, so nulls
         are excluded rather than counted as zero."""
-        return RuntimeAggregate(DynValue(self), AggregateFunction("mean"))
+        return RuntimeAggregate(DynValue(self), String("mean"))
 
     def min(self) raises -> RuntimeAggregate:
         """`MIN(self)`. Keeps the input's dtype — a timestamp's unit and
         timezone included; lexicographic over a string column."""
-        return RuntimeAggregate(DynValue(self), AggregateFunction("min"))
+        return RuntimeAggregate(DynValue(self), String("min"))
 
     def max(self) raises -> RuntimeAggregate:
         """`MAX(self)`."""
-        return RuntimeAggregate(DynValue(self), AggregateFunction("max"))
+        return RuntimeAggregate(DynValue(self), String("max"))
 
     def count(self) raises -> RuntimeAggregate:
         """`COUNT(self)` — the *non-null* values of `self`, not the row
         count."""
-        return RuntimeAggregate(DynValue(self), AggregateFunction("count"))
+        return RuntimeAggregate(DynValue(self), String("count"))
 
     def count_distinct(self) raises -> RuntimeAggregate:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
-        return RuntimeAggregate(
-            DynValue(self), AggregateFunction("count_distinct")
-        )
+        return RuntimeAggregate(DynValue(self), String("count_distinct"))
 
     def approx_count_distinct(self) raises -> RuntimeAggregate:
         """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
         standard error, nulls excluded."""
-        return RuntimeAggregate(
-            DynValue(self), AggregateFunction("approx_count_distinct")
-        )
+        return RuntimeAggregate(DynValue(self), String("approx_count_distinct"))
 
     def write_to[W: Writer](self, mut writer: W):
         var named = self.name()
