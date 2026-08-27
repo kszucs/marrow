@@ -1399,7 +1399,7 @@ struct ValidCount(AggKernel):
     the count as the accumulator.
 
     The comptime lane does **not** route numeric `count` here — it fuses
-    `LaneAggregate[CountKernel, A]`, which pays one typed `bitmap.test()` per
+    `FusedAggregate[CountKernel, A]`, which pays one typed `bitmap.test()` per
     row where this pays a `DynArray._dispatch` walk: a linear `comptime for`
     over 37 variant arms plus an indirect call *per row*, inside an already
     cache-hostile random-write loop. Measured at 1M rows / 100k groups on a

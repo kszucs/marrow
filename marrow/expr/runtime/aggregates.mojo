@@ -1,8 +1,8 @@
 """Aggregates named at run time — the runtime lane's half of aggregation.
 
 Its counterpart is `comptime/aggregates.mojo`, which holds the same aggregates
-as **types**: `LaneAggregate[K, A]` for the fused folds and
-`ColumnAggregate[Agg, A]` for the ones that materialise. Both lanes share one
+as **types**: `FusedAggregate[K, A]` for the fused folds and
+`BufferedAggregate[Agg, A]` for the ones that materialise. Both lanes share one
 vocabulary — `AggKernel` in `kernels/aggregate.mojo` — and differ only
 in when the aggregate is chosen.
 
@@ -26,11 +26,11 @@ mandatory:
 
 - `Aggregate._output_schema` calls `a.dtype(schema)` before any batch exists,
   so it resolves from schema-derived dtypes and keeps only its `dtype`.
-- `ColumnAggregateOperator` holds the node and resolves again on first push,
+- `BufferedAggregateOperator` holds the node and resolves again on first push,
   from the morsel's real dtypes, keeping only `fold`. It cannot resolve
   earlier: a `RuntimeValue` operand has no dtype until a schema is in hand.
   Holding the node is what removes the third type an earlier draft had — an
-  operator in this tree already holds its node (`FoldOperator._input`,
+  operator in this tree already holds its node (`FusedAggregateOperator._input`,
   `EvalOperator._value`), so `resolve` can simply be a method on it.
 
 Discarding a `AggregateFn` at plan time is one function-pointer assignment, and
@@ -65,7 +65,7 @@ from ...schema import Schema
 from ..logical import DynValue, Shape, Value, merged
 from ..params import Bindings
 from ..physical import (
-    ColumnAggregateOperator,
+    BufferedAggregateOperator,
     Datum,
     DynOperator,
     Evaluable,
@@ -128,7 +128,7 @@ struct RuntimeAggregate(Evaluable, Value):
     """An aggregate resolved by name, over erased operands.
 
     The runtime lane's aggregate node, and the counterpart of
-    `ColumnAggregate[Agg, A]`. That one keeps its operand **typed**, so
+    `BufferedAggregate[Agg, A]`. That one keeps its operand **typed**, so
     `count_distinct(upper(region))` still fuses `upper(region)` into one loop;
     this one cannot, because a caller who names its aggregate with a string
     built its operand at run time too. Reach for it from a frontend, not from
@@ -195,7 +195,7 @@ struct RuntimeAggregate(Evaluable, Value):
         """The one name x dtype ladder in the system.
 
         Public because the **operator holds this node** and calls it on first
-        push, the same way `FoldOperator` reaches into the `A` it holds. That
+        push, the same way `FusedAggregateOperator` reaches into the `A` it holds. That
         is what lets one type carry both the plan-time and the execution-time
         answer instead of a separate function object beside it.
 
@@ -263,7 +263,7 @@ struct RuntimeAggregate(Evaluable, Value):
         batch, so the aggregate above it never learns its input's type.
         `COUNT(x)` and `COUNT(DISTINCT x)` of nothing are 0 regardless; `sum`,
         `mean` and the extrema are NULL, and their *dtype* is known only to the
-        plan's schema, so they decline here and `AggregateOperator` fills the
+        plan's schema, so they decline here and `GroupByOperator` fills the
         slot.
         """
         if self._name == COUNT_DISTINCT or self._name == APPROX_COUNT_DISTINCT:
@@ -303,7 +303,7 @@ struct RuntimeAggregate(Evaluable, Value):
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """An aggregate has no per-batch value, and saying so is the point.
 
-        The same message `LaneAggregate.evaluate` raises, for the same
+        The same message `FusedAggregate.evaluate` raises, for the same
         reason: an aggregate reached through an elementwise path is a mistake
         in the plan, and naming it beats half-computing it.
         """
@@ -328,7 +328,7 @@ struct RuntimeAggregate(Evaluable, Value):
         var inputs = List[DynOperator](capacity=len(self._inputs))
         for ref i in self._inputs:
             inputs.append(i.to_operator(False, bindings))
-        return ColumnAggregateOperator(inputs^, self.copy(), grouped)
+        return BufferedAggregateOperator(inputs^, self.copy(), grouped)
 
     def alias(self, var name: String) raises -> Self:
         """Rename this aggregate. Changes **only** `_alias`, so the resolver

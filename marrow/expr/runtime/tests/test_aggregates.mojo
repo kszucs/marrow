@@ -1,6 +1,6 @@
 """The runtime lane's aggregates — a name and an erased operand.
 
-`ColumnAggregate` covers the case where the aggregate is written in Mojo and
+`BufferedAggregate` covers the case where the aggregate is written in Mojo and
 its operand can stay fused. This covers the other one: the aggregate arrives as
 a **string**, from a frontend that built the whole query after the program
 started, so both the aggregate and its operands are erased.
@@ -109,7 +109,7 @@ def test_named_aggregate_runs_grouped() raises:
 def test_named_aggregate_covers_the_folds_the_comptime_lane_fuses() raises:
     """`sum`/`mean`/`count` are reachable by name as well as by type.
 
-    The comptime lane fuses these into `LaneAggregate`; a frontend that only
+    The comptime lane fuses these into `FusedAggregate`; a frontend that only
     has a string reaches the same algebra through `Fold` and
     `ValidCount` instead. Same answers, one materialised column.
     """

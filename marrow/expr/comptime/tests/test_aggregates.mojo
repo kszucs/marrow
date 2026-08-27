@@ -2,10 +2,10 @@
 
 Two nodes, on one axis — what the aggregate consumes:
 
-- `LaneAggregate` folds its operand's **lanes** into registers and never
+- `FusedAggregate` folds its operand's **lanes** into registers and never
   materialises it. That is the 14.6x, and it is why `A` must be a
   `NumericValue`: a lane is a `SIMD`, which needs a fixed width.
-- `ColumnAggregate` materialises the operand **once** and computes over the
+- `BufferedAggregate` materialises the operand **once** and computes over the
   column, for the aggregates that have no fold algebra to fuse into. Its
   operand stays typed, so `count_distinct(upper(s))` still fuses `upper(s)`.
 
@@ -192,7 +192,7 @@ def test_a_fold_reports_spent_on_a_second_drain() raises:
 
     The driver calls `drain` until it answers `None`. A fold that answered
     `Some` every time would spin `while True: drain()` forever — it is only
-    safe today because `AggregateOperator` happens to call it once, and
+    safe today because `GroupByOperator` happens to call it once, and
     "happens to" is not a contract.
     """
     var s = col("a", int64).sum().alias("t").to_operator(False)
@@ -253,7 +253,7 @@ def test_count_is_named_and_aliasable() raises:
 
 
 # ---------------------------------------------------------------------------
-# ColumnAggregate — count_distinct
+# BufferedAggregate — count_distinct
 #
 # Two failure modes are specific to this node and each has cases of its own:
 #
@@ -458,7 +458,7 @@ def test_column_agg_string_min_over_no_rows_is_null() raises:
 # the operand keeps its fusion
 # ---------------------------------------------------------------------------
 def test_column_agg_counts_distinct_over_a_fused_operand() raises:
-    """The point of `ColumnAggregate[Agg, A]` keeping `A` typed.
+    """The point of `BufferedAggregate[Agg, A]` keeping `A` typed.
 
     `Upper[StringColumn[StringType]]` is a type, so `upper(s)` compiles to one
     loop and reaches the aggregate as a column; only the distinct count

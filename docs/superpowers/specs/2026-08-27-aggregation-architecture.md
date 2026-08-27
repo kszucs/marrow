@@ -89,7 +89,7 @@ cost.
 
 ### 3.2 Compute in `expr/` — the largest violation in either direction
 
-**`FoldOperator.push` (`comptime/aggregates.mojo:239-365`) is ~130 lines of pure
+**`FusedAggregateOperator.push` (`comptime/aggregates.mojo:239-365`) is ~130 lines of pure
 SIMD compute in the expression layer**: identity fill, dual accumulator, masked
 lane select, int64 count vector, horizontal reduce, mandatory scalar tail. The
 only expr-shaped token in the body is `self._input.lane[W](bound, i)`.
@@ -103,7 +103,7 @@ simply has no counterpart. Add one:
 
 These are **not** members of `FoldState` — `flush` takes a `FoldState`, so
 `self` is something else. They belong to a new per-morsel, register-resident
-scratch type: the four locals `FoldOperator.push` creates today at
+scratch type: the four locals `FusedAggregateOperator.push` creates today at
 `comptime/aggregates.mojo:302-306`, plus the `cnt` vector at `:315`.
 
 ```mojo
@@ -131,13 +131,13 @@ struct FoldRegister[K: FoldKernel, V: PrimitiveType](Movable):
 its own `_vec`; a `[W: Int]` parameter would admit a lane it cannot combine.
 The tail is `push_scalar`.
 
-`FoldOperator.push` then becomes ~25 lines: bind, loop pulling `lane[W]`, push,
+`FusedAggregateOperator.push` then becomes ~25 lines: bind, loop pulling `lane[W]`, push,
 flush once per morsel. Identity handling, the count semantics and the horizontal
 reduce move next to the algebra that defines them — which is the argument
 `combine_at`'s own docstring already makes for itself.
 
 **The scalar-tail bound does not move, and an earlier draft wrongly claimed it
-would.** `simd_end = (n // W) * W` and both loops stay in `FoldOperator.push`,
+would.** `simd_end = (n // W) * W` and both loops stay in `FusedAggregateOperator.push`,
 because only the caller can call `self._input.lane[W](bound, i)`. The register
 never sees `n` or a view. Moving that bound into kernels would need a
 lane-pulling driver taking a closure — the +662,740-byte adapter shape CLAUDE.md
@@ -167,7 +167,7 @@ convention by accident.
 | suffix | means | examples |
 |---|---|---|
 | `*Kernel` | element-wise compute | `AddKernel`, `EqKernel` |
-| `*Fold` | fold algebra, and folds bound to an input type | `SumFold`, `MinFold`, `PrimitiveFold`, `FoldState`, `FoldOperator` |
+| `*Fold` | fold algebra, and folds bound to an input type | `SumFold`, `MinFold`, `PrimitiveFold`, `FoldState`, `FusedAggregateOperator` |
 Never `Agg`. Never `-er`, `-Manager`, `-Data`, `-Info`, `-Helper`.
 
 `Agg` is dropped because `aggregate.mojo` spells one word six ways today. Note
@@ -232,7 +232,7 @@ trap, on a struct whose entire docstring is about preventing exactly this.
 ```mojo
 # comptime lane: the fused specialisation. Earns its parameters at 14.6x.
 struct NumericFold[K: FoldKernel, A: NumericValue](Evaluable, Value)
-struct FoldOperator[K: FoldKernel, A: NumericValue, scatters: Bool](Operator)
+struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, scatters: Bool](Operator)
 
 # everything else: zero parameters, one instantiation for the whole program
 struct RuntimeAggregate(Evaluable, Value):
@@ -263,8 +263,8 @@ built — see §4.4.
 
 **The operator is not a fold**, so it is not named one: it buffers erased
 columns and calls one thin pointer. Being parameterless, it also does not make
-the lane-agnostic layer name a lane, so unlike `FoldOperator` it belongs in
-`physical.mojo` beside `AggregateOperator`.
+the lane-agnostic layer name a lane, so unlike `FusedAggregateOperator` it belongs in
+`physical.mojo` beside `GroupByOperator`.
 
 **Why two nodes, stated correctly.** Not "the operand bound differs and Mojo has
 no conditional conformance" — conditional conformance *is* available
@@ -327,7 +327,7 @@ silently disagree, and `min` over `timestamp[us]` yielding a schema field of
 requirement is sharpened accordingly.
 
 **Mergeability is expressed by the operator, not by a flag.** Parallel
-aggregation (§7 E) is N `FoldOperator`s over disjoint morsels plus
+aggregation (§7 E) is N `FusedAggregateOperator`s over disjoint morsels plus
 `FoldState.merge`; an aggregate that cannot merge is one the operator does not
 run in parallel. No `is_mergeable` bit, no raising stubs.
 
@@ -349,11 +349,11 @@ The fluent surface at `comptime/core.mojo:405-428` exists **only on
 `NumericValue`**. So 4 of golden's 6 `.max()` and 4 of its 5 `.min()` uses have
 no path either.
 
-Temporal min/max is a genuine fold blocked only by `FoldOperator.__init__`
+Temporal min/max is a genuine fold blocked only by `FusedAggregateOperator.__init__`
 calling `Self.A.Type()` — `TemporalType` and `DecimalType` are not `Defaultable`.
 Routing it through `RuntimeAggregate` is correct but slow; the real fix is moving
 the accumulator dtype out of `__init__` and into first push, which
-`FoldOperator`'s own comment already anticipates. **Record it as owed.**
+`FusedAggregateOperator`'s own comment already anticipates. **Record it as owed.**
 
 ---
 
@@ -400,7 +400,7 @@ abort taking down a whole test file. Two requirements, not hopes:
 
 **Two stated properties this design reverses, and must say so.**
 
-- **`AggregateOperator` buffers again.** `ColumnFold` is one-shot over the whole
+- **`GroupByOperator` buffers again.** `ColumnFold` is one-shot over the whole
   input, so the operator must accumulate each morsel's evaluated columns and
   ids, concat at `drain`, and call the fold once. `physical.mojo:534-541`
   currently claims *"**Nothing is buffered** … this one keeps only the grouper's
@@ -440,17 +440,17 @@ works.
 |---|---|---|
 | **A** | **Rename the survivors only**, before any new code: `AggKernel`→`FoldKernel`, `AggState`→`FoldState`, `NumericAggregate`→`NumericFold`, `MinKernel`/`MaxKernel`→`MinFold`/`MaxFold` (+ the `kernels/__init__` re-export the collision blocked). Every *other* name §4.1 calls wrong is **deleted** by G, not renamed — 12 references versus 77 — so doing the survivors first means B–G are authored in the final vocabulary instead of being re-touched six times | `precompile` clean |
 | **B** | Add the `query_expr2_agg_named` gate and the two `nm` reachability assertions to `check_gate.py`. **Not the `compare.py:NAMES`/`MODULE_BUCKETS` churn** — `baseline.json` already holds both expr2 gates and `check_gate.py` already builds them; that part was gold-plating. The new gate is not: `fold_column[K]` reintroduces a per-kernel `dispatch_primitive` ladder and nothing measures it today | new gate builds and records |
-| **C** | `ColumnFold` · `Groups.single()`/`is_single()` · **delete `Groups.__len__`** · `count_distinct_column` *with its `is_single` whole-array branch* · `RuntimeAggregate` · `RuntimeAggregateOperator` · `aggregate_out_dtype` · `resolve_fold` · `.count_distinct()` as **one** `ComptimeValue` trait default. Correct `AggregateOperator`'s "Nothing is buffered" docstring | `agg_count_distinct_string` green — note it is **keyless**, so it exercises exactly the empty-ids path; DCE assertions still 0 |
+| **C** | `ColumnFold` · `Groups.single()`/`is_single()` · **delete `Groups.__len__`** · `count_distinct_column` *with its `is_single` whole-array branch* · `RuntimeAggregate` · `RuntimeAggregateOperator` · `aggregate_out_dtype` · `resolve_fold` · `.count_distinct()` as **one** `ComptimeValue` trait default. Correct `GroupByOperator`'s "Nothing is buffered" docstring | `agg_count_distinct_string` green — note it is **keyless**, so it exercises exactly the empty-ids path; DCE assertions still 0 |
 | **C2** | **A grouped `count_distinct` golden case.** None exists; C's only gate is the ungrouped path, which is the one that silently returns `[0]` | new case green |
 | **D** | `string_min_max_column[Op]`, `validity_count_column`, `.min()`/`.max()` on `StringValue` | `agg_min_max_string` green |
 | **D2** | `fold_column[K]` for the six numeric kernels, and `aggregate_array(name, arrays, ctx)` — **what G consumes**, and the only replacement for `marrow.compute`'s seven array-level entry points (`compute.mojo:134-153`), which take one erased array and a context and have no plan to be repointed at | `query_expr2_agg_named` recorded; ladder cost visible |
 | **D3** | Temporal `min`/`max`, via `aggregate_out_dtype`'s schema-derived dtypes | `temporal_min_max_timestamp` green |
 | **E** | The `FoldRegister` extraction (§3.2) | `__text` vs **the commit before E**, not vs merge-base — B–D have added symbols by then |
-| **F** | Parallel aggregation in `AggregateOperator`; `FoldState.merge(other, remap)` | group-by benches |
+| **F** | Parallel aggregation in `GroupByOperator`; `FoldState.merge(other, remap)` | group-by benches |
 | **G** | Repoint `tabular.mojo` and the seven `compute.mojo` entry points; delete `Aggregation`, `AggFunction`, `Grouped[V]`, `ColumnAggregator`, `OneAggregation`, `GroupBy.aggregate`/`apply`/`aggregate_all`; delete `NumericAgg.whole`'s `.with_threads(1)` **with a bench, not a correctness gate** — `aggregate.mojo:1178` asserts `wants_parallel`'s 32768 default is too low for a SIMD reduce, so removing it is a behaviour change | 676 Python tests green; benches no worse than F *except* the named regression below |
 
 **F before G**, because `RecordBatch.group_by` is a shipped Python API and
-`AggregateOperator` is single-threaded until F.
+`GroupByOperator` is single-threaded until F.
 
 **An accepted regression, with a number required.** `GroupBy` has **two**
 parallel paths, not one: `_thread_local_columns`, which F recovers, and

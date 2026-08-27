@@ -47,7 +47,7 @@ produced).
    cover both a relational stage (`RecordBatch`) and a value's (`Datum`).
 
    `drain` is **repeatable** — the driver calls it until `None`. An operator
-   that cannot say "spent" hangs the driver; `FoldOperator` violated this and
+   that cannot say "spent" hangs the driver; `FusedAggregateOperator` violated this and
    it was a latent infinite loop.
 
 3. **An aggregate is a `Value`.** Not a sibling of one. `sum(x)` conforms to
@@ -66,7 +66,7 @@ produced).
 
 Every `Operator` conformer ends in `Operator`: `BatchSourceOperator`,
 `FilterOperator`, `ProjectOperator`, `LimitOperator`, `SortOperator`,
-`AggregateOperator`, `FoldOperator`, `EvalOperator`.
+`GroupByOperator`, `FusedAggregateOperator`, `EvalOperator`.
 
 ### The lanes
 
@@ -89,7 +89,7 @@ that shadow rather than overload.
 - **Tier 1.3** — `Grouping` / `ScalarGrouping` / `HashGrouping`, the placement
   axis as a trait. `kernels.core.Grouping` was renamed `Groups` to free the
   name: the trait is the grouping, `Groups` is what it assigned.
-- **Tier 2.5** — `FoldOperator[K, A, G]`. Algebra, input subtree and placement
+- **Tier 2.5** — `FusedAggregateOperator[K, A, G]`. Algebra, input subtree and placement
   all comptime.
 - **Tier 2.7** — the push engine, then the consolidation above.
 - **Tier 2.8** — the `Aggregate` relation, plus `Limit` and `Sort`. Six of
@@ -212,7 +212,7 @@ Four things, each of which cost a wrong answer or a crash when missing:
    the end, never a horizontal reduce per chunk.
 4. **`AccType` must never appear unerased in a signature.** It is a comptime
    conditional type: it reduces inside a struct but fails to unify at a return
-   site. That is why `FoldOperator.Out` is `Datum` and not the accumulator
+   site. That is why `FusedAggregateOperator.Out` is `Datum` and not the accumulator
    type — forced, not chosen. `AggKernel.combine` also will not infer `W` from
    a `Scalar` — spell `combine[acc, 1](…)`.
 

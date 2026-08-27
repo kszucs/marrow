@@ -188,7 +188,7 @@ spelled as an `Operator` instead of its own trait.
    and `DynAggregateState`.
 5. **`Grouping`** (`Scalar`, `Hash`), then the fold as an `Operator`.
    **This blocks step 4's deletions**, which the draft did not record.
-   `AggregateOperator.push` resolves group ids from its grouper and calls
+   `GroupByOperator.push` resolves group ids from its grouper and calls
    `state.update(batch, gids, num_groups)`; a fold spelled as an `Operator`
    sees only `push(batch)` and has nowhere to get `gids`. It becomes possible
    once grouping is a *type* parameter — the aggregation architecture's

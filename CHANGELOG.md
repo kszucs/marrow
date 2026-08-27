@@ -10,6 +10,29 @@
 
 ### Refactors
 
+- **`marrow/expr` — the aggregate nodes are named for what they cost.**
+  `LaneAggregate` / `ColumnAggregate` named a mechanism and a non-distinction:
+  every aggregate aggregates a column, so `Column` said nothing, and `Lane` was
+  a SIMD detail leaking into the expression layer. They are now
+  `FusedAggregate` and `BufferedAggregate`, after the difference
+  `GroupByOperator`'s own docstring already stated — *a fused fold buffers
+  nothing; an `AggregateFn` buffers O(rows)*.
+
+  The axis is whether an aggregate can be finished incrementally. A fold keeps
+  one scalar per group and can, so `FusedAggregate` folds lanes straight into
+  registers and never materialises its operand. A hash set, a sketch or a
+  best-row index cannot, so `BufferedAggregate` keeps every morsel's column and
+  ids until `drain`. Neither is "the numeric one" or "the non-numeric one":
+  `col("v", int64).count_distinct()` is buffered over a perfectly numeric
+  column.
+
+  The operators follow — `FoldOperator` is `FusedAggregateOperator` and
+  `ColumnAggregateOperator` is `BufferedAggregateOperator`. The blocking
+  `GROUP BY` relation operator is `GroupByOperator`, so a relation-level
+  operator and one of the N value operators it holds no longer share a word and
+  read like a base/derived pair.
+
+
 - **`marrow/kernels/aggregate.mojo` — one aggregate vocabulary instead of
   four.** The package described the same four aggregates twice: `Aggregation`
   (typed, carrying `InArray`/`OutArray`/`from_any`/`to_dyn`/`is_mergeable`)

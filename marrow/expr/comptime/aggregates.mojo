@@ -10,13 +10,13 @@ takes `&[ArrayRef]`, ClickHouse's `IAggregateFunction::add` takes `IColumn**`,
 Polars aggregates a `Series` — all three must compute the intermediate column
 first, because none has comptime types.
 
-**The fold lives here too.** `FoldOperator` is the executor for the nodes
+**The fold lives here too.** `FusedAggregateOperator` is the executor for the nodes
 below it, and it sits beside them for the same reason `Column` sits beside its
 own `bind`/`lane`: this lane is organised by **family**, not by
 logical-versus-physical. That split is real one level up (`logical.mojo` /
 `physical.mojo`); inside a lane the distinction that matters is
 lane-agnostic versus lane-specific. `EvalOperator` is generic over any
-`Evaluable` and belongs in `physical.mojo`; `FoldOperator` is parameterised on
+`Evaluable` and belongs in `physical.mojo`; `FusedAggregateOperator` is parameterised on
 `A: NumericValue` and cannot go there without making the lane-agnostic layer
 name a lane.
 
@@ -49,7 +49,7 @@ from ...tabular import RecordBatch
 from ..logical import Shape, Value
 from ..params import Bindings
 from ..physical import (
-    ColumnAggregateOperator,
+    BufferedAggregateOperator,
     Datum,
     DynOperator,
     Evaluable,
@@ -60,7 +60,7 @@ from ..physical import (
 from .core import ComptimeValue, NumericValue
 
 
-struct LaneAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
+struct FusedAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
     """Folds its operand's **lanes** straight into registers; the operand is
     never materialised.
 
@@ -70,8 +70,10 @@ struct LaneAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
     at 1.17-1.68x over materialise-then-scatter when grouped, and **14.6x**
     when not — and that is the whole reason the pair of nodes exists.
 
-    Its counterpart is `ColumnAggregate`, which materialises its operand once
-    and computes over the column.
+    Its counterpart is `BufferedAggregate`, which accumulates its operand's
+    output across morsels and runs the aggregate once at the end. The names are
+    that difference: this node **buffers nothing** — the accumulator is a
+    scalar per group — while its counterpart holds O(rows).
 
     **An ordinary `Value`.** It conforms to exactly what `x + 1` conforms to
     and is boxed by the same `DynValue`. There is no `AggValue` trait: once
@@ -156,10 +158,10 @@ struct LaneAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
         of the inner loop.
         """
         if grouped:
-            return FoldOperator[Self.K, Self.A, HashGrouping](
+            return FusedAggregateOperator[Self.K, Self.A, HashGrouping](
                 self._input.copy(), bindings.copy()
             )
-        return FoldOperator[Self.K, Self.A, ScalarGrouping](
+        return FusedAggregateOperator[Self.K, Self.A, ScalarGrouping](
             self._input.copy(), bindings.copy()
         )
 
@@ -175,19 +177,21 @@ struct LaneAggregate[K: FoldKernel, A: NumericValue](Evaluable, Value):
         writer.write(Self.K.name, "(", self._input, ")")
 
 
-comptime Sum = LaneAggregate[SumKernel, _]
-comptime Product = LaneAggregate[ProductKernel, _]
-comptime Min = LaneAggregate[MinKernel, _]
-comptime Max = LaneAggregate[MaxKernel, _]
-comptime Mean = LaneAggregate[MeanKernel, _]
-comptime Count = LaneAggregate[CountKernel, _]
+comptime Sum = FusedAggregate[SumKernel, _]
+comptime Product = FusedAggregate[ProductKernel, _]
+comptime Min = FusedAggregate[MinKernel, _]
+comptime Max = FusedAggregate[MaxKernel, _]
+comptime Mean = FusedAggregate[MeanKernel, _]
+comptime Count = FusedAggregate[CountKernel, _]
 
 
-struct FoldOperator[K: FoldKernel, A: NumericValue, G: Grouping](Operator):
+struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](
+    Operator
+):
     """The fold in progress: this aggregate's input, plus the kernel's state.
 
     Three axes, all comptime: the **algebra** (`K`), the whole **input**
-    subtree (`A`), and the **placement** (`G`). `FoldOperator[SumKernel,
+    subtree (`A`), and the **placement** (`G`). `FusedAggregateOperator[SumKernel,
     Mul[Column[Int64Type], Literal[Int64Type]], ScalarGrouping]` is one type,
     and therefore one loop with nothing interpreted inside it.
 
@@ -234,7 +238,7 @@ struct FoldOperator[K: FoldKernel, A: NumericValue, G: Grouping](Operator):
     `drain` is **repeatable** — the driver calls it until it answers `None` —
     so a fold that answered `Some` every time would make
     `while True: drain()` spin forever. It is only reachable through
-    `AggregateOperator` today, which calls it once, but the contract is the
+    `GroupByOperator` today, which calls it once, but the contract is the
     contract: an operator that cannot say "spent" cannot be driven generically.
     """
 
@@ -255,7 +259,7 @@ struct FoldOperator[K: FoldKernel, A: NumericValue, G: Grouping](Operator):
         )
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """FoldOperator one morsel in and answer nothing — the result arrives at
+        """FusedAggregateOperator one morsel in and answer nothing — the result arrives at
         `finish`. The grouping travels *with* the batch, which is what lets this
         be an `Operator` at all."""
         ref batch = morsel.batch
@@ -390,17 +394,22 @@ struct FoldOperator[K: FoldKernel, A: NumericValue, G: Grouping](Operator):
 
 
 # ---------------------------------------------------------------------------
-# ColumnAggregate — the aggregates that materialise, with the operand still
-# fused.
+# BufferedAggregate — the aggregates that must see the whole column, with the
+# operand still fused.
 # ---------------------------------------------------------------------------
-struct ColumnAggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
-    """Materialises its operand once and computes over the column.
+struct BufferedAggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
+    """Accumulates its operand's output across morsels, then runs the
+    aggregate once over the whole column.
 
     **Not "the non-numeric one".** `col("v", int64).count_distinct()` lands
     here over a perfectly numeric column, because *distinct* has no fold
     algebra — no identity, no combine, no finalize — not because its input is
-    not numeric. The axis is what the aggregate consumes: `LaneAggregate`
-    reads lanes, this one reads a column.
+    not numeric. The axis is whether an aggregate can be finished incrementally:
+    a fold keeps one scalar per group and can, so `FusedAggregate` buffers
+    nothing; a hash set, a sketch or a best-row index cannot, so this one keeps
+    every morsel's column and ids until `drain` — **O(rows)**. That cost is
+    what the name is for, and it is the reason to prefer the fused node
+    wherever an aggregate has a fold algebra.
 
     **The operand is not erased, and that is the whole point.** Only the
     *aggregation* has to materialise; `upper(region)` is still a fused string
@@ -411,11 +420,11 @@ struct ColumnAggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
 
     `Agg` is an `AggKernel` rather than a `FoldKernel` because these
     aggregates have no identity, no combine and no finalize — there is
-    genuinely no algebra to parameterise on, which is why `LaneAggregate`
+    genuinely no algebra to parameterise on, which is why `FusedAggregate`
     could not be widened to cover them.
 
     `NumericValue.sum/min/max/...` are untouched and still build
-    `LaneAggregate`: they fuse, and a fused fold beats a materialised one by
+    `FusedAggregate`: they fuse, and a fused fold beats a materialised one by
     14.6x ungrouped.
     """
 
@@ -459,7 +468,7 @@ struct ColumnAggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         """An aggregate has no per-batch value — the same answer, and the same
-        reason, as `LaneAggregate.evaluate`."""
+        reason, as `FusedAggregate.evaluate`."""
         raise Error(
             "aggregate '",
             self._alias,
@@ -477,16 +486,16 @@ struct ColumnAggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
         """The operand gets its own fully monomorphised operator; the
         aggregation step is shared.
 
-        `ColumnAggregateOperator` has no type parameters on purpose. It does
+        `BufferedAggregateOperator` has no type parameters on purpose. It does
         not evaluate the operand — `EvalOperator[A]` does, and stays fused —
         so parameterising it on `[Agg, A]` would buy one direct call over one
-        indirect call, once per column per batch. `FoldOperator`'s parameters
+        indirect call, once per column per batch. `FusedAggregateOperator`'s parameters
         earn their instantiation because its body *is* the per-row loop; this
         one's body is a `concat` and a call.
         """
         var inputs = List[DynOperator](capacity=1)
         inputs.append(self._input.to_operator(False, bindings))
-        return ColumnAggregateOperator(
+        return BufferedAggregateOperator(
             inputs^, Self.Agg.grouped, Self.Agg.empty(), grouped
         )
 

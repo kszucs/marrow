@@ -34,7 +34,7 @@ from .params import Bindings
 from .runtime.values import column
 from .physical import (
     Datum,
-    AggregateOperator,
+    GroupByOperator,
     BatchSourceOperator,
     DynOperator,
     LimitOperator,
@@ -244,7 +244,7 @@ struct DynValue(Copyable, Movable, Writable):
         """The stateful thing that runs this value.
 
         The slot `DynAggValue._acc` used to occupy, on the one box that now
-        holds every value. An aggregate reaches its `FoldOperator` through here; an
+        holds every value. An aggregate reaches its `FusedAggregateOperator` through here; an
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
@@ -673,7 +673,7 @@ struct Aggregate(Relation, Writable):
         for ref k in self._keys:
             keys.append(k.to_operator(False, bindings))
         pipe.append(
-            AggregateOperator(keys^, folds^, self._schema.copy(), ctx.copy())
+            GroupByOperator(keys^, folds^, self._schema.copy(), ctx.copy())
         )
         return pipe^
 

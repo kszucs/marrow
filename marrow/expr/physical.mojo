@@ -278,7 +278,7 @@ struct EvalOperator[V: Evaluable](Operator):
 
     Generic over the node type rather than holding a `DynValue`, so a fused
     subtree stays one type through the boundary and is still inlined into one
-    loop. That is the same reason `FoldOperator` is parameterised on its input.
+    loop. That is the same reason `FusedAggregateOperator` is parameterised on its input.
 
     This is also where a value would keep state that outlives a batch — a
     compiled `LIKE` automaton, an `IsIn` hash set. It has none today, and the
@@ -526,7 +526,7 @@ struct ProjectOperator(Operator):
         return None
 
 
-struct AggregateOperator(Operator):
+struct GroupByOperator(Operator):
     """Blocking: fold every pushed morsel, then emit one row per group.
 
     The shape the push interface exists for — `push` answers `None` all the way
@@ -534,12 +534,13 @@ struct AggregateOperator(Operator):
     pull design this needed a different trait from `Filter` and `Project`, and
     therefore a second erased box.
 
-    **A fused fold buffers nothing; a `AggregateFn` buffers O(rows).** Which of
-    the two a query pays for is decided per aggregate, not here.
-    `FoldOperator` binds its own input subtree and folds lanes straight out of
-    the morsel, so `sum(a * 2 + b)` never materialises `a * 2 + b` and this
-    stage keeps only the grouper's key builders, which grow with the number of
-    *groups*. `ColumnAggregateOperator` cannot: a `AggregateFn` is one-shot
+    **A fused fold buffers nothing; an `AggregateFn` buffers O(rows)** — which
+    is what the two operators are named for. Which of them a query pays for is
+    decided per aggregate, not here. `FusedAggregateOperator` binds its own
+    input subtree and folds lanes straight out of the morsel, so
+    `sum(a * 2 + b)` never materialises `a * 2 + b` and this stage keeps only
+    the grouper's key builders, which grow with the number of *groups*.
+    `BufferedAggregateOperator` cannot: an `AggregateFn` is one-shot
     over the whole input, so it accumulates each morsel's evaluated columns
     and ids and calls the fold once at `drain`. Any query containing a
     `count_distinct`, or a `min`/`max` over a string or temporal column, is
@@ -626,7 +627,7 @@ struct AggregateOperator(Operator):
         and that split is measured. Parameterising *this* operator on
         `Grouping` instantiates it once per conformer for **+24,432 bytes** and
         buys nothing: its branch runs once per batch, while the 14.6x
-        register-fold win lives in `FoldOperator`, already monomorphised on `G`.
+        register-fold win lives in `FusedAggregateOperator`, already monomorphised on `G`.
         """
         # Indexed rather than `for ref`: a fold is move-only, and iterating a
         # `List` by reference requires `Copyable`.
@@ -672,16 +673,18 @@ struct AggregateOperator(Operator):
         return Datum(_struct_of(self._schema, cols^, self._num_groups).to_dyn())
 
 
-struct ColumnAggregateOperator(Operator):
-    """An aggregate that consumes **materialised columns** rather than lanes.
+struct BufferedAggregateOperator(Operator):
+    """An aggregate that must see its whole input as a column, so it **buffers
+    every morsel** until `drain`.
 
-    The counterpart of `FoldOperator`, and named for what it consumes. Both are
-    *value* operators — two of the things `AggregateOperator` holds in its
+    The counterpart of `FusedAggregateOperator`, and named for that cost. Both
+    are *value* operators — two of the things `GroupByOperator` holds in its
     `_folds` list — and both answer a `Datum` of one value per slot. They
     differ in what they can do with a morsel: a fold reads `lane[W]` out of a
-    fused subtree and keeps a scalar accumulator; this one has an aggregate
-    whose state is a hash set, a sketch, or a best-row index, so its input has
-    to exist as a column first.
+    fused subtree and keeps one scalar per group, so it buffers nothing; this
+    one has an aggregate whose state is a hash set, a sketch, or a best-row
+    index, which cannot be finished incrementally — so its input has to exist
+    as a column first, and the accumulated columns and ids are **O(rows)**.
 
     **Zero type parameters, shared by both lanes.** The comptime lane hands it
     `Agg.grouped` — a statically known method taken as a thin pointer — and the
@@ -699,7 +702,7 @@ struct ColumnAggregateOperator(Operator):
 
     Buffering the ids per aggregate is a known, bounded redundancy: three
     column-aggregates in one query keep three copies of the same `Int32` per
-    row. `AggregateOperator` sees every morsel and could keep one, but only by
+    row. `GroupByOperator` sees every morsel and could keep one, but only by
     special-casing this operator among the values it holds, which is the
     uniformity that made "every value answers `to_operator`" work at all.
 
@@ -725,7 +728,7 @@ struct ColumnAggregateOperator(Operator):
 
     var _node: Optional[RuntimeAggregate]
     """The node itself, for the lane that has a name instead of a type — an
-    operator here already holds its node (`FoldOperator._input`,
+    operator here already holds its node (`FusedAggregateOperator._input`,
     `EvalOperator._value`), so the ladder needs no object of its own."""
 
     var _empty: Optional[DynArray]
@@ -821,7 +824,7 @@ struct ColumnAggregateOperator(Operator):
         if len(self._chunks) == 0 or len(self._chunks[0]) == 0:
             # No morsel ever arrived, so there is no dtype to resolve against.
             # A distinct count still has an answer; an extremum does not, and
-            # `AggregateOperator` fills its slot from the output schema.
+            # `GroupByOperator` fills its slot from the output schema.
             if self._empty:
                 return Datum(self._empty.value().copy())
             return None
