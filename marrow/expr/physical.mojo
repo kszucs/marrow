@@ -277,7 +277,7 @@ struct EvalOperator[V: Evaluable](Operator):
 
     Generic over the node type rather than holding a `DynValue`, so a fused
     subtree stays one type through the boundary and is still inlined into one
-    loop. That is the same reason `FusedAggregateOperator` is parameterised on its input.
+    loop. That is the same reason `FusedAccumulator` is parameterised on its input.
 
     This is also where a value would keep state that outlives a batch — a
     compiled `LIKE` automaton, an `IsIn` hash set. It has none today, and the
@@ -298,6 +298,80 @@ struct EvalOperator[V: Evaluable](Operator):
         return self._value.evaluate(morsel.batch, self._bindings)
 
     def drain(mut self) raises -> Optional[Datum]:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Accumulable / AggregateOperator — the aggregate half of the pair above
+# ---------------------------------------------------------------------------
+
+
+trait Accumulable(Deinitable, Movable):
+    """An aggregate's accumulation strategy: see every morsel, answer once.
+
+    The counterpart of `Evaluable`, and the same trick. An elementwise value
+    has its answer as soon as it sees a batch, so `Evaluable.evaluate` plus one
+    generic `EvalOperator[V]` covers every value in both lanes. An aggregate is
+    the mirror image — it has no answer until the stream ends — so it needs two
+    methods rather than one, and then `AggregateOperator[S]` covers every
+    aggregate in both lanes just as generically.
+
+    Before this there were three bespoke operators (fused, buffered, runtime)
+    that each re-implemented `Operator`, the `_emitted` guard and the drain
+    contract. What actually differed between them was only the *state*: a
+    scalar per group, a list of buffered columns, or a name waiting to resolve.
+    That is what conforms here.
+    """
+
+    def absorb(mut self, morsel: Morsel) raises:
+        """Take one morsel into the state. Answers nothing — an aggregate's
+        result does not exist until the stream ends."""
+        ...
+
+    def finish(mut self) raises -> Optional[DynArray]:
+        """The aggregate column, one value per slot, or `None` when this
+        aggregate has no answer over an input that produced no column at all.
+
+        An extremum of nothing is the `None` case: its dtype is known only to
+        the plan's schema, so `GroupByOperator` fills the slot instead."""
+        ...
+
+
+struct AggregateOperator[S: Accumulable](Operator):
+    """Any aggregate, as an `Operator` — the sibling of `EvalOperator[V]`.
+
+    Blocking by construction: `push` answers `None` all the way through the
+    stream and `drain` answers the whole result. Everything specific to *which*
+    aggregate is in `S`; what lives here is the part all three strategies share
+    and used to write out three times.
+
+    `_emitted` is that part. `drain` is **repeatable** — the driver calls it
+    until it answers `None` — so a state that answered `Some` every time would
+    make `while True: drain()` spin forever. Each of the three operators
+    carried its own copy of this guard, and each was one edit away from losing
+    it.
+    """
+
+    comptime Out = Datum
+
+    var _state: Self.S
+    var _emitted: Bool
+
+    def __init__(out self, var state: Self.S):
+        self._state = state^
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        self._state.absorb(morsel)
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        var answer = self._state.finish()
+        if answer:
+            return Datum(answer.value().copy())
         return None
 
 
@@ -535,11 +609,11 @@ struct GroupByOperator(Operator):
 
     **A fused fold buffers nothing; an `AggregateFn` buffers O(rows)** — which
     is what the two operators are named for. Which of them a query pays for is
-    decided per aggregate, not here. `FusedAggregateOperator` binds its own
+    decided per aggregate, not here. `FusedAccumulator` binds its own
     input subtree and folds lanes straight out of the morsel, so
     `sum(a * 2 + b)` never materialises `a * 2 + b` and this stage keeps only
     the grouper's key builders, which grow with the number of *groups*.
-    `BufferedAggregateOperator` cannot: an `AggregateFn` is one-shot
+    `BufferedAccumulator` cannot: an `AggregateFn` is one-shot
     over the whole input, so it accumulates each morsel's evaluated columns
     and ids and calls the fold once at `drain`. Any query containing a
     `count_distinct`, or a `min`/`max` over a string or temporal column, is
@@ -626,7 +700,7 @@ struct GroupByOperator(Operator):
         and that split is measured. Parameterising *this* operator on
         `Grouping` instantiates it once per conformer for **+24,432 bytes** and
         buys nothing: its branch runs once per batch, while the 14.6x
-        register-fold win lives in `FusedAggregateOperator`, already monomorphised on `G`.
+        register-fold win lives in `FusedAccumulator`, already monomorphised on `G`.
         """
         # Indexed rather than `for ref`: a fold is move-only, and iterating a
         # `List` by reference requires `Copyable`.

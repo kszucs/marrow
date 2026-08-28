@@ -102,7 +102,7 @@ trait ComptimeValue(Evaluable, Value):
     ) raises -> DynOperator:
         """Every comptime node becomes the same operator — one that forwards
         each batch to the fused driver. `grouped` is ignored: an elementwise
-        value has no placement. Aggregates override this with a `FusedAggregateOperator`.
+        value has no placement. Aggregates override this with a `FusedAccumulator`.
 
         `bindings` is handed to the operator, which passes it back down through
         `evaluate` -> `bind`. A `Param` reads it there, which is also the only
@@ -561,7 +561,7 @@ trait TemporalValue(PrimitiveValue):
     # `min`/`max` over a temporal column *is* a genuine `AggState` fold — the
     # accumulator keeps the input dtype and `MinMax.acc_dtype` carries its unit
     # and timezone through. It cannot be the **fused** one today:
-    # `FusedAggregateOperator.__init__` builds its accumulator dtype from `Self.A.Type()`
+    # `FusedAccumulator.__init__` builds its accumulator dtype from `Self.A.Type()`
     # and a `TemporalType` is not `Defaultable`. Routing through the runtime
     # lane is correct but materialises; moving the accumulator dtype out of
     # `__init__` and into first push is what would fuse it, and is owed.

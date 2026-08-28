@@ -45,6 +45,36 @@
 
 ### Refactors
 
+- **One aggregate operator, three accumulation strategies.** There were three
+  bespoke operators — fused, buffered, runtime — each re-implementing
+  `Operator`, the `_emitted` guard and the drain contract. What actually
+  differed between them was only the *state*: a scalar per group, a list of
+  buffered columns, or a name waiting to resolve.
+
+  `physical.mojo` now declares `Accumulable` beside `Evaluable`, and the two
+  are exact counterparts. An elementwise value has its answer as soon as it
+  sees a batch, so `Evaluable.evaluate` plus one generic `EvalOperator[V]`
+  serves every value in both lanes; an aggregate has no answer until the stream
+  ends, so `Accumulable` takes `absorb` and `finish`, and
+  `AggregateOperator[S]` serves every aggregate in both lanes just as
+  generically.
+
+  The three operators became `FusedAccumulator[K, A, G]`,
+  `BufferedAccumulator[Agg, A]` and `RuntimeAccumulator`. `DynAggregateOperator`
+  is gone: what is dynamic about the runtime lane is the *state*, not the
+  operator machinery, and the name now says so.
+
+  `BufferedAccumulator` keeps `scatters` as a runtime `Bool` rather than a
+  `G: Grouping` parameter, which was measured rather than assumed.
+  `to_operator` branches on a runtime `grouped`, so parameterising it
+  instantiates both arms for every aggregate: a keyless binary with three
+  buffered aggregates linked `HashGrouping` *and* `ScalarGrouping` and grew
+  4.6%. The fused path earns its `G` because specialising the loop is worth
+  14.6x; a `concat` and a call does not.
+
+  `query_expr2_agg_fused` -0.234%, `query_expr2_streaming` byte-identical, and
+  a non-fusing comptime binary +0.299%.
+
 - **The comptime lane no longer erases its buffered aggregates — 36% smaller.**
   `BufferedAggregateOperator` was one zero-parameter struct shared with the
   runtime lane, so a comptime aggregate that could not fuse boxed its operand
