@@ -67,7 +67,7 @@ from ..physical import (
     Operator,
 )
 
-from .core import ComptimeValue, NumericValue
+from .core import ComptimeValue, NumericValue, PrimitiveValue
 
 
 struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
@@ -204,7 +204,7 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
                 Self.Agg.Lane, Self.A, ScalarGrouping
             ](self._input.copy(), bindings.copy())
         else:
-            return BufferedAggregateOperator[Self.Agg, Self.A](
+            return ColumnAggregateOperator[Self.Agg, Self.A](
                 self._input.copy(), bindings.copy(), grouped
             )
 
@@ -234,18 +234,19 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
 # would have to hide a `conforms_to` that the fluent surface already answers by
 # overload.
 #
-# `Variance` and `StdDev` name **both** parameters where the others leave the
-# operand as a `_` hole. That is not a style choice: an alias carrying its own
-# parameter cannot also be partially applied — `Variance[ddof]` declares, but
-# `Variance[ddof, Self]` at the use site is then "unexpected parameter". So an
-# alias with a comptime argument of its own spells the operand out.
+# Every fold alias names its operand, because `Fold[K, V]` is typed on its
+# input and `V` is exactly `A.Type` — the operand already knows it. That is
+# what removes the dtype dispatch from the comptime lane's folds entirely:
+# `col("ts", timestamp(us)).min()` is `Fold[MinKernel, TimestampType]`, not a
+# runtime lookup. `StringMin`, `CountDistinct` and friends stay partially
+# applied, since their kernels are genuinely dtype-generic.
 # ---------------------------------------------------------------------------
-comptime Sum = Aggregate[Fold[SumKernel], _]
-comptime Product = Aggregate[Fold[ProductKernel], _]
-comptime Min = Aggregate[Fold[MinKernel], _]
-comptime Max = Aggregate[Fold[MaxKernel], _]
-comptime Mean = Aggregate[Fold[MeanKernel], _]
-comptime Count = Aggregate[Fold[CountKernel], _]
+comptime Sum[A: PrimitiveValue] = Aggregate[Fold[SumKernel, A.Type], A]
+comptime Product[A: PrimitiveValue] = Aggregate[Fold[ProductKernel, A.Type], A]
+comptime Min[A: PrimitiveValue] = Aggregate[Fold[MinKernel, A.Type], A]
+comptime Max[A: PrimitiveValue] = Aggregate[Fold[MaxKernel, A.Type], A]
+comptime Mean[A: PrimitiveValue] = Aggregate[Fold[MeanKernel, A.Type], A]
+comptime Count[A: PrimitiveValue] = Aggregate[Fold[CountKernel, A.Type], A]
 comptime Variance[ddof: Int, A: ComptimeValue] = Aggregate[
     Dispersion[ddof, False], A
 ]
@@ -455,32 +456,31 @@ struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](
         return Datum(self._state.finish(self._num_groups).to_dyn())
 
 
-struct BufferedAggregateOperator[Agg: AggKernel, A: ComptimeValue](Operator):
-    """An aggregate that must see its whole input as a column, so it **buffers
-    every morsel** until `drain`. Fully typed, like its fused sibling.
+struct ColumnAggregateOperator[Agg: AggKernel, A: ComptimeValue](Operator):
+    """An aggregate that consumes its operand as a **column** rather than as
+    lanes, and streams.
 
-    The counterpart of `FusedAggregateOperator`, and named for the cost that
-    separates them. Both are *value* operators — two of the things
-    `GroupByOperator` holds in its `_folds` list — and both answer a `Datum` of
-    one value per slot. They differ in what they can do with a morsel: a fold
-    reads `lane[W]` out of a fused subtree and keeps one scalar per group, so
-    it buffers nothing; this one has an aggregate whose state is a hash set, a
-    sketch, a best-row index or a Welford triple, which `AggregateFn` cannot
-    finish incrementally — so its input has to exist as a column first, and the
-    accumulated columns and ids are **O(rows)**.
+    The counterpart of `FusedAggregateOperator`, and the whole difference is
+    what the kernel eats. A fold reads `lane[W]` straight out of a fused
+    subtree and keeps one scalar per group; this one has an aggregate whose
+    state is a hash set, a sketch, a best value or a Welford triple, so its
+    input has to *exist* as a column — but only for the morsel being absorbed.
 
-    **Buffering and erasure are different things, and only the first is forced
-    here.** This used to be one zero-parameter struct shared with the runtime
-    lane, which meant a comptime aggregate boxed its operand into a
-    `DynOperator`, reached its kernel through a thin `AggregateFn` pointer, and
-    carried an `Optional[RuntimeAggregate]` field it never set. None of that
-    was needed: `Agg` and `A` are known where the plan is written. The erased
-    shape is `RuntimeAggregateOperator` in `runtime/`, where the name really does
-    arrive at run time.
+    **It used to be `BufferedAggregateOperator`, and the name was accurate.**
+    `AggKernel.grouped` was one-shot over the whole input, so this operator
+    kept every morsel's column and ids and concatenated them at `drain` —
+    O(rows), and it contained no aggregation logic at all: nine fields whose
+    only job was rebuilding one call's arguments. `AggKernel` is a state
+    machine now (`open` / `update` / `finish`), so the state lives in the
+    kernel and this holds O(groups).
 
-    `A` earns its parameter the same way `EvalOperator`'s does — the operand
-    subtree stays one type through the boundary, so `min(upper(s))` still
-    compiles `upper(s)` to one loop.
+    `Column` is doing work in the name here, where it would not on a kernel:
+    every aggregate aggregates a column, but only one of these two *operators*
+    hands its kernel one.
+
+    The operand keeps its fusion: `A` stays a type parameter and evaluates
+    through its own `EvalOperator[A]`, so `min(upper(s))` still compiles
+    `upper(s)` to one loop even though `min` over a string cannot fuse.
     """
 
     comptime Out = Datum
@@ -489,17 +489,9 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: ComptimeValue](Operator):
     """The operand's own operator, typed. A `DynOperator` here would box a
     subtree whose type this struct already names."""
 
-    var _chunks: List[DynArray]
-    """Every morsel's evaluated column. The O(rows) this is named for."""
-
-    var _ids: List[Int32Array]
-    """Group ids per morsel, **typed**. They are always `Int32Array`; storing
-    them as `DynArray` erased a type this lane already knew and paid a narrow
-    back at `finish`. The typed `concat` overload is what made it spellable."""
-
-    var _num_groups: Int
-    var _rows: Int
-    var _emitted: Bool
+    var _state: Optional[Self.Agg]
+    """`None` until the first morsel: `Agg.open` needs the input's dtype, and
+    an operator is built before any schema is in hand."""
 
     var _scatters: Bool
     """Whether the query has `GROUP BY` keys — a runtime `Bool`, where
@@ -507,58 +499,53 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: ComptimeValue](Operator):
 
     Measured, not assumed. `Aggregate.to_operator` branches on a *runtime*
     `grouped`, so parameterising this instantiates both arms for every
-    aggregate: a keyless binary with three buffered aggregates linked both
-    `HashGrouping` and `ScalarGrouping` and grew **4.6%**. The fused path earns
-    its `G` because specialising the loop is worth 14.6x; this body is a
-    `concat` and a call, where one predictable branch per morsel costs
-    nothing."""
+    aggregate: a keyless binary with three of these linked both `HashGrouping`
+    and `ScalarGrouping` and grew **4.6%**. The fused path earns its `G`
+    because specialising the loop is worth 14.6x; handing a column to a kernel
+    does not."""
+
+    var _emitted: Bool
 
     def __init__(
         out self, var input: Self.A, var bindings: Bindings, scatters: Bool
     ):
         self._input = EvalOperator[Self.A](input^, bindings^)
-        self._chunks = List[DynArray]()
-        self._ids = List[Int32Array]()
+        self._state = None
         self._scatters = scatters
-        self._num_groups = 0 if scatters else 1
-        self._rows = 0
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Evaluate the operand against the morsel and keep the column.
+        """Evaluate the operand and let the kernel absorb it.
 
-        Empty batches are kept too rather than skipped: an empty column still
-        carries its dtype, and `Agg.grouped` dispatches on it.
+        Empty batches are absorbed too rather than skipped: an empty column
+        still carries its dtype, and that is the one thing `Agg.open` needs and
+        the one thing a later morsel cannot supply retroactively.
         """
         var n = len(morsel.batch)
         var d = self._input.push(morsel)
-        self._chunks.append(d.value().to_array(n))
-        self._rows += n
-        if self._scatters:
-            self._ids.append(morsel.groups.ids.copy())
-            self._num_groups = max(self._num_groups, morsel.groups.num_groups)
+        var column = d.value().to_array(n)
+        if not self._state:
+            var in_dtypes = List[DynType](capacity=1)
+            in_dtypes.append(column.dtype())
+            self._state = Self.Agg.open(in_dtypes)
+        var inputs = List[DynArray](capacity=1)
+        inputs.append(column^)
+        var groups = morsel.groups.copy() if self._scatters else Groups.single(
+            n
+        )
+        self._state.value().update(groups, inputs)
         return None
 
     def drain(mut self) raises -> Optional[Datum]:
         if self._emitted:
             return None
         self._emitted = True
-        if len(self._chunks) == 0:
-            # No morsel ever arrived. A distinct count still has an answer; an
-            # extremum does not, and `GroupByOperator` fills its slot from the
-            # output schema.
+        if not self._state:
+            # No morsel ever arrived, so there is no dtype to open against. A
+            # distinct count still has an answer; an extremum does not, and
+            # `GroupByOperator` fills its slot from the output schema.
             var answer = Self.Agg.empty()
             if answer:
                 return Datum(answer.value().copy())
             return None
-        var columns = List[DynArray](capacity=1)
-        columns.append(concat(self._chunks, ExecContext.serial()))
-        var groups: Groups
-        if self._scatters:
-            groups = Groups(
-                concat(self._ids, ExecContext.serial()), self._num_groups
-            )
-        else:
-            groups = Groups.single(self._rows)
-        # A direct static call, not a pointer: `Agg` is a type here.
-        return Datum(Self.Agg.grouped(groups, columns))
+        return Datum(self._state.value().finish())

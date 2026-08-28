@@ -16,7 +16,16 @@ from ...builders import (
     TimestampBuilder,
     array,
 )
-from ...dtypes import DynType, float64, int32, int64, microsecond, timestamp
+from ...dtypes import (
+    DynType,
+    Int64Type,
+    TimestampType,
+    float64,
+    int32,
+    int64,
+    microsecond,
+    timestamp,
+)
 from ..aggregate import (
     Dispersion,
     DistinctCount,
@@ -199,8 +208,12 @@ def test_agg_temporal_min_max_keeps_unit_and_timezone() raises:
     — and a dtype that disagreed with the schema would be a `Variant`
     misaccess at emit rather than a raise."""
     var values = _timestamps([30, 10, 20])
-    var lo = Fold[MinKernel].grouped(Groups.single(3), _one(values.copy()))
-    var hi = Fold[MaxKernel].grouped(Groups.single(3), _one(values^))
+    var lo = Fold[MinKernel, TimestampType].grouped(
+        Groups.single(3), _one(values.copy())
+    )
+    var hi = Fold[MaxKernel, TimestampType].grouped(
+        Groups.single(3), _one(values^)
+    )
     assert_true(lo.dtype() == DynType(timestamp(microsecond, "UTC")))
     assert_true(hi.dtype() == DynType(timestamp(microsecond, "UTC")))
     assert_equal(Int(lo.as_timestamp()[0].value()), 10)
@@ -208,7 +221,7 @@ def test_agg_temporal_min_max_keeps_unit_and_timezone() raises:
 
 
 def test_agg_temporal_min_grouped() raises:
-    var out = Fold[MinKernel].grouped(
+    var out = Fold[MinKernel, TimestampType].grouped(
         Groups(_ids([0, 0, 1, 1]), 2), _one(_timestamps([30, 10, 50, 40]))
     )
     assert_true(out.dtype() == DynType(timestamp(microsecond, "UTC")))
@@ -219,8 +232,10 @@ def test_agg_temporal_min_grouped() raises:
 
 def test_agg_numeric_min_one_slot_and_grouped() raises:
     var values = array([3, 1, 4, 1], int64).to_dyn()
-    var whole = Fold[MinKernel].grouped(Groups.single(4), _one(values.copy()))
-    var grouped = Fold[MinKernel].grouped(
+    var whole = Fold[MinKernel, Int64Type].grouped(
+        Groups.single(4), _one(values.copy())
+    )
+    var grouped = Fold[MinKernel, Int64Type].grouped(
         Groups(_ids([0, 0, 1, 1]), 2), _one(values^)
     )
     assert_true(whole.as_int64() == array([1], int64))
@@ -230,7 +245,7 @@ def test_agg_numeric_min_one_slot_and_grouped() raises:
 def test_agg_rejects_a_dtype_it_has_no_arm_for() raises:
     var raised = False
     try:
-        _ = Fold[MinKernel].grouped(
+        _ = Fold[MinKernel, Int64Type].grouped(
             Groups.single(2), _one(_strings(["a", "b"]))
         )
     except:
@@ -273,12 +288,16 @@ def test_agg_out_dtype_agrees_with_the_column_produced() raises:
         .dtype()
     )
     assert_true(
-        Fold[MaxKernel].dtype(stamp_dtypes)
-        == Fold[MaxKernel].grouped(Groups.single(3), _one(stamps^)).dtype()
+        Fold[MaxKernel, TimestampType].dtype(stamp_dtypes)
+        == Fold[MaxKernel, TimestampType]
+        .grouped(Groups.single(3), _one(stamps^))
+        .dtype()
     )
     assert_true(
-        Fold[MinKernel].dtype(number_dtypes)
-        == Fold[MinKernel].grouped(Groups.single(3), _one(numbers^)).dtype()
+        Fold[MinKernel, Int64Type].dtype(number_dtypes)
+        == Fold[MinKernel, Int64Type]
+        .grouped(Groups.single(3), _one(numbers^))
+        .dtype()
     )
 
 
@@ -300,7 +319,7 @@ def test_agg_over_no_input_only_the_counts_answer() raises:
     assert_true(Bool(counted))
     assert_true(counted.value().as_int64() == array([0], int64))
     assert_true(not StringExtremum[MinOp].empty())
-    assert_true(not Fold[MaxKernel].empty())
+    assert_true(not Fold[MaxKernel, Int64Type].empty())
 
 
 # ---------------------------------------------------------------------------

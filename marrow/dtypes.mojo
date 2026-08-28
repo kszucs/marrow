@@ -1322,6 +1322,17 @@ struct DynType(
 
     # --- compound type accessors ---
 
+    def holds[T: DataType](self) -> Bool:
+        """Whether this dtype is a `T` — the check `as_type` only asserts.
+
+        `as_type`'s `debug_assert` **aborts the process** on a mismatch, which
+        under `ASSERT=all` takes the whole test runner down and fails every
+        case in the file rather than the one that was wrong. Generic code that
+        narrows a runtime dtype to a comptime type must gate on this and raise;
+        the assert is for invariants a caller has already established.
+        """
+        return self._v.isa[T]()
+
     def as_type[T: DataType](ref self) -> ref[self._v[T]] T:
         """This dtype as the concrete `T` it holds — a borrow, no copy.
 

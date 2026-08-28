@@ -16,7 +16,7 @@ Two levels, and they answer different questions.
 
 Erasure at the second level is deliberate. It is what lets a single vocabulary
 serve both expression lanes: the comptime lane names an ``AggKernel`` as a type
-parameter, the runtime lane stores one as an ``AggregateFn`` pointer. The hot
+parameter, the runtime lane erases one behind its own box. The hot
 loop is still fully typed either way, because the dispatch happens once, at the
 boundary, before ``AggState`` exists.
 
@@ -68,11 +68,15 @@ from ..views import reduce
 from .core import Kernel, Groups
 from ..execution import ExecContext
 from .distinct import (
-    count_distinct,
-    approx_count_distinct,
-    count_distinct_grouped,
-    approx_count_distinct_grouped,
+    HLL_P_GROUPED,
+    hll_estimate,
+    hll_rho,
 )
+from .hashing import RapidHashKernel
+from .hashtable import SwissHashTable
+from ..utils import RapidHash64
+from ..arrays import StructArray
+from ..dtypes import Field, struct_
 
 
 # ---------------------------------------------------------------------------
@@ -997,48 +1001,45 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
 # ---------------------------------------------------------------------------
 
 
-comptime AggregateFn = def(Groups, List[DynArray]) thin raises -> DynArray
-"""`AggKernel.grouped`, erased — the assignment, its columns, one value per
-slot out.
-
-Mojo has no dynamic dispatch, so this pointer is how a caller that resolved an
-aggregate *at run time* stores which one it got. A caller that knows the type
-writes `Agg.grouped` and pays nothing.
-
-`List[DynArray]` rather than a single column from the start. No multi-input
-aggregate is scheduled, but the signature is the expensive-to-change part —
-every implementation plus every caller — and widening it costs nothing while
-the operator owns the list and lends it.
-
-`thin`, so it carries no captures and no identity: if the wrong arm is handed
-over, nothing downstream can name which aggregate it holds. Whoever builds one
-is the only place that pairing can be checked.
-"""
-
-
-trait AggKernel(Kernel):
-    """One aggregate, over erased columns.
+trait AggKernel(Deinitable, Kernel, Movable):
+    """One aggregate, over erased columns, **streaming**.
 
     Four implementations, named for what they compute rather than for what they
     consume: `Fold[K]` (any fixed-width column, via `K`'s lane algebra),
-    `StringExtremum[Op]`, `ValidCount` and `DistinctCount[exact]`. `Fold[K]`
-    additionally conforms to `Foldable`, which is how a caller asks at compile
-    time whether an aggregate can fuse.
+    `StringExtremum[Op]`, `ValidCount` and `DistinctCount[exact]`, plus
+    `Dispersion[ddof, root]`. `Fold[K]` additionally conforms to `Foldable`,
+    which is how a caller asks at compile time whether an aggregate can fuse.
 
-    No associated types, deliberately. That is what lets one vocabulary serve
-    both expression lanes: the comptime lane takes the trait as a parameter and
-    calls `grouped` directly, the runtime lane takes it as an `AggregateFn` and
-    calls it through a pointer. A single associated type would break the second
-    half, because an erased caller cannot name it.
+    **An aggregate is a state machine, not a function.** `open` once, `update`
+    per morsel, `finish` at the end. That is what lets an execution engine hold
+    O(groups) instead of O(rows): the previous contract was a single
+    `grouped(groups, inputs)` over the *whole* input, so every caller that saw
+    data in pieces had to accumulate every piece and concatenate at the end.
+    `BufferedAggregateOperator` was ~60 lines of exactly that and contained no
+    aggregation logic — it existed to rebuild one call's arguments.
+
+    The claim that these aggregates "cannot be finished incrementally" was
+    wrong, and it is worth naming because it justified the buffering for a
+    while. A hash set updates per row, HyperLogLog is definitionally
+    incremental, a best-value-per-group is one slot per group, and Welford's
+    triple is a fold. All four are O(groups).
+
+    `dtype` and `empty` stay static: both are plan-time questions, answered
+    before any state exists.
+
+    Movable but **not** `Copyable`: `Fold[K, V]` holds an `AggState[K, V]`,
+    whose builders are not copyable, and an aggregate in flight is not a value
+    anyone should duplicate — two copies of a half-absorbed state double-count
+    on the next morsel.
     """
 
     comptime mergeable: Bool = False
     """Whether `partials` / `merge` are implemented — whether this aggregate can
     run as independent per-thread folds that are combined afterwards.
 
-    A sketch-based aggregate cannot: two hash sets do not add. The grouper reads
-    this before choosing a strategy, so an aggregate that says `False` is simply
-    never asked."""
+    Separate from the streaming trio, and not redundant with it. Streaming is
+    *sequential* accumulation into one state; this is *parallel* accumulation
+    into several. A sketch can stream and still not merge."""
 
     @staticmethod
     def dtype(inputs: List[DynType]) raises -> DynType:
@@ -1052,18 +1053,55 @@ trait AggKernel(Kernel):
         ...
 
     @staticmethod
-    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
-        """One value per slot.
+    def open(in_dtypes: List[DynType]) raises -> Self:
+        """A fresh state for an aggregate over columns of these dtypes.
+
+        Takes dtypes rather than the first batch because an aggregate must be
+        openable before any row arrives, and because the dtype is the only part
+        of the input it needs in advance — `Fold[K]` resolves its `AggState[K,
+        V]` here, once, instead of on every morsel.
+        """
+        ...
+
+    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
+        """Absorb one morsel.
 
         **`groups.is_single()` must be its first branch.** The one-slot
         assignment carries no ids, and a per-group body is a
         `for i in range(len(groups.ids))` loop, which over an empty id array
-        does not execute at all — `[0]` or `[null]` where the whole-input
-        answer belongs. A wrong answer, not a crash. It is also where the
-        whole-column fast paths live: a vectorized reduce, an O(1) metadata
-        read, a radix-parallel sketch.
+        does not execute at all — leaving the state untouched and `finish`
+        answering `[0]` or `[null]` where the whole-input answer belongs. A
+        wrong answer, not a crash.
+
+        `groups.num_groups` may grow between morsels, so every per-group
+        container has to grow with it; ids already handed out are never
+        renumbered, so growing in place is sound.
         """
         ...
+
+    def finish(mut self) raises -> DynArray:
+        """One value per slot, from everything absorbed.
+
+        Takes no group count: `update` has seen every `groups.num_groups` and
+        the state is the only thing that knows how far it grew. Passing one
+        here is how a caller and a state disagree.
+        """
+        ...
+
+    @staticmethod
+    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
+        """The whole-input aggregate in one call — `open`, `update`, `finish`.
+
+        A default, for callers that genuinely have all the data: `GroupBy`'s
+        batch API, and the tests. Nothing overrides it, and an implementation
+        that did would be a second copy of its own algebra.
+        """
+        var in_dtypes = List[DynType](capacity=len(inputs))
+        for i in range(len(inputs)):
+            in_dtypes.append(inputs[i].dtype())
+        var state = Self.open(in_dtypes)
+        state.update(groups, inputs)
+        return state.finish()
 
     @staticmethod
     def empty() raises -> Optional[DynArray]:
@@ -1126,14 +1164,21 @@ trait Foldable(AggKernel):
     """The lane algebra this aggregate folds with."""
 
 
-struct Fold[K: FoldKernel](Foldable):
-    """The aggregate expressible as a lane fold, over any fixed-width column —
+struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
+    """The aggregate expressible as a lane fold, over a column of type `V` —
     `sum`, `product`, `mean`, `min`, `max`, `count`.
 
-    One dispatch on the input's runtime dtype, then the fully typed
-    `AggState[K, V]` — the same state the comptime lane fuses, reached the slow
-    way. Two things send an aggregate here rather than into the fused loop: the
-    query named it with a string, or its input is temporal.
+    **Typed on its input, like every other kernel in this package.** It holds
+    an `AggState[K, V]` as a plain field: no dispatch, no box, no trampoline.
+    Narrowing the erased column it is handed is one O(1) handle copy, and the
+    per-row loop inside `AggState.update` is fully monomorphized.
+
+    `V` used to be absent, and `Fold[K]` resolved a *runtime* dtype on every
+    call — which meant that once it had to hold state across morsels, that
+    state could not be a typed field and ended up behind an `ArcPointer` and
+    two thin trampolines. Erasure machinery inside a compute kernel is the
+    wrong layer: mapping a runtime dtype onto a type is the expression layer's
+    job, and it already does exactly that for every other kernel.
 
     `K.acc_dtype` decides the output dtype, so `sum(int32)` widens to int64,
     `mean` answers float64, and `min`/`max` keep the input's unit, timezone,
@@ -1143,6 +1188,18 @@ struct Fold[K: FoldKernel](Foldable):
     comptime name = Self.K.name
     comptime mergeable = True
     comptime Lane = Self.K
+
+    var _state: AggState[Self.K, Self.V]
+    var _slots: Int
+
+    def __init__(out self, var state: AggState[Self.K, Self.V]):
+        self._state = state^
+        self._slots = 0
+
+    @staticmethod
+    def dtype(inputs: List[DynType]) raises -> DynType:
+        var in_dtype = Self._domain(inputs)
+        return DynType(Self.K.acc_dtype[Self.V](in_dtype.as_type[Self.V]()))
 
     @staticmethod
     def _domain(inputs: List[DynType]) raises -> DynType:
@@ -1155,104 +1212,82 @@ struct Fold[K: FoldKernel](Foldable):
         """
         if len(inputs) != 1:
             raise Self.error(t"takes exactly one input, got {len(inputs)}")
-        ref dtype = inputs[0]
+        ref in_dtype = inputs[0]
         comptime if conforms_to(Self.K, ArithmeticAgg):
-            if not dtype.is_numeric():
+            if not in_dtype.is_numeric():
                 raise Self.error(
                     t"needs arithmetic, so it is not defined for"
-                    t" {dtype} columns"
+                    t" {in_dtype} columns"
                 )
         else:
-            if not (dtype.is_numeric() or dtype.is_temporal()):
-                raise Self.error(t"is not defined for {dtype} columns")
-        return dtype.copy()
-
-    @staticmethod
-    def _domain(inputs: List[DynArray]) raises -> DynType:
-        """The same gate, reached from the columns themselves."""
-        var dtypes = List[DynType]()
-        for i in range(len(inputs)):
-            dtypes.append(inputs[i].dtype())
-        return Self._domain(dtypes)
-
-    @staticmethod
-    def dtype(inputs: List[DynType]) raises -> DynType:
-        var in_dtype = Self._domain(inputs)
-
-        def numeric[V: NumericType](d: V) raises {imm} -> DynType:
-            return DynType(Self.K.acc_dtype[V](d))
-
-        comptime if conforms_to(Self.K, ArithmeticAgg):
-            return in_dtype.dispatch_numeric(numeric)
-        else:
-            if in_dtype.is_numeric():
-                return in_dtype.dispatch_numeric(numeric)
-
-            def temporal[V: TemporalType](d: V) raises {imm} -> DynType:
-                return DynType(Self.K.acc_dtype[V](d))
-
-            return in_dtype.dispatch_temporal(temporal)
-
-    @staticmethod
-    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
-        var in_dtype = Self._domain(inputs)
-
-        # Numeric and temporal are separate dispatch arms rather than one
-        # `dispatch_primitive`, so a kernel whose domain excludes temporal
-        # columns is never instantiated over one — `AggState`'s domain
-        # assertion would fail the build rather than raise.
-        def numeric[V: NumericType](d: V) raises {imm} -> DynArray:
-            return Self._one[V](groups, inputs[0])
-
-        comptime if conforms_to(Self.K, ArithmeticAgg):
-            return in_dtype.dispatch_numeric(numeric)
-        else:
-            if in_dtype.is_numeric():
-                return in_dtype.dispatch_numeric(numeric)
-
-            def temporal[V: TemporalType](d: V) raises {imm} -> DynArray:
-                return Self._one[V](groups, inputs[0])
-
-            return in_dtype.dispatch_temporal(temporal)
-
-    @staticmethod
-    def _one[
-        V: PrimitiveType
-    ](groups: Groups, input: DynArray) raises -> DynArray:
-        """One fixed-width column folded by `K`, at one slot or at many."""
-        var column = input.as_primitive[V]().copy()
-        if groups.is_single():
-            # The vectorized whole-array reduce, not the scatter loop over an
-            # id array that does not exist. Serial: the SIMD reduce only
-            # benefits from threads well above the sizes reached here, and that
-            # gating belongs in the reduce primitive. `with_threads(1)` rather
-            # than `serial()` — forcing one worker must not also discard a
-            # device the reduce could run on.
-            return (
-                Self.K.reduce(column, ExecContext.auto().with_threads(1))
-                .repeat(1)
-                .to_dyn()
+            if not (in_dtype.is_numeric() or in_dtype.is_temporal()):
+                raise Self.error(t"is not defined for {in_dtype} columns")
+        # The family gate above is not the same question as "is this column a
+        # `V`". Without this, a caller that resolved the wrong `V` reaches
+        # `as_type` inside `open` and **aborts the process** rather than
+        # raising — which under `ASSERT=all` fails every case in the file.
+        if not in_dtype.holds[Self.V]():
+            raise Self.error(
+                t"was resolved for a different column type than {in_dtype}"
             )
-        var state = AggState[Self.K, V](Self.K.acc_dtype[V](column.dtype))
-        state.update(groups.ids, column, groups.num_groups)
-        return state.finish(groups.num_groups).to_dyn()
+        return in_dtype.copy()
+
+    @staticmethod
+    def open(in_dtypes: List[DynType]) raises -> Self:
+        var in_dtype = Self._domain(in_dtypes)
+        return Self(
+            AggState[Self.K, Self.V](
+                Self.K.acc_dtype[Self.V](in_dtype.as_type[Self.V]())
+            )
+        )
+
+    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
+        var column = inputs[0].as_primitive[Self.V]().copy()
+        self._slots = max(
+            self._slots, 1 if groups.is_single() else groups.num_groups
+        )
+        if groups.is_single():
+            # One slot: fold this morsel into a register with `views.reduce`
+            # and hand the accumulator to slot 0 — the shape the fused loop
+            # uses, once per morsel rather than once per row.
+            #
+            # **`views.reduce` with `K.combine`, not `K.reduce`.** The kernel's
+            # own `reduce` returns the *finalized* value, and for `mean` that
+            # is already the quotient; handing it to `combine_at` divided a
+            # second time at `finish`.
+            comptime Acc = Self.K.AccType[Self.V].native
+            var identity = Self.K.identity[Acc]()
+            var acc: Scalar[Acc]
+            if column.bitmap:
+                acc = reduce[Self.V.native, Self.K.combine, Acc](
+                    column.values(),
+                    column.validity().value(),
+                    identity,
+                    ExecContext.serial(),
+                )
+            else:
+                acc = reduce[Self.V.native, Self.K.combine, Acc](
+                    column.values(), identity, ExecContext.serial()
+                )
+            self._state._grow(1)
+            self._state.combine_at(0, acc, len(column) - column.null_count())
+        else:
+            self._state.update(groups.ids, column, groups.num_groups)
+
+    def finish(mut self) raises -> DynArray:
+        return self._state.finish(self._slots).to_dyn()
 
     @staticmethod
     def partials(
         in_dtype: DynType, groups: Groups, inputs: List[DynArray]
     ) raises -> Tuple[DynArray, Int64Array]:
-        var box = List[Tuple[DynArray, Int64Array]]()
-        box.reserve(1)
-
-        def run[V: PrimitiveType](d: V) raises {mut box, imm}:
-            var column = inputs[0].as_primitive[V]().copy()
-            var state = AggState[Self.K, V](Self.K.acc_dtype[V](column.dtype))
-            state.update(groups.ids, column, groups.num_groups)
-            var parts = state.into_partials()
-            box.append((parts[0].copy().to_dyn(), parts[1].copy()))
-
-        Self._dispatch(in_dtype, run)
-        return box.pop()
+        var column = inputs[0].as_primitive[Self.V]().copy()
+        var state = AggState[Self.K, Self.V](
+            Self.K.acc_dtype[Self.V](column.dtype)
+        )
+        state.update(groups.ids, column, groups.num_groups)
+        var parts = state.into_partials()
+        return (parts[0].copy().to_dyn(), parts[1].copy())
 
     @staticmethod
     def merge(
@@ -1267,58 +1302,20 @@ struct Fold[K: FoldKernel](Foldable):
         # finalizes once at the end.
         if len(accs) == 0:
             raise Self.error("merge: no partial states to fold")
-        var box = List[DynArray]()
-        box.reserve(1)
-
-        def run[V: PrimitiveType](d: V) raises {mut box, imm}:
-            # The accumulator's dtype comes off the first partial rather than
-            # from the type: `min`/`max` keep the input's, and a timestamp's
-            # unit and timezone are not recoverable from `AccType` alone. Every
-            # partial was folded from the same column, so any of them answers.
-            comptime Acc = Self.K.AccType[V]
-            var first = accs[0].as_primitive[Acc]().copy()
-            var state = AggState[Self.K, V](first.dtype.copy())
-            for t in range(len(remap)):
-                state.merge(
-                    remap[t],
-                    accs[t].as_primitive[Acc]().copy(),
-                    cnts[t],
-                    num_groups,
-                )
-            box.append(state.finish(num_groups).to_dyn())
-
-        Self._dispatch(in_dtype, run)
-        return box.pop()
-
-    @staticmethod
-    def _dispatch[
-        Job: def[V: PrimitiveType](V) raises -> None
-    ](in_dtype: DynType, job: Job) raises:
-        """Narrow the input dtype to the family this kernel's domain allows.
-
-        The same numeric / temporal split `grouped` writes out, in the one
-        shape the partial-fold path needs — a job that returns nothing and
-        escapes its result through a captured box.
-        """
-
-        def numeric[V: NumericType](d: V) raises {imm}:
-            job[V](d)
-
-        comptime if conforms_to(Self.K, ArithmeticAgg):
-            if not in_dtype.is_numeric():
-                raise Self.error(t"is not defined for {in_dtype} columns")
-            in_dtype.dispatch_numeric(numeric)
-        else:
-            if in_dtype.is_numeric():
-                in_dtype.dispatch_numeric(numeric)
-            elif in_dtype.is_temporal():
-
-                def temporal[V: TemporalType](d: V) raises {imm}:
-                    job[V](d)
-
-                in_dtype.dispatch_temporal(temporal)
-            else:
-                raise Self.error(t"is not defined for {in_dtype} columns")
+        comptime Acc = Self.K.AccType[Self.V]
+        # The accumulator's dtype comes off the first partial rather than from
+        # the type: `min`/`max` keep the input's, and a timestamp's unit and
+        # timezone are not recoverable from `AccType` alone.
+        var first = accs[0].as_primitive[Acc]().copy()
+        var state = AggState[Self.K, Self.V](first.dtype.copy())
+        for t in range(len(remap)):
+            state.merge(
+                remap[t],
+                accs[t].as_primitive[Acc]().copy(),
+                cnts[t],
+                num_groups,
+            )
+        return state.finish(num_groups).to_dyn()
 
 
 struct Dispersion[ddof: Int, root: Bool](AggKernel):
@@ -1354,6 +1351,17 @@ struct Dispersion[ddof: Int, root: Bool](AggKernel):
 
     comptime name = "stddev" if Self.root else "variance"
 
+    var _n: List[Float64]
+    var _mean: List[Float64]
+    var _m2: List[Float64]
+    """Welford's triple, one slot each. The reason this is not a `Fold`: an
+    `AggState` holds one accumulator column plus one count."""
+
+    def __init__(out self):
+        self._n = List[Float64]()
+        self._mean = List[Float64]()
+        self._m2 = List[Float64]()
+
     @staticmethod
     def dtype(inputs: List[DynType]) raises -> DynType:
         if len(inputs) != 1:
@@ -1361,24 +1369,16 @@ struct Dispersion[ddof: Int, root: Bool](AggKernel):
         ref in_dtype = inputs[0]
         if not in_dtype.is_numeric():
             raise Self.error(
-                t"needs arithmetic, so it is not defined for"
-                t" {in_dtype} columns"
+                t"needs arithmetic, so it is not defined for {in_dtype} columns"
             )
         # A dispersion is a real number whatever the input's width, and a
         # rooted one is not even in the input's units squared.
         return DynType(float64)
 
     @staticmethod
-    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
-        var dtypes = List[DynType]()
-        for i in range(len(inputs)):
-            dtypes.append(inputs[i].dtype())
-        _ = Self.dtype(dtypes)  # arity + domain gate
-
-        def numeric[V: NumericType](d: V) raises {imm} -> DynArray:
-            return Self._welford[V](groups, inputs[0])
-
-        return inputs[0].dtype().dispatch_numeric(numeric)
+    def open(in_dtypes: List[DynType]) raises -> Self:
+        _ = Self.dtype(in_dtypes)  # arity + domain gate
+        return Self()
 
     @staticmethod
     def empty() raises -> Optional[DynArray]:
@@ -1387,64 +1387,62 @@ struct Dispersion[ddof: Int, root: Bool](AggKernel):
         # of what was aggregated.
         return Float64Scalar(None, float64).repeat(1).to_dyn()
 
-    @always_inline
-    @staticmethod
-    def _absorb(
-        mut n: List[Float64],
-        mut mean: List[Float64],
-        mut m2: List[Float64],
-        g: Int,
-        x: Float64,
-    ):
-        """One Welford step against slot `g`."""
-        n[g] += 1.0
-        var delta = x - mean[g]
-        mean[g] += delta / n[g]
-        m2[g] += delta * (x - mean[g])
+    def _grow(mut self, slots: Int):
+        while len(self._n) < slots:
+            self._n.append(0.0)
+            self._mean.append(0.0)
+            self._m2.append(0.0)
 
-    @staticmethod
+    @always_inline
+    def _absorb(mut self, g: Int, x: Float64):
+        """One Welford step against slot `g`."""
+        self._n[g] += 1.0
+        var delta = x - self._mean[g]
+        self._mean[g] += delta / self._n[g]
+        self._m2[g] += delta * (x - self._mean[g])
+
+    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
+        var in_dtype = inputs[0].dtype()
+        if not in_dtype.is_numeric():
+            raise Self.error(t"is not defined for {in_dtype} columns")
+        self._grow(1 if groups.is_single() else groups.num_groups)
+
+        def numeric[V: NumericType](d: V) raises {mut self, imm}:
+            self._welford[V](groups, inputs[0])
+
+        in_dtype.dispatch_numeric(numeric)
+
     def _welford[
         V: NumericType
-    ](groups: Groups, input: DynArray) raises -> DynArray:
+    ](mut self, groups: Groups, input: DynArray) raises:
         var values = input.as_primitive[V]().copy()
-        var single = groups.is_single()
-        var slots = 1 if single else groups.num_groups
-        var n = List[Float64](length=slots, fill=0.0)
-        var mean = List[Float64](length=slots, fill=0.0)
-        var m2 = List[Float64](length=slots, fill=0.0)
         var has_null = values.null_count() > 0
         var vals = values.values()
-
         # Two loops rather than one with a per-row branch on an invariant:
         # `groups.is_single()` holds no ids at all, so the grouped loop would
-        # not execute and would answer `[null]` for the whole input.
-        if single:
+        # not execute and would leave the state untouched.
+        if groups.is_single():
             for i in range(len(values)):
                 if has_null and not values.is_valid(i):
                     continue
-                Self._absorb(
-                    n, mean, m2, 0, Float64(vals[i].cast[DType.float64]())
-                )
+                self._absorb(0, Float64(vals[i].cast[DType.float64]()))
         else:
             var gids = groups.ids.values()
             for i in range(len(groups.ids)):
                 if has_null and not values.is_valid(i):
                     continue
-                Self._absorb(
-                    n,
-                    mean,
-                    m2,
-                    Int(gids[i]),
-                    Float64(vals[i].cast[DType.float64]()),
+                self._absorb(
+                    Int(gids[i]), Float64(vals[i].cast[DType.float64]())
                 )
 
-        var out = Float64Builder(slots)
-        for g in range(slots):
-            var divisor = n[g] - Float64(Self.ddof)
+    def finish(mut self) raises -> DynArray:
+        var out = Float64Builder(len(self._n))
+        for g in range(len(self._n)):
+            var divisor = self._n[g] - Float64(Self.ddof)
             if divisor <= 0.0:
                 out.append_null()
             else:
-                var v = m2[g] / divisor
+                var v = self._m2[g] / divisor
                 out.append(math.sqrt(v) if Self.root else v)
         return out.finish().to_dyn()
 
@@ -1453,15 +1451,30 @@ struct StringExtremum[Op: MinMaxOp](AggKernel):
     """`min`/`max` over a string column — a bytewise (lexicographic) scan,
     matching Arrow's `hash_min`/`hash_max`.
 
-    Not a fold: there is no scalar accumulator, so the scan keeps the index of
-    the best row per slot and materializes at the end. That is also why it is
-    not mergeable — two best-row indices into different batches do not combine.
+    Not a fold: there is no scalar accumulator to combine. That is also why it
+    is not mergeable — but it *is* streamable, which the previous design got
+    wrong. It used to keep the index of the best row, and an index is only
+    meaningful inside the morsel it came from, so the whole column had to be
+    concatenated first. Keeping the best **value** instead is O(groups) and
+    survives a morsel boundary.
 
-    Nulls are excluded (SQL semantics) and an empty or all-null slot yields
-    null.
+    Nulls are excluded and an empty or all-null slot yields null.
     """
 
     comptime name = Self.Op.name
+
+    var _best: List[Optional[String]]
+    """The winning value per slot, not its row index. One `String` per group,
+    so the state is O(groups) in the *distinct answers*, never O(rows)."""
+
+    var _dtype: DynType
+    """The input's dtype, kept because an extremum *is* one of the input's
+    values and so keeps its type — `string` and `large_string` are different
+    outputs."""
+
+    def __init__(out self, var dtype: DynType):
+        self._best = List[Optional[String]]()
+        self._dtype = dtype^
 
     @staticmethod
     def dtype(inputs: List[DynType]) raises -> DynType:
@@ -1474,66 +1487,74 @@ struct StringExtremum[Op: MinMaxOp](AggKernel):
         return in_dtype.copy()
 
     @staticmethod
-    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
-        var dtypes = List[DynType]()
-        for i in range(len(inputs)):
-            dtypes.append(inputs[i].dtype())
-        # `dtype` is the arity and domain gate, and a string extremum keeps its
-        # input's type, so it also answers which arm to dispatch into.
-        var in_dtype = Self.dtype(dtypes)
+    def open(in_dtypes: List[DynType]) raises -> Self:
+        return Self(Self.dtype(in_dtypes))
 
-        def stringly[T: StringLikeType](d: T) raises {imm} -> DynArray:
-            return Self._scan[T](groups, inputs[0])
+    def _grow(mut self, slots: Int):
+        while len(self._best) < slots:
+            self._best.append(None)
 
-        return in_dtype.dispatch_stringlike(stringly)
-
-    @staticmethod
     @always_inline
-    def _better[
-        T: StringLikeType
-    ](values: BinaryLikeArray[T], i: Int, best: Int) raises -> Bool:
-        """Whether row `i` beats the current best row."""
-        var a = values.unsafe_get(UInt(i))
-        var b = values.unsafe_get(UInt(best))
-        return (a < b) if Self.Op.is_min else (b < a)
+    def _offer(mut self, g: Int, var candidate: String):
+        """Keep `candidate` if it beats slot `g`'s incumbent."""
+        if not self._best[g]:
+            self._best[g] = candidate^
+            return
+        var better = (
+            candidate < self._best[g].value()
+        ) if Self.Op.is_min else (self._best[g].value() < candidate)
+        if better:
+            self._best[g] = candidate^
 
-    @staticmethod
+    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
+        var in_dtype = inputs[0].dtype()
+        var one = List[DynType](capacity=1)
+        one.append(in_dtype.copy())
+        _ = Self.dtype(one)
+        self._grow(1 if groups.is_single() else groups.num_groups)
+
+        def stringly[T: StringLikeType](d: T) raises {mut self, imm}:
+            self._scan[T](groups, inputs[0])
+
+        in_dtype.dispatch_stringlike(stringly)
+
     def _scan[
         T: StringLikeType
-    ](groups: Groups, input: DynArray) raises -> DynArray:
+    ](mut self, groups: Groups, input: DynArray) raises:
         var values = input.as_binary_like[T]().copy()
         var has_null = values.null_count() > 0
         if groups.is_single():
-            # The same comparison as the per-group loop, without the id load —
-            # and without synthesising an all-zeros id array to get there.
-            var best = -1
             for i in range(len(values)):
                 if has_null and not values.is_valid(i):
                     continue
-                if best == -1 or Self._better[T](values, i, best):
-                    best = i
-            var one = BinaryLikeBuilder[T](capacity=1)
-            if best == -1:
-                one.append_null()
-            else:
-                one.append(values.unsafe_get(UInt(best)))
-            return one.finish().to_dyn()
+                self._offer(0, String(values.unsafe_get(UInt(i))))
+        else:
+            var gids = groups.ids.values()
+            for i in range(len(groups.ids)):
+                if has_null and not values.is_valid(i):
+                    continue
+                self._offer(Int(gids[i]), String(values.unsafe_get(UInt(i))))
 
-        var best = List[Int](length=groups.num_groups, fill=-1)
-        var gids = groups.ids.values()
-        for i in range(len(groups.ids)):
-            if has_null and not values.is_valid(i):
-                continue
-            var g = Int(gids[i])
-            if best[g] == -1 or Self._better[T](values, i, best[g]):
-                best[g] = i
-        var out = BinaryLikeBuilder[T](capacity=groups.num_groups)
-        for g in range(groups.num_groups):
-            if best[g] == -1:
-                out.append_null()
-            else:
-                out.append(values.unsafe_get(UInt(best[g])))
-        return out.finish().to_dyn()
+    def finish(mut self) raises -> DynArray:
+        var box = List[DynArray]()
+        box.reserve(1)
+        # The dtype is copied out first: dispatching on `self._dtype` while the
+        # job captures `self` mutably aliases the same value both ways.
+        var out_dtype = self._dtype.copy()
+        var best = self._best^
+        self._best = List[Optional[String]]()
+
+        def build[T: StringLikeType](d: T) raises {mut box, imm}:
+            var out = BinaryLikeBuilder[T](capacity=len(best))
+            for g in range(len(best)):
+                if best[g]:
+                    out.append(best[g].value())
+                else:
+                    out.append_null()
+            box.append(out.finish().to_dyn())
+
+        out_dtype.dispatch_stringlike(build)
+        return box.pop()
 
 
 struct ValidCount(AggKernel):
@@ -1543,27 +1564,36 @@ struct ValidCount(AggKernel):
     there is nothing to monomorphize on: the input stays erased. An empty slot
     counts 0 and is never null, matching SQL.
 
+    Its state is one `Int64` per slot, so streaming it costs nothing over the
+    one-shot form it replaced.
+
     Mergeable, because per-slot counts merge by addition — which is exactly what
     the shared `(accumulator, valid count)` partial format already carries, with
     the count as the accumulator.
 
     The comptime lane does **not** route numeric `count` here — it fuses
     `Aggregate[Fold[CountKernel], A]` when its operand is numeric, which pays
-    one typed `bitmap.test()` per
-    row where this pays a `DynArray._dispatch` walk: a linear `comptime for`
-    over 37 variant arms plus an indirect call *per row*, inside an already
-    cache-hostile random-write loop. Measured at 1M rows / 100k groups on a
-    nullable column: 1.7159 ms (sd 0.0702) against 8.3555 ms (sd 0.2331). On a
-    null-free column this skips validity entirely via its `has_null` guard and
-    never loads a value, which is why it edges ahead there instead — 1.3710 ms
-    against 1.4124 ms, a ~3% gap. Converging the two would mean paying the
-    erased per-row cost on every numeric `count`, so the split stays. This is
-    the path for the dtypes a fold cannot serve, and for a `count` named at run
-    time.
+    one typed `bitmap.test()` per row where this pays a `DynArray._dispatch`
+    walk: a linear `comptime for` over 37 variant arms plus an indirect call
+    *per row*, inside an already cache-hostile random-write loop. Measured at
+    1M rows / 100k groups on a nullable column: 1.7159 ms (sd 0.0702) against
+    8.3555 ms (sd 0.2331). On a null-free column this skips validity entirely
+    via its `has_null` guard and never loads a value, which is why it edges
+    ahead there instead — 1.3710 ms against 1.4124 ms, a ~3% gap. Converging
+    the two would mean paying the erased per-row cost on every numeric `count`,
+    so the split stays. This is the path for the dtypes a fold cannot serve,
+    and for a `count` named at run time.
     """
 
     comptime name = CountKernel.name
     comptime mergeable = True
+
+    var _counts: List[Int64]
+    """One running count per slot. Grows with `groups.num_groups`; ids already
+    handed out are never renumbered, so growing in place is sound."""
+
+    def __init__(out self):
+        self._counts = List[Int64]()
 
     @staticmethod
     def dtype(inputs: List[DynType]) raises -> DynType:
@@ -1572,31 +1602,45 @@ struct ValidCount(AggKernel):
         return DynType(int64)
 
     @staticmethod
-    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
+    def open(in_dtypes: List[DynType]) raises -> Self:
+        _ = Self.dtype(in_dtypes)  # arity gate, before any row arrives
+        return Self()
+
+    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
         ref column = inputs[0]
+        var has_null = column.null_count() > 0
         if groups.is_single():
             # A valid count is metadata. Losing this branch would turn
             # `count(x)` with no GROUP BY from O(1) into O(n).
-            return (
-                Int64Scalar(Int64(len(column) - column.null_count()))
-                .repeat(1)
-                .to_dyn()
-            )
-        return Self._per_group(groups, column).to_dyn()
-
-    @staticmethod
-    def _per_group(groups: Groups, column: DynArray) raises -> Int64Array:
-        var counts = List[Int64](length=groups.num_groups, fill=0)
+            self._grow(1)
+            self._counts[0] += Int64(len(column) - column.null_count())
+            return
+        self._grow(groups.num_groups)
         var gids = groups.ids.values()
-        var has_null = column.null_count() > 0
         for i in range(len(groups.ids)):
             if has_null and not column.is_valid(i):
                 continue
-            counts[Int(gids[i])] += 1
-        var out = Int64Builder(groups.num_groups)
-        for g in range(groups.num_groups):
-            out.append(Scalar[int64.native](counts[g]))
-        return out.finish()
+            self._counts[Int(gids[i])] += 1
+
+    def _grow(mut self, slots: Int):
+        while len(self._counts) < slots:
+            self._counts.append(0)
+
+    def finish(mut self) raises -> DynArray:
+        var out = Int64Builder(len(self._counts))
+        for g in range(len(self._counts)):
+            out.append(Scalar[int64.native](self._counts[g]))
+        return out.finish().to_dyn()
+
+    @staticmethod
+    def _per_group(groups: Groups, column: DynArray) raises -> Int64Array:
+        """The per-slot counts as a typed column — what `partials` hands the
+        parallel driver, which wants an `Int64Array` rather than a state."""
+        var state = Self()
+        var one = List[DynArray](capacity=1)
+        one.append(column.copy())
+        state.update(groups, one)
+        return state.finish().as_int64().copy()
 
     @staticmethod
     def empty() raises -> Optional[DynArray]:
@@ -1635,13 +1679,52 @@ struct ValidCount(AggKernel):
 struct DistinctCount[exact: Bool](AggKernel):
     """`COUNT(DISTINCT x)` exactly, or a HyperLogLog estimate of it.
 
-    Not a fold at all — the per-slot state is a hash set or a sketch, not a
-    scalar accumulator — which is why there is no `FoldKernel` for it, no fused
-    form to fall back to, and no merge: two sketches of the same rows do not
-    add. Nulls are excluded (SQL semantics, PyArrow's `only_valid`).
+    Not a fold — the per-slot state is a hash set or a sketch, not a scalar
+    accumulator — which is why there is no `FoldKernel` for it, no fused form
+    to fall back to, and no merge: two sketches of the same rows do not add.
+    Nulls are excluded (SQL semantics, PyArrow's `only_valid`).
+
+    **Streaming, and this is the aggregate that most needed it.** Both states
+    are naturally incremental: the exact form dedups `(group, value)` pairs in
+    one `SwissHashTable` that simply persists across morsels, and HyperLogLog
+    is definitionally updatable. The previous contract still made a query
+    containing a `count_distinct` hold its entire input column in memory,
+    because `grouped` was one-shot. Exact is now O(distinct pairs) and approx
+    is O(groups * 2**11) — neither is O(rows).
+
+    One thing was given up. The one-slot exact path used to call
+    `count_distinct`, which goes radix-partition-parallel above 200k rows;
+    a streaming state sees one morsel at a time and cannot. Whole-column
+    parallelism and bounded memory are not simultaneously available through
+    this interface, and bounded memory is the one an execution engine needs.
+    `count_distinct` itself is unchanged for callers that have the whole
+    column.
+
+    Both field sets are declared, and one is empty in each instantiation: a
+    `comptime if` cannot select a *field*, and an unused `SwissHashTable` or
+    `List[UInt8]` is a few words, not per-group.
     """
 
     comptime name = "count_distinct" if Self.exact else "approx_count_distinct"
+    comptime _p = HLL_P_GROUPED
+    comptime _m = 1 << Self._p
+
+    var _table: SwissHashTable[RapidHash64]
+    """Exact: one table over `(group, value)` pairs, kept between morsels."""
+    var _seen: List[Bool]
+    """Exact: whether a table slot has already been counted."""
+    var _registers: List[UInt8]
+    """Approx: `2**11` HLL registers per slot."""
+    var _counts: List[Int64]
+    """Exact: the running distinct count per slot."""
+    var _slots: Int
+
+    def __init__(out self):
+        self._table = SwissHashTable[RapidHash64]()
+        self._seen = List[Bool]()
+        self._registers = List[UInt8]()
+        self._counts = List[Int64]()
+        self._slots = 0
 
     @staticmethod
     def dtype(inputs: List[DynType]) raises -> DynType:
@@ -1651,28 +1734,91 @@ struct DistinctCount[exact: Bool](AggKernel):
         return DynType(int64)
 
     @staticmethod
-    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
-        comptime if Self.exact:
-            if groups.is_single():
-                # Not an optimisation: `count_distinct_grouped` loops over ids
-                # there are none of. It is also where the whole-column
-                # radix-partition-parallel path lives, which self-gates on size
-                # — so the context passes straight through.
-                return (
-                    count_distinct(inputs[0], ExecContext.auto())
-                    .repeat(1)
-                    .to_dyn()
-                )
-            return count_distinct_grouped(groups, inputs[0]).to_dyn()
-        else:
-            if groups.is_single():
-                return (
-                    approx_count_distinct(inputs[0], ExecContext.auto())
-                    .repeat(1)
-                    .to_dyn()
-                )
-            return approx_count_distinct_grouped(groups, inputs[0]).to_dyn()
+    def open(in_dtypes: List[DynType]) raises -> Self:
+        _ = Self.dtype(in_dtypes)  # arity gate
+        return Self()
 
     @staticmethod
     def empty() raises -> Optional[DynArray]:
         return Int64Scalar(Int64(0)).repeat(1).to_dyn()
+
+    def _grow(mut self, slots: Int):
+        if slots <= self._slots:
+            return
+        comptime if Self.exact:
+            while len(self._counts) < slots:
+                self._counts.append(0)
+        else:
+            while len(self._registers) < slots * Self._m:
+                self._registers.append(0)
+        self._slots = slots
+
+    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
+        ref value = inputs[0]
+        var single = groups.is_single()
+        self._grow(1 if single else groups.num_groups)
+        var n = len(value) if single else len(groups.ids)
+        var has_null = value.null_count() > 0
+
+        comptime if Self.exact:
+            # The pair `(group, value)` is what makes one table serve every
+            # slot: a row is new when its *pair* is new. At one slot the group
+            # is constant, so the value alone identifies the pair and hashing
+            # it is enough.
+            var children = List[DynArray]()
+            if not single:
+                children.append(groups.ids.copy().to_dyn())
+            children.append(value.copy())
+            var fields = List[Field]()
+            if not single:
+                fields.append(Field("g", int32))
+            fields.append(Field("v", value.dtype().copy()))
+            var pairs = StructArray(
+                dtype=struct_(fields^),
+                length=n,
+                nulls=0,
+                offset=0,
+                bitmap=None,
+                children=children^,
+            )
+            var bids = self._table.insert_hashes(
+                RapidHashKernel.apply(pairs, ExecContext.serial()),
+                grow_adaptively=True,
+            )
+            while len(self._seen) < self._table.num_keys():
+                self._seen.append(False)
+            for i in range(n):
+                if has_null and not value.is_valid(i):
+                    continue
+                var b = Int(bids.unsafe_get(i))
+                if not self._seen[b]:
+                    self._seen[b] = True
+                    var g = 0 if single else Int(groups.ids.unsafe_get(i))
+                    self._counts[g] += 1
+        else:
+            var hv = RapidHashKernel.dispatch(
+                value, ExecContext.serial()
+            ).values()
+            for i in range(n):
+                if has_null and not value.is_valid(i):
+                    continue
+                var h = UInt64(hv[i])
+                var g = 0 if single else Int(groups.ids.unsafe_get(i))
+                var idx = g * Self._m + Int(h >> (64 - Self._p))
+                var rho = hll_rho[Self._p](h)
+                if rho > self._registers[idx]:
+                    self._registers[idx] = rho
+
+    def finish(mut self) raises -> DynArray:
+        var out = Int64Builder(self._slots)
+        comptime if Self.exact:
+            for g in range(self._slots):
+                out.append(Scalar[int64.native](self._counts[g]))
+        else:
+            for g in range(self._slots):
+                out.append(
+                    Scalar[int64.native](
+                        hll_estimate[Self._p](self._registers, g * Self._m)
+                    )
+                )
+        return out.finish().to_dyn()

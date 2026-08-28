@@ -10,7 +10,7 @@ about whether the fused one is faster, which is the part a user cares about.
 The two paths differ in exactly one thing, which is what makes the comparison
 honest:
 
-    AggFunc.of[Fold[SumKernel]](int64)   # kernel + dtype comptime
+    AggFunc.of[Fold[SumKernel, Int64Type]](int64)   # kernel + dtype comptime
     AggFunc("sum", int64)                                 # both resolved at run time
 
 Everything else — the plan, the grouper, the input batch, the number of
@@ -87,8 +87,8 @@ def _plan(
 
 def _fused_funcs() raises -> List[AggFunc]:
     var funcs = List[AggFunc]()
-    funcs.append(AggFunc.of[Fold[SumKernel]](DynType(int64)))
-    funcs.append(AggFunc.of[Fold[MinKernel]](DynType(int64)))
+    funcs.append(AggFunc.of[Fold[SumKernel, Int64Type]](DynType(int64)))
+    funcs.append(AggFunc.of[Fold[MinKernel, Int64Type]](DynType(int64)))
     return funcs^
 
 

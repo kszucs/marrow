@@ -61,7 +61,62 @@
   raise at plan time. `Aggregate` and `RuntimeAggregate` no longer conform to
   `Evaluable`, and their `evaluate` methods are gone.
 
+### Features
+
+- **Aggregates stream: `AggKernel` is a state machine, and buffering is gone.**
+  The contract was one `grouped(groups, inputs)` over the *whole* input, so
+  every caller that saw data in pieces had to keep every piece and concatenate
+  at the end. `BufferedAggregateOperator` was ~60 lines of exactly that,
+  containing no aggregation logic — nine fields whose only job was rebuilding
+  one call's arguments — and any query with a `count_distinct`, a string
+  extremum, a temporal `min` or a `variance` was **O(rows)** in that
+  aggregate's input.
+
+  `AggKernel` is now `open` / `update` / `finish`, with `grouped` as a default
+  for callers that genuinely hold all the data. All five conformers stream and
+  hold **O(groups)**: `Fold[K, V]` keeps its `AggState`, `ValidCount` one
+  `Int64` per slot, `Dispersion` a Welford triple, `DistinctCount` its
+  `SwissHashTable` or HLL registers across morsels, and `StringExtremum` the
+  best **value** per slot rather than a row index — an index is only
+  meaningful inside the morsel it came from, which is what had made it
+  unstreamable.
+
+  The claim that these "cannot be finished incrementally" was wrong, and it is
+  worth naming because it justified the buffering for a while. A hash set
+  updates per row and HyperLogLog is definitionally incremental.
+
+  `count_distinct_grouped` and `approx_count_distinct_grouped` are deleted:
+  free functions over erased arrays, fully superseded by `DistinctCount`'s
+  state.
+
+  One capability given up deliberately. The one-slot exact path used to call
+  `count_distinct`, which goes radix-partition-parallel above 200k rows; a
+  streaming state sees one morsel at a time and cannot. Whole-column
+  parallelism and bounded memory are not both available through this
+  interface. `count_distinct` itself is unchanged for callers holding the whole
+  column.
+
 ### Refactors
+
+- **`Fold` is typed, and no kernel erases anything.** `Fold[K]` resolved a
+  runtime dtype on every call, so once it had to hold state across morsels that
+  state could not be a typed field and went behind an `ArcPointer` with two
+  thin trampolines — erasure machinery inside a compute kernel. `Fold[K, V]`
+  holds its `AggState[K, V]` as a plain field, the erased box moved to
+  `expr/runtime/aggregates.mojo` as `DynAggKernel` where the runtime lane needs
+  it, and the dtype dispatch moved to `RuntimeAggregate._fold[K]` — the same
+  job the expression layer already does for `filter`, `take` and `cast`.
+
+  The comptime lane gains from it: `col("ts", timestamp(us)).min()` is
+  `Fold[MinKernel, TimestampType]`, resolved from `A.Type`, so temporal
+  `min`/`max` now does **no dtype dispatch at all**.
+
+- **`DynType.holds[T]()`, and a typed kernel that raises instead of aborting.**
+  `as_type`'s `debug_assert` aborts the process on a mismatch, which under
+  `ASSERT=all` fails every case in a file rather than the one that was wrong —
+  a mistyped test turned into 842 failures with no diagnostic. `Fold._domain`
+  now gates on `holds` and raises, naming the column type it was resolved
+  against.
 
 - **`concat` gained its typed half, and the comptime lane stopped erasing group
   ids.** The kernel had only a `List[DynArray]` overload, so a caller that knew

@@ -45,10 +45,11 @@ directly and never this ladder.
 """
 
 from ...arrays import DynArray, StructArray
-from ...dtypes import DynType, int64
+from ...dtypes import DynType, Int64Type, NumericType, TemporalType, int64
 from ...kernels.aggregate import (
+    ArithmeticAgg,
+    FoldKernel,
     AggKernel,
-    AggregateFn,
     Dispersion,
     DistinctCount,
     MaxKernel,
@@ -67,6 +68,8 @@ from ..logical import DynValue, Shape, Value, merged
 from ..params import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
+from std.memory import ArcPointer
+
 from ...kernels.core import Groups
 from ..physical import (
     Datum,
@@ -88,6 +91,71 @@ comptime MIN = "min"
 comptime MAX = "max"
 
 
+struct DynAggKernel(Copyable, Movable):
+    """An `AggKernel` with its type erased — a state machine, not a pointer.
+
+    **Glue, not compute, which is why it lives here.** The runtime lane
+    resolves a *name* to a kernel, so it cannot name the type it got; nothing
+    in `marrow.kernels` has that problem, and erasure machinery inside a
+    compute kernel is the wrong layer. This used to be a thin
+    `def(Groups, List[DynArray]) -> DynArray` in `kernels/aggregate.mojo`,
+    which worked only while every aggregate was one-shot and stateless. Now
+    that a kernel is `open` / `update` / `finish`, an erased one has to carry
+    state, and a bare function pointer cannot.
+
+    The mechanism is `DynValue`'s: an `ArcPointer[NoneType]` plus thin
+    trampolines that `rebind` it back. The difference is that these trampolines
+    *mutate* the boxed value, which `DynValue`'s read-only ones never do.
+
+    Mojo has no dynamic dispatch, so the indirection is not avoidable here —
+    but it is paid once per morsel, not once per row, and the comptime lane
+    never constructs one.
+    """
+
+    var _boxed: ArcPointer[NoneType]
+    var _update: def(ArcPointer[NoneType], Groups, List[DynArray]) thin raises
+    var _finish: def(ArcPointer[NoneType]) thin raises -> DynArray
+
+    @staticmethod
+    def _update_tramp[
+        Agg: AggKernel
+    ](ptr: ArcPointer[NoneType], groups: Groups, inputs: List[DynArray]) raises:
+        rebind[ArcPointer[Agg]](ptr)[].update(groups, inputs)
+
+    @staticmethod
+    def _finish_tramp[
+        Agg: AggKernel
+    ](ptr: ArcPointer[NoneType]) raises -> DynArray:
+        return rebind[ArcPointer[Agg]](ptr)[].finish()
+
+    @staticmethod
+    def open[Agg: AggKernel](in_dtypes: List[DynType]) raises -> DynAggKernel:
+        """Open `Agg` over these dtypes and erase it. The only thing that
+        builds one, so the pairing of box and trampolines cannot be wrong."""
+        var ptr = ArcPointer[Agg](Agg.open(in_dtypes))
+        return DynAggKernel(
+            rebind[ArcPointer[NoneType]](ptr^),
+            Self._update_tramp[Agg],
+            Self._finish_tramp[Agg],
+        )
+
+    def __init__(
+        out self,
+        var boxed: ArcPointer[NoneType],
+        update: def(ArcPointer[NoneType], Groups, List[DynArray]) thin raises,
+        finish: def(ArcPointer[NoneType]) thin raises -> DynArray,
+    ):
+        self._boxed = boxed^
+        self._update = update
+        self._finish = finish
+
+    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
+        self._update(self._boxed, groups, inputs)
+
+    def finish(mut self) raises -> DynArray:
+        return self._finish(self._boxed)
+
+
 struct ResolvedAggregate(Copyable, Movable):
     """What a named aggregate becomes once its input types are known.
 
@@ -105,14 +173,14 @@ struct ResolvedAggregate(Copyable, Movable):
     to disambiguate against — the inputs were consumed by `resolve`.
     """
 
-    var grouped: AggregateFn
-    """The implementation. Carries no identity — a `thin` fn cannot be asked
-    which aggregate it is — which is why `of` is the only thing that builds
-    one."""
+    var kernel: DynAggKernel
+    """The implementation, already open over the input dtypes. Carries no
+    identity — an erased state cannot be asked which aggregate it is — which is
+    why `of` is the only thing that builds one."""
 
-    def __init__(out self, var dtype: DynType, grouped: AggregateFn):
+    def __init__(out self, var dtype: DynType, var kernel: DynAggKernel):
         self.dtype = dtype^
-        self.grouped = grouped
+        self.kernel = kernel^
 
     @staticmethod
     def of[Agg: AggKernel](in_dtypes: List[DynType]) raises -> Self:
@@ -124,7 +192,7 @@ struct ResolvedAggregate(Copyable, Movable):
         `_resolved[Agg]` helper — same instantiation count, but it reads as
         construction instead of as a loose generic beside the type it builds.
         """
-        return Self(Agg.dtype(in_dtypes), Agg.grouped)
+        return Self(Agg.dtype(in_dtypes), DynAggKernel.open[Agg](in_dtypes))
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +289,67 @@ struct RuntimeAggregate(Value):
                 return name^
         raise Error("unknown aggregate '", name, "'")
 
+    @staticmethod
+    def _fold[
+        K: FoldKernel
+    ](in_dtypes: List[DynType]) raises -> ResolvedAggregate:
+        """Resolve a lane algebra against a runtime dtype.
+
+        **The dispatch lives here, not in `Fold`.** `Fold[K, V]` is typed on
+        its input like every other kernel, so something has to map a runtime
+        dtype onto `V` — and that is the expression layer's job, the same one
+        it does for `filter`, `take` and `cast`. `Fold` used to do it itself
+        and paid for it: once it had to hold state across morsels, the state
+        could not be a typed field and went behind an `ArcPointer`.
+
+        The numeric and temporal arms are separate rather than one
+        `dispatch_primitive`, so a kernel whose domain excludes temporal
+        columns is never instantiated over one — `AggState`'s compile-time
+        domain assertion would fail the build rather than raise.
+        """
+        if len(in_dtypes) != 1:
+            raise Error(
+                "aggregate '",
+                K.name,
+                "' takes exactly one input, got ",
+                len(in_dtypes),
+            )
+        ref d = in_dtypes[0]
+        var box = List[ResolvedAggregate]()
+        box.reserve(1)
+
+        def numeric[V: NumericType](x: V) raises {mut box, imm}:
+            box.append(ResolvedAggregate.of[Fold[K, V]](in_dtypes))
+
+        comptime if conforms_to(K, ArithmeticAgg):
+            if not d.is_numeric():
+                raise Error(
+                    "aggregate '",
+                    K.name,
+                    "' needs arithmetic, so it is not defined for ",
+                    d,
+                    " columns",
+                )
+            d.dispatch_numeric(numeric)
+        else:
+            if d.is_numeric():
+                d.dispatch_numeric(numeric)
+            elif d.is_temporal():
+
+                def temporal[V: TemporalType](x: V) raises {mut box, imm}:
+                    box.append(ResolvedAggregate.of[Fold[K, V]](in_dtypes))
+
+                d.dispatch_temporal(temporal)
+            else:
+                raise Error(
+                    "aggregate '",
+                    K.name,
+                    "' is not defined for ",
+                    d,
+                    " columns",
+                )
+        return box.pop()
+
     def resolve(self, in_dtypes: List[DynType]) raises -> ResolvedAggregate:
         """The one name x dtype ladder in the system.
 
@@ -249,11 +378,11 @@ struct RuntimeAggregate(Value):
             # fuses numeric `count`; see `ValidCount`.
             return ResolvedAggregate.of[ValidCount](in_dtypes)
         elif self._name == SUM:
-            return ResolvedAggregate.of[Fold[SumKernel]](in_dtypes)
+            return Self._fold[SumKernel](in_dtypes)
         elif self._name == PRODUCT:
-            return ResolvedAggregate.of[Fold[ProductKernel]](in_dtypes)
+            return Self._fold[ProductKernel](in_dtypes)
         elif self._name == MEAN:
-            return ResolvedAggregate.of[Fold[MeanKernel]](in_dtypes)
+            return Self._fold[MeanKernel](in_dtypes)
         elif self._name == VARIANCE:
             # `ddof=0` — the population form, Arrow's default. A sample
             # variance is `Dispersion[1, False]`, which needs two more names
@@ -281,13 +410,13 @@ struct RuntimeAggregate(Value):
                     return ResolvedAggregate.of[StringExtremum[MinOp]](
                         in_dtypes
                     )
-                return ResolvedAggregate.of[Fold[MinKernel]](in_dtypes)
+                return Self._fold[MinKernel](in_dtypes)
             else:
                 if stringly:
                     return ResolvedAggregate.of[StringExtremum[MaxOp]](
                         in_dtypes
                     )
-                return ResolvedAggregate.of[Fold[MaxKernel]](in_dtypes)
+                return Self._fold[MaxKernel](in_dtypes)
         else:
             raise Error("unknown aggregate '", self._name, "'")
 
@@ -307,7 +436,7 @@ struct RuntimeAggregate(Value):
             return DistinctCount[True].empty()
         elif self._name == COUNT:
             return ValidCount.empty()
-        return Fold[SumKernel].empty()
+        return Fold[SumKernel, Int64Type].empty()
 
     # -- Value --------------------------------------------------------------
 
@@ -366,91 +495,38 @@ struct RuntimeAggregate(Value):
 
 struct RuntimeAggregateOperator(Operator):
     """The runtime lane's aggregate operator: a **name**, resolved on the first
-    morsel, over erased inputs.
+    morsel, over erased inputs — and streaming, like its comptime sibling.
 
     Erased in three places, all forced by the lane rather than chosen: the
     operands are `DynOperator` because a `RuntimeValue` subtree has no type to
-    keep, the implementation is an `AggregateFn` pointer because the name is
-    not known until run time, and the inputs' dtypes are not known until a
-    morsel arrives. `BufferedAggregateOperator` in `comptime/` is the same
-    machine with all three known statically, and it shares no code with this on
-    purpose: erasure is the *only* difference, and paying for it in a lane that
-    does not need it is what the size gates exist to catch.
+    keep, the kernel is a `DynAggKernel` because the name is not known until
+    run time, and the inputs' dtypes are not known until a morsel arrives.
+    `ColumnAggregateOperator` in `comptime/` is the same machine with all three
+    known statically, and shares no code with this on purpose: erasure is the
+    only difference, and paying for it in a lane that does not need it is what
+    the size gates exist to catch.
 
-    `_scatters` stays a runtime `Bool` where `BufferedAggregateOperator` makes it a
-    `G: Grouping` parameter. That asymmetry is deliberate: parameterising here
-    would double an instantiation on the lane that has already accepted
-    interpretation, to remove one predictable branch per morsel.
-
-    It also buffers — the accumulated columns and ids are **O(rows)** — but
-    that is a property of `AggregateFn` being one-shot, not of erasure. Its
-    typed counterpart buffers identically.
-
-    **Zero type parameters, shared by both lanes.** The comptime lane hands it
-    `Agg.grouped` — a statically known method taken as a thin pointer — and the
-    runtime lane hands it the `RuntimeAggregate` node to resolve on first push.
-    The
-    operand keeps its fusion either way, because this operator does not
-    evaluate the operand: `_inputs` holds the operand's *own* operator, which
-    for a comptime subtree is a fully monomorphised `EvalOperator[A]`.
-
-    **It buffers, and that is inherent.** A `AggregateFn` is one-shot over the
-    whole input, so each morsel's evaluated columns and group ids are kept and
-    `concat`ed at `drain`. Concatenating ids across morsels is sound because
-    `HashGrouping` assigns dense ids that are stable across batches — batch
-    N+1 extends the numbering rather than restarting it.
-
-    Buffering the ids per aggregate is a known, bounded redundancy: three
-    column-aggregates in one query keep three copies of the same `Int32` per
-    row. `GroupByOperator` sees every morsel and could keep one, but only by
-    special-casing this operator among the values it holds, which is the
-    uniformity that made "every value answers `to_operator`" work at all.
-
-    **Exactly one of `_grouped` and `_node` is set at construction, and which
-    one says which lane built this.** The comptime lane knows its `AggKernel`
-    at compile time and supplies `_grouped` directly — which is what keeps a
-    binary that only ever aggregates a comptime expression from linking the
-    name ladder at all, and that DCE property is what the whole two-node design
-    turns on. The runtime lane knows only a name, so it supplies `_node` and
-    `_grouped` is filled on **first push**, from the morsel's real dtypes; it
-    cannot be filled earlier, because a `RuntimeValue` operand has no dtype
-    until a schema is in hand. `_grouped` is therefore `Some` from the first
-    push onward in both cases, which is the invariant `drain` reads.
-
-    Two nullable fields rather than a `Variant`: the alignment hazard
-    CLAUDE.md records for `Variant` is not worth paying for two small members,
-    so the invariant is stated here instead of encoded.
+    It holds O(groups), not O(rows). Both operators used to buffer every
+    morsel's columns and concatenate at `drain`, because `AggKernel.grouped`
+    was one-shot; the kernel is a state machine now and absorbs each morsel as
+    it arrives.
     """
-
-    var _inputs: List[DynOperator]
-    var _grouped: Optional[AggregateFn]
-    """The implementation. `Some` from the first push onward, in both lanes."""
-
-    var _node: Optional[RuntimeAggregate]
-    """The node itself, for the lane that has a name instead of a type — an
-    operator here already holds its node (`FusedAggregateOperator._input`,
-    `EvalOperator._value`), so the ladder needs no object of its own."""
-
-    var _empty: Optional[DynArray]
-    """This aggregate's answer over an input that produced no column at all.
-    Known without any dtype, so it is computed at construction rather than
-    being a third code path at `drain`."""
-
-    var _scatters: Bool
-    """Whether the query has `GROUP BY` keys.
-
-    A runtime `Bool` rather than a per-morsel `Groups.is_single()` read: a
-    grouped query whose first batch happens to hold exactly one group would
-    otherwise be mistaken for an ungrouped one, and that batch's ids dropped.
-    """
-
-    var _chunks: List[List[DynArray]]
-    var _ids: List[DynArray]
-    var _num_groups: Int
-    var _rows: Int
-    var _emitted: Bool
 
     comptime Out = Datum
+
+    var _inputs: List[DynOperator]
+    var _kernel: Optional[DynAggKernel]
+    """`None` until the first morsel: resolving the name needs the inputs'
+    real dtypes, and a `RuntimeValue` operand has none until a schema is in
+    hand."""
+
+    var _node: RuntimeAggregate
+    """The node itself, kept to resolve against those first dtypes."""
+
+    var _empty: Optional[DynArray]
+    var _scatters: Bool
+    var _rows: Int
+    var _emitted: Bool
 
     def __init__(
         out self,
@@ -458,65 +534,53 @@ struct RuntimeAggregateOperator(Operator):
         var node: RuntimeAggregate,
         scatters: Bool,
     ) raises:
-        """The runtime lane's constructor: the aggregate is a name, so the
-        implementation waits for the first morsel's dtypes."""
-        self._chunks = List[List[DynArray]]()
-        for _ in range(len(inputs)):
-            self._chunks.append(List[DynArray]())
         self._inputs = inputs^
-        self._grouped = None
+        self._kernel = None
         self._empty = node.empty()
         self._node = node^
         self._scatters = scatters
-        self._ids = List[DynArray]()
-        self._num_groups = 0 if scatters else 1
         self._rows = 0
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Evaluate this aggregate's inputs against the morsel and keep them.
+        """Evaluate this aggregate's inputs and let the kernel absorb them.
 
-        Empty batches are kept too rather than skipped: an empty column still
-        carries its dtype, which is the one thing a name-resolved fold needs
-        and the one thing a later batch cannot supply retroactively.
+        Empty batches are absorbed too rather than skipped: an empty column
+        still carries its dtype, which is the one thing a name-resolved
+        aggregate needs and the one thing a later batch cannot supply
+        retroactively.
         """
         var n = len(morsel.batch)
+        var columns = List[DynArray](capacity=len(self._inputs))
         # Indexed: an operator is move-only, so a `List` of them cannot be
         # iterated by reference.
         for i in range(len(self._inputs)):
             var d = self._inputs[i].push(morsel)
-            self._chunks[i].append(d.value().to_array(n))
-        if not self._grouped:
-            var in_dtypes = List[DynType](capacity=len(self._chunks))
-            for i in range(len(self._chunks)):
-                in_dtypes.append(self._chunks[i][0].dtype())
-            self._grouped = self._node.value().resolve(in_dtypes).grouped
+            columns.append(d.value().to_array(n))
+        if not self._kernel:
+            var in_dtypes = List[DynType](capacity=len(columns))
+            for i in range(len(columns)):
+                in_dtypes.append(columns[i].dtype())
+            # `.copy()` rather than a move: a field cannot be moved out of a
+            # struct, and the copy shares the same `ArcPointer` box, so it is
+            # the same state either way.
+            self._kernel = self._node.resolve(in_dtypes).kernel.copy()
         self._rows += n
-        if self._scatters:
-            self._ids.append(morsel.groups.ids.copy().to_dyn())
-            self._num_groups = max(self._num_groups, morsel.groups.num_groups)
+        var groups = morsel.groups.copy() if self._scatters else Groups.single(
+            n
+        )
+        self._kernel.value().update(groups, columns)
         return None
 
     def drain(mut self) raises -> Optional[Datum]:
         if self._emitted:
             return None
         self._emitted = True
-        if len(self._chunks) == 0 or len(self._chunks[0]) == 0:
-            # No morsel ever arrived, so there is no dtype to resolve against.
+        if not self._kernel:
+            # No morsel ever arrived, so there was no dtype to resolve against.
             # A distinct count still has an answer; an extremum does not, and
             # `GroupByOperator` fills its slot from the output schema.
             if self._empty:
                 return Datum(self._empty.value().copy())
             return None
-        var columns = List[DynArray](capacity=len(self._chunks))
-        for i in range(len(self._chunks)):
-            columns.append(concat(self._chunks[i], ExecContext.serial()))
-        var groups: Groups
-        if self._scatters:
-            groups = Groups(
-                concat(self._ids, ExecContext.serial()).as_int32().copy(),
-                self._num_groups,
-            )
-        else:
-            groups = Groups.single(self._rows)
-        return Datum(self._grouped.value()(groups, columns))
+        return Datum(self._kernel.value().finish())

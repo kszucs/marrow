@@ -180,8 +180,6 @@ from .core import Kernel, Groups
 from .distinct import (
     count_distinct,
     approx_count_distinct,
-    count_distinct_grouped,
-    approx_count_distinct_grouped,
 )
 from .filter import Filter, Take, filter, drop_null, take
 from .membership import IsInKernel, is_in

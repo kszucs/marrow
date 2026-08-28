@@ -57,6 +57,7 @@ from ...kernels.groupby import (
     GROUP_RADIX,
     GROUP_THREAD_LOCAL,
 )
+from ...dtypes import Date32Type, Float64Type, Int32Type, Int64Type, UInt8Type
 from ...kernels.aggregate import (
     DistinctCount,
     Fold,
@@ -70,9 +71,6 @@ from ...kernels.aggregate import (
     CountKernel,
     ValidCount,
 )
-
-
-from ...kernels.distinct import count_distinct_grouped
 
 
 # An aggregate is an `AggKernel`: erased columns in, one column out.
@@ -91,7 +89,7 @@ def test_groupby_sum_basic() raises:
     """Sum aggregation: [1,2,1,3,2] keys, [10,20,30,40,50] values."""
     var keys: DynArray = array([1, 2, 1, 3, 2], int32)
     var vals: DynArray = array([10, 20, 30, 40, 50], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
 
     # 3 groups: key=1 (sum=40), key=2 (sum=70), key=3 (sum=40)
     assert_equal(result.num_rows(), 3)
@@ -112,7 +110,7 @@ def test_groupby_sum_basic() raises:
 def test_groupby_sum_all_same_key() raises:
     var keys: DynArray = array([5, 5, 5], int32)
     var vals: DynArray = array([1, 2, 3], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
     assert_equal(result.num_rows(), 1)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 6)
@@ -126,7 +124,7 @@ def test_groupby_sum_all_same_key() raises:
 def test_groupby_min() raises:
     var keys: DynArray = array([1, 2, 1, 2], int32)
     var vals: DynArray = array([30, 10, 20, 40], int32)
-    var result = GroupBy(keys).aggregate[Fold[MinKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[MinKernel, Int32Type]](vals)
     # min preserves the input dtype (PyArrow-correct), so int32 in -> int32 out.
     ref m = result.aggregates[0].as_int32()
     assert_equal(m[0].value(), 20)  # min(30, 20)
@@ -136,7 +134,7 @@ def test_groupby_min() raises:
 def test_groupby_max() raises:
     var keys: DynArray = array([1, 2, 1, 2], int32)
     var vals: DynArray = array([30, 10, 20, 40], int32)
-    var result = GroupBy(keys).aggregate[Fold[MaxKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[MaxKernel, Int32Type]](vals)
     # max preserves the input dtype (PyArrow-correct), so int32 in -> int32 out.
     ref m = result.aggregates[0].as_int32()
     assert_equal(m[0].value(), 30)  # max(30, 20)
@@ -147,7 +145,7 @@ def test_groupby_sum_int64_precision() raises:
     """Sum of int64 values above 2**53 must not lose precision via float64."""
     var keys: DynArray = array([1, 1], int32)
     var vals: DynArray = array([9_007_199_254_740_993, 1], int64)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int64Type]](vals)
     assert_equal(result.num_rows(), 1)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 9_007_199_254_740_994)
@@ -159,7 +157,7 @@ def test_groupby_min_int64_precision() raises:
     var vals: DynArray = array(
         [9_007_199_254_740_993, 9_007_199_254_740_995], int64
     )
-    var result = GroupBy(keys).aggregate[Fold[MinKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[MinKernel, Int64Type]](vals)
     ref m = result.aggregates[0].as_int64()
     assert_equal(m[0].value(), 9_007_199_254_740_993)
 
@@ -170,7 +168,7 @@ def test_groupby_max_int64_precision() raises:
     var vals: DynArray = array(
         [9_007_199_254_740_993, 9_007_199_254_740_995], int64
     )
-    var result = GroupBy(keys).aggregate[Fold[MaxKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[MaxKernel, Int64Type]](vals)
     ref m = result.aggregates[0].as_int64()
     assert_equal(m[0].value(), 9_007_199_254_740_995)
 
@@ -180,7 +178,7 @@ def test_groupby_sum_uint8_widens_to_int64() raises:
     """
     var keys: DynArray = array([1, 1], int32)
     var vals: DynArray = array([100, 50], uint8)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, UInt8Type]](vals)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 150)
 
@@ -193,7 +191,7 @@ def test_groupby_sum_uint8_widens_to_int64() raises:
 def test_groupby_count() raises:
     var keys: DynArray = array([1, 2, 1, 3, 2], int32)
     var vals: DynArray = array([10, 20, 30, 40, 50], int32)
-    var result = GroupBy(keys).aggregate[Fold[CountKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[CountKernel, Int32Type]](vals)
     ref c = result.aggregates[0].as_int64()
     assert_equal(c[0].value(), 2)  # key=1: 2 rows
     assert_equal(c[1].value(), 2)  # key=2: 2 rows
@@ -208,7 +206,7 @@ def test_groupby_count() raises:
 def test_groupby_mean() raises:
     var keys: DynArray = array([1, 2, 1, 2], int32)
     var vals: DynArray = array([10, 20, 30, 40], int32)
-    var result = GroupBy(keys).aggregate[Fold[MeanKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[MeanKernel, Int32Type]](vals)
     ref m = result.aggregates[0].as_float64()
     assert_equal(m[0].value(), 20.0)  # (10+30)/2
     assert_equal(m[1].value(), 30.0)  # (20+40)/2
@@ -219,7 +217,7 @@ def test_groupby_sum_float64_preserved() raises:
     """
     var keys: DynArray = array([1, 1], int32)
     var vals: DynArray = array([1.5, 2.5], float64)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Float64Type]](vals)
     ref s = result.aggregates[0].as_float64()
     assert_equal(s[0].value(), 4.0)
 
@@ -233,7 +231,7 @@ def test_groupby_null_keys() raises:
     """Null keys form their own group."""
     var keys: DynArray = array([1, None, 2, None, 1], int32)
     var vals: DynArray = array([10, 20, 30, 40, 50], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
     assert_equal(result.num_rows(), 3)
     # Group order: 1, null, 2
     ref s = result.aggregates[0].as_int64()
@@ -246,7 +244,7 @@ def test_groupby_null_values_skipped() raises:
     """Null values are skipped in aggregation."""
     var keys: DynArray = array([1, 1, 1], int32)
     var vals: DynArray = array([10, None, 30], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 40)  # 10 + 30 (null skipped)
 
@@ -255,7 +253,7 @@ def test_groupby_count_skips_nulls() raises:
     """Count only counts non-null values."""
     var keys: DynArray = array([1, 1, 1], int32)
     var vals: DynArray = array([10, None, 30], int32)
-    var result = GroupBy(keys).aggregate[Fold[CountKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[CountKernel, Int32Type]](vals)
     ref c = result.aggregates[0].as_int64()
     assert_equal(c[0].value(), 2)  # 2 non-null values
 
@@ -273,7 +271,7 @@ def test_groupby_string_key() raises:
     b.append("b")
     var keys: DynArray = b.finish()
     var vals: DynArray = array([10, 20, 30, 40], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
     assert_equal(result.num_rows(), 2)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 40)  # "a": 10+30
@@ -302,7 +300,7 @@ def test_groupby_multikey() raises:
         children=children^,
     )
     var vals: DynArray = array([1, 2, 3, 4], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
     assert_equal(result.num_rows(), 4)  # 4 unique combos
 
 
@@ -314,7 +312,7 @@ def test_groupby_multikey() raises:
 def test_groupby_empty() raises:
     var keys: DynArray = array(int32)
     var vals: DynArray = array(int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
     assert_equal(result.num_rows(), 0)
 
 
@@ -326,7 +324,7 @@ def test_groupby_empty() raises:
 def test_groupby_bool_key() raises:
     var keys: DynArray = array([True, False, True, False, True])
     var vals: DynArray = array([1, 2, 3, 4, 5], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
     assert_equal(result.num_rows(), 2)
     ref s = result.aggregates[0].as_int64()
     assert_equal(s[0].value(), 9)  # True: 1+3+5
@@ -345,8 +343,8 @@ def test_groupby_sum_and_count_share_keys() raises:
     var keys: DynArray = array([1, 2, 1, 2], int32)
     var vals: DynArray = array([10, 20, 30, 40], int32)
 
-    var sums = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
-    var counts = GroupBy(keys).aggregate[Fold[CountKernel]](vals)
+    var sums = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
+    var counts = GroupBy(keys).aggregate[Fold[CountKernel, Int32Type]](vals)
 
     assert_equal(sums.num_rows(), 2)
     assert_equal(counts.num_rows(), 2)
@@ -403,7 +401,7 @@ def test_groupby_parallel_matches_serial() raises:
         children=children^,
     )
 
-    comptime SumInt32 = Fold[SumKernel]
+    comptime SumInt32 = Fold[SumKernel, Int32Type]
     var ctx = ExecContext.parallel(4)
     _assert_matches_expected(
         GroupBy(sa, ctx, GROUP_SERIAL).aggregate[SumInt32](vals)
@@ -457,7 +455,7 @@ def test_groupby_thread_local_mean_nulls_match_serial() raises:
         children=children^,
     )
 
-    comptime MeanFloat64 = Fold[MeanKernel]
+    comptime MeanFloat64 = Fold[MeanKernel, Float64Type]
     var ctx = ExecContext.parallel(4)
     var serial = GroupBy(sa, ctx, GROUP_SERIAL).aggregate[MeanFloat64](vals)
     var threaded = GroupBy(sa, ctx, GROUP_THREAD_LOCAL).aggregate[MeanFloat64](
@@ -570,7 +568,9 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     values.append(vals.copy())
 
     def exact(_j: Int, groups: Groups, col: DynArray) raises {imm} -> DynArray:
-        return count_distinct_grouped(groups, col)
+        return (
+            DistinctCount[True].grouped(groups, [col.copy()]).as_int64().copy()
+        )
 
     var ctx = ExecContext.parallel(4)
     _assert_all_distinct_10(
@@ -637,12 +637,12 @@ def test_groupby_min_max_date32() raises:
     b.append(Scalar[int32.native](18800))
     var vals: DynArray = b.finish()
 
-    var mn = GroupBy(keys).aggregate[Fold[MinKernel]](vals)
+    var mn = GroupBy(keys).aggregate[Fold[MinKernel, Date32Type]](vals)
     ref dmn = mn.aggregates[0].as_date32()
     assert_equal(dmn[0].value(), 18500)
     assert_equal(dmn[1].value(), 18800)
 
-    var mx = GroupBy(keys).aggregate[Fold[MaxKernel]](vals)
+    var mx = GroupBy(keys).aggregate[Fold[MaxKernel, Date32Type]](vals)
     ref dmx = mx.aggregates[0].as_date32()
     assert_equal(dmx[0].value(), 19000)
     assert_equal(dmx[1].value(), 18800)
@@ -653,7 +653,9 @@ def test_groupby_min_date32_all_null_group() raises:
     var b = Date32Builder(date32(), 2)
     b.append_null()
     b.append_null()
-    var result = GroupBy(keys).aggregate[Fold[MinKernel]](b.finish())
+    var result = GroupBy(keys).aggregate[Fold[MinKernel, Date32Type]](
+        b.finish()
+    )
     assert_false(result.aggregates[0].as_date32().is_valid(0))
 
 
@@ -709,7 +711,9 @@ def test_grouped_count_implementations_agree_on_nulls() raises:
     vb.append_null()
     var vals: DynArray = vb.finish()
 
-    var via_state = GroupBy(keys).aggregate[Fold[CountKernel]](vals)
+    var via_state = GroupBy(keys).aggregate[Fold[CountKernel, Float64Type]](
+        vals
+    )
     var via_scan = GroupBy(keys).aggregate[ValidCount](vals)
     # Two implementations, so two independently built layouts — the question
     # is whether they agree on *values*, not on buffer offsets.
@@ -768,7 +772,9 @@ def _check_bytes_keys[T: BinaryLikeType](strategy: UInt8) raises:
     var vals: DynArray = vb.finish()
 
     var ctx = ExecContext.parallel(4)
-    var result = GroupBy(keys, ctx, strategy).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys, ctx, strategy).aggregate[
+        Fold[SumKernel, Int64Type]
+    ](vals)
 
     assert_equal(result.num_rows(), G)
     ref ks = result.keys[0].as_binary_like[T]()

@@ -61,15 +61,15 @@ def _bench_group_by[
 
 
 def bench_groupby_sum_10k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[SumKernel]](b, 10_000)
+    _bench_group_by[Fold[SumKernel, Float64Type]](b, 10_000)
 
 
 def bench_groupby_sum_100k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[SumKernel]](b, 100_000)
+    _bench_group_by[Fold[SumKernel, Float64Type]](b, 100_000)
 
 
 def bench_groupby_sum_1m(mut b: Benchmark) raises:
-    _bench_group_by[Fold[SumKernel]](b, 1_000_000)
+    _bench_group_by[Fold[SumKernel, Float64Type]](b, 1_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -84,15 +84,15 @@ def bench_groupby_sum_1m(mut b: Benchmark) raises:
 
 
 def bench_groupby_sum_1m_g1k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[SumKernel]](b, 1_000_000, 1_000)
+    _bench_group_by[Fold[SumKernel, Float64Type]](b, 1_000_000, 1_000)
 
 
 def bench_groupby_sum_1m_g100k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[SumKernel]](b, 1_000_000, 100_000)
+    _bench_group_by[Fold[SumKernel, Float64Type]](b, 1_000_000, 100_000)
 
 
 def bench_groupby_mean_1m_g100k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[MeanKernel]](b, 1_000_000, 100_000)
+    _bench_group_by[Fold[MeanKernel, Float64Type]](b, 1_000_000, 100_000)
 
 
 # ---------------------------------------------------------------------------
@@ -101,15 +101,15 @@ def bench_groupby_mean_1m_g100k(mut b: Benchmark) raises:
 
 
 def bench_groupby_min_100k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[MinKernel]](b, 100_000)
+    _bench_group_by[Fold[MinKernel, Float64Type]](b, 100_000)
 
 
 def bench_groupby_max_100k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[MaxKernel]](b, 100_000)
+    _bench_group_by[Fold[MaxKernel, Float64Type]](b, 100_000)
 
 
 def bench_groupby_mean_100k(mut b: Benchmark) raises:
-    _bench_group_by[Fold[MeanKernel]](b, 100_000)
+    _bench_group_by[Fold[MeanKernel, Float64Type]](b, 100_000)
 
 
 def _make_vals_nulls(n: Int) raises -> DynArray:
@@ -162,7 +162,7 @@ def _bench_group_by_nulls[
 
 
 def bench_groupby_count_1m_g100k_aggstate(mut b: Benchmark) raises:
-    _bench_group_by[Fold[CountKernel]](b, 1_000_000, 100_000)
+    _bench_group_by[Fold[CountKernel, Float64Type]](b, 1_000_000, 100_000)
 
 
 def bench_groupby_count_1m_g100k_countagg(mut b: Benchmark) raises:
@@ -170,7 +170,7 @@ def bench_groupby_count_1m_g100k_countagg(mut b: Benchmark) raises:
 
 
 def bench_groupby_count_nulls_1m_g100k_aggstate(mut b: Benchmark) raises:
-    _bench_group_by_nulls[Fold[CountKernel]](b, 1_000_000, 100_000)
+    _bench_group_by_nulls[Fold[CountKernel, Float64Type]](b, 1_000_000, 100_000)
 
 
 def bench_groupby_count_nulls_1m_g100k_countagg(mut b: Benchmark) raises:

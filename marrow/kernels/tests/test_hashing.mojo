@@ -384,7 +384,7 @@ def test_hash_dictionary_with_null_index() raises:
 def test_groupby_date32_key() raises:
     var keys = _date32([19000, 18500, 19000, 18500, 19000])
     var vals: DynArray = array([1, 2, 3, 4, 5], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
 
     assert_equal(result.num_rows(), 2)
     ref k = result.keys[0].as_date32()
@@ -398,7 +398,7 @@ def test_groupby_date32_key() raises:
 def test_groupby_timestamp_key() raises:
     var keys = _timestamp([1_000, 2_000, 1_000])
     var vals: DynArray = array([10, 20, 30], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
 
     assert_equal(result.num_rows(), 2)
     ref s = result.aggregates[0].as_int64()
@@ -412,7 +412,7 @@ def test_groupby_large_string_key() raises:
         lb.append(s)
     var keys: DynArray = lb.finish()
     var vals: DynArray = array([1, 2, 3, 4], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel]](vals)
+    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
 
     assert_equal(result.num_rows(), 2)
     ref s = result.aggregates[0].as_int64()

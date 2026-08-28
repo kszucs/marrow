@@ -19,8 +19,11 @@ from ...dtypes import (
     date32,
     timestamp,
     second,
+    Date32Type,
+    Float64Type,
     Int32Type,
     Int64Type,
+    TimestampType,
 )
 from ...kernels.core import Groups
 from ...kernels.aggregate import (
@@ -77,7 +80,7 @@ def test_sumempty() raises:
 
 def test_sumuntyped() raises:
     var a: DynArray = array([1, 2, 3], int64)
-    var result = whole[Fold[SumKernel]](a)
+    var result = whole[Fold[SumKernel, Int64Type]](a)
     assert_equal(result.as_int64().value(), 6)
 
 
@@ -115,14 +118,14 @@ def test_reduce_typed_count() raises:
 def test_mean_int() raises:
     """Mean of integers is a float64 scalar."""
     var a: DynArray = array([1, 2, 3, 4], int32)
-    var result = whole[Fold[MeanKernel]](a)
+    var result = whole[Fold[MeanKernel, Int32Type]](a)
     assert_true(result.type() == float64)
     assert_equal(result.as_float64().value(), 2.5)
 
 
 def test_mean_float() raises:
     var a: DynArray = array([1.0, 2.0, 6.0], float64)
-    var result = whole[Fold[MeanKernel]](a)
+    var result = whole[Fold[MeanKernel, Float64Type]](a)
     assert_equal(result.as_float64().value(), 3.0)
 
 
@@ -134,19 +137,19 @@ def test_mean_skips_nulls() raises:
     a.append_null()
     a.append(30)
     var arr: DynArray = a.finish()
-    var result = whole[Fold[MeanKernel]](arr)
+    var result = whole[Fold[MeanKernel, Int32Type]](arr)
     assert_equal(result.as_float64().value(), 20.0)  # (10+20+30)/3
 
 
 def test_mean_all_null_is_null() raises:
     var a: DynArray = nulls(4, int64)
-    var result = whole[Fold[MeanKernel]](a)
+    var result = whole[Fold[MeanKernel, Int64Type]](a)
     assert_false(result.is_valid())
 
 
 def test_mean_empty_is_null() raises:
     var a: DynArray = array(int32)
-    var result = whole[Fold[MeanKernel]](a)
+    var result = whole[Fold[MeanKernel, Int32Type]](a)
     assert_false(result.is_valid())
 
 
@@ -216,8 +219,8 @@ def _date32(var days: List[Int]) raises -> DynArray:
 
 def test_min_max_date32() raises:
     var a = _date32([19000, 18500, 19000, 18800])
-    var mn = whole[Fold[MinKernel]](a)
-    var mx = whole[Fold[MaxKernel]](a)
+    var mn = whole[Fold[MinKernel, Date32Type]](a)
+    var mx = whole[Fold[MaxKernel, Date32Type]](a)
     assert_true(mn.type() == date32().to_dyn())  # dtype preserved
     assert_true(mx.type() == date32().to_dyn())
     assert_equal(mn.as_date32().value(), 18500)
@@ -230,8 +233,12 @@ def test_min_max_date32_skips_nulls() raises:
     b.append_null()
     b.append(Scalar[int32.native](18500))
     var a: DynArray = b.finish()
-    assert_equal(whole[Fold[MinKernel]](a).as_date32().value(), 18500)
-    assert_equal(whole[Fold[MaxKernel]](a).as_date32().value(), 19000)
+    assert_equal(
+        whole[Fold[MinKernel, Date32Type]](a).as_date32().value(), 18500
+    )
+    assert_equal(
+        whole[Fold[MaxKernel, Date32Type]](a).as_date32().value(), 19000
+    )
 
 
 def test_min_max_date32_all_null_is_null() raises:
@@ -239,8 +246,8 @@ def test_min_max_date32_all_null_is_null() raises:
     b.append_null()
     b.append_null()
     var a: DynArray = b.finish()
-    assert_false(whole[Fold[MinKernel]](a).is_valid())
-    assert_false(whole[Fold[MaxKernel]](a).is_valid())
+    assert_false(whole[Fold[MinKernel, Date32Type]](a).is_valid())
+    assert_false(whole[Fold[MaxKernel, Date32Type]](a).is_valid())
 
 
 def test_min_max_timestamp_preserves_unit_tz() raises:
@@ -249,7 +256,9 @@ def test_min_max_timestamp_preserves_unit_tz() raises:
     b.append(Scalar[int64.native](1000))
     b.append(Scalar[int64.native](2000))
     var a: DynArray = b.finish()
-    var mn = whole[Fold[MinKernel]](a)
+    var mn = whole[Fold[MinKernel, TimestampType]](a)
     assert_true(mn.type() == timestamp(second, "UTC").to_dyn())
     assert_equal(mn.as_timestamp().value(), 1000)
-    assert_equal(whole[Fold[MaxKernel]](a).as_timestamp().value(), 3000)
+    assert_equal(
+        whole[Fold[MaxKernel, TimestampType]](a).as_timestamp().value(), 3000
+    )

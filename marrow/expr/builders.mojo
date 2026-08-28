@@ -216,7 +216,7 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     return DynRelation(ParquetScan(path^, schema^))
 
 
-def count_star() -> Aggregate[Fold[CountKernel], Literal[Int64Type]]:
+def count_star() -> Aggregate[Fold[CountKernel, Int64Type], Literal[Int64Type]]:
     """`COUNT(*)` — how many rows each group has.
 
     Not the same aggregate as `col("x", int64).count()`, which counts the

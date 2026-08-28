@@ -205,7 +205,7 @@ def test_a_fold_reports_spent_on_a_second_drain() raises:
 def test_product_folds() raises:
     """`Product` had no test at all — found by auditing public names against
     test references."""
-    var s = Product(col("a", int64), "p").to_operator(False)
+    var s = col("a", int64).product().alias("p").to_operator(False)
     _ = s.push(_m(_b([2, 3, 4]), _groups(List[Optional[Int]]()), 1))
     assert_true(s.drain().value().to_array(1) == array([24], int64))
 

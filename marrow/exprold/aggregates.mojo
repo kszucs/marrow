@@ -107,10 +107,19 @@ struct NumericFold[K: FoldKernel](AggFunction):
     def resolve[
         Job: def[A: AggKernel]() raises -> None
     ](value_dtype: DynType, job: Job) raises:
-        # No dtype dispatch left: `Fold[K]` takes an erased column and gates
-        # the domain itself.
-        _ = Fold[Self.K].dtype([value_dtype.copy()])
-        job[Fold[Self.K]]()
+        if not value_dtype.is_numeric():
+            raise Error(
+                "aggregate '",
+                Self.name,
+                "' is not defined for ",
+                value_dtype,
+                " columns",
+            )
+
+        def numeric[V: NumericType](d: V) raises {imm}:
+            job[Fold[Self.K, V]]()
+
+        value_dtype.dispatch_numeric(numeric)
 
 
 struct OrderPreserving[Op: MinMaxOp](AggFunction):
@@ -124,8 +133,18 @@ struct OrderPreserving[Op: MinMaxOp](AggFunction):
     def resolve[
         Job: def[A: AggKernel]() raises -> None
     ](value_dtype: DynType, job: Job) raises:
-        if value_dtype.is_numeric() or value_dtype.is_temporal():
-            job[Fold[MinMax[Self.Op]]]()
+        if value_dtype.is_numeric():
+
+            def numeric[V: NumericType](d: V) raises {imm}:
+                job[Fold[MinMax[Self.Op], V]]()
+
+            value_dtype.dispatch_numeric(numeric)
+        elif value_dtype.is_temporal():
+
+            def temporal[V: TemporalType](d: V) raises {imm}:
+                job[Fold[MinMax[Self.Op], V]]()
+
+            value_dtype.dispatch_temporal(temporal)
         elif value_dtype.is_string() or value_dtype.is_large_string():
             job[StringExtremum[Self.Op]]()
         else:
@@ -149,7 +168,11 @@ struct CountValid(AggFunction):
         Job: def[A: AggKernel]() raises -> None
     ](value_dtype: DynType, job: Job) raises:
         if value_dtype.is_numeric():
-            job[Fold[CountKernel]]()
+
+            def numeric[V: NumericType](d: V) raises {imm}:
+                job[Fold[CountKernel, V]]()
+
+            value_dtype.dispatch_numeric(numeric)
         else:
             job[ValidCount]()
 
