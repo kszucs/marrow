@@ -960,6 +960,56 @@ designs are in §7, and their defend-this findings are in §8. To read one:
 **Not ours:** `mojo-regex`'s optional-group defect is upstream and appears
 unreported. Filing it would be a courtesy; nothing has been sent.
 
+### Aggregate soundness review — open, 2026-08-28
+
+A 27-probe review of the aggregate kernels and both aggregate lanes, against
+`c737411`. Two of its six findings were fixed on the spot (the erased-box leak,
+and `Fold.partials` missing its `is_single()` branch); one dissolves in the
+typed-`AggKernel` work (`update` narrowing unguarded). These three are real,
+none produces a wrong answer today, and each is a **contract** gap rather than
+a defect — which is why they are recorded rather than patched: the fix for each
+is to make an invariant checkable, not to change a computation.
+
+| ID | Item | Size |
+|---|---|---|
+| **AG-1** | **`Groups.is_single()` conflates "no `GROUP BY`" with "empty grouped batch".** `kernels/core.mojo:89` answers `len(ids) == 0 and num_groups == 1`, and `HashGrouping.assign(keys, 0)` after one group has been seen returns exactly that — so a zero-row morsel in a *grouped* query takes the **ungrouped** branch in all five kernels. Benign only because every single-slot path is additive and folds zero rows; it is one unconditional write away from a wrong answer. `Groups.single` should carry an explicit flag rather than being inferred from a shape two different states share. | S |
+| **AG-2** | **`Datum.to_array(n)` ignores `n`, and `_struct_of` validates nothing.** `expr/physical.mojo:107`, consumed at `GroupByOperator.drain`. A fold that returns fewer rows than `_num_groups` is an out-of-bounds read rather than an error. No aggregate does this today — `Fold._slots` is a running max independent of `_num_groups`, and `HashGrouping.num_groups` is monotonic — so what is missing is the length check, not a correct answer. | S |
+| **AG-3** | **`RuntimeAggregate.empty()` probes the resolution ladder with a fabricated `int64`.** `runtime/aggregates.mojo:409`. For `min`/`max` over a string column that selects `Fold[MinKernel, Int64Type]` — a *different kernel* than the one that will run. Correct only because both answer `None`, and nothing enforces that they must. Dissolves once `DynAgg` resolves `empty()` from the real dtype; recorded in case that work lands differently. | S |
+
+Naming note: A-4 above refers to an older `DynAgg` from `exprold`. The
+`DynAgg` in `kernels/aggregate.mojo` is unrelated — it is the single erased
+dispatcher over the typed `AggKernel` conformers.
+
+### The binary-size gate suite is mostly dead weight — open, 2026-08-28
+
+**12 of the 14 gates are written against `exprold`**, which is slated for
+removal; only `query_expr2_agg_fused` and `query_expr2_streaming` exercise
+`marrow.expr`. So a change confined to the live expression layer is measured by
+two gates and *cannot* move the other twelve — and the suite's ~15-minute
+wall-clock is spent almost entirely on code that is going away.
+
+`query_streaming_agg_fused.mojo` had additionally **not compiled since
+`b66e219`** (`Fold` gained its `V` parameter and the gate still spelled
+`Fold[SumKernel]`). Because `compare.py` builds gates in order and dies on the
+first failure, that one break made *every* gate after it unmeasurable — the run
+reports a Python traceback rather than a table. Fixed by naming the parameter;
+this is the third time a break outside `marrow/` has hidden behind
+`precompile`, after `python/bindings/compute.mojo` and `query_expr2_agg_fused`.
+
+Two things follow, neither done here:
+
+- **`compare.py` should not abort the suite on one failed build.** Report the
+  gate as broken and continue, so one stale file cannot blind the rest.
+- **Delete the `exprold` gates with `exprold`**, and port whatever coverage is
+  genuinely missing to `marrow.expr` first. The pair
+  `query_streaming_agg` / `query_streaming_agg_fused` measures "the cost of a
+  runtime aggregate identity", which is still a question worth gating — but it
+  should be asked of the lane that will exist.
+
+Related: **A-10** (the baseline is stale in both directions). Until it is
+re-recorded, an A/B of the two live gates across the change under test is a
+better measurement than a comparison against `baseline.json`.
+
 ### 5.1 Deliberately not scheduled
 
 Recorded so the audits stop pulling. Each is real; none pays into M1.

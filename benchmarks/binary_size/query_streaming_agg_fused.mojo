@@ -1,7 +1,7 @@
 """Binary-size gate for a fully **fused** aggregation.
 
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name` — the same query as
-`query_streaming_agg.mojo`, but the aggregates are `AggFunc.of[Fold[K]]()`:
+`query_streaming_agg.mojo`, but the aggregates are `AggFunc.of[Fold[K, V]]()`:
 kernel *and* input dtype are comptime, so the plan holds a direct pointer to
 `AggState[SumKernel, Int64Type]` / `AggState[MinKernel, Int64Type]`.
 
@@ -41,8 +41,8 @@ def main() raises:
     aggs.append(BoxedValue(col("b", int64)))
 
     var funcs = List[AggFunc]()
-    funcs.append(AggFunc.of[Fold[SumKernel]](DynType(int64)))
-    funcs.append(AggFunc.of[Fold[MinKernel]](DynType(int64)))
+    funcs.append(AggFunc.of[Fold[SumKernel, Int64Type]](DynType(int64)))
+    funcs.append(AggFunc.of[Fold[MinKernel, Int64Type]](DynType(int64)))
 
     var agg = Aggregate(
         input=DynRelation(InMemoryTable(batch=batch)),

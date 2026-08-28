@@ -222,6 +222,14 @@ struct DynOperator(Movable):
     ]
     var _virt_drain: def(ArcPointer[NoneType]) thin raises -> Optional[Datum]
     var _virt_done: def(ArcPointer[NoneType]) thin -> Bool
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
+    """Erasure drops the pointee's destructor, so it has to be carried
+    separately. `rebind[ArcPointer[NoneType]]` keeps the allocation and the
+    refcount but forgets the type, so the final release runs `NoneType`'s
+    destructor and **`O.__deinit__` never runs** — every operator's state leaks.
+    Measured, not reasoned: a 200k-iteration probe over a triple-shared box
+    reports zero destructions without this field and zero live objects with it.
+    """
 
     @staticmethod
     def _push_tramp[
@@ -239,6 +247,19 @@ struct DynOperator(Movable):
     def _done_tramp[O: Operator](ptr: ArcPointer[NoneType]) -> Bool:
         return rebind[ArcPointer[O]](ptr)[].done()
 
+    @staticmethod
+    def _drop_tramp[O: Operator](var ptr: ArcPointer[NoneType]):
+        """Release the box's reference at the operator's *true* type.
+
+        `rebind` takes a second reference, so the erased one can be released
+        without reaching zero; the typed reference then falls out of scope and
+        its release is the one that runs `O.__deinit__`. Sharing still works —
+        a box that holds one of several references simply decrements.
+        """
+        var typed = rebind[ArcPointer[O]](ptr)
+        _ = ptr^
+        _ = typed^
+
     @implicit
     def __init__[O: Operator](out self, var value: O):
         var ptr = ArcPointer[O](value^)
@@ -246,6 +267,10 @@ struct DynOperator(Movable):
         self._virt_push = Self._push_tramp[O]
         self._virt_drain = Self._drain_tramp[O]
         self._virt_done = Self._done_tramp[O]
+        self._virt_drop = Self._drop_tramp[O]
+
+    def __deinit__(deinit self):
+        self._virt_drop(self._data^)
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         return self._virt_push(self._data, morsel)

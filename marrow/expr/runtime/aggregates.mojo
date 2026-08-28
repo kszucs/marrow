@@ -146,6 +146,14 @@ struct ResolvedAggregate(Copyable, Movable):
     var _open: def(List[DynType]) thin raises -> ArcPointer[NoneType]
     var _update: def(ArcPointer[NoneType], Groups, List[DynArray]) thin raises
     var _finish: def(ArcPointer[NoneType]) thin raises -> DynArray
+    var _drop: def(var ArcPointer[NoneType]) thin
+    """Erasure forgets the pointee's destructor; this carries it.
+
+    It matters more here than anywhere else the pattern appears. The other
+    boxes hold a plan node — a few strings — while this one holds a fold state
+    whose size is O(distinct values): without it, `count_distinct` leaks an
+    entire `SwissHashTable` per query. See `DynOperator._virt_drop`.
+    """
 
     @staticmethod
     def of[Agg: AggKernel](in_dtypes: List[DynType]) raises -> Self:
@@ -165,8 +173,13 @@ struct ResolvedAggregate(Copyable, Movable):
             var ptr = ArcPointer[Agg](Agg.open(dtypes))
             return rebind[ArcPointer[NoneType]](ptr^)
 
+        def drop(var ptr: ArcPointer[NoneType]):
+            var typed = rebind[ArcPointer[Agg]](ptr)
+            _ = ptr^
+            _ = typed^
+
         return Self(
-            Agg.dtype(in_dtypes), Agg.empty(), None, open, update, finish
+            Agg.dtype(in_dtypes), Agg.empty(), None, open, update, finish, drop
         )
 
     def open(mut self, in_dtypes: List[DynType]) raises:
@@ -178,6 +191,10 @@ struct ResolvedAggregate(Copyable, Movable):
 
     def finish(mut self) raises -> DynArray:
         return self._finish(self._boxed.value())
+
+    def __deinit__(deinit self):
+        if self._boxed:
+            self._drop(self._boxed.take())
 
 
 # ---------------------------------------------------------------------------

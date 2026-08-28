@@ -201,6 +201,10 @@ struct DynValue(Copyable, Movable, Writable):
     ) thin raises -> DynOperator
     var _shape: Shape
     var _aggregates: Bool
+    var _drop: def(var ArcPointer[NoneType]) thin
+    """Erasure forgets the pointee's destructor; this carries it. See
+    `DynOperator._virt_drop` for why the release has to happen at the true
+    type, and for the probe that measured it."""
 
     # -- trampolines --------------------------------------------------------
     # One instantiation per boxed type, wired at construction. There is no
@@ -233,10 +237,17 @@ struct DynValue(Copyable, Movable, Writable):
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
         return String(rebind[ArcPointer[V]](ptr)[])
 
+    @staticmethod
+    def _drop_tramp[V: Value](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[V]](ptr)
+        _ = ptr^
+        _ = typed^
+
     @implicit
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._drop = Self._drop_tramp[V]
         self._aggregates = V.aggregates
         self._columns = Self._columns_tramp[V]
         self._name = Self._name_tramp[V]
@@ -244,6 +255,9 @@ struct DynValue(Copyable, Movable, Writable):
         self._write = Self._write_tramp[V]
         self._to_operator = Self._to_operator_tramp[V]
         self._shape = V.shape
+
+    def __deinit__(deinit self):
+        self._drop(self._boxed^)
 
     # -- the erased surface -------------------------------------------------
 
@@ -359,6 +373,10 @@ struct DynRelation(Copyable, Movable, Writable):
         ArcPointer[NoneType], ExecContext, Bindings
     ) thin raises -> Pipeline
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
+    var _drop: def(var ArcPointer[NoneType]) thin
+    """Erasure forgets the pointee's destructor; this carries it. See
+    `DynOperator._virt_drop` for why the release has to happen at the true
+    type, and for the probe that measured it."""
 
     @staticmethod
     def _schema_tramp[
@@ -380,6 +398,12 @@ struct DynRelation(Copyable, Movable, Writable):
     ](ptr: ArcPointer[NoneType]) -> String:
         return String(rebind[ArcPointer[R]](ptr)[])
 
+    @staticmethod
+    def _drop_tramp[R: Relation & Writable](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[R]](ptr)
+        _ = ptr^
+        _ = typed^
+
     @implicit
     def __init__[R: Relation & Writable](out self, value: R):
         var ptr = ArcPointer[R](value.copy())
@@ -387,6 +411,10 @@ struct DynRelation(Copyable, Movable, Writable):
         self._virt_schema = Self._schema_tramp[R]
         self._virt_to_operator = Self._to_operator_tramp[R]
         self._virt_write = Self._write_tramp[R]
+        self._drop = Self._drop_tramp[R]
+
+    def __deinit__(deinit self):
+        self._drop(self._data^)
 
     def schema(self) -> Schema:
         return self._virt_schema(self._data)

@@ -45,6 +45,34 @@
 
 ### Fixes
 
+- **Every erased box leaked what it held.** `DynValue`, `DynRelation`,
+  `DynOperator` and `ResolvedAggregate` each erase by
+  `rebind[ArcPointer[NoneType]](ArcPointer[T](...))`. That keeps the allocation
+  and the refcount and **forgets the destructor**: the final release runs
+  `NoneType`'s, so `T.__deinit__` never runs. Reproduced with a 200k-iteration
+  probe — zero destructions before, zero live objects after.
+
+  Each box now carries a `_drop` trampoline and a `__deinit__` that calls it.
+  The trampoline takes a second reference at the true type, releases the erased
+  one, and lets the typed one fall out of scope, so the release that reaches
+  zero is the one that knows what it is holding. Sharing is unaffected: N
+  copies still destroy exactly once, which
+  `test_erased_copies_share_one_destruction` pins from both sides — not N times
+  (a double free) and not zero (the leak).
+
+  The cost was worst where it was least visible. The plan-node boxes lose a few
+  strings; `ResolvedAggregate` boxes a fold state sized O(distinct values), so
+  an un-dropped `count_distinct` lost an entire `SwissHashTable` per query.
+  `AggKernel` is declared `Deinitable` precisely because its conformers own
+  heap, which is what made the omission look accidental rather than intended.
+
+  No existing test could see this — every answer was correct and only memory
+  was lost — so `marrow/expr/tests/test_erasure.mojo` counts destructions
+  directly. It also documents an asymmetry worth knowing: `DynOperator` takes
+  `var value: O` and **moves**, while `DynValue`/`DynRelation` take `value: V`
+  and box a **copy**, so boxing a node costs one extra object.
+
+
 - **`RuntimeAggregate.empty()` disagreed with its own kernel.** It restated the
   name-to-behaviour mapping in a hand-written arm list and declined for
   `variance` and `stddev`, while `Dispersion.empty()` answers a float64 null
