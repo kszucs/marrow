@@ -567,3 +567,81 @@ def test_variance_of_a_fused_subtree() raises:
     )
     var got = plan.execute().columns[0].as_float64()[0].value()
     assert_true(abs(got - 118.16 * 4.0) < 1e-9)
+
+
+# ---------------------------------------------------------------------------
+# A fused subtree under a GROUP BY
+#
+# `FusedAggregateOperator` has two instantiations and `comptime if
+# Self.G.scatters` picks between genuinely different bodies: a scatter loop
+# over group ids, or registers plus one hand-off per morsel. Every other
+# fused-subtree case in this tree is **keyless**, so all of them exercise
+# `ScalarGrouping` and none exercise the scatter loop reading `lane[W]` out of
+# a computed operand. These do.
+# ---------------------------------------------------------------------------
+def _lines() raises -> RecordBatch:
+    """Two groups of order lines, with a null quantity in the second."""
+    var qty: List[Optional[Int]] = [3, 7, 10, 2, None]
+    return record_batch(
+        [
+            array([1, 1, 2, 2, 2], int64).to_dyn(),
+            array(qty, int64).to_dyn(),
+            array([100, 100, 20, 250, 60], int64).to_dyn(),
+        ],
+        names=["g", "qty", "price"],
+    )
+
+
+def test_a_fused_subtree_folds_per_group() raises:
+    """`sum(qty * price)` grouped: the product is never materialised, and the
+    null row propagates *through* the multiply rather than contributing its
+    price alone.
+
+    Group 1 is 3*100 + 7*100 = 1000. Group 2 is 10*20 + 2*250 = 700, with the
+    null line contributing nothing.
+    """
+    var plan = table(_lines()).aggregate(
+        [
+            (col("qty", int64) * col("price", int64)).sum().alias("revenue"),
+        ],
+        [col("g", int64)],
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[1].as_int64() == array([1000, 700], int64))
+    assert_true(plan.schema() == out.schema)
+
+
+def test_a_fused_subtree_folds_per_group_under_every_kernel() raises:
+    """The scatter loop is `K`-generic, so one kernel passing is not evidence
+    for the rest: `max` keeps the input's type where `mean` widens to float64,
+    and both read the same fused operand."""
+    var plan = table(_lines()).aggregate(
+        [
+            (col("qty", int64) * col("price", int64)).max().alias("peak"),
+            (col("qty", int64) * lit(2, int64)).mean().alias("avg2"),
+        ],
+        [col("g", int64)],
+    )
+    var out = plan.execute()
+    assert_true(out.columns[1].as_int64() == array([700, 500], int64))
+    ref avg = out.columns[2].as_float64()
+    assert_true(abs(avg[0].value() - 10.0) < 1e-9)  # (6 + 14) / 2
+    assert_true(abs(avg[1].value() - 12.0) < 1e-9)  # (20 + 4) / 2, null skipped
+
+
+def test_a_fused_subtree_and_a_buffered_aggregate_share_one_grouping() raises:
+    """A fused fold and a buffered aggregate in the same query: `GroupByOperator`
+    assigns ids once and both read them, so the two operators must agree on the
+    slot count even though only one of them buffers."""
+    var plan = table(_lines()).aggregate(
+        [
+            (col("qty", int64) * col("price", int64)).sum().alias("revenue"),
+            col("price", int64).count_distinct().alias("prices"),
+        ],
+        [col("g", int64)],
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    assert_true(out.columns[1].as_int64() == array([1000, 700], int64))
+    assert_true(out.columns[2].as_int64() == array([1, 3], int64))
