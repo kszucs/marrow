@@ -498,7 +498,6 @@ struct RuntimeAggregateOperator(Operator):
     var _node: RuntimeAggregate
     """The node itself, kept to resolve against those first dtypes."""
 
-    var _empty: Optional[DynArray]
     var _scatters: Bool
     var _emitted: Bool
 
@@ -510,7 +509,6 @@ struct RuntimeAggregateOperator(Operator):
     ) raises:
         self._inputs = inputs^
         self._kernel = None
-        self._empty = node.empty()
         self._node = node^
         self._scatters = scatters
         self._emitted = False
@@ -549,7 +547,8 @@ struct RuntimeAggregateOperator(Operator):
             # No morsel ever arrived, so there was no dtype to resolve against.
             # A distinct count still has an answer; an extremum does not, and
             # `GroupByOperator` fills its slot from the output schema.
-            if self._empty:
-                return Datum(self._empty.value().copy())
+            var answer = self._node.empty()
+            if answer:
+                return Datum(answer.value().copy())
             return None
         return Datum(self._kernel.value().finish())
