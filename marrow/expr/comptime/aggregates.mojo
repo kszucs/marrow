@@ -10,13 +10,13 @@ takes `&[ArrayRef]`, ClickHouse's `IAggregateFunction::add` takes `IColumn**`,
 Polars aggregates a `Series` — all three must compute the intermediate column
 first, because none has comptime types.
 
-**The fold lives here too.** `FusedAccumulator` is the executor for the nodes
+**The fold lives here too.** `FusedAggregateOperator` is the executor for the nodes
 below it, and it sits beside them for the same reason `Column` sits beside its
 own `bind`/`lane`: this lane is organised by **family**, not by
 logical-versus-physical. That split is real one level up (`logical.mojo` /
 `physical.mojo`); inside a lane the distinction that matters is
 lane-agnostic versus lane-specific. `EvalOperator` is generic over any
-`Evaluable` and belongs in `physical.mojo`; `FusedAccumulator` is parameterised on
+`Evaluable` and belongs in `physical.mojo`; `FusedAggregateOperator` is parameterised on
 `A: NumericValue` and cannot go there without making the lane-agnostic layer
 name a lane.
 
@@ -60,8 +60,6 @@ from ...kernels.concat import concat
 from ...kernels.core import Groups
 from ...arrays import DynArray
 from ..physical import (
-    Accumulable,
-    AggregateOperator,
     Datum,
     EvalOperator,
     DynOperator,
@@ -123,7 +121,7 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
     """
 
     comptime aggregates = True
-    """It answers from `AggregateOperator.drain`, never per batch. `Project`
+    """It answers from its operator's `drain`, never per batch. `Project`
     and `Filter` read this and raise, which is what makes
     `project([col("a").sum()])` a plan-time error naming the mistake."""
 
@@ -190,30 +188,24 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
         of the inner loop.
 
         Both operators are parameterised, so nothing in this lane is erased:
-        `FusedAccumulator` because its body *is* the per-row loop, and
-        `BufferedAccumulator` because keeping `A` means its operand is an
+        `FusedAggregateOperator` because its body *is* the per-row loop, and
+        `BufferedAggregateOperator` because keeping `A` means its operand is an
         `EvalOperator[A]` rather than a `DynOperator` box and `Agg.grouped` is
         a direct call rather than a pointer. The erased shape lives in
-        `runtime/` as `RuntimeAccumulator`, where the name genuinely is not
+        `runtime/` as `RuntimeAggregateOperator`, where the name genuinely is not
         known until run time.
         """
         comptime if Self.fuses:
             if grouped:
-                return AggregateOperator(
-                    FusedAccumulator[Self.Agg.Lane, Self.A, HashGrouping](
-                        self._input.copy(), bindings.copy()
-                    )
-                )
-            return AggregateOperator(
-                FusedAccumulator[Self.Agg.Lane, Self.A, ScalarGrouping](
-                    self._input.copy(), bindings.copy()
-                )
-            )
+                return FusedAggregateOperator[
+                    Self.Agg.Lane, Self.A, HashGrouping
+                ](self._input.copy(), bindings.copy())
+            return FusedAggregateOperator[
+                Self.Agg.Lane, Self.A, ScalarGrouping
+            ](self._input.copy(), bindings.copy())
         else:
-            return AggregateOperator(
-                BufferedAccumulator[Self.Agg, Self.A](
-                    self._input.copy(), bindings.copy(), grouped
-                )
+            return BufferedAggregateOperator[Self.Agg, Self.A](
+                self._input.copy(), bindings.copy(), grouped
             )
 
     def alias(self, var name: String) -> Self:
@@ -266,13 +258,13 @@ comptime CountDistinct = Aggregate[DistinctCount[True], _]
 comptime ApproxCountDistinct = Aggregate[DistinctCount[False], _]
 
 
-struct FusedAccumulator[K: FoldKernel, A: NumericValue, G: Grouping](
-    Accumulable
+struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](
+    Operator
 ):
     """The fold in progress: this aggregate's input, plus the kernel's state.
 
     Three axes, all comptime: the **algebra** (`K`), the whole **input**
-    subtree (`A`), and the **placement** (`G`). `FusedAccumulator[SumKernel,
+    subtree (`A`), and the **placement** (`G`). `FusedAggregateOperator[SumKernel,
     Mul[Column[Int64Type], Literal[Int64Type]], ScalarGrouping]` is one type,
     and therefore one loop with nothing interpreted inside it.
 
@@ -302,10 +294,19 @@ struct FusedAccumulator[K: FoldKernel, A: NumericValue, G: Grouping](
     there."""
     var _state: AggState[Self.K, Self.A.Type]
     var _num_groups: Int
+    var _emitted: Bool
+    """Whether the fold has already been drained.
+
+    `drain` is **repeatable** — the driver calls it until it answers `None` —
+    so a fold that answered `Some` every time would make
+    `while True: drain()` spin forever."""
+
+    comptime Out = Datum
 
     def __init__(out self, var input: Self.A, var bindings: Bindings):
         self._input = input^
         self._bindings = bindings^
+        self._emitted = False
         # One implicit slot when this fold does not scatter, including over an
         # input that yields nothing: `sum` of no rows is one NULL, not no rows.
         self._num_groups = 1 if not Self.G.scatters else 0
@@ -318,9 +319,10 @@ struct FusedAccumulator[K: FoldKernel, A: NumericValue, G: Grouping](
             Self.K.acc_dtype[Self.A.Type](Self.A.Type())
         )
 
-    def absorb(mut self, morsel: Morsel) raises:
-        """Fold one morsel into the state. The grouping travels *with* the
-        batch, which is what lets a fold be an `Accumulable` at all."""
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        """Fold one morsel in and answer nothing — the result arrives at
+        `drain`. The grouping travels *with* the batch, which is what lets this
+        be an `Operator` at all."""
         ref batch = morsel.batch
         ref groups = morsel.groups.ids
         comptime if Self.G.scatters:
@@ -328,7 +330,7 @@ struct FusedAccumulator[K: FoldKernel, A: NumericValue, G: Grouping](
         var num_groups = self._num_groups
         var n = len(batch)
         if n == 0:
-            return
+            return None
         comptime W = Self.W
         var bound = self._input.bind(batch, self._bindings)
         var v = self._input.validity(bound)
@@ -443,16 +445,21 @@ struct FusedAccumulator[K: FoldKernel, A: NumericValue, G: Grouping](
             else:
                 self._state.combine_at(0, ident, 0)
 
-    def finish(mut self) raises -> Optional[DynArray]:
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
         """Always an answer: `sum` of no rows is one NULL, not no rows."""
-        return self._state.finish(self._num_groups).to_dyn()
+        if self._emitted:
+            return None
+        self._emitted = True
+        return Datum(self._state.finish(self._num_groups).to_dyn())
 
 
-struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
+struct BufferedAggregateOperator[Agg: AggKernel, A: ComptimeValue](Operator):
     """An aggregate that must see its whole input as a column, so it **buffers
     every morsel** until `drain`. Fully typed, like its fused sibling.
 
-    The counterpart of `FusedAccumulator`, and named for the cost that
+    The counterpart of `FusedAggregateOperator`, and named for the cost that
     separates them. Both are *value* operators — two of the things
     `GroupByOperator` holds in its `_folds` list — and both answer a `Datum` of
     one value per slot. They differ in what they can do with a morsel: a fold
@@ -468,13 +475,15 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
     `DynOperator`, reached its kernel through a thin `AggregateFn` pointer, and
     carried an `Optional[RuntimeAggregate]` field it never set. None of that
     was needed: `Agg` and `A` are known where the plan is written. The erased
-    shape is `RuntimeAccumulator` in `runtime/`, where the name really does
+    shape is `RuntimeAggregateOperator` in `runtime/`, where the name really does
     arrive at run time.
 
     `A` earns its parameter the same way `EvalOperator`'s does — the operand
     subtree stays one type through the boundary, so `min(upper(s))` still
     compiles `upper(s)` to one loop.
     """
+
+    comptime Out = Datum
 
     var _input: EvalOperator[Self.A]
     """The operand's own operator, typed. A `DynOperator` here would box a
@@ -490,10 +499,11 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
 
     var _num_groups: Int
     var _rows: Int
+    var _emitted: Bool
 
     var _scatters: Bool
     """Whether the query has `GROUP BY` keys — a runtime `Bool`, where
-    `FusedAccumulator` makes it a `G: Grouping` parameter.
+    `FusedAggregateOperator` makes it a `G: Grouping` parameter.
 
     Measured, not assumed. `Aggregate.to_operator` branches on a *runtime*
     `grouped`, so parameterising this instantiates both arms for every
@@ -512,8 +522,9 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
         self._scatters = scatters
         self._num_groups = 0 if scatters else 1
         self._rows = 0
+        self._emitted = False
 
-    def absorb(mut self, morsel: Morsel) raises:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Evaluate the operand against the morsel and keep the column.
 
         Empty batches are kept too rather than skipped: an empty column still
@@ -526,13 +537,20 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
         if self._scatters:
             self._ids.append(morsel.groups.ids.copy())
             self._num_groups = max(self._num_groups, morsel.groups.num_groups)
+        return None
 
-    def finish(mut self) raises -> Optional[DynArray]:
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
         if len(self._chunks) == 0:
             # No morsel ever arrived. A distinct count still has an answer; an
             # extremum does not, and `GroupByOperator` fills its slot from the
             # output schema.
-            return Self.Agg.empty()
+            var answer = Self.Agg.empty()
+            if answer:
+                return Datum(answer.value().copy())
+            return None
         var columns = List[DynArray](capacity=1)
         columns.append(concat(self._chunks, ExecContext.serial()))
         var groups: Groups
@@ -543,4 +561,4 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
         else:
             groups = Groups.single(self._rows)
         # A direct static call, not a pointer: `Agg` is a type here.
-        return Self.Agg.grouped(groups, columns)
+        return Datum(Self.Agg.grouped(groups, columns))

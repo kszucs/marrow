@@ -262,7 +262,7 @@ struct DynValue(Copyable, Movable, Writable):
         """The stateful thing that runs this value.
 
         The slot `DynAggValue._acc` used to occupy, on the one box that now
-        holds every value. An aggregate reaches its `FusedAccumulator` through here; an
+        holds every value. An aggregate reaches its `FusedAggregateOperator` through here; an
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """

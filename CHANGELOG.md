@@ -71,35 +71,19 @@
   typed `concat[T: PrimitiveType]` delegates to `PrimitiveBuilder[T].extend`,
   which already existed — only the entry point was missing.
 
-- **One aggregate operator, three accumulation strategies.** There were three
-  bespoke operators — fused, buffered, runtime — each re-implementing
-  `Operator`, the `_emitted` guard and the drain contract. What actually
-  differed between them was only the *state*: a scalar per group, a list of
-  buffered columns, or a name waiting to resolve.
+- **The three aggregate operators implement `Operator` themselves.** A previous
+  entry in this block introduced `Accumulable` plus a generic
+  `AggregateOperator[S]`, on the argument that it mirrored `Evaluable` and
+  `EvalOperator[V]`. The parallel does not hold: `EvalOperator` amortises one
+  wrapper over the ~32 value nodes in `comptime/`, while `Accumulable` had
+  exactly three conformers and would keep three — a new aggregate is a new
+  `AggKernel`, not a new accumulation strategy. One wrapper over three fixed
+  types is indirection, not abstraction, so both it and the trait are gone.
 
-  `physical.mojo` now declares `Accumulable` beside `Evaluable`, and the two
-  are exact counterparts. An elementwise value has its answer as soon as it
-  sees a batch, so `Evaluable.evaluate` plus one generic `EvalOperator[V]`
-  serves every value in both lanes; an aggregate has no answer until the stream
-  ends, so `Accumulable` takes `absorb` and `finish`, and
-  `AggregateOperator[S]` serves every aggregate in both lanes just as
-  generically.
-
-  The three operators became `FusedAccumulator[K, A, G]`,
-  `BufferedAccumulator[Agg, A]` and `RuntimeAccumulator`. `DynAggregateOperator`
-  is gone: what is dynamic about the runtime lane is the *state*, not the
-  operator machinery, and the name now says so.
-
-  `BufferedAccumulator` keeps `scatters` as a runtime `Bool` rather than a
-  `G: Grouping` parameter, which was measured rather than assumed.
-  `to_operator` branches on a runtime `grouped`, so parameterising it
-  instantiates both arms for every aggregate: a keyless binary with three
-  buffered aggregates linked `HashGrouping` *and* `ScalarGrouping` and grew
-  4.6%. The fused path earns its `G` because specialising the loop is worth
-  14.6x; a `concat` and a call does not.
-
-  `query_expr2_agg_fused` -0.234%, `query_expr2_streaming` byte-identical, and
-  a non-fusing comptime binary +0.299%.
+  `FusedAggregateOperator[K, A, G]`, `BufferedAggregateOperator[Agg, A]` and
+  `RuntimeAggregateOperator` each conform to `Operator` directly. The cost is
+  three copies of the four-line `_emitted` drain guard; the saving is a type,
+  a trait and a layer of wrapping.
 
 - **The comptime lane no longer erases its buffered aggregates — 36% smaller.**
   `BufferedAggregateOperator` was one zero-parameter struct shared with the

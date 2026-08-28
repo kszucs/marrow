@@ -26,11 +26,11 @@ mandatory:
 
 - `Aggregate._output_schema` calls `a.dtype(schema)` before any batch exists,
   so it resolves from schema-derived dtypes and keeps only its `dtype`.
-- `BufferedAccumulator` holds the node and resolves again on first push,
+- `BufferedAggregateOperator` holds the node and resolves again on first push,
   from the morsel's real dtypes, keeping only `fold`. It cannot resolve
   earlier: a `RuntimeValue` operand has no dtype until a schema is in hand.
   Holding the node is what removes the third type an earlier draft had — an
-  operator in this tree already holds its node (`FusedAccumulator._input`,
+  operator in this tree already holds its node (`FusedAggregateOperator._input`,
   `EvalOperator._value`), so `resolve` can simply be a method on it.
 
 Discarding a `AggregateFn` at plan time is one function-pointer assignment, and
@@ -69,11 +69,10 @@ from ...execution import ExecContext
 from ...kernels.concat import concat
 from ...kernels.core import Groups
 from ..physical import (
-    Accumulable,
-    AggregateOperator,
     Datum,
     DynOperator,
     Morsel,
+    Operator,
 )
 
 
@@ -150,7 +149,7 @@ struct RuntimeAggregate(Value):
     """
 
     comptime aggregates = True
-    """It answers from `AggregateOperator.drain`, never per batch — the same
+    """It answers from `RuntimeAggregateOperator.drain`, never per batch — the same
     answer `Aggregate` gives, for the same reason."""
 
     var _inputs: List[DynValue]
@@ -226,7 +225,7 @@ struct RuntimeAggregate(Value):
         """The one name x dtype ladder in the system.
 
         Public because the **operator holds this node** and calls it on first
-        push, the same way `FusedAccumulator` reaches into the `A` it holds. That
+        push, the same way `FusedAggregateOperator` reaches into the `A` it holds. That
         is what lets one type carry both the plan-time and the execution-time
         answer instead of a separate function object beside it.
 
@@ -348,9 +347,7 @@ struct RuntimeAggregate(Value):
         var inputs = List[DynOperator](capacity=len(self._inputs))
         for ref i in self._inputs:
             inputs.append(i.to_operator(False, bindings))
-        return AggregateOperator(
-            RuntimeAccumulator(inputs^, self.copy(), grouped)
-        )
+        return RuntimeAggregateOperator(inputs^, self.copy(), grouped)
 
     def alias(self, var name: String) raises -> Self:
         """Rename this aggregate. Changes **only** `_alias`, so the resolver
@@ -367,7 +364,7 @@ struct RuntimeAggregate(Value):
         writer.write(")")
 
 
-struct RuntimeAccumulator(Accumulable):
+struct RuntimeAggregateOperator(Operator):
     """The runtime lane's aggregate operator: a **name**, resolved on the first
     morsel, over erased inputs.
 
@@ -375,12 +372,12 @@ struct RuntimeAccumulator(Accumulable):
     operands are `DynOperator` because a `RuntimeValue` subtree has no type to
     keep, the implementation is an `AggregateFn` pointer because the name is
     not known until run time, and the inputs' dtypes are not known until a
-    morsel arrives. `BufferedAccumulator` in `comptime/` is the same
+    morsel arrives. `BufferedAggregateOperator` in `comptime/` is the same
     machine with all three known statically, and it shares no code with this on
     purpose: erasure is the *only* difference, and paying for it in a lane that
     does not need it is what the size gates exist to catch.
 
-    `_scatters` stays a runtime `Bool` where `BufferedAccumulator` makes it a
+    `_scatters` stays a runtime `Bool` where `BufferedAggregateOperator` makes it a
     `G: Grouping` parameter. That asymmetry is deliberate: parameterising here
     would double an instantiation on the lane that has already accepted
     interpretation, to remove one predictable branch per morsel.
@@ -431,7 +428,7 @@ struct RuntimeAccumulator(Accumulable):
 
     var _node: Optional[RuntimeAggregate]
     """The node itself, for the lane that has a name instead of a type — an
-    operator here already holds its node (`FusedAccumulator._input`,
+    operator here already holds its node (`FusedAggregateOperator._input`,
     `EvalOperator._value`), so the ladder needs no object of its own."""
 
     var _empty: Optional[DynArray]
@@ -451,6 +448,9 @@ struct RuntimeAccumulator(Accumulable):
     var _ids: List[DynArray]
     var _num_groups: Int
     var _rows: Int
+    var _emitted: Bool
+
+    comptime Out = Datum
 
     def __init__(
         out self,
@@ -471,8 +471,9 @@ struct RuntimeAccumulator(Accumulable):
         self._ids = List[DynArray]()
         self._num_groups = 0 if scatters else 1
         self._rows = 0
+        self._emitted = False
 
-    def absorb(mut self, morsel: Morsel) raises:
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Evaluate this aggregate's inputs against the morsel and keep them.
 
         Empty batches are kept too rather than skipped: an empty column still
@@ -494,14 +495,18 @@ struct RuntimeAccumulator(Accumulable):
         if self._scatters:
             self._ids.append(morsel.groups.ids.copy().to_dyn())
             self._num_groups = max(self._num_groups, morsel.groups.num_groups)
+        return None
 
-    def finish(mut self) raises -> Optional[DynArray]:
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
         if len(self._chunks) == 0 or len(self._chunks[0]) == 0:
             # No morsel ever arrived, so there is no dtype to resolve against.
             # A distinct count still has an answer; an extremum does not, and
             # `GroupByOperator` fills its slot from the output schema.
             if self._empty:
-                return self._empty.value().copy()
+                return Datum(self._empty.value().copy())
             return None
         var columns = List[DynArray](capacity=len(self._chunks))
         for i in range(len(self._chunks)):
@@ -514,4 +519,4 @@ struct RuntimeAccumulator(Accumulable):
             )
         else:
             groups = Groups.single(self._rows)
-        return self._grouped.value()(groups, columns)
+        return Datum(self._grouped.value()(groups, columns))

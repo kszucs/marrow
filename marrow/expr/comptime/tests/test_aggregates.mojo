@@ -572,7 +572,7 @@ def test_variance_of_a_fused_subtree() raises:
 # ---------------------------------------------------------------------------
 # A fused subtree under a GROUP BY
 #
-# `FusedAccumulator` has two instantiations and `comptime if
+# `FusedAggregateOperator` has two instantiations and `comptime if
 # Self.G.scatters` picks between genuinely different bodies: a scatter loop
 # over group ids, or registers plus one hand-off per morsel. Every other
 # fused-subtree case in this tree is **keyless**, so all of them exercise
