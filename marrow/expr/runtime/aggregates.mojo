@@ -65,11 +65,15 @@ from ...kernels.aggregate import (
 from ...schema import Schema
 from ..logical import DynValue, Shape, Value, merged
 from ..params import Bindings
+from ...execution import ExecContext
+from ...kernels.concat import concat
+from ...kernels.core import Groups
 from ..physical import (
-    BufferedAggregateOperator,
     Datum,
     DynOperator,
     Evaluable,
+    Morsel,
+    Operator,
 )
 
 
@@ -358,7 +362,7 @@ struct RuntimeAggregate(Evaluable, Value):
         var inputs = List[DynOperator](capacity=len(self._inputs))
         for ref i in self._inputs:
             inputs.append(i.to_operator(False, bindings))
-        return BufferedAggregateOperator(inputs^, self.copy(), grouped)
+        return DynAggregateOperator(inputs^, self.copy(), grouped)
 
     def alias(self, var name: String) raises -> Self:
         """Rename this aggregate. Changes **only** `_alias`, so the resolver
@@ -373,3 +377,154 @@ struct RuntimeAggregate(Evaluable, Value):
                 writer.write(", ")
             writer.write(self._inputs[i])
         writer.write(")")
+
+
+struct DynAggregateOperator(Operator):
+    """The runtime lane's aggregate operator: a **name**, resolved on the first
+    morsel, over erased inputs.
+
+    Erased in three places, all forced by the lane rather than chosen: the
+    operands are `DynOperator` because a `RuntimeValue` subtree has no type to
+    keep, the implementation is an `AggregateFn` pointer because the name is
+    not known until run time, and the inputs' dtypes are not known until a
+    morsel arrives. `BufferedAggregateOperator` in `comptime/` is the same
+    machine with all three known statically, and it shares no code with this on
+    purpose: erasure is the *only* difference, and paying for it in a lane that
+    does not need it is what the size gates exist to catch.
+
+    It also buffers — the accumulated columns and ids are **O(rows)** — but
+    that is a property of `AggregateFn` being one-shot, not of erasure. Its
+    typed counterpart buffers identically.
+
+    **Zero type parameters, shared by both lanes.** The comptime lane hands it
+    `Agg.grouped` — a statically known method taken as a thin pointer — and the
+    runtime lane hands it the `RuntimeAggregate` node to resolve on first push.
+    The
+    operand keeps its fusion either way, because this operator does not
+    evaluate the operand: `_inputs` holds the operand's *own* operator, which
+    for a comptime subtree is a fully monomorphised `EvalOperator[A]`.
+
+    **It buffers, and that is inherent.** A `AggregateFn` is one-shot over the
+    whole input, so each morsel's evaluated columns and group ids are kept and
+    `concat`ed at `drain`. Concatenating ids across morsels is sound because
+    `HashGrouping` assigns dense ids that are stable across batches — batch
+    N+1 extends the numbering rather than restarting it.
+
+    Buffering the ids per aggregate is a known, bounded redundancy: three
+    column-aggregates in one query keep three copies of the same `Int32` per
+    row. `GroupByOperator` sees every morsel and could keep one, but only by
+    special-casing this operator among the values it holds, which is the
+    uniformity that made "every value answers `to_operator`" work at all.
+
+    **Exactly one of `_grouped` and `_node` is set at construction, and which
+    one says which lane built this.** The comptime lane knows its `AggKernel`
+    at compile time and supplies `_grouped` directly — which is what keeps a
+    binary that only ever aggregates a comptime expression from linking the
+    name ladder at all, and that DCE property is what the whole two-node design
+    turns on. The runtime lane knows only a name, so it supplies `_node` and
+    `_grouped` is filled on **first push**, from the morsel's real dtypes; it
+    cannot be filled earlier, because a `RuntimeValue` operand has no dtype
+    until a schema is in hand. `_grouped` is therefore `Some` from the first
+    push onward in both cases, which is the invariant `drain` reads.
+
+    Two nullable fields rather than a `Variant`: the alignment hazard
+    CLAUDE.md records for `Variant` is not worth paying for two small members,
+    so the invariant is stated here instead of encoded.
+    """
+
+    var _inputs: List[DynOperator]
+    var _grouped: Optional[AggregateFn]
+    """The implementation. `Some` from the first push onward, in both lanes."""
+
+    var _node: Optional[RuntimeAggregate]
+    """The node itself, for the lane that has a name instead of a type — an
+    operator here already holds its node (`FusedAggregateOperator._input`,
+    `EvalOperator._value`), so the ladder needs no object of its own."""
+
+    var _empty: Optional[DynArray]
+    """This aggregate's answer over an input that produced no column at all.
+    Known without any dtype, so it is computed at construction rather than
+    being a third code path at `drain`."""
+
+    var _scatters: Bool
+    """Whether the query has `GROUP BY` keys.
+
+    A runtime `Bool` rather than a per-morsel `Groups.is_single()` read: a
+    grouped query whose first batch happens to hold exactly one group would
+    otherwise be mistaken for an ungrouped one, and that batch's ids dropped.
+    """
+
+    var _chunks: List[List[DynArray]]
+    var _ids: List[DynArray]
+    var _num_groups: Int
+    var _rows: Int
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var inputs: List[DynOperator],
+        var node: RuntimeAggregate,
+        scatters: Bool,
+    ) raises:
+        """The runtime lane's constructor: the aggregate is a name, so the
+        implementation waits for the first morsel's dtypes."""
+        self._chunks = List[List[DynArray]]()
+        for _ in range(len(inputs)):
+            self._chunks.append(List[DynArray]())
+        self._inputs = inputs^
+        self._grouped = None
+        self._empty = node.empty()
+        self._node = node^
+        self._scatters = scatters
+        self._ids = List[DynArray]()
+        self._num_groups = 0 if scatters else 1
+        self._rows = 0
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        """Evaluate this aggregate's inputs against the morsel and keep them.
+
+        Empty batches are kept too rather than skipped: an empty column still
+        carries its dtype, which is the one thing a name-resolved fold needs
+        and the one thing a later batch cannot supply retroactively.
+        """
+        var n = len(morsel.batch)
+        # Indexed: an operator is move-only, so a `List` of them cannot be
+        # iterated by reference.
+        for i in range(len(self._inputs)):
+            var d = self._inputs[i].push(morsel)
+            self._chunks[i].append(d.value().to_array(n))
+        if not self._grouped:
+            var in_dtypes = List[DynType](capacity=len(self._chunks))
+            for i in range(len(self._chunks)):
+                in_dtypes.append(self._chunks[i][0].dtype())
+            self._grouped = self._node.value().resolve(in_dtypes).grouped
+        self._rows += n
+        if self._scatters:
+            self._ids.append(morsel.groups.ids.copy().to_dyn())
+            self._num_groups = max(self._num_groups, morsel.groups.num_groups)
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        if len(self._chunks) == 0 or len(self._chunks[0]) == 0:
+            # No morsel ever arrived, so there is no dtype to resolve against.
+            # A distinct count still has an answer; an extremum does not, and
+            # `GroupByOperator` fills its slot from the output schema.
+            if self._empty:
+                return Datum(self._empty.value().copy())
+            return None
+        var columns = List[DynArray](capacity=len(self._chunks))
+        for i in range(len(self._chunks)):
+            columns.append(concat(self._chunks[i], ExecContext.serial()))
+        var groups: Groups
+        if self._scatters:
+            groups = Groups(
+                concat(self._ids, ExecContext.serial()).as_int32().copy(),
+                self._num_groups,
+            )
+        else:
+            groups = Groups.single(self._rows)
+        return Datum(self._grouped.value()(groups, columns))

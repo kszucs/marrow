@@ -55,9 +55,13 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape, Value
 from ..params import Bindings
+from ...execution import ExecContext
+from ...kernels.concat import concat
+from ...kernels.core import Groups
+from ...arrays import DynArray
 from ..physical import (
-    BufferedAggregateOperator,
     Datum,
+    EvalOperator,
     DynOperator,
     Evaluable,
     Morsel,
@@ -201,12 +205,13 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
         property of `Agg` and `A`. Resolving them here is what keeps them out
         of the inner loop.
 
-        `BufferedAggregateOperator` has no type parameters on purpose. It does
-        not evaluate the operand — `EvalOperator[A]` does, and stays fused — so
-        parameterising it on `[Agg, A]` would buy one direct call over one
-        indirect call, once per column per batch. `FusedAggregateOperator`'s
-        parameters earn their instantiation because its body *is* the per-row
-        loop; this one's body is a `concat` and a call.
+        Both operators are parameterised, so nothing in this lane is erased:
+        `FusedAggregateOperator` because its body *is* the per-row loop, and
+        `BufferedAggregateOperator` because keeping `A` means its operand is an
+        `EvalOperator[A]` rather than a `DynOperator` box and `Agg.grouped` is
+        a direct call rather than a pointer. The erased shape lives in
+        `runtime/` as `DynAggregateOperator`, where the name genuinely is not
+        known until run time.
         """
         comptime if Self.fuses:
             if grouped:
@@ -217,10 +222,8 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
                 Self.Agg.Lane, Self.A, ScalarGrouping
             ](self._input.copy(), bindings.copy())
         else:
-            var inputs = List[DynOperator](capacity=1)
-            inputs.append(self._input.to_operator(False, bindings))
-            return BufferedAggregateOperator(
-                inputs^, Self.Agg.grouped, Self.Agg.empty(), grouped
+            return BufferedAggregateOperator[Self.Agg, Self.A](
+                self._input.copy(), bindings.copy(), grouped
             )
 
     def alias(self, var name: String) -> Self:
@@ -479,3 +482,98 @@ struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](
             return None
         self._emitted = True
         return Datum(self._state.finish(self._num_groups).to_dyn())
+
+
+struct BufferedAggregateOperator[Agg: AggKernel, A: ComptimeValue](Operator):
+    """An aggregate that must see its whole input as a column, so it **buffers
+    every morsel** until `drain`. Fully typed, like its fused sibling.
+
+    The counterpart of `FusedAggregateOperator`, and named for the cost that
+    separates them. Both are *value* operators — two of the things
+    `GroupByOperator` holds in its `_folds` list — and both answer a `Datum` of
+    one value per slot. They differ in what they can do with a morsel: a fold
+    reads `lane[W]` out of a fused subtree and keeps one scalar per group, so
+    it buffers nothing; this one has an aggregate whose state is a hash set, a
+    sketch, a best-row index or a Welford triple, which `AggregateFn` cannot
+    finish incrementally — so its input has to exist as a column first, and the
+    accumulated columns and ids are **O(rows)**.
+
+    **Buffering and erasure are different things, and only the first is forced
+    here.** This used to be one zero-parameter struct shared with the runtime
+    lane, which meant a comptime aggregate boxed its operand into a
+    `DynOperator`, reached its kernel through a thin `AggregateFn` pointer, and
+    carried an `Optional[RuntimeAggregate]` field it never set. None of that
+    was needed: `Agg` and `A` are known where the plan is written. The erased
+    shape is `DynAggregateOperator` in `runtime/`, where the name really does
+    arrive at run time.
+
+    `A` earns its parameter the same way `EvalOperator`'s does — the operand
+    subtree stays one type through the boundary, so `min(upper(s))` still
+    compiles `upper(s)` to one loop.
+    """
+
+    comptime Out = Datum
+
+    var _input: EvalOperator[Self.A]
+    """The operand's own operator, typed. A `DynOperator` here would box a
+    subtree whose type this struct already names."""
+
+    var _chunks: List[DynArray]
+    """Every morsel's evaluated column. The O(rows) this is named for."""
+
+    var _ids: List[DynArray]
+    var _scatters: Bool
+    var _num_groups: Int
+    var _rows: Int
+    var _emitted: Bool
+
+    def __init__(
+        out self, var input: Self.A, var bindings: Bindings, scatters: Bool
+    ):
+        self._input = EvalOperator[Self.A](input^, bindings^)
+        self._chunks = List[DynArray]()
+        self._ids = List[DynArray]()
+        self._scatters = scatters
+        self._num_groups = 0 if scatters else 1
+        self._rows = 0
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        """Evaluate the operand against the morsel and keep the column.
+
+        Empty batches are kept too rather than skipped: an empty column still
+        carries its dtype, and `Agg.grouped` dispatches on it.
+        """
+        var n = len(morsel.batch)
+        var d = self._input.push(morsel)
+        self._chunks.append(d.value().to_array(n))
+        self._rows += n
+        if self._scatters:
+            self._ids.append(morsel.groups.ids.copy().to_dyn())
+            self._num_groups = max(self._num_groups, morsel.groups.num_groups)
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        if len(self._chunks) == 0:
+            # No morsel ever arrived. A distinct count still has an answer; an
+            # extremum does not, and `GroupByOperator` fills its slot from the
+            # output schema.
+            var answer = Self.Agg.empty()
+            if answer:
+                return Datum(answer.value().copy())
+            return None
+        var columns = List[DynArray](capacity=1)
+        columns.append(concat(self._chunks, ExecContext.serial()))
+        var groups: Groups
+        if self._scatters:
+            groups = Groups(
+                concat(self._ids, ExecContext.serial()).as_int32().copy(),
+                self._num_groups,
+            )
+        else:
+            groups = Groups.single(self._rows)
+        # A direct static call, not a pointer: `Agg` is a type here.
+        return Datum(Self.Agg.grouped(groups, columns))

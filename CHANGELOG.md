@@ -45,6 +45,30 @@
 
 ### Refactors
 
+- **The comptime lane no longer erases its buffered aggregates — 36% smaller.**
+  `BufferedAggregateOperator` was one zero-parameter struct shared with the
+  runtime lane, so a comptime aggregate that could not fuse boxed its operand
+  into a `DynOperator`, reached its kernel through a thin `AggregateFn`
+  pointer, and carried an `Optional[RuntimeAggregate]` field it never set.
+  None of that was needed: `Agg` and `A` are known where the plan is written.
+
+  It is now `BufferedAggregateOperator[Agg, A]` in `comptime/`, holding an
+  `EvalOperator[A]` and calling `Agg.grouped` directly, while the erased shape
+  moved to `runtime/aggregates.mojo` as `DynAggregateOperator`.
+
+  The cost of sharing was much larger than the indirect call it saved. A binary
+  using one string `min`, one `count_distinct` and one `variance` dropped from
+  2,591,796 to 1,660,180 bytes of `__text` — **-35.9%** — because the
+  `_node: Optional[RuntimeAggregate]` field kept `RuntimeAggregate.resolve`
+  reachable, and `resolve` names *every* kernel: 366 `kernels::aggregate`
+  symbols plus 88 `views::reduce` and 88 `_reduce_dispatch` were being linked
+  into a program that named three aggregates. `query_expr2_agg_fused` and
+  `query_expr2_streaming` are byte-identical, as neither uses a non-fusing
+  aggregate.
+
+  `physical.mojo` no longer imports from `runtime/`, so it is now genuinely
+  lane-agnostic.
+
 - **The comptime aggregate vocabulary is aliases again.** `expr/comptime/`
   defined `Sum`, `Product`, `Min`, `Max`, `Mean` and `Count` as partially
   applied `Aggregate[...]`, and then never used them: `core.mojo` spelled
