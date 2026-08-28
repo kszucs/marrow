@@ -45,7 +45,7 @@ directly and never this ladder.
 """
 
 from ...arrays import DynArray, StructArray
-from ...dtypes import DynType, Int64Type, NumericType, TemporalType, int64
+from ...dtypes import DynType, NumericType, TemporalType, int64
 from ...kernels.aggregate import (
     ArithmeticAgg,
     FoldKernel,
@@ -91,25 +91,34 @@ comptime MIN = "min"
 comptime MAX = "max"
 
 
-struct DynAggKernel(Copyable, Movable):
-    """An `AggKernel` with its type erased — a state machine, not a pointer.
+struct ResolvedAggregate(Copyable, Movable):
+    """What a named aggregate becomes once its input types are known: the
+    output dtype **and** the opened, type-erased state machine that produces it.
 
-    **Glue, not compute, which is why it lives here.** The runtime lane
-    resolves a *name* to a kernel, so it cannot name the type it got; nothing
-    in `marrow.kernels` has that problem, and erasure machinery inside a
-    compute kernel is the wrong layer. This used to be a thin
-    `def(Groups, List[DynArray]) -> DynArray` in `kernels/aggregate.mojo`,
-    which worked only while every aggregate was one-shot and stateless. Now
-    that a kernel is `open` / `update` / `finish`, an erased one has to carry
-    state, and a bare function pointer cannot.
+    **One type, because the two halves must agree.** `of[Agg]` names `Agg`
+    exactly once and takes both answers from it, so the declared dtype and the
+    implementation cannot disagree — a mismatch is a `Variant` misaccess at
+    emit, not a raise. A separate `dtype` struct beside a separate kernel box
+    would be two tables to keep in step.
 
-    The mechanism is `DynValue`'s: an `ArcPointer[NoneType]` plus thin
-    trampolines that `rebind` it back. The difference is that these trampolines
-    *mutate* the boxed value, which `DynValue`'s read-only ones never do.
+    **Glue, not compute, which is why the erasure lives here.** The runtime
+    lane resolves a *name* to a kernel, so it cannot name the type it got;
+    nothing in `marrow.kernels` has that problem. The mechanism is `DynValue`'s
+    — an `ArcPointer[NoneType]` plus thin trampolines that `rebind` it back —
+    except that these trampolines *mutate* the boxed value, because an
+    `AggKernel` is a state machine (`open` / `update` / `finish`) and a bare
+    function pointer cannot carry state.
 
     Mojo has no dynamic dispatch, so the indirection is not avoidable here —
     but it is paid once per morsel, not once per row, and the comptime lane
     never constructs one.
+    """
+
+    var dtype: DynType
+    """What the produced column will be typed as.
+
+    Bare `dtype`, because there is no *input* dtype in this struct for a prefix
+    to disambiguate against — the inputs were consumed by `of`.
     """
 
     var _boxed: ArcPointer[NoneType]
@@ -129,11 +138,13 @@ struct DynAggKernel(Copyable, Movable):
         return rebind[ArcPointer[Agg]](ptr)[].finish()
 
     @staticmethod
-    def open[Agg: AggKernel](in_dtypes: List[DynType]) raises -> DynAggKernel:
-        """Open `Agg` over these dtypes and erase it. The only thing that
-        builds one, so the pairing of box and trampolines cannot be wrong."""
+    def of[Agg: AggKernel](in_dtypes: List[DynType]) raises -> Self:
+        """Both halves of a resolution, off **one** `AggKernel`. The only thing
+        that builds one, so neither the box/trampoline pairing nor the
+        dtype/implementation pairing can be wrong."""
         var ptr = ArcPointer[Agg](Agg.open(in_dtypes))
-        return DynAggKernel(
+        return Self(
+            Agg.dtype(in_dtypes),
             rebind[ArcPointer[NoneType]](ptr^),
             Self._update_tramp[Agg],
             Self._finish_tramp[Agg],
@@ -141,10 +152,12 @@ struct DynAggKernel(Copyable, Movable):
 
     def __init__(
         out self,
+        var dtype: DynType,
         var boxed: ArcPointer[NoneType],
         update: def(ArcPointer[NoneType], Groups, List[DynArray]) thin raises,
         finish: def(ArcPointer[NoneType]) thin raises -> DynArray,
     ):
+        self.dtype = dtype^
         self._boxed = boxed^
         self._update = update
         self._finish = finish
@@ -154,45 +167,6 @@ struct DynAggKernel(Copyable, Movable):
 
     def finish(mut self) raises -> DynArray:
         return self._finish(self._boxed)
-
-
-struct ResolvedAggregate(Copyable, Movable):
-    """What a named aggregate becomes once its input types are known.
-
-    A named pair rather than a `Tuple`, for the reason `Groups` and `JoinIndex`
-    are named types: two fields that must agree with each other should not be
-    positional. Here the agreement is load-bearing — `dtype` reaches the
-    output schema and `fold` produces the column, and a mismatch is a `Variant`
-    misaccess at emit rather than a raise.
-    """
-
-    var dtype: DynType
-    """What the produced column will be typed as.
-
-    Bare `dtype`, because there is no *input* dtype in this struct for a prefix
-    to disambiguate against — the inputs were consumed by `resolve`.
-    """
-
-    var kernel: DynAggKernel
-    """The implementation, already open over the input dtypes. Carries no
-    identity — an erased state cannot be asked which aggregate it is — which is
-    why `of` is the only thing that builds one."""
-
-    def __init__(out self, var dtype: DynType, var kernel: DynAggKernel):
-        self.dtype = dtype^
-        self.kernel = kernel^
-
-    @staticmethod
-    def of[Agg: AggKernel](in_dtypes: List[DynType]) raises -> Self:
-        """Both halves of a resolution, off **one** `AggKernel`.
-
-        This is what makes the dtype and the implementation unable to
-        disagree: naming `Agg` once produces both, so there is no second table
-        to keep in step. A static constructor rather than a free
-        `_resolved[Agg]` helper — same instantiation count, but it reads as
-        construction instead of as a loose generic beside the type it builds.
-        """
-        return Self(Agg.dtype(in_dtypes), DynAggKernel.open[Agg](in_dtypes))
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +410,10 @@ struct RuntimeAggregate(Value):
             return DistinctCount[True].empty()
         elif self._name == COUNT:
             return ValidCount.empty()
-        return Fold[SumKernel, Int64Type].empty()
+        # Every remaining aggregate declines: `sum`, `mean`, the extrema and
+        # the dispersions all answer NULL, and their *dtype* is known only to
+        # the plan's schema, so `GroupByOperator` fills the slot.
+        return None
 
     # -- Value --------------------------------------------------------------
 
@@ -499,7 +476,7 @@ struct RuntimeAggregateOperator(Operator):
 
     Erased in three places, all forced by the lane rather than chosen: the
     operands are `DynOperator` because a `RuntimeValue` subtree has no type to
-    keep, the kernel is a `DynAggKernel` because the name is not known until
+    keep, the kernel is a `ResolvedAggregate` because the name is not known until
     run time, and the inputs' dtypes are not known until a morsel arrives.
     `ColumnAggregateOperator` in `comptime/` is the same machine with all three
     known statically, and shares no code with this on purpose: erasure is the
@@ -515,7 +492,7 @@ struct RuntimeAggregateOperator(Operator):
     comptime Out = Datum
 
     var _inputs: List[DynOperator]
-    var _kernel: Optional[DynAggKernel]
+    var _kernel: Optional[ResolvedAggregate]
     """`None` until the first morsel: resolving the name needs the inputs'
     real dtypes, and a `RuntimeValue` operand has none until a schema is in
     hand."""
@@ -525,7 +502,6 @@ struct RuntimeAggregateOperator(Operator):
 
     var _empty: Optional[DynArray]
     var _scatters: Bool
-    var _rows: Int
     var _emitted: Bool
 
     def __init__(
@@ -539,7 +515,6 @@ struct RuntimeAggregateOperator(Operator):
         self._empty = node.empty()
         self._node = node^
         self._scatters = scatters
-        self._rows = 0
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -561,11 +536,7 @@ struct RuntimeAggregateOperator(Operator):
             var in_dtypes = List[DynType](capacity=len(columns))
             for i in range(len(columns)):
                 in_dtypes.append(columns[i].dtype())
-            # `.copy()` rather than a move: a field cannot be moved out of a
-            # struct, and the copy shares the same `ArcPointer` box, so it is
-            # the same state either way.
-            self._kernel = self._node.resolve(in_dtypes).kernel.copy()
-        self._rows += n
+            self._kernel = self._node.resolve(in_dtypes)
         var groups = morsel.groups.copy() if self._scatters else Groups.single(
             n
         )

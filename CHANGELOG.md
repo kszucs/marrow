@@ -98,6 +98,28 @@
 
 ### Refactors
 
+- **The aggregate layer, after a three-way audit.** `AggKernel` drops from six
+  methods plus two always-raising defaults plus a `comptime mergeable` flag to
+  six methods: `partials`/`merge` moved to `trait Mergeable(AggKernel)`, so the
+  three conformers that cannot honour them no longer inherit them.
+  `FoldKernel.reduce`'s default body is gone (all six kernels override it, and
+  its docstring's claim that "`mean`/`count` reduce here too" was false), which
+  also removes `FoldKernel`'s only forward reference to `AggState`.
+  `OrderedAgg` gated nothing and `IntegralAgg` had zero conformers; both
+  deleted.
+
+  In the runtime lane, `ResolvedAggregate` and `DynAggKernel` collapse into
+  one type — four types to three — with `of[Agg]` still the sole constructor,
+  so the dtype and the implementation still cannot disagree.
+  `RuntimeAggregateOperator._rows` was written, incremented and never read.
+  `RuntimeAggregate.empty()` returned `Fold[SumKernel, Int64Type].empty()`, an
+  arbitrary kernel named only to spell `None`, and was a third table over the
+  aggregate vocabulary that already disagreed with `resolve` for
+  `variance`/`stddev`; it now returns `None` outright.
+
+  Both `expr2` size gates are byte-identical and still link zero runtime-lane
+  symbols.
+
 - **`Fold` is typed, and no kernel erases anything.** `Fold[K]` resolved a
   runtime dtype on every call, so once it had to hold state across morsels that
   state could not be a typed field and went behind an `ArcPointer` with two
