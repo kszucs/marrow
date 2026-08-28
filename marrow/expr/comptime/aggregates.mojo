@@ -302,8 +302,6 @@ struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](
     so a fold that answered `Some` every time would make
     `while True: drain()` spin forever."""
 
-    comptime Out = Datum
-
     def __init__(out self, var input: Self.A, var bindings: Bindings):
         self._input = input^
         self._bindings = bindings^
@@ -482,8 +480,6 @@ struct ColumnAggregateOperator[Agg: AggKernel, A: ComptimeValue](Operator):
     through its own `EvalOperator[A]`, so `min(upper(s))` still compiles
     `upper(s)` to one loop even though `min` over a string cannot fuse.
     """
-
-    comptime Out = Datum
 
     var _input: EvalOperator[Self.A]
     """The operand's own operator, typed. A `DynOperator` here would box a

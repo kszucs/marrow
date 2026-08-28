@@ -489,8 +489,6 @@ struct RuntimeAggregateOperator(Operator):
     it arrives.
     """
 
-    comptime Out = Datum
-
     var _inputs: List[DynOperator]
     var _kernel: Optional[ResolvedAggregate]
     """`None` until the first morsel: resolving the name needs the inputs'

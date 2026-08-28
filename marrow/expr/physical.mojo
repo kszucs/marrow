@@ -158,13 +158,17 @@ trait Operator(Deinitable, Movable):
     Two methods, and that is the whole physical contract. Streaming and
     blocking operators differ only in *when* they answer `Some`.
 
-    `Out` is an **associated type** rather than a fixed `RecordBatch`, because
-    the two things this trait must cover do not produce the same thing: a
-    relational stage produces a batch, a *value*'s stage produces a column.
-    Fixing `Out = RecordBatch` would force every value to wrap its column in a
-    one-column `RecordBatch` — allocating a `Schema` per value per batch — only
+    Both answer a `Datum`, which is what lets one trait cover the two things
+    that produce different shapes: a relational stage produces a batch, a
+    *value*'s stage produces a column, and `Datum` holds either. Fixing the
+    output at `RecordBatch` instead would force every value to wrap its column
+    in a one-column batch — allocating a `Schema` per value per batch — only
     for `ProjectOperator` to unwrap N of them and reassemble one. That is a
     real runtime cost paid for a nominal unification.
+
+    This was once an associated `Out`, and three operators still declared
+    `comptime Out = Datum` long after the trait stopped requiring it: nothing
+    declared it, nothing constrained it, and nothing ever read it.
     """
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -201,12 +205,11 @@ trait Operator(Deinitable, Movable):
 
 
 struct DynOperator(Movable):
-    """An `Operator` of any stage, erased — **one box, parameterised on `Out`**.
+    """An `Operator` of any stage, erased — **one box for both chains**.
 
-    `DynOperator` carries the relational chain and
-    `DynOperator` carries a value's, but they are two instantiations of
-    one definition rather than two hand-written boxes, so the erasure surface
-    stays single.
+    The relational chain and a value's chain go through the same box rather
+    than two hand-written ones, because both stages answer a `Datum`, so the
+    erasure surface stays single.
 
     Move-only: an operator owns mutable state, so copying one would fork an
     execution mid-stream. `DynRelation` copies freely for the opposite reason —
