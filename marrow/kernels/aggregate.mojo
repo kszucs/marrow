@@ -36,6 +36,7 @@ from ..arrays import (
     Int64Array,
 )
 from ..builders import (
+    Float64Builder,
     PrimitiveBuilder,
     DynBuilder,
     Int64Builder,
@@ -1318,6 +1319,134 @@ struct Fold[K: FoldKernel](Foldable):
                 in_dtype.dispatch_temporal(temporal)
             else:
                 raise Self.error(t"is not defined for {in_dtype} columns")
+
+
+struct Dispersion[ddof: Int, root: Bool](AggKernel):
+    """`variance` / `stddev` — the second central moment, optionally rooted.
+
+    **The worked example of an aggregate that is a fold but not a `Fold`.**
+    Welford's recurrence is a textbook fold, yet its accumulator is a *triple*
+    — running count, running mean, and the sum of squared deviations `M2` —
+    and `AggState[K, V]` holds exactly one accumulator column plus one count
+    column. So this cannot be a `FoldKernel`, does not conform to `Foldable`,
+    and an `Aggregate` over it never fuses. `Fold` means *scalar* fold; the
+    composite ones are siblings.
+
+    `ddof` is the delta degrees of freedom: the divisor is `n - ddof`, so
+    `ddof=0` is the population variance and `ddof=1` the sample variance.
+    Zero is the default because it is Arrow's — `VarianceOptions(int ddof = 0)`
+    in `arrow/compute/api_aggregate.h` — and therefore PyArrow's.
+
+    Welford's online form rather than the naive `E[x^2] - E[x]^2`: the naive
+    one subtracts two large nearly-equal numbers and loses every significant
+    digit when the mean is large relative to the spread, reporting a small
+    negative variance for data that plainly has none.
+
+    Nulls are skipped. A slot with `n - ddof <= 0` yields null, which is what
+    makes `variance` of one value answer `0.0` at `ddof=0` and null at
+    `ddof=1` — both checked against PyArrow.
+
+    **Not mergeable, though Welford famously is.** The parallel combination of
+    two `(n, mean, M2)` triples is standard, but `partials`/`merge` carry one
+    accumulator column plus counts, and a triple does not fit. The obstacle is
+    the shape of that contract, not the mathematics.
+    """
+
+    comptime name = "stddev" if Self.root else "variance"
+
+    @staticmethod
+    def dtype(inputs: List[DynType]) raises -> DynType:
+        if len(inputs) != 1:
+            raise Self.error(t"takes exactly one input, got {len(inputs)}")
+        ref in_dtype = inputs[0]
+        if not in_dtype.is_numeric():
+            raise Self.error(
+                t"needs arithmetic, so it is not defined for"
+                t" {in_dtype} columns"
+            )
+        # A dispersion is a real number whatever the input's width, and a
+        # rooted one is not even in the input's units squared.
+        return DynType(float64)
+
+    @staticmethod
+    def grouped(groups: Groups, inputs: List[DynArray]) raises -> DynArray:
+        var dtypes = List[DynType]()
+        for i in range(len(inputs)):
+            dtypes.append(inputs[i].dtype())
+        _ = Self.dtype(dtypes)  # arity + domain gate
+
+        def numeric[V: NumericType](d: V) raises {imm} -> DynArray:
+            return Self._welford[V](groups, inputs[0])
+
+        return inputs[0].dtype().dispatch_numeric(numeric)
+
+    @staticmethod
+    def empty() raises -> Optional[DynArray]:
+        # The dispersion of nothing is undefined, and unlike an extremum this
+        # can say so without a schema: the output dtype is float64 regardless
+        # of what was aggregated.
+        return Float64Scalar(None, float64).repeat(1).to_dyn()
+
+    @always_inline
+    @staticmethod
+    def _absorb(
+        mut n: List[Float64],
+        mut mean: List[Float64],
+        mut m2: List[Float64],
+        g: Int,
+        x: Float64,
+    ):
+        """One Welford step against slot `g`."""
+        n[g] += 1.0
+        var delta = x - mean[g]
+        mean[g] += delta / n[g]
+        m2[g] += delta * (x - mean[g])
+
+    @staticmethod
+    def _welford[
+        V: NumericType
+    ](groups: Groups, input: DynArray) raises -> DynArray:
+        var values = input.as_primitive[V]().copy()
+        var single = groups.is_single()
+        var slots = 1 if single else groups.num_groups
+        var n = List[Float64](length=slots, fill=0.0)
+        var mean = List[Float64](length=slots, fill=0.0)
+        var m2 = List[Float64](length=slots, fill=0.0)
+        var has_null = values.null_count() > 0
+        var vals = values.values()
+
+        # Two loops rather than one with a per-row branch on an invariant:
+        # `groups.is_single()` holds no ids at all, so the grouped loop would
+        # not execute and would answer `[null]` for the whole input.
+        if single:
+            for i in range(len(values)):
+                if has_null and not values.is_valid(i):
+                    continue
+                Self._absorb(
+                    n, mean, m2, 0, Float64(vals[i].cast[DType.float64]())
+                )
+        else:
+            var gids = groups.ids.values()
+            for i in range(len(groups.ids)):
+                if has_null and not values.is_valid(i):
+                    continue
+                Self._absorb(
+                    n,
+                    mean,
+                    m2,
+                    Int(gids[i]),
+                    Float64(vals[i].cast[DType.float64]()),
+                )
+
+        var out = Float64Builder(slots)
+        for g in range(slots):
+            var divisor = n[g] - Float64(Self.ddof)
+            if divisor <= 0.0:
+                out.append_null()
+            else:
+                var v = m2[g] / divisor
+                out.append(math.sqrt(v) if Self.root else v)
+        return out.finish().to_dyn()
 
 
 struct StringExtremum[Op: MinMaxOp](AggKernel):

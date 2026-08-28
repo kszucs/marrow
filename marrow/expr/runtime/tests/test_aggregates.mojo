@@ -126,3 +126,44 @@ def test_named_aggregate_covers_the_folds_the_comptime_lane_fuses() raises:
     assert_equal(out.columns[1].as_float64()[0].value(), 1.4)
     assert_true(out.columns[2].as_int64() == array([5], int64))
     assert_true(plan.schema() == out.schema)
+
+
+def test_named_variance_and_stddev_reach_the_composite_accumulator() raises:
+    """`variance` is the first aggregate reachable by name whose state is not
+    a scalar — Welford's (count, mean, M2). Nothing about the runtime lane
+    changes for it: a name, one `AggKernel`, one materialised column.
+
+    Group column `g` is [1,1,1,2,2]: population variance 0.24, stddev 0.4899.
+    """
+    var plan = table(_batch()).aggregate(
+        [
+            col("g").variance().alias("var_g"),
+            col("g").stddev().alias("sd_g"),
+        ],
+        List[DynValue](),
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)
+    assert_true(abs(out.columns[0].as_float64()[0].value() - 0.24) < 1e-9)
+    assert_true(
+        abs(out.columns[1].as_float64()[0].value() - 0.4898979485566356) < 1e-9
+    )
+    assert_true(plan.schema() == out.schema)
+
+
+def test_named_aggregate_vocabulary_all_resolves() raises:
+    """The two tables must agree: every name `__init__` accepts must be one
+    `resolve` can serve.
+
+    They are separate — a string list and a ladder that binds types — so
+    nothing but this case connects them. It exists because they *did* drift:
+    `variance` and `stddev` reached `resolve` one commit before they reached
+    the accept list, and every query naming them raised "unknown aggregate"
+    from the constructor.
+    """
+    var dtypes = List[DynType](capacity=1)
+    dtypes.append(DynType(int64))
+    for ref name in RuntimeAggregate.vocabulary():
+        var node = RuntimeAggregate(DynValue(column("g")), name.copy())
+        # Raises if the ladder has no arm for it; int64 is in every domain.
+        _ = node.resolve(dtypes)

@@ -8,6 +8,41 @@
 > findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
 > which indexes all twenty.
 
+### Features
+
+- **`variance` and `stddev`, and the first aggregate that is a fold but not a
+  `Fold`.** `Dispersion[ddof, root]` is a new `AggKernel` alongside `Fold`,
+  `StringExtremum`, `ValidCount` and `DistinctCount`. Welford's recurrence *is*
+  a fold, but its accumulator is a triple — count, mean, `M2` — where
+  `AggState` holds one accumulator column plus one count. So it is not a
+  `FoldKernel`, does not conform to `Foldable`, and `Aggregate.fuses` answers
+  False for it: `Fold` means *scalar* fold, and the composite ones are
+  siblings. Its operand still fuses, so `(col("v", int64) * lit(2, int64))
+  .variance()` compiles the multiply into one loop.
+
+  `ddof` is a comptime parameter, so `col("v", int64).variance()` is the
+  population form and `.variance[1]()` the sample one — two types, no runtime
+  option threaded anywhere. Zero is the default because it is Arrow's
+  (`VarianceOptions(int ddof = 0)`). Nulls are skipped and a slot with
+  `n - ddof <= 0` is null, so the variance of one value is `0.0` at `ddof=0`
+  and null at `ddof=1`; every expectation was read off PyArrow.
+
+  Welford rather than `E[x^2] - E[x]^2`, which subtracts two nearly-equal
+  large numbers and returns garbage — often a small *negative* variance. There
+  is a regression test over values near 1e9 that the naive form fails.
+
+  Not mergeable, and that is a finding rather than an oversight: the parallel
+  combination of two `(n, mean, M2)` triples is standard, but `partials` /
+  `merge` carry one accumulator column plus counts and a triple does not fit.
+  The obstacle is the shape of that contract, not the mathematics.
+
+  Reachable by name too (`col("v").variance()`), which exposed a real
+  two-table hazard: `RuntimeAggregate.__init__` validated against its own list
+  while `resolve` bound types, and the names reached `resolve` first, so every
+  query naming them raised "unknown aggregate" from the constructor. The list
+  is now `RuntimeAggregate.vocabulary()`, and a test walks it and resolves each
+  entry so the two sides cannot drift again silently.
+
 ### Refactors
 
 - **`marrow/expr` — one `Aggregate` node instead of two.** `FusedAggregate` and

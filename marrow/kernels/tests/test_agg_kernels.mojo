@@ -16,8 +16,9 @@ from ...builders import (
     TimestampBuilder,
     array,
 )
-from ...dtypes import DynType, int32, int64, microsecond, timestamp
+from ...dtypes import DynType, float64, int32, int64, microsecond, timestamp
 from ..aggregate import (
+    Dispersion,
     DistinctCount,
     MaxKernel,
     MaxOp,
@@ -300,3 +301,113 @@ def test_agg_over_no_input_only_the_counts_answer() raises:
     assert_true(counted.value().as_int64() == array([0], int64))
     assert_true(not StringExtremum[MinOp].empty())
     assert_true(not Fold[MaxKernel].empty())
+
+
+# ---------------------------------------------------------------------------
+# Dispersion — variance / stddev, the composite-accumulator aggregate
+#
+# Every expectation here was read off PyArrow (`pc.variance` / `pc.stddev`),
+# which is where the `n - ddof <= 0 -> null` rule and the `ddof=0` default come
+# from. Comparisons are tolerance-based: Welford's recurrence and Arrow's
+# implementation agree to floating point, not bit-for-bit.
+# ---------------------------------------------------------------------------
+def _close(got: Float64, want: Float64) -> Bool:
+    return abs(got - want) < 1e-9
+
+
+def test_agg_variance_one_slot_population() raises:
+    """`pc.variance([1,2,3,4])` is 1.25 at the default ddof=0."""
+    var out = Dispersion[0, False].grouped(
+        Groups.single(4), _one(array([1, 2, 3, 4], int64).to_dyn())
+    )
+    assert_equal(out.dtype(), DynType(float64))
+    assert_equal(len(out), 1)
+    assert_true(_close(out.as_float64()[0].value(), 1.25))
+
+
+def test_agg_variance_one_slot_sample() raises:
+    """`pc.variance([1,2,3,4], ddof=1)` is 5/3 — a different *type*, not a
+    different argument: `Dispersion[1, False]` is its own instantiation."""
+    var out = Dispersion[1, False].grouped(
+        Groups.single(4), _one(array([1, 2, 3, 4], int64).to_dyn())
+    )
+    assert_true(_close(out.as_float64()[0].value(), 5.0 / 3.0))
+
+
+def test_agg_stddev_is_the_root_of_the_variance() raises:
+    var out = Dispersion[0, True].grouped(
+        Groups.single(4), _one(array([1, 2, 3, 4], int64).to_dyn())
+    )
+    assert_true(_close(out.as_float64()[0].value(), 1.118033988749895))
+
+
+def test_agg_variance_skips_nulls() raises:
+    """`pc.variance([1, None, 3])` is 1.0 — the null is not a zero, and it is
+    not counted in `n` either."""
+    var values: List[Optional[Int]] = [1, None, 3]
+    var out = Dispersion[0, False].grouped(
+        Groups.single(3), _one(array(values, int64).to_dyn())
+    )
+    assert_true(_close(out.as_float64()[0].value(), 1.0))
+
+
+def test_agg_variance_of_one_value_is_zero_but_null_when_sampled() raises:
+    """The `n - ddof <= 0` rule, and the case that makes `ddof` visible:
+    PyArrow answers 0.0 at ddof=0 and None at ddof=1."""
+    var col = array([5], int64).to_dyn()
+    var pop = Dispersion[0, False].grouped(Groups.single(1), _one(col.copy()))
+    assert_true(_close(pop.as_float64()[0].value(), 0.0))
+
+    var sample = Dispersion[1, False].grouped(Groups.single(1), _one(col^))
+    assert_true(sample.is_null(0))
+
+
+def test_agg_variance_of_an_all_null_slot_is_null() raises:
+    var values: List[Optional[Int]] = [None, None]
+    var out = Dispersion[0, False].grouped(
+        Groups.single(2), _one(array(values, int64).to_dyn())
+    )
+    assert_true(out.is_null(0))
+
+
+def test_agg_variance_grouped() raises:
+    """The hazard this file exists for: a per-group body over `Groups.single`
+    would answer `[null]`. Group 0 is [1,3] and group 1 is [10,20,30]."""
+    var ids: List[Optional[Int]] = [0, 1, 0, 1, 1]
+    var col = array([1, 10, 3, 20, 30], int64).to_dyn()
+    var out = Dispersion[0, False].grouped(Groups(_ids(ids), 2), _one(col^))
+    assert_equal(len(out), 2)
+    assert_true(_close(out.as_float64()[0].value(), 1.0))
+    var third = out.as_float64()[1].value()
+    assert_true(_close(third, 200.0 / 3.0))
+
+
+def test_agg_variance_grouped_slot_with_one_row_is_null_when_sampled() raises:
+    var ids: List[Optional[Int]] = [0, 1, 1]
+    var col = array([7, 2, 4], int64).to_dyn()
+    var out = Dispersion[1, False].grouped(Groups(_ids(ids), 2), _one(col^))
+    assert_true(out.is_null(0), "one row, ddof=1 -> no answer")
+    assert_true(_close(out.as_float64()[1].value(), 2.0))
+
+
+def test_agg_variance_over_no_input_is_null() raises:
+    """Unlike an extremum, this can answer without a schema: the output dtype
+    is float64 whatever was aggregated."""
+    var answer = Dispersion[0, False].empty()
+    assert_true(Bool(answer))
+    assert_true(answer.value().is_null(0))
+
+
+def test_agg_variance_is_numerically_stable() raises:
+    """The reason for Welford rather than `E[x^2] - E[x]^2`.
+
+    These four values differ by 1 around 1e9, so the naive form subtracts two
+    numbers that agree to ~19 significant digits and returns garbage — often a
+    small *negative* variance. The true population variance is 1.25.
+    """
+    var big = 1_000_000_000
+    var col = array([big + 1, big + 2, big + 3, big + 4], int64).to_dyn()
+    var out = Dispersion[0, False].grouped(Groups.single(4), _one(col^))
+    var got = out.as_float64()[0].value()
+    assert_true(got >= 0.0, "a variance is never negative")
+    assert_true(_close(got, 1.25))

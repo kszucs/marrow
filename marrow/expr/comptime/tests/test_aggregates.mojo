@@ -19,6 +19,7 @@ from ....arrays import Int32Array
 from ....builders import array, arange
 from ....dtypes import (
     DynType,
+    float64,
     Int32Type,
     Int64Type,
     int32,
@@ -483,3 +484,86 @@ def test_column_agg_min_over_a_fused_operand() raises:
         [Upper(col("s", string)).min().alias("lo")], List[DynValue]()
     )
     assert_true(plan.execute().columns[0].as_string() == array(["A"]))
+
+
+# ---------------------------------------------------------------------------
+# variance / stddev — a fold that is not a `Fold`
+#
+# Welford's accumulator is a triple (count, mean, M2) where `AggState` holds one
+# accumulator column plus one count, so `Dispersion` is not a `FoldKernel` and
+# `Aggregate.fuses` answers False for it. These cases pin the semantics against
+# PyArrow and pin the *non*-fusion, since that is the property the naming turns
+# on.
+# ---------------------------------------------------------------------------
+def _spread() raises -> RecordBatch:
+    """Group 1 holds [1, 3] and group 2 holds [10, 20, 30]."""
+    return record_batch(
+        [
+            array([1, 1, 2, 2, 2], int64).to_dyn(),
+            array([1, 3, 10, 20, 30], int64).to_dyn(),
+        ],
+        names=["g", "v"],
+    )
+
+
+def test_variance_does_not_fuse_but_its_operand_does() raises:
+    """The whole reason `Dispersion` is a sibling of `Fold` rather than a
+    `FoldKernel`. `fuses` is a comptime fact, so this is a compile-time
+    assertion dressed as a test."""
+    comptime Var = type_of(col("v", int64).variance())
+    comptime Summed = type_of(col("v", int64).sum())
+    assert_true(not Var.fuses, "a composite accumulator cannot fuse")
+    assert_true(Summed.fuses, "a scalar fold still does")
+
+
+def test_variance_keyless_is_the_population_form() raises:
+    """`pc.variance([1,3,10,20,30])` is 118.16 at the default ddof=0."""
+    var plan = table(_spread()).aggregate(
+        [col("v", int64).variance()], List[DynValue]()
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 1)
+    assert_true(plan.schema().fields[0].dtype == DynType(float64))
+    assert_true(abs(out.columns[0].as_float64()[0].value() - 118.16) < 1e-9)
+    assert_true(plan.schema() == out.schema)
+
+
+def test_variance_ddof_is_a_comptime_parameter() raises:
+    """`variance[1]()` is the sample form — a different *type*, resolved where
+    the query is written, so no runtime option is threaded anywhere."""
+    var plan = table(_spread()).aggregate(
+        [col("v", int64).variance[1]()], List[DynValue]()
+    )
+    var got = plan.execute().columns[0].as_float64()[0].value()
+    assert_true(abs(got - 147.7) < 1e-9)
+
+
+def test_stddev_is_the_root_of_the_variance_expression() raises:
+    var plan = table(_spread()).aggregate(
+        [col("v", int64).stddev().alias("sd")], List[DynValue]()
+    )
+    var got = plan.execute().columns[0].as_float64()[0].value()
+    assert_true(abs(got - 10.870142593360953) < 1e-9)
+
+
+def test_variance_grouped() raises:
+    """Group 1 is [1,3] -> 1.0; group 2 is [10,20,30] -> 200/3."""
+    var plan = table(_spread()).aggregate(
+        [col("v", int64).variance().alias("var_v")], [col("g", int64)]
+    )
+    var out = plan.execute()
+    assert_equal(out.num_rows(), 2)
+    ref got = out.columns[1].as_float64()
+    assert_true(abs(got[0].value() - 1.0) < 1e-9)
+    assert_true(abs(got[1].value() - 200.0 / 3.0) < 1e-9)
+
+
+def test_variance_of_a_fused_subtree() raises:
+    """Only the dispersion materialises: `v * 2` is still one loop, and
+    scaling by 2 scales the variance by 4."""
+    var plan = table(_spread()).aggregate(
+        [(col("v", int64) * lit(2, int64)).variance().alias("v4")],
+        List[DynValue](),
+    )
+    var got = plan.execute().columns[0].as_float64()[0].value()
+    assert_true(abs(got - 118.16 * 4.0) < 1e-9)

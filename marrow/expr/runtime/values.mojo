@@ -321,6 +321,19 @@ struct RuntimeValue(Evaluable, Movable, Value):
         are excluded rather than counted as zero."""
         return RuntimeAggregate(DynValue(self), String("mean"))
 
+    def variance(self) raises -> RuntimeAggregate:
+        """`VAR_POP(self)` — the population variance, Arrow's default.
+
+        The sample form is `Dispersion[1, False]` in the comptime lane. It is
+        absent here only because no name is bound to it; adding `var_samp`
+        costs one string and one arm of `resolve`.
+        """
+        return RuntimeAggregate(DynValue(self), String("variance"))
+
+    def stddev(self) raises -> RuntimeAggregate:
+        """`STDDEV_POP(self)` — the square root of `variance()`."""
+        return RuntimeAggregate(DynValue(self), String("stddev"))
+
     def min(self) raises -> RuntimeAggregate:
         """`MIN(self)`. Keeps the input's dtype — a timestamp's unit and
         timezone included; lexicographic over a string column."""

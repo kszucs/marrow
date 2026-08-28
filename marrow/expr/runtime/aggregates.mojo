@@ -49,6 +49,7 @@ from ...dtypes import DynType, int64
 from ...kernels.aggregate import (
     AggKernel,
     AggregateFn,
+    Dispersion,
     DistinctCount,
     MaxKernel,
     MaxOp,
@@ -78,6 +79,8 @@ comptime MEAN = "mean"
 comptime COUNT = "count"
 comptime COUNT_DISTINCT = "count_distinct"
 comptime APPROX_COUNT_DISTINCT = "approx_count_distinct"
+comptime VARIANCE = "variance"
+comptime STDDEV = "stddev"
 comptime MIN = "min"
 comptime MAX = "max"
 
@@ -176,20 +179,40 @@ struct RuntimeAggregate(Evaluable, Value):
         self._alias = display^
 
     @staticmethod
+    def vocabulary() -> List[String]:
+        """Every aggregate name this lane serves.
+
+        Public because it is the *only* thing that can keep `_checked` and
+        `resolve` in step. They are two tables over one vocabulary, and the
+        hazard is real rather than theoretical: `variance` and `stddev` were
+        added to `resolve` first, and every query naming them raised "unknown
+        aggregate" from `__init__` before reaching it.
+
+        `resolve` cannot be derived from this list — its arms bind types, not
+        strings — so instead `test_named_aggregate_vocabulary_all_resolves`
+        walks this list and resolves each entry, which fails loudly the next
+        time one side gains a name the other lacks.
+        """
+        return [
+            SUM,
+            PRODUCT,
+            MEAN,
+            VARIANCE,
+            STDDEV,
+            COUNT,
+            COUNT_DISTINCT,
+            APPROX_COUNT_DISTINCT,
+            MIN,
+            MAX,
+        ]
+
+    @staticmethod
     def _checked(var name: String) raises -> String:
         """`name`, or a raise naming it. The only gate on the vocabulary."""
-        if not (
-            name == SUM
-            or name == PRODUCT
-            or name == MEAN
-            or name == COUNT
-            or name == COUNT_DISTINCT
-            or name == APPROX_COUNT_DISTINCT
-            or name == MIN
-            or name == MAX
-        ):
-            raise Error("unknown aggregate '", name, "'")
-        return name^
+        for ref known in Self.vocabulary():
+            if name == known:
+                return name^
+        raise Error("unknown aggregate '", name, "'")
 
     def resolve(self, in_dtypes: List[DynType]) raises -> ResolvedAggregate:
         """The one name x dtype ladder in the system.
@@ -224,6 +247,13 @@ struct RuntimeAggregate(Evaluable, Value):
             return ResolvedAggregate.of[Fold[ProductKernel]](in_dtypes)
         elif self._name == MEAN:
             return ResolvedAggregate.of[Fold[MeanKernel]](in_dtypes)
+        elif self._name == VARIANCE:
+            # `ddof=0` — the population form, Arrow's default. A sample
+            # variance is `Dispersion[1, False]`, which needs two more names
+            # here (`var_samp`, `stddev_samp`) and nothing else.
+            return ResolvedAggregate.of[Dispersion[0, False]](in_dtypes)
+        elif self._name == STDDEV:
+            return ResolvedAggregate.of[Dispersion[0, True]](in_dtypes)
         elif self._name == MIN or self._name == MAX:
             # The only place a *dtype* selects an implementation. A string
             # extremum is a bytewise scan and a fixed-width one is a grouped, and

@@ -58,6 +58,7 @@ from .boolean import And, Not, Or, Xor
 from .strings import StrEq, StrNe, StrLt, StrGt
 from ...kernels.aggregate import (
     CountKernel,
+    Dispersion,
     DistinctCount,
     MaxOp,
     MinOp,
@@ -476,6 +477,39 @@ trait NumericValue(PrimitiveValue):
     def max(self) -> Aggregate[Fold[MaxKernel], Self]:
         """`MAX(self)`."""
         return Aggregate[Fold[MaxKernel], Self](self.copy(), String("max"))
+
+    def variance[
+        ddof: Int = 0
+    ](self) -> Aggregate[Dispersion[ddof, False], Self]:
+        """`VAR_POP(self)` by default, `VAR_SAMP(self)` at `ddof=1`.
+
+        The divisor is `n - ddof` over the *non-null* values, so `ddof=0` is
+        the population variance and `ddof=1` the sample variance. Zero is the
+        default because it is Arrow's, and therefore PyArrow's.
+
+        **This does not fuse, and the reason is worth knowing.** Welford's
+        recurrence is a fold, but its accumulator is a triple — count, mean,
+        `M2` — where `AggState` holds one accumulator column plus one count.
+        So `Dispersion` is not a `FoldKernel`, does not conform to `Foldable`,
+        and `Aggregate.fuses` answers False. The operand still fuses:
+        `(col("a", int64) * 2).variance()` compiles the multiply into one loop
+        and only the dispersion materialises.
+        """
+        return Aggregate[Dispersion[ddof, False], Self](
+            self.copy(), String("variance")
+        )
+
+    def stddev[
+        ddof: Int = 0
+    ](self) -> Aggregate[Dispersion[ddof, True], Self]:
+        """`STDDEV_POP(self)` by default, `STDDEV_SAMP(self)` at `ddof=1`.
+
+        The square root of `variance[ddof]()`, computed from the same Welford
+        state rather than by aggregating twice.
+        """
+        return Aggregate[Dispersion[ddof, True], Self](
+            self.copy(), String("stddev")
+        )
 
     def count(self) -> Aggregate[Fold[CountKernel], Self]:
         """`COUNT(self)` — the *non-null* values of `self`, not the row count.
