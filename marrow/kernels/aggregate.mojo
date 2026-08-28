@@ -1108,10 +1108,43 @@ trait Foldable(AggKernel):
     aggregate is capable of fusing, without a second parallel hierarchy of
     nodes. A node holds an `AggKernel`; `comptime if conforms_to(Agg, Foldable)`
     is what decides whether it can hand `Agg.Lane` to the fused operator.
+
+    The three methods below are the **lane-facing** half of that: a fused
+    driver folds in registers and needs somewhere to put the result, which
+    `update(groups, inputs)` cannot express because it takes a materialised
+    column. They are forwarding one-liners onto `AggState`, and they exist so
+    the expression layer stops holding an `AggState[K, V]` field directly —
+    reaching past the kernel into its own state struct was the leak.
     """
 
     comptime Lane: FoldKernel
     """The lane algebra this aggregate folds with."""
+
+    comptime Acc: DType
+    """The accumulator's element dtype, for the SIMD the driver folds in."""
+
+    def grow(mut self, slots: Int) raises:
+        """Ensure `slots` per-group slots exist, seeded with the identity."""
+        ...
+
+    def scatter[
+        W: Int
+    ](
+        mut self,
+        groups: SIMD[DType.int32, W],
+        values: SIMD[Self.Acc, W],
+        valid: SIMD[DType.bool, W],
+        num_groups: Int,
+    ) raises:
+        """Fold `W` lanes into the groups their ids name."""
+        ...
+
+    def combine_at(
+        mut self, slot: Int, value: Scalar[Self.Acc], count: Int
+    ) raises:
+        """Fold an already-reduced register value into `slot`, crediting
+        `count` rows — the ungrouped path's once-per-morsel hand-off."""
+        ...
 
 
 struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Mergeable):
@@ -1137,6 +1170,7 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Mergeable):
 
     comptime name = Self.K.name
     comptime Lane = Self.K
+    comptime Acc = Self.K.AccType[Self.V].native
 
     var _state: AggState[Self.K, Self.V]
     var _slots: Int
@@ -1225,6 +1259,30 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Mergeable):
 
     def finish(mut self) raises -> DynArray:
         return self._state.finish(self._slots).to_dyn()
+
+    # -- Foldable: the lane-facing half, forwarded onto `AggState` -----------
+
+    def grow(mut self, slots: Int) raises:
+        self._slots = max(self._slots, slots)
+        self._state._grow(slots)
+
+    def scatter[
+        W: Int
+    ](
+        mut self,
+        groups: SIMD[DType.int32, W],
+        values: SIMD[Self.Acc, W],
+        valid: SIMD[DType.bool, W],
+        num_groups: Int,
+    ) raises:
+        self._slots = max(self._slots, num_groups)
+        self._state.accumulate[W](groups, values, valid, num_groups)
+
+    def combine_at(
+        mut self, slot: Int, value: Scalar[Self.Acc], count: Int
+    ) raises:
+        self._slots = max(self._slots, slot + 1)
+        self._state.combine_at(slot, value, count)
 
     @staticmethod
     def partials(

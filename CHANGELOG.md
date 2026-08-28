@@ -98,6 +98,24 @@
 
 ### Refactors
 
+- **One `AggregateOperator`, two ways of feeding one state.**
+  `FusedAggregateOperator` and `ColumnAggregateOperator` are one struct,
+  `AggregateOperator[Agg, A, G]`, with `comptime fuses` selecting the push
+  body. Both arms hold the same `Optional[Agg]`: the fused one reaches it
+  through `Foldable`'s new lane entry points (`grow` / `scatter` /
+  `combine_at`), the other through `AggKernel.update`.
+
+  The single state field is what makes the merge possible — a struct cannot
+  declare a field conditionally, and an earlier attempt that kept a separate
+  `AggState[K, A.Type]` field had to carry both field sets. Holding `Agg`
+  instead also stops the expression layer naming `AggState`, a kernel's own
+  state struct that it had been reaching into.
+
+  Sizes are neutral-to-better: `query_expr2_agg_fused` -0.019%,
+  `query_expr2_streaming` byte-identical, and a non-fusing comptime binary
+  -0.228%. `G` is pinned to `ScalarGrouping` on the non-fusing arm, verified by
+  that binary linking `ScalarGrouping` and zero `HashGrouping`.
+
 - **The aggregate layer, after a three-way audit.** `AggKernel` drops from six
   methods plus two always-raising defaults plus a `comptime mergeable` flag to
   six methods: `partials`/`merge` moved to `trait Mergeable(AggKernel)`, so the
