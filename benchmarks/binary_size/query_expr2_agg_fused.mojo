@@ -44,8 +44,11 @@ def main() raises:
     keys.append(DynValue(col("g", int64)))
 
     var aggs = List[DynValue]()
-    aggs.append(DynValue(Sum(col("a", int64), "total")))
-    aggs.append(DynValue(Min(col("b", int64), "smallest")))
+    # The fluent spelling CLAUDE.md mandates, and the only one that compiles:
+    # `Sum[A]` puts `A` under a projection (`Fold[SumKernel, A.Type]`), so `A`
+    # is not inferrable from a constructor argument. `col(...).sum()` names it.
+    aggs.append(DynValue(col("a", int64).sum().alias("total")))
+    aggs.append(DynValue(col("b", int64).min().alias("smallest")))
 
     var agg = Aggregate(DynRelation(InMemoryTable(batch^)), keys^, aggs^)
     print(DynRelation(agg^).execute())
