@@ -54,6 +54,7 @@ from ..dtypes import NumericType, StringLikeType, TemporalType
 from ..kernels.core import Groups, Kernel
 from ..kernels.aggregate import (
     AggKernel,
+    Mergeable,
     FoldKernel,
     Fold,
     StringExtremum,
@@ -306,7 +307,7 @@ struct AggFunc(Copyable, Movable, Writable):
         return AggFunc(
             func_name=String(A.name),
             out_dtype=A.dtype([value_dtype.copy()]),
-            is_mergeable=A.mergeable,
+            is_mergeable=conforms_to(A, Mergeable),
             grouped_fn=Self._grouped[A],
         )
 
@@ -370,7 +371,10 @@ struct AggFold(Copyable, Movable):
     ](in_dtype: DynType, groups: Groups, value: DynArray) raises -> Tuple[
         DynArray, Int64Array
     ]:
-        return A.partials(in_dtype, groups, [value.copy()])
+        comptime if conforms_to(A, Mergeable):
+            return A.partials(in_dtype, groups, [value.copy()])
+        else:
+            raise Error("aggregate has no mergeable partial state")
 
     @staticmethod
     def _merge[
@@ -382,7 +386,10 @@ struct AggFold(Copyable, Movable):
         cnts: List[Int64Array],
         num_groups: Int,
     ) raises -> DynArray:
-        return A.merge(in_dtype, remap, accs, cnts, num_groups)
+        comptime if conforms_to(A, Mergeable):
+            return A.merge(in_dtype, remap, accs, cnts, num_groups)
+        else:
+            raise Error("aggregate has no mergeable partial state")
 
     def __init__(
         out self,

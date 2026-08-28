@@ -40,7 +40,6 @@ from ..builders import (
     PrimitiveBuilder,
     DynBuilder,
     Int64Builder,
-    Int32Builder,
     BinaryLikeBuilder,
 )
 from ..dtypes import (
@@ -118,7 +117,7 @@ trait FoldKernel(Kernel):
     Bound on `PrimitiveType` at both ends, not `NumericType`: `min`/`max` keep
     the input's type, and that input may be a timestamp or a decimal. What a
     kernel *requires* of its input is stated separately, by the domain markers
-    (`OrderedAgg` / `ArithmeticAgg` / `IntegralAgg`) — one bound cannot say
+    (`ArithmeticAgg`) — one bound cannot say
     both "I can be read as a lane" and "I support addition"."""
 
     @staticmethod
@@ -128,14 +127,10 @@ trait FoldKernel(Kernel):
         Non-raising, so it runs at comptime; a violation is a build error naming
         the domain, not an `Error` at run time. No marker means "accepts
         anything" — that is `CountKernel`, which reads validity and never touches
-        a value, and `OrderedAgg`, which needs only a total order and gets one from
-        every fixed-width type.
+        a value, and `min`/`max`, which need only a total order and get one
+        from every fixed-width type.
         """
-        comptime if conforms_to(Self, IntegralAgg):
-            comptime assert conforms_to(
-                V, IntegerType
-            ), "this aggregate is defined for integer columns only"
-        elif conforms_to(Self, ArithmeticAgg):
+        comptime if conforms_to(Self, ArithmeticAgg):
             comptime assert conforms_to(V, NumericType), (
                 "this aggregate needs arithmetic, so it is defined for numeric"
                 " columns only -- not temporal, interval or decimal"
@@ -196,19 +191,8 @@ trait FoldKernel(Kernel):
         known at comptime, so the result is `PrimitiveScalar[Self.AccType[V]]`
         directly (no erased `DynScalar`, no downcast).
 
-        This general default works for *any* kernel — it drives one
-        `AggState[Self, V]` with every row in group 0 — so `mean`/`count` reduce
-        here too (`SELECT avg(col)`); `sum`/`min`/`max`/`product` override it
-        with the SIMD widened fast path."""
-        var n = len(array)
-        Self.check_domain[V]()
-        var gb = Int32Builder(n)
-        for _ in range(n):
-            gb.append(Scalar[int32.native](0))
-        var gids = gb.finish()
-        var state = AggState[Self, V](Self.acc_dtype[V](array.dtype))
-        state.update(gids, array, 1)
-        return state.finish(1)[0]
+        Abstract: every kernel answers it directly."""
+        ...
 
     @staticmethod
     def apply[
@@ -317,31 +301,10 @@ struct ProductOp(WideningOp):
 # by `FoldKernel.acc_dtype(input_dtype)` — the one place that knows whether the
 # accumulator keeps the input's dtype (`min`/`max`) or names its own
 # (`sum` -> int64/float64, `count` -> int64, `mean` -> float64).
-trait OrderedAgg(FoldKernel):
-    """Needs an ordering and nothing more — any fixed-width type will do.
-
-    `min`, `max`, and later `quantile` / `median`.
-    """
-
-    pass
-
-
 trait ArithmeticAgg(FoldKernel):
     """Needs addition or division, so numeric input only.
 
     `sum`, `product`, `mean`, and later `variance` / `stddev`.
-    """
-
-    pass
-
-
-trait IntegralAgg(ArithmeticAgg):
-    """Needs bit operations, so integers only — narrower than arithmetic.
-
-    Nothing conforms yet; `bitwise_and` / `_or` / `_xor` will. Declared with
-    the others because it is what shows the domains form a lattice rather than
-    a flag: a bitwise kernel accepts `int64` and rejects `float64`, which a
-    Bool could not express.
     """
 
     pass
@@ -452,7 +415,7 @@ struct MaxOp(MinMaxOp):
         return math.max(a, b)
 
 
-struct MinMax[Op: MinMaxOp](OrderedAgg):
+struct MinMax[Op: MinMaxOp](FoldKernel):
     """`min`/`max` as one kernel: the accumulator keeps the input type, the fold
     is `Op.combine`, and finalize is the identity. Previously two structs that
     differed only in `name`, `identity`, `combine`, and the `is_min` flag passed
@@ -1033,14 +996,6 @@ trait AggKernel(Deinitable, Kernel, Movable):
     on the next morsel.
     """
 
-    comptime mergeable: Bool = False
-    """Whether `partials` / `merge` are implemented — whether this aggregate can
-    run as independent per-thread folds that are combined afterwards.
-
-    Separate from the streaming trio, and not redundant with it. Streaming is
-    *sequential* accumulation into one state; this is *parallel* accumulation
-    into several. A sketch can stream and still not merge."""
-
     @staticmethod
     def dtype(inputs: List[DynType]) raises -> DynType:
         """The column this produces, from its inputs' dtypes alone.
@@ -1116,22 +1071,19 @@ trait AggKernel(Deinitable, Kernel, Movable):
         """
         return None
 
+
+trait Mergeable(AggKernel):
+    """An `AggKernel` whose per-group state can be built per thread and folded
+    afterwards. `Fold[K, V]` and `ValidCount` conform; a sketch and a bytewise
+    scan do not."""
+
     @staticmethod
     def partials(
         in_dtype: DynType, groups: Groups, inputs: List[DynArray]
     ) raises -> Tuple[DynArray, Int64Array]:
         """One thread's raw, *non-finalized* per-group accumulator plus its
-        valid counts, for a later `merge`.
-
-        `in_dtype` is passed rather than read off `inputs`, so that `merge` —
-        which only ever sees accumulators — can be handed the same value. A
-        widening fold loses the input type on the way out (`sum(int32)`
-        accumulates in int64), so the accumulator column cannot answer what it
-        was folded from.
-        """
-        raise Error(
-            "aggregate '", Self.name, "' has no mergeable partial state"
-        )
+        valid counts, for a later `merge`."""
+        ...
 
     @staticmethod
     def merge(
@@ -1142,9 +1094,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
         num_groups: Int,
     ) raises -> DynArray:
         """Fold every thread's partials at remapped group ids, then finalize."""
-        raise Error(
-            "aggregate '", Self.name, "' has no mergeable partial state"
-        )
+        ...
 
 
 trait Foldable(AggKernel):
@@ -1164,7 +1114,7 @@ trait Foldable(AggKernel):
     """The lane algebra this aggregate folds with."""
 
 
-struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
+struct Fold[K: FoldKernel, V: PrimitiveType](Foldable, Mergeable):
     """The aggregate expressible as a lane fold, over a column of type `V` —
     `sum`, `product`, `mean`, `min`, `max`, `count`.
 
@@ -1186,7 +1136,6 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
     """
 
     comptime name = Self.K.name
-    comptime mergeable = True
     comptime Lane = Self.K
 
     var _state: AggState[Self.K, Self.V]
@@ -1557,7 +1506,7 @@ struct StringExtremum[Op: MinMaxOp](AggKernel):
         return box.pop()
 
 
-struct ValidCount(AggKernel):
+struct ValidCount(Mergeable):
     """`COUNT(x)` — the *non-null* values of `x`, over a column of any type.
 
     A validity scan and nothing else, so it is defined for every dtype and
@@ -1586,7 +1535,6 @@ struct ValidCount(AggKernel):
     """
 
     comptime name = CountKernel.name
-    comptime mergeable = True
 
     var _counts: List[Int64]
     """One running count per slot. Grows with `groups.num_groups`; ids already

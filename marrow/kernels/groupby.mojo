@@ -33,7 +33,7 @@ from ..utils import RapidHash64
 from ..execution import ExecContext
 from .filter import Take, take
 from .concat import concat
-from .aggregate import AggKernel
+from .aggregate import AggKernel, Mergeable
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ struct OneAggregate[A: AggKernel](AggregateSet):
         return 1
 
     def mergeable(self) -> Bool:
-        return Self.A.mergeable
+        return conforms_to(Self.A, Mergeable)
 
     def grouped(
         self, column: Int, groups: Groups, values: DynArray
@@ -351,7 +351,10 @@ struct OneAggregate[A: AggKernel](AggregateSet):
     def partials(
         self, column: Int, groups: Groups, values: DynArray
     ) raises -> Tuple[DynArray, Int64Array]:
-        return Self.A.partials(self._in_dtype, groups, [values.copy()])
+        comptime if conforms_to(Self.A, Mergeable):
+            return Self.A.partials(self._in_dtype, groups, [values.copy()])
+        else:
+            raise Error("aggregate has no mergeable partial state")
 
     def merge(
         self,
@@ -361,7 +364,10 @@ struct OneAggregate[A: AggKernel](AggregateSet):
         cnts: List[Int64Array],
         num_groups: Int,
     ) raises -> DynArray:
-        return Self.A.merge(self._in_dtype, remap, accs, cnts, num_groups)
+        comptime if conforms_to(Self.A, Mergeable):
+            return Self.A.merge(self._in_dtype, remap, accs, cnts, num_groups)
+        else:
+            raise Error("aggregate has no mergeable partial state")
 
 
 struct ThreadPartials(Copyable, Movable):

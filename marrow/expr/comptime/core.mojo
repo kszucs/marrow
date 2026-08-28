@@ -214,7 +214,7 @@ trait PrimitiveValue(ComptimeValue):
     no members and exist so a node can require the *operations* it needs. A
     comparison binds on this trait and serves both; arithmetic binds on
     `NumericValue` and rejects dates at compile time. Same split as
-    `FoldKernel`'s `OrderedAgg` / `ArithmeticAgg`, for the same reason.
+    `FoldKernel`'s `ArithmeticAgg` marker, for the same reason.
     """
 
     comptime Type: PrimitiveType
