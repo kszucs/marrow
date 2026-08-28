@@ -259,7 +259,8 @@ def test_a_computed_key_is_named_by_position() raises:
     for the same `GROUP BY d`, giving one query two output schemas.
     """
     var plan = table(_keyed()).aggregate(
-        [col("a", int64).sum().alias("total")], [(col("g", int64) + col("a", int64))]
+        [col("a", int64).sum().alias("total")],
+        [(col("g", int64) + col("a", int64))],
     )
     assert_equal(plan.schema().fields[0].name, "key0")
 
@@ -291,9 +292,7 @@ def test_an_aggregate_folds_a_fused_subtree() raises:
     an already-computed array.
     """
     var plan = table(_batch()).aggregate(
-        [
-            (col("a", int64) + col("b", int64)).sum().alias("total")
-        ],
+        [(col("a", int64) + col("b", int64)).sum().alias("total")],
         List[DynValue](),
     )
     # a = [1, 2, None, 4], b = [10, 20, 30, 40] -> 11 + 22 + 44, the null row
@@ -335,9 +334,7 @@ def test_the_flush_cascade_feeds_the_stages_above() raises:
         .aggregate([col("a", int64).sum().alias("total")], [col("g", int64)])
         .project(
             ["doubled"],
-            [
-                (col("total", int64) + col("total", int64))
-            ],
+            [(col("total", int64) + col("total", int64))],
         )
     )
     var out = plan.execute()
@@ -550,3 +547,48 @@ def _right() raises -> RecordBatch:
         [array([2, 3, 4], int64).copy(), array([200, 300, 400], int64).copy()],
         names=["k", "rv"],
     )
+
+
+# ---------------------------------------------------------------------------
+# An aggregate is a `Value`, but not one every relation can take
+# ---------------------------------------------------------------------------
+def test_projecting_an_aggregate_raises_rather_than_aborting() raises:
+    """It used to **abort the process**, not raise.
+
+    An aggregate answers from `drain`, so its operator's `push` returns `None`
+    — and `ProjectOperator.push` called `.value()` on that. Under `ASSERT=all`
+    an abort takes down the whole runner, so this was one bad query away from
+    failing every case in a file. `Value.aggregates` is what lets `Project` say
+    no at plan time; the node used to conform to `Evaluable` and raise from an
+    `evaluate` that was never reached.
+    """
+    var raised = False
+    try:
+        _ = table(_batch()).project(["s"], [col("a", int64).sum()])
+    except e:
+        raised = True
+        assert_true("is an aggregate" in String(e))
+    assert_true(raised, "projecting an aggregate must raise")
+
+
+def test_filtering_on_an_aggregate_raises() raises:
+    """The same rule on the other verb, and it points at `HAVING`: filtering
+    an aggregate is legal *above* an `.aggregate()`, never beside it."""
+    var raised = False
+    try:
+        _ = table(_batch()).filter(col("a", int64).sum())
+    except e:
+        raised = True
+        assert_true("HAVING" in String(e))
+    assert_true(raised, "filtering on an aggregate must raise")
+
+
+def test_a_non_aggregate_value_is_still_projectable() raises:
+    """The gate reads `Value.aggregates`, so an ordinary fused subtree — which
+    is also `Shape.scalar` when it is a literal — is untouched."""
+    var out = (
+        table(_batch())
+        .project(["s"], [(col("a", int64) + col("b", int64))])
+        .execute()
+    )
+    assert_equal(out.num_rows(), 4)

@@ -32,7 +32,7 @@ from ...dtypes import DynType, NumericType
 from ...kernels.groupby import Grouping, HashGrouping, ScalarGrouping
 from std.sys.info import simd_width_of
 
-from ...arrays import StructArray, Int32Array
+from ...arrays import Int32Array, StructArray
 from ...kernels.aggregate import (
     FoldKernel,
     AggState,
@@ -65,7 +65,6 @@ from ..physical import (
     Datum,
     EvalOperator,
     DynOperator,
-    Evaluable,
     Morsel,
     Operator,
 )
@@ -73,7 +72,7 @@ from ..physical import (
 from .core import ComptimeValue, NumericValue
 
 
-struct Aggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
+struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
     """One aggregate over one operand — every aggregate, both ways of running.
 
     **Whether this fuses is computed, not declared.** `to_operator` asks two
@@ -122,6 +121,11 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
     rather than by raising), the mechanism is a comptime `kind` on
     `Analyzable`, not a parallel hierarchy.
     """
+
+    comptime aggregates = True
+    """It answers from `AggregateOperator.drain`, never per batch. `Project`
+    and `Filter` read this and raise, which is what makes
+    `project([col("a").sum()])` a plan-time error naming the mistake."""
 
     comptime fuses = conforms_to(Self.Agg, Foldable) and conforms_to(
         Self.A, NumericValue
@@ -172,28 +176,6 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
     comptime shape = Shape.scalar
     """An aggregate yields one value per group, so it is scalar-shaped in the
     same sense a literal is: it does not produce a value per input row."""
-
-    # -- Evaluable ----------------------------------------------------------
-
-    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        """An aggregate has no per-batch value, and saying so is the point.
-
-        Folding needs every batch, so there is nothing to answer here — the
-        result exists only once the stream ends, which is what `to_operator`
-        and `Operator.finish` express. Raising makes
-        `project([col("a").sum()])` a **plan-time** error naming the mistake,
-        which is what DuckDB, DataFusion and Polars all do. The alternative, a
-        compile-time rejection, is what a `Kind` on the trait would buy and is
-        not worth a second erased box.
-        """
-        raise Error(
-            "aggregate '",
-            self._alias,
-            (
-                "' cannot be evaluated per batch; use .aggregate() rather than"
-                " projecting or filtering on it"
-            ),
-        )
 
     # -- to_operator --------------------------------------------------------
 
@@ -501,7 +483,11 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
     var _chunks: List[DynArray]
     """Every morsel's evaluated column. The O(rows) this is named for."""
 
-    var _ids: List[DynArray]
+    var _ids: List[Int32Array]
+    """Group ids per morsel, **typed**. They are always `Int32Array`; storing
+    them as `DynArray` erased a type this lane already knew and paid a narrow
+    back at `finish`. The typed `concat` overload is what made it spellable."""
+
     var _num_groups: Int
     var _rows: Int
 
@@ -522,7 +508,7 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
     ):
         self._input = EvalOperator[Self.A](input^, bindings^)
         self._chunks = List[DynArray]()
-        self._ids = List[DynArray]()
+        self._ids = List[Int32Array]()
         self._scatters = scatters
         self._num_groups = 0 if scatters else 1
         self._rows = 0
@@ -538,7 +524,7 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
         self._chunks.append(d.value().to_array(n))
         self._rows += n
         if self._scatters:
-            self._ids.append(morsel.groups.ids.copy().to_dyn())
+            self._ids.append(morsel.groups.ids.copy())
             self._num_groups = max(self._num_groups, morsel.groups.num_groups)
 
     def finish(mut self) raises -> Optional[DynArray]:
@@ -552,8 +538,7 @@ struct BufferedAccumulator[Agg: AggKernel, A: ComptimeValue](Accumulable):
         var groups: Groups
         if self._scatters:
             groups = Groups(
-                concat(self._ids, ExecContext.serial()).as_int32().copy(),
-                self._num_groups,
+                concat(self._ids, ExecContext.serial()), self._num_groups
             )
         else:
             groups = Groups.single(self._rows)

@@ -112,6 +112,22 @@ trait Value(Copyable, Deinitable, Writable):
     can run one, and two executions of the same plan cannot interfere.
     """
 
+    comptime aggregates: Bool = False
+    """Whether this value answers from `Operator.drain` rather than from a
+    batch — that is, whether it is an aggregate.
+
+    An aggregate is an ordinary `Value` in every other respect, so nothing
+    structural distinguishes it and the relations that cannot accept one had no
+    way to say so. `Project` and `Filter` read this and raise; before it,
+    `project([col("a").sum()])` reached `ProjectOperator.push`, which called
+    `.value()` on the `None` an aggregate answers with and **aborted the
+    process**.
+
+    A defaulted `comptime` rather than a marker trait, because a trait
+    constraining nothing documents nothing: every value would still satisfy
+    `Value` either way, and only the *answer* differs.
+    """
+
     comptime shape: Shape
     """`Shape.scalar` or `Shape.columnar` — whether this yields one value or
     one per row. Known without running, which is why it lives here and not on
@@ -184,6 +200,7 @@ struct DynValue(Copyable, Movable, Writable):
         ArcPointer[NoneType], Bool, Bindings
     ) thin raises -> DynOperator
     var _shape: Shape
+    var _aggregates: Bool
 
     # -- trampolines --------------------------------------------------------
     # One instantiation per boxed type, wired at construction. There is no
@@ -220,6 +237,7 @@ struct DynValue(Copyable, Movable, Writable):
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._aggregates = V.aggregates
         self._columns = Self._columns_tramp[V]
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
@@ -249,6 +267,14 @@ struct DynValue(Copyable, Movable, Writable):
         which is the point.
         """
         return self._to_operator(self._boxed, grouped, bindings)
+
+    def aggregates(self) -> Bool:
+        """Whether the boxed value answers from `drain` rather than per batch.
+
+        A field for the same reason `shape` is one: a constant per boxed value,
+        so a trampoline would pay an indirect call to read something fixed at
+        construction."""
+        return self._aggregates
 
     def shape(self) -> Shape:
         """The boxed value's `shape`, read at construction.
@@ -492,7 +518,18 @@ struct Filter(Relation, Writable):
     var _input: DynRelation
     var _predicate: DynValue
 
-    def __init__(out self, var input: DynRelation, var predicate: DynValue):
+    def __init__(
+        out self, var input: DynRelation, var predicate: DynValue
+    ) raises:
+        if predicate.aggregates():
+            raise Error(
+                "filter: '",
+                predicate.name(),
+                (
+                    "' is an aggregate, which has no value per row; put it in"
+                    " .aggregate() and filter the result (HAVING)"
+                ),
+            )
         self._input = input^
         self._predicate = predicate^
 
@@ -537,6 +574,16 @@ struct Project(Relation, Writable):
             raise Error(
                 "project: ", len(names), " names but ", len(values), " values"
             )
+        for i in range(len(values)):
+            if values[i].aggregates():
+                raise Error(
+                    "project: '",
+                    names[i],
+                    (
+                        "' is an aggregate, which has no value per row; use"
+                        " .aggregate() instead"
+                    ),
+                )
         self._schema = Self._output_schema(input.schema(), names, values)
         self._input = input^
         self._names = names^

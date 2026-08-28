@@ -73,7 +73,6 @@ from ..physical import (
     AggregateOperator,
     Datum,
     DynOperator,
-    Evaluable,
     Morsel,
 )
 
@@ -132,7 +131,7 @@ struct ResolvedAggregate(Copyable, Movable):
 # ---------------------------------------------------------------------------
 # RuntimeAggregate — the node
 # ---------------------------------------------------------------------------
-struct RuntimeAggregate(Evaluable, Value):
+struct RuntimeAggregate(Value):
     """An aggregate resolved by name, over erased operands.
 
     The runtime lane's aggregate node, and the counterpart of
@@ -149,6 +148,10 @@ struct RuntimeAggregate(Evaluable, Value):
     stores the *function* and resolves twice — once for the schema, once for
     the columns.
     """
+
+    comptime aggregates = True
+    """It answers from `AggregateOperator.drain`, never per batch — the same
+    answer `Aggregate` gives, for the same reason."""
 
     var _inputs: List[DynValue]
     """The operands, erased. A `List` because `AggregateFn` takes one."""
@@ -332,24 +335,6 @@ struct RuntimeAggregate(Evaluable, Value):
 
     comptime shape = Shape.scalar
     """One value per group, so scalar-shaped in the same sense a literal is."""
-
-    # -- Evaluable ----------------------------------------------------------
-
-    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
-        """An aggregate has no per-batch value, and saying so is the point.
-
-        The same message `Aggregate.evaluate` raises, for the same
-        reason: an aggregate reached through an elementwise path is a mistake
-        in the plan, and naming it beats half-computing it.
-        """
-        raise Error(
-            "aggregate '",
-            self._alias,
-            (
-                "' cannot be evaluated per batch; use .aggregate() rather than"
-                " projecting or filtering on it"
-            ),
-        )
 
     # -- to_operator --------------------------------------------------------
 

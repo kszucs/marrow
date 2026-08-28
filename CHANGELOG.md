@@ -43,7 +43,33 @@
   is now `RuntimeAggregate.vocabulary()`, and a test walks it and resolves each
   entry so the two sides cannot drift again silently.
 
+### Fixes
+
+- **Projecting an aggregate aborted the process.** `project([col("a").sum()])`
+  reached `ProjectOperator.push`, which called `.value()` on the `None` an
+  aggregate's operator answers with — an abort, not a raise, and under
+  `ASSERT=all` an abort takes down the whole test runner rather than one case.
+
+  `Aggregate` conformed to `Evaluable` and raised from an `evaluate` that named
+  exactly this mistake, but nothing ever called it: `EvalOperator` is the only
+  caller of `evaluate`, and an aggregate's `to_operator` returns an
+  `AggregateOperator`. The conformance was a claim the node could not honour
+  and a check that never ran.
+
+  `Value` now carries `comptime aggregates: Bool = False`, `DynValue` copies it
+  at boxing exactly as it copies `shape`, and `Project` and `Filter` read it and
+  raise at plan time. `Aggregate` and `RuntimeAggregate` no longer conform to
+  `Evaluable`, and their `evaluate` methods are gone.
+
 ### Refactors
+
+- **`concat` gained its typed half, and the comptime lane stopped erasing group
+  ids.** The kernel had only a `List[DynArray]` overload, so a caller that knew
+  its element type had to erase, concatenate and narrow back.
+  `BufferedAccumulator._ids` is exactly that case: group ids are always
+  `Int32Array`, and every morsel round-tripped one through `DynArray`. The
+  typed `concat[T: PrimitiveType]` delegates to `PrimitiveBuilder[T].extend`,
+  which already existed — only the entry point was missing.
 
 - **One aggregate operator, three accumulation strategies.** There were three
   bespoke operators — fused, buffered, runtime — each re-implementing
