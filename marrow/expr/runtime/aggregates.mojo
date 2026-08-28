@@ -91,6 +91,7 @@ comptime MIN = "min"
 comptime MAX = "max"
 
 
+@fieldwise_init
 struct ResolvedAggregate(Copyable, Movable):
     """What a named aggregate becomes once its input types are known: the
     output dtype **and** the opened, type-erased state machine that produces it.
@@ -121,52 +122,62 @@ struct ResolvedAggregate(Copyable, Movable):
     to disambiguate against — the inputs were consumed by `of`.
     """
 
-    var _boxed: ArcPointer[NoneType]
+    var empty: Optional[DynArray]
+    """This aggregate's answer over an input that produced no column at all.
+
+    Taken off the same `Agg` as `dtype`, for the same reason: `empty` is
+    dtype-independent for every conformer (the trait default declines, and
+    `ValidCount`, `DistinctCount` and `Dispersion` each answer without one), so
+    nothing but provenance keeps a restatement of it in step — and a
+    restatement had already drifted from `Dispersion`.
+    """
+
+    var _boxed: Optional[ArcPointer[NoneType]]
+    """The opened state, `None` until an execution actually folds.
+
+    `dtype` and `empty` are dtype-free statics on `AggKernel` and neither needs
+    `open`, so resolving to read a dtype must not construct a fold state.
+    `RuntimeAggregate.dtype(schema)` resolves at *plan* time and discards
+    everything but the dtype; opening eagerly allocated an `ArcPointer` and a
+    per-group state on every such call, and `empty()` does the same through its
+    probe. Deferring it costs one more trampoline and makes both allocation
+    free."""
+
+    var _open: def(List[DynType]) thin raises -> ArcPointer[NoneType]
     var _update: def(ArcPointer[NoneType], Groups, List[DynArray]) thin raises
     var _finish: def(ArcPointer[NoneType]) thin raises -> DynArray
-
-    @staticmethod
-    def _update_tramp[
-        Agg: AggKernel
-    ](ptr: ArcPointer[NoneType], groups: Groups, inputs: List[DynArray]) raises:
-        rebind[ArcPointer[Agg]](ptr)[].update(groups, inputs)
-
-    @staticmethod
-    def _finish_tramp[
-        Agg: AggKernel
-    ](ptr: ArcPointer[NoneType]) raises -> DynArray:
-        return rebind[ArcPointer[Agg]](ptr)[].finish()
 
     @staticmethod
     def of[Agg: AggKernel](in_dtypes: List[DynType]) raises -> Self:
         """Both halves of a resolution, off **one** `AggKernel`. The only thing
         that builds one, so neither the box/trampoline pairing nor the
         dtype/implementation pairing can be wrong."""
-        var ptr = ArcPointer[Agg](Agg.open(in_dtypes))
+
+        def update(
+            ptr: ArcPointer[NoneType], groups: Groups, inputs: List[DynArray]
+        ) raises:
+            rebind[ArcPointer[Agg]](ptr)[].update(groups, inputs)
+
+        def finish(ptr: ArcPointer[NoneType]) raises -> DynArray:
+            return rebind[ArcPointer[Agg]](ptr)[].finish()
+
+        def open(dtypes: List[DynType]) raises -> ArcPointer[NoneType]:
+            var ptr = ArcPointer[Agg](Agg.open(dtypes))
+            return rebind[ArcPointer[NoneType]](ptr^)
+
         return Self(
-            Agg.dtype(in_dtypes),
-            rebind[ArcPointer[NoneType]](ptr^),
-            Self._update_tramp[Agg],
-            Self._finish_tramp[Agg],
+            Agg.dtype(in_dtypes), Agg.empty(), None, open, update, finish
         )
 
-    def __init__(
-        out self,
-        var dtype: DynType,
-        var boxed: ArcPointer[NoneType],
-        update: def(ArcPointer[NoneType], Groups, List[DynArray]) thin raises,
-        finish: def(ArcPointer[NoneType]) thin raises -> DynArray,
-    ):
-        self.dtype = dtype^
-        self._boxed = boxed^
-        self._update = update
-        self._finish = finish
+    def open(mut self, in_dtypes: List[DynType]) raises:
+        """Construct the state. Called once, on the first morsel."""
+        self._boxed = self._open(in_dtypes)
 
     def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
-        self._update(self._boxed, groups, inputs)
+        self._update(self._boxed.value(), groups, inputs)
 
     def finish(mut self) raises -> DynArray:
-        return self._finish(self._boxed)
+        return self._finish(self._boxed.value())
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +275,21 @@ struct RuntimeAggregate(Value):
         raise Error("unknown aggregate '", name, "'")
 
     @staticmethod
+    def _solo(name: StringSlice, in_dtypes: List[DynType]) raises:
+        """The sole input dtype, or a raise naming the aggregate.
+
+        One gate, not two: `_fold` and the `min`/`max` arm both need the single
+        operand and both used to spell the same arity check.
+        """
+        if len(in_dtypes) != 1:
+            raise Error(
+                "aggregate '",
+                name,
+                "' takes exactly one input, got ",
+                len(in_dtypes),
+            )
+
+    @staticmethod
     def _fold[
         K: FoldKernel
     ](in_dtypes: List[DynType]) raises -> ResolvedAggregate:
@@ -281,19 +307,12 @@ struct RuntimeAggregate(Value):
         columns is never instantiated over one — `AggState`'s compile-time
         domain assertion would fail the build rather than raise.
         """
-        if len(in_dtypes) != 1:
-            raise Error(
-                "aggregate '",
-                K.name,
-                "' takes exactly one input, got ",
-                len(in_dtypes),
-            )
+        Self._solo(K.name, in_dtypes)
         ref d = in_dtypes[0]
-        var box = List[ResolvedAggregate]()
-        box.reserve(1)
+        var box = Optional[ResolvedAggregate](None)
 
         def numeric[V: NumericType](x: V) raises {mut box, imm}:
-            box.append(ResolvedAggregate.of[Fold[K, V]](in_dtypes))
+            box = ResolvedAggregate.of[Fold[K, V]](in_dtypes)
 
         comptime if conforms_to(K, ArithmeticAgg):
             if not d.is_numeric():
@@ -311,7 +330,7 @@ struct RuntimeAggregate(Value):
             elif d.is_temporal():
 
                 def temporal[V: TemporalType](x: V) raises {mut box, imm}:
-                    box.append(ResolvedAggregate.of[Fold[K, V]](in_dtypes))
+                    box = ResolvedAggregate.of[Fold[K, V]](in_dtypes)
 
                 d.dispatch_temporal(temporal)
             else:
@@ -322,7 +341,7 @@ struct RuntimeAggregate(Value):
                     d,
                     " columns",
                 )
-        return box.pop()
+        return box.take()
 
     def resolve(self, in_dtypes: List[DynType]) raises -> ResolvedAggregate:
         """The one name x dtype ladder in the system.
@@ -369,16 +388,9 @@ struct RuntimeAggregate(Value):
             # extremum is a bytewise scan and a fixed-width one is a grouped, and
             # they are two `AggKernel`s rather than one with a runtime
             # branch, so neither compiles the other's body.
-            if len(in_dtypes) != 1:
-                raise Error(
-                    "aggregate '",
-                    self._name,
-                    "' takes exactly one input, got ",
-                    len(in_dtypes),
-                )
-            var stringly = (
-                in_dtypes[0].is_string() or in_dtypes[0].is_large_string()
-            )
+            Self._solo(self._name, in_dtypes)
+            ref d = in_dtypes[0]
+            var stringly = d.is_string() or d.is_large_string()
             if self._name == MIN:
                 if stringly:
                     return ResolvedAggregate.of[StringExtremum[MinOp]](
@@ -398,21 +410,22 @@ struct RuntimeAggregate(Value):
         """This aggregate's answer over an input that produced no column at
         all, or `None` when it has none.
 
-        Delegates to the same conformers `resolve` names, and needs no dtypes —
-        which is the whole point. A filter that keeps nothing answers with no
-        batch, so the aggregate above it never learns its input's type.
-        `COUNT(x)` and `COUNT(DISTINCT x)` of nothing are 0 regardless; `sum`,
-        `mean` and the extrema are NULL, and their *dtype* is known only to the
-        plan's schema, so they decline here and `GroupByOperator` fills the
-        slot.
+        Answered by the **same ladder** `resolve` uses, so it cannot drift from
+        the kernel the way the restated arm list it replaced did: `variance` and `stddev`
+        answer a float64 null without a schema, and a hand-written arm list
+        here declined for both.
+
+        The probe dtype is sound because `AggKernel.empty` is a dtype-free
+        static on every conformer — `int64` selects `Fold` over
+        `StringExtremum` for the extrema, and both decline. `sum`, `mean` and
+        the extrema still answer `None`; their dtype is known only to the
+        plan's schema, so `GroupByOperator` fills the slot.
         """
-        if self._name == COUNT_DISTINCT or self._name == APPROX_COUNT_DISTINCT:
-            return DistinctCount[True].empty()
-        elif self._name == COUNT:
-            return ValidCount.empty()
-        # Every remaining aggregate declines: `sum`, `mean`, the extrema and
-        # the dispersions all answer NULL, and their *dtype* is known only to
-        # the plan's schema, so `GroupByOperator` fills the slot.
+        var probe = List[DynType](capacity=1)
+        probe.append(DynType(int64))
+        var resolved = self.resolve(probe)
+        if resolved.empty:
+            return resolved.empty.value().copy()
         return None
 
     # -- Value --------------------------------------------------------------
@@ -532,7 +545,12 @@ struct RuntimeAggregateOperator(Operator):
             var in_dtypes = List[DynType](capacity=len(columns))
             for i in range(len(columns)):
                 in_dtypes.append(columns[i].dtype())
-            self._kernel = self._node.resolve(in_dtypes)
+            var resolved = self._node.resolve(in_dtypes)
+            # The state is built here, on the first morsel — `resolve` itself
+            # allocates nothing, so the plan-time calls that only want a dtype
+            # do not pay for one.
+            resolved.open(in_dtypes)
+            self._kernel = resolved^
         var groups = morsel.groups.copy() if self._scatters else Groups.single(
             n
         )

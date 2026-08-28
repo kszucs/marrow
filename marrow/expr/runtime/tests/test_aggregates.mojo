@@ -14,6 +14,7 @@ from std.testing import assert_equal, assert_true
 
 from ....builders import array
 from ....dtypes import DynType, int64, string
+from ....kernels.aggregate import Dispersion
 from ....tabular import RecordBatch, record_batch
 from ...builders import col, table
 from ...logical import DynValue, Shape
@@ -167,3 +168,44 @@ def test_named_aggregate_vocabulary_all_resolves() raises:
         var node = RuntimeAggregate(DynValue(column("g")), name.copy())
         # Raises if the ladder has no arm for it; int64 is in every domain.
         _ = node.resolve(dtypes)
+
+
+def test_named_aggregate_empty_agrees_with_its_kernel() raises:
+    """`empty()` must answer what the kernel `resolve` names would answer.
+
+    It used to restate the mapping in a hand-written arm list, and had drifted:
+    `variance` and `stddev` declined here while `Dispersion.empty()` answers a
+    float64 null without a schema. It now goes through the same ladder, so the
+    drift is unrepresentable rather than merely tested.
+
+    The kernels are therefore named **independently** below. Comparing
+    `node.empty()` against `node.resolve(...).empty` would compare a call with
+    itself and pass no matter what either does.
+    """
+
+    def node(var name: String) raises -> RuntimeAggregate:
+        return RuntimeAggregate(DynValue(column("g")), name^)
+
+    # Counting nothing is 0 -- SQL's answer, and PyArrow's.
+    assert_true(Bool(node(String("count")).empty()))
+    assert_true(Bool(node(String("count_distinct")).empty()))
+    assert_true(Bool(node(String("approx_count_distinct")).empty()))
+
+    # A dispersion of nothing is a float64 null, and needs no schema to say so.
+    assert_true(Bool(node(String("variance")).empty()))
+    assert_true(Bool(node(String("stddev")).empty()))
+    assert_true(
+        Bool(node(String("variance")).empty())
+        == Bool(Dispersion[0, False].empty())
+    )
+
+    # The rest decline: their dtype is known only to the plan's schema.
+    assert_true(not node(String("sum")).empty())
+    assert_true(not node(String("product")).empty())
+    assert_true(not node(String("mean")).empty())
+    assert_true(not node(String("min")).empty())
+    assert_true(not node(String("max")).empty())
+
+    # And every name in the vocabulary can answer at all.
+    for ref name in RuntimeAggregate.vocabulary():
+        _ = node(name.copy()).empty()

@@ -45,6 +45,14 @@
 
 ### Fixes
 
+- **`RuntimeAggregate.empty()` disagreed with its own kernel.** It restated the
+  name-to-behaviour mapping in a hand-written arm list and declined for
+  `variance` and `stddev`, while `Dispersion.empty()` answers a float64 null
+  without needing a schema. Latent rather than live — `GroupByOperator` fills
+  the same null from the plan's schema — but a second table that is already
+  wrong is worth deleting rather than correcting. It now goes through the same
+  ladder `resolve` uses, so the drift is unrepresentable.
+
 - **Projecting an aggregate aborted the process.** `project([col("a").sum()])`
   reached `ProjectOperator.push`, which called `.value()` on the `None` an
   aggregate's operator answers with — an abort, not a raise, and under
@@ -97,6 +105,25 @@
   column.
 
 ### Refactors
+
+- **The runtime aggregate resolution no longer allocates at plan time.**
+  `ResolvedAggregate.of[Agg]` called `Agg.open(...)`, so
+  `RuntimeAggregate.dtype(schema)` — which runs while the plan's output schema
+  is built, before any data — allocated an `ArcPointer` and a per-group fold
+  state purely to read one dtype and discard it. `dtype` and `empty` are
+  dtype-free statics on `AggKernel` and neither depends on `open`, so opening
+  moved behind a fourth trampoline and happens on the first morsel.
+
+  Also in this layer: `@fieldwise_init` replaces a hand-written constructor
+  mirroring four fields, the two named trampoline statics are inlined into
+  `of[Agg]` (nested `def`s do convert to `thin` pointers), a
+  `List`+`reserve(1)`+`pop()` escape box becomes an `Optional`, and one arity
+  gate replaces two identical copies.
+
+  Three structs is the right count, confirmed independently by two audits: the
+  split is by *lifetime* — plan, resolution, execution — and `test_params.mojo`
+  executing one plan twice is what forces the pure-node/mutable-operator half
+  of it.
 
 - **One `AggregateOperator`, two ways of feeding one state.**
   `FusedAggregateOperator` and `ColumnAggregateOperator` are one struct,
