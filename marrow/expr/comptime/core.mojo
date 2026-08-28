@@ -52,24 +52,23 @@ from ...tabular import RecordBatch
 from ...views import apply
 from ..logical import Shape, Value
 from ..params import Bindings
-from .aggregates import Aggregate
+from .aggregates import (
+    ApproxCountDistinct,
+    Count,
+    CountDistinct,
+    Max,
+    Mean,
+    Min,
+    Product,
+    StdDev,
+    StringMax,
+    StringMin,
+    Sum,
+    Variance,
+)
 from .numeric import Add, Sub, Mul, Eq, Ne, Lt, Le, Gt, Ge
 from .boolean import And, Not, Or, Xor
 from .strings import StrEq, StrNe, StrLt, StrGt
-from ...kernels.aggregate import (
-    CountKernel,
-    Dispersion,
-    DistinctCount,
-    MaxOp,
-    MinOp,
-    Fold,
-    StringExtremum,
-    MaxKernel,
-    MeanKernel,
-    MinKernel,
-    ProductKernel,
-    SumKernel,
-)
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
@@ -131,16 +130,16 @@ trait ComptimeValue(Evaluable, Value):
     # type a conformer must change becomes an ambiguous overload at every call
     # site, so `NumericValue` can never later specialise these to a fused form.
 
-    def count_distinct(self) -> Aggregate[DistinctCount[True], Self]:
+    def count_distinct(self) -> CountDistinct[Self]:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
-        return Aggregate[DistinctCount[True], Self](self.copy())
+        return CountDistinct[Self](self.copy())
 
     def approx_count_distinct(
         self,
-    ) -> Aggregate[DistinctCount[False], Self]:
+    ) -> ApproxCountDistinct[Self]:
         """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
         standard error, nulls excluded."""
-        return Aggregate[DistinctCount[False], Self](self.copy())
+        return ApproxCountDistinct[Self](self.copy())
 
     comptime Type: DataType
     """This node's output type, known without a schema.
@@ -420,15 +419,15 @@ trait StringValue(ComptimeValue):
     # there is no `FoldKernel` to parameterise a fused node on. The **operand**
     # stays typed, so `min(upper(name))` still fuses `upper(name)`.
 
-    def min(self) -> Aggregate[StringExtremum[MinOp], Self]:
+    def min(self) -> StringMin[Self]:
         """`MIN(self)` — lexicographic (bytewise), matching Arrow's
         `hash_min`. Keeps the input's type."""
-        return Aggregate[StringExtremum[MinOp], Self](self.copy())
+        return StringMin[Self](self.copy())
 
-    def max(self) -> Aggregate[StringExtremum[MaxOp], Self]:
+    def max(self) -> StringMax[Self]:
         """`MAX(self)` — lexicographic (bytewise), matching Arrow's
         `hash_max`."""
-        return Aggregate[StringExtremum[MaxOp], Self](self.copy())
+        return StringMax[Self](self.copy())
 
 
 trait NumericValue(PrimitiveValue):
@@ -455,32 +454,28 @@ trait NumericValue(PrimitiveValue):
     # arithmetic and belong one level up the moment `AggState` accepts a
     # non-numeric accumulator; until then they would not compile there.
 
-    def sum(self) -> Aggregate[Fold[SumKernel], Self]:
+    def sum(self) -> Sum[Self]:
         """`SUM(self)`. Integers widen to int64; floats stay float64."""
-        return Aggregate[Fold[SumKernel], Self](self.copy(), String("sum"))
+        return Sum[Self](self.copy(), String("sum"))
 
-    def product(self) -> Aggregate[Fold[ProductKernel], Self]:
+    def product(self) -> Product[Self]:
         """`PRODUCT(self)`."""
-        return Aggregate[Fold[ProductKernel], Self](
-            self.copy(), String("product")
-        )
+        return Product[Self](self.copy(), String("product"))
 
-    def mean(self) -> Aggregate[Fold[MeanKernel], Self]:
+    def mean(self) -> Mean[Self]:
         """`AVG(self)`. Accumulates in float64 and divides by the valid count,
         so nulls are excluded rather than counted as zero."""
-        return Aggregate[Fold[MeanKernel], Self](self.copy(), String("mean"))
+        return Mean[Self](self.copy(), String("mean"))
 
-    def min(self) -> Aggregate[Fold[MinKernel], Self]:
+    def min(self) -> Min[Self]:
         """`MIN(self)`. Keeps the input's type."""
-        return Aggregate[Fold[MinKernel], Self](self.copy(), String("min"))
+        return Min[Self](self.copy(), String("min"))
 
-    def max(self) -> Aggregate[Fold[MaxKernel], Self]:
+    def max(self) -> Max[Self]:
         """`MAX(self)`."""
-        return Aggregate[Fold[MaxKernel], Self](self.copy(), String("max"))
+        return Max[Self](self.copy(), String("max"))
 
-    def variance[
-        ddof: Int = 0
-    ](self) -> Aggregate[Dispersion[ddof, False], Self]:
+    def variance[ddof: Int = 0](self) -> Variance[ddof, Self]:
         """`VAR_POP(self)` by default, `VAR_SAMP(self)` at `ddof=1`.
 
         The divisor is `n - ddof` over the *non-null* values, so `ddof=0` is
@@ -495,29 +490,23 @@ trait NumericValue(PrimitiveValue):
         `(col("a", int64) * 2).variance()` compiles the multiply into one loop
         and only the dispersion materialises.
         """
-        return Aggregate[Dispersion[ddof, False], Self](
-            self.copy(), String("variance")
-        )
+        return Variance[ddof, Self](self.copy(), String("variance"))
 
-    def stddev[
-        ddof: Int = 0
-    ](self) -> Aggregate[Dispersion[ddof, True], Self]:
+    def stddev[ddof: Int = 0](self) -> StdDev[ddof, Self]:
         """`STDDEV_POP(self)` by default, `STDDEV_SAMP(self)` at `ddof=1`.
 
         The square root of `variance[ddof]()`, computed from the same Welford
         state rather than by aggregating twice.
         """
-        return Aggregate[Dispersion[ddof, True], Self](
-            self.copy(), String("stddev")
-        )
+        return StdDev[ddof, Self](self.copy(), String("stddev"))
 
-    def count(self) -> Aggregate[Fold[CountKernel], Self]:
+    def count(self) -> Count[Self]:
         """`COUNT(self)` — the *non-null* values of `self`, not the row count.
 
         `COUNT(*)` is `count_star()` in `builders.mojo`, which is this same
         aggregate over a literal.
         """
-        return Aggregate[Fold[CountKernel], Self](self.copy(), String("count"))
+        return Count[Self](self.copy(), String("count"))
 
     # -- operators ----------------------------------------------------------
     # The fluent surface CLAUDE.md mandates: `col("a", int64) > lit(2, int64)`
@@ -577,15 +566,15 @@ trait TemporalValue(PrimitiveValue):
     # lane is correct but materialises; moving the accumulator dtype out of
     # `__init__` and into first push is what would fuse it, and is owed.
 
-    def min(self) -> Aggregate[Fold[MinKernel], Self]:
+    def min(self) -> Min[Self]:
         """`MIN(self)`. Keeps the input's dtype — unit and timezone
         included."""
-        return Aggregate[Fold[MinKernel], Self](self.copy())
+        return Min[Self](self.copy())
 
-    def max(self) -> Aggregate[Fold[MaxKernel], Self]:
+    def max(self) -> Max[Self]:
         """`MAX(self)`. Keeps the input's dtype — unit and timezone
         included."""
-        return Aggregate[Fold[MaxKernel], Self](self.copy())
+        return Max[Self](self.copy())
 
 
 # ---------------------------------------------------------------------------

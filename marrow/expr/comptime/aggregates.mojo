@@ -37,13 +37,18 @@ from ...kernels.aggregate import (
     FoldKernel,
     AggState,
     AggKernel,
+    Dispersion,
+    DistinctCount,
     Fold,
     Foldable,
     CountKernel,
     MaxKernel,
+    MaxOp,
     MeanKernel,
     MinKernel,
+    MinOp,
     ProductKernel,
+    StringExtremum,
     SumKernel,
 )
 from ...schema import Schema
@@ -230,12 +235,42 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Evaluable, Value):
         writer.write(Self.Agg.name, "(", self._input, ")")
 
 
+# ---------------------------------------------------------------------------
+# The vocabulary — one alias per aggregate, partially applied on its operand.
+#
+# `Sum[Self]` rather than `Aggregate[Fold[SumKernel], Self]` at every fluent
+# method. The long form names three things to say one, and it puts the *kernel*
+# vocabulary in `core.mojo`'s imports, where nothing else needs it: with these,
+# `core.mojo` names no `AggKernel` at all.
+#
+# `Min` is the fixed-width extremum and `StringMin` the bytewise one, because
+# they are genuinely different kernels — `NumericValue.min()` and
+# `StringValue.min()` are two methods for a reason, and one alias covering both
+# would have to hide a `conforms_to` that the fluent surface already answers by
+# overload.
+#
+# `Variance` and `StdDev` name **both** parameters where the others leave the
+# operand as a `_` hole. That is not a style choice: an alias carrying its own
+# parameter cannot also be partially applied — `Variance[ddof]` declares, but
+# `Variance[ddof, Self]` at the use site is then "unexpected parameter". So an
+# alias with a comptime argument of its own spells the operand out.
+# ---------------------------------------------------------------------------
 comptime Sum = Aggregate[Fold[SumKernel], _]
 comptime Product = Aggregate[Fold[ProductKernel], _]
 comptime Min = Aggregate[Fold[MinKernel], _]
 comptime Max = Aggregate[Fold[MaxKernel], _]
 comptime Mean = Aggregate[Fold[MeanKernel], _]
 comptime Count = Aggregate[Fold[CountKernel], _]
+comptime Variance[ddof: Int, A: ComptimeValue] = Aggregate[
+    Dispersion[ddof, False], A
+]
+comptime StdDev[ddof: Int, A: ComptimeValue] = Aggregate[
+    Dispersion[ddof, True], A
+]
+comptime StringMin = Aggregate[StringExtremum[MinOp], _]
+comptime StringMax = Aggregate[StringExtremum[MaxOp], _]
+comptime CountDistinct = Aggregate[DistinctCount[True], _]
+comptime ApproxCountDistinct = Aggregate[DistinctCount[False], _]
 
 
 struct FusedAggregateOperator[K: FoldKernel, A: NumericValue, G: Grouping](

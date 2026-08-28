@@ -45,6 +45,24 @@
 
 ### Refactors
 
+- **The comptime aggregate vocabulary is aliases again.** `expr/comptime/`
+  defined `Sum`, `Product`, `Min`, `Max`, `Mean` and `Count` as partially
+  applied `Aggregate[...]`, and then never used them: `core.mojo` spelled
+  `Aggregate[Fold[ProductKernel], Self]` at every fluent method — three names
+  to say one, and it dragged the whole `AggKernel` vocabulary into `core.mojo`'s
+  imports. `exprold` had it right, with `Sum[Self]`.
+
+  The fluent methods now read `Sum[Self]`, and the set is complete rather than
+  partial: `StringMin` / `StringMax` for the bytewise extrema, `CountDistinct` /
+  `ApproxCountDistinct`, and `Variance` / `StdDev`. `core.mojo` names no kernel
+  at all.
+
+  `Variance` and `StdDev` spell both parameters where the others leave the
+  operand as a `_` hole, and that is forced: an alias carrying a comptime
+  argument of its own cannot also be partially applied — `Variance[ddof]`
+  declares, but `Variance[ddof, Self]` at the use site is then "unexpected
+  parameter".
+
 - **`marrow/expr` — one `Aggregate` node instead of two.** `FusedAggregate` and
   `BufferedAggregate` were one aggregate wearing two node types: of eight
   members six were identical, and the split had to be restated by hand at every
