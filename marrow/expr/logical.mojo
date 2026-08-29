@@ -349,6 +349,32 @@ def merged(var into: List[String], extra: List[String]) -> List[String]:
     return into^
 
 
+def reject_aggregate(
+    value: DynValue, node: StringSlice, name: StringSlice, remedy: StringSlice
+) raises:
+    """Refuse an aggregate in a position that is evaluated once per row.
+
+    An aggregate's operator answers `None` to every `push` and yields only at
+    `drain`, so a per-row consumer unwraps that `None` and aborts the process
+    rather than raising. Four node positions are per-row — `Filter`'s
+    predicate, `Project`'s values, `Aggregate`'s **keys** (its `aggs` are the
+    point) and `Sort`'s keys — and each calls this. `remedy` names the way to
+    say what the caller meant, which differs per node.
+
+    Two of the four carried their own copy of this check and two did not, which
+    is the shape the guard exists to prevent: `rel.sort_by([col("a",
+    int64).sum()], [True])` aborted.
+    """
+    if value.aggregates():
+        raise Error(
+            node,
+            ": '",
+            name,
+            "' is an aggregate, which has no value per row; ",
+            remedy,
+        )
+
+
 trait Relation(Copyable, Deinitable, Movable):
     """An immutable description of a query."""
 
@@ -739,15 +765,12 @@ struct Filter(Relation, Writable):
         var predicate: DynValue,
         var pruner: Optional[PrunePredicate] = None,
     ) raises:
-        if predicate.aggregates():
-            raise Error(
-                "filter: '",
-                predicate.name(),
-                (
-                    "' is an aggregate, which has no value per row; put it in"
-                    " .aggregate() and filter the result (HAVING)"
-                ),
-            )
+        reject_aggregate(
+            predicate,
+            "filter",
+            predicate.name(),
+            "put it in .aggregate() and filter the result (HAVING)",
+        )
         self._input = input^
         self._predicate = predicate^
         self._pruner = pruner^
@@ -808,15 +831,9 @@ struct Project(Relation, Writable):
                 "project: ", len(names), " names but ", len(values), " values"
             )
         for i in range(len(values)):
-            if values[i].aggregates():
-                raise Error(
-                    "project: '",
-                    names[i],
-                    (
-                        "' is an aggregate, which has no value per row; use"
-                        " .aggregate() instead"
-                    ),
-                )
+            reject_aggregate(
+                values[i], "project", names[i], "use .aggregate() instead"
+            )
         self._schema = Self._output_schema(input.schema(), names, values)
         self._input = input^
         self._names = names^
@@ -913,6 +930,13 @@ struct Aggregate(Relation, Writable):
         var keys: List[DynValue],
         var aggs: List[DynValue],
     ) raises:
+        for ref k in keys:
+            reject_aggregate(
+                k,
+                "aggregate",
+                k.name(),
+                "group by a column or a per-row expression, not an aggregate",
+            )
         self._schema = Self._output_schema(input.schema(), keys, aggs)
         self._input = input^
         self._keys = keys^
@@ -1045,6 +1069,13 @@ struct Sort(Relation, Writable):
             )
         if len(keys) == 0:
             raise Error("sort: needs at least one key")
+        for ref k in keys:
+            reject_aggregate(
+                k,
+                "sort",
+                k.name(),
+                "aggregate first, then sort the result",
+            )
         self._input = input^
         self._keys = keys^
         self._ascending = ascending^
