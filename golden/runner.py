@@ -239,6 +239,83 @@ TABLES = {
             "b": pa.array([True, False, True, None], pa.bool_()),
         }
     ),
+    # String-function inputs. `words` answers case, padding, emptiness and
+    # multi-byte questions about the *unary* kernels; this one exists for the
+    # functions that need structure inside the string:
+    #
+    #   'a,b,c'       a separator, so split / split_part / position have
+    #                 something to find, at three different offsets
+    #   'xyz'         no separator at all — the not-found answer, which is 0
+    #                 in some engines, NULL in others and an error in a third
+    #   ''            the empty string, which is not a null and which every
+    #                 pad / substr / repeat function answers differently about
+    #   NULL          the null
+    #   '  Ab  '      surrounding whitespace *and* mixed case, so trim-with-a
+    #                 -character-set and case-insensitive compare separate
+    #   'héllo wörld' multi-byte plus a space, so substr / left / lpad have to
+    #                 say whether they count bytes or characters
+    #
+    # `n` drives the count-taking functions from a column rather than a
+    # literal, and carries 0 and -1 — the two counts engines disagree about
+    # for `repeat`, `lpad` and `substr`.
+    "text": pa.table(
+        {
+            "t": pa.array(
+                ["a,b,c", "xyz", "", None, "  Ab  ", "héllo wörld"], pa.string()
+            ),
+            "n": pa.array([1, 2, 3, 0, -1, None], pa.int64()),
+        }
+    ),
+    # List inputs. Five rows, each asking a different question:
+    #
+    #   [1, 2, 3]  the ordinary case
+    #   []         the empty list — length 0, and *not* a null
+    #   NULL       the null list — length NULL, and not length 0
+    #   [NULL, 5]  a null *element*, which neither nulls the list nor is
+    #              skipped by its length
+    #   [7]        one element, so `l[1]` and `l[2]` differ in whether an
+    #              out-of-bounds index is NULL or an error
+    #
+    # `id` is a stable sort key: nothing here can order rows by `l` itself.
+    "lists": pa.table(
+        {
+            "l": pa.array([[1, 2, 3], [], None, [None, 5], [7]], pa.list_(pa.int64())),
+            "id": pa.array([1, 2, 3, 4, 5], pa.int64()),
+        }
+    ),
+    # Struct and map inputs, for the field-access and key-lookup families.
+    # `st` separates a null *field* from a null *struct* — the distinction an
+    # engine loses when it flattens — and `m` covers a present key, an absent
+    # key, an empty map and a null map.
+    "nested": pa.table(
+        {
+            "st": pa.array(
+                [{"a": 1, "b": "x"}, {"a": None, "b": "y"}, None],
+                pa.struct([("a", pa.int64()), ("b", pa.string())]),
+            ),
+            "m": pa.array(
+                [[("k", 1), ("j", 2)], [], None],
+                pa.map_(pa.string(), pa.int64()),
+            ),
+            "id": pa.array([1, 2, 3], pa.int64()),
+        }
+    ),
+    # Integer extremes. The other fixtures hold values a kernel cannot get
+    # wrong by a sentinel or a wrap; these are the ones it can.
+    #
+    #   `i`  int64 max and int64 min — what a `min`/`max` seeded with 0, or an
+    #        `abs` that negates in place, gets wrong; plus a null.
+    #   `j`  a zero divisor, a negative divisor and a positive one, so
+    #        division and modulo have every sign combination against `i`.
+    "edges": pa.table(
+        {
+            "i": pa.array(
+                [9223372036854775807, -9223372036854775808, 0, 1, None],
+                pa.int64(),
+            ),
+            "j": pa.array([1, -1, 0, 3, 2], pa.int64()),
+        }
+    ),
 }
 
 

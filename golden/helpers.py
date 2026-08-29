@@ -76,6 +76,11 @@ SHIMS = {
     "CaseWhen",
     "Coalesce",
     "FillNull",
+    "Nullif",
+    # `array_length(l)` — the fused lane's one list verb. Python's expression
+    # frontend had no list surface at all, so this is debt rather than a
+    # spelling difference.
+    "array_length",
     # fused cast nodes vs. `.cast(type, safe=False)`
     "NumericCast",
     "NumToString",
@@ -123,6 +128,7 @@ BoolType = bool_
 # Mojo has no comptime singleton for a type carrying a runtime unit. So they
 # pass straight through, and only the unit needs a spelling.
 date32 = marrow.date32
+list_ = marrow.list_
 microsecond = "us"
 
 
@@ -220,6 +226,15 @@ def Coalesce(value, other):
 
 def FillNull(value, other):
     return value.fill_null(other)
+
+
+def Nullif(value, other):
+    return value.nullif(other)
+
+
+def array_length(value):
+    """The number of elements in each list."""
+    return value.list_length()
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +420,7 @@ NAMESPACE = {
     "StringType": StringType,
     "BoolType": BoolType,
     "date32": date32,
+    "list_": list_,
     "timestamp": timestamp,
     "microsecond": microsecond,
     "Upper": Upper,
@@ -419,6 +435,8 @@ NAMESPACE = {
     "NotNull": NotNull,
     "CaseWhen": CaseWhen,
     "Coalesce": Coalesce,
+    "Nullif": Nullif,
+    "array_length": array_length,
     "FillNull": FillNull,
     "NumericCast": NumericCast,
     "NumToString": NumToString,
