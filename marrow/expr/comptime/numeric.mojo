@@ -54,6 +54,15 @@ from ...tabular import RecordBatch
 from ...buffers import Bitmap
 from ..logical import Shape, merged
 from ..params import Bindings
+from ...kernels.bounds import (
+    EqBounds,
+    GeBounds,
+    GtBounds,
+    LeBounds,
+    LtBounds,
+    NeBounds,
+)
+from ..pruning import PruneStats, Truth
 from ..physical import Datum
 
 from .rules import promote, wider, widest_shape
@@ -403,6 +412,35 @@ struct NumericCompare[
             self.l.lane[W](bound[0], idx).cast[Self.ArgType.native](),
             self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
         )
+
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """`prune` is `lane` in the interval domain, and reads the same way:
+        both operands cast to `ArgType`, then the kernel.
+
+        The reading is selected by a `comptime if` over `Self.K.name` rather
+        than by a second struct parameter. That keeps this purely additive —
+        no arity change, no alias change, no call site touched — and its
+        failure mode is conservative: an operator with no arm falls through to
+        `maybe`, which is always correct. Only the taken arm is emitted, so a
+        `Gt` node links `GtBounds.decide` and nothing else.
+        """
+        comptime dt = Self.ArgType.native
+        var lb = self.l.bounds(stats, bindings).cast[dt]()
+        var rb = self.r.bounds(stats, bindings).cast[dt]()
+        comptime if Self.K.name == LtKernel.name:
+            return Truth(LtBounds.maybe[dt](lb, rb))
+        elif Self.K.name == LeKernel.name:
+            return Truth(LeBounds.maybe[dt](lb, rb))
+        elif Self.K.name == GtKernel.name:
+            return Truth(GtBounds.maybe[dt](lb, rb))
+        elif Self.K.name == GeKernel.name:
+            return Truth(GeBounds.maybe[dt](lb, rb))
+        elif Self.K.name == EqKernel.name:
+            return Truth(EqBounds.maybe[dt](lb, rb))
+        elif Self.K.name == NeKernel.name:
+            return Truth(NeBounds.maybe[dt](lb, rb))
+        else:
+            return Truth.maybe
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

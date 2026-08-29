@@ -18,7 +18,12 @@ The three rules are the whole design, and the file is organised around them:
   NULL, which is the entire difference from `is_null`.
 """
 
-from std.testing import assert_almost_equal, assert_equal, assert_true
+from std.math import inf, nan
+from std.testing import (
+    assert_almost_equal,
+    assert_equal,
+    assert_true,
+)
 
 from ...builders import col, lit
 from ...params import Bindings
@@ -225,23 +230,34 @@ def test_is_nan_and_is_inf_are_null_on_a_null() raises:
 
 
 def test_is_nan_finds_a_nan_and_is_inf_finds_an_infinity() raises:
-    """Built by arithmetic rather than by a literal: `0/0` is NaN and `1/0` is
-    an infinity, and `DivKernel` substitutes 1 for a zero *integer* divisor —
-    a float divisor is left alone, which is what makes these reachable."""
-    var num: List[Optional[Float64]] = [0.0, 1.0, 1.0]
-    var den: List[Optional[Float64]] = [0.0, 0.0, 2.0]
-    var b = record_batch(
-        [array(num, float64).to_dyn(), array(den, float64).to_dyn()],
-        names=["n", "d"],
-    )
-    var q = col("n", float64) / col("d", float64)
-    var nan = _as_bool(q.is_nan(), b)
-    assert_true(nan[0].value())
-    assert_true(not nan[1].value())
-    var inf = _as_bool(q.is_inf(), b)
-    assert_true(not inf[0].value())
-    assert_true(inf[1].value())
-    assert_true(not inf[2].value())
+    """The values are put into the column, not produced by dividing by zero.
+
+    That is worth stating, because the obvious construction does not work:
+    `DivKernel.core` substitutes 1 for **any** zero divisor — `a /
+    b.eq(0).select(1, b)` — to dodge SIGFPE on integers, and the guard is not
+    conditioned on the dtype. So `0.0 / 0.0` evaluates to 0.0 here and
+    `1.0 / 0.0` to 1.0, where IEEE 754 says NaN and +inf. Whether marrow's `/`
+    should produce an infinity on a float column is a question about
+    `DivKernel`, not about these nodes, so this case sidesteps it and the
+    golden corpus's `math_div_float64` avoids it by using a divisor column with
+    no zero.
+    """
+    var vals: List[Optional[Float64]] = [
+        nan[DType.float64](),
+        inf[DType.float64](),
+        -inf[DType.float64](),
+        3.0,
+    ]
+    var b = record_batch([array(vals, float64).to_dyn()], names=["x"])
+    var is_nan = _as_bool(col("x", float64).is_nan(), b)
+    assert_true(is_nan[0].value())
+    assert_true(not is_nan[1].value())
+    assert_true(not is_nan[3].value())
+    var is_inf = _as_bool(col("x", float64).is_inf(), b)
+    assert_true(not is_inf[0].value())
+    # Both signs, which is what "is an infinity" means.
+    assert_true(is_inf[1].value() and is_inf[2].value())
+    assert_true(not is_inf[3].value())
 
 
 def test_arithmetic_nodes_still_fuse_into_one_pass() raises:

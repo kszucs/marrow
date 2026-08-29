@@ -57,6 +57,15 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, Value, merged
 from ..params import Bindings
+from ...kernels.bounds import (
+    EqBounds,
+    GeBounds,
+    GtBounds,
+    LeBounds,
+    LtBounds,
+    NeBounds,
+)
+from ..pruning import DynBounds, PruneStats, Prunable, Truth, compare_dyn
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 from .aggregates import RuntimeAggregate
@@ -72,7 +81,7 @@ from outside.
 """
 
 
-struct RuntimeValue(Evaluable, Movable, Value):
+struct RuntimeValue(Evaluable, Movable, Prunable, Value):
     """A runtime-built expression.
 
     Satisfies `Value` — `Analyzable & Executable & Writable & Copyable &
@@ -129,6 +138,51 @@ struct RuntimeValue(Evaluable, Movable, Value):
         self._payload = Payload(NoneType())
 
     # -- Value --------------------------------------------------------------
+
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """The runtime lane's half of the same contract.
+
+        The tag selects between six one-line `decide` bodies, not between
+        kernels: no kernel code is linked by this, so the module's "a tag never
+        selects a kernel" rule is not what is at stake here. The dtype ladder
+        lives once, in `_ord`, and the readings are the same six the fused lane
+        runs — writing them twice is how two lanes drift into disagreeing about
+        which row groups to skip.
+        """
+        if len(self._kids) == 2:
+            if self._tag == "and":
+                return self._kids[0][].prune(stats, bindings) & self._kids[
+                    1
+                ][].prune(stats, bindings)
+            if self._tag == "or":
+                return self._kids[0][].prune(stats, bindings) | self._kids[
+                    1
+                ][].prune(stats, bindings)
+            var l = self._kids[0][]._bounds(stats, bindings)
+            var r = self._kids[1][]._bounds(stats, bindings)
+            if self._tag == "lt":
+                return compare_dyn[LtBounds](l, r)
+            if self._tag == "le":
+                return compare_dyn[LeBounds](l, r)
+            if self._tag == "gt":
+                return compare_dyn[GtBounds](l, r)
+            if self._tag == "ge":
+                return compare_dyn[GeBounds](l, r)
+            if self._tag == "eq":
+                return compare_dyn[EqBounds](l, r)
+            if self._tag == "ne":
+                return compare_dyn[NeBounds](l, r)
+        return Truth.maybe
+
+    def _bounds(self, stats: PruneStats, bindings: Bindings) -> DynBounds:
+        """A leaf's bounds, left erased — this lane has no comptime type to
+        unwrap into. Anything composite answers unknown."""
+        if len(self._kids) == 0:
+            if self._tag == "column" and self._payload.isa[String]():
+                return stats.dyn_bounds(self._payload[String])
+            if self._tag == "literal" and self._payload.isa[DynScalar]():
+                return DynBounds.point(self._payload[DynScalar].copy())
+        return DynBounds.unknown()
 
     def columns(self) -> List[String]:
         # The leaf case is spelled out rather than falling out of an empty

@@ -38,6 +38,7 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape, merged
 from ..params import Bindings
+from ..pruning import PruneStats, Truth
 from ..physical import Datum
 from .core import (
     BoolValue,
@@ -118,6 +119,18 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         var lhs = _as_bool(self.l.evaluate(batch, bindings), n)
         var rhs = _as_bool(self.r.evaluate(batch, bindings), n)
         return Self.K.apply(lhs, rhs).to_dyn()
+
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """`AND` is provably false as soon as either conjunct is; `OR` only
+        when both disjuncts are. `XOR` prunes nothing — both operands being
+        possible says nothing about them differing on any single row, and a
+        one-sided domain cannot say more."""
+        comptime if Self.K.name == AndKernel.name:
+            return self.l.prune(stats, bindings) & self.r.prune(stats, bindings)
+        elif Self.K.name == OrKernel.name:
+            return self.l.prune(stats, bindings) | self.r.prune(stats, bindings)
+        else:
+            return Truth.maybe
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

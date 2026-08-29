@@ -10,6 +10,27 @@
 
 ### Removals
 
+- **`marrow/kernels/interval.mojo` is gone**, replaced rather than extended by
+  `marrow/kernels/bounds.mojo`. It had zero consumers — its consumer was
+  `exprold`'s pruner, deleted with the package — so this breaks nothing, and
+  four properties made replacing it the cheaper option:
+
+  - `Interval` carried `Optional[DynScalar]` bounds and compared through
+    `Interval._compare_scalar`, which calls `DynType.dispatch_primitive`. That
+    is a twenty-arm ladder per comparison node per row group, *inside* what has
+    to be a fused comptime-typed predicate. `Bounds[dt]` is four register-sized
+    fields.
+  - It carried `lo`/`hi` **and** `maybe_true`, so `AndInterval` and
+    `OrInterval` were "interval kernels" that never touched an interval. The
+    boolean algebra now lives on `Truth` and the interval algebra has six
+    kernels rather than eight.
+  - `Interval._three_way` was a known-open NaN defect — a three-way written as
+    `-1 if x < y else (1 if x > y else 0)` reports an IEEE-unordered pair as
+    *equal*, and an "equal" bound is what makes `x < 5` prune a matching group.
+  - It had no notion of nulls at all, so it could not express the one exactly
+    provable prune the format gives for free: an all-null granule makes every
+    comparison NULL, and a filter keeps only valid TRUE.
+
 - **`marrow/exprold/` is gone, and with it the machinery that only it kept
   alive.** The previous expression layer is deleted outright — `values.mojo`,
   `dynamic.mojo`, `aggregates.mojo`, `builders.mojo`, `params.mojo`,
@@ -30,9 +51,9 @@
     reuse the driver, and `exprold`'s `FoldedAggregates`. With the second gone
     the trait was an erasure boundary with nothing to erase.
 
-    **`HashGrouper` and the `Grouping` trait survive**, with `ScalarGrouping`
-    and `HashGrouping`: `marrow/expr/`'s `AggregateOperator` is parameterised
-    on placement and uses all three. Grouping was never the exprold-only part.
+    **`HashGrouper` and `HashGrouping` survive** — grouping was never the
+    exprold-only part. The `Grouping` *trait* and `ScalarGrouping` did not
+    outlive it long; see the abstraction-audit entry under Refactors below.
 
   - **`trait Mergeable`** and the thread-local partial/merge protocol:
     `AccArray`, `partials` and `merge` on the trait, on `Fold` and on
@@ -63,7 +84,190 @@
   what makes `libmarrow.so` link again. The eager `Array` / `Scalar` /
   `RecordBatch` / `Table` / IPC / Parquet surface is unaffected.
 
+### Refactors
+
+- **The aggregate layer's four ragged seams, from the 2026-08-29 abstraction
+  audit** (`docs/2026-08-29-expr-kernels-abstraction-audit.md`, §8 steps 2-4
+  and 7). Net: one trait, one struct, two fields and one method deleted; one
+  trait member and two structs added; one latent join defect fixed.
+
+  - **`trait Grouping` and `struct ScalarGrouping` are gone**
+    (`marrow/kernels/groupby.mojo`). `ScalarGrouping` was **never constructed
+    anywhere** — every occurrence in the tree was a type argument pinning a
+    parameter nothing read — and no generic function was ever bound on
+    `Grouping`. Its one consumed member was `comptime scatters: Bool`. The
+    aspiration recorded on it (window partitions and a sorted or radix
+    placement arriving as conformers) is contradicted by a measurement already
+    in the tree: parameterising `GroupByOperator` on the trait cost **+24,432
+    bytes for no benefit**, and that operator is the one place a future
+    conformer would have plugged in. `HashGrouping` stays, now a plain struct
+    owned concretely by `GroupByOperator`.
+
+  - **`AggregateOperator` split into three operators, one per way of feeding
+    the state** (`marrow/expr/comptime/aggregates.mojo`):
+    `ScatteredAggregateOperator` (fused, scatters into group slots),
+    `RegisterAggregateOperator` (fused, accumulates in registers — the path the
+    14.6x was measured on) and `BufferedAggregateOperator` (evaluates the
+    operand to a column and hands it to the kernel). The merged struct required
+    `comptime fuses` to be written **twice, identically** — once on the node to
+    pick the operator, once on the operator to pick the arm, with nothing
+    enforcing agreement — and, because a struct body admits no `comptime if`
+    and therefore no conditional field, each instantiation carried the other
+    arms' dead state (`_scatters` unread by the fused arms, `_num_groups`
+    unread by the buffered one). Both `to_operator` call sites additionally
+    pinned the placement parameter to `ScalarGrouping` while passing
+    `grouped=True`. Splitting costs **no** extra instantiations — placement was
+    already comptime — and `fuses` is now stated once, on `Aggregate`.
+
+  - **Temporal `min`/`max` now fuses.** `Aggregate.fuses` widened from
+    `conforms_to(A, NumericValue)` to `conforms_to(A, PrimitiveValue)`. The
+    fused loop calls exactly `bind`, `validity` and `lane[W]`, all
+    `PrimitiveValue` members, so the narrower bound excluded temporal operands
+    for no reason the loop can see. The stated obstacle — "the operator builds
+    its accumulator dtype from `Self.A.Type()` and a `TemporalType` is not
+    `Defaultable`" — stopped being true when the operator started taking
+    `in_dtype: DynType`.
+
+  - **One owner for the group count.** `Fold._slots` is deleted with its four
+    `max` sites; `AggState.finish` takes no count and reads `acc.length()`,
+    which restores the invariant `AggKernel.finish`'s own docstring already
+    claimed ("passing one here is how a caller and a state disagree").
+    `AggState._grow` became the public `AggState.reserve`, which also removes a
+    cross-type `_underscore` call `Fold` had been making.
+
+  - **`Foldable.grow` -> `AggKernel.reserve`.** The seed for an input that
+    produced no morsel is a property of every aggregate, not of the ones
+    drivable from registers, so it moved off the lane protocol —
+    which leaves `Foldable` exactly `Lane` / `Acc` / `scatter` / `combine_at`.
+    All five conformers override it, unifying the three different `_grow`
+    length conventions they had drifted into. `BufferedAggregateOperator` now
+    seeds its one slot too, so `count_distinct` over an empty stream answers
+    one `0` rather than a zero-length column.
+
+  - **One catalog of aggregate names.** `SUM`...`MAX` and the vocabulary list
+    moved from `marrow/expr/runtime/aggregates.mojo` into
+    `marrow/kernels/aggregate.mojo` as `agg_vocabulary()`, and every kernel's
+    `Kernel.name` is now *defined from* them rather than repeating the string.
+    `dispatch_agg` stays in `expr` — mapping a name onto a kernel needs a
+    runtime dtype and is the expression layer's job.
+
+  - **`RuntimeAggregate.empty()` deleted** with the test that exercised it. It
+    had no production caller and no reachable one: `GroupByOperator` holds its
+    folds as `DynOperator`s and cannot reach a node, and the null-fill branch
+    it would have served is unreachable because every aggregate operator
+    answers `Some` from its first `drain`. `AggKernel.reserve` covers the case
+    properly and covers all ten names rather than three.
+
+### Fixes
+
+- **`Groups` states whether it is the one-slot assignment instead of inferring
+  it** (backlog AG-1, `marrow/kernels/core.mojo`). `is_single()` was
+  `len(ids) == 0 and num_groups == 1`, which is the same predicate for two
+  different assignments: a keyless query, and a *keyed* query whose morsel
+  carries zero rows while exactly one group has been seen. A zero-row morsel in
+  a grouped query therefore took the ungrouped branch in every kernel — benign
+  only because each such branch happens to fold an empty extent into slot 0
+  with the fold's identity.
+
+- **`Datum.to_array(n)` checks the array's length against `n`** (backlog AG-2,
+  `marrow/expr/physical.mojo`). `n` was read only on the scalar branch and
+  ignored entirely on the array one, so a wrong-length column passed into
+  `_struct_of(schema, cols, n)`, which trusts its `length` argument and never
+  looks at its children — producing a `StructArray` that claims `n` rows over a
+  shorter child, and an out-of-bounds read at the first index. An aggregate
+  over an input that produced no morsel reached exactly that shape.
+
+- **`JoinOperator` no longer describes its build side with the join's output
+  schema** (`marrow/expr/physical.mojo`, `marrow/expr/logical.mojo`).
+  `_build_schema()` returned `self._schema.copy()` — the *output* schema — and
+  was handed to `_concat_batches` for the build side, whose columns are the
+  left input's alone; `drain` did the same with the probe side, whose columns
+  are the right input's. `_concat_batches` reads a schema only when handed no
+  batches, so the defect surfaced only for a side that yielded nothing: an
+  inner or left join then built its index over left fields plus a run of
+  all-null right ones, and `SEMI`/`ANTI` described an empty probe side with the
+  left schema entirely. Both schemas are now passed in from `Join.to_operator`,
+  which has them.
+
 ### Features
+
+- **Statistics-based pruning and predicate pushdown for `marrow/expr/`**, in
+  three new leaf modules and one deletion. A predicate is now evaluable over a
+  *granule* — a row group's per-column `[min, max]` and null count — instead of
+  over rows, and the answer rides the lowering down to the source that can act
+  on it. `marrow/kernels/bounds.mojo` holds the algebra, `marrow/expr/pruning.mojo`
+  the vocabulary and the two lanes' readings, `marrow/expr/pushdown.mojo` the
+  delivery and the Parquet read plan.
+
+  **The error is one-sided by construction.** The only question a node ever
+  answers is *"could this be TRUE here?"*, so `NOT` and `XOR` prune nothing —
+  negating "maybe true" is not "maybe false". That single decision is what
+  removes both fields a two-sided lattice would need: ClickHouse carries
+  `can_be_false` to make `NOT` composable and a per-atom `relaxed` bit that any
+  query-side widening must force on (`KeyCondition.cpp:5581-5589`), and with one
+  side there is no false half to be unsound about. The whole subsystem is
+  speed-only: the `Filter` above the scan still applies the predicate exactly,
+  so deleting every line of it leaves every answer identical.
+
+  Pruning is `bind`/`lane` in a second domain, and the signatures mirror them
+  deliberately: `bounds(stats, bindings) -> Bounds[Self.Type.native]` against
+  `bind(batch, bindings) -> Self.Bound`, with the same `.cast[ArgType.native]()`
+  promotion at a comparison. **One algebra serves both lanes.** `Ord` — a
+  three-way comparison whose answer may be *unknown* — is what makes that
+  possible: the comptime lane produces one from two `Scalar[dt]` with no
+  dispatch, the runtime lane from two `DynScalar` through a single dtype
+  ladder, and the six readings are then the same six lines for both. Writing
+  them twice is how two lanes drift into disagreeing about which row groups to
+  skip.
+
+  Three soundness rules that a plausible implementation gets wrong, each now a
+  line of code with a test:
+
+  - **A non-monotone cast is refused rather than trusted.**
+    `promote[Int64Type, UInt64Type]` resolves to `Int64Type`, so a `uint64`
+    operand is *reinterpreted*, not widened. A column holding `{1, 2**63}` has
+    bounds that cast to the inverted interval `[1, -2**63]`, and reading
+    `x > 0` off it would skip a group whose first row matches. `Bounds.cast`
+    routes its result through `range`, whose `lo <= hi` test catches exactly
+    that case — the u64→i64 rotation inverts the interval *iff* it straddles
+    `2**63`.
+  - **A NaN bound bounds nothing.** The same `lo <= hi` test is false for any
+    NaN endpoint, so a NaN reads as *unknown* once at construction. This is the
+    reader-side mirror of the writer's `skip_nan=True`
+    (`parquet/statistics.mojo:101-119`), and it closes the still-open
+    `Interval._three_way` defect, which reported an IEEE-unordered pair as
+    *equal*.
+  - **An absent null count is unknown, never zero.** arrow-rs makes
+    "missing null counts as zero" an explicit option because it is a soundness
+    choice; here `-1` means unknown and `all_null` is never inferred from it.
+
+  `PrunePredicate` is a one-slot erasure box called **once per row group** —
+  order 10^6 rows — and everything below it is monomorphic. It is built where
+  the concrete predicate type is still visible rather than as a sixth slot on
+  `DynValue`, which is the difference between paying per *filter predicate* and
+  paying per *boxed value*: the recorded priors are +3.2 MB for one extra slot
+  on the old aggregate box and +662,740 bytes for a shared generic dispatch
+  adapter. The stated price is that a predicate arriving already boxed as a
+  `DynValue` gets no pruner and reads the whole file.
+
+  Three Mojo mechanics the design documents left open are settled by cases in
+  `marrow/expr/tests/test_pruning.mojo` rather than by assumption. A trait
+  **default** returning `Bounds[Self.Type.native]` reduces for a conformer that
+  does not override it (`2026-08-27-index-and-pruning-plan.md` R-2, whose
+  fallback was to declare `bounds` abstract and write a four-line body on every
+  node). A `comptime if` over `Self.K.name == LtKernel.name` folds, so the
+  operator's reading is selected without a new struct parameter and without
+  touching a single alias or call site. And `f[V: Value & Prunable](V)` and
+  `f(DynValue)` are disjoint overloads even though `DynValue` carries an
+  `@implicit __init__[V: Value]` (08-24 design open question 1), which is what
+  makes the typed `filter` verb applicable.
+
+  **Honest value.** On `hits_0.parquet` — two row groups of 450,560 and 549,440
+  rows, no ColumnIndex, no OffsetIndex — exactly one ClickBench predicate prunes
+  anything (`CounterID = 62`, one group of two), and the whole-suite ceiling is
+  **1.04x**, against 3.6x measured for projection pushdown and 1.6-4.7x for
+  row-group windowing. This landed because it is correct and composable and
+  because files with page indexes need it, not because it moves that number.
 
 - **The operator surface `marrow/exprold/` had and `marrow/expr/` did not:
   arithmetic beyond `+ - *`, the temporal family, and the string fluent
@@ -263,6 +467,38 @@
 
 ### Tests
 
+- **`marrow/kernels/tests/test_bounds.mojo`,
+  `marrow/expr/tests/test_pruning.mojo` and
+  `marrow/expr/tests/test_pushdown.mojo`** — 46 cases for the pruning
+  subsystem, of which three carry the weight.
+
+  `test_bounds_readings_are_exact_over_small_integers` brute-forces the whole
+  algebra: over `[-3, 3]` an integer interval is dense, so "could `x op y` hold
+  for some pair" is decidable by enumeration and the reading must agree
+  **exactly**. Asserting equality rather than one-sidedness is what makes the
+  case able to fail — a kernel answering `True` unconditionally passes any
+  one-sided check.
+
+  `test_pruning_never_excludes_a_matching_group` is the soundness property.
+  For 240 randomly generated granules across four predicate shapes it builds
+  the **real** comptime predicate, runs it through the **real** engine, and
+  requires that every granule the pruner rejected returned zero rows — the
+  one-sided rule as an experiment against the production evaluator rather than
+  against a second model of it. It counts prunes and keeps and asserts both are
+  non-zero, so it cannot pass vacuously.
+
+  `test_pruning_a_foreign_dtype_answers_maybe_without_aborting` is the case
+  that has to exist because failing it is not a failure: `as_primitive[T]` is a
+  `debug_assert`, so unwrapping a bound of the wrong type **aborts the
+  process** and takes every case in the file with it.
+
+  `test_pushdown.mojo` writes its fixtures with **pyarrow**, not marrow's
+  writer — a suite built only on marrow-written files never sees an absent
+  `column_orders`, a leaf under a struct, or a chunk with no statistics, which
+  is where the six defects fixed in `9a491ce` all lived. Each case asserts
+  fewer row groups read *and* identical rows returned; either alone passes for
+  a pruner that prunes nothing or for one that prunes everything.
+
 - **`marrow/expr/comptime/tests/test_arithmetic.mojo` and `test_temporal.mojo`**,
   plus fluent-surface cases appended to `test_strings.mojo` and verb cases to
   `marrow/expr/tests/test_relations.mojo`. They pin *wiring*, which is what
@@ -389,47 +625,73 @@
 
 ### Refactors
 
-- **The aggregate kernels are typed, with one erased dispatcher on top.** The
-  same shape every other kernel family here has: `filter`, `take`, `cast` and
-  `concat` put their logic in typed overloads and expose one erased entry point
-  that narrows and delegates. Aggregates did the opposite — `List[DynArray]`
-  appeared in the trait itself, so every conformer re-narrowed on every morsel
-  and the trait could not say what it consumed.
+- **The aggregate kernels are typed all the way down, and the erased aggregate
+  box is gone.** The same shape every other kernel family here has: `filter`,
+  `take`, `cast` and `concat` put their logic in typed overloads. Aggregates did
+  the opposite — `List[DynArray]` appeared in the trait itself, so every
+  conformer re-narrowed on every morsel and the trait could not say what it
+  consumed.
 
-  `AggKernel` now declares `comptime InArray: ArrayInput` and
+  `AggKernel` now declares `comptime InArray: Array` and
   `comptime OutArray: Array`, with `update(groups, input: Self.InArray)` and
-  `finish() -> Self.OutArray`. `Fold[K, V]` eats a `PrimitiveArray[V]`,
-  `StringExtremum[Op, T]` a `BinaryLikeArray[T]`, `Dispersion[ddof, root, V]` a
-  `PrimitiveArray[V]`. That removes `Dispersion`'s and `StringExtremum`'s
-  per-morsel `dispatch_numeric`/`dispatch_stringlike` re-dispatch entirely.
+  `finish() -> Self.OutArray`. **Every** conformer answers with a concrete
+  array: `Fold[K, V]` eats a `PrimitiveArray[V]`, `StringExtremum[Op, T]` a
+  `BinaryLikeArray[T]`, `Dispersion[…, V]` a `PrimitiveArray[V]`, and
+  `ValidCount[A]` / `DistinctCount[exact, A]` an `A` — because a cardinality is
+  dtype-generic in what it *computes* but not in how it *reads*: a valid count
+  wants a validity bitmap and a distinct count wants to hash values, and both
+  are faster knowing the array type.
 
-  **`ArrayInput` is the new bound, and it is what makes one boundary enough.**
-  Two members — `__init__(ArrayData)` and `type()` — so
-  `Self.InArray(column.to_data())` narrows *any* conformer and `DynAgg` needs
-  no per-kernel hook. `Array` already required both; `DynArray` now conforms
-  too, which is deliberate: `ValidCount` and `DistinctCount` read only a
-  validity bitmap and a hash, never a value's type, so naming an array type for
-  them would name a type they never use — and since every caller holds an
-  erased column, that "narrowing" would be an unchecked *reinterpret* rather
-  than a conversion. They consume `DynArray`, which is the truthful statement.
-  `ValidCount` avoids the per-row cost by reading the bitmap once per morsel
-  through `to_data().validity()` instead of calling `is_valid(i)` per row,
-  which is what the measured 4.9x was actually about.
+  That removes `Dispersion`'s and `StringExtremum`'s per-morsel
+  `dispatch_numeric` / `dispatch_stringlike` re-dispatch entirely.
 
-- **`DynAgg` replaces `ResolvedAggregate`, and moves to `kernels/`.** One box
-  holding the output dtype, the empty answer, the opened state and four
-  trampolines — the erased face of the typed stack, next to the kernels it
-  erases rather than in the expression layer. It carries the `_drop` trampoline
-  from the start, which matters most here: the state it boxes is O(distinct
-  values).
+  An intermediate design let `InArray` be `DynArray` for the two cardinalities,
+  behind a weaker `ArrayInput` bound. It bought nothing: the bound had no
+  readable members, so no kernel body was written against it, and with
+  `DynArray` sitting in the same bound as `PrimitiveArray[Int64Type]` the
+  declaration said only "some column-ish thing". Both are gone. Resolving the
+  array type at the *dispatch site*, where `dispatch_primitive` already binds a
+  concrete `T`, is what lets the bound mean what it says.
 
-  It also closes the hazard the typed contract introduced. `DynAgg.update` is
-  the sole place a runtime dtype meets a comptime `InArray`, and
-  `Array.__init__` from `ArrayData` does not re-validate — so it checks the
-  column's dtype against the one it resolved for. Every morsel of a scan shares
-  a schema, so that is one comparison per morsel, not per row, and without it a
-  mismatch reaches `as_type`'s `debug_assert`, which **aborts the process**
-  rather than raising.
+  The typing paid for itself immediately: ten call sites mistyped during the
+  migration failed loudly at construction with `BinaryArray requires exactly
+  two buffers`, where the erased contract would have reinterpreted an int64
+  payload as string offsets and returned a plausible wrong cardinality.
+
+- **`dispatch_agg_array`** (`kernels/aggregate.mojo`) is the new runtime-dtype →
+  **array-type** dispatcher — the aggregate counterpart of the `dispatch` static
+  every value kernel exposes. Those narrow an erased *array* and run
+  immediately, because they are stateless; an aggregate is a state machine that
+  must exist before its first morsel, so this narrows a *dtype* and hands back
+  whatever the caller builds at that type.
+
+- **The runtime lane builds a typed operator, so there is no erased aggregate
+  state at all.** `Value.to_operator` now takes the input `Schema`, so a
+  name-resolved aggregate resolves at **plan-build time** rather than on the
+  first morsel. Each `dispatch_*` arm binds a concrete type, so the arm
+  constructs `AggregateOperator[Fold[K, V], RuntimeValue, …]` outright and boxes
+  it in the `DynOperator` every operator already pays for.
+
+  That deleted `ResolvedAggregate`, its four trampolines and its drop
+  trampoline, *and* `RuntimeAggregateOperator` — one erasure where there were
+  two. Measured afterwards: the fused aggregate gate sits at 1,466,328 bytes of
+  `__text` against 10,711,044 for the runtime-identity gate, a 7.3x gap that is
+  the clearest statement yet of what the AOT lane buys.
+
+- **One ladder, not two.** `dispatch_agg` takes a **parametric job**
+  (`Func: def[Agg: AggKernel]() raises -> R`), the same mechanism
+  `DynType.dispatch_*` uses, so the plan-time dtype question and the
+  build-an-operator question share a single name × dtype resolution. Both
+  callers take their answer off the same branch, which makes the two-table
+  drift that `min` over `timestamp[us]` declaring `timestamp[s]` represents
+  unrepresentable rather than merely tested.
+
+- **`AggKernel.open` folded into construction.** It was a lifecycle step on the
+  theory that an operator is built before a schema is in hand; it no longer is.
+  Four of the five bodies were a no-op or a domain check the type parameters
+  already guaranteed, and keeping it cost every conformer an "am I open?"
+  `Optional` — including `Fold`, whose accumulator was unwrapped **once per SIMD
+  lane** inside the fused loop. `Defaultable` left `AggKernel` with it.
 
 - **Aggregates take one column, not a list.** `dtype(List[DynType])` became
   `dtype(DynType)` and `RuntimeAggregate._inputs: List[DynValue]` became

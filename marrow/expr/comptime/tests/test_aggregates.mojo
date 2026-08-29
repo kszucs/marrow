@@ -4,7 +4,8 @@ Two nodes, on one axis — what the aggregate consumes:
 
 - A fusing `Aggregate` folds its operand's **lanes** into registers and never
   materialises it. That is the 14.6x, and it is why `A` must be a
-  `NumericValue`: a lane is a `SIMD`, which needs a fixed width.
+  `PrimitiveValue`: a lane is a `SIMD`, which needs a fixed width — and needs
+  nothing else, so a temporal `min`/`max` fuses too.
 - A non-fusing one materialises the operand **once** and computes over the
   column, for the aggregates that have no fold algebra to fuse into. Its
   operand stays typed, so `count_distinct(upper(s))` still fuses `upper(s)`.
@@ -162,14 +163,14 @@ def test_grouped_folds_into_slots() raises:
     _ = s.push(_m(_b([1, 2, 3, 4]), _groups([0, 1, 0, 1]), 2))
     _ = s.push(_m(_b([10, 20]), _groups([1, 0]), 2))
     assert_true(
-        s.drain().value().to_array(1) == array([1 + 3 + 20, 2 + 4 + 10], int64)
+        s.drain().value().to_array(2) == array([1 + 3 + 20, 2 + 4 + 10], int64)
     )
 
 
 def test_grouped_skips_nulls_per_group() raises:
     var s = col("a", int64).min().alias("t").to_operator(Schema(), True)
     _ = s.push(_m(_b([5, None, 1, 9]), _groups([0, 0, 1, 1]), 2))
-    assert_true(s.drain().value().to_array(1) == array([5, 1], int64))
+    assert_true(s.drain().value().to_array(2) == array([5, 1], int64))
 
 
 def test_mean_uses_the_valid_count_as_divisor() raises:
@@ -576,11 +577,11 @@ def test_variance_of_a_fused_subtree() raises:
 # ---------------------------------------------------------------------------
 # A fused subtree under a GROUP BY
 #
-# `FusedAggregateOperator` has two instantiations and `comptime if
-# Self.G.scatters` picks between genuinely different bodies: a scatter loop
-# over group ids, or registers plus one hand-off per morsel. Every other
-# fused-subtree case in this tree is **keyless**, so all of them exercise
-# `ScalarGrouping` and none exercise the scatter loop reading `lane[W]` out of
+# A fused fold is two separate operators — `ScatteredAggregateOperator` walks
+# group ids and does a random write per row, `RegisterAggregateOperator`
+# accumulates in registers and hands off once per morsel. Every other
+# fused-subtree case in this tree is **keyless**, so all of them exercise the
+# register operator and none exercise the scatter loop reading `lane[W]` out of
 # a computed operand. These do.
 # ---------------------------------------------------------------------------
 def _lines() raises -> RecordBatch:

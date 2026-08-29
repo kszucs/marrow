@@ -54,6 +54,8 @@ from std.collections import Dict
 
 from ..arrays import StructArray
 from ..buffers import Bitmap
+from ..kernels.bounds import Bounds
+from .pruning import PruneStats, param_bounds
 from ..dtypes import DynType, NumericType
 from ..scalars import DynScalar
 from ..schema import Schema
@@ -156,6 +158,20 @@ struct Param[T: NumericType](NumericValue):
         W: Int
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return SIMD[Self.Type.native, W](bound)
+
+    def bounds(
+        self, stats: PruneStats, bindings: Bindings
+    ) -> Bounds[Self.Type.native]:
+        """A bound parameter prunes exactly as well as a literal, because
+        pruning runs at *execution* time with the same `Bindings` `bind` will
+        see. `exprold` needed a process-global registry for this and still
+        regressed a parameterised date filter to reading every row group.
+
+        Unbound and undefaulted answers unknown and does not raise: the scan
+        reads everything and `bind` then raises naming the parameter. Pruning
+        degrades; binding raises.
+        """
+        return param_bounds[Self.T](bindings, self._name, self._default)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("param(", self._name, ")")

@@ -8,10 +8,11 @@ Two-phase group-by:
 
 The grouper is **aggregate-agnostic**: aggregates are ``AggKernel`` types, and
 mapping a runtime function *name* onto one lives in the expression layer
-(``marrow/expr``). ``Grouping`` is the placement axis an aggregate is
-parameterised on — ``ScalarGrouping`` for one implicit slot, ``HashGrouping``
-for a keyed one — and the operator that drives a query holds both a grouping
-and its aggregates (``marrow/expr/physical.mojo``).
+(``marrow/expr``). ``HashGrouping`` is the keyed placement, owned concretely by
+``GroupByOperator`` (``marrow/expr/physical.mojo``), which evaluates the key
+expressions once per morsel and hands the resulting ``Groups`` to every
+aggregate. The keyless case has no conformer here at all — it is
+``Groups.single``, an empty id array, and no placement object exists to hold.
 """
 
 from ..arrays import (
@@ -43,8 +44,9 @@ struct HashGrouper(Movable):
     group), matching SQL GROUP BY semantics (unlike join, where NULL != NULL).
 
     Aggregate state is owned by the caller, not the grouper — see
-    ``AggregateOperator`` in ``marrow/expr/comptime/aggregates.mojo``, which
-    pairs a ``Grouping`` with an ``AggKernel``.
+    ``GroupByOperator`` in ``marrow/expr/physical.mojo``, which hashes the keys
+    once and forwards the resulting ``Groups`` to each aggregate's own
+    operator.
     """
 
     var _table: SwissHashTable[RapidHash64]
@@ -151,20 +153,29 @@ struct HashGrouper(Movable):
 
 
 # ---------------------------------------------------------------------------
-# Grouping — the placement axis
+# HashGrouping — the keyed placement
 # ---------------------------------------------------------------------------
-trait Grouping(Deinitable, Movable):
-    """Which slot does a row contribute to?
+struct HashGrouping(Deinitable, Movable):
+    """Dense ids from a keys-only hash table, accumulated across batches.
 
-    The *strategy*; `Groups` is the assignment it produces. One of the four
-    axes an aggregation composes from — algebra x input x placement x emission
-    — and the one that decides whether a fold scatters at all.
+    Wraps `HashGrouper`, which already owns the hashing, the dense-id
+    assignment and the unique-key materialisation. This adds the batch-facing
+    `assign` / `num_groups` / `key_columns` surface `GroupByOperator` drives it
+    through.
 
-    A trait rather than a flag, so window partitions and a sorted or radix
-    placement arrive as **conformers** rather than as further branches inside
-    the operator that drives them. Placement is a comptime type parameter of a
-    fold, so the loop a placement implies is chosen when the plan is built, not
-    per batch.
+    **A concrete struct, not a conformer.** It used to implement a `Grouping`
+    trait alongside a `ScalarGrouping` that stood for "one implicit slot", on
+    the theory that window partitions and a sorted or radix placement would
+    arrive as further conformers. Neither ever did, and two measurements say
+    they will not arrive here: `ScalarGrouping` was **never constructed
+    anywhere** — every occurrence was a type argument pinning the aggregate
+    operator's unused `G` parameter — and parameterising `GroupByOperator`
+    itself on the trait cost **+24,432 bytes for no benefit**
+    (`expr/physical.mojo`). The only member any consumer read was
+    `comptime scatters: Bool`, and the two answers to it are now two separate
+    operators — `ScatteredAggregateOperator` and `RegisterAggregateOperator`.
+    A future sorted or radix placement is a *runtime* choice inside the
+    operator that owns the keys, not a comptime parameter of a fold.
 
     Takes **already-evaluated key columns**, never a `RecordBatch`: `kernels`
     must not depend on the expression layer, and evaluating a key expression is
@@ -172,78 +183,16 @@ trait Grouping(Deinitable, Movable):
     in a query — the keys are hashed once, not once per aggregate.
     """
 
-    comptime scatters: Bool
-    """Whether a fold must scatter into per-slot accumulators.
-
-    False for a single implicit slot, which lets a fold accumulate in registers
-    and reduce once at the end. Not a micro-optimisation: scattering at one
-    group measured **14.6x** worse than the register fold, which is the whole
-    reason `ScalarGrouping` is its own conformer rather than `HashGrouping`
-    with one key.
-    """
-
-    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
-        """Place this batch's rows, extending the grouping with any new slots.
-
-        Ids are dense and stable across calls, so an accumulator that folded an
-        earlier batch keeps its slots when a later one introduces new groups.
-        """
-        ...
-
-    def num_groups(self) -> Int:
-        """How many slots exist so far — the size of a per-slot accumulator."""
-        ...
-
-    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
-        """One column per key field, one row per slot.
-
-        Empty when there are no keys. Call once, at emit time — it finishes the
-        key builders.
-        """
-        ...
-
-
-struct ScalarGrouping(Grouping):
-    """One slot for every row — `SELECT sum(x) FROM t`, with no `GROUP BY`.
-
-    Holds nothing and allocates nothing per batch. In particular it does **not**
-    build a zero vector to say "every row is group 0": a fold whose `scatters`
-    is False never reads the ids, and materialising one `Int32` per row to
-    communicate a constant is exactly the cost this conformer exists to avoid.
-    """
-
-    comptime scatters = False
-
-    def __init__(out self):
-        pass
-
-    def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
-        return Groups.single(num_rows)
-
-    def num_groups(self) -> Int:
-        return 1
-
-    def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
-        return List[DynArray]()
-
-
-struct HashGrouping(Grouping):
-    """Dense ids from a keys-only hash table, accumulated across batches.
-
-    Wraps `HashGrouper`, which already owns the hashing, the dense-id
-    assignment and the unique-key materialisation. This adds the `Grouping`
-    surface over it so a fold can be parameterised on placement.
-    """
-
-    comptime scatters = True
-
     var _grouper: HashGrouper
 
     def __init__(out self):
         self._grouper = HashGrouper()
 
     def assign(mut self, keys: List[DynArray], num_rows: Int) raises -> Groups:
-        """Hash the key columns and resolve dense ids.
+        """Place this batch's rows, extending the grouping with any new slots.
+
+        Ids are dense and stable across calls, so an accumulator that folded an
+        earlier batch keeps its slots when a later one introduces new groups.
 
         The field names built here are positional and deliberately arbitrary —
         `HashGrouper` keys on the *values*, and the caller supplies the real
@@ -264,8 +213,12 @@ struct HashGrouping(Grouping):
         return Groups(ids^, self._grouper.num_groups())
 
     def num_groups(self) -> Int:
+        """How many slots exist so far — the size of a per-slot accumulator."""
         return self._grouper.num_groups()
 
     def key_columns(mut self, fields: List[Field]) raises -> List[DynArray]:
-        return self._grouper.key_columns(fields)
+        """One column per key field, one row per slot.
 
+        Call once, at emit time — it finishes the key builders.
+        """
+        return self._grouper.key_columns(fields)

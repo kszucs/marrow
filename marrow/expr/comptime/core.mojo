@@ -52,6 +52,8 @@ from ...tabular import RecordBatch
 from ...views import apply
 from ..logical import Shape, Value
 from ..params import Bindings
+from ...kernels.bounds import Bounds
+from ..pruning import PruneStats, Prunable, Truth
 from .aggregates import (
     ApproxCountDistinct,
     StringApproxCountDistinct,
@@ -141,7 +143,7 @@ from ..physical import Evaluable, DynOperator, EvalOperator
 # ---------------------------------------------------------------------------
 # ComptimeValue — what every node in this lane shares
 # ---------------------------------------------------------------------------
-trait ComptimeValue(Evaluable, Value):
+trait ComptimeValue(Evaluable, Prunable, Value):
     """A `Value` whose type states its output type and its per-batch state.
 
     This is where `evaluate` lives — **not** on `Value`. A logical node is
@@ -275,6 +277,21 @@ trait PrimitiveValue(ComptimeValue):
     """
 
     comptime Type: PrimitiveType
+
+    def bounds(
+        self, stats: PruneStats, bindings: Bindings
+    ) -> Bounds[Self.Type.native]:
+        """What this sub-expression's value can be over one granule. Default:
+        unknown.
+
+        `bounds` is to `prune` what `lane` is to `evaluate`: the typed half a
+        composite reads from its operands. `Bounds[Self.Type.native]` is the
+        same projection `lane`'s `SIMD[Self.Type.native, W]` already makes, and
+        a *defaulted body* at that return type reduces — verified, so the
+        fallback of declaring this abstract and writing a four-line body on
+        every conformer is not needed.
+        """
+        return Bounds[Self.Type.native].unknown()
 
     def count_distinct(self) -> CountDistinct[Self]:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics).

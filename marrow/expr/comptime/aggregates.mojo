@@ -10,14 +10,15 @@ takes `&[ArrayRef]`, ClickHouse's `IAggregateFunction::add` takes `IColumn**`,
 Polars aggregates a `Series` — all three must compute the intermediate column
 first, because none has comptime types.
 
-**The fold lives here too.** `FusedAggregateOperator` is the executor for the nodes
-below it, and it sits beside them for the same reason `Column` sits beside its
-own `bind`/`lane`: this lane is organised by **family**, not by
+**The three executors live here too.** `ScatteredAggregateOperator`,
+`RegisterAggregateOperator` and `BufferedAggregateOperator` are what the nodes
+below become, and they sit beside them for the same reason `Column` sits beside
+its own `bind`/`lane`: this lane is organised by **family**, not by
 logical-versus-physical. That split is real one level up (`logical.mojo` /
-`physical.mojo`); inside a lane the distinction that matters is
-lane-agnostic versus lane-specific. `EvalOperator` is generic over any
-`Evaluable` and belongs in `physical.mojo`; `FusedAggregateOperator` is parameterised on
-`A: NumericValue` and cannot go there without making the lane-agnostic layer
+`physical.mojo`); inside a lane the distinction that matters is lane-agnostic
+versus lane-specific. `EvalOperator` is generic over any `Evaluable` and
+belongs in `physical.mojo`; the two fused operators are parameterised on
+`A: PrimitiveValue` and cannot go there without making the lane-agnostic layer
 name a lane.
 
 `AggState[K, V]` is the accumulator, it lives
@@ -29,7 +30,6 @@ exactly one place.
 """
 
 from ...dtypes import DynType, NumericType
-from ...kernels.groupby import Grouping, HashGrouping, ScalarGrouping
 from std.sys.info import simd_width_of
 
 from ...arrays import BinaryLikeArray, PrimitiveArray, Int32Array, StructArray
@@ -78,8 +78,9 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
 
     - does `Agg` have a lane algebra — `conforms_to(Agg, Foldable)`? A hash
       set and a bytewise scan do not.
-    - is the operand lane-readable — `conforms_to(A, NumericValue)`? A lane is
-      `SIMD[Type.native, W]`, so it needs a fixed-width element.
+    - is the operand lane-readable — `conforms_to(A, PrimitiveValue)`? A lane
+      is `SIMD[Type.native, W]`, so it needs a fixed-width element — which is
+      all it needs, temporal columns included.
 
     Both yes, and the fold is fused into the operand's loop: `sum(a * 2 + b)`
     never builds `a * 2 + b`, worth 1.17-1.68x grouped and **14.6x** ungrouped.
@@ -100,13 +101,15 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
     aggregate's, which is a loss nothing forces. So `A` stays a type parameter
     and the operand builds its own `EvalOperator[A]`.
 
-    **`A: ComptimeValue` — the looser bound — is load-bearing.** It is a
-    concrete trait rather than a projection off `Agg`, and that is what makes
+    **`A: Evaluable & Value` — the looser bound — is load-bearing.** It names
+    concrete traits rather than a projection off `Agg`, and that is what makes
     `_input` storable: a trait-valued associated type (`A: Agg.Operand`) does
     reduce and its members do resolve, but it cannot type a *field*. See
     CLAUDE.md's associated-types section. The tight bound is recovered inside
     `to_operator`, where `comptime if conforms_to` is enough to hand `Self.A`
-    to an operator that requires `NumericValue`.
+    to an operator that requires `PrimitiveValue` — verified 2026-08-29: Mojo
+    accepts binding a parameter at a *tighter* trait bound at a struct
+    *instantiation* site, not only at a method call.
 
     **An ordinary `Value`.** It conforms to exactly what `x + 1` conforms to
     and is boxed by the same `DynValue`. There is no `AggValue` trait: once
@@ -126,14 +129,26 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
     `project([col("a").sum()])` a plan-time error naming the mistake."""
 
     comptime fuses = conforms_to(Self.Agg, Foldable) and conforms_to(
-        Self.A, NumericValue
+        Self.A, PrimitiveValue
     )
     """Whether this instantiation folds lanes or evaluates a column.
 
-    Stated once and read by `to_operator`. It is also the honest answer to "is
-    this aggregate cheap?": a fused fold keeps one scalar per group, while the
-    other path accumulates every morsel's column and ids until `drain` and is
-    therefore **O(rows)** in the aggregate's input.
+    **Stated once, here, and nowhere else.** It used to be written twice —
+    identically — once on this node and once on the operator, which is a
+    two-place invariant with nothing enforcing it: had they drifted, this node
+    would have picked the fused operator while that operator took its buffered
+    arm, or the reverse. The operators are now two structs, and each one *is*
+    the answer rather than recomputing it.
+
+    **`PrimitiveValue`, not `NumericValue`.** The fused arm calls exactly
+    `bind`, `validity` and `lane[W]` on its operand, and all three are
+    `PrimitiveValue` members — so the narrower bound excluded temporal
+    `min`/`max` from fusion for no reason the fused loop can see.
+    `TemporalValue.min()` and `.max()` already build a `Fold[MinKernel, V]`
+    over a temporal `V`; the accumulator dtype comes from the `in_dtype:
+    DynType` the fused operator is constructed with, not from `Self.A.Type()`,
+    so the "a `TemporalType` is not `Defaultable`" obstacle that once justified
+    the narrower bound is gone.
     """
 
     var _input: Self.A
@@ -185,33 +200,38 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
         property of `Agg` and `A`. Resolving them here is what keeps them out
         of the inner loop.
 
-        Both operators are parameterised, so nothing in this lane is erased:
-        `FusedAggregateOperator` because its body *is* the per-row loop, and
-        `BufferedAggregateOperator` because keeping `A` means its operand is an
-        `EvalOperator[A]` rather than a `DynOperator` box and `Agg.grouped` is
-        a direct call rather than a pointer. The erased shape lives in
-        `runtime/` as `RuntimeAggregateOperator`, where the name genuinely is not
-        known until run time.
+        All three operators are parameterised, so nothing in this lane is
+        erased: the two fused ones because their bodies *are* the per-row
+        loop, and `BufferedAggregateOperator` because keeping `A` means its
+        operand is evaluated through a direct call rather than through a
+        `DynOperator` box. All three are boxed once, here, in the
+        `DynOperator` every operator already pays for, so the return type does
+        not depend on the branch.
+
+        **Placement is a comptime choice for a fused fold and a runtime one
+        for a buffered fold**, and that asymmetry is the measurement rather
+        than an oversight. `ScatteredAggregateOperator` and
+        `RegisterAggregateOperator` are different programs — a random write per
+        row against a register accumulated across the whole morsel — and the
+        gap between them is the 14.6x. `BufferedAggregateOperator` reads its
+        placement once per morsel to build a `Groups`, never per row, so
+        instantiating it twice would double the code for nothing — measured
+        at +4.6%.
         """
         comptime if Self.fuses:
             if grouped:
-                return AggregateOperator[Self.Agg, Self.A, HashGrouping](
+                return ScatteredAggregateOperator[Self.Agg, Self.A](
                     self._input.copy(),
                     bindings.copy(),
-                    True,
                     self._input.dtype(schema),
                 )
-            return AggregateOperator[Self.Agg, Self.A, ScalarGrouping](
+            return RegisterAggregateOperator[Self.Agg, Self.A](
                 self._input.copy(),
                 bindings.copy(),
-                False,
                 self._input.dtype(schema),
             )
         else:
-            # `G` is pinned: the non-fusing arm reads `_scatters` at run time,
-            # so instantiating both groupings for it would double the code for
-            # nothing — measured at +4.6%.
-            return AggregateOperator[Self.Agg, Self.A, ScalarGrouping](
+            return BufferedAggregateOperator[Self.Agg, Self.A](
                 self._input.copy(),
                 bindings.copy(),
                 grouped,
@@ -285,43 +305,87 @@ comptime StringApproxCountDistinct[A: StringValue] = Aggregate[
 ]
 
 
-struct AggregateOperator[Agg: AggKernel, A: Evaluable & Value, G: Grouping](
-    Operator
-):
-    """Any aggregate over a comptime operand — one struct, two ways of feeding
-    the same state.
+# ---------------------------------------------------------------------------
+# The three executors — one per way of feeding an aggregate's state.
+#
+# `ScatteredAggregateOperator` folds lanes into the slot each row's group id
+# names. `RegisterAggregateOperator` folds a whole morsel in registers and
+# hands the result to slot 0 once. `BufferedAggregateOperator` evaluates the
+# operand to a column and gives the column to the kernel. That is the whole
+# taxonomy, and it is named for *how the state is fed* rather than for what the
+# aggregate is called.
+#
+# **One struct held all three for a while, and every merge cost the same
+# thing.** A struct body admits no `comptime if`, so there are no conditional
+# fields: a merged operator carries every arm's state in every instantiation.
+# The last merge left `_scatters` unread by the fused arms and `_num_groups`
+# unread by the buffered one, and required the `fuses` predicate to be written
+# twice — once on the node to pick the operator and once on the operator to
+# pick the arm — with nothing enforcing that the two agreed. Both non-fusing
+# call sites additionally pinned the placement parameter to a "one implicit
+# slot" conformer while passing `grouped=True`, so the type said one thing and
+# the field another.
+#
+# The argument that kept them together does not transfer. It cited the *node*
+# split — `FusedAggregate` / `BufferedAggregate` — which forced every fluent
+# method to restate the split by hand and get it right. Splitting the
+# *operators* leaves `Aggregate` one node with one fluent surface;
+# `to_operator` already branched on `comptime if Self.fuses` and on `grouped`,
+# and all three are boxed in the same `DynOperator`, so nothing above sees more
+# than one type.
+#
+# **Splitting on placement costs no instantiations.** `scatters` was already a
+# comptime parameter, so the same two fused programs were emitted either way —
+# each now with a straight-line `push` and no field it does not read.
+# ---------------------------------------------------------------------------
 
-    `comptime fuses` decides which, from two independent facts: whether `Agg`
-    has a lane algebra (`Foldable`) and whether the operand is lane-readable
-    (`NumericValue`). Both yes and the fold runs in registers over the operand's
-    own `lane[W]`, so `sum(a * 2 + b)` never builds `a * 2 + b` — 1.17-1.68x
-    grouped, **14.6x** ungrouped. Otherwise the operand is evaluated to a column
-    per morsel and the kernel absorbs it.
 
-    **One state field, not a union.** Both paths hold `Optional[Agg]`: the
-    fused one reaches it through `Foldable`'s lane entry points (`grow` /
-    `scatter` / `combine_at`), the other through `AggKernel.update`. That is
-    what makes the merge possible at all — a struct cannot declare a field
-    conditionally, and an earlier attempt that kept a separate
-    `AggState[K, A.Type]` field had to carry both field sets and paid for it.
-    Holding `Agg` instead also stops this layer naming `AggState`, a kernel's
-    own state struct, which it had no business reaching into.
+def _emit_fold[Agg: AggKernel](mut state: Agg, slots: Int) raises -> Datum:
+    """Seed `slots` slots, then finalize — the tail all three operators share.
 
-    The tight bounds are recovered inside `comptime if Self.fuses`, where
-    `conforms_to` prunes the untaken branch **before** name resolution: the
-    fused arm calls `A.lane[W]` on a field bound only on `ComptimeValue`, and
-    `Foldable`'s methods on a field bound only on `AggKernel`. Both resolve.
+    **A free function, not a method and not a trait default.** A method body on
+    an operator struct elaborates unconditionally, which is the trap that
+    forced the fused `push` bodies inline: `comptime if` prunes an untaken
+    *branch* before name resolution, but never a method. This takes the state
+    as an argument instead, so it is elaborated once per `Agg` and names
+    nothing from the operator that calls it.
 
-    `G` is comptime for the fused arm, where specialising the scatter loop is
-    the 14.6x. The other arm ignores it and reads `_scatters`, and
-    `Aggregate.to_operator` pins `G = ScalarGrouping` there so a non-fusing
-    aggregate is instantiated once rather than twice — instantiating both
-    groupings for aggregates that cannot use them measured **+4.6%**.
+    `reserve` is what makes an aggregate over **zero** morsels answer at all.
+    The fused operators return early at `n == 0` and a buffered one over an
+    empty stream never sees `update`, so nothing grew a slot; a keyless query
+    still owes exactly one row. `reserve(0)` is a no-op in every conformer, so
+    a grouped query that saw no rows correctly answers no rows.
     """
+    state.reserve(slots)
+    return Datum(state.finish().to_dyn())
 
-    comptime fuses = conforms_to(Self.Agg, Foldable) and conforms_to(
-        Self.A, NumericValue
-    )
+
+struct ScatteredAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
+    """A fused fold that scatters into the slot each row's group id names —
+    `GROUP BY` with a lane-readable operand and a lane algebra.
+
+    `sum(a * 2 + b)` never builds `a * 2 + b`: the state binds the subtree and
+    reads `lane[W]` straight into a register before scattering. Measured
+    2026-08-22 at 1.17-1.68x over materialise-then-scatter.
+
+    The scatter stays scalar per lane even at `W > 1`, and that is not an
+    oversight — two lanes may carry the same group, and a vector
+    read-modify-write would lose one of them without conflict detection. `W`
+    still pays because the loads and the arithmetic feeding it vectorise.
+
+    **Separate from `RegisterAggregateOperator` rather than one struct with a
+    `scatters` parameter.** The two bodies share no statement: this one issues
+    a random write per row through `agg.scatter[W]`, the other accumulates in
+    registers and calls `combine_at` once per morsel — and that register path
+    is where the **14.6x** came from. A merged struct also had to carry
+    `_num_groups` in the instantiation that never reads it, because a struct
+    body admits no `comptime if` and therefore no conditional field.
+
+    **The bounds are the honest ones.** `Agg: Foldable` because this calls
+    `scatter`; `A: PrimitiveValue` because it calls `bind`, `validity` and
+    `lane[W]`. `Aggregate.to_operator` recovers both inside
+    `comptime if Self.fuses`, where `conforms_to` has already established them.
+    """
 
     var _input: Self.A
     var _bindings: Bindings
@@ -330,14 +394,279 @@ struct AggregateOperator[Agg: AggKernel, A: Evaluable & Value, G: Grouping](
     of it bind different values."""
 
     var _state: Self.Agg
-    """`None` until the first morsel: `Agg.open` needs the input's dtype, and
-    an operator is built before any schema is in hand."""
-
-    var _scatters: Bool
-    """Whether the query has `GROUP BY` keys. Read only by the non-fusing arm;
-    the fused arm has `G.scatters` at comptime."""
+    """The accumulator, built at construction from the operand's dtype. Not an
+    `Optional`: `to_operator` takes the input schema, so the dtype is in hand
+    before the first morsel, which is what let `AggKernel.open` and the
+    `_opened` latch that guarded it disappear."""
 
     var _num_groups: Int
+    """How many slots the last morsel asked for. `drain` reads it to seed the
+    slots an input of zero rows never grew — it stays 0 when no morsel arrived,
+    and a grouped query over nothing correctly emits no rows."""
+
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var input: Self.A,
+        var bindings: Bindings,
+        in_dtype: DynType,
+    ) raises:
+        self._input = input^
+        self._bindings = bindings^
+        self._state = Self.Agg(in_dtype)
+        self._num_groups = 0
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        """Scatter this morsel's lanes into their groups.
+
+        Inline rather than delegating to a method per validity case, and that
+        is forced: a separate method's body is elaborated unconditionally, and
+        moving the loop out gave `'A' value has no attribute 'bind'` because
+        `A` is bound only on `PrimitiveValue` at the point of the call.
+        """
+        ref batch = morsel.batch
+        self._num_groups = morsel.groups.num_groups
+        var num_groups = self._num_groups
+        var n = len(batch)
+        ref agg = self._state
+        if n == 0:
+            return None
+        comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
+        var bound = self._input.bind(batch, self._bindings)
+        var v = self._input.validity(bound)
+
+        # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
+        # reads past the view on the final chunk and **aborts the process**:
+        # buffer *size* is rounded up to 64 bytes, and that is not slack.
+        var simd_end = (n // W) * W
+
+        var gids = morsel.groups.ids.values()
+        var i = 0
+        if v:
+            var vb = v.value()
+            var bits = vb.view()
+            while i < simd_end:
+                agg.scatter[W](
+                    gids.load[W](i),
+                    self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
+                    bits.load[W](i),
+                    num_groups,
+                )
+                i += W
+            while i < n:
+                agg.scatter[1](
+                    gids.load[1](i),
+                    self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
+                    bits.load[1](i),
+                    num_groups,
+                )
+                i += 1
+        else:
+            while i < simd_end:
+                agg.scatter[W](
+                    gids.load[W](i),
+                    self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
+                    SIMD[DType.bool, W](fill=True),
+                    num_groups,
+                )
+                i += W
+            while i < n:
+                agg.scatter[1](
+                    gids.load[1](i),
+                    self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
+                    SIMD[DType.bool, 1](True),
+                    num_groups,
+                )
+                i += 1
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        # No "did a morsel arrive?" branch: the kernel is built at
+        # construction, so this answers from an untouched state exactly as it
+        # would after a morsel that folded nothing.
+        return _emit_fold(self._state, self._num_groups)
+
+
+struct RegisterAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
+    """A fused fold with **one** slot, accumulated in registers — no `GROUP
+    BY`, a lane-readable operand and a lane algebra.
+
+    The fastest shape in the tree, and the one the **14.6x** was measured on: a
+    scatter at one group is a million serially dependent read-modify-writes
+    through a builder slot, where this keeps the accumulator in a SIMD register
+    for the whole morsel and hands it over once through `combine_at`.
+
+    It never touches `morsel.groups` — every row is group 0 by construction, so
+    there are no ids to load and none to materialise. That is the same saving
+    `Groups.single` makes one level down, and it is why placement is a comptime
+    distinction here rather than a field: the two loops are different programs,
+    not one program with a branch.
+
+    The register accumulator is **per-batch scratch**, the same status `Bound`
+    has. `AggState` stays the only thing crossing a morsel boundary, so
+    `K.finalize`, `K.empty_is_null` and the count-is-zero rule stay defined in
+    exactly one place.
+    """
+
+    var _input: Self.A
+    var _bindings: Bindings
+    """This execution's parameter values, held by the *operator* rather than
+    the node — which is what keeps the plan immutable and lets two executions
+    of it bind different values."""
+
+    var _state: Self.Agg
+    """The accumulator, built at construction from the operand's dtype."""
+
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var input: Self.A,
+        var bindings: Bindings,
+        in_dtype: DynType,
+    ) raises:
+        self._input = input^
+        self._bindings = bindings^
+        self._state = Self.Agg(in_dtype)
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        """Fold the whole morsel in registers, then hand it to slot 0 once."""
+        ref batch = morsel.batch
+        var n = len(batch)
+        ref agg = self._state
+        if n == 0:
+            return None
+        comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
+        var bound = self._input.bind(batch, self._bindings)
+        var v = self._input.validity(bound)
+
+        # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
+        # reads past the view on the final chunk and **aborts the process**:
+        # buffer *size* is rounded up to 64 bytes, and that is not slack.
+        var simd_end = (n // W) * W
+
+        var ident = Self.Agg.Lane.identity[Self.Agg.Acc]()
+        var vec = SIMD[Self.Agg.Acc, W](ident)
+        var acc = ident
+        var count = 0
+        var i = 0
+        if v:
+            var vb = v.value()
+            var bits = vb.view()
+            # A second accumulator, not a horizontal reduce per chunk: the
+            # count is `K.finalize`'s divisor for `mean`, and the only thing
+            # distinguishing "sum of nothing" from "sum of zeros" — both 0.
+            # int64, not the accumulator type: `mean` accumulates in float64,
+            # and a count is a count.
+            var cnt = SIMD[DType.int64, W](0)
+            while i < simd_end:
+                # `lane[W]` is null-blind: it returns data bits regardless of
+                # validity, so a null must become the identity here. Without
+                # the mask an unmasked `sum` is *silently correct* whenever the
+                # null slot's payload happens to be zero — only min/max expose
+                # it.
+                var mask = bits.load[W](i)
+                vec = Self.Agg.Lane.combine[Self.Agg.Acc, W](
+                    vec,
+                    mask.select(
+                        self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
+                        SIMD[Self.Agg.Acc, W](ident),
+                    ),
+                )
+                cnt += mask.select(
+                    SIMD[DType.int64, W](1), SIMD[DType.int64, W](0)
+                )
+                i += W
+            while i < n:
+                if bits.load[1](i)[0]:
+                    acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](
+                        acc,
+                        self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
+                    )
+                    count += 1
+                i += 1
+            for j in range(W):
+                count += Int(cnt[j])
+        else:
+            while i < simd_end:
+                vec = Self.Agg.Lane.combine[Self.Agg.Acc, W](
+                    vec,
+                    self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
+                )
+                i += W
+            while i < n:
+                acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](
+                    acc,
+                    self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
+                )
+                i += 1
+            count += n
+        for j in range(W):
+            acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](acc, vec[j])
+
+        # The registers were per-batch scratch; this is the hand-off, once per
+        # morsel rather than once per row.
+        if count > 0:
+            agg.combine_at(0, acc, count)
+        else:
+            agg.combine_at(0, ident, 0)
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        # One slot, always: `sum` of nothing is one NULL, not no rows. `push`
+        # returns early at `n == 0` and never grew it, so the seed is here.
+        return _emit_fold(self._state, 1)
+
+
+struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable & Value](
+    Operator
+):
+    """The aggregate that cannot fold lanes: evaluate the operand to a column,
+    hand it to the kernel.
+
+    Reached when `Agg` has no lane algebra (`count_distinct` keeps a hash set
+    or a sketch, `min`/`max` over a string is a bytewise scan, a dispersion
+    keeps Welford's triple) or the operand is not lane-readable.
+
+    **The operand still stays typed.** Only the aggregation step
+    materialises: `count_distinct(upper(region))` still compiles
+    `upper(region)` into one fused loop, and `A` is a type parameter rather
+    than a `DynValue` precisely so that fusion is not thrown away along with
+    the aggregate's.
+
+    **Not O(rows).** This buffered *columns* once, calling a one-shot
+    `grouped` at `drain`; every `AggKernel` is now streaming, so each morsel is
+    absorbed into per-slot state and released. The name is historical, and what
+    it now buffers is one evaluated column at a time.
+    """
+
+    var _input: Self.A
+    var _bindings: Bindings
+    """This execution's parameter values, held by the *operator* rather than
+    the node — which is what keeps the plan immutable and lets two executions
+    of it bind different values."""
+
+    var _state: Self.Agg
+    """The accumulator, built at construction from the operand's dtype."""
+
+    var _scatters: Bool
+    """Whether the query has `GROUP BY` keys.
+
+    A field and not a parameter, unlike the fused operator's: this arm reads it
+    once per morsel to build a `Groups`, not once per row, so specialising on
+    it would double the instantiation for a branch that never reaches the inner
+    loop — measured at +4.6%.
+    """
+
     var _emitted: Bool
 
     def __init__(
@@ -347,183 +676,34 @@ struct AggregateOperator[Agg: AggKernel, A: Evaluable & Value, G: Grouping](
         scatters: Bool,
         in_dtype: DynType,
     ) raises:
-        """The kernel is built here, from the operand's dtype, which the plan
-        already knows: `to_operator` takes the input schema. That is what let
-        `AggKernel.open` disappear — and with it this operator's
-        `Optional[Agg]` and the `_opened` latch that guarded it."""
         self._input = input^
         self._bindings = bindings^
         self._state = Self.Agg(in_dtype)
         self._scatters = scatters
-        self._num_groups = 1 if not scatters else 0
         self._emitted = False
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Absorb one morsel, two ways.
-
-        Both arms are inline rather than delegating to a method each, and that
-        is forced: `comptime if` prunes an untaken *branch* before name
-        resolution, but a separate method's body is elaborated unconditionally.
-        Moving the fused loop out gave `'A' value has no attribute 'bind'`,
-        because `A` is only bound on `ComptimeValue` here.
-        """
-        comptime if Self.fuses:
-            ref batch = morsel.batch
-            ref groups = morsel.groups.ids
-            comptime if Self.G.scatters:
-                self._num_groups = morsel.groups.num_groups
-            var num_groups = self._num_groups
-            var n = len(batch)
-            ref agg = self._state
-            if n == 0:
-                return None
-            comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
-            var bound = self._input.bind(batch, self._bindings)
-            var v = self._input.validity(bound)
-
-            # The SIMD body stops at the last whole chunk. A `range(0, n, W)` loop
-            # reads past the view on the final chunk and **aborts the process**:
-            # buffer *size* is rounded up to 64 bytes, and that is not slack.
-            var simd_end = (n // W) * W
-
-            comptime if Self.G.scatters:
-                var gids = groups.values()
-                var i = 0
-                if v:
-                    var vb = v.value()
-                    var bits = vb.view()
-                    while i < simd_end:
-                        agg.scatter[W](
-                            gids.load[W](i),
-                            self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
-                            bits.load[W](i),
-                            num_groups,
-                        )
-                        i += W
-                    while i < n:
-                        agg.scatter[1](
-                            gids.load[1](i),
-                            self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
-                            bits.load[1](i),
-                            num_groups,
-                        )
-                        i += 1
-                else:
-                    while i < simd_end:
-                        agg.scatter[W](
-                            gids.load[W](i),
-                            self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
-                            SIMD[DType.bool, W](fill=True),
-                            num_groups,
-                        )
-                        i += W
-                    while i < n:
-                        agg.scatter[1](
-                            gids.load[1](i),
-                            self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
-                            SIMD[DType.bool, 1](True),
-                            num_groups,
-                        )
-                        i += 1
-            else:
-                # One group by construction, so `groups` is unused: building a zero
-                # vector to say so is exactly the cost this path exists to avoid.
-                var ident = Self.Agg.Lane.identity[Self.Agg.Acc]()
-                var vec = SIMD[Self.Agg.Acc, W](ident)
-                var acc = ident
-                var count = 0
-                var i = 0
-                if v:
-                    var vb = v.value()
-                    var bits = vb.view()
-                    # A second accumulator, not a horizontal reduce per chunk: the
-                    # count is `K.finalize`'s divisor for `mean`, and the only thing
-                    # distinguishing "sum of nothing" from "sum of zeros" — both 0.
-                    # int64, not the accumulator type: `mean` accumulates in
-                    # float64, and a count is a count.
-                    var cnt = SIMD[DType.int64, W](0)
-                    while i < simd_end:
-                        # `lane[W]` is null-blind: it returns data bits regardless
-                        # of validity, so a null must become the identity here.
-                        # Without the mask an unmasked `sum` is *silently correct*
-                        # whenever the null slot's payload happens to be zero —
-                        # only min/max expose it.
-                        var mask = bits.load[W](i)
-                        vec = Self.Agg.Lane.combine[Self.Agg.Acc, W](
-                            vec,
-                            mask.select(
-                                self._input.lane[W](bound, i).cast[
-                                    Self.Agg.Acc
-                                ](),
-                                SIMD[Self.Agg.Acc, W](ident),
-                            ),
-                        )
-                        cnt += mask.select(
-                            SIMD[DType.int64, W](1), SIMD[DType.int64, W](0)
-                        )
-                        i += W
-                    while i < n:
-                        if bits.load[1](i)[0]:
-                            acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](
-                                acc,
-                                self._input.lane[1](bound, i).cast[
-                                    Self.Agg.Acc
-                                ](),
-                            )
-                            count += 1
-                        i += 1
-                    for j in range(W):
-                        count += Int(cnt[j])
-                else:
-                    while i < simd_end:
-                        vec = Self.Agg.Lane.combine[Self.Agg.Acc, W](
-                            vec,
-                            self._input.lane[W](bound, i).cast[Self.Agg.Acc](),
-                        )
-                        i += W
-                    while i < n:
-                        acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](
-                            acc,
-                            self._input.lane[1](bound, i).cast[Self.Agg.Acc](),
-                        )
-                        i += 1
-                    count += n
-                for j in range(W):
-                    acc = Self.Agg.Lane.combine[Self.Agg.Acc, 1](acc, vec[j])
-
-                # The registers were per-batch scratch; this is the hand-off, once
-                # per morsel rather than once per row.
-                if count > 0:
-                    agg.combine_at(0, acc, count)
-                else:
-                    agg.combine_at(0, ident, 0)
-
-            return None
-        else:
-            var n = len(morsel.batch)
-            var column = self._input.evaluate(
-                morsel.batch, self._bindings
-            ).to_array(n)
-            var groups = (
-                morsel.groups.copy() if self._scatters else Groups.single(n)
-            )
-            # The one narrowing in this lane, and it is comptime-resolved:
-            # `Agg` is a parameter here, so `InArray` is a concrete type and
-            # this is a conversion rather than a dispatch.
-            self._state.update(groups, Self.Agg.InArray(column.to_data()))
-            return None
+        var n = len(morsel.batch)
+        var column = self._input.evaluate(
+            morsel.batch, self._bindings
+        ).to_array(n)
+        var groups = morsel.groups.copy() if self._scatters else Groups.single(
+            n
+        )
+        # The one narrowing in this lane, and it is comptime-resolved:
+        # `Agg` is a parameter here, so `InArray` is a concrete type and
+        # this is a conversion rather than a dispatch.
+        self._state.update(groups, Self.Agg.InArray(column.to_data()))
+        return None
 
     def drain(mut self) raises -> Optional[Datum]:
         if self._emitted:
             return None
         self._emitted = True
-        # No "did a morsel arrive?" branch: the kernel is built at
-        # construction, so an aggregate over zero rows answers from an
-        # untouched state — `sum` of nothing is one NULL — exactly as it would
-        # after a morsel that folded nothing.
-        comptime if Self.fuses:
-            # A fused aggregate over zero rows never grew a slot — `push`
-            # returns early at `n == 0` — so `drain` seeds them here. That is
-            # what makes `sum` of nothing one NULL rather than no rows.
-            self._state.grow(self._num_groups)
+        if not self._scatters:
+            # One implicit slot, and an input that produced no morsel at all
+            # never grew it. `count_distinct` of nothing is one 0 and `min` of
+            # nothing is one NULL — both one row, which is what the stage above
+            # builds its output batch from.
+            self._state.reserve(1)
         return Datum(self._state.finish())

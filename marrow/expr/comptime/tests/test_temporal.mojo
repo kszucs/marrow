@@ -52,8 +52,16 @@ def _events() raises -> RecordBatch:
     d.append(Int32(18_062))  # 2019-06-15
     d.append_null()
     d.append(Int32(18_321))  # 2020-02-29
+    # The same instants at microsecond resolution, so a cross-unit comparison
+    # is expressible against this batch. Both are int64-backed, so nothing at
+    # compile time separates them.
+    var us = PrimitiveBuilder[TimestampType](timestamp(microsecond), capacity=3)
+    us.append(Int64(1_560_601_845_000_000))
+    us.append_null()
+    us.append(Int64(1_582_934_400_000_000))
     return record_batch(
-        [b.finish().to_dyn(), d.finish().to_dyn()], names=["ts", "d"]
+        [b.finish().to_dyn(), d.finish().to_dyn(), us.finish().to_dyn()],
+        names=["ts", "d", "us"],
     )
 
 
@@ -139,7 +147,7 @@ def test_temporal_comparison_rejects_a_unit_mismatch() raises:
     var b = _events()
     with assert_raises(contains="units must match"):
         _ = _as_bool(
-            col("ts", timestamp(second)) > col("ts", timestamp(microsecond)),
+            col("ts", timestamp(second)) > col("us", timestamp(microsecond)),
             b,
         )
 

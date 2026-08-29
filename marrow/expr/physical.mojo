@@ -50,6 +50,7 @@ from ..parquet.source import MappedFile
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
 from .params import Bindings
+from .pushdown import Pushdown, read_plan, row_group_stats
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -86,9 +87,11 @@ struct Datum(Copyable, Movable):
     def is_scalar(self) -> Bool:
         """Whether this is still one value.
 
-        The planner asks so it knows whether a projection needs materialising;
-        `Shape` is the *static* answer to the same question, and this is the
-        one that survives erasure.
+        `Shape` is the *static* answer to the same question and is what the
+        planner actually reads; this is the one that survives erasure, and its
+        only caller is `struct_array`'s own guard below. Kept public rather
+        than folded into that guard because the distinction is part of what a
+        `Datum` *is* — a caller holding one has no other way to ask.
         """
         return self._v.isa[DynScalar]()
 
@@ -110,10 +113,28 @@ struct Datum(Copyable, Movable):
         The single place laziness ends. `n` is why this cannot be an implicit
         conversion: a scalar does not know how many rows it is about to become,
         and only the caller holding the batch does.
+
+        **`n` binds the array case too** — backlog AG-2. It used to be read
+        only on the scalar branch and ignored entirely on the array one, so a
+        column of the wrong length passed straight through into
+        `_struct_of(schema, cols, n)`, which trusts its `length` argument and
+        never looks at its children. The result is a `StructArray` claiming `n`
+        rows over a child that has fewer: not a crash, but an out-of-bounds
+        read the moment anything indexes it. An aggregate over an input that
+        produced no morsel at all reached exactly that shape. Checking here
+        turns the whole class into a raise naming both numbers.
         """
         if self._v.isa[DynScalar]():
             return self._v[DynScalar].repeat(n)
-        return self._v[DynArray].copy()
+        ref arr = self._v[DynArray]
+        if len(arr) != n:
+            raise Error(
+                "to_array: expected a column of ",
+                n,
+                " rows, got ",
+                len(arr),
+            )
+        return arr.copy()
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +152,7 @@ struct Morsel(Copyable, Movable):
     Relational stages ignore `groups` entirely. They pay nothing for it: the
     ungrouped assignment holds an **empty** id array, because a fold that does
     not scatter never reads the ids and materialising one `Int32` per row to
-    say "everything is group 0" is exactly the cost `ScalarGrouping` avoids.
+    say "everything is group 0" is exactly the cost `Groups.single` avoids.
     """
 
     var batch: StructArray
@@ -304,7 +325,8 @@ struct EvalOperator[V: Evaluable](Operator):
 
     Generic over the node type rather than holding a `DynValue`, so a fused
     subtree stays one type through the boundary and is still inlined into one
-    loop. That is the same reason `FusedAggregateOperator` is parameterised on its input.
+    loop. That is the same reason the fused aggregate operators are
+    parameterised on their input.
 
     This is also where a value would keep state that outlives a batch — a
     compiled `LIKE` automaton, an `IsIn` hash set. It has none today, and the
@@ -560,30 +582,30 @@ struct GroupByOperator(Operator):
     pull design this needed a different trait from `Filter` and `Project`, and
     therefore a second erased box.
 
-    **A fused fold buffers nothing; an `AggregateFn` buffers O(rows)** — which
-    is what the two operators are named for. Which of them a query pays for is
-    decided per aggregate, not here. `FusedAggregateOperator` binds its own
-    input subtree and folds lanes straight out of the morsel, so
-    `sum(a * 2 + b)` never materialises `a * 2 + b` and this stage keeps only
-    the grouper's key builders, which grow with the number of *groups*.
-    `BufferedAggregateOperator` cannot: an `AggregateFn` is one-shot
-    over the whole input, so it accumulates each morsel's evaluated columns
-    and ids and calls the fold once at `drain`. Any query containing a
-    `count_distinct`, or a `min`/`max` over a string or temporal column, is
-    therefore **O(rows)** in memory for that aggregate's input. There is
-    precedent — `SortOperator._batches`, `JoinOperator._buffered` — and it is
-    the price of an aggregate whose state is not a scalar accumulator.
+    **Which aggregate machine a query pays for is decided per aggregate, not
+    here.** `ScatteredAggregateOperator` and `RegisterAggregateOperator` bind
+    their own input subtree and fold lanes straight out of the morsel, so
+    `sum(a * 2 + b)` never materialises `a * 2 + b`;
+    `BufferedAggregateOperator` evaluates its operand to a column per morsel
+    and hands that to the kernel. None of the three buffers rows — every
+    `AggKernel` is streaming, so all of them keep O(groups) state — and this
+    stage keeps only the grouper's key builders, which grow with the number of
+    *groups* too. That was not always so: a `count_distinct` used to hold its
+    whole input column, and the docstring here recorded it as the price of a
+    non-scalar accumulator long after `DistinctCount` became incremental.
 
-    Group ids are dense and stable across morsels, which is what makes both
-    halves work: a state that has already folded batch N keeps its slots when
-    batch N+1 introduces new groups (`AggState._grow` extends them in place),
+    Group ids are dense and stable across morsels, which is what makes all of
+    them work: a state that has already folded batch N keeps its slots when
+    batch N+1 introduces new groups (`AggState.reserve` extends them in place),
     and concatenating N morsels' id arrays end to end is a valid assignment
     over the concatenated input rather than N unrelated numberings.
 
-    A fold that answers `None` from `drain` never saw a morsel at all — the
-    input filtered to nothing — and had no dtype to resolve against. Its slot
-    is filled with a null column typed from this stage's own output schema,
-    which is the only place that type is still known.
+    A fold that answers `None` from `drain` would have its slot filled with a
+    null column typed from this stage's own output schema, the only place that
+    type is still known. No aggregate operator does — all three answer `Some`
+    from their first `drain`, seeding one slot when the query has no keys — so
+    the branch is a guard against a future `Operator` in this position rather
+    than a path any query takes.
 
     `HAVING` needs no node of its own: a `FilterOperator` above this stage sees
     the aggregate's *output* batch, which is exactly what the flush cascade in
@@ -645,15 +667,18 @@ struct GroupByOperator(Operator):
         """Assign the rows to slots **once**, then hand the same morsel to
         every fold.
 
-        This is why placement belongs to the operator rather than to each grouped:
+        This is why placement belongs to the operator rather than to each fold:
         N aggregates over one `GROUP BY` hash the keys once between them, where
         N folds each owning a grouping would hash N times.
 
-        Placement is a runtime choice here and a comptime one inside the grouped,
-        and that split is measured. Parameterising *this* operator on
-        `Grouping` instantiates it once per conformer for **+24,432 bytes** and
-        buys nothing: its branch runs once per batch, while the 14.6x
-        register-fold win lives in `FusedAggregateOperator`, already monomorphised on `G`.
+        Placement is a runtime choice here and a comptime one inside the fold,
+        and that split is measured. Parameterising *this* operator on a
+        grouping trait instantiated it once per conformer for **+24,432
+        bytes** and bought nothing: its branch runs once per batch, while the
+        14.6x register-fold win lives one level down, in the split between
+        `RegisterAggregateOperator` and `ScatteredAggregateOperator`. That
+        measurement is also why the trait is gone — the one place a future
+        conformer would have plugged in had already been tried and rejected.
         """
         # Indexed rather than `for ref`: a fold is move-only, and iterating a
         # `List` by reference requires `Copyable`.
@@ -884,6 +909,33 @@ struct JoinOperator(Operator):
     var _kind: JoinKind
     var _strictness: UInt8
     var _schema: Schema
+    """What this stage promises its consumers: left fields then right, or left
+    alone for the kinds that emit no right columns."""
+
+    var _build_schema: Schema
+    """The **build** input's own fields — the left side's, not this stage's.
+
+    A separate field because the two genuinely differ and confusing them is a
+    wrong answer rather than a crash. It was a `_build_schema()` *method*
+    returning `self._schema.copy()`, whose docstring described a
+    "`len(left_keys)`-agnostic prefix of the output schema" that neither it nor
+    anything else computed. `_concat_batches` reads a schema only when it is
+    handed **no** batches, and then builds an empty batch from it — so a build
+    side that yielded nothing was indexed as if it had the join's output
+    columns. For an inner or left join that is the left fields plus a run of
+    all-null right ones, and `probe` then hands `_struct_of` more children than
+    the output dtype has fields.
+
+    Invisible today only because `_concat_batches` short-circuits at
+    `len(batches) == 1`, which is every build side that produced exactly one
+    batch."""
+
+    var _probe_schema: Schema
+    """The **probe** input's own fields — the right side's. Same argument, and
+    the same latent defect: `drain` concatenates the buffered probe morsels,
+    and for `SEMI`/`ANTI` the output schema is the *left* side's, so an empty
+    probe side was described with the wrong columns entirely."""
+
     var _ctx: ExecContext
     var _index: Optional[HashJoin[RapidHash64]]
     var _buffered: List[StructArray]
@@ -897,6 +949,8 @@ struct JoinOperator(Operator):
         kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
+        var build_schema: Schema,
+        var probe_schema: Schema,
         var ctx: ExecContext,
     ):
         self._build = build^
@@ -905,6 +959,8 @@ struct JoinOperator(Operator):
         self._kind = kind
         self._strictness = strictness
         self._schema = schema^
+        self._build_schema = build_schema^
+        self._probe_schema = probe_schema^
         self._ctx = ctx^
         self._index = None
         self._buffered = List[StructArray]()
@@ -928,15 +984,10 @@ struct JoinOperator(Operator):
                 parts.append(b.value().struct_array())
             else:
                 break
-        var left = _concat_batches(parts, self._build_schema(), self._ctx)
+        var left = _concat_batches(parts, self._build_schema.copy(), self._ctx)
         var index = HashJoin[RapidHash64](self._ctx.copy())
         index.build(left.copy(), self._left_keys)
         self._index = index^
-
-    def _build_schema(self) -> Schema:
-        """The build side's fields are the first `len(left_keys)`-agnostic
-        prefix of the output schema for every kind that emits them."""
-        return self._schema.copy()
 
     def _probe(mut self, batch: StructArray) raises -> StructArray:
         var result = self._index.value().probe(
@@ -968,7 +1019,7 @@ struct JoinOperator(Operator):
         if not self._blocks_on_probe_side():
             return None
         var whole = _concat_batches(
-            self._buffered, self._schema.copy(), self._ctx
+            self._buffered, self._probe_schema.copy(), self._ctx
         )
         return Datum(self._probe(whole).to_dyn())
 
@@ -995,7 +1046,13 @@ def _struct_of(
 def _concat_batches(
     batches: List[StructArray], schema: Schema, ctx: ExecContext
 ) raises -> StructArray:
-    """Join both phases need one contiguous side; this is where that happens."""
+    """Join both phases need one contiguous side; this is where that happens.
+
+    `schema` describes **the side being concatenated**, not the join's output,
+    and it is read only when `batches` is empty — the one case where there is
+    no array to take a dtype from. Handing it the output schema is what
+    `JoinOperator._build_schema` used to do, and it is wrong whenever the two
+    differ."""
     if len(batches) == 1:
         return batches[0].copy()
     if len(batches) == 0:
@@ -1021,7 +1078,13 @@ struct ParquetScanOperator(Operator):
     **The schema doubles as the projection.** Only its columns are read, so
     narrowing a scan's schema is how a projection is pushed into it.
 
-    **No pruning.** `expr/`'s scan skips row groups whose statistics prove no
+    **Pruning.** A predicate pushed down from a `Filter` is evaluated once per
+    row group against its statistics, and a group proven to hold no matching
+    row is never decoded. Speed only: the `Filter` above still applies the
+    predicate exactly, so an empty `Pushdown` and a full one return the same
+    rows. Row-group *windowing* is still absent and is a separate change.
+
+    (superseded) `expr/`'s scan skips row groups whose statistics prove no
     row can match, and windows several groups at once. Both need
     `expr/pruning.mojo`, which has no `expr2` counterpart yet. Their absence
     costs speed and never correctness — a `Filter` above the scan applies the
@@ -1031,14 +1094,32 @@ struct ParquetScanOperator(Operator):
     var _path: String
     var _schema: Schema
     var _file: Optional[ParquetFile[MappedFile, LeafSet.all()]]
-    var _next_group: Int
+    var _pushed: Pushdown
+    var _bindings: Bindings
+    var _plan: List[Int]
+    """Row groups this scan will read, computed on the first `drain`.
+
+    Empty until the file is opened, because a `Relation` is a description and
+    must not touch the filesystem to exist — so the plan cannot be built where
+    the operator is."""
+
+    var _next: Int
     var _pending: List[StructArray]
 
-    def __init__(out self, var path: String, var schema: Schema):
+    def __init__(
+        out self,
+        var path: String,
+        var schema: Schema,
+        var pushed: Pushdown = Pushdown(),
+        var bindings: Bindings = Bindings(),
+    ):
         self._path = path^
         self._schema = schema^
         self._file = None
-        self._next_group = 0
+        self._pushed = pushed^
+        self._bindings = bindings^
+        self._plan = List[Int]()
+        self._next = 0
         self._pending = List[StructArray]()
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -1053,15 +1134,20 @@ struct ParquetScanOperator(Operator):
                 self._file = ParquetFile[MappedFile, LeafSet.all()](
                     self._path.copy()
                 )
-            if self._next_group >= self._file.value().num_row_groups():
+                self._plan = read_plan(
+                    row_group_stats(self._file.value()),
+                    self._pushed,
+                    self._bindings,
+                )
+            if self._next >= len(self._plan):
                 return None
 
             var names = List[String](capacity=len(self._schema.fields))
             for ref f in self._schema.fields:
                 names.append(f.name.copy())
-            var groups = List[Int]()
-            groups.append(self._next_group)
-            self._next_group += 1
+            var groups = List[Int](capacity=1)
+            groups.append(self._plan[self._next])
+            self._next += 1
 
             var table = self._file.value().read(
                 columns=Optional(names^), row_groups=Optional(groups^)

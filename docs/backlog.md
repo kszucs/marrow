@@ -920,7 +920,7 @@ Three findings came out of the cross-read that no single document had:
 | **S8** | **`ExecContext.alloc_buffer[T](n)` / `.alloc_bitmap(n)`**, collapsing the 10-site GPU-or-host preamble in `numeric`/`cast`/`hashing`/`boolean`. `execution.mojo` already owns `GPU_ENABLED` after `5b14bfa`, and `views` already imports both modules, so no new cycle. | dup §1.5 B | tests | S |
 | **S9** | **`Bitmap.extend_validity`**, collapsing the 11-line reserve-then-propagate block at `builders.mojo:696, 827, 1022, 1229, 1370`. It is bitmap logic, not builder logic — it already calls `Bitmap.extend` and `set_range`. Not a hot path. | dup §1.7 B | tests | S |
 | **S10** | **`c_data.mojo` release-slot helpers.** `is_released`/`mark_released` verbatim on three structs, six copies of the same `unsafe_bitcast` slot arithmetic. This is the spec's double-free guard — the one place three copies drifting is a memory-safety bug, and CLAUDE.md restricts `unsafe_ptr`-class code precisely so it is not reasoned about six times. | dup §1.8 A | tests | S |
-| **S11** | **Two placement moves.** `equal_any` → a neutral `kernels/compare.mojo`, deleting the `kernels.numeric → kernels.string` edge; `Grouping` → `kernels/grouping.mojo` (a leaf five files import — check the import direction before preferring `groupby.mojo`). | org §1.8, dup §2.4 | import check | S |
+| **S11 — half CLOSED 2026-08-29** | **Two placement moves.** `equal_any` → a neutral `kernels/compare.mojo`, deleting the `kernels.numeric → kernels.string` edge. The `Grouping` → `kernels/grouping.mojo` half is **moot**: the trait is deleted, along with `ScalarGrouping`, by the 2026-08-29 abstraction audit's Step 2 — it carried one comptime `Bool`, had no polymorphic consumer, and `ScalarGrouping` was never constructed. There is nothing left to relocate; `HashGrouping` stays in `groupby.mojo` beside the `HashGrouper` it wraps. | org §1.8, dup §2.4 | import check | S |
 | **S12** | **`kernels/tests/test_execution{,_gpu}.mojo` → `marrow/tests/`.** They test `marrow/execution.mojo` and import `...execution`, three levels up and out of their own package. Left behind by A4. | dup §2.5 | tests | XS |
 | **S14** | **Suite-wide `tempfile.mkstemp` in `parquet/tests/`.** ~15 fixed `/tmp/marrow_*.parquet` paths across `test_codecs`, `test_bloom`, `bench_parquet`, `test_parquet`; two concurrent `pytest` invocations — which the harness explicitly supports — collide. Fixed paths are the prevailing convention there, so this is suite-wide or nothing. | dup §1.12 | tests | S |
 | **S16** | **Re-verified 2026-08-17 and mostly evaporated — recommend dropping.** The audit's citations predate `5b14bfa` and `e3a6cd0`. What survives: `_format_ns` is still defined after its only caller, but at `utils/testing.mojo:542` → `:429`, not `testing/bench.mojo`; the three-helper chain in `kernels/string.mojo:523/536/546` is unmoved. What is **gone**: three of the four `hashing.mojo` helpers (`_rapid_mix_wide`, `_rapidhash_bool`, `_rapidhash_primitive_masked` — removed by the pluggable-hash and wide-multiply work), leaving only `_indices_as_int32` (`kernels/hashing.mojo:59` → `:228`). **`_rapidhash_bool_masked` — the one part of this card that could have been a real defect, "dead or a masked-hash gap for boolean columns" — is resolved by deletion; it has zero hits under `marrow/`.** The residue is three cosmetic inlines, and the string trio is named in two docstrings and a comment, which is the tell that it names a step rather than fragmenting one. | dup §3 B | tests | XS, or drop |
@@ -961,15 +961,26 @@ designs are in §7, and their defend-this findings are in §8. To read one:
 **Not ours:** `mojo-regex`'s optional-group defect is upstream and appears
 unreported. Filing it would be a courtesy; nothing has been sent.
 
-### Aggregate soundness review — open, 2026-08-28
+### Aggregate soundness review — closed, 2026-08-29
 
 A 27-probe review of the aggregate kernels and both aggregate lanes, against
 `c737411`. Two of its six findings were fixed on the spot (the erased-box leak,
-and `Fold.partials` missing its `is_single()` branch); one dissolves in the
-typed-`AggKernel` work (`update` narrowing unguarded). These three are real,
-none produces a wrong answer today, and each is a **contract** gap rather than
-a defect — which is why they are recorded rather than patched: the fix for each
-is to make an invariant checkable, not to change a computation.
+and `Fold.partials` missing its `is_single()` branch); one dissolved in the
+typed-`AggKernel` work (`update` narrowing unguarded). The remaining three were
+**contract** gaps rather than defects — none produced a wrong answer — and all
+three closed with the 2026-08-29 abstraction audit's Step 3:
+
+- **AG-1** — `Groups` now carries an explicit `_single: Bool`, set by
+  `Groups.single` and read by `is_single()`. A zero-row morsel in a grouped
+  query takes the grouped branch.
+- **AG-2** — `Datum.to_array(n)` raises when the array it holds is not `n`
+  rows. The shape that reached it in practice (an aggregate over an input that
+  produced no morsel) is fixed at the source by `AggKernel.reserve`.
+- **AG-3** — `RuntimeAggregate.empty()` is deleted. Nothing probes the ladder
+  with a fabricated dtype any more; each aggregate answers its own empty case
+  from the state built with the real one.
+
+The original entries, for the record:
 
 | ID | Item | Size |
 |---|---|---|
@@ -978,9 +989,16 @@ is to make an invariant checkable, not to change a computation.
 | **AG-3** | **`RuntimeAggregate.empty()` probes the resolution ladder with a fabricated `int64`.** `runtime/aggregates.mojo:409`. For `min`/`max` over a string column that selects `Fold[MinKernel, Int64Type]` — a *different kernel* than the one that will run. Correct only because both answer `None`, and nothing enforces that they must. Dissolves once `DynAgg` resolves `empty()` from the real dtype; recorded in case that work lands differently. | S |
 
 Naming note: A-4 above refers to an older `DynAgg` from the previous
-expression package, now deleted. The
-`DynAgg` in `kernels/aggregate.mojo` is unrelated — it is the single erased
-dispatcher over the typed `AggKernel` conformers.
+expression package, now deleted. There is no `DynAgg` in
+`kernels/aggregate.mojo` either — the aggregate vocabulary is the typed
+`AggKernel` trait, and neither lane holds an erased aggregate.
+
+**Left over.** `AggKernel.empty()` itself now has no production caller — it was
+`RuntimeAggregate.empty()`'s only consumer, and `AggKernel.reserve` supersedes
+it for every conformer. It is still exercised by
+`kernels/tests/test_agg_kernels.mojo` and
+`expr/runtime/tests/test_aggregates.mojo`. Deleting the trait member and its
+four overrides is a separate, mechanical change.
 
 ### `marrow/expr/` gaps the golden corpus measured — closed, 2026-08-29
 

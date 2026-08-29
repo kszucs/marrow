@@ -31,6 +31,8 @@ from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field
 from .params import Bindings
+from .pruning import PrunePredicate, Prunable
+from .pushdown import Pushdown
 from .runtime.values import column
 from .physical import (
     Datum,
@@ -290,7 +292,8 @@ struct DynValue(Copyable, Movable, Writable):
         """The stateful thing that runs this value.
 
         The slot `DynAggValue._acc` used to occupy, on the one box that now
-        holds every value. An aggregate reaches its `FusedAggregateOperator` through here; an
+        holds every value. An aggregate reaches one of its three operators
+        through here; an
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
@@ -359,7 +362,10 @@ trait Relation(Copyable, Deinitable, Movable):
         ...
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The running operator for this description.
 
@@ -384,7 +390,7 @@ struct DynRelation(Copyable, Movable, Writable):
     var _data: ArcPointer[NoneType]
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_to_operator: def(
-        ArcPointer[NoneType], ExecContext, Bindings
+        ArcPointer[NoneType], ExecContext, Bindings, var Pushdown
     ) thin raises -> Pipeline
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
     var _drop: def(var ArcPointer[NoneType]) thin
@@ -402,9 +408,12 @@ struct DynRelation(Copyable, Movable, Writable):
     def _to_operator_tramp[
         R: Relation
     ](
-        ptr: ArcPointer[NoneType], ctx: ExecContext, bindings: Bindings
+        ptr: ArcPointer[NoneType],
+        ctx: ExecContext,
+        bindings: Bindings,
+        var pushed: Pushdown,
     ) raises -> Pipeline:
-        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx, bindings)
+        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx, bindings, pushed^)
 
     @staticmethod
     def _write_tramp[
@@ -434,9 +443,12 @@ struct DynRelation(Copyable, Movable, Writable):
         return self._virt_schema(self._data)
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        return self._virt_to_operator(self._data, ctx, bindings)
+        return self._virt_to_operator(self._data, ctx, bindings, pushed^)
 
     # -- the plan-building API ----------------------------------------------
     #
@@ -451,8 +463,28 @@ struct DynRelation(Copyable, Movable, Writable):
     # conformer implement eight methods it does not care about.
 
     def filter(self, var predicate: DynValue) raises -> DynRelation:
-        """Rows where `predicate` is true. Schema-preserving."""
+        """Rows where `predicate` is true. Schema-preserving.
+
+        The erased overload: an already-boxed predicate has lost the type
+        `prune` needs, so this plan filters exactly and reads every row group.
+        """
         return Filter(self.copy(), predicate^)
+
+    def filter[
+        V: Value & Prunable
+    ](self, var predicate: V) raises -> DynRelation:
+        """Rows where `predicate` is true, **with statistics pruning**.
+
+        The concrete type is captured here because this is the last place it is
+        visible: `DynValue` erases it, and the box deliberately has no `prune`
+        slot. The two overloads are disjoint — `DynValue` does not conform to
+        the traits it erases — which is what lets both spellings coexist.
+        """
+        return Filter(
+            self.copy(),
+            DynValue(predicate.copy()),
+            Optional(PrunePredicate(predicate^)),
+        )
 
     def select(self, names: List[String]) raises -> DynRelation:
         """Keep these columns, in this order.
@@ -667,7 +699,10 @@ struct InMemoryTable(Relation, Writable):
         return self._batch.schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The one relation that *creates* a pipeline; every other appends."""
         return Pipeline(BatchSourceOperator(self._batch.to_struct_array()))
@@ -689,8 +724,20 @@ struct Filter(Relation, Writable):
     var _input: DynRelation
     var _predicate: DynValue
 
+    var _pruner: Optional[PrunePredicate]
+    """The predicate again, typed, for statistics pruning — `None` when it
+    arrived already boxed.
+
+    Never consulted for correctness: the `DynValue` above is what actually
+    filters, and this only ever makes the scan smaller. That is what lets it be
+    `Optional` without a soundness caveat — a missing pruner reads every row
+    group, which is the answer the engine gave before pruning existed."""
+
     def __init__(
-        out self, var input: DynRelation, var predicate: DynValue
+        out self,
+        var input: DynRelation,
+        var predicate: DynValue,
+        var pruner: Optional[PrunePredicate] = None,
     ) raises:
         if predicate.aggregates():
             raise Error(
@@ -703,14 +750,26 @@ struct Filter(Relation, Writable):
             )
         self._input = input^
         self._predicate = predicate^
+        self._pruner = pruner^
 
     def schema(self) -> Schema:
         return self._input.schema()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(
+            ctx,
+            bindings,
+            (
+                pushed.conjoined(self._pruner.value())
+                if self._pruner
+                else pushed^
+            ),
+        )
         pipe.append(
             FilterOperator(
                 self._predicate.to_operator(
@@ -806,9 +865,12 @@ struct Project(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
         var values = List[DynOperator](capacity=len(self._values))
         for ref v in self._values:
             values.append(v.to_operator(self._input.schema(), False, bindings))
@@ -883,13 +945,16 @@ struct Aggregate(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         var grouped = len(self._keys) > 0
         var folds = List[DynOperator](capacity=len(self._aggs))
         for ref a in self._aggs:
             folds.append(a.to_operator(self._input.schema(), grouped, bindings))
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
         var keys = List[DynOperator](capacity=len(self._keys))
         for ref k in self._keys:
             keys.append(k.to_operator(self._input.schema(), False, bindings))
@@ -928,9 +993,12 @@ struct Limit(Relation, Writable):
         return self._input.schema()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
         pipe.append(LimitOperator(self._offset, self._length))
         return pipe^
 
@@ -986,9 +1054,12 @@ struct Sort(Relation, Writable):
         return self._input.schema()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(ctx, bindings, pushed^)
         pipe.append(
             SortOperator(
                 _to_operators(self._keys, self._input.schema(), bindings),
@@ -1096,18 +1167,23 @@ struct Join(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The probe side is the pipeline; the build side is a stage's cargo."""
-        var probe = self._right.to_operator(ctx, bindings)
+        var probe = self._right.to_operator(ctx, bindings, Pushdown())
         probe.append(
             JoinOperator(
-                self._left.to_operator(ctx, bindings),
+                self._left.to_operator(ctx, bindings, Pushdown()),
                 self._left_keys.copy(),
                 self._right_keys.copy(),
                 self._kind,
                 self._strictness,
                 self._schema.copy(),
+                self._left.schema(),
+                self._right.schema(),
                 ctx.copy(),
             )
         )
@@ -1143,10 +1219,18 @@ struct ParquetScan(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         return Pipeline(
-            ParquetScanOperator(self._path.copy(), self._schema.copy())
+            ParquetScanOperator(
+                self._path.copy(),
+                self._schema.copy(),
+                pushed^,
+                bindings.copy(),
+            )
         )
 
     def write_to[W: Writer](self, mut writer: W):

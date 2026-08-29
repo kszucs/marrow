@@ -26,15 +26,14 @@ mandatory:
 
 - `Aggregate._output_schema` calls `a.dtype(schema)` before any batch exists,
   so it resolves from schema-derived dtypes and keeps only its `dtype`.
-- `BufferedAggregateOperator` holds the node and resolves again on first push,
-  from the morsel's real dtypes, keeping only `fold`. It cannot resolve
-  earlier: a `RuntimeValue` operand has no dtype until a schema is in hand.
-  Holding the node is what removes the third type an earlier draft had — an
-  operator in this tree already holds its node (`FusedAggregateOperator._input`,
-  `EvalOperator._value`), so `resolve` can simply be a method on it.
+- `to_operator` resolves again, against the same schema, and keeps only the
+  `AggKernel` it binds — which is what lets it construct a **fully typed**
+  `BufferedAggregateOperator[Agg, RuntimeValue]` with no erased aggregate
+  state anywhere. It cannot resolve earlier: a `RuntimeValue` operand has no
+  dtype until a schema is in hand.
 
-Discarding a `AggregateFn` at plan time is one function-pointer assignment, and
-paying it is what buys a single ladder.
+Both resolutions take their answer off the same branch of the same ladder, so
+two-ladder drift is unrepresentable.
 
 **Non-generic on purpose.** A `resolve[Job: def[A: ...]()]` form instantiates
 once per closure type — the `_arith[K]` shape, measured at +115,600 bytes. This
@@ -44,15 +43,7 @@ program built from `col("a", int64)` reaches `AggKernel` conformers
 directly and never this ladder.
 """
 
-from ...arrays import (
-    Array,
-    BinaryLikeArray,
-    BoolArray,
-    DynArray,
-    Int64Array,
-    PrimitiveArray,
-    StructArray,
-)
+from ...arrays import Array
 from ...dtypes import (
     DynType,
     NumericType,
@@ -63,6 +54,17 @@ from ...dtypes import (
 )
 from ...kernels.aggregate import (
     dispatch_agg_array,
+    agg_vocabulary,
+    APPROX_COUNT_DISTINCT,
+    COUNT,
+    COUNT_DISTINCT,
+    MAX,
+    MEAN,
+    MIN,
+    PRODUCT,
+    STDDEV,
+    SUM,
+    VARIANCE,
     ArithmeticAgg,
     MinMaxOp,
     FoldKernel,
@@ -82,8 +84,7 @@ from ...kernels.aggregate import (
 )
 from ...schema import Schema
 from ..logical import DynValue, Shape, Value, merged
-from ..`comptime`.aggregates import AggregateOperator
-from ...kernels.groupby import ScalarGrouping
+from ..`comptime`.aggregates import BufferedAggregateOperator
 from .values import RuntimeValue
 from ..params import Bindings
 from ...execution import ExecContext
@@ -97,20 +98,6 @@ from ..physical import (
     Morsel,
     Operator,
 )
-
-
-# ---------------------------------------------------------------------------
-# RuntimeAggregate — the node
-comptime SUM = "sum"
-comptime PRODUCT = "product"
-comptime MEAN = "mean"
-comptime COUNT = "count"
-comptime COUNT_DISTINCT = "count_distinct"
-comptime APPROX_COUNT_DISTINCT = "approx_count_distinct"
-comptime VARIANCE = "variance"
-comptime STDDEV = "stddev"
-comptime MIN = "min"
-comptime MAX = "max"
 
 
 def _fold_agg[
@@ -251,8 +238,9 @@ struct RuntimeAggregate(Value):
     """
 
     comptime aggregates = True
-    """It answers from `RuntimeAggregateOperator.drain`, never per batch — the same
-    answer `Aggregate` gives, for the same reason."""
+    """It answers from `BufferedAggregateOperator.drain`, never per batch — the
+    same answer `Aggregate` gives, for the same reason, through the same
+    operator."""
 
     var _input: RuntimeValue
     """The operand.
@@ -296,26 +284,22 @@ struct RuntimeAggregate(Value):
 
     @staticmethod
     def vocabulary() -> List[String]:
-        """Every name this node accepts — the kernels' own catalog."""
-        var out = List[String](capacity=10)
-        out.append(SUM)
-        out.append(PRODUCT)
-        out.append(MEAN)
-        out.append(COUNT)
-        out.append(COUNT_DISTINCT)
-        out.append(APPROX_COUNT_DISTINCT)
-        out.append(VARIANCE)
-        out.append(STDDEV)
-        out.append(MIN)
-        out.append(MAX)
-        return out^
+        """Every name this node accepts.
+
+        Forwards to `agg_vocabulary()` in `kernels/aggregate.mojo`, which is
+        where the catalog lives: the names are the kernels' own
+        `Kernel.name` constants, and keeping a second list here meant nothing
+        enforced that the two agreed. Kept as a method because it is part of
+        this node's surface — a frontend asks *this* what it accepts.
+        """
+        return agg_vocabulary()
 
     @staticmethod
     def _checked(var name: String) raises -> String:
         """`name`, or a raise naming it. The only gate on the vocabulary, and
         it runs in `__init__` so `col("s").count_distnct()` raises where it was
         written rather than on the first morsel of a long scan."""
-        for ref known in Self.vocabulary():
+        for ref known in agg_vocabulary():
             if name == known:
                 return name^
         raise Error("unknown aggregate '", name, "'")
@@ -340,32 +324,17 @@ struct RuntimeAggregate(Value):
 
         return dispatch_agg(self._name, d, job)
 
-    def empty(self) raises -> Optional[DynArray]:
-        """The answer over an input that produced **no column at all**.
-
-        Takes no dtype, because there is none: a filter that keeps nothing
-        answers with no batch, so an aggregate above it never sees one. That is
-        also why this cannot go through `dispatch_agg` — and why only the
-        cardinalities answer, since they are the only kernels whose `empty` is
-        independent of the type they were resolved for.
-
-        `variance`/`stddev` decline here while `Dispersion.empty()` answers a
-        float64 null, and the asymmetry is real rather than drift: that static
-        can only be asked once `V` is known. `GroupByOperator` fills the slot
-        from the plan's schema instead — the same route `sum` and the extrema
-        take.
-        """
-        if self._name == COUNT:
-            var e = ValidCount[Int64Array].empty()
-            return DynArray(e.take()) if e else None
-        elif self._name == COUNT_DISTINCT:
-            var e = DistinctCount[True, Int64Array].empty()
-            return DynArray(e.take()) if e else None
-        elif self._name == APPROX_COUNT_DISTINCT:
-            var e = DistinctCount[False, Int64Array].empty()
-            return DynArray(e.take()) if e else None
-        else:
-            return None
+    # `empty()` — the one-row answer over an input that produced no column at
+    # all — used to live here, a four-arm switch on `_name` that only the
+    # cardinalities answered. It had **no production caller**: `GroupByOperator`
+    # holds its folds as `DynOperator`s and cannot reach a node, so there was
+    # nowhere for it to be called from, and its null-fill branch was unreachable
+    # besides — the aggregate operators always answer `Some` from their first
+    # `drain`. `AggKernel.reserve` now covers the case properly and covers all
+    # ten names rather than three: an operator with no keys seeds one slot at
+    # `drain`, so `count_distinct` of nothing is one `0` and `min` of nothing is
+    # one NULL, computed by the kernel that owns the answer instead of by a
+    # second switch that could disagree with it.
 
     # -- to_operator --------------------------------------------------------
 
@@ -377,17 +346,19 @@ struct RuntimeAggregate(Value):
 
         This is why `to_operator` takes a schema. `dispatch_agg` binds a
         concrete `Agg`, so the job below constructs
-        `AggregateOperator[Fold[K, V], RuntimeValue, ScalarGrouping]` outright:
-        no erased aggregate state, no per-morsel narrowing, no second box.
+        `BufferedAggregateOperator[Fold[K, V], RuntimeValue]` outright: no
+        erased aggregate state, no per-morsel narrowing, no second box.
 
-        `G` is pinned to `ScalarGrouping` because nothing fuses over a runtime
-        operand — `grouped` is read as a plain `Bool` — so instantiating both
-        groupings would double the code for nothing.
+        **Always the buffered operator, never the fused one.** Fusion needs an
+        operand that answers `lane[W]`, and a `RuntimeValue` materialises a
+        `DynArray` per node by construction — so `grouped` stays a plain `Bool`
+        field here rather than becoming a comptime parameter. Reusing the
+        comptime lane's operator is what deleted this lane's own copy of it.
         """
         var d = self._input.dtype(schema)
 
         def job[Agg: AggKernel]() raises {imm} -> DynOperator:
-            return AggregateOperator[Agg, RuntimeValue, ScalarGrouping](
+            return BufferedAggregateOperator[Agg, RuntimeValue](
                 self._input.copy(), bindings.copy(), grouped, d
             )
 

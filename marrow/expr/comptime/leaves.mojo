@@ -28,6 +28,8 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
 from ..params import Bindings
+from ...kernels.bounds import Bounds
+from ..pruning import PruneStats, Truth
 from ..physical import Datum
 from .core import (
     BoolValue,
@@ -85,6 +87,17 @@ struct Column[T: NumericType](ColumnBound, NumericValue):
         W: Int
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return bound.values().load[W](idx)
+
+    def bounds(
+        self, stats: PruneStats, bindings: Bindings
+    ) -> Bounds[Self.Type.native]:
+        """The typed unwrap of this column's statistic, guarded on dtype.
+
+        `stats.bounds[T]` compares `DynType(T())` against the stored scalar's
+        own type before unwrapping, because `as_primitive[T]` is a
+        `debug_assert` that *aborts the process* on a mismatch rather than
+        raising."""
+        return stats.bounds[Self.T](self._name)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
@@ -209,6 +222,11 @@ struct Literal[T: NumericType](NumericValue):
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return SIMD[Self.Type.native, W](self._value)
 
+    def bounds(
+        self, stats: PruneStats, bindings: Bindings
+    ) -> Bounds[Self.Type.native]:
+        return Bounds[Self.Type.native].point(self._value)
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write("lit(", self._value, ")")
 
@@ -261,6 +279,10 @@ struct BoolColumn(BoolValue, ColumnBound):
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         return bound.values().load[W](idx)
+
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """A bare bool column: `never` when all-null or when `max` is False."""
+        return stats.bool_truth(self._name)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._name)

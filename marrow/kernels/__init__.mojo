@@ -2,12 +2,22 @@
 
 Re-exports the compute surface from the submodules so callers can
 ``import marrow.kernels as mk`` and use e.g. ``mk.AddKernel.dispatch``,
-``mk.SumKernel.dispatch``, ``mk.filter``, ``mk.concat`` directly.
+``mk.filter``, ``mk.cast``, ``mk.concat`` directly.
+
+**An aggregate is not applied like that, and the example used to say it was.**
+This docstring advertised ``mk.SumKernel.dispatch``; ``SumKernel`` is
+``Widening[SumOp]``, a ``FoldKernel``, which has no ``dispatch``, no ``reduce``
+and no ``apply`` — it is an *algebra* (identity / combine / finalize) and names
+no array type at all. What applies one to a column is ``Fold[K, V]``, an
+``AggKernel``, driven ``reserve`` / ``update`` / ``finish`` or in one call
+through ``AggKernel.grouped``. Both levels plus ``Foldable`` and
+``dispatch_agg_array`` are re-exported below, so the family's actual entry
+points are reachable from this namespace rather than only its building blocks.
 
 **The boundary, and why there is one.** Everything a caller *computes with* is
-re-exported here: the element-wise kernels, the folds, and the free-function
-verbs. Two things are deliberately not, and both are reached through their own
-submodule rather than through this namespace:
+re-exported here: the element-wise kernels, the aggregates, and the
+free-function verbs. Two things are deliberately not, and both are reached
+through their own submodule rather than through this namespace:
 
   - **`MinKernel` / `MaxKernel`**, because the name means two different things.
     `numeric.MinKernel` is the element-wise binary minimum of two arrays;
@@ -16,7 +26,7 @@ submodule rather than through this namespace:
     mean (`from marrow.kernels.aggregate import MinKernel`). Their `*Op`
     building blocks (`MinOp`, `MaxOp`, `SumOp`, `ProductOp`) stay with them.
   - **The hash and partition machinery** — `groupby`, `join`, `hashtable`,
-    `hashing`, `partition` — and the pruning algebra in `interval`. These are
+    `hashing`, `partition` — and the interval algebra in `bounds`. These are
     implementation modules that `expr` composes, not kernels a caller applies
     to an array.
 
@@ -39,10 +49,10 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `sort.mojo` — sort and sort_indices
   - `concat.mojo` — concatenation
   - `core.mojo` — the `Kernel` root trait and `Groups`
-  - *not re-exported* — `groupby.mojo` (grouped aggregation), `join.mojo` /
-    `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the hash machinery
-    group-by, join and `is_in` share), `interval.mojo` (the interval algebra
-    `expr/pruning.mojo` evaluates predicates in)
+  - *not re-exported* — `groupby.mojo` (`HashGrouper`/`HashGrouping`),
+    `join.mojo` / `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the
+    hash machinery group-by, join and `is_in` share), `bounds.mojo` (the
+    interval algebra `expr/pruning.mojo` evaluates predicates in)
 
 `ExecContext` is re-exported here for convenience but lives in
 `marrow/execution.mojo`: it is a thread-count/device policy object that imports
@@ -77,12 +87,18 @@ from marrow.dtypes import (
 )
 from ..execution import ExecContext
 from .aggregate import (
+    AggKernel,
+    Fold,
+    FoldKernel,
+    Foldable,
     SumKernel,
     ProductKernel,
     MeanKernel,
     CountKernel,
     AnyKernel,
     AllKernel,
+    agg_vocabulary,
+    dispatch_agg_array,
 )
 from .numeric import (
     AddKernel,

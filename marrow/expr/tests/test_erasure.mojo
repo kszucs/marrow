@@ -26,6 +26,7 @@ from ...kernels.core import Groups
 from ...schema import Schema
 from ..logical import DynRelation, DynValue, Relation, Shape, Value
 from ..params import Bindings
+from ..pushdown import Pushdown
 from ..physical import Datum, DynOperator, Morsel, Operator, Pipeline
 
 
@@ -102,7 +103,10 @@ struct _RelationProbe(Copyable, Movable, Relation, Writable):
         return Schema()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         raise Error("probe is not runnable")
 

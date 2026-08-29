@@ -44,7 +44,6 @@ trait Kernel:
 # TODO: have vectorwise and elementwise kernels conform to a common trait
 
 
-@fieldwise_init
 struct Groups(Copyable, Movable):
     """A batch's rows assigned to dense group ids, with how many groups exist.
 
@@ -59,9 +58,10 @@ struct Groups(Copyable, Movable):
     Sibling of `JoinIndex`, which named `Tuple[Int32Array, Int32Array]` for the
     same reason.
 
-    Named `Groups` rather than `Grouping` because `Grouping` is the *strategy*
-    that produces this — `ScalarGrouping`, `HashGrouping` in `groupby.mojo`.
-    The trait is the grouping; this is the groups it assigned.
+    Named `Groups` rather than `Grouping` because it is the *assignment*, not
+    the strategy that produced it — `HashGrouping` in `groupby.mojo` is one
+    such strategy, and `expr` picks between hashing and the implicit one slot
+    at plan time.
     """
 
     var ids: Int32Array
@@ -70,21 +70,47 @@ struct Groups(Copyable, Movable):
     var num_groups: Int
     """How many distinct groups exist — the size of a per-group accumulator."""
 
+    var _single: Bool
+    """Whether this is the implicit one-slot assignment — no `GROUP BY`.
+
+    **Stated, not inferred.** It used to be derived as
+    `len(ids) == 0 and num_groups == 1`, which is the same predicate for two
+    different assignments: a keyless query, and a *keyed* query whose morsel
+    happens to carry zero rows while exactly one group has been seen so far.
+    A zero-row morsel in a grouped query therefore took the ungrouped branch
+    in every kernel — benign today only because every such branch folds an
+    empty extent into slot 0 with the fold's identity, which is a coincidence
+    of the current kernels rather than a property of the contract. The flag
+    costs one byte per morsel and makes the two cases distinguishable.
+
+    Private, with `is_single()` the only reader, so the factory below can keep
+    the name `single`: the constructor states the case and nothing outside can
+    contradict it after the fact.
+    """
+
+    def __init__(out self, var ids: Int32Array, num_groups: Int):
+        """A keyed assignment: `ids[i]` names row `i`'s slot."""
+        self.ids = ids^
+        self.num_groups = num_groups
+        self._single = False
+
     @staticmethod
     def single(num_rows: Int) raises -> Groups:
         """The one-slot assignment: every row contributes to group 0.
 
         `ids` is **empty**, not a `num_rows`-long run of zeros. Materialising
-        one `Int32` per row to communicate a constant is exactly the cost
-        `ScalarGrouping` exists to avoid, and `Morsel.ungrouped` already
-        establishes the convention. `num_rows` is therefore accepted and not
-        stored — it says what extent the caller is asserting over, the same
-        way `Morsel.ungrouped` takes the batch whose length it never records.
+        one `Int32` per row to communicate a constant is exactly the cost this
+        assignment exists to avoid, and `Morsel.ungrouped` already establishes
+        the convention. `num_rows` is therefore accepted and not stored — it
+        says what extent the caller is asserting over, the same way
+        `Morsel.ungrouped` takes the batch whose length it never records.
 
         Read it back with `is_single`, never with `len(self.ids)`.
         """
         var empty = Int32Builder(0)
-        return Groups(empty.finish(), 1)
+        var g = Groups(empty.finish(), 1)
+        g._single = True
+        return g^
 
     def is_single(self) -> Bool:
         """Whether this is the one-slot assignment — no `GROUP BY`.
@@ -98,4 +124,4 @@ struct Groups(Copyable, Movable):
         `len(self.ids)` and read as "how many rows", so `range(len(groups))`
         was a silently empty loop waiting to be written.
         """
-        return len(self.ids) == 0 and self.num_groups == 1
+        return self._single
