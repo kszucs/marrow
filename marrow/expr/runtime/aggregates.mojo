@@ -281,47 +281,40 @@ struct RuntimeAggregate(Value):
         self._name = Self._checked(name^)
         self._alias = display^
 
-    comptime VOCABULARY = (
-        SUM,
-        PRODUCT,
-        MEAN,
-        COUNT,
-        COUNT_DISTINCT,
-        APPROX_COUNT_DISTINCT,
-        VARIANCE,
-        STDDEV,
-        MIN,
-        MAX,
-    )
-    """Every name this node accepts.
-
-    The catalog lives *here*, not in `kernels/aggregate.mojo`: "which names may
-    a frontend say" is a question about this layer's surface, and this node is
-    its only consumer. The kernel layer keeps the ten constants, because those
-    are `Kernel.name` values -- a real kernel property the comptime lane reads.
-
-    A comptime tuple rather than a `List[String]`: `_checked` runs on every
-    construction, and building a fresh ten-element heap list per aggregate to
-    linear-scan it was pure waste. `any` and `all` are deliberately absent --
-    they are `BoolReduceKernel`s, not `AggKernel`s, and no node resolves to
-    them.
-    """
-
     @staticmethod
     def vocabulary() -> List[String]:
-        """`VOCABULARY` as a list, for a frontend that wants to enumerate it."""
-        var out = List[String](capacity=len(Self.VOCABULARY))
-        comptime for i in range(len(Self.VOCABULARY)):
-            out.append(String(Self.VOCABULARY[i]))
-        return out^
+        """Every name this node accepts.
+
+        The catalog lives *here*, not in `kernels/aggregate.mojo`: "which names
+        may a frontend say" is a question about this layer's surface, and this
+        node is its only consumer. The kernel layer keeps the ten constants,
+        because those are `Kernel.name` values -- a real kernel property the
+        comptime lane reads -- and every entry below is one of them, so the two
+        cannot drift.
+
+        `any` and `all` are deliberately absent: they are `BoolReduceKernel`s,
+        not `AggKernel`s, and no node resolves to them.
+        """
+        return [
+            String(SUM),
+            String(PRODUCT),
+            String(MEAN),
+            String(COUNT),
+            String(COUNT_DISTINCT),
+            String(APPROX_COUNT_DISTINCT),
+            String(VARIANCE),
+            String(STDDEV),
+            String(MIN),
+            String(MAX),
+        ]
 
     @staticmethod
     def _checked(var name: String) raises -> String:
         """`name`, or a raise naming it. The only gate on the vocabulary, and
         it runs in `__init__` so `col("s").count_distnct()` raises where it was
         written rather than on the first morsel of a long scan."""
-        comptime for i in range(len(Self.VOCABULARY)):
-            if name == Self.VOCABULARY[i]:
+        for ref known in Self.vocabulary():
+            if name == known:
                 return name^
         raise Error("unknown aggregate '", name, "'")
 
