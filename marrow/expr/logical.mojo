@@ -300,7 +300,7 @@ struct DynValue(Copyable, Movable, Writable):
     ) raises -> DynOperator:
         """The stateful thing that runs this value.
 
-        The slot `DynAggValue._acc` used to occupy, on the one box that now
+        The slot an aggregate accumulator would occupy, on the one box that
         holds every value. An aggregate reaches one of its three operators
         through here; an
         elementwise value reaches an `EvalOperator`. The caller cannot tell,

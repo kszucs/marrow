@@ -151,9 +151,9 @@ struct Morsel(Copyable, Movable):
 
     Carrying the grouping *with* the batch is what collapses three executor
     shapes into one. A fold needs to know which slot a row contributes to;
-    `push(batch)` alone cannot tell it, which is why an aggregate used to need
-    its own trait (`AggregateState`) and its own erased box. Put the assignment
-    in the morsel and a fold is simply an `Operator` whose `Out` is a column.
+    `push(batch)` alone cannot tell it — which would force an aggregate into
+    its own trait and its own erased box. Put the assignment in the morsel and
+    a fold is simply an `Operator` producing a column.
 
     Relational stages ignore `groups` entirely. They pay nothing for it: the
     ungrouped assignment holds an **empty** id array, because a fold that does
@@ -194,9 +194,8 @@ trait Operator(Deinitable, Movable):
     for `ProjectOperator` to unwrap N of them and reassemble one. That is a
     real runtime cost paid for a nominal unification.
 
-    This was once an associated `Out`, and three operators still declared
-    `comptime Out = Datum` long after the trait stopped requiring it: nothing
-    declared it, nothing constrained it, and nothing ever read it.
+    Deliberately not an associated `Out`: nothing would constrain it and
+    nothing would read it.
     """
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -1180,20 +1179,11 @@ struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
     absorbed into per-slot state and released. The name is historical, and what
     it now buffers is one evaluated column at a time.
 
-    **Lives here, not in `comptime/`, because it is not lane-specific.** Its
-    two siblings bind on `PrimitiveValue` and genuinely belong to the fused
-    lane; this one needs only that the operand can be evaluated to a column,
-    which both lanes can do. It sat in `comptime/aggregates.mojo` and was
-    imported from `runtime/aggregates.mojo` -- the sole reason the runtime lane
-    depended on the comptime lane. The bound was `Evaluable & Value`, and the
-    `Value` half was never used: no `Value` member is called here, and
-    `physical.mojo` deliberately does not import `logical.mojo`, so dropping it
-    is what lets the struct move without creating a new cycle.
-
-    This is a *move*, not the `Fused`/`Buffered` merge CLAUDE.md records as
-    blocked -- that one needs a single node to store either operand behind one
-    parameterised bound, and a trait-valued associated type cannot type a
-    field.
+    **Here, not in `comptime/`, because it is not lane-specific.** Its two
+    siblings bind on `PrimitiveValue` and belong to the fused lane; this one
+    needs only that the operand can be evaluated to a column, which both lanes
+    can do. Hence the bound is `Evaluable` alone -- `physical.mojo` does not
+    import `logical.mojo`, so naming `Value` here would create a cycle.
     """
 
     var _input: Self.A

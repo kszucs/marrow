@@ -98,13 +98,10 @@ trait FoldKernel(Kernel):
     aggregate may be *built from*, and only six are. `Fold[K, V]` is the one
     that turns it into one, and the comptime expression lane fuses it directly.
 
-    **No array-shaped member at all.** `reduce` and `apply` used to be
-    documented here as a "default whole-array path" the extrema overrode; they
-    were removed with the streaming rewrite and the docstring outlived them by
-    long enough to mislead. Whole-column reduction is now the `is_single()` arm
-    of `AggState.update`, reached through `Fold`, so a `FoldKernel` never sees a
-    `PrimitiveArray` — only `SIMD` — and binding one to a *runtime* dtype
-    happens on the other side of that boundary.
+    **No array-shaped member at all.** Whole-column reduction is the
+    `is_single()` arm of `AggState.update`, reached through `Fold`, so a
+    `FoldKernel` never sees a `PrimitiveArray` — only `SIMD` — and binding one
+    to a *runtime* dtype happens on the other side of that boundary.
 
     Grouped state + driver live in the fully typed `AggState[K, V]`. The default
     per-group state is an accumulator column plus a valid-count column (the count
@@ -682,10 +679,8 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
 
         Monotonic, and that is what makes this state the **single owner** of
         the group count: `finish` reads `acc.length()` rather than taking a
-        count from its caller, so a caller and a state cannot disagree. `Fold`
-        used to keep a parallel `_slots` field `max`'d at four sites and pass
-        it back in here, which is exactly the shape `AggKernel.finish`'s
-        docstring warns against.
+        count from its caller, so a caller and a state cannot disagree — the
+        shape `AggKernel.finish`'s docstring warns against.
 
         Public rather than private because `Fold` forwards `AggKernel.reserve`
         onto it: an aggregate over **zero** morsels never calls `update` at
@@ -870,13 +865,11 @@ trait AggKernel(Deinitable, Kernel, Movable):
     `type()`, so a caller narrows with `Self.InArray(column.to_data())` and
     reads the dtype with `input.type()` — neither needs a per-conformer hook.
 
-    An earlier shape let this be `DynArray` so the two cardinalities could sit
-    under the same trait without naming an array type. It bought nothing: the
-    bound had no readable members, so no kernel body was written against it,
-    and with `DynArray` in the same bound as `PrimitiveArray[Int64Type]` the
-    declaration said only "some column-ish thing". Resolving the array type at
-    the *dispatch site* — where `dispatch_primitive` already binds a concrete
-    `T` — is what lets the bound mean what it says.
+    **Never `DynArray`.** A bound admitting both `DynArray` and
+    `PrimitiveArray[Int64Type]` says only "some column-ish thing" and has no
+    readable members to write a kernel body against. Resolving the array type
+    at the *dispatch site* — where `dispatch_primitive` already binds a
+    concrete `T` — is what lets the bound mean what it says.
     """
 
     comptime OutArray: Array
@@ -902,13 +895,12 @@ trait AggKernel(Deinitable, Kernel, Movable):
     def __init__(out self, in_dtype: DynType) raises:
         """A fresh accumulator ready to absorb columns of `in_dtype`.
 
-        **Construction, not a lifecycle step.** This was an `open` method for a
-        while, on the theory that an operator is built before a schema is in
-        hand. It no longer is: `Value.to_operator` takes the input schema, so
-        the dtype is known wherever an aggregate is constructed. Keeping `open`
-        cost every conformer an "am I open?" `Optional` — including `Fold`,
-        whose accumulator is unwrapped once per SIMD lane in the fused loop —
-        and four of the five bodies were a no-op or a domain check the type
+        **Construction, not a lifecycle step.** `Value.to_operator` takes the
+        input schema, so the dtype is known wherever an aggregate is
+        constructed. A separate `open` would cost every conformer an "am I
+        open?" `Optional` — including `Fold`, whose accumulator is unwrapped
+        once per SIMD lane in the fused loop — and four of the five bodies
+        would be a no-op or a domain check the type
         parameters already guaranteed.
 
         The dtype is an argument at all because marrow's dtypes are
@@ -999,12 +991,10 @@ trait Foldable(AggKernel):
     the expression layer stops holding an `AggState[K, V]` field directly —
     reaching past the kernel into its own state struct was the leak.
 
-    **`grow` used to be a third, and did not belong.** It was never called from
-    a lane: its only caller was the fused operator's `drain`, seeding slots for
-    an input that produced no rows. That is a property of *every* aggregate,
-    not of the ones drivable from registers, so it moved up to
-    `AggKernel.reserve` and this protocol became exactly "this aggregate can be
-    driven from registers" — `Lane`, `Acc`, `scatter`, `combine_at`.
+    Seeding slots for an input that produced no rows is **not** here: that is
+    a property of every aggregate, not of the ones drivable from registers, so
+    it lives on `AggKernel.reserve`. This protocol is exactly "this aggregate
+    can be driven from registers" — `Lane`, `Acc`, `scatter`, `combine_at`.
     """
 
     comptime Lane: FoldKernel
@@ -1042,12 +1032,11 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
     Narrowing the erased column it is handed is one O(1) handle copy, and the
     per-row loop inside `AggState.update` is fully monomorphized.
 
-    `V` used to be absent, and `Fold[K]` resolved a *runtime* dtype on every
-    call — which meant that once it had to hold state across morsels, that
-    state could not be a typed field and ended up behind an `ArcPointer` and
-    two thin trampolines. Erasure machinery inside a compute kernel is the
+    `V` is a parameter so the state can be a *typed field*. Resolving a
+    runtime dtype per call would put the state behind an `ArcPointer` and two
+    thin trampolines — erasure machinery inside a compute kernel, which is the
     wrong layer: mapping a runtime dtype onto a type is the expression layer's
-    job, and it already does exactly that for every other kernel.
+    job.
 
     `K.acc_dtype` decides the output dtype, so `sum(int32)` widens to int64,
     `mean` answers float64, and `min`/`max` keep the input's unit, timezone,
@@ -1276,10 +1265,9 @@ struct LexicalExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
     matching Arrow's `hash_min`/`hash_max`.
 
     Not a fold: there is no scalar accumulator to combine. That is also why it
-    is not mergeable — but it *is* streamable, which the previous design got
-    wrong. It used to keep the index of the best row, and an index is only
-    meaningful inside the morsel it came from, so the whole column had to be
-    concatenated first. Keeping the best **value** instead is O(groups) and
+    is not mergeable — but it *is* streamable, because it keeps the best
+    **value** per slot rather than the index of the best row. An index is only
+    meaningful inside the morsel it came from; a value is O(groups) and
     survives a morsel boundary.
 
     Nulls are excluded and an empty or all-null slot yields null.
@@ -1290,9 +1278,8 @@ struct LexicalExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
     comptime OutArray = BinaryLikeArray[Self.T]
 
     var _best: List[Optional[String]]
-    """The winning value per slot, not its row index. An index is only
-    meaningful inside the morsel it came from, which is what used to make this
-    unstreamable."""
+    """The winning value per slot, not its row index — an index is only
+    meaningful inside the morsel it came from."""
 
     def __init__(out self, in_dtype: DynType) raises:
         self._best = List[Optional[String]]()
@@ -1442,13 +1429,12 @@ struct DistinctCount[exact: Bool, A: Array](AggKernel):
     because `grouped` was one-shot. Exact is now O(distinct pairs) and approx
     is O(groups * 2**11) — neither is O(rows).
 
-    One thing was given up. The one-slot exact path used to call
-    `count_distinct`, which goes radix-partition-parallel above 200k rows;
-    a streaming state sees one morsel at a time and cannot. Whole-column
-    parallelism and bounded memory are not simultaneously available through
-    this interface, and bounded memory is the one an execution engine needs.
-    `count_distinct` itself is unchanged for callers that have the whole
-    column.
+    **The tradeoff:** a streaming state sees one morsel at a time, so it
+    cannot take `count_distinct`'s radix-partition-parallel path above 200k
+    rows. Whole-column parallelism and bounded memory are not simultaneously
+    available through this interface, and bounded memory is the one an
+    execution engine needs. `count_distinct` itself is unchanged for callers
+    holding the whole column.
 
     Both field sets are declared, and one is empty in each instantiation: a
     `comptime if` cannot select a *field*, and an unused `SwissHashTable` or

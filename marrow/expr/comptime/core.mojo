@@ -273,7 +273,7 @@ trait PrimitiveValue(ComptimeValue):
     fixed-width: a `native` dtype, a buffer, a SIMD lane. It says nothing about
     which *operations* the type supports.
 
-    That distinction used to be missing: this trait was `NumericValue`, and
+    That distinction matters: when this trait was `NumericValue`, and
     `Type: NumericType` was a single bound standing for both "I can be read by
     a lane loop" and "I support arithmetic". Two claims in one bound meant a
     temporal column could not be read at all, because dates are not numeric —
