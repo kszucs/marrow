@@ -574,6 +574,50 @@
 
 ### Tests
 
+- **The golden corpus grew from 154 cases to 278**, and `golden/COVERAGE.md`
+  now states what it covers, what it records as unsupported and what it
+  deliberately leaves out. 39 of the new cases run against marrow; the other
+  85 carry `-- skip mojo`, which keeps their bodies out of the compilation unit
+  while still recording the SQL and DuckDB's answer.
+
+  That split is forced by the suite being **one compilation unit**: an `xfail`
+  case is still compiled, so it can only mark a *wrong answer*, never a missing
+  API. Every unsupported feature therefore had to be `skip mojo`, and every
+  `skip mojo` body is an unverified proposal for the verb marrow would need.
+
+  Four new fixtures: `text` (a separator, a string without one, the empty
+  string, multi-byte, and a count column holding 0 and -1), `lists` (list,
+  empty list, null list, list with a null *element*), `nested` (a struct with a
+  null field versus a null struct; a map with a present key, an empty map and a
+  null map — reached only by skipped cases, so no compiled case depends on
+  struct or map IPC) and `edges` (int64 max and min, a zero divisor).
+
+  Three new `-- xfail`s, and they are **one root cause with three faces**.
+  `FloordivKernel` and `ModKernel` are Mojo's `a // b` and `a % b` with a zero
+  divisor replaced by 1, evaluated in a SIMD lane that can neither raise nor
+  produce a null. So `-1 // 3` is `-1` where SQL says `0` (Python floors, SQL
+  truncates toward zero), `-1 % 3` is `2` where SQL says `-1` (the remainder
+  takes the divisor's sign rather than the dividend's), and `10 // 0` is `10`
+  where SQL says NULL. `math_mod_int64` had been asking the one form of the
+  question that agrees — `((n % 3) + 3) % 3` — so the divergence had never been
+  visible.
+
+  Newly covered and passing: `variance`/`stddev` with both `ddof`s including
+  the singleton-group null, `count(DISTINCT)` over int64 and grouped, the
+  empty-input family (all-null column, zero rows grouped and ungrouped),
+  `min`/`max` at the int64 extremes and at int32 without widening, an aggregate
+  of an aggregate, numeric promotion in both arithmetic and comparison, a
+  three-level fused expression, `nullif`, nested `CASE`, `XOR` over bool
+  columns, `x = x` being null on the null row, `LIKE`'s `_` and backtracking
+  paths, `ILIKE`'s non-ASCII fold, bytewise string ordering, a *column* as a
+  string predicate's pattern, `array_length` over a list column, a computed
+  sort key, `with_columns` replacing a column in place, a filter above a limit,
+  an outer join with an empty right side, and `date_trunc` at `quarter` and
+  `second`.
+
+  `golden/prelude.mojo` gained `Nullif`, `array_length` and `list_`;
+  `golden/helpers.py` carries the same three so the two lanes stay honest.
+
 - **`marrow/kernels/tests/test_bounds.mojo`,
   `marrow/expr/tests/test_pruning.mojo` and
   `marrow/expr/tests/test_pushdown.mojo`** — 46 cases for the pruning

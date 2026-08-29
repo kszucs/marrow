@@ -77,7 +77,8 @@ name, and the break only surfaced when `pytest golden` tried to build
 `libmarrow.so` and bailed out of the whole session before running a case —
 reported as `exit code 0`, which reads like a pass. After any change to a
 public name under `marrow/`, run `pixi run build_python` (bindings) and
-`pixi run -e dev pytest golden` (154 cases), and grep `benchmarks/binary_size/`
+`pixi run -e dev pytest golden` (278 cases, 193 of them compiled — the rest
+carry `-- skip mojo`; see `golden/COVERAGE.md`), and grep `benchmarks/binary_size/`
 for the name.
 
 A single test file **cannot** be compiled on its own: with no `main()` there is
