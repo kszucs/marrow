@@ -31,8 +31,8 @@ and it is kept so that gate's recorded number stays comparable.
 
 from marrow.builders import array
 from marrow.dtypes import int64, string
-from marrow.expr.builders import col, table
-from marrow.expr.logical import DynValue
+from marrow.expr import col, table
+from marrow.expr import DynValue
 from marrow.tabular import record_batch
 
 

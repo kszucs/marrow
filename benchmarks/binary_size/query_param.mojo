@@ -52,9 +52,9 @@ immutable — the old process-global parameter registry is gone with the rest.
 from std.sys import argv
 
 from marrow.dtypes import field, int64, string
-from marrow.expr.builders import col, param, scan
-from marrow.expr.`comptime`.numeric import Gt
-from marrow.expr.logical import DynValue
+from marrow.expr import col, param, scan
+from marrow.expr import Gt
+from marrow.expr import DynValue
 from marrow.scalars import Int64Scalar
 from marrow.schema import schema
 from marrow.utils.argparse import ArgumentParser

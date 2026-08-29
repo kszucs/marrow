@@ -30,9 +30,9 @@ package, both of which move the number:
 
 from marrow.builders import array
 from marrow.dtypes import int64, string
-from marrow.expr.builders import col, table
-from marrow.expr.`comptime`.numeric import Gt
-from marrow.expr.logical import DynValue
+from marrow.expr import col, table
+from marrow.expr import Gt
+from marrow.expr import DynValue
 from marrow.tabular import record_batch
 
 

@@ -21,7 +21,7 @@ The recorded baseline predates the port and is stale.
 """
 
 from marrow.builders import array
-from marrow.expr.builders import table
+from marrow.expr import table
 from marrow.dtypes import int64
 from marrow.kernels.join import JOIN_INNER
 from marrow.tabular import record_batch

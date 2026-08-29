@@ -36,11 +36,11 @@ the gap.
 
 from marrow.builders import TimestampBuilder, array
 from marrow.dtypes import Float64Type, int64, second, string, timestamp
-from marrow.expr.builders import col, table
-from marrow.expr.`comptime`.casts import NumericCast
-from marrow.expr.`comptime`.numeric import Coalesce, TemporalGt
-from marrow.expr.`comptime`.strings import Like
-from marrow.expr.logical import DynValue
+from marrow.expr import col, table
+from marrow.expr import NumericCast
+from marrow.expr import Coalesce, TemporalGt
+from marrow.expr import Like
+from marrow.expr import DynValue
 from marrow.tabular import record_batch
 
 

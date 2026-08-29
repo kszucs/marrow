@@ -32,9 +32,9 @@ column reads, which would link the very lane this gate exists to prove absent.
 
 from marrow.builders import array
 from marrow.dtypes import int64
-from marrow.expr.builders import col
-from marrow.expr.`comptime`.numeric import Gt
-from marrow.expr.logical import DynRelation, DynValue, InMemoryTable
+from marrow.expr import col
+from marrow.expr import Gt
+from marrow.expr import DynRelation, DynValue, InMemoryTable
 from marrow.tabular import record_batch
 
 

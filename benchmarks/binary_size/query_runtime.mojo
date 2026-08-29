@@ -25,7 +25,7 @@ port and is stale.
 
 from marrow.builders import array
 from marrow.dtypes import int64
-from marrow.expr.builders import col, table
+from marrow.expr import col, table
 from marrow.expr.runtime.values import gt
 from marrow.tabular import record_batch
 

@@ -28,10 +28,10 @@ an `int64`, with everything else equal.
 
 from marrow.builders import array
 from marrow.dtypes import int64
-from marrow.expr.builders import col
-from marrow.expr.`comptime`.aggregates import Min, Sum
-from marrow.expr.logical import DynValue
-from marrow.expr.logical import Aggregate, DynRelation, InMemoryTable
+from marrow.expr import col
+from marrow.expr import Min, Sum
+from marrow.expr import DynValue
+from marrow.expr import Aggregate, DynRelation, InMemoryTable
 from marrow.tabular import record_batch
 
 

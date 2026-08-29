@@ -40,9 +40,9 @@ not. The recorded baseline predates the port and is stale.
 """
 
 from marrow.dtypes import field, int64, string
-from marrow.expr.builders import col, scan
-from marrow.expr.`comptime`.numeric import Gt
-from marrow.expr.logical import DynValue
+from marrow.expr import col, scan
+from marrow.expr import Gt
+from marrow.expr import DynValue
 from marrow.schema import schema
 
 

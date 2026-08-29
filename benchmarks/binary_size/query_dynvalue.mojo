@@ -28,8 +28,8 @@ baseline predates the port and is stale.
 
 from marrow.builders import array
 from marrow.dtypes import int64
-from marrow.expr.builders import col
-from marrow.expr.logical import DynRelation, DynValue, InMemoryTable, Project
+from marrow.expr import col
+from marrow.expr import DynRelation, DynValue, InMemoryTable, Project
 from marrow.expr.runtime.values import gt
 from marrow.tabular import record_batch
 
