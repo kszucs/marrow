@@ -19,7 +19,7 @@ def plan() raises -> DynRelation:
     7
     """
     var t = table("basic")
-    var q = t.project(
+    return t.project(
         ["c"],
         [
             CaseWhen(
@@ -29,4 +29,3 @@ def plan() raises -> DynRelation:
             )
         ],
     )
-    return q

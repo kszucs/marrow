@@ -13,7 +13,7 @@ distinguishes them.
 from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit
-from ...params import Bindings
+from ...bindings import Bindings
 from ....builders import Int64Builder, array
 from ....arrays import Int64Array, StringArray
 from ....dtypes import (
@@ -200,11 +200,11 @@ def test_cast_string_to_int_nulls_what_will_not_parse() raises:
 def test_cast_string_to_int_null_survives_a_fused_parent() raises:
     """The regression this port exists to not reintroduce.
 
-    `exprold` answered validity from the *batch* as well as from the state,
-    and its batch-side answer re-ran the parse; inheriting the all-valid
-    default instead made `to_int(s) + 1` yield 0 where it should be null
-    (`marrow/exprold/values.mojo:1668-1680`). Here there is one source — the
-    bound — so a fused parent reading `validity(bound)` sees the parse failure.
+    The previous expression layer answered validity from the *batch* as well
+    as from the state, and its batch-side answer re-ran the parse; inheriting
+    the all-valid default instead made `to_int(s) + 1` yield 0 where it should
+    be null. Here there is one source — the bound — so a fused parent reading
+    `validity(bound)` sees the parse failure.
     """
     var b = _batch()
     var got = (

@@ -14,6 +14,5 @@ def plan() raises -> DynRelation:
     50
     """
     var t = table("sales")
-    var picked = t.select("qty")
-    var q = picked.sort([col("qty", int32)], [True]).limit(100, 4)
-    return q
+    var picked = t.select(["qty"])
+    return picked.sort_by([col("qty", int32)], [True]).limit(100, 4)

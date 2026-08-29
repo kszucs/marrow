@@ -110,7 +110,7 @@ benchmarks; `--save-benchmarks DIR` / `--benchmark-history FILE` persist results
 import the code you touched; the rest tells you nothing extra.
 
 ```bash
-pixi run -e dev pytest marrow/exprold/tests marrow/kernels/tests   # after editing expr + kernels
+pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests   # after editing expr + kernels
 pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo   # narrower still
 ```
 
@@ -131,9 +131,9 @@ comparison through `pytest`.
 Compilation dominates, and almost all of it is elaborating **marrow**, not the
 test bodies. The harness generates **one driver** for the whole selection
 (`.test_runners/_test_driver_<hash>.mojo`, content-addressed) and compiles that.
-N files in one unit cost about what 1 file costs — measured on
-`marrow/exprold/tests`: all 9 files together took 4 min 43 s / 17.0 GB peak, while
-`test_join.mojo` alone took 3 min 18 s / 19.6 GB.
+N files in one unit cost about what 1 file costs — measured on the former
+expression-layer suite, since replaced: all 9 files together took 4 min 43 s /
+17.0 GB peak, while `test_join.mojo` alone took 3 min 18 s / 19.6 GB.
 
 - **Selecting fewer *files* saves time; selecting fewer *cases* does not.**
 - **A compile error fails every case in the run**, since there is one unit.
@@ -253,10 +253,14 @@ only by each other's companion members (`ArrayType` → `ScalarType`,
 binary size. Keep it that way: a box may *hold* trait-bound values, it should
 not *be* one.
 
-The exception is `DynValue: Value`, and it earns it — `Value` is a trait of
-runtime methods plus `OutShape`, which `DynValue` answers truthfully, and the
-conformance is what lets a runtime leaf be an operand of the fused
-`NullPredicate`/`IsIn`/`WindowFunction` nodes.
+**There is no exception.** `DynValue` (`expr/logical.mojo`) erases `Value`
+without conforming to it either: five function slots — `columns`, `name`,
+`dtype`, `write`, `to_operator` — plus a comptime `shape` read once at
+construction, exposed as its own API. This entry used to record `DynValue:
+Value` as an earned exception that let a runtime leaf be an operand of a fused
+node; the comptime nodes bind on `ComptimeValue`, and a runtime operand inside
+one would throw away the fusion the lane exists for. The lanes meet at the box,
+not inside a node.
 
 ### Arrays, builders, scalars
 
@@ -401,22 +405,47 @@ wider than a register.
 
 ### Expression layer
 
-`marrow/exprold/` is split into **two lanes that no longer share node types**:
+`marrow/expr/` is a **logical** side, a **physical** side, and **two lanes that
+share no node types**:
 
-- **The AOT lane** (`values.mojo`, `aggregates.mojo`) — every node's operands are
-  bound on a family trait (`L: NumericValue`), its output dtype is a comptime
-  type, and a subtree fuses into one SIMD loop. Nothing is erased.
-- **The runtime lane** (`dynamic.mojo`) — `DynValue` is one struct holding its
-  children, an optional payload, and a pointer to the evaluating function. What
-  stays runtime is the *dtype* of the operands, not the operation.
+- **`logical.mojo`** — the plan IR. `Relation` nodes are pure, immutable
+  descriptions (`schema` / `to_operator` / `write`), erased by `DynRelation`
+  behind an `ArcPointer` so copying a plan is an O(1) share: `InMemoryTable`,
+  `ParquetScan`, `Filter`, `Project`, `Aggregate`, `Limit`, `Sort`, `Join`,
+  chained by `.filter()` / `.select()` / `.project()` / `.aggregate()` /
+  `.sort_by()` / `.limit()` / `.join()` and run by `.execute()`. It also holds
+  `Value` — the five-member trait every expression implements in either lane —
+  and `DynValue`, the box the two lanes meet in.
+- **`physical.mojo`** — the executing counterpart. `Relation.to_operator(ctx)`
+  builds an `Operator` owning all mutable state (grouper table, accumulator
+  slots, child operators), erased by `DynOperator`. **The engine pushes**:
+  `push(batch)` answers with what it produced, `drain()` with what is left, and
+  `collect()` runs a plan down to one `StructArray`. One operator per plan node
+  — `FilterOperator`, `ProjectOperator`, `GroupByOperator`, `SortOperator`,
+  `JoinOperator`, `LimitOperator`, `ParquetScanOperator`, `BatchSourceOperator`
+  — plus `Pipeline` and `EvalOperator`.
+- **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
+  `boolean.mojo`, `strings.mojo`, `casts.mojo`, `aggregates.mojo`, `rules.mojo`)
+  — every node's operands are bound on a family trait (`L: NumericValue`), its
+  output dtype is a comptime type, and a subtree fuses into one SIMD loop.
+  Nothing is erased. `Column[T]`, `Literal[T]`, `Aggregate[Agg, A]`.
+- **The runtime lane** (`runtime/values.mojo`, `runtime/aggregates.mojo`) —
+  `RuntimeValue` is one struct holding a tag, its children behind `ArcPointer`,
+  and an optional payload; `RuntimeAggregate` is an aggregate named at run time
+  and resolved against the input schema at plan-build time. What stays runtime
+  is the *dtype* of the operands, not the operation.
+- **`builders.mojo`** — `col`, `lit`, `if_else`, `param`, `count_star`,
+  `table()`, `scan()`: the one surface spanning both lanes. `col("a", int64)`
+  gives a comptime `Column[Int64Type]`, `col("a")` a `RuntimeValue`.
+- **`params.mojo`** — `Param[T]` and `Bindings`: a literal whose value arrives at
+  execution time, carried *through* an execution rather than substituted into a
+  copy of the plan, so two executions of one plan cannot interfere.
 
-`relations.mojo` holds the plan IR: `Relation` nodes are pure, immutable
-descriptions (`kind`/`schema`/`to_processor`), erased by `DynRelation` behind an
-`ArcPointer` so copying a plan is an O(1) share. `execution.mojo` is the
-executing counterpart: `Relation.to_processor(ctx)` builds a `Processor` owning
-all mutable state (scan offset, hash index, grouper, children), erased by
-`DynProcessor`, drained by `collect()`. `pruning.mojo` does conservative
-statistics-based predicate pruning for row groups and pages.
+Tests live in `expr/tests/`, `expr/comptime/tests/` and `expr/runtime/tests/`.
+
+**Statistics-based pruning, predicate/projection pushdown and the CLI-output
+layer are unported.** They lived in the previous expression package and have no
+replacement in the tree yet — do not describe them as available.
 
 Two standing constraints:
 
@@ -442,14 +471,13 @@ Two standing constraints:
   cast target — resolve a runtime dtype with `dispatch_*` and box each arm), or
   it does not depend on the type at all (a column read by name).
   `DynColumn`/`DynLiteral`/`DynCast` were all added and all removed for this
-  reason. **`DynValue` conforms to `Value` and to nothing else** — its own docstring
-  says so, and the struct declares `(Copyable, Movable, Value, Writable)`.
-  This entry used to claim it "conforms to every value family", which is
-  false. Fused nodes take a runtime operand because the three that accept
-  one bind on `Value` itself — `IsIn[A: Value]`,
-  `NullPredicate[K, A: Value]`, `WindowFunction[Func, A: Value]` — not
-  because the families are satisfied; a node keys off `comptime IsErased` (propagated,
-  not defaulted) to pick dispatch over fusion.
+  reason. **`DynValue` conforms to nothing it erases** — it declares
+  `(Copyable, Movable, Writable)` and carries `Value`'s surface as its own API,
+  exactly like `DynArray`/`DynScalar`/`DynBuilder`. This entry used to claim a
+  `DynValue: Value` conformance that let a fused node take a runtime operand;
+  the comptime nodes bind on `ComptimeValue` (`NullPredicate[K, A:
+  ComptimeValue]`), and a runtime operand inside one would discard the fusion
+  the lane exists for. A plan mixes lanes at the box, never inside a node.
 
 ### Interop and tabular
 
@@ -502,12 +530,14 @@ marrow/
 │   ├── concat.mojo       # concat
 │   └── tests/            # test_*.mojo + bench_*.mojo
 ├── expr/
-│   ├── values.mojo       # AOT lane: fused, comptime-typed value nodes
-│   ├── dynamic.mojo      # runtime lane: DynValue
-│   ├── aggregates.mojo   # AggFunction → resolved aggregate
-│   ├── relations.mojo    # Relation / DynRelation plan IR
-│   ├── execution.mojo    # Processor / DynProcessor pull engine
-│   ├── pruning.mojo      # statistics-based predicate pruning
+│   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
+│   ├── physical.mojo     # Operator / DynOperator push engine
+│   ├── builders.mojo     # col, lit, if_else, param, count_star, table, scan
+│   ├── params.mojo       # Param[T], Bindings
+│   ├── comptime/         # AOT lane: core, leaves, numeric, boolean, strings,
+│   │   └── tests/        #   casts, aggregates, rules
+│   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
+│   │   └── tests/
 │   └── tests/
 ├── parquet/              # reader, writer, schema, format, codecs, bloom,
 │   └── tests/            # statistics, source
@@ -678,10 +708,11 @@ In addition:
 - **Write aggregates with the fluent API** — `col("amount", int64).sum()`,
   `.mean()`, `.min()`, `.max()`, `.count()` on `NumericValue`/`StringValue`/
   `TemporalValue`, named with `.alias("total")`, and no key list at all for a
-  no-`GROUP BY` aggregate (`rel.aggregate(aggs=[...])`). Never spell one
-  `AggExpr.of[NumericAgg[SumKernel, Int64Type]](...)` — that constructor is
-  for the kernel layer and for the benches that deliberately measure comptime
-  versus runtime resolution (`bench_aggregate_aot.mojo`,
+  no-`GROUP BY` aggregate (`rel.aggregate(aggs=[...])`). Never spell the
+  comptime `Aggregate[Fold[SumKernel, Int64Type], ...]` node by hand — that
+  form is for the kernel layer and for the benches that deliberately measure
+  comptime versus runtime resolution
+  (`marrow/expr/comptime/tests/bench_aggregates.mojo`,
   `benchmarks/binary_size/`), not for tests.
 - Use standard pytest assertions and fixtures (`tmp_path`) on the Python side.
 
@@ -798,6 +829,28 @@ In addition:
   and a Mojo *build* failure emits no ASAN output at all — so a clean ASAN run is
   not evidence on its own. Verify without ASAN too, and confirm the tests
   actually ran rather than the build having died.
+- **`rebind[ArcPointer[NoneType]]` erasure silently drops the destructor.**
+  The allocation and the refcount survive; the *type* does not, so the final
+  release runs `NoneType`'s destructor and the boxed object's `__deinit__`
+  never runs. Every erased box in the tree leaked this way until 2026-08-28 —
+  `DynValue`, `DynRelation`, `DynOperator`, and the aggregate box, where the
+  pointee is O(distinct values) rather than a plan node.
+
+  Nothing in the type system catches it and **no test can see it without
+  counting destructions**: every answer stays correct and only memory is lost.
+  `marrow/expr/tests/test_erasure.mojo` counts them.
+
+  The fix is a `_drop` trampoline per box plus a `__deinit__` that calls it:
+  take a second reference at the true type, release the erased one, and let the
+  typed one fall out of scope, so the release that reaches zero knows what it
+  is holding. Sharing is unaffected — N copies destroy exactly once. Two
+  alternatives do **not** work: `OwnedPointer` cannot be erased at all
+  (`rebind` requires `ImplicitlyCopyable` and refuses a move-only pointer), and
+  `Some[Trait]` is an argument-position existential, not a concrete field type
+  (*"is not a concrete type, use '[]' to bind missing parameters"*).
+
+  **Any new erased box needs the fourth trampoline.** Three virtual methods
+  plus a pointer looks complete and is not.
 
 ### Closures
 
@@ -831,6 +884,24 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   per concrete struct. Composing out of *type parameters'* associated types is
   fine (`Tuple[Self.L.State, Self.R.State]`) — but a raising `prepare` needs
   `comptime State: Copyable & Deinitable`.
+
+  **Measured 2026-08-28: the same default can also *crash the compiler*, and
+  it does so nowhere near the declaration.** `trait PrimVal(Val): comptime
+  ArrayType = PrimitiveArray[Self.Type]` declares fine and even resolves when
+  read directly — `Counter[IntLeaf.ArrayType]` compiles and runs. It dies when
+  projected through a **dependent comptime alias**: `comptime CountOf[V: Val] =
+  Agg[Counter[V.ArrayType], V]` reports *"Crash resolving decl body"* at the
+  *use* site, with no diagnostic naming the trait. Declaring `ArrayType` on
+  each concrete struct instead makes the identical alias compile and run. So
+  "declare such members per concrete struct" is not a style preference — it is
+  the difference between a working alias and a compiler crash, and the crash
+  points at innocent code.
+
+  Do not confuse this with the *inferability* trap: `comptime Sum[A:
+  PrimitiveValue] = Aggregate[Fold[SumKernel, A.Type], A]` works because `A` is
+  also a direct parameter, while an alias whose parameter appears **only** under
+  a projection has nothing to infer from and fails (or crashes) too. Both were
+  hit in one session; they are different faults with the same symptom.
 - **Re-defaulting a base trait's abstract method in a sub-trait recurses** when
   it returns `Self.ArrayType`. Keep the base abstract and override under a new
   name (`NumericValue.execute` -> `_fused`).
@@ -874,9 +945,9 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   refined — `A: Self.I.Operand` reports *"'Self' type is not available in this
   context"* and `A: I.Operand & Deinitable` does not parse. So the mechanism
   serves arguments and return values, not fields. This is what blocks merging
-  `FusedAggregate` and `BufferedAggregate` (`expr/comptime/aggregates.mojo`)
-  behind one node parameterised on its operand bound: both must *store* their
-  operand.
+  `FusedAggregateOperator` and `BufferedAggregateOperator`
+  (`expr/physical.mojo`) behind one node parameterised on its operand bound:
+  both must *store* their operand.
 
 - **A reflected field type is opaque inside the generic function that reflects
   it.** Route construction through a separately-instantiated generic bound on
@@ -903,8 +974,8 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   unwritable; they moved onto `DynValue`, whose callers they all already were.
   **This was once written as the broader "a struct method does not override a
   trait default", and that is false.** A *same-signature* override is ordinary
-  and works — `Value.prune`, `name` and `bound_column` are each a trait
-  default overridden by conformers throughout `values.mojo`.
+  and works — the previous expression layer's `Value.prune`, `name` and
+  `bound_column` were each a trait default overridden by its conformers.
 - **A trait default method's parameter name must not collide with a
   *conformer's* struct parameter**, or that struct fails with `name conflict
   between parameter 'R' in the default trait method and a parameter in the

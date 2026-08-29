@@ -4,22 +4,22 @@ Each kernel is a separate struct implementing ``Kernel`` and doing **one**
 conversion, so it can be optimized and monomorphized in isolation (and grabbed
 directly by the AOT expression layer):
 
-- ``NumericCast`` — numeric ↔ numeric SIMD ``pop.cast``; ``core`` /
+- ``NumericCastKernel`` — numeric ↔ numeric SIMD ``pop.cast``; ``core`` /
   ``core_checked`` are the lane functors (the latter reused by the fused AOT
   node). ``safe`` is a **comptime** parameter selecting checked vs unchecked.
-- ``NumToBool`` / ``BoolToNum`` — bit-pack (``x != 0``) / bit-unpack (``True→1``).
-- ``TemporalCast`` — relabel to the underlying integer, or unit-scale it.
-- ``StringToNum`` / ``NumToString`` / ``StringToBool`` / ``BoolToString`` —
+- ``NumToBoolKernel`` / ``BoolToNumKernel`` — bit-pack (``x != 0``) / bit-unpack (``True→1``).
+- ``TemporalCastKernel`` — relabel to the underlying integer, or unit-scale it.
+- ``StringToNumKernel`` / ``NumToStringKernel`` / ``StringToBoolKernel`` / ``BoolToStringKernel`` —
   per-element ``atol``/``atof`` parse or format (variable-length, builder-based).
-- ``NullCast`` — an all-null array of the target type.
+- ``NullCastKernel`` — an all-null array of the target type.
 
 Every kernel conforms to ``CastKernel`` and so exposes the **same**
 ``dispatch(array, to, safe, ctx)``, resolving the runtime dtypes of its family
 (the arithmetic-kernel pattern). The free ``cast`` function at the bottom picks
 the target family and delegates to the matching kernel's ``dispatch``; ``safe``
 is a plain runtime flag each kernel branches at its leaf ``apply`` call. The
-fused AOT node in ``marrow.exprold.values`` bypasses all of this and grabs
-``NumericCast.core`` directly.
+fused AOT node in ``marrow/expr/comptime/casts.mojo`` bypasses all of this and
+grabs ``NumericCastKernel.core`` directly.
 
 The uniform signature is the point of the trait, not code reuse: the ladder used
 to call six different shapes and silently dropped whichever argument the target
@@ -107,11 +107,11 @@ trait CastKernel(Kernel):
 
 
 # ---------------------------------------------------------------------------
-# NumericCast — numeric ↔ numeric
+# NumericCastKernel — numeric ↔ numeric
 # ---------------------------------------------------------------------------
 
 
-struct NumericCast(CastKernel):
+struct NumericCastKernel(CastKernel):
     """Numeric ↔ numeric cast: one ``pop.cast`` per SIMD lane."""
 
     comptime name = "numeric_cast"
@@ -228,11 +228,11 @@ struct NumericCast(CastKernel):
 
 
 # ---------------------------------------------------------------------------
-# NumToBool / BoolToNum — bit-packed bool ↔ numeric
+# NumToBoolKernel / BoolToNumKernel — bit-packed bool ↔ numeric
 # ---------------------------------------------------------------------------
 
 
-struct NumToBool(CastKernel):
+struct NumToBoolKernel(CastKernel):
     """Numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
 
     comptime name = "num_to_bool"
@@ -287,7 +287,7 @@ struct NumToBool(CastKernel):
         )
 
 
-struct BoolToNum(CastKernel):
+struct BoolToNumKernel(CastKernel):
     """Bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
 
     comptime name = "bool_to_num"
@@ -343,11 +343,11 @@ struct BoolToNum(CastKernel):
 
 
 # ---------------------------------------------------------------------------
-# TemporalCast — temporal ↔ integer / temporal ↔ temporal
+# TemporalCastKernel — temporal ↔ integer / temporal ↔ temporal
 # ---------------------------------------------------------------------------
 
 
-struct TemporalCast(CastKernel):
+struct TemporalCastKernel(CastKernel):
     """Cast temporal ↔ integer / temporal ↔ temporal. Same physical width and
     resolution → a zero-copy relabel (``_reinterpret``); a differing unit → scale
     the underlying integers by the unit ratio (``_scale``)."""
@@ -422,7 +422,7 @@ struct TemporalCast(CastKernel):
         `__text`** on `query_sort`, `query_dynvalue` and `query_runtime`, because
         `_map_scalar` carries the allocation and the `ArrayData` relabel inside
         every `[SrcN, DstN]` instantiation while `_scale` has them once. Same
-        shape as the `DecimalCast._convert` merge recorded below. This change,
+        shape as the `DecimalCastKernel._convert` merge recorded below. This change,
         measured alone, is +64 bytes on one gate and +0 on the other eleven."""
         if dt.is_date32():
             return 86_400_000_000_000  # days
@@ -444,7 +444,7 @@ struct TemporalCast(CastKernel):
 
         Serial by construction, not by preference — this raises, and an
         exception cannot cross a `ctx.stripe` worker or a GPU kernel boundary
-        (§0). `NumericCast.apply`'s checked arm is serial for the same reason.
+        (§0). `NumericCastKernel.apply`'s checked arm is serial for the same reason.
 
         Null lanes are skipped: an invalid slot may hold arbitrary junk that
         need not be representable, and failing on it would reject a perfectly
@@ -547,11 +547,11 @@ struct TemporalCast(CastKernel):
 
 
 # ---------------------------------------------------------------------------
-# StringToNum / NumToString / StringToBool / BoolToString
+# StringToNumKernel / NumToStringKernel / StringToBoolKernel / BoolToStringKernel
 # ---------------------------------------------------------------------------
 
 
-struct StringToNum(CastKernel):
+struct StringToNumKernel(CastKernel):
     """Parse strings to a numeric type. ``safe`` is comptime: safe=True raises on
     an unparseable value, safe=False nulls it — the dead branch is elided."""
 
@@ -606,7 +606,7 @@ struct StringToNum(CastKernel):
         return b.finish()
 
 
-struct StringToBool(CastKernel):
+struct StringToBoolKernel(CastKernel):
     """Parse ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive) to bool.
     ``safe`` comptime: raise vs null on an unrecognized value."""
 
@@ -621,7 +621,7 @@ struct StringToBool(CastKernel):
     ) raises -> DynArray:
         """Runtime string-like → bool over the source string kinds.
 
-        `to` is checked rather than assumed — see `NumToBool.dispatch`.
+        `to` is checked rather than assumed — see `NumToBoolKernel.dispatch`.
         """
         if not to.is_bool():
             raise Self.error(t"target must be bool, got {to}")
@@ -656,7 +656,7 @@ struct StringToBool(CastKernel):
         return b.finish()
 
 
-struct NumToString(CastKernel):
+struct NumToStringKernel(CastKernel):
     """Format a numeric array to strings (per-element ``String(value)``)."""
 
     comptime name = "num_to_string"
@@ -697,7 +697,7 @@ struct NumToString(CastKernel):
         return b.finish()
 
 
-struct BoolToString(CastKernel):
+struct BoolToStringKernel(CastKernel):
     """Format a bool array to ``"true"``/``"false"`` strings."""
 
     comptime name = "bool_to_string"
@@ -711,7 +711,7 @@ struct BoolToString(CastKernel):
     ) raises -> DynArray:
         """Runtime bool → string-like over the target string kinds.
 
-        `safe` and `ctx` are inert — see `NumToString.dispatch`.
+        `safe` and `ctx` are inert — see `NumToStringKernel.dispatch`.
         """
         var b = array.as_bool().copy()
 
@@ -738,7 +738,7 @@ def _all_ascii(window: BufferView[DType.uint8, _]) -> Bool:
 
     ASCII is a subset of UTF-8 that is closed under slicing, so an all-ASCII
     buffer makes every element of *any* offset layout over it valid UTF-8 —
-    which is what lets `BinaryLikeCast._check_utf8` skip both its offset scan
+    which is what lets `BinaryLikeCastKernel._check_utf8` skip both its offset scan
     and its per-element loop.
 
     Four accumulators, reduced once per 4 KiB chunk. The accumulators are for
@@ -824,11 +824,11 @@ def _validate_utf8_window(window: BufferView[DType.uint8, _]) -> Bool:
 
 
 # ---------------------------------------------------------------------------
-# BinaryLikeCast — binary/large_binary/utf8/large_utf8 ↔ each other
+# BinaryLikeCastKernel — binary/large_binary/utf8/large_utf8 ↔ each other
 # ---------------------------------------------------------------------------
 
 
-struct BinaryLikeCast(CastKernel):
+struct BinaryLikeCastKernel(CastKernel):
     """Cast between the binary-like containers (binary, large_binary, utf8,
     large_utf8). Equal physical offset width → a zero-copy relabel that shares
     the offset and value buffers; differing width (32↔64-bit offsets) → a rebuild
@@ -964,11 +964,11 @@ struct BinaryLikeCast(CastKernel):
 
 
 # ---------------------------------------------------------------------------
-# FixedSizeBinaryCast — fixed_size_binary ↔ variable-length binary
+# FixedSizeBinaryCastKernel — fixed_size_binary ↔ variable-length binary
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryCast(CastKernel):
+struct FixedSizeBinaryCastKernel(CastKernel):
     """Cast fixed-size-binary ↔ variable-length binary. ``to_binary`` derives the
     offset buffer from the fixed width and shares the data bytes; ``from_binary``
     packs each element into a fixed cell, raising when a length ≠ the width."""
@@ -1047,11 +1047,11 @@ struct FixedSizeBinaryCast(CastKernel):
 
 
 # ---------------------------------------------------------------------------
-# NullCast — null → any
+# NullCastKernel — null → any
 # ---------------------------------------------------------------------------
 
 
-struct NullCast(CastKernel):
+struct NullCastKernel(CastKernel):
     """Cast a null array to any target type: an all-null array of that type."""
 
     comptime name = "null_cast"
@@ -1079,7 +1079,7 @@ struct NullCast(CastKernel):
 # The decimal family — one struct per conversion, not one struct per dtype pair
 # ---------------------------------------------------------------------------
 #
-# These five were a single `DecimalCast` doing decimal↔decimal, decimal↔float
+# These five were a single `DecimalCastKernel` doing decimal↔decimal, decimal↔float
 # and decimal↔integer behind one `_convert[FromN, ToN]`. That function resolved
 # *both* sides over "decimal or numeric", so it was monomorphized across the
 # full cross product — roughly 16 x 16 pairs — and every line inside it was
@@ -1093,8 +1093,8 @@ struct NullCast(CastKernel):
 #
 # Splitting by conversion narrows each kernel's dispatch to the families it can
 # actually see, and two of the five collapse a runtime branch outright: an
-# integer source is always scale 0, so `IntToDecimal` only ever scales *up*,
-# and an integer target is always scale 0, so `DecimalToInt` only ever scales
+# integer source is always scale 0, so `IntToDecimalKernel` only ever scales *up*,
+# and an integer target is always scale 0, so `DecimalToIntKernel` only ever scales
 # *down*. The fat version could not express that — it had to test `delta` at
 # runtime on every path.
 
@@ -1144,7 +1144,7 @@ def _map_decimal[
 
     Null lanes are skipped rather than mapped: an invalid slot may hold
     arbitrary junk, and a checked ``op`` would reject an array whose every
-    *valid* element converts cleanly. ``NumericCast.apply`` masks its checked
+    *valid* element converts cleanly. ``NumericCastKernel.apply`` masks its checked
     lanes by validity for the same reason.
     """
     var n = data.length
@@ -1175,8 +1175,9 @@ def _map_decimal[
 def _rescale_up[
     FromN: DType, ToN: DType
 ](data: ArrayData, to: DynType, delta: Int, safe: Bool) raises -> DynArray:
-    """Multiply by 10^delta, widening the scale. Shared by `DecimalRescale` and
-    `IntToDecimal`, which is the only real overlap left between the five."""
+    """Multiply by 10^delta, widening the scale. Shared by `DecimalRescaleKernel` and
+    `IntToDecimalKernel`, which is the only real overlap left between the five.
+    """
     var f = _pow10[ToN](delta)
 
     def up(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
@@ -1198,7 +1199,7 @@ def _rescale_down[
     FromN: DType, ToN: DType
 ](data: ArrayData, to: DynType, delta: Int, safe: Bool) raises -> DynArray:
     """Integer-divide by 10^-delta, narrowing the scale. Shared by
-    `DecimalRescale` and `DecimalToInt`."""
+    `DecimalRescaleKernel` and `DecimalToIntKernel`."""
     var f = _pow10[FromN](-delta)
 
     def down(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
@@ -1217,7 +1218,7 @@ def _rescale_down[
     return _map_decimal[FromN, ToN](data, to, down)
 
 
-struct DecimalRescale(CastKernel):
+struct DecimalRescaleKernel(CastKernel):
     """Decimal → decimal: an integer rescale by 10^(to_scale − from_scale).
 
     The only member of the family whose direction is genuinely unknown until
@@ -1248,7 +1249,7 @@ struct DecimalRescale(CastKernel):
         return array.dtype().dispatch_decimal(on_from)
 
 
-struct IntToDecimal(CastKernel):
+struct IntToDecimalKernel(CastKernel):
     """Integer → decimal. An integer is scale 0, so this only ever scales *up*
     — the `delta < 0` arm the fat kernel carried here was unreachable."""
 
@@ -1273,7 +1274,7 @@ struct IntToDecimal(CastKernel):
         return array.dtype().dispatch_integer(on_from)
 
 
-struct DecimalToInt(CastKernel):
+struct DecimalToIntKernel(CastKernel):
     """Decimal → integer. An integer target is scale 0, so this only ever
     scales *down*, and the remainder check is the whole of `safe` here."""
 
@@ -1300,7 +1301,7 @@ struct DecimalToInt(CastKernel):
         return array.dtype().dispatch_decimal(on_from)
 
 
-struct FloatToDecimal(CastKernel):
+struct FloatToDecimalKernel(CastKernel):
     """Float → decimal: multiply by 10^scale in float64 and round.
 
     float16/32 ↔ int128/256 has no direct compiler-rt path (`__fixhfti` /
@@ -1343,12 +1344,12 @@ struct FloatToDecimal(CastKernel):
         return array.dtype().dispatch_floating(on_from)
 
 
-struct DecimalToFloat(CastKernel):
+struct DecimalToFloatKernel(CastKernel):
     """Decimal → float: divide by 10^scale in float64.
 
     Unchecked on purpose. Decimal → float is inexact by construction and Arrow
     permits it under `safe`, exactly as float → float is permitted
-    (`NumericCast.needs_check` answers False there too)."""
+    (`NumericCastKernel.needs_check` answers False there too)."""
 
     comptime name = "decimal_to_float"
 
@@ -1378,7 +1379,7 @@ struct DecimalToFloat(CastKernel):
         return array.dtype().dispatch_decimal(on_from)
 
 
-struct DecimalCast(CastKernel):
+struct DecimalCastKernel(CastKernel):
     """Router for the decimal family: pick the kernel for this pair.
 
     Kept so `cast()`'s ladder has one decimal arm rather than five, and so the
@@ -1396,32 +1397,32 @@ struct DecimalCast(CastKernel):
     ) raises -> DynArray:
         var src = array.dtype()
         if src.is_decimal() and to.is_decimal():
-            return DecimalRescale.dispatch(array, to, safe, ctx)
+            return DecimalRescaleKernel.dispatch(array, to, safe, ctx)
         elif src.is_decimal() and to.is_floating_point():
-            return DecimalToFloat.dispatch(array, to, safe, ctx)
+            return DecimalToFloatKernel.dispatch(array, to, safe, ctx)
         elif src.is_decimal() and to.is_integer():
-            return DecimalToInt.dispatch(array, to, safe, ctx)
+            return DecimalToIntKernel.dispatch(array, to, safe, ctx)
         elif src.is_floating_point() and to.is_decimal():
-            return FloatToDecimal.dispatch(array, to, safe, ctx)
+            return FloatToDecimalKernel.dispatch(array, to, safe, ctx)
         elif src.is_integer() and to.is_decimal():
-            return IntToDecimal.dispatch(array, to, safe, ctx)
+            return IntToDecimalKernel.dispatch(array, to, safe, ctx)
         else:
             raise Self.error(t"unsupported decimal cast {src} -> {to}")
 
 
 # ---------------------------------------------------------------------------
-# ListCast / StructCast / DictionaryCast — nested + dictionary
+# ListCastKernel / StructCastKernel / DictionaryCastKernel — nested + dictionary
 # ---------------------------------------------------------------------------
 
 
-struct ListCast(CastKernel):
+struct ListCastKernel(CastKernel):
     """Cast a list-like array (list / large_list / map) to another of the same
     kind by recursively casting its child values to the target's value type; the
     offset buffer and validity are shared unchanged.
 
     `map` rides this path rather than needing its own kernel: physically it is a
     list whose single child is the non-nullable `entries` struct, so casting a
-    `map<k1, v1>` to `map<k2, v2>` is casting that struct — which `StructCast`
+    `map<k1, v1>` to `map<k2, v2>` is casting that struct — which `StructCastKernel`
     then does field by field. Only the *target child type* differs, which is why
     the three cases meet here and nowhere else."""
 
@@ -1457,7 +1458,7 @@ struct ListCast(CastKernel):
         )
 
 
-struct StructCast(CastKernel):
+struct StructCastKernel(CastKernel):
     """Cast struct → struct by recursively casting each field to the target
     field's type (matched by position); the field counts must match."""
 
@@ -1494,7 +1495,7 @@ struct StructCast(CastKernel):
         )
 
 
-struct DictionaryCast(CastKernel):
+struct DictionaryCastKernel(CastKernel):
     """Decode a dictionary array — gather its values by index (``take``) — then
     cast the decoded values to the target type when it differs."""
 
@@ -1533,43 +1534,47 @@ def cast(
     if src == to:
         return array.copy()  # identity → zero-copy
     elif src.is_null():
-        return NullCast.dispatch(array, to, safe, ctx)  # null → any
+        return NullCastKernel.dispatch(array, to, safe, ctx)  # null → any
     elif src.is_dictionary():
-        return DictionaryCast.dispatch(array, to, safe, ctx)  # decode first
+        return DictionaryCastKernel.dispatch(
+            array, to, safe, ctx
+        )  # decode first
     elif src.is_binary_like() and to.is_binary_like():
-        return BinaryLikeCast.dispatch(array, to, safe, ctx)  # bytes ↔ bytes
+        return BinaryLikeCastKernel.dispatch(
+            array, to, safe, ctx
+        )  # bytes ↔ bytes
     elif (src.is_fixed_size_binary() and to.is_binary_like()) or (
         src.is_binary_like() and to.is_fixed_size_binary()
     ):
-        return FixedSizeBinaryCast.dispatch(array, to, safe, ctx)
+        return FixedSizeBinaryCastKernel.dispatch(array, to, safe, ctx)
     elif src.is_string() or src.is_large_string():  # string-like → numeric/bool
         if to.is_bool():
-            return StringToBool.dispatch(array, to, safe, ctx)
+            return StringToBoolKernel.dispatch(array, to, safe, ctx)
         elif to.is_numeric():
-            return StringToNum.dispatch(array, to, safe, ctx)
+            return StringToNumKernel.dispatch(array, to, safe, ctx)
         raise Error(t"cast: unsupported cast {src} -> {to}")
     elif to.is_string() or to.is_large_string():  # numeric/bool → string-like
         if src.is_bool():
-            return BoolToString.dispatch(array, to, safe, ctx)
+            return BoolToStringKernel.dispatch(array, to, safe, ctx)
         elif src.is_numeric():
-            return NumToString.dispatch(array, to, safe, ctx)
+            return NumToStringKernel.dispatch(array, to, safe, ctx)
         raise Error(t"cast: unsupported cast {src} -> {to}")
     elif src.is_decimal() or to.is_decimal():
-        return DecimalCast.dispatch(array, to, safe, ctx)
+        return DecimalCastKernel.dispatch(array, to, safe, ctx)
     elif src.is_numeric() and to.is_numeric():
-        return NumericCast.dispatch(array, to, safe, ctx)
+        return NumericCastKernel.dispatch(array, to, safe, ctx)
     elif to.is_bool():
-        return NumToBool.dispatch(array, to, safe, ctx)  # numeric → bool
+        return NumToBoolKernel.dispatch(array, to, safe, ctx)  # numeric → bool
     elif src.is_bool():
-        return BoolToNum.dispatch(array, to, safe, ctx)  # bool → numeric
+        return BoolToNumKernel.dispatch(array, to, safe, ctx)  # bool → numeric
     elif src.is_temporal() or to.is_temporal():
-        return TemporalCast.dispatch(array, to, safe, ctx)
+        return TemporalCastKernel.dispatch(array, to, safe, ctx)
     elif (
         (src.is_list() and to.is_list())
         or (src.is_large_list() and to.is_large_list())
         or (src.is_map() and to.is_map())
     ):
-        return ListCast.dispatch(array, to, safe, ctx)
+        return ListCastKernel.dispatch(array, to, safe, ctx)
     elif src.is_struct() and to.is_struct():
-        return StructCast.dispatch(array, to, safe, ctx)
+        return StructCastKernel.dispatch(array, to, safe, ctx)
     raise Error(t"cast: unsupported cast {src} -> {to}")

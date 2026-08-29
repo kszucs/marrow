@@ -21,5 +21,4 @@ def plan() raises -> DynRelation:
             col("w", int64).count().alias("n"),
         ],
     )
-    var q = agg.sort([col("k", string)], [True])
-    return q
+    return agg.sort_by([col("k", string)], [True])

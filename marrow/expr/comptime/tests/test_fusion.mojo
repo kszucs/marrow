@@ -10,7 +10,8 @@ fused result with the nulls it should have kept.
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import col, lit, table
-from ...params import Bindings
+from ....schema import Schema
+from ...bindings import Bindings
 from ....builders import array
 from ....dtypes import DynType, Int64Type, int64
 from ....tabular import RecordBatch, record_batch
@@ -42,7 +43,7 @@ def test_dtype_agrees_with_evaluation_comptime() raises:
     var v = col("a", int64)
     # A value is reached only through `to_operator` now: it is a stateless
     # description, and running it is the operator's job.
-    var op = v.to_operator(False)
+    var op = v.to_operator(Schema(), False)
     var produced = (
         op.push(Morsel.ungrouped(b.to_struct_array()))
         .value()
@@ -57,7 +58,8 @@ def test_validity_matches_the_bound_column() raises:
     """`lane` produces data bits only, so validity is a separate contract.
 
     Reading it from the `Bound` rather than the batch is what stops the second
-    pass `expr/` needed; the property is that it still reports the same nulls.
+    pass the previous expression package needed; the property is that it still
+    reports the same nulls.
     """
     var b = _batch()
     var c = col("a", int64)
@@ -87,7 +89,7 @@ def test_a_comparison_over_a_null_is_null_not_false() raises:
     row is whatever the payload happened to be — usually zero, which reads as
     `False`. Only the validity bitmap records that the bit is meaningless.
     Reading the data bit without it is exactly what made NULL join keys match
-    each other in `expr/`.
+    each other in the previous expression package.
     """
     var b = _batch()  # a = [1, 2, None, 4]
     var pred = col("a", int64) > lit(2, int64)
@@ -161,13 +163,13 @@ def test_sub_and_mul_fuse_like_add() raises:
     while still type-checking.
     """
     var b = _batch()
-    var op = (col("b", int64) - col("a", int64)).to_operator(False)
+    var op = (col("b", int64) - col("a", int64)).to_operator(Schema(), False)
     var got = op.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(4)
     # b = [10, 20, 30, 40], a = [1, 2, None, 4]
     assert_true(got.as_int64()[0].value() == 9)
     assert_true(got.as_int64().is_null(2))
 
-    var m = (col("a", int64) * lit(3, int64)).to_operator(False)
+    var m = (col("a", int64) * lit(3, int64)).to_operator(Schema(), False)
     var prod = m.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(4)
     assert_true(prod.as_int64()[1].value() == 6)
 

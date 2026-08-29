@@ -20,17 +20,10 @@ def plan() raises -> DynRelation:
     """
     var left = table("sales")
     var right = table("regions").rename(["region"], ["rregion"])
-    var joined = left.join(
-        right,
-        left_on=[col("region", string)],
-        right_on=[col("rregion", string)],
-        how=JOIN_FULL,
-        strictness=JOIN_ALL,
-    )
+    var joined = left.join(right^, [0], [0], JOIN_FULL)
     var picked = joined.project(
         ["qty", "rregion"], [col("qty", int32), col("rregion", string)]
     )
-    var q = picked.sort(
+    return picked.sort_by(
         [col("rregion", string), col("qty", int32)], [True, True]
     )
-    return q

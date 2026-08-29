@@ -13,5 +13,4 @@ def plan() raises -> DynRelation:
     2
     """
     var t = table("floats")
-    var q = t.filter(col("x", float64).is_nan()).select("n")
-    return q
+    return t.filter(col("x", float64).is_nan()).select(["n"])

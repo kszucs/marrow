@@ -17,5 +17,4 @@ def plan() raises -> DynRelation:
         keys=[col("region", string)],
         aggs=[col("price", float64).sum().alias("total")],
     )
-    var q = agg.sort([col("region", string)], [True])
-    return q
+    return agg.sort_by([col("region", string)], [True])

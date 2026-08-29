@@ -23,7 +23,8 @@ from ...builders import PrimitiveBuilder, Int64Builder
 from ...dtypes import int64, Int64Type, struct_, Field
 from ...kernels.join import JOIN_INNER, JOIN_ALL
 from ...kernels.join import HashJoin, hash_join
-from ...kernels.aggregate import SumKernel
+from ...kernels.aggregate import Fold, SumFold
+from ...kernels.groups import Groups
 from ...execution import ExecContext
 from ...utils.testing import Benchmark
 
@@ -227,7 +228,7 @@ def bench_join_shape_10m_x_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # morsel-probe matrix — the shape the plan layer actually produces
 #
-# `JoinProcessor` (marrow/exprold/execution.mojo) streams the *probe* side in
+# `JoinOperator` (marrow/expr/physical.mojo) streams the *probe* side in
 # 8192-row morsels against a build side that may be arbitrarily large. Every
 # bench above probes with a single big batch, so none of them can see the cost
 # of a per-call fan-out decision: they amortize one dispatch over 1M rows,
@@ -372,7 +373,7 @@ def bench_join_morsel_10k_t8(mut b: Benchmark) raises:
 
 # --- drift control -----------------------------------------------------------
 #
-# `SumKernel` touches nothing in join.mojo / partition.mojo / hashtable.mojo,
+# `SumFold` touches nothing in join.mojo / partition.mojo / hashtable.mojo,
 # so this row cannot move for any reason attributable to the fix. Its delta is
 # the per-batch drift that must be subtracted from every row above before a
 # change is attributed to the code (CLAUDE.md: this box drifts up to ±8% per
@@ -389,7 +390,11 @@ def bench_join_drift_control_sum_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(SumKernel.apply(vals).value())
+        keep(
+            Fold[SumFold, Int64Type]
+            .grouped(Groups.single(n), vals.copy())
+            .to_dyn()
+        )
 
     b.iter(call)
     keep(vals)

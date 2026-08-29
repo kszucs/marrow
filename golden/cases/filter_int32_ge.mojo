@@ -12,7 +12,6 @@ def plan() raises -> DynRelation:
     50
     """
     var t = table("sales")
-    var picked = t.select("qty")
+    var picked = t.select(["qty"])
     var filtered = picked.filter(col("qty", int32) >= lit(20, int32))
-    var q = filtered.sort([col("qty", int32)], [True])
-    return q
+    return filtered.sort_by([col("qty", int32)], [True])

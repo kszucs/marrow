@@ -9,7 +9,7 @@ return :class:`~marrow.Array` or :class:`~marrow.Scalar` as appropriate.
 """
 
 from . import libmarrow as _ma
-from . import Array, Scalar, RecordBatch, _serial
+from . import Array, _serial
 
 
 # ── Arithmetic ────────────────────────────────────────────────────────────────
@@ -47,80 +47,7 @@ def divide(left, right, memory_pool=None, ctx=None):
     return Array.wrap(_ma.divide(left.unwrap(), right.unwrap(), (ctx or _serial())))
 
 
-# ── Aggregations ──────────────────────────────────────────────────────────────
-
-
-def sum(array, *, skip_nulls=True, memory_pool=None, ctx=None):
-    """Sum the values of an array.
-
-    Equivalent to ``pyarrow.compute.sum``.
-    """
-    if not skip_nulls:
-        raise NotImplementedError("skip_nulls=False is not implemented")
-    return Scalar.wrap(_ma.sum(array.unwrap(), (ctx or _serial())))
-
-
-def product(array, *, skip_nulls=True, memory_pool=None, ctx=None):
-    """Compute the product of all values in an array.
-
-    Equivalent to ``pyarrow.compute.product``.
-    """
-    if not skip_nulls:
-        raise NotImplementedError("skip_nulls=False is not implemented")
-    return Scalar.wrap(_ma.product(array.unwrap(), (ctx or _serial())))
-
-
-def min(array, *, skip_nulls=True, memory_pool=None, ctx=None):
-    """Compute the minimum value of an array.
-
-    Equivalent to ``pyarrow.compute.min``.
-    """
-    if not skip_nulls:
-        raise NotImplementedError("skip_nulls=False is not implemented")
-    return Scalar.wrap(_ma.min(array.unwrap(), (ctx or _serial())))
-
-
-def max(array, *, skip_nulls=True, memory_pool=None, ctx=None):
-    """Compute the maximum value of an array.
-
-    Equivalent to ``pyarrow.compute.max``.
-    """
-    if not skip_nulls:
-        raise NotImplementedError("skip_nulls=False is not implemented")
-    return Scalar.wrap(_ma.max(array.unwrap(), (ctx or _serial())))
-
-
-def mean(array, *, skip_nulls=True, memory_pool=None, ctx=None):
-    """Compute the arithmetic mean of an array, as a float64 scalar.
-
-    Nulls are excluded. Returns a null scalar for an empty or all-null array.
-    Equivalent to ``pyarrow.compute.mean``.
-    """
-    if not skip_nulls:
-        raise NotImplementedError("skip_nulls=False is not implemented")
-    return Scalar.wrap(_ma.mean(array.unwrap(), (ctx or _serial())))
-
-
-def count_distinct(array, *, mode="only_valid", memory_pool=None, ctx=None):
-    """Count the distinct (unique) non-null values in an array, exactly.
-
-    Equivalent to ``pyarrow.compute.count_distinct`` with the default
-    ``mode="only_valid"`` (nulls excluded).
-    """
-    if mode != "only_valid":
-        # `mode="all"` and `"only_null"` change the answer, and returning the
-        # only-valid count for them is worse than not offering the option.
-        raise NotImplementedError(f"count_distinct mode={mode!r} is not implemented")
-    return Scalar.wrap(_ma.count_distinct(array.unwrap(), (ctx or _serial())))
-
-
-def approx_count_distinct(array, *, memory_pool=None, ctx=None):
-    """Estimate the number of distinct non-null values via HyperLogLog.
-
-    A fixed 16 KiB sketch with ~0.65% standard error. Equivalent to
-    ``pyarrow.compute.approx_count_distinct``.
-    """
-    return Scalar.wrap(_ma.approx_count_distinct(array.unwrap(), (ctx or _serial())))
+# ── Aggregations ────────────────────────────────────────────────────────────────────────
 
 
 def any(array, *, skip_nulls=True, memory_pool=None, ctx=None):

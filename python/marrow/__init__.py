@@ -316,44 +316,6 @@ class RecordBatch(_Tabular):
             self._binding.join(right.unwrap(), keys, right_keys, join_type, num_threads)
         )
 
-    def group_by(self, keys, num_threads=0):
-        """Group by one or more key columns (PyArrow-style).
-
-        Returns a ``RecordBatchGroupBy`` on which ``.aggregate([(col, func)])``
-        applies the aggregates. ``num_threads``: 0 auto (all cores), 1 serial,
-        >=2 that many.
-        """
-        if isinstance(keys, str):
-            keys = [keys]
-        return RecordBatchGroupBy(self, list(keys), num_threads)
-
-    def aggregate(self, aggregations):
-        """Whole-table aggregation (no grouping): ``[(col, func), ...]`` → a
-        one-row RecordBatch with a ``<col>_<func>`` column per aggregate.
-        ``count`` of a non-null column gives ``COUNT(*)``."""
-        values = [col for col, _ in aggregations]
-        funcs = [func for _, func in aggregations]
-        return RecordBatch.wrap(self._binding.aggregate(values, funcs))
-
-
-class RecordBatchGroupBy:
-    """A grouping over a RecordBatch's key columns; apply ``aggregate``.
-
-    Mirrors ``pyarrow.TableGroupBy``: ``rb.group_by("k").aggregate([("v", "sum")])``.
-    """
-
-    def __init__(self, batch, keys, num_threads=0):
-        self._batch = batch
-        self._keys = keys
-        self._num_threads = num_threads
-
-    def aggregate(self, aggregations):
-        values = [col for col, _ in aggregations]
-        funcs = [func for _, func in aggregations]
-        return RecordBatch.wrap(
-            self._batch._binding.group_by(self._keys, values, funcs, self._num_threads)
-        )
-
 
 # ── Table ──────────────────────────────────────────────────────────────────────
 
@@ -461,26 +423,3 @@ def read_ipc_stream_schema(path):
 # Imported last: `compute` pulls Array/Scalar/RecordBatch back out of this
 # module, so it can only be bound once those exist.
 from . import compute  # noqa: E402
-
-# Same reason — `_expr_column` needs `_Wrapper`, `Array` and `array`. It comes
-# before `expr`, which builds its predicates and computed columns out of these.
-from ._expr_column import (  # noqa: E402
-    Aggregate,
-    Column,
-    col,
-    count_star,
-    if_else,
-    lit,
-)
-
-# The lazy relational frontend, for the same reason: `lazy` pulls RecordBatch
-# and `_Wrapper` back out of this module. `LazyTable` is deliberately not
-# `Table` — that name is the eager, PyArrow-shaped one above.
-#
-# `lazy`, not `expr`: this module is named after what it *is*, never after the
-# Mojo package that happens to back it. That package has been `expr`, `expr2`
-# and now `exprold`, and tracking it is what broke `import marrow` — `ebd4c4c`
-# renamed the Mojo side and updated this import to `.exprold` while the file
-# was still `expr.py`.
-from . import lazy  # noqa: E402
-from .lazy import LazyTable, memtable, read_parquet  # noqa: E402

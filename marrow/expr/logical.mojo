@@ -7,13 +7,13 @@ freely copyable, shareable, inspectable and — once the optimizer exists —
 rewritable. `to_operator(ctx)` turns it into the physical operator that owns
 the running state.
 
-**Two methods, not eight.** `expr/`'s `DynRelation` carries `schema`,
-`to_operator`, `write`, `drop`, `kind`, `with_predicate`, `with_projection`
-and `children`. The last four exist for an optimizer that was never finished,
-and two of them cannot express any rewrite that changes a node's type or arity
-— which is every rewrite worth having. They are not reproduced here. When a
-rule needs to walk or rebuild a plan, `children` and its inverse arrive with
-that rule and are shaped by it.
+**Four slots, not eight.** The previous expression package's `DynRelation`
+carried `schema`, `to_operator`, `write`, `drop`, `kind`, `with_predicate`,
+`with_projection` and `children`. `schema`, `to_operator`, `write` and `drop`
+are here; the other four existed for an optimizer that was never finished, and
+two of them cannot express any rewrite that changes a node's type or arity —
+which is every rewrite worth having. When a rule needs to walk or rebuild a
+plan, `children` and its inverse arrive with that rule and are shaped by it.
 
 The one property that must survive whatever arrives: **nothing may name every
 node type in one place.** `DynRelation.__init__[T]` wires trampolines per
@@ -30,7 +30,9 @@ from ..kernels.join import JoinKind, JOIN_INNER
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field
-from .params import Bindings
+from .bindings import Bindings
+from .pruning import PrunePredicate, Prunable
+from .pushdown import Pushdown
 from .runtime.values import column
 from .physical import (
     Datum,
@@ -87,16 +89,17 @@ struct Shape(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
 trait Value(Copyable, Deinitable, Writable):
     """What every expression is, in both lanes.
 
-    Five members: what it reads, what it is called, what type it produces,
-    whether it yields one value or one per row, and how to turn it into
-    something that runs.
+    Six members: what it reads, what it is called, what type it produces,
+    whether it yields one value or one per row, whether it is an aggregate, and
+    how to turn it into something that runs.
 
     **One trait, not three.** This was `Analyzable & Executable & Writable`, a
-    composite alias split that way in reaction to `expr/`'s nine-responsibility
+    composite alias split that way in reaction to the previous expression
+    package's nine-responsibility
     `Value` trait. The reaction overshot: nothing ever bound on `Analyzable`
     alone, and `Executable` was bound alone in exactly one place, for `shape`.
     Two names that only ever appeared composed back together are not two
-    abstractions — five members in one trait is the honest count, and it is
+    abstractions — six members in one trait is the honest count, and it is
     still not nine.
 
     `dtype` takes a `Schema` because the runtime lane learns its type from one.
@@ -110,6 +113,25 @@ trait Value(Copyable, Deinitable, Writable):
     subtree stays one type and inlines into one loop. What this trait says is
     narrower and true — a node carries no *state*, so nothing outside a lane
     can run one, and two executions of the same plan cannot interfere.
+    """
+
+    comptime aggregates: Bool = False
+    """Whether this value answers from `Operator.drain` rather than from a
+    batch — that is, whether it is an aggregate.
+
+    An aggregate is an ordinary `Value` in every other respect, so nothing
+    structural distinguishes it and the relations that cannot accept one had no
+    way to say so. All four per-row positions read this through
+    `reject_aggregate` and raise: `Filter`'s predicate, `Project`'s values,
+    `Aggregate`'s **keys**, and `Sort`'s keys. Before it,
+    `project([col("a").sum()])` reached `ProjectOperator.push`, which called
+    `.value()` on the `None` an aggregate answers with and **aborted the
+    process** — and `Aggregate` and `Sort` kept aborting that way until the
+    check reached them too.
+
+    A defaulted `comptime` rather than a marker trait, because a trait
+    constraining nothing documents nothing: every value would still satisfy
+    `Value` either way, and only the *answer* differs.
     """
 
     comptime shape: Shape
@@ -131,9 +153,18 @@ trait Value(Copyable, Deinitable, Writable):
         ...
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         """The stateful thing that runs this value.
+
+        `schema` describes this value's **input**, and it is what lets a
+        name-resolved aggregate pick its kernel here, at plan-build time,
+        rather than on the first morsel. That is the difference between the
+        runtime lane holding an erased aggregate state and holding a *typed*
+        one behind the `DynOperator` box every operator already pays for:
+        `dispatch_numeric` hands each arm a concrete `V`, so the arm can
+        construct `AggregateOperator[Fold[K, V], RuntimeValue, G]` outright.
+        Every relation has its input's schema where it calls this.
 
         `grouped` picks a fold's placement and is ignored by everything else.
         `bindings` supplies this execution's parameter values — the operator
@@ -157,12 +188,17 @@ struct DynValue(Copyable, Movable, Writable):
     and no Python frontend can build) and runtime expressions everywhere (which
     is the 4.91 MB configuration).
 
-    Five function slots — `columns`, `name`, `dtype`, `write`, `to_operator` —
-    plus `shape`, read once at construction because it is a comptime constant.
-    `expr/` carried seven and had no `dtype`, computing output types by
+    Six function slots — `columns`, `name`, `dtype`, `write`, `to_operator`
+    and `_drop` — plus two constant fields, `shape` and `aggregates`, read once
+    at construction because both are comptime constants. `_drop` is the
+    destructor trampoline every erased box here needs; erasure through
+    `rebind[ArcPointer[NoneType]]` forgets the pointee's destructor otherwise.
+    the previous expression package carried seven and had no `dtype`, computing
+    output types by
     evaluating against a zero-row batch instead.
 
-    `expr/`'s two extra slots were `name()`, which duplicated what `name` and
+    the previous expression package's two extra slots were `name()`, which
+    duplicated what `name` and
     `write` already answered, and `resolve_names` — a *rewrite*, carried by
     every boxed expression in every binary though it is a no-op in the comptime
     lane. Nothing here is a rewrite: parameter values travel *through* an
@@ -181,9 +217,14 @@ struct DynValue(Copyable, Movable, Writable):
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
     var _write: def(ArcPointer[NoneType]) thin -> String
     var _to_operator: def(
-        ArcPointer[NoneType], Bool, Bindings
+        ArcPointer[NoneType], Schema, Bool, Bindings
     ) thin raises -> DynOperator
     var _shape: Shape
+    var _aggregates: Bool
+    var _drop: def(var ArcPointer[NoneType]) thin
+    """Erasure forgets the pointee's destructor; this carries it. See
+    `DynOperator._virt_drop` for why the release has to happen at the true
+    type, and for the probe that measured it."""
 
     # -- trampolines --------------------------------------------------------
     # One instantiation per boxed type, wired at construction. There is no
@@ -208,24 +249,40 @@ struct DynValue(Copyable, Movable, Writable):
     def _to_operator_tramp[
         V: Value
     ](
-        ptr: ArcPointer[NoneType], grouped: Bool, bindings: Bindings
+        ptr: ArcPointer[NoneType],
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings,
     ) raises -> DynOperator:
-        return rebind[ArcPointer[V]](ptr)[].to_operator(grouped, bindings)
+        return rebind[ArcPointer[V]](ptr)[].to_operator(
+            schema, grouped, bindings
+        )
 
     @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
         return String(rebind[ArcPointer[V]](ptr)[])
 
+    @staticmethod
+    def _drop_tramp[V: Value](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[V]](ptr)
+        _ = ptr^
+        _ = typed^
+
     @implicit
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._drop = Self._drop_tramp[V]
+        self._aggregates = V.aggregates
         self._columns = Self._columns_tramp[V]
         self._name = Self._name_tramp[V]
         self._dtype = Self._dtype_tramp[V]
         self._write = Self._write_tramp[V]
         self._to_operator = Self._to_operator_tramp[V]
         self._shape = V.shape
+
+    def __deinit__(deinit self):
+        self._drop(self._boxed^)
 
     # -- the erased surface -------------------------------------------------
 
@@ -239,16 +296,25 @@ struct DynValue(Copyable, Movable, Writable):
         return self._dtype(self._boxed, schema)
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         """The stateful thing that runs this value.
 
-        The slot `DynAggValue._acc` used to occupy, on the one box that now
-        holds every value. An aggregate reaches its `FusedAggregateOperator` through here; an
+        The slot an aggregate accumulator would occupy, on the one box that
+        holds every value. An aggregate reaches one of its three operators
+        through here; an
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
-        return self._to_operator(self._boxed, grouped, bindings)
+        return self._to_operator(self._boxed, schema, grouped, bindings)
+
+    def aggregates(self) -> Bool:
+        """Whether the boxed value answers from `drain` rather than per batch.
+
+        A field for the same reason `shape` is one: a constant per boxed value,
+        so a trampoline would pay an indirect call to read something fixed at
+        construction."""
+        return self._aggregates
 
     def shape(self) -> Shape:
         """The boxed value's `shape`, read at construction.
@@ -292,6 +358,32 @@ def merged(var into: List[String], extra: List[String]) -> List[String]:
     return into^
 
 
+def reject_aggregate(
+    value: DynValue, node: StringSlice, name: StringSlice, remedy: StringSlice
+) raises:
+    """Refuse an aggregate in a position that is evaluated once per row.
+
+    An aggregate's operator answers `None` to every `push` and yields only at
+    `drain`, so a per-row consumer unwraps that `None` and aborts the process
+    rather than raising. Four node positions are per-row — `Filter`'s
+    predicate, `Project`'s values, `Aggregate`'s **keys** (its `aggs` are the
+    point) and `Sort`'s keys — and each calls this. `remedy` names the way to
+    say what the caller meant, which differs per node.
+
+    Two of the four carried their own copy of this check and two did not, which
+    is the shape the guard exists to prevent: `rel.sort_by([col("a",
+    int64).sum()], [True])` aborted.
+    """
+    if value.aggregates():
+        raise Error(
+            node,
+            ": '",
+            name,
+            "' is an aggregate, which has no value per row; ",
+            remedy,
+        )
+
+
 trait Relation(Copyable, Deinitable, Movable):
     """An immutable description of a query."""
 
@@ -305,7 +397,10 @@ trait Relation(Copyable, Deinitable, Movable):
         ...
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The running operator for this description.
 
@@ -330,9 +425,13 @@ struct DynRelation(Copyable, Movable, Writable):
     var _data: ArcPointer[NoneType]
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_to_operator: def(
-        ArcPointer[NoneType], ExecContext, Bindings
+        ArcPointer[NoneType], ExecContext, Bindings, var Pushdown
     ) thin raises -> Pipeline
     var _virt_write: def(ArcPointer[NoneType]) thin -> String
+    var _drop: def(var ArcPointer[NoneType]) thin
+    """Erasure forgets the pointee's destructor; this carries it. See
+    `DynOperator._virt_drop` for why the release has to happen at the true
+    type, and for the probe that measured it."""
 
     @staticmethod
     def _schema_tramp[
@@ -344,15 +443,24 @@ struct DynRelation(Copyable, Movable, Writable):
     def _to_operator_tramp[
         R: Relation
     ](
-        ptr: ArcPointer[NoneType], ctx: ExecContext, bindings: Bindings
+        ptr: ArcPointer[NoneType],
+        ctx: ExecContext,
+        bindings: Bindings,
+        var pushed: Pushdown,
     ) raises -> Pipeline:
-        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx, bindings)
+        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx, bindings, pushed^)
 
     @staticmethod
     def _write_tramp[
         R: Relation & Writable
     ](ptr: ArcPointer[NoneType]) -> String:
         return String(rebind[ArcPointer[R]](ptr)[])
+
+    @staticmethod
+    def _drop_tramp[R: Relation & Writable](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[R]](ptr)
+        _ = ptr^
+        _ = typed^
 
     @implicit
     def __init__[R: Relation & Writable](out self, value: R):
@@ -361,14 +469,21 @@ struct DynRelation(Copyable, Movable, Writable):
         self._virt_schema = Self._schema_tramp[R]
         self._virt_to_operator = Self._to_operator_tramp[R]
         self._virt_write = Self._write_tramp[R]
+        self._drop = Self._drop_tramp[R]
+
+    def __deinit__(deinit self):
+        self._drop(self._data^)
 
     def schema(self) -> Schema:
         return self._virt_schema(self._data)
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        return self._virt_to_operator(self._data, ctx, bindings)
+        return self._virt_to_operator(self._data, ctx, bindings, pushed^)
 
     # -- the plan-building API ----------------------------------------------
     #
@@ -383,8 +498,28 @@ struct DynRelation(Copyable, Movable, Writable):
     # conformer implement eight methods it does not care about.
 
     def filter(self, var predicate: DynValue) raises -> DynRelation:
-        """Rows where `predicate` is true. Schema-preserving."""
+        """Rows where `predicate` is true. Schema-preserving.
+
+        The erased overload: an already-boxed predicate has lost the type
+        `prune` needs, so this plan filters exactly and reads every row group.
+        """
         return Filter(self.copy(), predicate^)
+
+    def filter[
+        V: Value & Prunable
+    ](self, var predicate: V) raises -> DynRelation:
+        """Rows where `predicate` is true, **with statistics pruning**.
+
+        The concrete type is captured here because this is the last place it is
+        visible: `DynValue` erases it, and the box deliberately has no `prune`
+        slot. The two overloads are disjoint — `DynValue` does not conform to
+        the traits it erases — which is what lets both spellings coexist.
+        """
+        return Filter(
+            self.copy(),
+            DynValue(predicate.copy()),
+            Optional(PrunePredicate(predicate^)),
+        )
 
     def select(self, names: List[String]) raises -> DynRelation:
         """Keep these columns, in this order.
@@ -399,11 +534,140 @@ struct DynRelation(Copyable, Movable, Writable):
             values.append(column(n.copy()))
         return Project(self.copy(), names.copy(), values^)
 
+    def select(self, *names: String) raises -> DynRelation:
+        """`select("a", "b")` — the same verb without the brackets.
+
+        Kept as a second overload rather than replacing the list form: the
+        golden corpus's Python twin spells it `select(*names)` and its Mojo
+        twin spelled it `select("ts", "label")` until the port rewrote every
+        case to a list, so one of the two lanes has to grow the other's
+        spelling for the corpus to stay one text. A `VariadicListMem` cannot
+        be forwarded to another function's variadic parameter (CLAUDE.md), so
+        this copies into a `List` and delegates rather than the list overload
+        delegating here.
+        """
+        var owned = List[String](capacity=len(names))
+        for ref n in names:
+            owned.append(n.copy())
+        return self.select(owned)
+
     def project(
         self, var names: List[String], var values: List[DynValue]
     ) raises -> DynRelation:
         """`SELECT <values> AS <names>` — new columns over the same rows."""
         return Project(self.copy(), names^, values^)
+
+    def with_columns(
+        self, var names: List[String], var values: List[DynValue]
+    ) raises -> DynRelation:
+        """`SELECT *, <values> AS <names>` — append to the existing columns.
+
+        A name that already exists is **replaced in place** rather than
+        appended, which is Polars' `with_columns` rule and the only one that
+        keeps the output schema free of duplicates. Position is preserved:
+        replacing `qty` leaves `qty` where it was.
+
+        Sugar over `project`, like `select` — the surviving columns are runtime
+        column reads, so no caller has to supply their dtypes. That is the same
+        reason `select` is not generic: a fused `Column[T]` would make this
+        method parametric over every column in the input.
+        """
+        if len(names) != len(values):
+            raise Error(
+                "with_columns: ",
+                len(names),
+                " names but ",
+                len(values),
+                " values",
+            )
+        var input_schema = self.schema()
+        var out_names = List[String]()
+        var out_values = List[DynValue]()
+        for ref f in input_schema.fields:
+            var replaced = -1
+            for i in range(len(names)):
+                if names[i] == f.name:
+                    replaced = i
+            out_names.append(f.name.copy())
+            if replaced >= 0:
+                out_values.append(values[replaced].copy())
+            else:
+                out_values.append(column(f.name.copy()))
+        for i in range(len(names)):
+            if input_schema.get_field_index(names[i]) == -1:
+                out_names.append(names[i].copy())
+                out_values.append(values[i].copy())
+        return Project(self.copy(), out_names^, out_values^)
+
+    def drop(self, names: List[String]) raises -> DynRelation:
+        """`SELECT <everything except names>` — say what goes, not what stays.
+
+        The survivors keep their **input order**, which is what distinguishes
+        this from spelling out the complement with `select`: a caller who
+        writes the complement by hand has to know the order too, and gets it
+        wrong the moment a column is added upstream.
+
+        A name that is not in the schema raises rather than being ignored. A
+        typo in a `drop` list is otherwise silent — the column it meant to
+        remove survives — and that is the failure mode this verb exists to
+        avoid.
+        """
+        var input_schema = self.schema()
+        for ref n in names:
+            if input_schema.get_field_index(n) == -1:
+                raise Error("drop: column '", n, "' not found in schema")
+        var out_names = List[String]()
+        var out_values = List[DynValue]()
+        for ref f in input_schema.fields:
+            var dropped = False
+            for ref n in names:
+                if n == f.name:
+                    dropped = True
+            if not dropped:
+                out_names.append(f.name.copy())
+                out_values.append(column(f.name.copy()))
+        return Project(self.copy(), out_names^, out_values^)
+
+    def rename(
+        self, names: List[String], new_names: List[String]
+    ) raises -> DynRelation:
+        """Rename `names[i]` to `new_names[i]`, keeping every other column.
+
+        Two parallel lists rather than a mapping because Mojo has no dict
+        literal in argument position; `golden/helpers.py` adapts the Python
+        frontend's dict spelling to this one for exactly that reason.
+
+        The renamed column keeps its **source `Field`** — dtype, `nullable`
+        and metadata — because `Project._output_schema` carries a bare column's
+        field over whole. Rebuilding from the dtype alone would silently turn
+        `nullable=False` into `True`, which is the divergence that method
+        exists to fix.
+        """
+        if len(names) != len(new_names):
+            raise Error(
+                "rename: ",
+                len(names),
+                " names but ",
+                len(new_names),
+                " new names",
+            )
+        var input_schema = self.schema()
+        for ref n in names:
+            if input_schema.get_field_index(n) == -1:
+                raise Error("rename: column '", n, "' not found in schema")
+        var out_names = List[String]()
+        var out_values = List[DynValue]()
+        for ref f in input_schema.fields:
+            var renamed = -1
+            for i in range(len(names)):
+                if names[i] == f.name:
+                    renamed = i
+            if renamed >= 0:
+                out_names.append(new_names[renamed].copy())
+            else:
+                out_names.append(f.name.copy())
+            out_values.append(column(f.name.copy()))
+        return Project(self.copy(), out_names^, out_values^)
 
     def limit(self, length: Int, offset: Int = 0) raises -> DynRelation:
         """`OFFSET offset LIMIT length`."""
@@ -470,7 +734,10 @@ struct InMemoryTable(Relation, Writable):
         return self._batch.schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The one relation that *creates* a pipeline; every other appends."""
         return Pipeline(BatchSourceOperator(self._batch.to_struct_array()))
@@ -492,20 +759,56 @@ struct Filter(Relation, Writable):
     var _input: DynRelation
     var _predicate: DynValue
 
-    def __init__(out self, var input: DynRelation, var predicate: DynValue):
+    var _pruner: Optional[PrunePredicate]
+    """The predicate again, typed, for statistics pruning — `None` when it
+    arrived already boxed.
+
+    Never consulted for correctness: the `DynValue` above is what actually
+    filters, and this only ever makes the scan smaller. That is what lets it be
+    `Optional` without a soundness caveat — a missing pruner reads every row
+    group, which is the answer the engine gave before pruning existed."""
+
+    def __init__(
+        out self,
+        var input: DynRelation,
+        var predicate: DynValue,
+        var pruner: Optional[PrunePredicate] = None,
+    ) raises:
+        reject_aggregate(
+            predicate,
+            "filter",
+            predicate.name(),
+            "put it in .aggregate() and filter the result (HAVING)",
+        )
         self._input = input^
         self._predicate = predicate^
+        self._pruner = pruner^
 
     def schema(self) -> Schema:
         return self._input.schema()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(
+            ctx,
+            bindings,
+            (
+                pushed.conjoined(
+                    self._pruner.value()
+                ) if self._pruner else pushed
+                ^
+            ),
+        )
         pipe.append(
             FilterOperator(
-                self._predicate.to_operator(False, bindings), ctx.copy()
+                self._predicate.to_operator(
+                    self._input.schema(), False, bindings
+                ),
+                ctx.copy(),
             )
         )
         return pipe^
@@ -537,6 +840,10 @@ struct Project(Relation, Writable):
             raise Error(
                 "project: ", len(names), " names but ", len(values), " values"
             )
+        for i in range(len(values)):
+            reject_aggregate(
+                values[i], "project", names[i], "use .aggregate() instead"
+            )
         self._schema = Self._output_schema(input.schema(), names, values)
         self._input = input^
         self._names = names^
@@ -552,7 +859,8 @@ struct Project(Relation, Writable):
         over whole — dtype, `nullable` and metadata — rather than being
         rebuilt from its dtype alone. Rebuilding loses `nullable`, so
         projecting a column produced a *different* schema for it than
-        selecting the same column did; `expr/` records that as a real
+        selecting the same column did; the previous expression package records
+        that as a real
         divergence, with `nullable` False becoming True.
 
         Bare-column-ness is the composition `name() != "" and
@@ -585,12 +893,15 @@ struct Project(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
         var values = List[DynOperator](capacity=len(self._values))
         for ref v in self._values:
-            values.append(v.to_operator(False, bindings))
+            values.append(v.to_operator(self._input.schema(), False, bindings))
         pipe.append(ProjectOperator(values^, self._schema.copy()))
         return pipe^
 
@@ -630,6 +941,13 @@ struct Aggregate(Relation, Writable):
         var keys: List[DynValue],
         var aggs: List[DynValue],
     ) raises:
+        for ref k in keys:
+            reject_aggregate(
+                k,
+                "aggregate",
+                k.name(),
+                "group by a column or a per-row expression, not an aggregate",
+            )
         self._schema = Self._output_schema(input.schema(), keys, aggs)
         self._input = input^
         self._keys = keys^
@@ -643,7 +961,8 @@ struct Aggregate(Relation, Writable):
 
         A key that is a bare column keeps its own name; anything computed has
         none and is called `key0`, `key1`, … by position. That rule is not
-        cosmetic: `expr/` shipped a defect where one lane answered `d` and the
+        cosmetic: the previous expression package shipped a defect where one
+        lane answered `d` and the
         other `key0` for the same `GROUP BY d`, so one query had two output
         schemas depending on which lane built it.
         """
@@ -662,16 +981,19 @@ struct Aggregate(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         var grouped = len(self._keys) > 0
         var folds = List[DynOperator](capacity=len(self._aggs))
         for ref a in self._aggs:
-            folds.append(a.to_operator(grouped, bindings))
-        var pipe = self._input.to_operator(ctx, bindings)
+            folds.append(a.to_operator(self._input.schema(), grouped, bindings))
+        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
         var keys = List[DynOperator](capacity=len(self._keys))
         for ref k in self._keys:
-            keys.append(k.to_operator(False, bindings))
+            keys.append(k.to_operator(self._input.schema(), False, bindings))
         pipe.append(
             GroupByOperator(keys^, folds^, self._schema.copy(), ctx.copy())
         )
@@ -707,9 +1029,12 @@ struct Limit(Relation, Writable):
         return self._input.schema()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
         pipe.append(LimitOperator(self._offset, self._length))
         return pipe^
 
@@ -730,8 +1055,8 @@ struct Sort(Relation, Writable):
 
     Sorting is blocking by nature: no prefix of the input determines the first
     output row, so the operator buffers every morsel and orders once at
-    `finish`. That the engine expresses this with the same two methods a filter
-    uses is the point of the push interface.
+    `drain`. That the engine expresses this with the same methods a filter uses
+    is the point of the push interface.
     """
 
     var _input: DynRelation
@@ -756,6 +1081,13 @@ struct Sort(Relation, Writable):
             )
         if len(keys) == 0:
             raise Error("sort: needs at least one key")
+        for ref k in keys:
+            reject_aggregate(
+                k,
+                "sort",
+                k.name(),
+                "aggregate first, then sort the result",
+            )
         self._input = input^
         self._keys = keys^
         self._ascending = ascending^
@@ -765,12 +1097,15 @@ struct Sort(Relation, Writable):
         return self._input.schema()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings)
+        var pipe = self._input.to_operator(ctx, bindings, pushed^)
         pipe.append(
             SortOperator(
-                _to_operators(self._keys, bindings),
+                _to_operators(self._keys, self._input.schema(), bindings),
                 self._ascending.copy(),
                 self._nulls_first,
                 ctx.copy(),
@@ -787,7 +1122,7 @@ struct Sort(Relation, Writable):
 
 
 def _to_operators(
-    values: List[DynValue], bindings: Bindings
+    values: List[DynValue], schema: Schema, bindings: Bindings
 ) raises -> List[DynOperator]:
     """Turn a list of logical values into the operators that run them.
 
@@ -797,7 +1132,7 @@ def _to_operators(
     """
     var out = List[DynOperator](capacity=len(values))
     for ref v in values:
-        out.append(v.to_operator(False, bindings))
+        out.append(v.to_operator(schema, False, bindings))
     return out^
 
 
@@ -875,18 +1210,23 @@ struct Join(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The probe side is the pipeline; the build side is a stage's cargo."""
-        var probe = self._right.to_operator(ctx, bindings)
+        var probe = self._right.to_operator(ctx, bindings, Pushdown())
         probe.append(
             JoinOperator(
-                self._left.to_operator(ctx, bindings),
+                self._left.to_operator(ctx, bindings, Pushdown()),
                 self._left_keys.copy(),
                 self._right_keys.copy(),
                 self._kind,
                 self._strictness,
                 self._schema.copy(),
+                self._left.schema(),
+                self._right.schema(),
                 ctx.copy(),
             )
         )
@@ -922,10 +1262,18 @@ struct ParquetScan(Relation, Writable):
         return self._schema.copy()
 
     def to_operator(
-        self, ctx: ExecContext, bindings: Bindings = Bindings()
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         return Pipeline(
-            ParquetScanOperator(self._path.copy(), self._schema.copy())
+            ParquetScanOperator(
+                self._path.copy(),
+                self._schema.copy(),
+                pushed^,
+                bindings.copy(),
+            )
         )
 
     def write_to[W: Writer](self, mut writer: W):

@@ -26,17 +26,27 @@ from ...kernels.boolean import (
     BoolBinaryKernel,
     IsNullKernel,
     NotKernel,
+    IsInfKernel,
+    IsNanKernel,
     NotNullKernel,
     OrKernel,
     UnaryPredicateKernel,
+    ValuePredicateKernel,
     XorKernel,
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape, merged
-from ..params import Bindings
+from ..bindings import Bindings
+from ..pruning import PruneStats, Truth
 from ..physical import Datum
-from .core import BoolValue, ColumnBound, ComptimeValue, Unnamed
+from .core import (
+    BoolValue,
+    ColumnBound,
+    ComptimeValue,
+    NumericValue,
+    Unnamed,
+)
 
 
 def _as_bool(d: Datum, n: Int) raises -> BoolArray:
@@ -94,6 +104,9 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         return merged(self.l.columns(), self.r.columns())
 
     def dtype(self, schema: Schema) raises -> DynType:
+        """Spelled out, where the fusing bool nodes inherit it from
+        `BoolValue`. A Kleene operator produces `bool` but does not fuse, so it
+        conforms to `ComptimeValue` directly and never sees that default."""
         return DynType(Self.Type())
 
     # -- Evaluable ----------------------------------------------------------
@@ -109,6 +122,18 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         var lhs = _as_bool(self.l.evaluate(batch, bindings), n)
         var rhs = _as_bool(self.r.evaluate(batch, bindings), n)
         return Self.K.apply(lhs, rhs).to_dyn()
+
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """`AND` is provably false as soon as either conjunct is; `OR` only
+        when both disjuncts are. `XOR` prunes nothing — both operands being
+        possible says nothing about them differing on any single row, and a
+        one-sided domain cannot say more."""
+        comptime if Self.K.name == AndKernel.name:
+            return self.l.prune(stats, bindings) & self.r.prune(stats, bindings)
+        elif Self.K.name == OrKernel.name:
+            return self.l.prune(stats, bindings) | self.r.prune(stats, bindings)
+        else:
+            return Truth.maybe
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
@@ -146,6 +171,9 @@ struct Not[A: ComptimeValue](ComptimeValue, Unnamed):
         return self.a.columns()
 
     def dtype(self, schema: Schema) raises -> DynType:
+        """Spelled out, where the fusing bool nodes inherit it from
+        `BoolValue`. A Kleene operator produces `bool` but does not fuse, so it
+        conforms to `ComptimeValue` directly and never sees that default."""
         return DynType(Self.Type())
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
@@ -227,3 +255,72 @@ struct NullPredicate[K: UnaryPredicateKernel, A: ComptimeValue](
 
 comptime IsNull = NullPredicate[IsNullKernel, _]
 comptime NotNull = NullPredicate[NotNullKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# ValuePredicate — is_nan / is_inf
+# ---------------------------------------------------------------------------
+struct ValuePredicate[K: ValuePredicateKernel, A: NumericValue](
+    BoolValue, ColumnBound, Unnamed
+):
+    """`is_nan` / `is_inf` — the predicates that read an operand's *values*.
+
+    Its own node rather than another `NullPredicate` alias, which
+    `NullPredicate`'s docstring already anticipates: these are meaningful only
+    over a floating operand, so they need a narrower operand bound than
+    `ComptimeValue`. The bound is `NumericValue` and the *floating* half is a
+    `comptime assert` in `__init__` — narrowing the parameter to a hypothetical
+    `FloatingValue` would need a fifth family trait and a fifth leaf, for one
+    node.
+
+    **The null rule is the point of these existing at all.** A null is not a
+    NaN: `is_nan(NULL)` is NULL, not FALSE, where `is_null(NULL)` is TRUE.
+    `ValuePredicateKernel.apply` propagates the operand's validity into the
+    result, and `ColumnBound` reads that back, so the rule is stated once — in
+    the kernel — rather than restated here.
+
+    A breaker for the same reason `NullPredicate` is: the kernel takes a
+    `DynArray` and produces a whole `BoolArray`, and `lane` reads bits back out
+    of it.
+    """
+
+    comptime NativeType = DType.int32
+    """Sizes the bit-pack driver's lane. The operand's own width is irrelevant
+    — `lane` reads bits out of a `BoolArray` the kernel already produced."""
+
+    comptime shape = Shape.columnar
+    comptime Bound = BoolArray
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        comptime assert (
+            Self.A.Type.native.is_floating_point()
+        ), "is_nan / is_inf need a floating-point operand"
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(BoolType())
+
+    # -- BoolValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return Self.K.apply(
+            self.a.evaluate(batch, bindings).to_array(len(batch))
+        )
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ")")
+
+
+comptime IsNan = ValuePredicate[IsNanKernel, _]
+comptime IsInf = ValuePredicate[IsInfKernel, _]

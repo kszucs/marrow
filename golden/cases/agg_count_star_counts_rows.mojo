@@ -10,5 +10,4 @@ def plan() raises -> DynRelation:
     7
     """
     var t = table("basic")
-    var q = t.aggregate(aggs=[count_star().alias("n")])
-    return q
+    return t.aggregate(aggs=[count_star().alias("n")])

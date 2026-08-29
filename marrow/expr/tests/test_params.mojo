@@ -13,7 +13,7 @@ from ...dtypes import Int64Type, int64
 from ...scalars import Int64Scalar
 from ...tabular import record_batch
 from ..builders import col, param, table
-from ..params import Bindings
+from ..bindings import Bindings
 from ..logical import DynRelation, DynValue, InMemoryTable
 from ..`comptime`.leaves import Column
 from ..`comptime`.boolean import Not
@@ -35,14 +35,10 @@ def test_a_value_is_supplied_per_execution() raises:
     var min_a = param("min-a", int64)
     var plan = _table().filter((col("a", int64) > min_a.copy()))
 
-    var low = plan.execute(
-        bindings={"min-a": Int64Scalar(4).to_dyn()}
-    )
+    var low = plan.execute(bindings={"min-a": Int64Scalar(4).to_dyn()})
     assert_true(low.columns[0].as_int64() == array([5, 9], int64))
 
-    var high = plan.execute(
-        bindings={"min-a": Int64Scalar(8).to_dyn()}
-    )
+    var high = plan.execute(bindings={"min-a": Int64Scalar(8).to_dyn()})
     assert_true(high.columns[0].as_int64() == array([9], int64))
 
 
@@ -57,14 +53,12 @@ def test_binding_reaches_a_nested_parameter() raises:
     var t = param("t", int64)
     var plan = _table().filter(Not((col("a", int64) > t.copy())))
 
-    var got = plan.execute(
-        bindings={"t": Int64Scalar(4).to_dyn()}
-    )
+    var got = plan.execute(bindings={"t": Int64Scalar(4).to_dyn()})
     assert_true(got.columns[0].as_int64() == array([1], int64))
 
 
 def test_an_unbound_parameter_names_itself() raises:
-    """`expr/`'s cell raises "parameter is not bound" without naming it,
+    """The previous expression package's cell raises "parameter is not bound" without naming it,
     because a cell cannot know the name it is read through. Here the node is
     the parameter, so it can."""
     var missing = param("threshold", int64)
@@ -84,7 +78,5 @@ def test_a_default_is_used_until_something_binds() raises:
     var plan = _table().filter((col("a", int64) > t.copy()))
     assert_true(plan.execute().columns[0].as_int64() == array([5, 9], int64))
 
-    var bound = plan.execute(
-        bindings={"t": Int64Scalar(8).to_dyn()}
-    )
+    var bound = plan.execute(bindings={"t": Int64Scalar(8).to_dyn()})
     assert_true(bound.columns[0].as_int64() == array([9], int64))

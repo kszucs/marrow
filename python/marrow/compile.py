@@ -6,14 +6,15 @@ recipe ``benchmarks/binary_size/compare.py:build_and_strip`` uses to measure
 gate binaries: ``mojo build -O3 -g0 -I <marrow> <src> -o <out>``, then
 ``strip``.
 
-**Output writers are opt-in at the Mojo level, opt-out here.** Linking the
-Parquet + Arrow IPC output writers into ``execute_cli`` costs 572,288 bytes
-of ``__text`` — enough that they sit behind
-``-D MARROW_CLI_WRITERS=true`` (``marrow/exprold/relations.mojo``), off by
-default for anyone building with plain ``mojo build``. But the CLI's
-documented contract is that ``-o result.parquet`` / ``-o result.arrow`` work
-out of the box, so ``marrow compile`` passes that define **by default** —
-``--no-writers`` opts back out for the smaller binary.
+**The CLI entry point is currently unimplemented.** ``execute_cli()``, the
+generated ``--help``/``--describe`` surface and the Parquet + Arrow IPC output
+writers all lived in the previous expression package, which was removed when
+``marrow/expr/`` replaced it; nothing in the tree defines them today. This
+module still builds a ``.mojo`` file against marrow, and it still passes
+``-D MARROW_CLI_WRITERS=true`` by default (``--no-writers`` opts out), but that
+define currently gates nothing: when the writers linked, they cost 572,288
+bytes of ``__text``, which is why the flag exists at all. Restore the Mojo side
+before treating ``-o result.parquet`` as a supported contract.
 """
 
 from __future__ import annotations

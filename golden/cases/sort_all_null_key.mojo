@@ -13,5 +13,4 @@ def plan() raises -> DynRelation:
     NULL	8	'y'
     """
     var t = table("nulls")
-    var q = t.sort([col("a", int64), col("b", int64)], [True, True])
-    return q
+    return t.sort_by([col("a", int64), col("b", int64)], [True, True])

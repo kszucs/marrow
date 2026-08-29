@@ -12,5 +12,4 @@ def plan() raises -> DynRelation:
     125
     """
     var t = table("sales")
-    var q = t.aggregate(aggs=[col("qty", int32).sum().alias("total")])
-    return q
+    return t.aggregate(aggs=[col("qty", int32).sum().alias("total")])

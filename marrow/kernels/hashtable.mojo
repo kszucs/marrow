@@ -20,7 +20,7 @@ from ..dtypes import int32, uint64
 
 from .numeric import EqKernel
 from ..execution import ExecContext
-from .filter import Take, Filter
+from .filter import TakeKernel, FilterKernel
 from .hashing import HashKernel
 from ..utils import Hasher, RapidHash64
 
@@ -617,10 +617,10 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
 
         # Filter hash-collision false positives by key equality.
         var mask = EqKernel.apply(
-            Take.apply(build_keys, build_indices),
-            Take.apply(probe_keys, probe_indices),
+            TakeKernel.apply(build_keys, build_indices),
+            TakeKernel.apply(probe_keys, probe_indices),
         )
-        # `filter`, not `Filter.apply(..., mask.values())`: **a NULL key matches
+        # `filter`, not `FilterKernel.apply(..., mask.values())`: **a NULL key matches
         # nothing, not even another NULL.** That is SQL's rule and Arrow C++'s
         # default `JoinKeyCmp::EQ` — Acero's probe loop ("Apply null key
         # filtering", hash_join.cc) sends any row with a null key column
@@ -658,12 +658,12 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
         if valid:
             var selected = mask.values() & valid.value()
             return (
-                Filter.apply(build_indices, selected.view()),
-                Filter.apply(probe_indices, selected.view()),
+                FilterKernel.apply(build_indices, selected.view()),
+                FilterKernel.apply(probe_indices, selected.view()),
             )
         return (
-            Filter.apply(build_indices, mask.values()),
-            Filter.apply(probe_indices, mask.values()),
+            FilterKernel.apply(build_indices, mask.values()),
+            FilterKernel.apply(probe_indices, mask.values()),
         )
 
     def num_keys(self) -> Int:

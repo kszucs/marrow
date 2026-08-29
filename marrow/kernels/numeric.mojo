@@ -9,7 +9,8 @@ Comparison stopped being "the string-aware one" when `NumericCompareKernel`
 dropped its `comptime StringKernel`: comparing strings is a separate family
 (`StringPredicateKernel` in `string.mojo`) whose core is elementwise over
 variable-width data and cannot vectorize. Whoever interprets `a < b` picks the
-family from the operand dtype — see `_compare` in `marrow/exprold/dynamic.mojo`.
+family from the operand dtype — see the runtime lane in
+`marrow/expr/runtime/values.mojo`.
 
 Three tiers per operation:
 

@@ -1,7 +1,7 @@
-"""DynArray concatenation kernel.
+"""Array concatenation kernel.
 
-Combines a list of type-erased arrays into a single array by concatenating
-their contents. Matches the semantics of PyArrow's `pyarrow.concat_arrays()`
+Combines a list of arrays into a single array by concatenating their contents.
+Typed first, erased on top: a caller that knows its element type keeps it. Matches the semantics of PyArrow's `pyarrow.concat_arrays()`
 and Arrow C++'s `arrow::Concatenate()`.
 
 Delegates to the appropriate builder's `extend()` method, which handles
@@ -9,9 +9,43 @@ offset-awareness, bitmap concatenation, and recursive child concatenation
 for all supported array types.
 """
 
-from ..arrays import DynArray
-from ..builders import DynBuilder
+from ..arrays import DynArray, PrimitiveArray
+from ..builders import DynBuilder, PrimitiveBuilder
+from ..dtypes import PrimitiveType
 from ..execution import ExecContext
+
+
+def concat[
+    T: PrimitiveType
+](
+    arrays: List[PrimitiveArray[T]],
+    ctx: ExecContext = ExecContext.serial(),
+) raises -> PrimitiveArray[T]:
+    """Concatenate fixed-width arrays of a known type.
+
+    The typed half of this kernel, and the one the module was missing:
+    everything here went through `DynBuilder`, so a caller that already knew
+    its element type had to erase, concatenate, and narrow back. `Groups.ids`
+    is the case that made it visible — always `Int32Array`, round-tripped
+    through `DynArray` on every morsel by the aggregate operators.
+
+    Args:
+        arrays: Non-empty list of arrays with the same dtype.
+        ctx: Execution context, accepted for signature parity with the erased
+            overload; concatenation is a sequential copy.
+
+    Raises:
+        If arrays is empty.
+    """
+    if len(arrays) == 0:
+        raise Error("concat: cannot concatenate an empty list of arrays")
+    var total_length = 0
+    for ref arr in arrays:
+        total_length += len(arr)
+    var builder = PrimitiveBuilder[T](arrays[0].dtype.copy(), total_length)
+    for ref arr in arrays:
+        builder.extend(arr)
+    return builder.finish()
 
 
 def concat(

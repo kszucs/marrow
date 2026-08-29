@@ -14,5 +14,4 @@ def plan() raises -> DynRelation:
     256.0
     """
     var t = table("floats")
-    var q = t.aggregate(aggs=[col("y", float64).product().alias("p")])
-    return q
+    return t.aggregate(aggs=[col("y", float64).product().alias("p")])

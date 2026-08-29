@@ -17,5 +17,4 @@ def plan() raises -> DynRelation:
         keys=[col("k", string)],
         aggs=[(col("v", int64) * lit(2, int64)).sum().alias("d")],
     )
-    var q = agg.sort([col("k", string)], [True])
-    return q
+    return agg.sort_by([col("k", string)], [True])

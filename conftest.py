@@ -256,7 +256,7 @@ class MojoRunner:
 
     @staticmethod
     def module_path(rootpath, fspath):
-        """``marrow/exprold/tests/test_values.mojo`` -> ``marrow.exprold.tests.test_values``.
+        """``marrow/expr/tests/test_relations.mojo`` -> ``marrow.expr.tests.test_relations``.
 
         A path component that is a Mojo keyword is backticked, so
         ``marrow/expr/comptime/tests/x.mojo`` becomes
@@ -275,8 +275,9 @@ class MojoRunner:
         The compiler accepts a single input file per invocation and
         re-elaborates all of marrow for each one, so compiling per test file
         costs that elaboration N times over.  Collapsing the selection into one
-        unit pays it once: the nine ``marrow/exprold/tests`` files (280 cases) take
-        4m43s together, against ~200s *each* when built separately.
+        unit pays it once: measured on the former expression-layer suite, its
+        nine files (280 cases) took 4m43s together, against ~200s *each* when
+        built separately.
 
         Output is deterministic — modules sorted, cases in source order — so an
         unchanged selection regenerates byte-identical source and hits the Mojo
@@ -1465,12 +1466,12 @@ def test_flags_asan_only_when_requested(tmp):
 
 
 def test_module_path(tmp):
-    path = Path(tmp) / "marrow" / "expr" / "tests" / "test_values.mojo"
+    path = Path(tmp) / "marrow" / "expr" / "tests" / "test_relations.mojo"
     path.parent.mkdir(parents=True)
     path.touch()
-    assert MojoRunner.module_path(tmp, path) == "marrow.exprold.tests.test_values"
+    assert MojoRunner.module_path(tmp, path) == "marrow.expr.tests.test_relations"
 
-    reserved = tmp / "marrow" / "expr2" / "comptime" / "tests" / "test_x.mojo"
+    reserved = Path(tmp) / "marrow" / "expr" / "comptime" / "tests" / "test_x.mojo"
     reserved.parent.mkdir(parents=True, exist_ok=True)
     reserved.touch()
     assert (

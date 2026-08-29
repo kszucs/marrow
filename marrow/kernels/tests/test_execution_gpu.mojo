@@ -2,9 +2,9 @@
 
 Everything here is about one defect: a context that carries a GPU device being
 rebuilt through a factory that sets `device=None`. `HashJoin` hit it at five
-internal sites and fixed it by holding the context whole; `GroupBy` and
-`Aggregation` hit it through `num_threads: Int` API boundaries that destructured
-the context and rebuilt it with `ExecContext.parallel(n)`.
+internal sites and fixed it by holding the context whole; the eager group-by
+driver and `Aggregation` hit it through `num_threads: Int` API boundaries that
+destructured the context and rebuilt it with `ExecContext.parallel(n)`.
 
 A CPU-only test cannot see any of this — `is_gpu()` is False before and after,
 so every assertion passes on a context that has already lost its device.
@@ -27,8 +27,8 @@ def test_with_threads_preserves_the_device() raises:
     assert_true(rethreaded.is_gpu())
     assert_equal(rethreaded.resolved_num_threads(), 4)
 
-    # And the serial direction, which `GroupBy._by_partition` takes for its
-    # single-partition case.
+    # And the serial direction, which a single-partition grouped aggregation
+    # takes.
     var serialized = ctx.with_threads(1)
     assert_true(serialized.is_gpu())
     assert_equal(serialized.resolved_num_threads(), 1)
@@ -48,9 +48,10 @@ def test_worth_parallel_is_false_on_the_gpu() raises:
     """The device runs its own parallelism, so a CPU worker split is never the
     right answer on it — the same short-circuit `wants_parallel` already has.
 
-    Its absence is what let `count_distinct`, `HashJoin.build` and
-    `GroupBy._choose_strategy` take a CPU-parallel path on a GPU context: all
-    three asked `resolved_num_threads()`, which knows nothing about the device.
+    Its absence is what let `count_distinct`, `HashJoin.build` and the eager
+    group-by driver's strategy choice take a CPU-parallel path on a GPU context:
+    all three asked `resolved_num_threads()`, which knows nothing about the
+    device.
     """
     var ctx = ExecContext(num_threads=8, device=DeviceContext())
     assert_true(ctx.is_gpu())

@@ -17,11 +17,10 @@ def plan() raises -> DynRelation:
     12	31
     """
     var t = table("events")
-    var q = t.project(
+    return t.project(
         ["mo", "dy"],
         [
             col("ts", timestamp(microsecond)).month(),
             col("ts", timestamp(microsecond)).day(),
         ],
     )
-    return q

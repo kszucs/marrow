@@ -1,8 +1,8 @@
 """The runtime lane: expressions whose structure lives in fields.
 
-One struct — a tag, its children, a payload, and a pointer to the function that
-evaluates it. Where the comptime lane puts a whole subtree in a type and fuses
-it into one SIMD loop, this materialises a `DynArray` **per node, per morsel**.
+One struct — a tag, its children behind `ArcPointer`, and an optional payload.
+Where the comptime lane puts a whole subtree in a type and fuses it into one
+SIMD loop, this materialises a `DynArray` **per node, per morsel**.
 
 That is the trade, and it is why the two lanes exist rather than one:
 
@@ -11,24 +11,44 @@ That is the trade, and it is why the two lanes exist rather than one:
 | structure | in the type | in the fields |
 | per node | inlined into one loop | one materialised column |
 | built from | Mojo source | anything, including Python at run time |
-| binary | 1.46 MB | 4.91 MB (same plan) |
 
 The runtime lane is what a frontend uses when the query is not known until the
 program runs, which is every frontend that is not the Mojo DSL. It is also why
-this package has a box at all: a plan holds either lane through `DynValue`,
-and that mixing is what buys the 1.46 MB.
+this package has a box at all: a plan holds either lane through `DynValue`, and
+that mixing is what keeps an AOT binary off this file entirely. The measured
+gap between the two lanes is several times the binary; the current figures live
+in `benchmarks/binary_size/` rather than here, so they cannot go stale in a
+docstring.
 
-**A tag never selects a kernel.** `_tag` is how a node prints and how it
-prunes; `_eval` is how it computes, and it is a function pointer bound at
-construction. Routing on the tag would put every kernel in every binary that
-builds any expression — the same closed-erasure property that keeps unused
-operators out of a plan.
+**The tag selects the kernel, and that is deliberate.** `evaluate` switches on
+`_tag`, so this file is an interpreter. A program that builds expressions at
+run time has already accepted one — it cannot know its kernels at compile time,
+and a frontend constructing queries dynamically reaches most of them anyway.
+The cost is paid only by binaries that use this lane at all, and the comptime
+lane never reaches it.
+
+**Do not replace the switch with a per-node function pointer.** That design
+existed, put a thin `fn` field in this self-referential struct, and the compiler
+miscompiled it. See `docs/backlog.md`; this docstring described that removed
+design, in the present tense, long after it was gone.
 """
 
 from std.memory import ArcPointer
 from std.utils import Variant
 
 from ...arrays import StructArray, BoolArray, DynArray
+from ...kernels.aggregate import (
+    APPROX_COUNT_DISTINCT,
+    COUNT,
+    COUNT_DISTINCT,
+    MAX,
+    MEAN,
+    MIN,
+    PRODUCT,
+    STDDEV,
+    SUM,
+    VARIANCE,
+)
 from ...kernels.boolean import AndKernel, NotKernel, OrKernel, XorKernel
 from ...kernels.cast import cast as cast_array
 from ...kernels.conditional import case_when as case_when_kernel
@@ -56,7 +76,16 @@ from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, Value, merged
-from ..params import Bindings
+from ..bindings import Bindings
+from ...kernels.bounds import (
+    EqBounds,
+    GeBounds,
+    GtBounds,
+    LeBounds,
+    LtBounds,
+    NeBounds,
+)
+from ..pruning import DynBounds, PruneStats, Prunable, Truth, compare_dyn
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 from .aggregates import RuntimeAggregate
@@ -72,7 +101,7 @@ from outside.
 """
 
 
-struct RuntimeValue(Evaluable, Movable, Value):
+struct RuntimeValue(Evaluable, Movable, Prunable, Value):
     """A runtime-built expression.
 
     Satisfies `Value` — `Analyzable & Executable & Writable & Copyable &
@@ -130,6 +159,51 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
     # -- Value --------------------------------------------------------------
 
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """The runtime lane's half of the same contract.
+
+        The tag selects between six one-line `decide` bodies, not between
+        kernels: no kernel code is linked by this, so the module's "a tag never
+        selects a kernel" rule is not what is at stake here. The dtype ladder
+        lives once, in `_ord`, and the readings are the same six the fused lane
+        runs — writing them twice is how two lanes drift into disagreeing about
+        which row groups to skip.
+        """
+        if len(self._kids) == 2:
+            if self._tag == "and":
+                return self._kids[0][].prune(stats, bindings) & self._kids[
+                    1
+                ][].prune(stats, bindings)
+            if self._tag == "or":
+                return self._kids[0][].prune(stats, bindings) | self._kids[
+                    1
+                ][].prune(stats, bindings)
+            var l = self._kids[0][]._bounds(stats, bindings)
+            var r = self._kids[1][]._bounds(stats, bindings)
+            if self._tag == "lt":
+                return compare_dyn[LtBounds](l, r)
+            if self._tag == "le":
+                return compare_dyn[LeBounds](l, r)
+            if self._tag == "gt":
+                return compare_dyn[GtBounds](l, r)
+            if self._tag == "ge":
+                return compare_dyn[GeBounds](l, r)
+            if self._tag == "eq":
+                return compare_dyn[EqBounds](l, r)
+            if self._tag == "ne":
+                return compare_dyn[NeBounds](l, r)
+        return Truth.maybe
+
+    def _bounds(self, stats: PruneStats, bindings: Bindings) -> DynBounds:
+        """A leaf's bounds, left erased — this lane has no comptime type to
+        unwrap into. Anything composite answers unknown."""
+        if len(self._kids) == 0:
+            if self._tag == "column" and self._payload.isa[String]():
+                return stats.dyn_bounds(self._payload[String])
+            if self._tag == "literal" and self._payload.isa[DynScalar]():
+                return DynBounds.point(self._payload[DynScalar].copy())
+        return DynBounds.unknown()
+
     def columns(self) -> List[String]:
         # The leaf case is spelled out rather than falling out of an empty
         # loop: without it the compiler reads the recursion below as
@@ -164,7 +238,8 @@ struct RuntimeValue(Evaluable, Movable, Value):
         would mean a promotion rule per tag, which is a second dispatch table
         keyed on the thing that must never select behaviour.
 
-        `expr/` probed *every* expression this way, comptime ones included.
+        the previous expression package probed *every* expression this way,
+        comptime ones included.
         Here the comptime lane answers from `Type` for free and only this lane
         pays, which is the asymmetry worth having.
         """
@@ -186,7 +261,7 @@ struct RuntimeValue(Evaluable, Movable, Value):
         )
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         """The runtime lane's half of the same contract. Its operator is the
         same adapter the comptime lane uses — the lanes differ in how they
@@ -310,39 +385,52 @@ struct RuntimeValue(Evaluable, Movable, Value):
 
     def sum(self) raises -> RuntimeAggregate:
         """`SUM(self)`. Integers widen to int64; floats stay float64."""
-        return RuntimeAggregate(DynValue(self), String("sum"))
+        return RuntimeAggregate(self.copy(), String(SUM))
 
     def product(self) raises -> RuntimeAggregate:
         """`PRODUCT(self)`."""
-        return RuntimeAggregate(DynValue(self), String("product"))
+        return RuntimeAggregate(self.copy(), String(PRODUCT))
 
     def mean(self) raises -> RuntimeAggregate:
         """`AVG(self)`. Accumulates in float64 over the valid values, so nulls
         are excluded rather than counted as zero."""
-        return RuntimeAggregate(DynValue(self), String("mean"))
+        return RuntimeAggregate(self.copy(), String(MEAN))
+
+    def variance(self) raises -> RuntimeAggregate:
+        """`VAR_POP(self)` — the population variance, Arrow's default.
+
+        The sample form is `Dispersion[1, False]` in the comptime lane. It is
+        absent here only because no name is bound to it; adding `var_samp`
+        costs one string and one arm of `resolve`.
+        """
+        return RuntimeAggregate(self.copy(), String(VARIANCE))
+
+    def stddev(self) raises -> RuntimeAggregate:
+        """`STDDEV_POP(self)` — the square root of `variance()`."""
+        return RuntimeAggregate(self.copy(), String(STDDEV))
 
     def min(self) raises -> RuntimeAggregate:
         """`MIN(self)`. Keeps the input's dtype — a timestamp's unit and
         timezone included; lexicographic over a string column."""
-        return RuntimeAggregate(DynValue(self), String("min"))
+        return RuntimeAggregate(self.copy(), String(MIN))
 
     def max(self) raises -> RuntimeAggregate:
         """`MAX(self)`."""
-        return RuntimeAggregate(DynValue(self), String("max"))
+        return RuntimeAggregate(self.copy(), String(MAX))
 
     def count(self) raises -> RuntimeAggregate:
         """`COUNT(self)` — the *non-null* values of `self`, not the row
         count."""
-        return RuntimeAggregate(DynValue(self), String("count"))
+        return RuntimeAggregate(self.copy(), String(COUNT))
 
     def count_distinct(self) raises -> RuntimeAggregate:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
-        return RuntimeAggregate(DynValue(self), String("count_distinct"))
+        return RuntimeAggregate(self.copy(), String(COUNT_DISTINCT))
 
     def approx_count_distinct(self) raises -> RuntimeAggregate:
         """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
         standard error, nulls excluded."""
-        return RuntimeAggregate(DynValue(self), String("approx_count_distinct"))
+        return RuntimeAggregate(self.copy(), String(APPROX_COUNT_DISTINCT))
 
     def write_to[W: Writer](self, mut writer: W):
         var named = self.name()
@@ -440,8 +528,8 @@ def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
     """First non-null across N expressions (PyArrow `pc.coalesce`).
 
     N-ary rather than a fold of binary nodes, because the kernel is already
-    n-ary — `expr/` folds only because its runtime node had no way to hold N
-    children.
+    n-ary — the previous expression package folded only because its runtime
+    node had no way to hold N children.
     """
     if len(values) == 0:
         raise Error("coalesce: needs at least one value")

@@ -14,17 +14,9 @@ def plan() raises -> DynRelation:
     'mx'	25
     """
     var left = table("sales")
-    var right = table("regions")
-    var joined = left.join(
-        right,
-        left_on=[col("region", string)],
-        right_on=[col("region", string)],
-        how=JOIN_INNER,
-        strictness=JOIN_ALL,
-    )
+    var joined = left.join(table("regions"), [0], [0], JOIN_INNER)
     var agg = joined.aggregate(
         keys=[col("country", string)],
         aggs=[col("qty", int32).sum().alias("total")],
     )
-    var q = agg.sort([col("country", string)], [True])
-    return q
+    return agg.sort_by([col("country", string)], [True])

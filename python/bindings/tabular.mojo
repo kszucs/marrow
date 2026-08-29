@@ -414,43 +414,6 @@ def _record_batch_join(
     ).to_python_object()
 
 
-def _pylist_str(obj: PythonObject) raises -> List[String]:
-    """A Python sequence of strings as a Mojo `List[String]`."""
-    var out = List[String]()
-    for i in range(Int(obj.__len__())):
-        out.append(String(py=obj[i]))
-    return out^
-
-
-def _record_batch_group_by(
-    py_self: PythonObject,
-    keys: PythonObject,
-    values: PythonObject,
-    funcs: PythonObject,
-    num_threads: PythonObject,
-) raises -> PythonObject:
-    """Marshal and call `RecordBatch.group_by`."""
-    ref rb = py_self.downcast_value_ptr[RecordBatch]()[]
-    return rb.group_by(
-        _pylist_str(keys),
-        _pylist_str(values),
-        _pylist_str(funcs),
-        ExecContext.parallel(Int(py=num_threads)),
-    ).to_python_object()
-
-
-def _record_batch_aggregate(
-    py_self: PythonObject,
-    values: PythonObject,
-    funcs: PythonObject,
-) raises -> PythonObject:
-    """Marshal and call `RecordBatch.aggregate`."""
-    ref rb = py_self.downcast_value_ptr[RecordBatch]()[]
-    return rb.aggregate(
-        _pylist_str(values), _pylist_str(funcs)
-    ).to_python_object()
-
-
 def _record_batch_sort_by(
     py_self: PythonObject,
     by: PythonObject,
@@ -534,8 +497,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
         .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
-        .def_method[_record_batch_group_by]("group_by")
-        .def_method[_record_batch_aggregate]("aggregate")
     )
     _ = rb_py.def_method[_record_batch_str]("__str__").def_method[
         _record_batch_str

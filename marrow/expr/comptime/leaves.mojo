@@ -27,7 +27,9 @@ from ...kernels.nested import ArrayLengthKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
-from ..params import Bindings
+from ..bindings import Bindings
+from ...kernels.bounds import Bounds
+from ..pruning import PruneStats, Truth, param_bounds
 from ..physical import Datum
 from .core import (
     BoolValue,
@@ -86,6 +88,17 @@ struct Column[T: NumericType](ColumnBound, NumericValue):
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return bound.values().load[W](idx)
 
+    def bounds(
+        self, stats: PruneStats, bindings: Bindings
+    ) -> Bounds[Self.Type.native]:
+        """The typed unwrap of this column's statistic, guarded on dtype.
+
+        `stats.bounds[T]` compares `DynType(T())` against the stored scalar's
+        own type before unwrapping, because `as_primitive[T]` is a
+        `debug_assert` that *aborts the process* on a mismatch rather than
+        raising."""
+        return stats.bounds[Self.T](self._name)
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
 
@@ -101,7 +114,8 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
     `date + date` must not compile.
 
     That is the whole duplication, and the point of the split is that it stops
-    at the leaf: everything above binds on `PrimitiveValue`, where `expr/`
+    at the leaf: everything above binds on `PrimitiveValue`, where the previous
+    expression package
     needs `TemporalColumn` *plus* duplicated comparison arms.
 
     **Comparison works too, but through its own node.** `TemporalCompare` is
@@ -138,8 +152,12 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
         The one place this leaf genuinely differs from `Column[T]`: a numeric
         dtype is `Defaultable` and can answer from its type, a temporal one
         cannot.
+
+        `field(name=...)` rather than `fields[get_field_index(...)]`: the index
+        form answers `-1` for an unknown column and `fields[-1]` is the *last*
+        field, so a typo silently reported a neighbour's dtype.
         """
-        return schema.fields[schema.get_field_index(self._name)].dtype.copy()
+        return schema.field(name=self._name).dtype.copy()
 
     # -- Evaluable ----------------------------------------------------------
 
@@ -209,6 +227,11 @@ struct Literal[T: NumericType](NumericValue):
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return SIMD[Self.Type.native, W](self._value)
 
+    def bounds(
+        self, stats: PruneStats, bindings: Bindings
+    ) -> Bounds[Self.Type.native]:
+        return Bounds[Self.Type.native].point(self._value)
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write("lit(", self._value, ")")
 
@@ -224,7 +247,8 @@ struct BoolColumn(BoolValue, ColumnBound):
 
     Without this leaf a fused expression could not read a `bool` column at all,
     so any three-valued-logic test would have to synthesise its operands from
-    comparisons. `expr/` shipped without it for exactly that reason and had to
+    comparisons. the previous expression package shipped without it for exactly
+    that reason and had to
     add it later.
     """
 
@@ -261,6 +285,10 @@ struct BoolColumn(BoolValue, ColumnBound):
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         return bound.values().load[W](idx)
+
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """A bare bool column: `never` when all-null or when `max` is False."""
+        return stats.bool_truth(self._name)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._name)
@@ -392,7 +420,9 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
     def dtype(self, schema: Schema) raises -> DynType:
         # From the schema: a list dtype carries its child field, which cannot
         # be conjured from `Self.T()` any more than a timestamp's unit can.
-        return schema.fields[schema.get_field_index(self._name)].dtype.copy()
+        # `field(name=...)` raises on an unknown column; the index form answers
+        # -1 and would report the last field's dtype instead.
+        return schema.field(name=self._name).dtype.copy()
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         return batch.field(self._name).copy()
@@ -450,3 +480,153 @@ struct ListLength[A: ListValue](ColumnBound, NumericValue, Unnamed):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("array_length(", self.a, ")")
+
+
+# ---------------------------------------------------------------------------
+# Param -- a literal whose value arrives at execution time
+# ---------------------------------------------------------------------------
+# A parameter is **a literal whose value arrives later**: it has a dtype and a
+# shape when the plan is built, and a value only once something binds it. That is
+# why `Param` mirrors `Literal` — same families, same `Shape.scalar`, same
+# per-family split — rather than being a category of its own.
+#
+# **A parameter is a description; its value belongs to an execution.** The node
+# holds a name, a dtype, help text and an optional default, and nothing else — no
+# cell, no mutable state. Values arrive through `Bindings` when the plan is
+# turned into operators:
+#
+#     var min_a = param("min-a", int64)
+#     var plan = t.filter(col("a", int64) > min_a)
+#
+#     plan.execute(bindings=Bindings().set("min-a", Int64Scalar(4).to_dyn()))
+#
+# That is the layer's own rule — *a logical node is stateless* — applied here.
+# An earlier version of this module held the value in an `ArcPointer` cell shared
+# by every copy of the node, so `min_a.set(4)` reached into a built plan and
+# changed what it computed. It made a plan's result depend on hidden mutable
+# state, and it made executing one plan on two threads with two values a data
+# race: the same defect the previous expression package's process-global
+# registry has, relocated into the
+# node rather than removed.
+#
+# Passing the values *through* the execution instead means the plan stays
+# immutable, two executions with different values cannot interfere, and there is
+# no cell.
+#
+# That one property removes an entire subsystem. the previous expression
+# package declares parameters
+# *inline* at each use — `col("a") > param("min-a", int64)` written twice must
+# still share a cell — so it needs a process-global registry keyed by name, a
+# second lookup table for the runtime lane, dedup on every declaration, and a
+# dtype-conflict check. It also inherits two limitations it records honestly: a
+# plan built but never executed leaks its declarations into the next plan's
+# `--help`, and the globals are unsynchronised, so building two plans on two
+# threads is a data race.
+#
+# None of that exists here. Sharing is structural rather than name-keyed, so
+# there is no registry to leak and no global to race on, and one declaration
+# cannot conflict with itself.
+#
+# There is deliberately **no `params()` traversal**. Asking a plan which
+# parameters it takes is a sixteen-method walk that only a `--help` surface
+# would use, and nothing outside a test ever asked. Add it back when something
+# does; until then a plan's parameters are discovered the way its columns are —
+# by binding it and being told, by name, which one is missing. the previous
+# expression package's
+# `ParamCell` raises "parameter is not bound" *without* naming it, because a
+# cell cannot know the name it is read through. Here the node **is** the
+# parameter, so it can.
+
+
+struct Param[T: NumericType](NumericValue):
+    """A late-bound numeric scalar — `Literal[T]` whose value arrives later.
+
+    Immutable. It knows its name, dtype, help and default; the *value* arrives
+    through `Bindings`, which the operator carries and hands back down to
+    `bind`. `Shape.scalar`, so a predicate over a parameter costs one
+    broadcast, exactly as a literal does.
+
+    An unbound parameter with no default raises **naming itself** — the node is
+    the parameter, so it can, where the previous expression package's cell
+    explicitly cannot.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = Scalar[Self.T.native]
+    """This execution's value, looked up once per batch — the same stage at
+    which a column leaf resolves its column."""
+
+    var _name: String
+    var _help: String
+    var _default: Optional[Scalar[Self.T.native]]
+    """Used when nothing binds this name. Absent means the parameter is
+    required, and `bind` says so naming it."""
+
+    def __init__(
+        out self,
+        var name: String,
+        var help: String = String(),
+        var default: Optional[Scalar[Self.T.native]] = None,
+    ):
+        self._name = name^
+        self._help = help^
+        self._default = default^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        """Read this execution's value — the one leaf that reads `bindings`.
+
+        **Here, rather than as a rewrite at `to_operator`.** Substituting at
+        lowering would need every composite node to rebuild itself with
+        resolved children, one method per node for a concern one node has.
+        `bind` already walks the whole tree and already carries per-execution
+        state, so this costs nothing that was not already being paid.
+        """
+        var got = bindings.get(self._name)
+        if got:
+            return got.value().as_primitive[Self.T]().value()
+        if self._default:
+            return self._default.value()
+        raise Error(
+            "parameter '",
+            self._name,
+            "' is not bound",
+            (": " + self._help) if self._help else "",
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return SIMD[Self.Type.native, W](bound)
+
+    def bounds(
+        self, stats: PruneStats, bindings: Bindings
+    ) -> Bounds[Self.Type.native]:
+        """A bound parameter prunes exactly as well as a literal, because
+        pruning runs at *execution* time with the same `Bindings` `bind` will
+        see. the previous expression package needed a process-global registry
+        for this and still
+        regressed a parameterised date filter to reading every row group.
+
+        Unbound and undefaulted answers unknown and does not raise: the scan
+        reads everything and `bind` then raises naming the parameter. Pruning
+        degrades; binding raises.
+        """
+        return param_bounds[Self.T](bindings, self._name, self._default)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("param(", self._name, ")")

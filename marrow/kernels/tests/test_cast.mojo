@@ -64,9 +64,9 @@ from ...dtypes import (
 )
 from ...kernels.cast import (
     cast,
-    BinaryLikeCast,
-    FixedSizeBinaryCast,
-    NumericCast,
+    BinaryLikeCastKernel,
+    FixedSizeBinaryCastKernel,
+    NumericCastKernel,
 )
 
 
@@ -77,19 +77,19 @@ from ...kernels.cast import (
 
 def test_int_to_float_widen() raises:
     var a = array([1, 2, 3], int32)
-    var r = NumericCast.apply[Int32Type, Float64Type](a)
+    var r = NumericCastKernel.apply[Int32Type, Float64Type](a)
     assert_true(r == array([1.0, 2.0, 3.0], float64))
 
 
 def test_float_to_int_truncates_toward_zero() raises:
     var a = array([1.9, -1.9, 2.5, -2.5], float64)
-    var r = NumericCast.apply[Float64Type, Int32Type, False](a)
+    var r = NumericCastKernel.apply[Float64Type, Int32Type, False](a)
     assert_true(r == array([1, -1, 2, -2], int32))
 
 
 def test_negative_narrowing_wraps() raises:
     var a = array([-1, 300, 44], int32)
-    var r = NumericCast.apply[Int32Type, UInt8Type, False](a)
+    var r = NumericCastKernel.apply[Int32Type, UInt8Type, False](a)
     assert_equal(Int(r.unsafe_get(0)), 255)
     assert_equal(Int(r.unsafe_get(1)), 44)  # 300 & 0xFF
     assert_equal(Int(r.unsafe_get(2)), 44)
@@ -97,14 +97,14 @@ def test_negative_narrowing_wraps() raises:
 
 def test_int16_wraps_to_int8() raises:
     var a = array([300], int16)
-    var r = NumericCast.apply[Int16Type, Int8Type, False](a)
+    var r = NumericCastKernel.apply[Int16Type, Int8Type, False](a)
     assert_equal(Int(r.unsafe_get(0)), 44)  # 300 & 0xFF = 44
 
 
 def test_float16_roundtrip() raises:
     var a = array([1.0, 2.5, -3.25], float32)
-    var half = NumericCast.apply[Float32Type, Float16Type](a)
-    var back = NumericCast.apply[Float16Type, Float32Type](half)
+    var half = NumericCastKernel.apply[Float32Type, Float16Type](a)
+    var back = NumericCastKernel.apply[Float16Type, Float32Type](half)
     assert_true(back == a)
 
 
@@ -115,7 +115,7 @@ def test_float16_roundtrip() raises:
 
 def test_nulls_preserved() raises:
     var a = array([1, None, 3], int32)
-    var r = NumericCast.apply[Int32Type, Float64Type](a)
+    var r = NumericCastKernel.apply[Int32Type, Float64Type](a)
     assert_equal(r.nulls, 1)
     assert_true(r.is_valid(0))
     assert_true(not r.is_valid(1))
@@ -129,39 +129,39 @@ def test_nulls_preserved() raises:
 
 def test_safe_lossless_ok() raises:
     var a = array([1, 2, 3], int32)
-    var r = NumericCast.apply[Int32Type, Int64Type, True](a)
+    var r = NumericCastKernel.apply[Int32Type, Int64Type, True](a)
     assert_true(r == array([1, 2, 3], int64))
 
 
 def test_safe_overflow_raises() raises:
     var a = array([300], int32)
     with assert_raises():
-        _ = NumericCast.apply[Int32Type, Int8Type, True](a)
+        _ = NumericCastKernel.apply[Int32Type, Int8Type, True](a)
 
 
 def test_safe_float_truncation_raises() raises:
     var a = array([3.9], float64)
     with assert_raises():
-        _ = NumericCast.apply[Float64Type, Int32Type, True](a)
+        _ = NumericCastKernel.apply[Float64Type, Int32Type, True](a)
 
 
 def test_safe_negative_to_unsigned_raises() raises:
     var a = array([-1], int32)
     with assert_raises():
-        _ = NumericCast.apply[Int32Type, UInt8Type, True](a)
+        _ = NumericCastKernel.apply[Int32Type, UInt8Type, True](a)
 
 
 def test_safe_skips_null_lanes() raises:
     # A null lane holds arbitrary data that need not be representable; safe mode
     # must not raise on it.
     var a = array([1, None, 2], int32)
-    var r = NumericCast.apply[Int32Type, Int8Type, True](a)
+    var r = NumericCastKernel.apply[Int32Type, Int8Type, True](a)
     assert_equal(r.nulls, 1)
 
 
 def test_unsafe_overflow_ok() raises:
     var a = array([300], int32)
-    var r = NumericCast.apply[Int32Type, Int8Type, False](a)
+    var r = NumericCastKernel.apply[Int32Type, Int8Type, False](a)
     assert_equal(Int(r.unsafe_get(0)), 44)
 
 
@@ -259,7 +259,7 @@ def test_timestamp_unit_downscale() raises:
     # `safe=False` is required: 1500 ms is not a whole number of seconds, and
     # the default `safe=True` now raises rather than discarding the remainder.
     # This case asserted the truncation under the default until S4 threaded
-    # `safe` through to `TemporalCast` — the suite encoded the defect.
+    # `safe` through to `TemporalCastKernel` — the suite encoded the defect.
     var i: DynArray = array([1500, 2500], int64)
     var ts_ms = cast(i, timestamp(millisecond))
     var ts_s = cast(ts_ms, timestamp(second), safe=False)  # // 1000 truncates
@@ -555,8 +555,8 @@ def test_cast_map_casts_the_entry_values() raises:
     raised "unsupported cast".
 
     A map needs no kernel of its own: physically it is a list whose single
-    child is the non-nullable `entries` struct, so `ListCast` casts that struct
-    and `StructCast` casts the fields. Only the *target child type* had to be
+    child is the non-nullable `entries` struct, so `ListCastKernel` casts that struct
+    and `StructCastKernel` casts the fields. Only the *target child type* had to be
     read differently — from `entries_field()` rather than `value_type()`.
     """
     var b = MapBuilder(map_(DynType(string), DynType(int64)))
@@ -587,8 +587,8 @@ def test_cast_map_casts_the_entry_values() raises:
 # ---------------------------------------------------------------------------
 # S4 — `safe` must reach every kernel `cast()` delegates to.
 #
-# `cast()`'s ladder called `DecimalCast.dispatch(array, to)` and
-# `TemporalCast.dispatch(array, to, ctx)`, so the caller's `safe` flag was
+# `cast()`'s ladder called `DecimalCastKernel.dispatch(array, to)` and
+# `TemporalCastKernel.dispatch(array, to, ctx)`, so the caller's `safe` flag was
 # dropped on both arms and neither kernel could honour it. Arrow C++ raises in
 # each case below (`CastOptions::Safe()` clears `allow_decimal_truncate`,
 # `allow_time_truncate` and `allow_time_overflow`).
@@ -776,7 +776,9 @@ def test_binary_to_string_null_slot_bytes_are_not_validated() raises:
         values=built.values.copy(),
     )
 
-    var out = BinaryLikeCast.apply[BinaryType, StringType, True](with_null)
+    var out = BinaryLikeCastKernel.apply[BinaryType, StringType, True](
+        with_null
+    )
     assert_equal(len(out), 3)
     assert_true(out.is_null(1))
     assert_equal(String(out[0]), "a")

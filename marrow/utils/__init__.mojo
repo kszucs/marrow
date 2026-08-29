@@ -6,6 +6,7 @@ out on its own:
 
 | module | what |
 |---|---|
+| `argparse` | `ArgumentParser` — argv into named values, flags and `--help` |
 | `byteorder` | `LittleEndian` — byte, bit and LEB128-varint reads/writes |
 | `datetime` | `CivilDate`, `Epoch`, `floor_div` — proleptic-Gregorian arithmetic |
 | `checksum` | `Crc32` — the ISO-3309 / zlib / gzip checksum |
@@ -30,6 +31,7 @@ two modules named `utils`, neither describing its contents. Device capability
 whether there is a device.
 """
 
+from .argparse import ArgSpec, ArgumentParser, ParsedArgs, parse_bool
 from .byteorder import LittleEndian
 from .checksum import Crc32
 from .compression import CompressionLibs

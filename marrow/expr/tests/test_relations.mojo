@@ -18,8 +18,8 @@ from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
 from ...execution import ExecContext
 from ...kernels.join import JOIN_INNER, JOIN_LEFT, JOIN_SEMI
-from ...dtypes import field
-from ...schema import schema
+from ...dtypes import Field, field
+from ...schema import Schema, schema
 from ...parquet.writer import write_table
 from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
@@ -119,7 +119,8 @@ def test_project_carries_a_bare_column_field_whole() raises:
 
     Rebuilding the field from `dtype()` alone loses `nullable`, so projecting
     a column would produce a *different* schema for it than selecting the same
-    column does. `expr/` records that divergence with `nullable` False
+    column does. the previous expression package records that divergence with
+    `nullable` False
     becoming True.
     """
     var b = record_batch([array([1, 2], int64).copy()], names=["a"])
@@ -135,7 +136,8 @@ def test_project_names_a_computed_column_from_its_dtype() raises:
     """A computed value has no `Field` to carry, so `dtype()` answers instead.
 
     This is `dtype()`'s reason to exist: the schema must be known *before*
-    anything runs, and `expr/` got it by evaluating against a zero-row batch.
+    anything runs, and the previous expression package got it by evaluating
+    against a zero-row batch.
     """
     var b = _batch()
     var p = table(b.copy()).project(
@@ -255,11 +257,13 @@ def test_aggregate_schema_is_keys_then_aggregates() raises:
 def test_a_computed_key_is_named_by_position() raises:
     """A bare column keeps its name; anything computed has none.
 
-    `expr/` shipped a defect where one lane answered `d` and the other `key0`
+    the previous expression package shipped a defect where one lane answered
+    `d` and the other `key0`
     for the same `GROUP BY d`, giving one query two output schemas.
     """
     var plan = table(_keyed()).aggregate(
-        [col("a", int64).sum().alias("total")], [(col("g", int64) + col("a", int64))]
+        [col("a", int64).sum().alias("total")],
+        [(col("g", int64) + col("a", int64))],
     )
     assert_equal(plan.schema().fields[0].name, "key0")
 
@@ -291,9 +295,7 @@ def test_an_aggregate_folds_a_fused_subtree() raises:
     an already-computed array.
     """
     var plan = table(_batch()).aggregate(
-        [
-            (col("a", int64) + col("b", int64)).sum().alias("total")
-        ],
+        [(col("a", int64) + col("b", int64)).sum().alias("total")],
         List[DynValue](),
     )
     # a = [1, 2, None, 4], b = [10, 20, 30, 40] -> 11 + 22 + 44, the null row
@@ -335,9 +337,7 @@ def test_the_flush_cascade_feeds_the_stages_above() raises:
         .aggregate([col("a", int64).sum().alias("total")], [col("g", int64)])
         .project(
             ["doubled"],
-            [
-                (col("total", int64) + col("total", int64))
-            ],
+            [(col("total", int64) + col("total", int64))],
         )
     )
     var out = plan.execute()
@@ -550,3 +550,187 @@ def _right() raises -> RecordBatch:
         [array([2, 3, 4], int64).copy(), array([200, 300, 400], int64).copy()],
         names=["k", "rv"],
     )
+
+
+# ---------------------------------------------------------------------------
+# An aggregate is a `Value`, but not one every relation can take
+# ---------------------------------------------------------------------------
+def test_projecting_an_aggregate_raises_rather_than_aborting() raises:
+    """It used to **abort the process**, not raise.
+
+    An aggregate answers from `drain`, so its operator's `push` returns `None`
+    — and `ProjectOperator.push` called `.value()` on that. Under `ASSERT=all`
+    an abort takes down the whole runner, so this was one bad query away from
+    failing every case in a file. `Value.aggregates` is what lets `Project` say
+    no at plan time; the node used to conform to `Evaluable` and raise from an
+    `evaluate` that was never reached.
+    """
+    var raised = False
+    try:
+        _ = table(_batch()).project(["s"], [col("a", int64).sum()])
+    except e:
+        raised = True
+        assert_true("is an aggregate" in String(e))
+    assert_true(raised, "projecting an aggregate must raise")
+
+
+def test_filtering_on_an_aggregate_raises() raises:
+    """The same rule on the other verb, and it points at `HAVING`: filtering
+    an aggregate is legal *above* an `.aggregate()`, never beside it."""
+    var raised = False
+    try:
+        _ = table(_batch()).filter(col("a", int64).sum())
+    except e:
+        raised = True
+        assert_true("HAVING" in String(e))
+    assert_true(raised, "filtering on an aggregate must raise")
+
+
+def test_sorting_on_an_aggregate_raises() raises:
+    """The third per-row position, and one of the two that kept aborting.
+
+    `Filter` and `Project` grew the guard; `Sort` and `Aggregate`'s keys did
+    not, so this reached `SortOperator`, which calls `.value()` on the `None`
+    an aggregate answers from `push`. Four positions need the check and two
+    had it — which is why it now lives in one `reject_aggregate` rather than
+    being copied per node.
+    """
+    var raised = False
+    try:
+        _ = table(_batch()).sort_by([col("a", int64).sum()], [True])
+    except e:
+        raised = True
+        assert_true("is an aggregate" in String(e))
+    assert_true(raised, "sorting on an aggregate must raise")
+
+
+def test_grouping_by_an_aggregate_raises() raises:
+    """The fourth, and the one where the asymmetry is the whole point: an
+    aggregate in `aggs` is what the node is *for*, and the same expression in
+    `keys` is the abort."""
+    var raised = False
+    try:
+        _ = table(_batch()).aggregate(
+            [col("b", int64).count().alias("n")], [col("a", int64).sum()]
+        )
+    except e:
+        raised = True
+        assert_true("is an aggregate" in String(e))
+    assert_true(raised, "grouping by an aggregate must raise")
+
+
+def test_a_non_aggregate_value_is_still_projectable() raises:
+    """The gate reads `Value.aggregates`, so an ordinary fused subtree — which
+    is also `Shape.scalar` when it is a literal — is untouched."""
+    var out = (
+        table(_batch())
+        .project(["s"], [(col("a", int64) + col("b", int64))])
+        .execute()
+    )
+    assert_equal(out.num_rows(), 4)
+
+
+# ---------------------------------------------------------------------------
+# with_columns / drop / rename — the verbs that say what changes
+# ---------------------------------------------------------------------------
+# All three are sugar over `Project`, exactly as `select` is: the surviving
+# columns are runtime column reads, so no caller has to supply their dtypes.
+# What each one owns is a *rule about the output schema*, and that is what
+# these cases pin — the row values follow from `Project`, which is already
+# covered above.
+
+
+def test_with_columns_appends_and_keeps_the_input_order() raises:
+    """A new name goes on the end; the existing columns keep their positions
+    and their fields. `select` cannot express this without the caller writing
+    out the complement, which is wrong the moment a column is added
+    upstream."""
+    var out = (
+        table(_batch())
+        .with_columns(["s"], [(col("a", int64) + col("b", int64))])
+        .execute()
+    )
+    assert_equal(out.num_columns(), 3)
+    assert_equal(out.schema.fields[0].name, String("a"))
+    assert_equal(out.schema.fields[1].name, String("b"))
+    assert_equal(out.schema.fields[2].name, String("s"))
+    assert_equal(out.column(2).as_int64()[1].value(), Int64(22))
+
+
+def test_with_columns_replaces_an_existing_name_in_place() raises:
+    """Polars' rule, and the only one that keeps the output free of
+    duplicates: `b` is overwritten where it already sits rather than appended
+    a second time."""
+    var out = (
+        table(_batch())
+        .with_columns(["b"], [(col("b", int64) * lit(2, int64))])
+        .execute()
+    )
+    assert_equal(out.num_columns(), 2)
+    assert_equal(out.schema.fields[1].name, String("b"))
+    assert_equal(out.column(1).as_int64()[0].value(), Int64(20))
+
+
+def test_drop_keeps_the_survivors_in_input_order() raises:
+    """`drop` says what goes; everything else stays where it was."""
+    var out = table(_batch()).drop(["a"]).execute()
+    assert_equal(out.num_columns(), 1)
+    assert_equal(out.schema.fields[0].name, String("b"))
+
+
+def test_drop_rejects_a_name_that_is_not_there() raises:
+    """A typo in a `drop` list is otherwise silent — the column it meant to
+    remove survives — which is the failure this verb exists to avoid."""
+    var raised = False
+    try:
+        _ = table(_batch()).drop(["nope"])
+    except e:
+        raised = True
+        assert_true("not found" in String(e))
+    assert_true(raised, "dropping an unknown column must raise")
+
+
+def test_rename_carries_the_source_field_over() raises:
+    """Not just the name: dtype, `nullable` and metadata come from the source
+    field, because `Project._output_schema` recognises a bare column. Rebuilding
+    from the dtype alone turns `nullable=False` into `True`, which is the
+    divergence that method exists to fix."""
+    var fields = List[Field](capacity=1)
+    fields.append(field("a", int64, nullable=False))
+    var b = RecordBatch(Schema(fields=fields^), [array([1, 2], int64).to_dyn()])
+    var renamed = table(b^).rename(["a"], ["z"]).schema()
+    assert_equal(renamed.fields[0].name, String("z"))
+    assert_true(renamed.fields[0].dtype.is_int64())
+    assert_true(not renamed.fields[0].nullable)
+
+
+def test_rename_leaves_untouched_columns_alone() raises:
+    """Two parallel lists rather than a mapping, because Mojo has no dict
+    literal in argument position. Columns not named keep their own names and
+    their positions."""
+    var out = table(_batch()).rename(["b"], ["total"]).execute()
+    assert_equal(out.num_columns(), 2)
+    assert_equal(out.schema.fields[0].name, String("a"))
+    assert_equal(out.schema.fields[1].name, String("total"))
+    assert_equal(out.column(1).as_int64()[3].value(), Int64(40))
+
+
+def test_rename_rejects_mismatched_list_lengths() raises:
+    var raised = False
+    try:
+        _ = table(_batch()).rename(["a", "b"], ["z"])
+    except e:
+        raised = True
+        assert_true("new names" in String(e))
+    assert_true(raised, "rename with unequal lists must raise")
+
+
+def test_variadic_select_matches_the_list_form() raises:
+    """`select("a")` and `select(["a"])` are one verb. The variadic spelling is
+    what the golden corpus's Python twin uses, so the two lanes cannot be one
+    text without it."""
+    var one = table(_batch()).select("b", "a").execute()
+    var two = table(_batch()).select(["b", "a"]).execute()
+    assert_equal(one.schema.fields[0].name, two.schema.fields[0].name)
+    assert_equal(one.schema.fields[1].name, String("a"))
+    assert_equal(one.num_columns(), 2)

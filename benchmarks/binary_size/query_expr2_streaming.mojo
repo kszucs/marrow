@@ -1,31 +1,40 @@
-"""Binary-size gate for `expr2` filter + projection.
+"""Binary-size gate: filter + projection over two `int64` columns.
 
-`SELECT a, b FROM orders WHERE a > b`, built through `expr2`'s plan-building
-verbs with fused comptime values. Only comptime nodes (`col`, `Gt`) are boxed
-into `DynValue`, so the runtime lane and its per-dtype kernel fanout are
-dead-code-eliminated — this gate is the DCE proof for `expr2`, the same role
-`query_streaming.mojo` plays for `expr/`.
+`SELECT a, b FROM orders WHERE a > b`, built through `marrow.expr`'s
+plan-building verbs with fused comptime values. Only comptime nodes (`col`,
+`Gt`) are boxed into `DynValue`, so the runtime lane and its per-dtype kernel
+fanout are dead-code-eliminated.
 
-Paired with `query_expr2_agg_fused.mojo`, which covers the aggregation path.
-Together they are the first gates in this directory that build anything from
-`expr2` at all.
+**It is `query_streaming.mojo` with both projected columns numeric**, and that
+is now its whole reason to exist. It was written when this directory measured
+`marrow/expr2/` — the package that has since replaced the old one and taken
+the name `marrow/expr/` — as the first gate that built anything from that
+lane at all, back when `pixi run binary_size` reported ~0.00% no matter what
+the expression rewrite did. `query_streaming.mojo` was ported onto the same
+package on 2026-08-29, so the two now differ only in that one projects
+`col("name", string)` where this projects `col("b", int64)`.
+
+**Keep it numeric.** The docstring here used to claim a fused string column
+"cannot be spelled" because the comptime `Column[T]` is bound on `NumericType`.
+That is false: `StringColumn[T]` is a separate leaf and `col(name, string)`
+returns one. What is true is that this gate's recorded baseline was measured
+against the all-numeric program, so changing it to a string column would
+silently invalidate the only number CI checks for it. The pair is worth
+keeping either way — the delta against `query_streaming` is what a fused
+*string* column costs over a fused numeric one, with everything else equal.
 
 **`project`, not `select`.** `select` takes names only and builds *runtime*
 column reads, which would link the very lane this gate exists to prove absent.
 `project` takes fused values, so the projection stays in the comptime lane.
-
-Unlike its `expr/` twin this projects two `int64` columns rather than an
-`int64` and a `string`: `expr2`'s comptime `Column[T]` is bound on
-`NumericType`, so a fused string column cannot be spelled yet.
 
     pixi run binary_size
 """
 
 from marrow.builders import array
 from marrow.dtypes import int64
-from marrow.expr.builders import col
-from marrow.expr.`comptime`.numeric import Gt
-from marrow.expr.logical import DynRelation, DynValue, InMemoryTable
+from marrow.expr import col
+from marrow.expr import Gt
+from marrow.expr import DynRelation, DynValue, InMemoryTable
 from marrow.tabular import record_batch
 
 

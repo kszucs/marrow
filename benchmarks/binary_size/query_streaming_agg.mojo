@@ -1,32 +1,42 @@
-"""Binary-size gate for *aggregation* with a **runtime-named** aggregate.
+"""Binary-size gate for aggregation with a **runtime-named** aggregate.
 
-`SELECT name, sum(a), min(b) FROM orders GROUP BY name` — fused comptime values
-(`col`) for the key and the aggregate inputs, but the aggregate *identity*
-resolved from a function name (`AggFunc("sum")`), as the Python / ibis frontend
-does.
+`SELECT name, sum(a), min(b) FROM orders GROUP BY name` — a fused comptime key
+(`col("name", string)`), but the aggregates resolved from a function *name*
+through `RuntimeAggregate` (`marrow/expr/runtime/aggregates.mojo`), as the
+Python / ibis frontend does. Resolution goes through `resolve_aggregate`, which
+switches on the name and then on the operand's runtime dtype, so every kernel
+in the catalog and every dtype arm each one accepts stays reachable.
 
 Why this file exists: `query_streaming.mojo` is filter+project only, so the AOT
 size gate was blind to the aggregate path. Fusion monomorphises per
 aggregate-set — exactly the change that can blow code size up — and without an
 aggregate query in the gate that regression would go unnoticed.
 
-Its pair, `query_streaming_agg_fused.mojo`, expresses the **same** query with
-comptime aggregations (`AggFunc.of[Fold[SumKernel]]()`). The delta between
-the two is the measurement: it is exactly the cost of the aggregate identity
-(and the input dtype) being runtime rather than comptime.
+Its pair is `query_streaming_agg_fused.mojo`, which expresses the same query
+with comptime aggregates.
 
     pixi run binary_size
+
+**Ported from the old expression package on 2026-08-29, and the pair now
+measures more than it did.** The old package could hand a *fused* operand to a
+runtime-named aggregate (`AggFunc("sum")` over a boxed `col("a", int64)`), so
+the delta against the fused gate isolated the aggregate *identity* alone.
+`RuntimeAggregate` stores its operand as a `RuntimeValue` and cannot take a
+fused one — the node's own docstring says a caller who names its aggregate with
+a string built its operand at run time too — so `col("a").sum()` here is
+runtime in both respects. The delta against the fused gate therefore now
+conflates the runtime aggregate identity with the runtime *operand*, and is
+correspondingly larger — measured 2026-08-29 at 10,711,044 bytes of `__text`
+against the fused gate's 1,466,328, with `marrow::expr::runtime` at 864 symbols
+here and 0 there. The group key is still fused, so that half is unchanged. The
+recorded baseline predates the port and is stale.
 """
 
-from marrow.exprold.values import BoxedValue
 from marrow.builders import array
-from marrow.dtypes import DynType, int64, string, field
-from marrow.schema import schema
+from marrow.dtypes import int64, string
+from marrow.expr import col, table
+from marrow.expr import DynValue
 from marrow.tabular import record_batch
-from marrow.exprold.aggregates import AggFunc
-from marrow.exprold.builders import col
-from marrow.exprold.dynamic import DynValue
-from marrow.exprold.relations import InMemoryTable, Aggregate, DynRelation
 
 
 def main() raises:
@@ -37,24 +47,9 @@ def main() raises:
         [a.copy(), b.copy(), nm.copy()], names=["a", "b", "name"]
     )
 
-    var keys = List[BoxedValue]()
-    keys.append(BoxedValue(col("name", string)))
-
-    var aggs = List[BoxedValue]()
-    aggs.append(BoxedValue(col("a", int64)))
-    aggs.append(BoxedValue(col("b", int64)))
-
-    var funcs = List[AggFunc]()
-    funcs.append(AggFunc("sum", DynType(int64)))
-    funcs.append(AggFunc("min", DynType(int64)))
-
-    var agg = Aggregate(
-        input=DynRelation(InMemoryTable(batch=batch)),
-        keys=keys^,
-        inputs=aggs^,
-        aggs=funcs^,
-        schema=schema(
-            [field("name", string), field("a", int64), field("b", int64)]
-        ),
-    )
-    print(DynRelation(agg^).execute())
+    var keys: List[DynValue] = [col("name", string)]
+    var aggs: List[DynValue] = [
+        col("a").sum().alias("a"),
+        col("b").min().alias("b"),
+    ]
+    print(table(batch^).aggregate(aggs^, keys^).execute())

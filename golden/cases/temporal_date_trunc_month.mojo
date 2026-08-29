@@ -19,7 +19,6 @@ def plan() raises -> DynRelation:
     '2021-12-01T00:00:00'
     """
     var t = table("events")
-    var q = t.project(
+    return t.project(
         ["m"], [col("ts", timestamp(microsecond)).date_trunc("month")]
     )
-    return q

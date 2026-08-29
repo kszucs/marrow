@@ -16,7 +16,6 @@ def plan() raises -> DynRelation:
     'south'
     """
     var t = table("sales")
-    var picked = t.select("region")
-    var filtered = picked.filter(col("region", string) >= lit("north"))
-    var q = filtered.sort([col("region", string)], [True])
-    return q
+    var picked = t.select(["region"])
+    var filtered = picked.filter(col("region", string) >= lit("north", string))
+    return filtered.sort_by([col("region", string)], [True])

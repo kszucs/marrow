@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     1	1
     """
     var t = table("kleene")
-    var q = t.filter(
+    return t.filter(
         (col("x", int64) > lit(0, int64)) & (col("y", int64) > lit(0, int64))
     )
-    return q

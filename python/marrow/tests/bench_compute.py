@@ -595,15 +595,6 @@ def _hash_source(n):
 
 
 @pytest.fixture(scope="session")
-def hash_ma(n):
-    v = list(range(n))
-    return {
-        k: ma.record_batch({"k": ma.array(arr), "v": ma.array(v)})
-        for k, arr in _hash_source(n).items()
-    }
-
-
-@pytest.fixture(scope="session")
 def hash_pl(n):
     v = list(range(n))
     return {
@@ -613,13 +604,6 @@ def hash_pl(n):
 
 
 _hash_keys = pytest.mark.parametrize("key", ["list", "struct"])
-
-
-@pytest.mark.benchmark(group="groupby_nested")
-@_hash_keys
-def test_marrow_groupby_nested(benchmark, hash_ma, key):
-    rb = hash_ma[key]
-    benchmark(lambda: rb.group_by("k").aggregate([("v", "sum")]))
 
 
 @pytest.mark.benchmark(group="groupby_nested")

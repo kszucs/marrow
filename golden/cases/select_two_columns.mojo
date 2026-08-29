@@ -16,5 +16,4 @@ def plan() raises -> DynRelation:
     NULL	7
     """
     var t = table("basic")
-    var q = t.select("k", "v")
-    return q
+    return t.select(["k", "v"])

@@ -17,7 +17,7 @@ shadow rather than overload — and which one a call site got would depend on it
 imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
-from .`comptime`.aggregates import FusedAggregate
+from .`comptime`.aggregates import Aggregate
 from .`comptime`.numeric import CaseWhen
 from .`comptime`.core import BoolValue, ListValue, NumericValue
 from .`comptime`.leaves import (
@@ -25,13 +25,14 @@ from .`comptime`.leaves import (
     Column,
     ListColumn,
     ListLength,
+    Param,
     TemporalColumn,
     Literal,
     StringColumn,
     StringLiteral,
 )
 from .logical import DynRelation, InMemoryTable, ParquetScan
-from .params import Param
+
 from .runtime.values import RuntimeValue, column, literal
 from ..dtypes import (
     BoolType,
@@ -43,7 +44,7 @@ from ..dtypes import (
     TemporalType,
     int64,
 )
-from ..kernels.aggregate import CountKernel
+from ..kernels.aggregate import CountFold, Fold
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -95,7 +96,8 @@ def col(var name: String, dtype: BoolType) -> BoolColumn:
     The leaf already existed; without this overload a fused expression could
     only reach a bool column by spelling `BoolColumn("flag")` directly, so any
     three-valued-logic test had to synthesise its operands from comparisons.
-    `expr/` shipped without it for exactly that reason and had to add it later.
+    the previous expression package shipped without it for exactly that reason
+    and had to add it later.
     """
     return BoolColumn(name^)
 
@@ -126,7 +128,8 @@ def lit[T: NumericType](value: Int, dtype: T) -> Literal[T]:
     when the first argument is checked — the compiler reports *"cannot be
     converted from 'Int64' to 'Scalar[T.native]', it depends on an unresolved
     parameter 'T'"*. The dtype argument is what resolves `T`, and it is read
-    second. `expr/` reached the same two overloads by the same route.
+    second. the previous expression package reached the same two overloads by
+    the same route.
     """
     return Literal[T](Scalar[T.native](value))
 
@@ -189,7 +192,8 @@ def param[
 
     Calling `param("min-a", int64)` twice makes two *independent* parameters
     that happen to share a name — which is why there is no registry, no
-    name-keyed dedup and no dtype-conflict check. `expr/` needs all three
+    name-keyed dedup and no dtype-conflict check. the previous expression
+    package needs all three
     because it declares parameters inline at each use site.
     """
     return Param[T](name^, help^, default^)
@@ -216,14 +220,14 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     return DynRelation(ParquetScan(path^, schema^))
 
 
-def count_star() -> FusedAggregate[CountKernel, Literal[Int64Type]]:
+def count_star() -> Aggregate[Fold[CountFold, Int64Type], Literal[Int64Type]]:
     """`COUNT(*)` — how many rows each group has.
 
     Not the same aggregate as `col("x", int64).count()`, which counts the
     *non-null* values of `x`; the two differ on any nullable column, and
     `COUNT(*)` is what ~30 of ClickBench's 43 queries ask for.
 
-    It needs no new kernel and no new node. `CountKernel` counts valid values
+    It needs no new kernel and no new node. `CountFold` counts valid values
     and a literal is valid on every row, so the valid-count of a constant
     column *is* the row count. This is that expression, under the name SQL
     gives it, so callers stop rediscovering the trick.

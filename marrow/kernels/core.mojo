@@ -1,4 +1,4 @@
-"""The root of the kernel trait hierarchy.
+"""The `Kernel` base trait: what every compute kernel shares.
 
 Every kernel family in `marrow.kernels` — element-wise arithmetic, comparison,
 boolean, string, temporal, aggregate — descends from `Kernel`, so a kernel is
@@ -10,8 +10,6 @@ a caller sees is the same sentence whichever kernel raised it, and a new family
 inherits it by conforming rather than by copying the message.
 """
 
-from ..arrays import Int32Array
-from ..builders import Int32Builder
 from ..dtypes import DynType
 
 
@@ -42,60 +40,3 @@ trait Kernel:
 
 
 # TODO: have vectorwise and elementwise kernels conform to a common trait
-
-
-@fieldwise_init
-struct Groups(Copyable, Movable):
-    """A batch's rows assigned to dense group ids, with how many groups exist.
-
-    The two always travel together: `ids[i]` is row `i`'s group, and
-    `num_groups` sizes every per-group accumulator the ids then scatter into.
-    They were passed as two parameters through ~22 signatures across `groupby`,
-    `aggregate`, `distinct` and `expr.aggregates`, which let a caller size an
-    accumulator from one grouping and index it with another's ids — an
-    out-of-bounds scatter rather than a type error, and silent when the
-    mismatched count happens to be larger.
-
-    Sibling of `JoinIndex`, which named `Tuple[Int32Array, Int32Array]` for the
-    same reason.
-
-    Named `Groups` rather than `Grouping` because `Grouping` is the *strategy*
-    that produces this — `ScalarGrouping`, `HashGrouping` in `groupby.mojo`.
-    The trait is the grouping; this is the groups it assigned.
-    """
-
-    var ids: Int32Array
-    """Dense group id per row of the batch."""
-
-    var num_groups: Int
-    """How many distinct groups exist — the size of a per-group accumulator."""
-
-    @staticmethod
-    def single(num_rows: Int) raises -> Groups:
-        """The one-slot assignment: every row contributes to group 0.
-
-        `ids` is **empty**, not a `num_rows`-long run of zeros. Materialising
-        one `Int32` per row to communicate a constant is exactly the cost
-        `ScalarGrouping` exists to avoid, and `Morsel.ungrouped` already
-        establishes the convention. `num_rows` is therefore accepted and not
-        stored — it says what extent the caller is asserting over, the same
-        way `Morsel.ungrouped` takes the batch whose length it never records.
-
-        Read it back with `is_single`, never with `len(self.ids)`.
-        """
-        var empty = Int32Builder(0)
-        return Groups(empty.finish(), 1)
-
-    def is_single(self) -> Bool:
-        """Whether this is the one-slot assignment — no `GROUP BY`.
-
-        **Every implementation that loops over rows must branch on this
-        first.** A per-group loop is written `for i in range(len(self.ids))`,
-        and the one-slot assignment holds no ids at all, so such a loop does
-        not execute and answers `[0]` or `[null]` instead of the whole-input
-        aggregate. That is a wrong answer rather than a crash, which is why
-        `__len__` was removed from this struct: `len(groups)` returned
-        `len(self.ids)` and read as "how many rows", so `range(len(groups))`
-        was a silently empty loop waiting to be written.
-        """
-        return len(self.ids) == 0 and self.num_groups == 1

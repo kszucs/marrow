@@ -13,7 +13,7 @@ Lane-specific behaviour lives with its lane — `comptime/tests/` and
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...arrays import DynArray
-from ..params import Bindings
+from ..bindings import Bindings
 from ...builders import array
 from ..builders import col, lit
 from ...dtypes import DynType, Int64Type, int64

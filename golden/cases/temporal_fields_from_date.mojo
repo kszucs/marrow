@@ -19,7 +19,7 @@ def plan() raises -> DynRelation:
     2021	6	15
     """
     var t = table("events")
-    var q = t.project(
+    return t.project(
         ["y", "mo", "dy"],
         [
             col("d", date32()).year(),
@@ -27,4 +27,3 @@ def plan() raises -> DynRelation:
             col("d", date32()).day(),
         ],
     )
-    return q

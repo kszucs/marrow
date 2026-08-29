@@ -1,39 +1,53 @@
 # Binary size: what each relational/expression feature costs an AOT binary
 
 `query_streaming.mojo` is the floor: `SELECT a, name FROM orders WHERE a > b`
-over a 5-row in-memory batch, built from `marrow.exprold.relations`'s
-self-executing nodes (`InMemoryTable`/`Filter`/`Project`, no central planner)
-with a fused comptime predicate (`col("a") > col("b")`, boxed via `BoxedValue`
-from `marrow.exprold.values`). Every other gate in this directory is that same
-shape plus exactly one feature, so the `__text` delta against the floor is
-what that one feature costs:
+over a 5-row in-memory batch, built from `marrow.expr`'s logical nodes
+(`InMemoryTable`/`Filter`/`Project` in `marrow/expr/logical.mojo`), run through
+the push operators in `marrow/expr/physical.mojo`, with a fused comptime
+predicate (`Gt(col("a", int64), col("b", int64))`, boxed into `DynValue`).
+Every other gate in this directory is that same shape plus exactly one feature,
+so the `__text` delta against the floor is what that one feature costs:
 
 - **`query_arith.mojo`** — adds fused arithmetic (`Add`/`Sub`/`Mul`).
 - **`query_exprs.mojo`** — adds string (`Like`), conditional (`Coalesce`),
-  membership (`IsIn`), cast and temporal (`Year`) nodes.
-- **`query_sort.mojo`** — adds `Sort` + top-K `Limit`.
+  cast (`NumericCast`) and temporal-comparison (`TemporalGt`) nodes.
+- **`query_sort.mojo`** — adds `Sort` + `Limit` (a full sort and a slice; see
+  the gate's docstring, top-K is gone).
 - **`query_join.mojo`** — adds an equi-`Join` (`SwissHashTable`, `rapidhash`,
   radix partitioning).
 - **`query_scan.mojo`** / **`query_scan_typed.mojo`** — the leaf is a
-  `ParquetScan` instead of an `InMemoryTable`; `_typed` additionally pins the
-  scan's column set at comptime (`leaf_of[Int64Type]() | leaf_of[StringType]()`).
+  `ParquetScan` instead of an `InMemoryTable`. `_typed` used to pin the scan's
+  leaf set at comptime; `marrow.expr`'s `ParquetScan` takes no parameter, so
+  **the two are currently the same program** — read `query_scan_typed.mojo`'s
+  docstring before quoting it.
 - **`query_streaming_agg_fused.mojo`** / **`query_streaming_agg.mojo`** — add
-  `Aggregate`, with the aggregate identity resolved at comptime
-  (`AggFunc.of[NumericAgg[K, V]]()`) versus by runtime name (`AggFunc("sum")`,
-  the shape the Python/ibis frontend uses).
-- **`query_dynvalue.mojo`** — the same fat relational nodes as
-  `query_streaming.mojo`, but the predicate is built the "runtime" way
-  (`col("a") > col("b")` via operators) and boxed into `DynValue`
-  (`marrow.exprold.values`) instead of being constructed as a fused node directly.
-- **`query_runtime.mojo`** — the full type-erased entry point end to end:
-  `marrow.expr`'s `in_memory_table(batch).filter(...).select(...)` then
-  `plan.execute()`.
-- **`query_param.mojo`** — `query_scan_typed`'s exact query and plan, with the
-  scan path and the predicate's right operand late-bound (`param("src",
-  string)`, `param("min-a", int64)`) instead of literal, and
-  `plan.execute_cli()` in place of `print(...execute())`. Isolates what a
-  `param()` node plus the `execute_cli` entry point (argv parsing, `--help` /
-  `--describe`, output-format dispatch) cost over a literal-bound scan.
+  `Aggregate`, with the aggregate resolved at comptime
+  (`col("a", int64).sum()`, a fused operand) versus by runtime name
+  (`col("a").sum()` -> `RuntimeAggregate`, the shape the Python/ibis frontend
+  uses, whose operand is erased too).
+- **`query_dynvalue.mojo`** — the same logical nodes as `query_streaming.mojo`,
+  but the values are erased (`RuntimeValue` via `col(name)` and `gt`) instead
+  of fused. It is the gate that watches `marrow.kernels.cast`, which the
+  interpreter reaches to widen operands.
+- **`query_runtime.mojo`** — the same erased values through the fluent verbs
+  and `select`, then `plan.execute()`.
+- **`query_param.mojo`** — `query_scan`'s query with the path and the
+  predicate's right operand late-bound (`marrow.utils.argparse` for argv,
+  `param("min-a", int64)` + `Bindings` for the value). Isolates what a
+  parameter plus argv handling cost over a literal-bound scan. The old
+  `execute_cli` tail — output writers, `--describe` — no longer exists and is
+  no longer measured.
+- **`query_expr2_streaming.mojo`** / **`query_expr2_agg_fused.mojo`** — the
+  numeric-only twins of `query_streaming` and `query_streaming_agg_fused`,
+  written when this directory first gained a gate on the current expression
+  package. Their deltas against those two are what a fused *string* column and
+  a *string* group key cost.
+
+**The twelve gates above were ported from the old expression package to
+`marrow.expr` on 2026-08-29, and every number below — and in `baseline.json` —
+predates that port.** Each gate's docstring says what its port changed and
+what it stopped measuring; the recorded baselines need a deliberate re-record
+before any of them means anything again.
 
 There is no comptime-only / fully type-erased pair of binaries left to
 contrast against these any more (see "Read this before quoting a number
@@ -97,12 +111,14 @@ column reference and a comparison. Every other gate is that shape plus one thing
 so the delta column is what the thing costs in an AOT binary.
 
 **`benchmarks/binary_size/baseline.json` is the machine-readable, enforced
-source of truth** for the four gates CI checks (`query_streaming`,
-`query_join`, `query_streaming_agg_fused`, `query_streaming_agg`) — it is
-regenerated by `check_gate.py --update`, so it cannot go stale as prose the way
-this table can. The table below covers every gate (including the three
-CI doesn't check) for the feature-by-feature comparison; if the two disagree,
-`baseline.json` is right and this table needs re-running.
+source of truth** for the gates CI checks (`query_streaming`, `query_join`,
+`query_streaming_agg_fused`, `query_streaming_agg`, `query_dynvalue`,
+`query_expr2_streaming`, `query_expr2_agg_fused`) — it is regenerated by
+`check_gate.py --update`, so it cannot go stale as prose the way this table
+can. The table below covers every gate (including the ones CI doesn't check)
+for the feature-by-feature comparison; if the two disagree, `baseline.json` is
+right and this table needs re-running. **Both are pre-port numbers as of
+2026-08-29 and neither has been re-recorded.**
 
 | gate | `__text` | Δ vs floor | ratio | what it adds |
 |---|---:|---:|---:|---|
@@ -118,7 +134,8 @@ CI doesn't check) for the feature-by-feature comparison; if the two disagree,
 | `query_dynvalue` | 4,080,564 | +2,748,108 | 3.1x | the erased lane (was the tag interpreter) |
 | `query_streaming_agg` | 4,159,796 | +2,827,340 | 3.1x | `Aggregate`, runtime-named aggs |
 
-Re-measure one gate without paying for the sweep (ten `-O3` builds, ~20 min):
+Re-measure one gate without paying for the sweep (fourteen `-O3` builds,
+~20 min):
 
 ```
 pixi run binary_size query_scan
@@ -143,7 +160,7 @@ against the stale table above.
 Far past the ~20 KB a parameter alone should cost (a `NumericParam`/
 `StringParam` node is structurally a literal plus a pointer dereference
 resolved once per batch — see `values.mojo`). Investigating the first number:
-`_write_parquet_output` / `_write_ipc_output` in `marrow/exprold/relations.mojo`
+`_write_parquet_output` / `_write_ipc_output` in the old expression layer
 pulled in the Parquet writer, the IPC writer, and the codec layer behind them
 unconditionally, even though neither gate program calls either format. Both
 are now gated behind `comptime CLI_WRITERS_ENABLED =
@@ -177,8 +194,9 @@ faintly negative. It is neither.
 
 ## Historical note (osx-arm64, Mojo 1.0.0b3.dev2026070506) — page-quantized, not reproducible
 
-Before `marrow.aot` and `marrow.dyn` were folded into today's
-`marrow.exprold.{values,relations,dynamic}`, this directory ran a four-way
+Before `marrow.aot` and `marrow.dyn` were folded into the expression layer
+that preceded today's `marrow.expr.{logical,physical,comptime,runtime}`, this
+directory ran a four-way
 comparison to answer one question: does a runtime, rewritable plan tree have
 to pay for its type-erasure, or can it stay as small as a fully-monomorphized
 one? The four binaries were `query_comptime` (the monomorphized layer, no

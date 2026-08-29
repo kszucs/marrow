@@ -13,19 +13,11 @@ def plan() raises -> DynRelation:
     'south'	20	'mx'
     """
     var left = table("sales")
-    var right = table("regions")
-    var joined = left.join(
-        right,
-        left_on=[col("region", string)],
-        right_on=[col("region", string)],
-        how=JOIN_INNER,
-        strictness=JOIN_ALL,
-    )
+    var joined = left.join(table("regions"), [0], [0], JOIN_INNER)
     var picked = joined.project(
         ["region", "qty", "country"],
         [col("region", string), col("qty", int32), col("country", string)],
     )
-    var q = picked.sort(
+    return picked.sort_by(
         [col("region", string), col("qty", int32)], [True, True]
     )
-    return q

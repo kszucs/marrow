@@ -16,5 +16,4 @@ def plan() raises -> DynRelation:
     """
     var t = table("floats")
     var ones = t.filter(col("y", float64) == lit(1.0, float64))
-    var q = ones.project(["l"], [col("y", float64).ln()])
-    return q
+    return ones.project(["l"], [col("y", float64).ln()])

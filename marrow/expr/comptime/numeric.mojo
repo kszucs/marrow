@@ -10,19 +10,36 @@ pointer in the runtime lane: routing on a name would put every arithmetic
 kernel in every binary that builds any expression.
 """
 
-from ...dtypes import DataType, DynType, NumericType
+from ...dtypes import DataType, DynType, Float64Type, NumericType
 from ...kernels.numeric import (
+    AbsKernel,
     AddKernel,
+    BinaryKernel,
+    CeilKernel,
+    DivKernel,
     EqKernel,
+    ExpKernel,
+    FloorKernel,
+    FloordivKernel,
     GeKernel,
     GtKernel,
     LeKernel,
+    LogKernel,
     LtKernel,
+    ModKernel,
     NeKernel,
+    NegKernel,
     NumericCompareKernel,
     BinaryNumericKernel,
     MulKernel,
+    PowKernel,
+    RoundKernel,
+    SignKernel,
+    SqrtKernel,
     SubKernel,
+    TruncKernel,
+    UnaryKernel,
+    UnaryNumericKernel,
 )
 from ...arrays import StructArray, BoolArray, DynArray, PrimitiveArray
 from ...kernels.conditional import (
@@ -36,7 +53,16 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ...buffers import Bitmap
 from ..logical import Shape, merged
-from ..params import Bindings
+from ..bindings import Bindings
+from ...kernels.bounds import (
+    EqBounds,
+    GeBounds,
+    GtBounds,
+    LeBounds,
+    LtBounds,
+    NeBounds,
+)
+from ..pruning import PruneStats, Truth
 from ..physical import Datum
 
 from .rules import promote, wider, widest_shape
@@ -73,9 +99,6 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -111,6 +134,208 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 comptime Add = NumericBinary[AddKernel, _, _]
 comptime Sub = NumericBinary[SubKernel, _, _]
 comptime Mul = NumericBinary[MulKernel, _, _]
+comptime Mod = NumericBinary[ModKernel, _, _]
+comptime Floordiv = NumericBinary[FloordivKernel, _, _]
+"""`%` and `//` — **Python's**, not SQL's, and coherently so.
+
+`ModKernel` takes the sign of the divisor, so `-1 % 3` is 2 and
+`a == (a // b) * b + a % b` holds. SQL, PyArrow and arrow-rs all truncate
+toward zero and answer -1. That divergence is deliberate and recorded in
+`golden/cases/math_mod_int64.mojo`, whose SQL twin spells floored modulo as
+`((n % 3) + 3) % 3` rather than asserting SQL's convention against marrow's.
+"""
+
+
+# ---------------------------------------------------------------------------
+# NumericUnary — one operand, the operand's type
+# ---------------------------------------------------------------------------
+struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](
+    NumericValue, Unnamed
+):
+    """A unary arithmetic node that keeps its operand's dtype — `neg`, `abs`,
+    `sign`, `floor`, `ceil`, `round`, `trunc`.
+
+    The dtype is preserved rather than promoted because every one of these is
+    closed over its input: `abs(int32)` is an `int32` and `floor(float64)` is a
+    `float64` — Arrow C++'s rule for the same functions, and PyArrow's. The
+    two exceptions are `sqrt`/`exp`/`ln`, which are not closed over the
+    integers and therefore live on `FloatUnary` below.
+
+    `validity` forwards rather than intersecting: with one operand there is
+    nothing to intersect, and none of these kernels manufactures or removes a
+    null.
+    """
+
+    comptime Type = Self.A.Type
+    comptime shape = Self.A.shape
+    comptime Bound = Self.A.Bound
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    # -- ComptimeValue ------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self.a.bind(batch, bindings)
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(bound)
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        # The cast is a no-op — `Self.Type` *is* `Self.A.Type` — but it has to
+        # be spelled: a chained projection is not canonicalised, so the
+        # compiler reports `SIMD[A.Type.native, W]` "cannot be converted" to
+        # `SIMD[NumericUnary[K, A].Type.native, W]`, which is the same type.
+        # `TemporalCompare.lane` spells two casts for exactly this reason.
+        return Self.K.core[Self.Type.native, W](
+            self.a.lane[W](bound, idx).cast[Self.Type.native]()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ")")
+
+
+comptime Neg = NumericUnary[NegKernel, _]
+comptime Abs = NumericUnary[AbsKernel, _]
+comptime Sign = NumericUnary[SignKernel, _]
+comptime Floor = NumericUnary[FloorKernel, _]
+comptime Ceil = NumericUnary[CeilKernel, _]
+comptime Round = NumericUnary[RoundKernel, _]
+comptime Trunc = NumericUnary[TruncKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# FloatBinary / FloatUnary — the nodes whose output is float64 whatever went in
+# ---------------------------------------------------------------------------
+struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
+    NumericValue, Unnamed
+):
+    """`/` and `**` — binary operators whose result is always `float64`.
+
+    Separate from `NumericBinary` because `promote[L, R]` is the wrong rule
+    here: `5 / 2` is 2.5, not 2, so the output type does not follow from the
+    operands at all. Both operands are cast up to `float64` *before* the
+    kernel, which is what makes integer true division exact rather than an
+    integer division silently widened afterwards.
+
+    `K` is bound on `BinaryKernel`, not on `BinaryNumericKernel` or
+    `BinaryFloatKernel`: `DivKernel` is the former and `PowKernel` the latter,
+    and the two have no common sub-trait. That is also why `BinaryKernel`
+    declares `dispatch` — see its docstring.
+
+    **PyArrow diverges here and marrow does not follow it.** `pc.divide` on two
+    integer arrays returns an integer, so `-1 / 3` is 0; marrow answers -0.333.
+    The rule is Python's, and it is the same rule that makes `Floordiv` and
+    `Mod` above agree with `//` and `%`.
+    """
+
+    comptime Type = Float64Type
+    comptime shape = widest_shape[Self.L, Self.R]
+    comptime Bound = Tuple[Self.L.Bound, Self.R.Bound]
+
+    var l: Self.L
+    var r: Self.R
+
+    def __init__(out self, var l: Self.L, var r: Self.R):
+        self.l = l^
+        self.r = r^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return merged(self.l.columns(), self.r.columns())
+
+    # -- ComptimeValue ------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return (self.l.bind(batch, bindings), self.r.bind(batch, bindings))
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """Null-in, null-out — as `NumericBinary`. Division by zero is *not* a
+        null: `DivKernel` substitutes 1 for a zero divisor to dodge SIGFPE and
+        the float result is an infinity, which is a value."""
+        return Bitmap.intersect(
+            self.l.validity(bound[0]), self.r.validity(bound[1])
+        )
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return Self.K.core[Self.Type.native, W](
+            self.l.lane[W](bound[0], idx).cast[Self.Type.native](),
+            self.r.lane[W](bound[1], idx).cast[Self.Type.native](),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
+
+
+comptime Div = FloatBinary[DivKernel, _, _]
+comptime Pow = FloatBinary[PowKernel, _, _]
+
+
+struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
+    """`sqrt`, `exp`, `ln` — unary operators whose result is always `float64`.
+
+    The operand is cast up before the kernel for the same reason
+    `FloatBinary`'s are: `sqrt` of an integer is not an integer, so preserving
+    the operand's dtype the way `NumericUnary` does would truncate the answer
+    rather than widen it.
+
+    `K` is bound on `UnaryKernel` rather than `UnaryFloatKernel` so the same
+    node can carry a kernel from either family, matching `FloatBinary`.
+    """
+
+    comptime Type = Float64Type
+    comptime shape = Self.A.shape
+    comptime Bound = Self.A.Bound
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    # -- ComptimeValue ------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return self.a.bind(batch, bindings)
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """Forwarded. `sqrt(-1)` is NaN, not null — a domain error is a value
+        in IEEE 754, and `is_nan` is how a caller asks about it."""
+        return self.a.validity(bound)
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return Self.K.core[Self.Type.native, W](
+            self.a.lane[W](bound, idx).cast[Self.Type.native]()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ")")
+
+
+comptime Sqrt = FloatUnary[SqrtKernel, _]
+comptime Exp = FloatUnary[ExpKernel, _]
+comptime Ln = FloatUnary[LogKernel, _]
 
 
 struct NumericCompare[
@@ -149,9 +374,6 @@ struct NumericCompare[
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -176,6 +398,35 @@ struct NumericCompare[
             self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
         )
 
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        """`prune` is `lane` in the interval domain, and reads the same way:
+        both operands cast to `ArgType`, then the kernel.
+
+        The reading is selected by a `comptime if` over `Self.K.name` rather
+        than by a second struct parameter. That keeps this purely additive —
+        no arity change, no alias change, no call site touched — and its
+        failure mode is conservative: an operator with no arm falls through to
+        `maybe`, which is always correct. Only the taken arm is emitted, so a
+        `Gt` node links `GtBounds.decide` and nothing else.
+        """
+        comptime dt = Self.ArgType.native
+        var lb = self.l.bounds(stats, bindings).cast[dt]()
+        var rb = self.r.bounds(stats, bindings).cast[dt]()
+        comptime if Self.K.name == LtKernel.name:
+            return Truth(LtBounds.maybe[dt](lb, rb))
+        elif Self.K.name == LeKernel.name:
+            return Truth(LeBounds.maybe[dt](lb, rb))
+        elif Self.K.name == GtKernel.name:
+            return Truth(GtBounds.maybe[dt](lb, rb))
+        elif Self.K.name == GeKernel.name:
+            return Truth(GeBounds.maybe[dt](lb, rb))
+        elif Self.K.name == EqKernel.name:
+            return Truth(EqBounds.maybe[dt](lb, rb))
+        elif Self.K.name == NeKernel.name:
+            return Truth(NeBounds.maybe[dt](lb, rb))
+        else:
+            return Truth.maybe
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
@@ -195,7 +446,8 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
 
     **Not element-wise fused, deliberately.** `bind` computes the whole result
     through `kernels.conditional.case_when` and `lane` reads it back, so the
-    `Bound` is the answer rather than the operands. `expr/`'s `CaseWhen` does
+    `Bound` is the answer rather than the operands. the previous expression
+    package's `CaseWhen` does
     the same thing for the same reason: which branch supplies a row depends on
     the condition's *validity* as well as its value — a null condition counts
     as false, and a selected-but-null value stays null — and that three-way
@@ -342,9 +594,6 @@ struct TemporalCompare[
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -410,12 +659,12 @@ struct ConditionalBinary[
     derived by intersecting bitmaps and must come from the computed result.
 
     **That is why this conforms to `ColumnBound`**, and it is what
-    `comptime/core.mojo` is referring to when it says `exprold` needed two
-    validity methods and evaluated `coalesce`/`nullif`/`case_when` twice per
-    fused pass: its `validity` took the batch, so it re-ran `combine` over both
-    operands to recover a bitmap the result already carried
-    (`marrow/exprold/values.mojo:2578-2588`). Here `bind` computes once and
-    `validity` reads the bound.
+    `comptime/core.mojo` is referring to when it says the previous expression
+    layer needed two validity methods and evaluated
+    `coalesce`/`nullif`/`case_when` twice per fused pass: its `validity` took
+    the batch, so it re-ran `combine` over both operands to recover a bitmap
+    the result already carried. Here `bind` computes once and `validity` reads
+    the bound.
     """
 
     comptime Type = Self.L.Type

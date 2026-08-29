@@ -4,18 +4,23 @@ A `Relation` describes a query and is immutable, shareable and rewritable. This
 is what that description becomes when it runs, and it owns everything mutable —
 a grouper's table, an accumulator's slots.
 
-**The engine pushes.** An operator is handed a batch and answers with what it
+**The engine pushes.** An operator is handed a morsel and answers with what it
 produced, if anything:
 
-    push(batch) -> Optional[StructArray]
-    finish()    -> Optional[StructArray]
+    push(morsel: Morsel) -> Optional[Datum]
+    drain()              -> Optional[Datum]
+    done()               -> Bool
 
 That one interface covers streaming and blocking alike, because **blocking
 stops being a type distinction and becomes *when you return `Some`***. `Filter`
-and `Project` answer from `push` and nothing from `finish`; an aggregate
+and `Project` answer from `push` and nothing from `drain`; an aggregate
 accumulates through every `push`, answers `None`, and produces its whole result
-from `finish`. Under the old pull design those were two different shapes and
+from `drain`. Under the old pull design those were two different shapes and
 therefore two different erased boxes.
+
+`drain` rather than a one-shot `finish`: it is repeatable, which is what lets
+the same trait cover sources, and it lets an operator emit *several* batches at
+end of stream — a chunking sort, a fanning join.
 
 **Sources stay pull, and drive.** A scan is I/O and naturally a generator, so
 the source operator answers from `drain` and `Pipeline.collect` pushes what
@@ -39,19 +44,19 @@ from ..scalars import DynScalar
 from std.utils import Variant
 from ..builders import nulls
 from ..dtypes import Field, struct_
+from ..kernels.aggregate import AggKernel
 from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter, take
-from ..kernels.core import Groups
-from ..kernels.aggregate import AggregateFn
+from ..kernels.groups import Groups
 from ..kernels.groupby import HashGrouping
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile
 from ..parquet.source import MappedFile
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
-from .runtime.aggregates import RuntimeAggregate
-from .params import Bindings
+from .bindings import Bindings
+from .pushdown import Pushdown, read_plan, row_group_stats
 from ..kernels.sort import sort_indices
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -88,9 +93,11 @@ struct Datum(Copyable, Movable):
     def is_scalar(self) -> Bool:
         """Whether this is still one value.
 
-        The planner asks so it knows whether a projection needs materialising;
-        `Shape` is the *static* answer to the same question, and this is the
-        one that survives erasure.
+        `Shape` is the *static* answer to the same question and is what the
+        planner actually reads; this is the one that survives erasure, and its
+        only caller is `struct_array`'s own guard below. Kept public rather
+        than folded into that guard because the distinction is part of what a
+        `Datum` *is* — a caller holding one has no other way to ask.
         """
         return self._v.isa[DynScalar]()
 
@@ -112,10 +119,28 @@ struct Datum(Copyable, Movable):
         The single place laziness ends. `n` is why this cannot be an implicit
         conversion: a scalar does not know how many rows it is about to become,
         and only the caller holding the batch does.
+
+        **`n` binds the array case too** — backlog AG-2. It used to be read
+        only on the scalar branch and ignored entirely on the array one, so a
+        column of the wrong length passed straight through into
+        `_struct_of(schema, cols, n)`, which trusts its `length` argument and
+        never looks at its children. The result is a `StructArray` claiming `n`
+        rows over a child that has fewer: not a crash, but an out-of-bounds
+        read the moment anything indexes it. An aggregate over an input that
+        produced no morsel at all reached exactly that shape. Checking here
+        turns the whole class into a raise naming both numbers.
         """
         if self._v.isa[DynScalar]():
             return self._v[DynScalar].repeat(n)
-        return self._v[DynArray].copy()
+        ref arr = self._v[DynArray]
+        if len(arr) != n:
+            raise Error(
+                "to_array: expected a column of ",
+                n,
+                " rows, got ",
+                len(arr),
+            )
+        return arr.copy()
 
 
 # ---------------------------------------------------------------------------
@@ -126,14 +151,14 @@ struct Morsel(Copyable, Movable):
 
     Carrying the grouping *with* the batch is what collapses three executor
     shapes into one. A fold needs to know which slot a row contributes to;
-    `push(batch)` alone cannot tell it, which is why an aggregate used to need
-    its own trait (`AggregateState`) and its own erased box. Put the assignment
-    in the morsel and a fold is simply an `Operator` whose `Out` is a column.
+    `push(batch)` alone cannot tell it — which would force an aggregate into
+    its own trait and its own erased box. Put the assignment in the morsel and
+    a fold is simply an `Operator` producing a column.
 
     Relational stages ignore `groups` entirely. They pay nothing for it: the
     ungrouped assignment holds an **empty** id array, because a fold that does
     not scatter never reads the ids and materialising one `Int32` per row to
-    say "everything is group 0" is exactly the cost `ScalarGrouping` avoids.
+    say "everything is group 0" is exactly the cost `Groups.single` avoids.
     """
 
     var batch: StructArray
@@ -157,16 +182,20 @@ struct Morsel(Copyable, Movable):
 trait Operator(Deinitable, Movable):
     """A stage that transforms pushed batches.
 
-    Two methods, and that is the whole physical contract. Streaming and
-    blocking operators differ only in *when* they answer `Some`.
+    Three methods — `push`, `drain` and `done` — and that is the whole physical
+    contract. Streaming and blocking operators differ only in *when* they
+    answer `Some`.
 
-    `Out` is an **associated type** rather than a fixed `RecordBatch`, because
-    the two things this trait must cover do not produce the same thing: a
-    relational stage produces a batch, a *value*'s stage produces a column.
-    Fixing `Out = RecordBatch` would force every value to wrap its column in a
-    one-column `RecordBatch` — allocating a `Schema` per value per batch — only
+    Both answer a `Datum`, which is what lets one trait cover the two things
+    that produce different shapes: a relational stage produces a batch, a
+    *value*'s stage produces a column, and `Datum` holds either. Fixing the
+    output at `RecordBatch` instead would force every value to wrap its column
+    in a one-column batch — allocating a `Schema` per value per batch — only
     for `ProjectOperator` to unwrap N of them and reassemble one. That is a
     real runtime cost paid for a nominal unification.
+
+    Deliberately not an associated `Out`: nothing would constrain it and
+    nothing would read it.
     """
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -203,12 +232,11 @@ trait Operator(Deinitable, Movable):
 
 
 struct DynOperator(Movable):
-    """An `Operator` of any stage, erased — **one box, parameterised on `Out`**.
+    """An `Operator` of any stage, erased — **one box for both chains**.
 
-    `DynOperator` carries the relational chain and
-    `DynOperator` carries a value's, but they are two instantiations of
-    one definition rather than two hand-written boxes, so the erasure surface
-    stays single.
+    The relational chain and a value's chain go through the same box rather
+    than two hand-written ones, because both stages answer a `Datum`, so the
+    erasure surface stays single.
 
     Move-only: an operator owns mutable state, so copying one would fork an
     execution mid-stream. `DynRelation` copies freely for the opposite reason —
@@ -221,6 +249,14 @@ struct DynOperator(Movable):
     ]
     var _virt_drain: def(ArcPointer[NoneType]) thin raises -> Optional[Datum]
     var _virt_done: def(ArcPointer[NoneType]) thin -> Bool
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
+    """Erasure drops the pointee's destructor, so it has to be carried
+    separately. `rebind[ArcPointer[NoneType]]` keeps the allocation and the
+    refcount but forgets the type, so the final release runs `NoneType`'s
+    destructor and **`O.__deinit__` never runs** — every operator's state leaks.
+    Measured, not reasoned: a 200k-iteration probe over a triple-shared box
+    reports zero destructions without this field and zero live objects with it.
+    """
 
     @staticmethod
     def _push_tramp[
@@ -238,6 +274,19 @@ struct DynOperator(Movable):
     def _done_tramp[O: Operator](ptr: ArcPointer[NoneType]) -> Bool:
         return rebind[ArcPointer[O]](ptr)[].done()
 
+    @staticmethod
+    def _drop_tramp[O: Operator](var ptr: ArcPointer[NoneType]):
+        """Release the box's reference at the operator's *true* type.
+
+        `rebind` takes a second reference, so the erased one can be released
+        without reaching zero; the typed reference then falls out of scope and
+        its release is the one that runs `O.__deinit__`. Sharing still works —
+        a box that holds one of several references simply decrements.
+        """
+        var typed = rebind[ArcPointer[O]](ptr)
+        _ = ptr^
+        _ = typed^
+
     @implicit
     def __init__[O: Operator](out self, var value: O):
         var ptr = ArcPointer[O](value^)
@@ -245,6 +294,10 @@ struct DynOperator(Movable):
         self._virt_push = Self._push_tramp[O]
         self._virt_drain = Self._drain_tramp[O]
         self._virt_done = Self._done_tramp[O]
+        self._virt_drop = Self._drop_tramp[O]
+
+    def __deinit__(deinit self):
+        self._virt_drop(self._data^)
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         return self._virt_push(self._data, morsel)
@@ -278,7 +331,8 @@ struct EvalOperator[V: Evaluable](Operator):
 
     Generic over the node type rather than holding a `DynValue`, so a fused
     subtree stays one type through the boundary and is still inlined into one
-    loop. That is the same reason `FusedAggregateOperator` is parameterised on its input.
+    loop. That is the same reason the fused aggregate operators are
+    parameterised on their input.
 
     This is also where a value would keep state that outlives a batch — a
     compiled `LIKE` automaton, an `IsIn` hash set. It has none today, and the
@@ -530,34 +584,34 @@ struct GroupByOperator(Operator):
     """Blocking: fold every pushed morsel, then emit one row per group.
 
     The shape the push interface exists for — `push` answers `None` all the way
-    through the stream and `finish` answers the whole result. Under the old
+    through the stream and `drain` answers the whole result. Under the old
     pull design this needed a different trait from `Filter` and `Project`, and
     therefore a second erased box.
 
-    **A fused fold buffers nothing; an `AggregateFn` buffers O(rows)** — which
-    is what the two operators are named for. Which of them a query pays for is
-    decided per aggregate, not here. `FusedAggregateOperator` binds its own
-    input subtree and folds lanes straight out of the morsel, so
-    `sum(a * 2 + b)` never materialises `a * 2 + b` and this stage keeps only
-    the grouper's key builders, which grow with the number of *groups*.
-    `BufferedAggregateOperator` cannot: an `AggregateFn` is one-shot
-    over the whole input, so it accumulates each morsel's evaluated columns
-    and ids and calls the fold once at `drain`. Any query containing a
-    `count_distinct`, or a `min`/`max` over a string or temporal column, is
-    therefore **O(rows)** in memory for that aggregate's input. There is
-    precedent — `SortOperator._batches`, `JoinOperator._buffered` — and it is
-    the price of an aggregate whose state is not a scalar accumulator.
+    **Which aggregate machine a query pays for is decided per aggregate, not
+    here.** `ScatteredAggregateOperator` and `RegisterAggregateOperator` bind
+    their own input subtree and fold lanes straight out of the morsel, so
+    `sum(a * 2 + b)` never materialises `a * 2 + b`;
+    `BufferedAggregateOperator` evaluates its operand to a column per morsel
+    and hands that to the kernel. None of the three buffers rows — every
+    `AggKernel` is streaming, so all of them keep O(groups) state — and this
+    stage keeps only the grouper's key builders, which grow with the number of
+    *groups* too. That was not always so: a `count_distinct` used to hold its
+    whole input column, and the docstring here recorded it as the price of a
+    non-scalar accumulator long after `DistinctCount` became incremental.
 
-    Group ids are dense and stable across morsels, which is what makes both
-    halves work: a state that has already folded batch N keeps its slots when
-    batch N+1 introduces new groups (`AggState._grow` extends them in place),
+    Group ids are dense and stable across morsels, which is what makes all of
+    them work: a state that has already folded batch N keeps its slots when
+    batch N+1 introduces new groups (`AggState.reserve` extends them in place),
     and concatenating N morsels' id arrays end to end is a valid assignment
     over the concatenated input rather than N unrelated numberings.
 
-    A fold that answers `None` from `drain` never saw a morsel at all — the
-    input filtered to nothing — and had no dtype to resolve against. Its slot
-    is filled with a null column typed from this stage's own output schema,
-    which is the only place that type is still known.
+    A fold that answers `None` from `drain` would have its slot filled with a
+    null column typed from this stage's own output schema, the only place that
+    type is still known. No aggregate operator does — all three answer `Some`
+    from their first `drain`, seeding one slot when the query has no keys — so
+    the branch is a guard against a future `Operator` in this position rather
+    than a path any query takes.
 
     `HAVING` needs no node of its own: a `FilterOperator` above this stage sees
     the aggregate's *output* batch, which is exactly what the flush cascade in
@@ -619,15 +673,18 @@ struct GroupByOperator(Operator):
         """Assign the rows to slots **once**, then hand the same morsel to
         every fold.
 
-        This is why placement belongs to the operator rather than to each grouped:
+        This is why placement belongs to the operator rather than to each fold:
         N aggregates over one `GROUP BY` hash the keys once between them, where
         N folds each owning a grouping would hash N times.
 
-        Placement is a runtime choice here and a comptime one inside the grouped,
-        and that split is measured. Parameterising *this* operator on
-        `Grouping` instantiates it once per conformer for **+24,432 bytes** and
-        buys nothing: its branch runs once per batch, while the 14.6x
-        register-fold win lives in `FusedAggregateOperator`, already monomorphised on `G`.
+        Placement is a runtime choice here and a comptime one inside the fold,
+        and that split is measured. Parameterising *this* operator on a
+        grouping trait instantiated it once per conformer for **+24,432
+        bytes** and bought nothing: its branch runs once per batch, while the
+        14.6x register-fold win lives one level down, in the split between
+        `RegisterAggregateOperator` and `ScatteredAggregateOperator`. That
+        measurement is also why the trait is gone — the one place a future
+        conformer would have plugged in had already been tried and rejected.
         """
         # Indexed rather than `for ref`: a fold is move-only, and iterating a
         # `List` by reference requires `Copyable`.
@@ -671,175 +728,6 @@ struct GroupByOperator(Operator):
                     )
                 )
         return Datum(_struct_of(self._schema, cols^, self._num_groups).to_dyn())
-
-
-struct BufferedAggregateOperator(Operator):
-    """An aggregate that must see its whole input as a column, so it **buffers
-    every morsel** until `drain`.
-
-    The counterpart of `FusedAggregateOperator`, and named for that cost. Both
-    are *value* operators — two of the things `GroupByOperator` holds in its
-    `_folds` list — and both answer a `Datum` of one value per slot. They
-    differ in what they can do with a morsel: a fold reads `lane[W]` out of a
-    fused subtree and keeps one scalar per group, so it buffers nothing; this
-    one has an aggregate whose state is a hash set, a sketch, or a best-row
-    index, which cannot be finished incrementally — so its input has to exist
-    as a column first, and the accumulated columns and ids are **O(rows)**.
-
-    **Zero type parameters, shared by both lanes.** The comptime lane hands it
-    `Agg.grouped` — a statically known method taken as a thin pointer — and the
-    runtime lane hands it the `RuntimeAggregate` node to resolve on first push.
-    The
-    operand keeps its fusion either way, because this operator does not
-    evaluate the operand: `_inputs` holds the operand's *own* operator, which
-    for a comptime subtree is a fully monomorphised `EvalOperator[A]`.
-
-    **It buffers, and that is inherent.** A `AggregateFn` is one-shot over the
-    whole input, so each morsel's evaluated columns and group ids are kept and
-    `concat`ed at `drain`. Concatenating ids across morsels is sound because
-    `HashGrouping` assigns dense ids that are stable across batches — batch
-    N+1 extends the numbering rather than restarting it.
-
-    Buffering the ids per aggregate is a known, bounded redundancy: three
-    column-aggregates in one query keep three copies of the same `Int32` per
-    row. `GroupByOperator` sees every morsel and could keep one, but only by
-    special-casing this operator among the values it holds, which is the
-    uniformity that made "every value answers `to_operator`" work at all.
-
-    **Exactly one of `_grouped` and `_node` is set at construction, and which
-    one says which lane built this.** The comptime lane knows its `AggKernel`
-    at compile time and supplies `_grouped` directly — which is what keeps a
-    binary that only ever aggregates a comptime expression from linking the
-    name ladder at all, and that DCE property is what the whole two-node design
-    turns on. The runtime lane knows only a name, so it supplies `_node` and
-    `_grouped` is filled on **first push**, from the morsel's real dtypes; it
-    cannot be filled earlier, because a `RuntimeValue` operand has no dtype
-    until a schema is in hand. `_grouped` is therefore `Some` from the first
-    push onward in both cases, which is the invariant `drain` reads.
-
-    Two nullable fields rather than a `Variant`: the alignment hazard
-    CLAUDE.md records for `Variant` is not worth paying for two small members,
-    so the invariant is stated here instead of encoded.
-    """
-
-    var _inputs: List[DynOperator]
-    var _grouped: Optional[AggregateFn]
-    """The implementation. `Some` from the first push onward, in both lanes."""
-
-    var _node: Optional[RuntimeAggregate]
-    """The node itself, for the lane that has a name instead of a type — an
-    operator here already holds its node (`FusedAggregateOperator._input`,
-    `EvalOperator._value`), so the ladder needs no object of its own."""
-
-    var _empty: Optional[DynArray]
-    """This aggregate's answer over an input that produced no column at all.
-    Known without any dtype, so it is computed at construction rather than
-    being a third code path at `drain`."""
-
-    var _scatters: Bool
-    """Whether the query has `GROUP BY` keys.
-
-    A runtime `Bool` rather than a per-morsel `Groups.is_single()` read: a
-    grouped query whose first batch happens to hold exactly one group would
-    otherwise be mistaken for an ungrouped one, and that batch's ids dropped.
-    """
-
-    var _chunks: List[List[DynArray]]
-    var _ids: List[DynArray]
-    var _num_groups: Int
-    var _rows: Int
-    var _emitted: Bool
-
-    def __init__(
-        out self,
-        var inputs: List[DynOperator],
-        grouped: AggregateFn,
-        var empty: Optional[DynArray],
-        scatters: Bool,
-    ):
-        """The comptime lane's constructor: the aggregate is a type, so its
-        implementation is already known."""
-        self._chunks = List[List[DynArray]]()
-        for _ in range(len(inputs)):
-            self._chunks.append(List[DynArray]())
-        self._inputs = inputs^
-        self._grouped = grouped
-        self._node = None
-        self._empty = empty^
-        self._scatters = scatters
-        self._ids = List[DynArray]()
-        self._num_groups = 0 if scatters else 1
-        self._rows = 0
-        self._emitted = False
-
-    def __init__(
-        out self,
-        var inputs: List[DynOperator],
-        var node: RuntimeAggregate,
-        scatters: Bool,
-    ) raises:
-        """The runtime lane's constructor: the aggregate is a name, so the
-        implementation waits for the first morsel's dtypes."""
-        self._chunks = List[List[DynArray]]()
-        for _ in range(len(inputs)):
-            self._chunks.append(List[DynArray]())
-        self._inputs = inputs^
-        self._grouped = None
-        self._empty = node.empty()
-        self._node = node^
-        self._scatters = scatters
-        self._ids = List[DynArray]()
-        self._num_groups = 0 if scatters else 1
-        self._rows = 0
-        self._emitted = False
-
-    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Evaluate this aggregate's inputs against the morsel and keep them.
-
-        Empty batches are kept too rather than skipped: an empty column still
-        carries its dtype, which is the one thing a name-resolved fold needs
-        and the one thing a later batch cannot supply retroactively.
-        """
-        var n = len(morsel.batch)
-        # Indexed: an operator is move-only, so a `List` of them cannot be
-        # iterated by reference.
-        for i in range(len(self._inputs)):
-            var d = self._inputs[i].push(morsel)
-            self._chunks[i].append(d.value().to_array(n))
-        if not self._grouped:
-            var in_dtypes = List[DynType](capacity=len(self._chunks))
-            for i in range(len(self._chunks)):
-                in_dtypes.append(self._chunks[i][0].dtype())
-            self._grouped = self._node.value().resolve(in_dtypes).grouped
-        self._rows += n
-        if self._scatters:
-            self._ids.append(morsel.groups.ids.copy().to_dyn())
-            self._num_groups = max(self._num_groups, morsel.groups.num_groups)
-        return None
-
-    def drain(mut self) raises -> Optional[Datum]:
-        if self._emitted:
-            return None
-        self._emitted = True
-        if len(self._chunks) == 0 or len(self._chunks[0]) == 0:
-            # No morsel ever arrived, so there is no dtype to resolve against.
-            # A distinct count still has an answer; an extremum does not, and
-            # `GroupByOperator` fills its slot from the output schema.
-            if self._empty:
-                return Datum(self._empty.value().copy())
-            return None
-        var columns = List[DynArray](capacity=len(self._chunks))
-        for i in range(len(self._chunks)):
-            columns.append(concat(self._chunks[i], ExecContext.serial()))
-        var groups: Groups
-        if self._scatters:
-            groups = Groups(
-                concat(self._ids, ExecContext.serial()).as_int32().copy(),
-                self._num_groups,
-            )
-        else:
-            groups = Groups.single(self._rows)
-        return Datum(self._grouped.value()(groups, columns))
 
 
 struct LimitOperator(Operator):
@@ -891,7 +779,7 @@ struct LimitOperator(Operator):
 struct SortOperator(Operator):
     """`ORDER BY` — blocking, because a global order needs every row.
 
-    Buffers each morsel and sorts once at `finish`. That is not a limitation of
+    Buffers each morsel and sorts once at `drain`. That is not a limitation of
     the engine but of the operation: no prefix of the input determines the
     first output row.
 
@@ -1017,7 +905,8 @@ struct JoinOperator(Operator):
     re-emit their tail once per morsel and SEMI would duplicate. Those kinds
     therefore buffer and probe once at `drain`. RIGHT is *not* among them: its
     extra rows are unmatched probe rows, and each probe row belongs to exactly
-    one morsel, so it streams correctly. `expr/` reached the same conclusion
+    one morsel, so it streams correctly. the previous expression package
+    reached the same conclusion
     and this carries it over deliberately.
     """
 
@@ -1027,6 +916,33 @@ struct JoinOperator(Operator):
     var _kind: JoinKind
     var _strictness: UInt8
     var _schema: Schema
+    """What this stage promises its consumers: left fields then right, or left
+    alone for the kinds that emit no right columns."""
+
+    var _build_schema: Schema
+    """The **build** input's own fields — the left side's, not this stage's.
+
+    A separate field because the two genuinely differ and confusing them is a
+    wrong answer rather than a crash. It was a `_build_schema()` *method*
+    returning `self._schema.copy()`, whose docstring described a
+    "`len(left_keys)`-agnostic prefix of the output schema" that neither it nor
+    anything else computed. `_concat_batches` reads a schema only when it is
+    handed **no** batches, and then builds an empty batch from it — so a build
+    side that yielded nothing was indexed as if it had the join's output
+    columns. For an inner or left join that is the left fields plus a run of
+    all-null right ones, and `probe` then hands `_struct_of` more children than
+    the output dtype has fields.
+
+    Invisible today only because `_concat_batches` short-circuits at
+    `len(batches) == 1`, which is every build side that produced exactly one
+    batch."""
+
+    var _probe_schema: Schema
+    """The **probe** input's own fields — the right side's. Same argument, and
+    the same latent defect: `drain` concatenates the buffered probe morsels,
+    and for `SEMI`/`ANTI` the output schema is the *left* side's, so an empty
+    probe side was described with the wrong columns entirely."""
+
     var _ctx: ExecContext
     var _index: Optional[HashJoin[RapidHash64]]
     var _buffered: List[StructArray]
@@ -1040,6 +956,8 @@ struct JoinOperator(Operator):
         kind: JoinKind,
         strictness: UInt8,
         var schema: Schema,
+        var build_schema: Schema,
+        var probe_schema: Schema,
         var ctx: ExecContext,
     ):
         self._build = build^
@@ -1048,6 +966,8 @@ struct JoinOperator(Operator):
         self._kind = kind
         self._strictness = strictness
         self._schema = schema^
+        self._build_schema = build_schema^
+        self._probe_schema = probe_schema^
         self._ctx = ctx^
         self._index = None
         self._buffered = List[StructArray]()
@@ -1071,15 +991,10 @@ struct JoinOperator(Operator):
                 parts.append(b.value().struct_array())
             else:
                 break
-        var left = _concat_batches(parts, self._build_schema(), self._ctx)
+        var left = _concat_batches(parts, self._build_schema.copy(), self._ctx)
         var index = HashJoin[RapidHash64](self._ctx.copy())
         index.build(left.copy(), self._left_keys)
         self._index = index^
-
-    def _build_schema(self) -> Schema:
-        """The build side's fields are the first `len(left_keys)`-agnostic
-        prefix of the output schema for every kind that emits them."""
-        return self._schema.copy()
 
     def _probe(mut self, batch: StructArray) raises -> StructArray:
         var result = self._index.value().probe(
@@ -1111,7 +1026,7 @@ struct JoinOperator(Operator):
         if not self._blocks_on_probe_side():
             return None
         var whole = _concat_batches(
-            self._buffered, self._schema.copy(), self._ctx
+            self._buffered, self._probe_schema.copy(), self._ctx
         )
         return Datum(self._probe(whole).to_dyn())
 
@@ -1138,7 +1053,13 @@ def _struct_of(
 def _concat_batches(
     batches: List[StructArray], schema: Schema, ctx: ExecContext
 ) raises -> StructArray:
-    """Join both phases need one contiguous side; this is where that happens."""
+    """Join both phases need one contiguous side; this is where that happens.
+
+    `schema` describes **the side being concatenated**, not the join's output,
+    and it is read only when `batches` is empty — the one case where there is
+    no array to take a dtype from. Handing it the output schema is what
+    `JoinOperator._build_schema` used to do, and it is wrong whenever the two
+    differ."""
     if len(batches) == 1:
         return batches[0].copy()
     if len(batches) == 0:
@@ -1164,24 +1085,42 @@ struct ParquetScanOperator(Operator):
     **The schema doubles as the projection.** Only its columns are read, so
     narrowing a scan's schema is how a projection is pushed into it.
 
-    **No pruning.** `expr/`'s scan skips row groups whose statistics prove no
-    row can match, and windows several groups at once. Both need
-    `expr/pruning.mojo`, which has no `expr2` counterpart yet. Their absence
-    costs speed and never correctness — a `Filter` above the scan applies the
-    predicate exactly — so this is a smaller scan, not a wrong one.
+    **Pruning.** A predicate pushed down from a `Filter` is evaluated once per
+    row group against its statistics, and a group proven to hold no matching
+    row is never decoded. Speed only: the `Filter` above still applies the
+    predicate exactly, so an empty `Pushdown` and a full one return the same
+    rows. Row-group *windowing* is still absent and is a separate change.
     """
 
     var _path: String
     var _schema: Schema
     var _file: Optional[ParquetFile[MappedFile, LeafSet.all()]]
-    var _next_group: Int
+    var _pushed: Pushdown
+    var _bindings: Bindings
+    var _plan: List[Int]
+    """Row groups this scan will read, computed on the first `drain`.
+
+    Empty until the file is opened, because a `Relation` is a description and
+    must not touch the filesystem to exist — so the plan cannot be built where
+    the operator is."""
+
+    var _next: Int
     var _pending: List[StructArray]
 
-    def __init__(out self, var path: String, var schema: Schema):
+    def __init__(
+        out self,
+        var path: String,
+        var schema: Schema,
+        var pushed: Pushdown = Pushdown(),
+        var bindings: Bindings = Bindings(),
+    ):
         self._path = path^
         self._schema = schema^
         self._file = None
-        self._next_group = 0
+        self._pushed = pushed^
+        self._bindings = bindings^
+        self._plan = List[Int]()
+        self._next = 0
         self._pending = List[StructArray]()
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
@@ -1196,15 +1135,20 @@ struct ParquetScanOperator(Operator):
                 self._file = ParquetFile[MappedFile, LeafSet.all()](
                     self._path.copy()
                 )
-            if self._next_group >= self._file.value().num_row_groups():
+                self._plan = read_plan(
+                    row_group_stats(self._file.value()),
+                    self._pushed,
+                    self._bindings,
+                )
+            if self._next >= len(self._plan):
                 return None
 
             var names = List[String](capacity=len(self._schema.fields))
             for ref f in self._schema.fields:
                 names.append(f.name.copy())
-            var groups = List[Int]()
-            groups.append(self._next_group)
-            self._next_group += 1
+            var groups = List[Int](capacity=1)
+            groups.append(self._plan[self._next])
+            self._next += 1
 
             var table = self._file.value().read(
                 columns=Optional(names^), row_groups=Optional(groups^)
@@ -1214,3 +1158,89 @@ struct ParquetScanOperator(Operator):
             for ref b in table.to_batches():
                 self._pending.append(b.to_struct_array())
         return Datum(self._pending.pop(0).to_dyn())
+
+
+struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable](Operator):
+    """The aggregate that cannot fold lanes: evaluate the operand to a column,
+    hand it to the kernel.
+
+    Reached when `Agg` has no lane algebra (`count_distinct` keeps a hash set
+    or a sketch, `min`/`max` over a string is a bytewise scan, a dispersion
+    keeps Welford's triple) or the operand is not lane-readable.
+
+    **The operand still stays typed.** Only the aggregation step
+    materialises: `count_distinct(upper(region))` still compiles
+    `upper(region)` into one fused loop, and `A` is a type parameter rather
+    than a `DynValue` precisely so that fusion is not thrown away along with
+    the aggregate's.
+
+    **Not O(rows).** This buffered *columns* once, calling a one-shot
+    `grouped` at `drain`; every `AggKernel` is now streaming, so each morsel is
+    absorbed into per-slot state and released. The name is historical, and what
+    it now buffers is one evaluated column at a time.
+
+    **Here, not in `comptime/`, because it is not lane-specific.** Its two
+    siblings bind on `PrimitiveValue` and belong to the fused lane; this one
+    needs only that the operand can be evaluated to a column, which both lanes
+    can do. Hence the bound is `Evaluable` alone -- `physical.mojo` does not
+    import `logical.mojo`, so naming `Value` here would create a cycle.
+    """
+
+    var _input: Self.A
+    var _bindings: Bindings
+    """This execution's parameter values, held by the *operator* rather than
+    the node — which is what keeps the plan immutable and lets two executions
+    of it bind different values."""
+
+    var _state: Self.Agg
+    """The accumulator, built at construction from the operand's dtype."""
+
+    var _scatters: Bool
+    """Whether the query has `GROUP BY` keys.
+
+    A field and not a parameter, unlike the fused operator's: this arm reads it
+    once per morsel to build a `Groups`, not once per row, so specialising on
+    it would double the instantiation for a branch that never reaches the inner
+    loop — measured at +4.6%.
+    """
+
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var input: Self.A,
+        var bindings: Bindings,
+        scatters: Bool,
+        in_dtype: DynType,
+    ) raises:
+        self._input = input^
+        self._bindings = bindings^
+        self._state = Self.Agg(in_dtype)
+        self._scatters = scatters
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        var n = len(morsel.batch)
+        var column = self._input.evaluate(
+            morsel.batch, self._bindings
+        ).to_array(n)
+        var groups = morsel.groups.copy() if self._scatters else Groups.single(
+            n
+        )
+        # The one narrowing in this lane, and it is comptime-resolved:
+        # `Agg` is a parameter here, so `InArray` is a concrete type and
+        # this is a conversion rather than a dispatch.
+        self._state.update(groups, Self.Agg.InArray(column.to_data()))
+        return None
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted:
+            return None
+        self._emitted = True
+        if not self._scatters:
+            # One implicit slot, and an input that produced no morsel at all
+            # never grew it. `count_distinct` of nothing is one 0 and `min` of
+            # nothing is one NULL — both one row, which is what the stage above
+            # builds its output batch from.
+            self._state.reserve(1)
+        return Datum(self._state.finish())

@@ -13,10 +13,9 @@ def plan() raises -> DynRelation:
     'east'	'south'
     """
     var t = table("sales")
-    var q = t.aggregate(
+    return t.aggregate(
         aggs=[
             col("region", string).min().alias("lo"),
             col("region", string).max().alias("hi"),
         ]
     )
-    return q

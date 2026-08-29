@@ -12,10 +12,9 @@ def plan() raises -> DynRelation:
     'south'	5	-1.25
     """
     var t = table("sales")
-    var picked = t.select("region", "qty", "price")
+    var picked = t.select(["region", "qty", "price"])
     var filtered = picked.filter(
-        (col("region", string) == lit("south"))
+        (col("region", string) == lit("south", string))
         & (col("price", float64) < lit(0.0, float64))
     )
-    var q = filtered.sort([col("qty", int32)], [True])
-    return q
+    return filtered.sort_by([col("qty", int32)], [True])

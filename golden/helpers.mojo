@@ -12,7 +12,8 @@ driver runs from.
 
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType, bool_, float64, int32, int64
-from marrow.exprold.relations import DynRelation, in_memory_table
+from marrow.expr.builders import table as _in_memory_table
+from marrow.expr.logical import DynRelation
 from marrow.ipc import read_ipc_file
 from marrow.tabular import RecordBatch
 
@@ -31,7 +32,9 @@ def table(var name: String) raises -> DynRelation:
     What is under test is the engine, so the source is a memtable in every
     lane; Parquet and IPC keep their own suites.
     """
-    return in_memory_table(read_one(String("golden/fixtures/", name, ".arrow")))
+    return _in_memory_table(
+        read_one(String("golden/fixtures/", name, ".arrow"))
+    )
 
 
 def values_equal(a: DynArray, b: DynArray) raises -> Bool:
@@ -78,9 +81,10 @@ def check(var name: String, plan: DynRelation) raises:
 
     `plan` is **borrowed**, not owned: an owned parameter would make Mojo want
     `check(q^)` at the call site, and `^` has no Python reading, so the one
-    spelling would stop being one spelling. `DynRelation` is
-    `ImplicitlyCopyable` and `execute` borrows its receiver, so nothing is
-    given up.
+    spelling would stop being one spelling. `execute` borrows its receiver, so
+    borrowing here gives nothing up. (`DynRelation` used to be
+    `ImplicitlyCopyable`, which is why cases could write `var q = ...; return q`;
+    it no longer is, so a case body inlines its plan into the `return` instead.)
 
     Schema, then row count, then columns — reported separately, because the
     three mean different things: a schema mismatch is a dtype or naming bug, a

@@ -17,5 +17,4 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("nums")
-    var q = t.project(["c"], [StringToNum[Int64Type](col("s", string))])
-    return q
+    return t.project(["c"], [StringToNum[Int64Type](col("s", string))])

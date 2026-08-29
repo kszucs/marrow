@@ -12,7 +12,4 @@ def plan() raises -> DynRelation:
     3
     """
     var t = table("sales")
-    var q = t.aggregate(
-        aggs=[col("region", string).count_distinct().alias("n")]
-    )
-    return q
+    return t.aggregate(aggs=[col("region", string).count_distinct().alias("n")])

@@ -69,6 +69,7 @@
   `cos`, `pow_`, and row-wise `minimum`/`maximum`.
 - Every parallel loop runs through one striped driver on the execution
   context, which owns the thread count.
+- Variance and standard deviation, sample and population.
 
 ### Expressions and the query engine
 

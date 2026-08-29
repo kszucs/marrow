@@ -16,5 +16,4 @@ def plan() raises -> DynRelation:
     -63
     """
     var t = table("basic")
-    var q = t.project(["d"], [col("v", int64) - col("w", int64)])
-    return q
+    return t.project(["d"], [col("v", int64) - col("w", int64)])

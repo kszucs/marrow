@@ -15,7 +15,7 @@ Two shapes:
   own boundary with `CalendarUnit.parse`.
 
 Every entry point is a kernel: `YearKernel.dispatch(a)`, not `year(a)`. There
-used to be ten free functions here forwarding to exactly one kernel each, with
+A free function per kernel would mean ten forwarders here, each with
 no caller outside the tests that existed to cover them — the expression layer
 already imported the kernels directly.
 

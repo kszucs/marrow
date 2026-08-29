@@ -14,5 +14,4 @@ def plan() raises -> DynRelation:
     True	NULL
     """
     var t = table("flags")
-    var q = t.filter(col("p", bool_))
-    return q
+    return t.filter(col("p", bool_))

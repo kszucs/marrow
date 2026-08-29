@@ -8,7 +8,7 @@ folded in as a per-register max, matching ``pyarrow.compute.approx_count_distinc
 
 Both come in a whole-array form (returns an ``int64`` scalar) and a **grouped**
 form (``*_grouped(gids, value, num_groups)`` → one ``int64`` per group), the
-latter driving ``GroupBy``'s ``count_distinct`` / ``approx_count_distinct``:
+latter backing the ``count_distinct`` / ``approx_count_distinct`` aggregates:
 
 - exact grouped dedups ``(group_id, value)`` pairs in a single ``SwissHashTable``
   (the join's table) and bumps a per-group counter on each newly-seen pair — one
@@ -26,7 +26,7 @@ from ..builders import Int64Builder
 from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
 from ..execution import ExecContext
-from .core import Groups
+from .groups import Groups
 from .hashing import RapidHashKernel
 from ..utils import RapidHash64
 from .hashtable import SwissHashTable
@@ -45,14 +45,14 @@ overhead would dominate."""
 
 
 @always_inline
-def _hll_rho[p: Int](h: UInt64) -> UInt8:
+def hll_rho[p: Int](h: UInt64) -> UInt8:
     """Register increment for hash ``h``: 1 + leading-zero run of the bits below
     the top ``p`` (a sentinel bit ORed in caps it at ``64 - p + 1``)."""
     var w = (h << UInt64(p)) | (UInt64(1) << UInt64(p - 1))
     return UInt8(count_leading_zeros(w) + 1)
 
 
-def _hll_estimate[p: Int](registers: List[UInt8], base: Int) -> Int64:
+def hll_estimate[p: Int](registers: List[UInt8], base: Int) -> Int64:
     """Cardinality estimate for the ``2**p`` registers at ``registers[base:]``.
 
     Harmonic-mean (raw) estimate with the standard bias constant, falling back
@@ -76,9 +76,13 @@ def _hll_estimate[p: Int](registers: List[UInt8], base: Int) -> Int64:
 comptime _HLL_P = 14
 """Whole-array HyperLogLog precision: 2**14 = 16384 registers → ~0.65% error."""
 
-comptime _HLL_P_GROUPED = 11
+comptime HLL_P_GROUPED = 11
 """Per-group HyperLogLog precision: 2**11 = 2048 registers (2 KiB/group,
-~2.3% standard error) — bounds memory when the group count is large."""
+~2.3% standard error) — bounds memory when the group count is large.
+
+Public, with `hll_rho` and `hll_estimate`, because the streaming aggregate in
+`aggregate.mojo` keeps registers of this width between morsels and finalises
+them itself. The sketch is the shared thing; the loop over morsels is not."""
 
 
 # ---------------------------------------------------------------------------
@@ -152,92 +156,13 @@ def approx_count_distinct(
             continue
         var h = UInt64(hv[i])
         var idx = Int(h >> (64 - p))
-        var rho = _hll_rho[p](h)
+        var rho = hll_rho[p](h)
         if rho > registers[idx]:
             registers[idx] = rho
 
-    return Int64Scalar(_hll_estimate[p](registers, 0))
+    return Int64Scalar(hll_estimate[p](registers, 0))
 
 
 # ---------------------------------------------------------------------------
-# Grouped — one distinct-count per group id (driven by GroupBy)
+# Grouped — one distinct-count per group id (driven by `DistinctCount`)
 # ---------------------------------------------------------------------------
-
-
-def count_distinct_grouped(
-    groups: Groups,
-    value: DynArray,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> Int64Array:
-    """Exact distinct count of ``value`` per group, over precomputed ``groups.ids``.
-
-    Dedups ``(group_id, value)`` pairs in one ``SwissHashTable``: each pair's
-    combined hash is inserted once, and the first time a pair is seen its group's
-    counter is bumped. One pass, O(distinct pairs) memory, no per-group set.
-    Null values are excluded.
-    """
-    var n = len(groups.ids)
-    # Hash the (group_id, value) pair per row via the struct hasher (per-field
-    # rapidhash + combine) — reusing the exact join/group-by hashing path.
-    var children = List[DynArray]()
-    children.append(groups.ids.copy())
-    children.append(value.copy())
-    var pairs = StructArray(
-        dtype=struct_(Field("g", int32), Field("v", value.dtype().copy())),
-        length=n,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        children=children^,
-    )
-    var table = SwissHashTable[RapidHash64]()
-    var bids = table.insert_hashes(
-        RapidHashKernel.apply(pairs, ctx), grow_adaptively=True
-    )
-
-    var seen = List[Bool](length=table.num_keys(), fill=False)
-    var counts = List[Int64](length=groups.num_groups, fill=0)
-    var has_null = value.null_count() > 0
-    for i in range(n):
-        if has_null and not value.is_valid(i):
-            continue
-        var b = Int(bids.unsafe_get(i))
-        if not seen[b]:
-            seen[b] = True
-            counts[Int(groups.ids.unsafe_get(i))] += 1
-
-    var out = Int64Builder(groups.num_groups)
-    for g in range(groups.num_groups):
-        out.append(counts[g])
-    return out.finish()
-
-
-def approx_count_distinct_grouped(
-    groups: Groups,
-    value: DynArray,
-    ctx: ExecContext = ExecContext.serial(),
-) raises -> Int64Array:
-    """Approximate distinct count of ``value`` per group via one HyperLogLog
-    sketch per group (2**11 registers each). Bounds memory at
-    ``groups.num_groups * 2 KiB`` regardless of per-group cardinality. Nulls excluded.
-    """
-    comptime p = _HLL_P_GROUPED
-    comptime m = 1 << p
-    var registers = List[UInt8](length=groups.num_groups * m, fill=0)
-
-    var hv = RapidHashKernel.dispatch(value, ctx).values()
-    var n = len(groups.ids)
-    var has_null = value.null_count() > 0
-    for i in range(n):
-        if has_null and not value.is_valid(i):
-            continue
-        var h = UInt64(hv[i])
-        var idx = Int(groups.ids.unsafe_get(i)) * m + Int(h >> (64 - p))
-        var rho = _hll_rho[p](h)
-        if rho > registers[idx]:
-            registers[idx] = rho
-
-    var out = Int64Builder(groups.num_groups)
-    for g in range(groups.num_groups):
-        out.append(_hll_estimate[p](registers, g * m))
-    return out.finish()

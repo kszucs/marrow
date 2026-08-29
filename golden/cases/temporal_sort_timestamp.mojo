@@ -19,6 +19,5 @@ def plan() raises -> DynRelation:
     '2021-12-31T23:59:59.999999'	'b'
     """
     var t = table("events")
-    var picked = t.select("ts", "label")
-    var q = picked.sort([col("ts", timestamp(microsecond))], [True])
-    return q
+    var picked = t.select(["ts", "label"])
+    return picked.sort_by([col("ts", timestamp(microsecond))], [True])

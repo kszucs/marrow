@@ -19,8 +19,6 @@ from .kernels.join import (
     JoinKind,
 )
 from .execution import ExecContext
-from .kernels.groupby import GroupBy
-from .exprold.aggregates import FoldedAggregates
 from .kernels.sort import sort
 
 
@@ -247,8 +245,8 @@ struct RecordBatch(
 
         This lived in `python/bindings/tabular.mojo`: name resolution, join-kind
         parsing and result assembly existed **only** for Python callers, and the
-        binding imported `marrow.exprold.relations` inside a function body to reach
-        the kind constants. Joining two batches is core behaviour, so it lives
+        binding imported the plan layer inside a function body to reach the
+        kind constants. Joining two batches is core behaviour, so it lives
         with the type; the binding now just marshals Python values."""
         var left_on = self._key_indices(keys, "Left")
         var right_on = right._key_indices(
@@ -266,77 +264,6 @@ struct RecordBatch(
             ctx=ctx,
         )
         return RecordBatch.from_struct_array(joined^)
-
-    def _agg_columns(
-        self, values: List[String], funcs: List[String], who: String
-    ) raises -> Tuple[List[DynArray], FoldedAggregates, List[String]]:
-        """Resolve `(value column, aggregate)` pairs and their output names.
-
-        `<value>_<func>` matches PyArrow's naming. Shared by `group_by` and
-        `aggregate`, which differ only in whether a key grouping runs."""
-        var cols = List[DynArray]()
-        var aggs = FoldedAggregates()
-        var names = List[String]()
-        for j in range(len(funcs)):
-            var vname = values[j]
-            var vidx = self.schema.get_field_index(vname)
-            if vidx == -1:
-                raise Error(who, ": column '", vname, "' not found")
-            cols.append(self.column(vidx).copy())
-            aggs.append(funcs[j], self.column(vidx).dtype())
-            names.append(vname + "_" + funcs[j])
-        return (cols^, aggs^, names^)
-
-    def group_by(
-        self,
-        keys: List[String],
-        values: List[String],
-        funcs: List[String],
-        ctx: ExecContext = ExecContext.auto(),
-    ) raises -> RecordBatch:
-        """`GROUP BY keys` with one output column per `(value, func)` pair.
-
-        The keys are grouped once and every aggregate rides that pass. Output is
-        the unique key columns followed by `<value>_<func>` columns."""
-        var key_indices = self._key_indices(keys, "group_by")
-        var key_struct = self.select(key_indices).to_struct_array()
-        var resolved = self._agg_columns(values, funcs, "group_by")
-
-        var gb = GroupBy(key_struct, ctx)
-        var res = resolved[1].grouped(gb, resolved[0])
-
-        # `res` is [key columns..., aggregate columns...]; name the aggregates.
-        var n_keys = len(res.columns) - len(resolved[1])
-        var fields = List[Field]()
-        var columns = List[DynArray]()
-        for c in range(n_keys):
-            fields.append(res.schema.fields[c].copy())
-            columns.append(res.columns[c].copy())
-        for j in range(len(resolved[1])):
-            fields.append(
-                Field(
-                    resolved[2][j], res.schema.fields[n_keys + j].dtype.copy()
-                )
-            )
-            columns.append(res.columns[n_keys + j].copy())
-        return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
-
-    def aggregate(
-        self, values: List[String], funcs: List[String]
-    ) raises -> RecordBatch:
-        """Whole-table aggregation — one row, a `<value>_<func>` column each.
-
-        `count` of a non-null column is `COUNT(*)`."""
-        var resolved = self._agg_columns(values, funcs, "aggregate")
-        var res = resolved[1].whole(resolved[0])
-        var fields = List[Field]()
-        var columns = List[DynArray]()
-        for j in range(len(resolved[1])):
-            fields.append(
-                Field(resolved[2][j], res.schema.fields[j].dtype.copy())
-            )
-            columns.append(res.columns[j].copy())
-        return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
 
     def sort_by(
         self,

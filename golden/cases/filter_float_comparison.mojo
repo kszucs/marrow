@@ -12,7 +12,6 @@ def plan() raises -> DynRelation:
     10	1.5
     """
     var t = table("sales")
-    var picked = t.select("qty", "price")
+    var picked = t.select(["qty", "price"])
     var filtered = picked.filter(col("price", float64) < lit(2.0, float64))
-    var q = filtered.sort([col("price", float64)], [True])
-    return q
+    return filtered.sort_by([col("price", float64)], [True])

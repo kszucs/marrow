@@ -262,7 +262,9 @@ struct PrimitiveScalar[T: PrimitiveType](ArrowScalar):
         """Broadcast this scalar into an array of length `times`."""
         var builder = PrimitiveBuilder[Self.T](self._dtype.copy(), times)
         if self._is_valid:
-            var v = self.value()  # hoisted: one byte decode, not `times` of them
+            var v = (
+                self.value()
+            )  # hoisted: one byte decode, not `times` of them
             for _ in range(times):
                 builder.unsafe_append(v)
         else:

@@ -18,7 +18,6 @@ def plan() raises -> DynRelation:
     NULL	NULL
     """
     var t = table("kleene")
-    var q = t.project(
+    return t.project(
         ["x", "r"], [col("x", int64), ~(col("x", int64) > lit(0, int64))]
     )
-    return q

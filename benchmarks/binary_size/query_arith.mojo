@@ -12,16 +12,28 @@ A change to the fused numeric algebra could regress arbitrarily without any gate
 noticing.
 
     pixi run binary_size query_arith
+
+**Ported from the old expression package on 2026-08-29** — the arithmetic
+itself carries over unchanged (`marrow/expr/comptime/numeric.mojo` keeps
+`Add`/`Sub`/`Mul` and the `+ - *` sugar on `NumericValue`), so this gate
+measures exactly what it did before. The only difference is that `project`
+derives its output schema instead of taking one; see `query_streaming.mojo`.
+The recorded baseline predates the port and is stale.
+
+**What the new package does not have**, and this gate therefore no longer
+touches even in principle: `Div`, `Floordiv`, `Mod`, `Pow`, `Neg`, `Abs`,
+`Sign`, `Floor`, `Ceil`, `Round`, `Sqrt`, `Exp` and `Ln`. The old package had
+them and this gate never named them either, so nothing is lost *here* — but the
+fused numeric algebra is smaller than it was, and part of any drop against the
+old number is that, not a win.
 """
 
-from marrow.exprold.values import BoxedValue
 from marrow.builders import array
-from marrow.dtypes import int64, field
-from marrow.schema import schema
+from marrow.dtypes import int64
+from marrow.expr import col, table
+from marrow.expr import Gt
+from marrow.expr import DynValue
 from marrow.tabular import record_batch
-from marrow.exprold.builders import col
-from marrow.exprold.dynamic import DynValue
-from marrow.exprold.relations import InMemoryTable, Project, DynRelation
 
 
 def main() raises:
@@ -29,20 +41,12 @@ def main() raises:
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
-    var filtered = DynRelation(InMemoryTable(batch=batch)).filter(
-        BoxedValue(col("a", int64) > col("b", int64))
+    var values: List[DynValue] = [
+        (col("a", int64) + col("b", int64)) * col("a", int64) - col("b", int64)
+    ]
+    print(
+        table(batch^)
+        .filter(Gt(col("a", int64), col("b", int64)))
+        .project(["z"], values^)
+        .execute()
     )
-    var values = List[BoxedValue]()
-    values.append(
-        BoxedValue(
-            (col("a", int64) + col("b", int64)) * col("a", int64)
-            - col("b", int64)
-        )
-    )
-    var proj = Project(
-        input=filtered,
-        names=["z"],
-        values=values^,
-        schema=schema([field("z", int64)]),
-    )
-    print(DynRelation(proj^).execute())

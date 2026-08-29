@@ -14,17 +14,17 @@ formatting `12` writes one. Both run their kernel once over the whole batch in
 reason they conform to `ColumnBound`.
 
 That conformance is worth being explicit about, because it removes a real
-defect rather than merely tidying one. `exprold`'s `StringToNum` had to answer
-validity from the *batch* as well as from the state, and its batch-side answer
-re-ran the whole parse to recover a bitmap it had already computed
-(`marrow/exprold/values.mojo:1668-1680`). Here validity has one source — the
-bound — so the parse runs once. A parse failure is still a null the input does
+defect rather than merely tidying one. The previous expression layer's
+`StringToNum` had to answer validity from the *batch* as well as from the
+state, and its batch-side answer re-ran the whole parse to recover a bitmap it
+had already computed. Here validity has one source — the bound — so the parse
+runs once. A parse failure is still a null the input does
 not have (`"x"` -> null), and it is still `ColumnBound`'s
 `bound.to_data().owned_validity()` that reports it.
 
 The two breakers also call the kernels' **typed** `apply` rather than
-`dispatch`. `exprold` erased to `DynArray` and narrowed back with `as_type`
-because its operand's type was reachable only at runtime; here `A.Type` is a
+`dispatch`. The previous layer erased to `DynArray` and narrowed back with
+`as_type` because its operand's type was reachable only at runtime; here `A.Type` is a
 comptime parameter, so the dispatch and the round trip both disappear.
 """
 
@@ -32,15 +32,15 @@ from ...arrays import BinaryLikeArray, PrimitiveArray, StructArray
 from ...buffers import Bitmap
 from ...dtypes import BoolType, DynType, NumericType, StringLikeType
 from ...kernels.cast import (
-    BoolToNum as BoolToNumKernel,
-    NumToBool as NumToBoolKernel,
-    NumToString as NumToStringKernel,
-    NumericCast as NumericCastKernel,
-    StringToNum as StringToNumKernel,
+    BoolToNumKernel,
+    NumToBoolKernel,
+    NumToStringKernel,
+    NumericCastKernel,
+    StringToNumKernel,
 )
 from ...schema import Schema
 from ..logical import Shape
-from ..params import Bindings
+from ..bindings import Bindings
 from .core import (
     BoolValue,
     ColumnBound,
@@ -76,9 +76,6 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue, Unnamed):
 
     def columns(self) -> List[String]:
         return self.a.columns()
-
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- PrimitiveValue -----------------------------------------------------
 
@@ -166,9 +163,6 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue, Unnamed):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -222,9 +216,6 @@ struct StringToNum[To: NumericType, A: StringValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -262,9 +253,6 @@ struct NumToString[To: StringLikeType, A: NumericValue](
 
     def columns(self) -> List[String]:
         return self.a.columns()
-
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- StringValue --------------------------------------------------------
 
