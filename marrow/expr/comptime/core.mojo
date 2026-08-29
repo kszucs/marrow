@@ -434,6 +434,15 @@ trait StringValue(ComptimeValue):
 
     comptime Type: StringLikeType
 
+    def dtype(self, schema: Schema) raises -> DynType:
+        """The output type, from `Type` — the schema is the runtime lane's
+        concern. Defaulted here rather than on `ComptimeValue` because
+        constructing a `Type()` needs it to be `Defaultable`, and the base
+        bounds it only by `DataType`. `TemporalValue` keeps its own override
+        for the same reason: a timestamp's unit and timezone live in the value,
+        not the type."""
+        return DynType(Self.Type())
+
     def count_distinct(self) -> StringCountDistinct[Self]:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
         return StringCountDistinct[Self](self.copy())
@@ -621,6 +630,15 @@ trait NumericValue(PrimitiveValue):
     """Narrowed from `PrimitiveValue`. A sub-trait *can* narrow an associated
     type — a conformer cannot, which is why the domains are traits and not a
     bound on the leaf."""
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        """The output type, from `Type` — the schema is the runtime lane's
+        concern. Defaulted here rather than on `ComptimeValue` because
+        constructing a `Type()` needs it to be `Defaultable`, and the base
+        bounds it only by `DataType`. `TemporalValue` keeps its own override
+        for the same reason: a timestamp's unit and timezone live in the value,
+        not the type."""
+        return DynType(Self.Type())
 
     # -- the aggregate surface ----------------------------------------------
     #
@@ -994,6 +1012,15 @@ trait BoolValue(ComptimeValue):
     """
 
     comptime Type = BoolType
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        """The output type, from `Type` — the schema is the runtime lane's
+        concern. Defaulted here rather than on `ComptimeValue` because
+        constructing a `Type()` needs it to be `Defaultable`, and the base
+        bounds it only by `DataType`. `TemporalValue` keeps its own override
+        for the same reason: a timestamp's unit and timezone live in the value,
+        not the type."""
+        return DynType(Self.Type())
 
     comptime Bound: Copyable & Deinitable
     """Everything the lane loop needs, resolved once per batch.

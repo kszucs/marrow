@@ -104,6 +104,9 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         return merged(self.l.columns(), self.r.columns())
 
     def dtype(self, schema: Schema) raises -> DynType:
+        """Spelled out, where the fusing bool nodes inherit it from
+        `BoolValue`. A Kleene operator produces `bool` but does not fuse, so it
+        conforms to `ComptimeValue` directly and never sees that default."""
         return DynType(Self.Type())
 
     # -- Evaluable ----------------------------------------------------------
@@ -168,6 +171,9 @@ struct Not[A: ComptimeValue](ComptimeValue, Unnamed):
         return self.a.columns()
 
     def dtype(self, schema: Schema) raises -> DynType:
+        """Spelled out, where the fusing bool nodes inherit it from
+        `BoolValue`. A Kleene operator produces `bool` but does not fuse, so it
+        conforms to `ComptimeValue` directly and never sees that default."""
         return DynType(Self.Type())
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:

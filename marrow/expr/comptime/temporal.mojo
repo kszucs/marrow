@@ -85,8 +85,6 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- PrimitiveValue -----------------------------------------------------
 

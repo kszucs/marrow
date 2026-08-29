@@ -77,8 +77,6 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue, Unnamed):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- PrimitiveValue -----------------------------------------------------
 
@@ -166,8 +164,6 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue, Unnamed):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- PrimitiveValue -----------------------------------------------------
 
@@ -222,8 +218,6 @@ struct StringToNum[To: NumericType, A: StringValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- PrimitiveValue -----------------------------------------------------
 
@@ -263,8 +257,6 @@ struct NumToString[To: StringLikeType, A: NumericValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- StringValue --------------------------------------------------------
 

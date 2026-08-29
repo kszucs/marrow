@@ -151,8 +151,6 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -311,8 +309,6 @@ struct StringPredicate[
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- BoolValue ----------------------------------------------------------
 
@@ -374,8 +370,6 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- PrimitiveValue -----------------------------------------------------
 

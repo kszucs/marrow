@@ -1110,26 +1110,25 @@ struct Fold[K: FoldKernel, V: PrimitiveType](Foldable):
 
     @staticmethod
     def _domain(in_dtype: DynType) raises -> DynType:
-        """The domain gate every entry point shares.
+        """Check that this column really is a `V`, and hand it back.
 
-        The runtime half of `AggState`'s compile-time domain assertion: an
-        arithmetic fold is numeric-only, and instantiating one over a temporal
-        column is a *build* error rather than a raise, so the two must agree or
-        a query that should raise fails to compile instead.
+        **Not a family gate.** Whether an arithmetic fold accepts this column
+        is settled twice before control arrives here: `AggState` asserts it at
+        compile time, and every caller binds `V` *from* `in_dtype` through
+        `dispatch_numeric`/`dispatch_primitive`, so a family check could only
+        fire after a different caller had already resolved wrong. It used to be
+        written out anyway, and in the comptime lane it could not fire at all —
+        `Column[T].dtype` ignores the schema and answers `DynType(Self.T())`,
+        so the dtype being validated was manufactured from `V` two frames
+        earlier. The AOT binary still linked both arms and their format
+        strings.
+
+        This check is different, and *is* reachable: `TemporalColumn[T].dtype`
+        genuinely reads the schema, so a `TemporalColumn[TimestampType]` over a
+        `date32` field arrives here with a `V` that does not match. Without it
+        that reaches `as_type` and **aborts the process** rather than raising —
+        which under `ASSERT=all` fails every case in the file.
         """
-        comptime if conforms_to(Self.K, ArithmeticAgg):
-            if not in_dtype.is_numeric():
-                raise Self.error(
-                    t"needs arithmetic, so it is not defined for"
-                    t" {in_dtype} columns"
-                )
-        else:
-            if not (in_dtype.is_numeric() or in_dtype.is_temporal()):
-                raise Self.error(t"is not defined for {in_dtype} columns")
-        # The family gate above is not the same question as "is this column a
-        # `V`". Without this, a caller that resolved the wrong `V` reaches
-        # `as_type` inside `open` and **aborts the process** rather than
-        # raising — which under `ASSERT=all` fails every case in the file.
         if not in_dtype.holds[Self.V]():
             raise Self.error(
                 t"was resolved for a different column type than {in_dtype}"
@@ -1326,9 +1325,12 @@ struct StringExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
     def dtype(in_dtype: DynType) raises -> DynType:
         """An extremum *is* one of the input's values, so it keeps its type.
 
-        No domain check: `T: StringLikeType` is the domain, and every caller
-        binds `T` from `in_dtype` through `dispatch_stringlike`."""
-        return in_dtype.copy()
+        Answered from `T`, not from the argument: `StringLikeType` is
+        `Defaultable`, so `T` already carries everything the output type needs.
+        The temporal and decimal kernels cannot do this — a timestamp's unit
+        and timezone live in the *value* — which is the whole reason the trait
+        still takes an `in_dtype` at all."""
+        return DynType(Self.T())
 
     def reserve(mut self, slots: Int) raises:
         while len(self._best) < slots:

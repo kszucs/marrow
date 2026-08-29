@@ -99,8 +99,6 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -183,8 +181,6 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -261,8 +257,6 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -320,8 +314,6 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -386,8 +378,6 @@ struct NumericCompare[
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -608,8 +598,6 @@ struct TemporalCompare[
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        return DynType(Self.Type())
 
     # -- ComptimeValue ------------------------------------------------------
 
