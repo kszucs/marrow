@@ -37,6 +37,18 @@ from std.memory import ArcPointer
 from std.utils import Variant
 
 from ...arrays import StructArray, BoolArray, DynArray
+from ...kernels.aggregate import (
+    APPROX_COUNT_DISTINCT,
+    COUNT,
+    COUNT_DISTINCT,
+    MAX,
+    MEAN,
+    MIN,
+    PRODUCT,
+    STDDEV,
+    SUM,
+    VARIANCE,
+)
 from ...kernels.boolean import AndKernel, NotKernel, OrKernel, XorKernel
 from ...kernels.cast import cast as cast_array
 from ...kernels.conditional import case_when as case_when_kernel
@@ -372,16 +384,16 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
 
     def sum(self) raises -> RuntimeAggregate:
         """`SUM(self)`. Integers widen to int64; floats stay float64."""
-        return RuntimeAggregate(self.copy(), String("sum"))
+        return RuntimeAggregate(self.copy(), String(SUM))
 
     def product(self) raises -> RuntimeAggregate:
         """`PRODUCT(self)`."""
-        return RuntimeAggregate(self.copy(), String("product"))
+        return RuntimeAggregate(self.copy(), String(PRODUCT))
 
     def mean(self) raises -> RuntimeAggregate:
         """`AVG(self)`. Accumulates in float64 over the valid values, so nulls
         are excluded rather than counted as zero."""
-        return RuntimeAggregate(self.copy(), String("mean"))
+        return RuntimeAggregate(self.copy(), String(MEAN))
 
     def variance(self) raises -> RuntimeAggregate:
         """`VAR_POP(self)` — the population variance, Arrow's default.
@@ -390,34 +402,34 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         absent here only because no name is bound to it; adding `var_samp`
         costs one string and one arm of `resolve`.
         """
-        return RuntimeAggregate(self.copy(), String("variance"))
+        return RuntimeAggregate(self.copy(), String(VARIANCE))
 
     def stddev(self) raises -> RuntimeAggregate:
         """`STDDEV_POP(self)` — the square root of `variance()`."""
-        return RuntimeAggregate(self.copy(), String("stddev"))
+        return RuntimeAggregate(self.copy(), String(STDDEV))
 
     def min(self) raises -> RuntimeAggregate:
         """`MIN(self)`. Keeps the input's dtype — a timestamp's unit and
         timezone included; lexicographic over a string column."""
-        return RuntimeAggregate(self.copy(), String("min"))
+        return RuntimeAggregate(self.copy(), String(MIN))
 
     def max(self) raises -> RuntimeAggregate:
         """`MAX(self)`."""
-        return RuntimeAggregate(self.copy(), String("max"))
+        return RuntimeAggregate(self.copy(), String(MAX))
 
     def count(self) raises -> RuntimeAggregate:
         """`COUNT(self)` — the *non-null* values of `self`, not the row
         count."""
-        return RuntimeAggregate(self.copy(), String("count"))
+        return RuntimeAggregate(self.copy(), String(COUNT))
 
     def count_distinct(self) raises -> RuntimeAggregate:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
-        return RuntimeAggregate(self.copy(), String("count_distinct"))
+        return RuntimeAggregate(self.copy(), String(COUNT_DISTINCT))
 
     def approx_count_distinct(self) raises -> RuntimeAggregate:
         """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
         standard error, nulls excluded."""
-        return RuntimeAggregate(self.copy(), String("approx_count_distinct"))
+        return RuntimeAggregate(self.copy(), String(APPROX_COUNT_DISTINCT))
 
     def write_to[W: Writer](self, mut writer: W):
         var named = self.name()

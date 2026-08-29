@@ -97,7 +97,6 @@ from .aggregate import (
     CountKernel,
     AnyKernel,
     AllKernel,
-    agg_vocabulary,
     dispatch_agg_array,
 )
 from .numeric import (

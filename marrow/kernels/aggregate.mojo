@@ -23,9 +23,9 @@ Neither lane ever holds an erased aggregate, so the hot loop is fully typed
 both ways.
 
 No aggregate *name* is ever compared in this module. The ten names themselves
-live here, as the constants every kernel's ``Kernel.name`` is defined from and
-as ``agg_vocabulary()``; mapping one onto ``Fold[SumKernel, V]`` needs a
-runtime dtype and is the expression layer's job (``dispatch_agg``).
+live here, as the constants every kernel's ``Kernel.name`` is defined from.
+Both the *vocabulary* -- which names a frontend may say -- and the mapping of
+one onto ``Fold[SumKernel, V]`` need the expression layer, not this one.
 """
 
 import std.math as math
@@ -193,10 +193,15 @@ trait FoldKernel(Kernel):
 # They were declared a second time in the expression layer, beside a
 # hand-written `vocabulary()` listing the same ten. Nothing enforced that the
 # two agreed, and a disagreement is not a build error: a name the resolver
-# accepts but no kernel answers to raises `unknown aggregate` from inside
-# `dispatch_agg` on the first morsel, and a name a kernel reports but the
-# resolver rejects is simply unreachable. Deriving each `name` from the
-# constant makes both unrepresentable.
+# accepts but no kernel answers to raises `unknown aggregate` on the first
+# morsel, and a name a kernel reports but the resolver rejects is simply
+# unreachable. Deriving each `name` from the constant makes both
+# unrepresentable.
+#
+# **The constants are a kernel property; the *vocabulary* is not.** "Which
+# names may a frontend say" is a question about the expression layer's surface,
+# so the list lives on `RuntimeAggregate.vocabulary()` -- its only consumer --
+# and these stay here as the `Kernel.name` values they are.
 # ---------------------------------------------------------------------------
 comptime SUM = "sum"
 comptime PRODUCT = "product"
@@ -208,29 +213,6 @@ comptime VARIANCE = "variance"
 comptime STDDEV = "stddev"
 comptime MIN = "min"
 comptime MAX = "max"
-
-
-def agg_vocabulary() -> List[String]:
-    """Every aggregate name an `AggKernel` answers to.
-
-    The list a frontend validates against, and the reason the constants above
-    are not simply inlined: a caller that wants to know whether `"cnt"` is an
-    aggregate has one place to ask. `any` and `all` are deliberately absent —
-    they are `BoolReduceKernel`s, not `AggKernel`s, and no expression node
-    resolves to them.
-    """
-    var out = List[String](capacity=10)
-    out.append(SUM)
-    out.append(PRODUCT)
-    out.append(MEAN)
-    out.append(COUNT)
-    out.append(COUNT_DISTINCT)
-    out.append(APPROX_COUNT_DISTINCT)
-    out.append(VARIANCE)
-    out.append(STDDEV)
-    out.append(MIN)
-    out.append(MAX)
-    return out^
 
 
 # ---------------------------------------------------------------------------

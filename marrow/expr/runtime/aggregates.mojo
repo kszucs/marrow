@@ -54,7 +54,6 @@ from ...dtypes import (
 )
 from ...kernels.aggregate import (
     dispatch_agg_array,
-    agg_vocabulary,
     APPROX_COUNT_DISTINCT,
     COUNT,
     COUNT_DISTINCT,
@@ -282,25 +281,47 @@ struct RuntimeAggregate(Value):
         self._name = Self._checked(name^)
         self._alias = display^
 
+    comptime VOCABULARY = (
+        SUM,
+        PRODUCT,
+        MEAN,
+        COUNT,
+        COUNT_DISTINCT,
+        APPROX_COUNT_DISTINCT,
+        VARIANCE,
+        STDDEV,
+        MIN,
+        MAX,
+    )
+    """Every name this node accepts.
+
+    The catalog lives *here*, not in `kernels/aggregate.mojo`: "which names may
+    a frontend say" is a question about this layer's surface, and this node is
+    its only consumer. The kernel layer keeps the ten constants, because those
+    are `Kernel.name` values -- a real kernel property the comptime lane reads.
+
+    A comptime tuple rather than a `List[String]`: `_checked` runs on every
+    construction, and building a fresh ten-element heap list per aggregate to
+    linear-scan it was pure waste. `any` and `all` are deliberately absent --
+    they are `BoolReduceKernel`s, not `AggKernel`s, and no node resolves to
+    them.
+    """
+
     @staticmethod
     def vocabulary() -> List[String]:
-        """Every name this node accepts.
-
-        Forwards to `agg_vocabulary()` in `kernels/aggregate.mojo`, which is
-        where the catalog lives: the names are the kernels' own
-        `Kernel.name` constants, and keeping a second list here meant nothing
-        enforced that the two agreed. Kept as a method because it is part of
-        this node's surface — a frontend asks *this* what it accepts.
-        """
-        return agg_vocabulary()
+        """`VOCABULARY` as a list, for a frontend that wants to enumerate it."""
+        var out = List[String](capacity=len(Self.VOCABULARY))
+        comptime for i in range(len(Self.VOCABULARY)):
+            out.append(String(Self.VOCABULARY[i]))
+        return out^
 
     @staticmethod
     def _checked(var name: String) raises -> String:
         """`name`, or a raise naming it. The only gate on the vocabulary, and
         it runs in `__init__` so `col("s").count_distnct()` raises where it was
         written rather than on the first morsel of a long scan."""
-        for ref known in agg_vocabulary():
-            if name == known:
+        comptime for i in range(len(Self.VOCABULARY)):
+            if name == Self.VOCABULARY[i]:
                 return name^
         raise Error("unknown aggregate '", name, "'")
 
