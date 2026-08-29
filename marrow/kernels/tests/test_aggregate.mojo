@@ -30,14 +30,14 @@ from ...kernels.core import Groups
 from ...kernels.aggregate import (
     AggKernel,
     Fold,
-    MaxKernel,
+    MaxFold,
     MaxOp,
-    MeanKernel,
-    MinKernel,
+    MeanFold,
+    MinFold,
     MinOp,
-    StringExtremum,
-    SumKernel,
-    CountKernel,
+    LexicalExtremum,
+    SumFold,
+    CountFold,
 )
 
 
@@ -55,7 +55,7 @@ def whole[A: AggKernel](value: DynArray) raises -> DynScalar:
 
 def test_sumtyped() raises:
     var a: DynArray = array([1, 2, 3, 4, 5], int64)
-    var result = whole[Fold[SumKernel, Int64Type]](a)
+    var result = whole[Fold[SumFold, Int64Type]](a)
     assert_equal(result.as_int64().value(), 15)
 
 
@@ -66,39 +66,39 @@ def test_sumwith_nulls() raises:
     a.append(20)
     a.append_null()  # index 2 is null
     var col: DynArray = a.finish()
-    var result = whole[Fold[SumKernel, Int32Type]](col)
+    var result = whole[Fold[SumFold, Int32Type]](col)
     assert_equal(result.as_int64().value(), 30)
 
 
 def test_sumall_nulls() raises:
     var a: DynArray = nulls(5, int64)
-    var result = whole[Fold[SumKernel, Int64Type]](a)
+    var result = whole[Fold[SumFold, Int64Type]](a)
     assert_equal(result.as_int64().value(), 0)
 
 
 def test_sumempty() raises:
     var a: DynArray = array(int32)
-    var result = whole[Fold[SumKernel, Int32Type]](a)
+    var result = whole[Fold[SumFold, Int32Type]](a)
     assert_equal(result.as_int64().value(), 0)
 
 
 def test_sumuntyped() raises:
     var a: DynArray = array([1, 2, 3], int64)
-    var result = whole[Fold[SumKernel, Int64Type]](a)
+    var result = whole[Fold[SumFold, Int64Type]](a)
     assert_equal(result.as_int64().value(), 6)
 
 
 def test_mean_int() raises:
     """Mean of integers is a float64 scalar."""
     var a: DynArray = array([1, 2, 3, 4], int32)
-    var result = whole[Fold[MeanKernel, Int32Type]](a)
+    var result = whole[Fold[MeanFold, Int32Type]](a)
     assert_true(result.type() == float64)
     assert_equal(result.as_float64().value(), 2.5)
 
 
 def test_mean_float() raises:
     var a: DynArray = array([1.0, 2.0, 6.0], float64)
-    var result = whole[Fold[MeanKernel, Float64Type]](a)
+    var result = whole[Fold[MeanFold, Float64Type]](a)
     assert_equal(result.as_float64().value(), 3.0)
 
 
@@ -110,19 +110,19 @@ def test_mean_skips_nulls() raises:
     a.append_null()
     a.append(30)
     var arr: DynArray = a.finish()
-    var result = whole[Fold[MeanKernel, Int32Type]](arr)
+    var result = whole[Fold[MeanFold, Int32Type]](arr)
     assert_equal(result.as_float64().value(), 20.0)  # (10+20+30)/3
 
 
 def test_mean_all_null_is_null() raises:
     var a: DynArray = nulls(4, int64)
-    var result = whole[Fold[MeanKernel, Int64Type]](a)
+    var result = whole[Fold[MeanFold, Int64Type]](a)
     assert_false(result.is_valid())
 
 
 def test_mean_empty_is_null() raises:
     var a: DynArray = array(int32)
-    var result = whole[Fold[MeanKernel, Int32Type]](a)
+    var result = whole[Fold[MeanFold, Int32Type]](a)
     assert_false(result.is_valid())
 
 
@@ -140,14 +140,14 @@ def _strings(var items: List[String]) raises -> DynArray:
 
 def test_min_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[StringExtremum[MinOp, StringType]](a)
+    var r = whole[LexicalExtremum[MinOp, StringType]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "apple")
 
 
 def test_max_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[StringExtremum[MaxOp, StringType]](a)
+    var r = whole[LexicalExtremum[MaxOp, StringType]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "cherry")
 
@@ -160,10 +160,10 @@ def test_min_string_skips_nulls() raises:
     b.append_null()
     var a: DynArray = b.finish()
     assert_equal(
-        whole[StringExtremum[MinOp, StringType]](a).as_string().to_string(), "a"
+        whole[LexicalExtremum[MinOp, StringType]](a).as_string().to_string(), "a"
     )
     assert_equal(
-        whole[StringExtremum[MaxOp, StringType]](a).as_string().to_string(), "m"
+        whole[LexicalExtremum[MaxOp, StringType]](a).as_string().to_string(), "m"
     )
 
 
@@ -172,14 +172,14 @@ def test_min_string_all_null_is_null() raises:
     b.append_null()
     b.append_null()
     var a: DynArray = b.finish()
-    assert_false(whole[StringExtremum[MinOp, StringType]](a).is_valid())
-    assert_false(whole[StringExtremum[MaxOp, StringType]](a).is_valid())
+    assert_false(whole[LexicalExtremum[MinOp, StringType]](a).is_valid())
+    assert_false(whole[LexicalExtremum[MaxOp, StringType]](a).is_valid())
 
 
 def test_min_string_empty_is_null() raises:
     var b = StringBuilder(0)
     var a: DynArray = b.finish()
-    assert_false(whole[StringExtremum[MinOp, StringType]](a).is_valid())
+    assert_false(whole[LexicalExtremum[MinOp, StringType]](a).is_valid())
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +196,8 @@ def _date32(var days: List[Int]) raises -> DynArray:
 
 def test_min_max_date32() raises:
     var a = _date32([19000, 18500, 19000, 18800])
-    var mn = whole[Fold[MinKernel, Date32Type]](a)
-    var mx = whole[Fold[MaxKernel, Date32Type]](a)
+    var mn = whole[Fold[MinFold, Date32Type]](a)
+    var mx = whole[Fold[MaxFold, Date32Type]](a)
     assert_true(mn.type() == date32().to_dyn())  # dtype preserved
     assert_true(mx.type() == date32().to_dyn())
     assert_equal(mn.as_date32().value(), 18500)
@@ -211,10 +211,10 @@ def test_min_max_date32_skips_nulls() raises:
     b.append(Scalar[int32.native](18500))
     var a: DynArray = b.finish()
     assert_equal(
-        whole[Fold[MinKernel, Date32Type]](a).as_date32().value(), 18500
+        whole[Fold[MinFold, Date32Type]](a).as_date32().value(), 18500
     )
     assert_equal(
-        whole[Fold[MaxKernel, Date32Type]](a).as_date32().value(), 19000
+        whole[Fold[MaxFold, Date32Type]](a).as_date32().value(), 19000
     )
 
 
@@ -223,8 +223,8 @@ def test_min_max_date32_all_null_is_null() raises:
     b.append_null()
     b.append_null()
     var a: DynArray = b.finish()
-    assert_false(whole[Fold[MinKernel, Date32Type]](a).is_valid())
-    assert_false(whole[Fold[MaxKernel, Date32Type]](a).is_valid())
+    assert_false(whole[Fold[MinFold, Date32Type]](a).is_valid())
+    assert_false(whole[Fold[MaxFold, Date32Type]](a).is_valid())
 
 
 def test_min_max_timestamp_preserves_unit_tz() raises:
@@ -233,9 +233,9 @@ def test_min_max_timestamp_preserves_unit_tz() raises:
     b.append(Scalar[int64.native](1000))
     b.append(Scalar[int64.native](2000))
     var a: DynArray = b.finish()
-    var mn = whole[Fold[MinKernel, TimestampType]](a)
+    var mn = whole[Fold[MinFold, TimestampType]](a)
     assert_true(mn.type() == timestamp(second, "UTC").to_dyn())
     assert_equal(mn.as_timestamp().value(), 1000)
     assert_equal(
-        whole[Fold[MaxKernel, TimestampType]](a).as_timestamp().value(), 3000
+        whole[Fold[MaxFold, TimestampType]](a).as_timestamp().value(), 3000
     )

@@ -12,7 +12,7 @@ internal node vocabulary, so the bridge lives here, in the corpus, where it is
 countable.
 
 The aggregates used to be the worst of it —
-`AggExpr.of[NumericAgg[SumKernel, Int64Type]](x).alias("total")` — and needed
+`AggExpr.of[NumericAgg[SumFold, Int64Type]](x).alias("total")` — and needed
 nine shims. It turned out marrow already had `col("v", int64).sum()`, on
 `NumericValue`, documented in `Relation.aggregate` and used throughout the
 expression layer's own tests; the corpus was simply spelling it the long way. That is

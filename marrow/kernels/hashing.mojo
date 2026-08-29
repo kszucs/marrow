@@ -216,7 +216,7 @@ struct HashKernel[H: Hasher](Kernel):
             # same as the equivalent plain column, otherwise two batches with
             # different dictionaries would never group together.
             #
-            # Decoded by gather rather than through `cast`. `DictionaryCast`
+            # Decoded by gather rather than through `cast`. `DictionaryCastKernel`
             # does exactly this -- normalise the indices, `take` the values,
             # then a re-cast that is a no-op when the target *is* the value
             # type, which is the only way this called it. Reaching it imported

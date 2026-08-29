@@ -12,20 +12,20 @@ Two levels, and they answer different questions.
 - **``AggKernel``** — one aggregate, whole, **typed on what it consumes and
   produces** (``InArray`` / ``OutArray``): the output dtype from the input
   dtype, and one value per group. Every aggregate has one — ``Fold[K, V]``
-  wraps the level above, and ``StringExtremum``, ``Dispersion``, ``ValidCount``
+  wraps the level above, and ``LexicalExtremum``, ``Dispersion``, ``ValidCount``
   and ``DistinctCount`` have no fold algebra to wrap.
 
 Typing at the second level is deliberate, and it is what lets a single
 vocabulary serve both expression lanes: the comptime lane names an
 ``AggKernel`` as a type parameter, and the runtime lane resolves a *name* onto
-one through ``expr.runtime.aggregates.dispatch_agg`` before any state exists.
+one through ``expr.runtime.aggregates.resolve_aggregate`` before any state exists.
 Neither lane ever holds an erased aggregate, so the hot loop is fully typed
 both ways.
 
 No aggregate *name* is ever compared in this module. The ten names themselves
 live here, as the constants every kernel's ``Kernel.name`` is defined from.
 Both the *vocabulary* -- which names a frontend may say -- and the mapping of
-one onto ``Fold[SumKernel, V]`` need the expression layer, not this one.
+one onto ``Fold[SumFold, V]`` need the expression layer, not this one.
 """
 
 import std.math as math
@@ -127,7 +127,7 @@ trait FoldKernel(Kernel):
 
         Non-raising, so it runs at comptime; a violation is a build error naming
         the domain, not an `Error` at run time. No marker means "accepts
-        anything" — that is `CountKernel`, which reads validity and never touches
+        anything" — that is `CountFold`, which reads validity and never touches
         a value, and `min`/`max`, which need only a total order and get one
         from every fixed-width type.
         """
@@ -184,8 +184,8 @@ trait FoldKernel(Kernel):
 # The vocabulary — every aggregate name, once.
 #
 # **No aggregate name is ever *compared* in this module**, and that has not
-# changed: mapping `"sum"` onto `Fold[SumKernel, V]` is a runtime-dtype
-# question and lives in `expr/runtime/aggregates.mojo`, with `dispatch_agg`.
+# changed: mapping `"sum"` onto `Fold[SumFold, V]` is a runtime-dtype
+# question and lives in `expr/runtime/aggregates.mojo`, with `resolve_aggregate`.
 # What lives here is the *catalog* — the strings themselves — because they are
 # the kernels' own `Kernel.name` values and every one below is defined from
 # them.
@@ -278,7 +278,7 @@ struct ProductOp(WideningOp):
 # time, so `sum(date)` is a build error rather than a silent nonsense or a runtime
 # raise.
 #
-# **No marker means "accepts anything"** — that is `CountKernel`, which reads
+# **No marker means "accepts anything"** — that is `CountFold`, which reads
 # validity and never touches a value.
 #
 # Markers rather than a `comptime numeric_only: Bool` because a flag can be
@@ -340,8 +340,8 @@ struct Widening[Op: WideningOp](ArithmeticAgg):
         return acc
 
 
-comptime SumKernel = Widening[SumOp]
-comptime ProductKernel = Widening[ProductOp]
+comptime SumFold = Widening[SumOp]
+comptime ProductFold = Widening[ProductOp]
 
 
 trait MinMaxOp(Kernel):
@@ -418,11 +418,11 @@ struct MinMax[Op: MinMaxOp](FoldKernel):
         return acc
 
 
-comptime MinKernel = MinMax[MinOp]
-comptime MaxKernel = MinMax[MaxOp]
+comptime MinFold = MinMax[MinOp]
+comptime MaxFold = MinMax[MaxOp]
 
 
-struct CountKernel(FoldKernel):
+struct CountFold(FoldKernel):
     """Counts valid (non-null) values. `combine` leaves the accumulator
     untouched — the result is the per-group valid count that every kernel keeps,
     returned by `finalize`."""
@@ -451,7 +451,7 @@ struct CountKernel(FoldKernel):
         return Scalar[A](count)
 
 
-struct MeanKernel(ArithmeticAgg):
+struct MeanFold(ArithmeticAgg):
     """Sums into a float64 accumulator; divides by the valid count on finish."""
 
     comptime name = MEAN
@@ -585,7 +585,7 @@ struct AllKernel(BoolReduceKernel):
 # The default aggregate state: an accumulator column plus a valid-count column.
 # `acc` is a real `PrimitiveBuilder[K.AccType[V]]` (not erased), so `update` /
 # `finish` carry no dtype dispatch at all — the runtime dtype was resolved once
-# at the boundary, by `dispatch_agg` in the expression layer, before this type
+# at the boundary, by `resolve_aggregate` in the expression layer, before this type
 # existed. The count column drives NULL output for empty/all-null groups and
 # the `mean` divisor.
 #
@@ -824,7 +824,7 @@ struct AggState[K: FoldKernel, V: PrimitiveType](Movable):
 # much as the ones that do. Its input and its output are **typed**
 # (`InArray` / `OutArray`), and that is the whole point: it is one vocabulary
 # the comptime lane names as a type parameter and the runtime lane resolves a
-# *name* onto through `dispatch_agg`, so neither ever holds an erased
+# *name* onto through `resolve_aggregate`, so neither ever holds an erased
 # aggregate.
 #
 # This replaced a second, *erased* copy of the same aggregates. The pair
@@ -841,7 +841,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
     """One aggregate, **typed on what it consumes and produces**.
 
     Five implementations, named for what they compute rather than for what they
-    consume: `Fold[K, V]`, `StringExtremum[Op, T]`, `Dispersion[ddof, root, V]`,
+    consume: `Fold[K, V]`, `LexicalExtremum[Op, T]`, `Dispersion[ddof, root, V]`,
     `ValidCount` and `DistinctCount[exact]`.
 
     **Typed first, narrowed once at the boundary — the same shape as every
@@ -864,7 +864,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
 
     Every conformer answers with a concrete array, including the two whose
     *algebra* is dtype-generic. `Fold[K, V]` eats a `PrimitiveArray[V]`,
-    `StringExtremum[Op, T]` a `BinaryLikeArray[T]`, `Dispersion[…, V]` a
+    `LexicalExtremum[Op, T]` a `BinaryLikeArray[T]`, `Dispersion[…, V]` a
     `PrimitiveArray[V]` — and `ValidCount[A]` / `DistinctCount[exact, A]` eat
     an `A`, because a cardinality is dtype-generic in what it *computes* and
     not in how it *reads*: a valid count wants a validity bitmap and a distinct
@@ -979,7 +979,7 @@ trait AggKernel(Deinitable, Kernel, Movable):
 
         Static, where the rest of the contract is not: a `mut self` method
         cannot be called on a temporary, so an instance `grouped` would turn
-        every `Fold[SumKernel, Int64Type].grouped(...)` into two statements. It
+        every `Fold[SumFold, Int64Type].grouped(...)` into two statements. It
         needs no state of its own — it constructs one."""
         var state = Self(input.type())
         state.update(groups, input)
@@ -990,7 +990,7 @@ trait Foldable(AggKernel):
     """An `AggKernel` that wraps a lane algebra, and can name it.
 
     `Fold[K]` is the only conformer, and `Lane` is the `K` it was built from.
-    `StringExtremum` and `DistinctCount` deliberately do not conform: a bytewise
+    `LexicalExtremum` and `DistinctCount` deliberately do not conform: a bytewise
     scan and a hash set have no identity, combine or finalize.
 
     This exists so the expression layer can ask *at compile time* whether an
@@ -1277,7 +1277,7 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
         return out.finish()
 
 
-struct StringExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
+struct LexicalExtremum[Op: MinMaxOp, T: StringLikeType](AggKernel):
     """`min`/`max` over a string column — a bytewise (lexicographic) scan,
     matching Arrow's `hash_min`/`hash_max`.
 
@@ -1368,7 +1368,7 @@ struct ValidCount[A: Array](AggKernel):
     one-shot form it replaced.
 
     The comptime lane does **not** route numeric `count` here — it fuses
-    `Aggregate[Fold[CountKernel], A]` when its operand is numeric, which pays
+    `Aggregate[Fold[CountFold], A]` when its operand is numeric, which pays
     one typed `bitmap.test()` per row where this pays a `DynArray._dispatch`
     walk: a linear `comptime for` over 37 variant arms plus an indirect call
     *per row*, inside an already cache-hostile random-write loop. Measured at
@@ -1381,7 +1381,7 @@ struct ValidCount[A: Array](AggKernel):
     and for a `count` named at run time.
     """
 
-    comptime name = CountKernel.name
+    comptime name = CountFold.name
     comptime InArray = Self.A
     comptime OutArray = Int64Array
 
@@ -1589,48 +1589,3 @@ struct DistinctCount[exact: Bool, A: Array](AggKernel):
 # ---------------------------------------------------------------------------
 # Runtime dtype -> array type
 # ---------------------------------------------------------------------------
-
-
-def dispatch_agg_array[
-    R: Movable, //, Func: def[A: Array]() raises -> R
-](in_dtype: DynType, func: Func) raises -> R:
-    """Resolve a runtime dtype to the **array type** that holds it, and run
-    `func` at that type.
-
-    The counterpart, for aggregates, of the `dispatch` static every value
-    kernel exposes (`RapidHashKernel.dispatch`, `kernels/hashing.mojo`). Those
-    narrow an erased *array* and run immediately, because they are stateless.
-    An aggregate is a state machine that must exist before its first morsel, so
-    this narrows a *dtype* instead and hands back whatever the caller builds at
-    that type — an accumulator, or an operator holding one.
-
-    It is what lets `ValidCount[A]` and `DistinctCount[exact, A]` be typed at
-    all. Both are dtype-generic in what they *compute* — a cardinality is an
-    int64 whatever was counted — but not in how they *read*: a valid count
-    wants a validity bitmap and a distinct count wants to hash values, and both
-    are faster knowing the array type than walking an erased one per row.
-    Without this they had to declare `InArray = DynArray`, which made
-    `AggKernel.InArray` mean "some column-ish thing" and put an unchecked
-    reinterpret at every call site.
-
-    Three arms rather than one ladder over every layout: each existing family
-    dispatcher already knows its own array, and `dispatch_primitive` spans
-    numeric, temporal, interval and decimal. A layout outside them raises here,
-    at plan time, rather than at the first morsel.
-    """
-    if in_dtype.is_bool():
-        return func[BoolArray]()
-    elif in_dtype.is_string() or in_dtype.is_large_string():
-
-        def stringly[T: StringLikeType](d: T) raises {imm func} -> R:
-            return func[BinaryLikeArray[T]]()
-
-        return in_dtype.dispatch_stringlike(stringly)
-    elif in_dtype.is_primitive():
-
-        def primitive[T: PrimitiveType](d: T) raises {imm func} -> R:
-            return func[PrimitiveArray[T]]()
-
-        return in_dtype.dispatch_primitive(primitive)
-    else:
-        raise Error("no array type for ", in_dtype, " columns")

@@ -32,11 +32,11 @@ from ...arrays import BinaryLikeArray, PrimitiveArray, StructArray
 from ...buffers import Bitmap
 from ...dtypes import BoolType, DynType, NumericType, StringLikeType
 from ...kernels.cast import (
-    BoolToNum as BoolToNumKernel,
-    NumToBool as NumToBoolKernel,
-    NumToString as NumToStringKernel,
-    NumericCast as NumericCastKernel,
-    StringToNum as StringToNumKernel,
+    BoolToNumKernel,
+    NumToBoolKernel,
+    NumToStringKernel,
+    NumericCastKernel,
+    StringToNumKernel,
 )
 from ...schema import Schema
 from ..logical import Shape

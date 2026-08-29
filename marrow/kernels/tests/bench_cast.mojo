@@ -25,7 +25,7 @@ from ...dtypes import (
     second,
     millisecond,
 )
-from ...kernels.cast import cast, BinaryLikeCast, NumericCast
+from ...kernels.cast import cast, BinaryLikeCastKernel, NumericCastKernel
 from ...utils.testing import Benchmark
 
 
@@ -40,7 +40,7 @@ def _bench_int32_to_float64(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(NumericCast.apply[Int32Type, Float64Type, safe=True](src)))
+        keep(len(NumericCastKernel.apply[Int32Type, Float64Type, safe=True](src)))
 
     b.iter(call)
     keep(src)
@@ -69,7 +69,7 @@ def _bench_int64_to_int32_unsafe(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(NumericCast.apply[Int64Type, Int32Type, safe=False](src)))
+        keep(len(NumericCastKernel.apply[Int64Type, Int32Type, safe=False](src)))
 
     b.iter(call)
     keep(src)
@@ -142,7 +142,7 @@ def bench_timestamp_upscale_1m(mut b: Benchmark) raises:
 #
 # Parquet `BYTE_ARRAY` columns arrive as `binary`, and the string kernels are
 # bound on `StringLikeType`, so every string query spells `.cast(string)`.
-# `BinaryLikeCast.apply` is a pure relabel when the offset widths match, which
+# `BinaryLikeCastKernel.apply` is a pure relabel when the offset widths match, which
 # `binary` → `string` satisfies — so the *entire* cost of these rows is the
 # `safe` UTF-8 validation guard. The three cases below separate that out:
 #
@@ -168,7 +168,7 @@ def _url_binary(n: Int) raises -> BinaryArray:
                 "#fragment",
             )
         )
-    return BinaryLikeCast.apply[StringType, BinaryType, False](b.finish())
+    return BinaryLikeCastKernel.apply[StringType, BinaryType, False](b.finish())
 
 
 def _text_binary(n: Int) raises -> BinaryArray:
@@ -179,7 +179,7 @@ def _text_binary(n: Int) raises -> BinaryArray:
     var b = StringBuilder(n)
     for i in range(n):
         b.append(String("Здравствуйте, мир — строка ", i, " ünïcødé"))
-    return BinaryLikeCast.apply[StringType, BinaryType, False](b.finish())
+    return BinaryLikeCastKernel.apply[StringType, BinaryType, False](b.finish())
 
 
 def _bench_binary_to_string_safe(mut b: Benchmark, n: Int) raises:
@@ -188,7 +188,7 @@ def _bench_binary_to_string_safe(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(BinaryLikeCast.apply[BinaryType, StringType, True](src)))
+        keep(len(BinaryLikeCastKernel.apply[BinaryType, StringType, True](src)))
 
     b.iter(call)
     keep(src)
@@ -212,7 +212,7 @@ def _bench_binary_to_string_unsafe(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(BinaryLikeCast.apply[BinaryType, StringType, False](src)))
+        keep(len(BinaryLikeCastKernel.apply[BinaryType, StringType, False](src)))
 
     b.iter(call)
     keep(src)
@@ -236,7 +236,7 @@ def _bench_binary_to_string_utf8_safe(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(BinaryLikeCast.apply[BinaryType, StringType, True](src)))
+        keep(len(BinaryLikeCastKernel.apply[BinaryType, StringType, True](src)))
 
     b.iter(call)
     keep(src)
@@ -249,12 +249,12 @@ def bench_binary_to_string_utf8_safe_100k(mut b: Benchmark) raises:
 def _bench_string_to_string_relabel(mut b: Benchmark, n: Int) raises:
     """Control — `bytes_to_text` is False, so no guard is compiled in at all."""
     var src = _url_binary(n)
-    var s = BinaryLikeCast.apply[BinaryType, StringType, False](src)
+    var s = BinaryLikeCastKernel.apply[BinaryType, StringType, False](src)
     b.throughput(BenchMetric.elements, n)
 
     @always_inline
     def call() raises {imm}:
-        keep(len(BinaryLikeCast.apply[StringType, StringType, True](s)))
+        keep(len(BinaryLikeCastKernel.apply[StringType, StringType, True](s)))
 
     b.iter(call)
     keep(s)

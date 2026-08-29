@@ -3,7 +3,7 @@
 `SELECT g, sum(a), min(b) FROM orders GROUP BY g`. Keys and aggregate inputs
 are comptime `Column[Int64Type]` nodes and the aggregates are `Sum` / `Min`, so
 kernel *and* input dtype are known at compile time: the plan holds a direct
-`AggState[SumKernel, Int64Type]` / `AggState[MinKernel, Int64Type]` and nothing
+`AggState[SumFold, Int64Type]` / `AggState[MinFold, Int64Type]` and nothing
 interprets an aggregate at run time.
 
 **It is `query_streaming_agg_fused.mojo` with a numeric group key**, and that
@@ -48,7 +48,7 @@ def main() raises:
 
     var aggs = List[DynValue]()
     # The fluent spelling CLAUDE.md mandates, and the only one that compiles:
-    # `Sum[A]` puts `A` under a projection (`Fold[SumKernel, A.Type]`), so `A`
+    # `Sum[A]` puts `A` under a projection (`Fold[SumFold, A.Type]`), so `A`
     # is not inferrable from a constructor argument. `col(...).sum()` names it.
     aggs.append(DynValue(col("a", int64).sum().alias("total")))
     aggs.append(DynValue(col("b", int64).min().alias("smallest")))

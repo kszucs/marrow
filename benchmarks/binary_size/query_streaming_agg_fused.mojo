@@ -3,12 +3,12 @@
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name` — the same query as
 `query_streaming_agg.mojo`, but every value is comptime: the key is a
 `StringColumn[StringType]`, and `col("a", int64).sum()` resolves to
-`Aggregate[Fold[SumKernel, Int64Type], Column[Int64Type]]`. Kernel *and* input
+`Aggregate[Fold[SumFold, Int64Type], Column[Int64Type]]`. Kernel *and* input
 dtype are known at compile time, so the plan holds a direct
-`AggState[SumKernel, Int64Type]` / `AggState[MinKernel, Int64Type]`.
+`AggState[SumFold, Int64Type]` / `AggState[MinFold, Int64Type]`.
 
 Nothing interprets an aggregate here — no function-name switch, no per-dtype
-`dispatch_agg` ladder over ten kernels, and no erased operand. Everything the
+`resolve_aggregate` ladder over ten kernels, and no erased operand. Everything the
 runtime-named variant must keep alive is dead code in this binary, and the
 `__text` delta between the two is the cost of resolving an aggregate at run
 time.
@@ -18,7 +18,7 @@ time.
 **Ported from the old expression package on 2026-08-29; the recorded baseline
 predates the port and is stale.** The aggregates are now spelled fluently
 (`col("a", int64).sum().alias(...)`) rather than by naming a kernel through
-`AggFunc.of[Fold[SumKernel, Int64Type]]()` — which is what CLAUDE.md mandates
+`AggFunc.of[Fold[SumFold, Int64Type]]()` — which is what CLAUDE.md mandates
 and, more to the point, the only spelling that compiles: `Sum[A]` puts `A`
 under a projection, so it is not inferrable from a constructor argument. The
 resolved node is the same one. `Aggregate` also derives its output schema

@@ -3,7 +3,7 @@
 `SELECT name, sum(a), min(b) FROM orders GROUP BY name` — a fused comptime key
 (`col("name", string)`), but the aggregates resolved from a function *name*
 through `RuntimeAggregate` (`marrow/expr/runtime/aggregates.mojo`), as the
-Python / ibis frontend does. Resolution goes through `dispatch_agg`, which
+Python / ibis frontend does. Resolution goes through `resolve_aggregate`, which
 switches on the name and then on the operand's runtime dtype, so every kernel
 in the catalog and every dtype arm each one accepts stays reachable.
 

@@ -1244,7 +1244,7 @@ def test_bounds_bitmapview_load_bits_with_bit_offset() raises:
 
 def test_bounds_bitmapview_filter_with_bit_offset() raises:
     """Filter through views that carry a sub-byte bit offset — the shape a
-    sliced array hands to `Filter.apply`.
+    sliced array hands to `FilterKernel.apply`.
 
     Both the selection and the data are read with `load_bits`, so an offset
     that truncates the top of each 64-bit word drops rows from the answer.

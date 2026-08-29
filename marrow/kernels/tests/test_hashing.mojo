@@ -32,7 +32,7 @@ from ...dtypes import (
 )
 from ...arrays import StructArray
 from ...dtypes import Field, struct_
-from ...kernels.aggregate import Fold, SumKernel
+from ...kernels.aggregate import Fold, SumFold
 from ...kernels.groupby import HashGrouping
 
 from ...arrays import UInt64Array, Int64Array
@@ -392,7 +392,7 @@ def _summed(var key: DynArray, var vals: DynArray) raises -> Int64Array:
     keys.append(key^)
     var g = HashGrouping()
     var groups = g.assign(keys, len(vals))
-    return Fold[SumKernel, Int32Type].grouped(groups, vals.as_int32().copy())
+    return Fold[SumFold, Int32Type].grouped(groups, vals.as_int32().copy())
 
 
 def test_groupby_date32_key() raises:

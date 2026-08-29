@@ -47,6 +47,7 @@ from std.os import abort
 from .dtypes import (
     DynType,
     BinaryLikeType,
+    StringLikeType,
     BinaryType,
     Date32Type,
     Date64Type,
@@ -2882,3 +2883,59 @@ struct DynArray(
             return DictionaryArray(data)
         else:
             raise Error("from_data: unsupported dtype")
+
+
+def dispatch_array[
+    R: Movable, //, Func: def[A: Array]() raises -> R
+](in_dtype: DynType, func: Func) raises -> R:
+    """Resolve a runtime dtype to the **array type** that holds it, and run
+    `func` at that type.
+
+    The tenth member of the `dispatch_*` family, and the only free function in
+    it: the other nine are methods on `DynType`, which narrow a dtype to a
+    *dtype* parameter, while this one narrows it to an *array* type -- so it
+    belongs beside `DynArray` rather than on `DynType`.
+
+    It was `kernels.aggregate.dispatch_agg_array`, which named neither of the
+    two things it does: it takes no array, and knows nothing about aggregates.
+    It was also the only free `dispatch_*` in the kernels package, and read as
+    a sibling of `expr.runtime.resolve_aggregate` (then `dispatch_agg`), a
+    completely different operation in a different layer.
+
+    The counterpart of the `dispatch` static every value kernel exposes
+    (`RapidHashKernel.dispatch`, `kernels/hashing.mojo`). Those
+    narrow an erased *array* and run immediately, because they are stateless.
+    An aggregate is a state machine that must exist before its first morsel, so
+    this narrows a *dtype* instead and hands back whatever the caller builds at
+    that type — an accumulator, or an operator holding one.
+
+Its motivating callers are `ValidCount[A]` and `DistinctCount[exact, A]`,
+    which it is what lets be typed at all. Both are dtype-generic in what they *compute* — a cardinality is an
+    int64 whatever was counted — but not in how they *read*: a valid count
+    wants a validity bitmap and a distinct count wants to hash values, and both
+    are faster knowing the array type than walking an erased one per row.
+    Without this they had to declare `InArray = DynArray`, which made
+    `AggKernel.InArray` mean "some column-ish thing" and put an unchecked
+    reinterpret at every call site.
+
+    Three arms rather than one ladder over every layout: each existing family
+    dispatcher already knows its own array, and `dispatch_primitive` spans
+    numeric, temporal, interval and decimal. A layout outside them raises here,
+    at plan time, rather than at the first morsel.
+    """
+    if in_dtype.is_bool():
+        return func[BoolArray]()
+    elif in_dtype.is_string() or in_dtype.is_large_string():
+
+        def stringly[T: StringLikeType](d: T) raises {imm func} -> R:
+            return func[BinaryLikeArray[T]]()
+
+        return in_dtype.dispatch_stringlike(stringly)
+    elif in_dtype.is_primitive():
+
+        def primitive[T: PrimitiveType](d: T) raises {imm func} -> R:
+            return func[PrimitiveArray[T]]()
+
+        return in_dtype.dispatch_primitive(primitive)
+    else:
+        raise Error("no array type for ", in_dtype, " columns")

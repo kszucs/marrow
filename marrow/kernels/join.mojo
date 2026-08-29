@@ -122,7 +122,7 @@ from ..dtypes import (
     null,
 )
 from ..execution import ExecContext
-from .filter import Take, filter, take
+from .filter import TakeKernel, filter, take
 from .hashtable import SwissHashTable
 from .partition import RadixPartitioner
 from .hashing import HashKernel
@@ -679,7 +679,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         def build_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises {mut tables, imm} -> Tuple[StructArray, Int32Array]:
-            var k = Take.apply(left_keys, rows)
+            var k = TakeKernel.apply(left_keys, rows)
             tables[i].build_hashes(part_hashes)
             return (k^, rows.copy())
 
@@ -726,7 +726,7 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
         def probe_partition(
             i: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises {imm} -> IndexPairs:
-            var probe_keys_i = Take.apply(right_keys, rows)
+            var probe_keys_i = TakeKernel.apply(right_keys, rows)
             var pairs = self._tables[i].probe(
                 self._left_partition_keys[i],
                 probe_keys_i,
@@ -735,8 +735,8 @@ struct HashJoin[Hash: Hasher = RapidHash64]:
                 hashes=part_hashes.copy(),
             )
             return JoinIndex(
-                Take.apply(self._left_partition_rows[i], pairs[0]),
-                Take.apply(rows, pairs[1]),
+                TakeKernel.apply(self._left_partition_rows[i], pairs[0]),
+                TakeKernel.apply(rows, pairs[1]),
             )
 
         # 1. Hash probe side in parallel; 2-3. partition + parallel probe.

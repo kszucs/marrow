@@ -44,7 +44,7 @@ from ..dtypes import (
     TemporalType,
     int64,
 )
-from ..kernels.aggregate import CountKernel, Fold
+from ..kernels.aggregate import CountFold, Fold
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -217,14 +217,14 @@ def scan(var path: String, var schema: Schema) raises -> DynRelation:
     return DynRelation(ParquetScan(path^, schema^))
 
 
-def count_star() -> Aggregate[Fold[CountKernel, Int64Type], Literal[Int64Type]]:
+def count_star() -> Aggregate[Fold[CountFold, Int64Type], Literal[Int64Type]]:
     """`COUNT(*)` — how many rows each group has.
 
     Not the same aggregate as `col("x", int64).count()`, which counts the
     *non-null* values of `x`; the two differ on any nullable column, and
     `COUNT(*)` is what ~30 of ClickBench's 43 queries ask for.
 
-    It needs no new kernel and no new node. `CountKernel` counts valid values
+    It needs no new kernel and no new node. `CountFold` counts valid values
     and a literal is valid on every row, so the valid-count of a constant
     column *is* the row count. This is that expression, under the name SQL
     gives it, so callers stop rediscovering the trick.

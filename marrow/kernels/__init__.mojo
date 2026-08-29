@@ -5,26 +5,34 @@ Re-exports the compute surface from the submodules so callers can
 ``mk.filter``, ``mk.cast``, ``mk.concat`` directly.
 
 **An aggregate is not applied like that, and the example used to say it was.**
-This docstring advertised ``mk.SumKernel.dispatch``; ``SumKernel`` is
-``Widening[SumOp]``, a ``FoldKernel``, which has no ``dispatch``, no ``reduce``
-and no ``apply`` — it is an *algebra* (identity / combine / finalize) and names
-no array type at all. What applies one to a column is ``Fold[K, V]``, an
-``AggKernel``, driven ``reserve`` / ``update`` / ``finish`` or in one call
-through ``AggKernel.grouped``. Both levels plus ``Foldable`` and
-``dispatch_agg_array`` are re-exported below, so the family's actual entry
-points are reachable from this namespace rather than only its building blocks.
+This docstring advertised ``mk.SumKernel.dispatch``; ``SumFold`` (as it is now
+spelled) is ``Widening[SumOp]``, a ``FoldKernel``, which has no ``dispatch``,
+no ``reduce`` and no ``apply`` — it is an *algebra* (identity / combine /
+finalize) and names no array type at all. What applies one to a column is
+``Fold[K, V]``, an ``AggKernel``, driven ``reserve`` / ``update`` / ``finish``
+or in one call through ``AggKernel.grouped``. Both levels plus ``Foldable`` are
+re-exported below, so the family's actual entry points are reachable from this
+namespace rather than only its building blocks.
+
+**The ``*Fold`` suffix is what makes that distinction visible**, and it is why
+the whole-array folds no longer end in ``Kernel``: a name ending ``Kernel``
+here is something you *apply*, and a fold is something you *drive*.
 
 **The boundary, and why there is one.** Everything a caller *computes with* is
 re-exported here: the element-wise kernels, the aggregates, and the
 free-function verbs. Two things are deliberately not, and both are reached
 through their own submodule rather than through this namespace:
 
-  - **`MinKernel` / `MaxKernel`**, because the name means two different things.
-    `numeric.MinKernel` is the element-wise binary minimum of two arrays;
-    `aggregate.MinKernel` is `MinMax[MinOp]`, a whole-array fold. A flat
-    namespace cannot hold both, so neither is re-exported — spell the one you
-    mean (`from marrow.kernels.aggregate import MinKernel`). Their `*Op`
-    building blocks (`MinOp`, `MaxOp`, `SumOp`, `ProductOp`) stay with them.
+  - **The `*Op` building blocks** — `MinOp`, `MaxOp`, `SumOp`, `ProductOp`.
+    They are the algebras the folds are assembled from, not things a caller
+    applies.
+
+    This entry used to read "`MinKernel` / `MaxKernel`, because the name means
+    two different things": `numeric.MinKernel` is the element-wise binary
+    minimum of two arrays, `aggregate.MinKernel` was `MinMax[MinOp]`, a
+    whole-array fold, and a flat namespace could hold neither. Renaming the
+    folds to `MinFold` / `MaxFold` dissolved the collision, so both are now
+    re-exported and the workaround is gone.
   - **The hash and partition machinery** — `groupby`, `join`, `hashtable`,
     `hashing`, `partition` — and the interval algebra in `bounds`. These are
     implementation modules that `expr` composes, not kernels a caller applies
@@ -91,16 +99,19 @@ from .aggregate import (
     Fold,
     FoldKernel,
     Foldable,
-    SumKernel,
-    ProductKernel,
-    MeanKernel,
-    CountKernel,
+    SumFold,
+    ProductFold,
+    MeanFold,
+    CountFold,
+    MinFold,
+    MaxFold,
     AnyKernel,
     AllKernel,
-    dispatch_agg_array,
 )
 from .numeric import (
     AddKernel,
+    MinKernel,
+    MaxKernel,
     SubKernel,
     MulKernel,
     DivKernel,
@@ -196,6 +207,6 @@ from .distinct import (
     count_distinct,
     approx_count_distinct,
 )
-from .filter import Filter, Take, filter, drop_null, take
+from .filter import FilterKernel, TakeKernel, filter, drop_null, take
 from .membership import IsInKernel, is_in
 from .sort import SortIndices, sort_indices, sort

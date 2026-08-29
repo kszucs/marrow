@@ -43,7 +43,7 @@ program built from `col("a", int64)` reaches `AggKernel` conformers
 directly and never this ladder.
 """
 
-from ...arrays import Array
+from ...arrays import Array, dispatch_array
 from ...dtypes import (
     DynType,
     NumericType,
@@ -53,7 +53,6 @@ from ...dtypes import (
     int64,
 )
 from ...kernels.aggregate import (
-    dispatch_agg_array,
     APPROX_COUNT_DISTINCT,
     COUNT,
     COUNT_DISTINCT,
@@ -70,15 +69,15 @@ from ...kernels.aggregate import (
     AggKernel,
     Dispersion,
     DistinctCount,
-    MaxKernel,
+    MaxFold,
     MaxOp,
-    MeanKernel,
-    MinKernel,
+    MeanFold,
+    MinFold,
     MinOp,
     Fold,
-    ProductKernel,
-    StringExtremum,
-    SumKernel,
+    ProductFold,
+    LexicalExtremum,
+    SumFold,
     ValidCount,
 )
 from ...schema import Schema
@@ -146,7 +145,7 @@ def _fold_agg[
             )
 
 
-def dispatch_agg[
+def resolve_aggregate[
     R: Movable, //, Func: def[Agg: AggKernel]() raises -> R
 ](name: StringSlice, in_dtype: DynType, func: Func) raises -> R:
     """**The** name x dtype ladder — one, not two.
@@ -172,7 +171,7 @@ def dispatch_agg[
             else:
                 return func[DistinctCount[False, A]]()
 
-        return dispatch_agg_array(in_dtype, counted)
+        return dispatch_array(in_dtype, counted)
     elif name == VARIANCE or name == STDDEV:
         # `ddof=0` — the population form, Arrow's default. A sample variance is
         # `Dispersion[1, root, V]`: two more names here and nothing else.
@@ -198,22 +197,22 @@ def dispatch_agg[
         # other's body.
         def extremum[T: StringLikeType](d: T) raises {imm func, imm name} -> R:
             if name == MIN:
-                return func[StringExtremum[MinOp, T]]()
+                return func[LexicalExtremum[MinOp, T]]()
             else:
-                return func[StringExtremum[MaxOp, T]]()
+                return func[LexicalExtremum[MaxOp, T]]()
 
         if in_dtype.is_string() or in_dtype.is_large_string():
             return in_dtype.dispatch_stringlike(extremum)
         elif name == MIN:
-            return _fold_agg[K=MinKernel](in_dtype, func)
+            return _fold_agg[K=MinFold](in_dtype, func)
         else:
-            return _fold_agg[K=MaxKernel](in_dtype, func)
+            return _fold_agg[K=MaxFold](in_dtype, func)
     elif name == SUM:
-        return _fold_agg[K=SumKernel](in_dtype, func)
+        return _fold_agg[K=SumFold](in_dtype, func)
     elif name == PRODUCT:
-        return _fold_agg[K=ProductKernel](in_dtype, func)
+        return _fold_agg[K=ProductFold](in_dtype, func)
     elif name == MEAN:
-        return _fold_agg[K=MeanKernel](in_dtype, func)
+        return _fold_agg[K=MeanFold](in_dtype, func)
     else:
         raise Error("unknown aggregate '", name, "'")
 
@@ -336,7 +335,7 @@ struct RuntimeAggregate(Value):
         def job[Agg: AggKernel]() raises {imm} -> DynType:
             return Agg.dtype(d)
 
-        return dispatch_agg(self._name, d, job)
+        return resolve_aggregate(self._name, d, job)
 
     # `empty()` — the one-row answer over an input that produced no column at
     # all — used to live here, a four-arm switch on `_name` that only the
@@ -358,7 +357,7 @@ struct RuntimeAggregate(Value):
         """Resolve the name against the input dtype and hand back a **fully
         typed** operator, in the box every operator already pays for.
 
-        This is why `to_operator` takes a schema. `dispatch_agg` binds a
+        This is why `to_operator` takes a schema. `resolve_aggregate` binds a
         concrete `Agg`, so the job below constructs
         `BufferedAggregateOperator[Fold[K, V], RuntimeValue]` outright: no
         erased aggregate state, no per-morsel narrowing, no second box.
@@ -376,7 +375,7 @@ struct RuntimeAggregate(Value):
                 self._input.copy(), bindings.copy(), grouped, d
             )
 
-        return dispatch_agg(self._name, d, job)
+        return resolve_aggregate(self._name, d, job)
 
     def alias(self, var name: String) raises -> Self:
         """Rename this aggregate. Changes **only** `_alias`, so the resolver

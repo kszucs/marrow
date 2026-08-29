@@ -224,7 +224,7 @@ def test_count_skips_nulls() raises:
 
 
 def test_count_star_counts_every_row_including_nulls() raises:
-    """`count_star()` is `CountKernel` over a literal, and a literal is valid
+    """`count_star()` is `CountFold` over a literal, and a literal is valid
     on every row — so the valid-count of a constant column is the row count.
     The trick is only correct if it survives a *nullable* input column, which
     is the whole point of testing it against one.

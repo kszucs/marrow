@@ -21,20 +21,20 @@ from ....kernels.aggregate import (
     Dispersion,
     DistinctCount,
     Fold,
-    MaxKernel,
+    MaxFold,
     MaxOp,
-    MeanKernel,
-    MinKernel,
+    MeanFold,
+    MinFold,
     MinOp,
-    ProductKernel,
-    StringExtremum,
-    SumKernel,
+    ProductFold,
+    LexicalExtremum,
+    SumFold,
     ValidCount,
 )
 from ....tabular import RecordBatch, record_batch
 from ...builders import col, table
 from ...logical import DynValue, Shape
-from ..aggregates import RuntimeAggregate, dispatch_agg
+from ..aggregates import RuntimeAggregate, resolve_aggregate
 from ..values import column
 
 
@@ -70,7 +70,7 @@ def _out_dtype(name: String, in_dtype: DynType) raises -> DynType:
     def job[Agg: AggKernel]() raises {imm} -> DynType:
         return Agg.dtype(in_dtype)
 
-    return dispatch_agg(name, in_dtype, job)
+    return resolve_aggregate(name, in_dtype, job)
 
 
 def test_named_aggregate_resolution_answers_dtype_and_fold_together() raises:
@@ -78,13 +78,13 @@ def test_named_aggregate_resolution_answers_dtype_and_fold_together() raises:
 
     `agg_out_dtype` answers from each kernel's own `dtype` static rather than
     restating a constant, so `min` over a string column reports `string`
-    because `StringExtremum` says so — not because an arm here spells it.
+    because `LexicalExtremum` says so — not because an arm here spells it.
     """
     assert_true(_out_dtype("count_distinct", DynType(string)) == int64)
     assert_true(_out_dtype("count", DynType(string)) == int64)
     assert_true(_out_dtype("min", DynType(string)) == string)
     assert_true(_out_dtype("max", DynType(string)) == string)
-    # `sum(int32)` widens; the widening rule is `SumKernel`'s, not the
+    # `sum(int32)` widens; the widening rule is `SumFold`'s, not the
     # catalog's.
     assert_true(_out_dtype("sum", DynType(int32)) == int64)
     assert_true(_out_dtype("variance", DynType(int64)) == float64)

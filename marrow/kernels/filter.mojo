@@ -46,7 +46,7 @@ from .core import Kernel
 from ..execution import ExecContext
 
 
-struct Filter(Kernel):
+struct FilterKernel(Kernel):
     """Selection kernel — keep elements where a boolean ``mask`` is True.
 
     The typed leaves are the ``apply`` overloads below; each operates directly on
@@ -66,7 +66,7 @@ struct Filter(Kernel):
         """Resolve `array`'s runtime dtype and filter it by `mask`."""
         var dt = array.dtype()
         if dt == bool_:
-            return Filter.apply(array.as_bool(), mask, ctx).to_dyn()
+            return FilterKernel.apply(array.as_bool(), mask, ctx).to_dyn()
         elif dt.is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
@@ -76,35 +76,35 @@ struct Filter(Kernel):
             # decimal columns raising `unsupported dtype`.
 
             def primitive[T: PrimitiveType](d: T) raises {imm} -> DynArray:
-                return Filter.apply(array.as_primitive[T](), mask, ctx).to_dyn()
+                return FilterKernel.apply(array.as_primitive[T](), mask, ctx).to_dyn()
 
             return dt.dispatch_primitive(primitive)
         elif dt.is_binary_like():
 
             def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
-                return Filter.apply(
+                return FilterKernel.apply(
                     array.as_binary_like[T](), mask, ctx
                 ).to_dyn()
 
             return dt.dispatch_binarylike(binarylike)
         elif dt.is_null():
-            return Filter.apply(array.as_null(), mask, ctx).to_dyn()
+            return FilterKernel.apply(array.as_null(), mask, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
-            return Filter.apply(
+            return FilterKernel.apply(
                 array.as_fixed_size_binary(), mask, ctx
             ).to_dyn()
         elif dt.is_struct():
-            return Filter.apply(array.as_struct(), mask, ctx).to_dyn()
+            return FilterKernel.apply(array.as_struct(), mask, ctx).to_dyn()
         elif dt.is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> DynArray:
-                return Filter.apply(array.as_list_like[T](), mask, ctx).to_dyn()
+                return FilterKernel.apply(array.as_list_like[T](), mask, ctx).to_dyn()
 
             return dt.dispatch_listlike(listlike)
         elif dt.is_fixed_size_list():
-            return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_dyn()
+            return FilterKernel.apply(array.as_fixed_size_list(), mask, ctx).to_dyn()
         elif dt.is_dictionary():
-            return Filter.apply(array.as_dictionary(), mask, ctx).to_dyn()
+            return FilterKernel.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
             raise Self.error(t"unsupported dtype {dt}")
 
@@ -130,7 +130,7 @@ struct Filter(Kernel):
         var data = array.to_data()
         if not data.bitmap:
             return array.copy()
-        return Filter.dispatch(array, data.validity().value(), ctx)
+        return FilterKernel.dispatch(array, data.validity().value(), ctx)
 
     @staticmethod
     def apply[
@@ -328,7 +328,7 @@ struct Filter(Kernel):
 
         debug_assert(
             dst_byte_pos == total_bytes,
-            "Filter.apply(binary) copied ",
+            "FilterKernel.apply(binary) copied ",
             dst_byte_pos,
             " bytes but sized its destination for ",
             total_bytes,
@@ -450,7 +450,7 @@ struct Filter(Kernel):
                 w &= w - 1
             wb += 64
 
-        var new_child = Filter.dispatch(child, child_mask.view(), ctx)
+        var new_child = FilterKernel.dispatch(child, child_mask.view(), ctx)
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
         if array.bitmap:
@@ -499,7 +499,7 @@ struct Filter(Kernel):
                 w &= w - 1
             wb += 64
 
-        var new_child = Filter.dispatch(child, child_mask.view(), ctx)
+        var new_child = FilterKernel.dispatch(child, child_mask.view(), ctx)
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
         if array.bitmap:
@@ -529,7 +529,7 @@ struct Filter(Kernel):
         the fast sequential primitive path and sharing the values unchanged — far
         cheaper than a take (no index materialization, no random gather)."""
         Self.expect_same_length(len(array), len(mask))
-        var new_indices = Filter.dispatch(array.indices(), mask, ctx)
+        var new_indices = FilterKernel.dispatch(array.indices(), mask, ctx)
         return DictionaryArray(
             dtype=array.type(),
             length=len(new_indices),
@@ -552,7 +552,7 @@ struct Filter(Kernel):
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         var children = [
-            Filter.dispatch(array.children[c].slice(array.offset, n), mask, ctx)
+            FilterKernel.dispatch(array.children[c].slice(array.offset, n), mask, ctx)
             for c in range(len(array.children))
         ]
 
@@ -577,7 +577,7 @@ struct Filter(Kernel):
         )
 
 
-struct Take(Kernel):
+struct TakeKernel(Kernel):
     """Gather kernel — collect elements at arbitrary indices (null index → null).
 
     The typed leaves are the ``apply`` overloads below; ``dispatch`` resolves a
@@ -595,7 +595,7 @@ struct Take(Kernel):
         """Resolve `array`'s runtime dtype and gather it at `indices`."""
         var dt = array.dtype()
         if dt == bool_:
-            return Take.apply(array.as_bool(), indices, ctx).to_dyn()
+            return TakeKernel.apply(array.as_bool(), indices, ctx).to_dyn()
         elif dt.is_primitive():
             # One arm for every fixed-width type: `apply` is bound on
             # `PrimitiveType`, so numeric, temporal, interval and decimal
@@ -605,7 +605,7 @@ struct Take(Kernel):
             # decimal columns raising `unsupported dtype`.
 
             def primitive[T: PrimitiveType](d: T) raises {imm} -> DynArray:
-                return Take.apply(
+                return TakeKernel.apply(
                     array.as_primitive[T](), indices, ctx
                 ).to_dyn()
 
@@ -613,31 +613,31 @@ struct Take(Kernel):
         elif dt.is_binary_like():
 
             def binarylike[T: BinaryLikeType](d: T) raises {imm} -> DynArray:
-                return Take.apply(
+                return TakeKernel.apply(
                     array.as_binary_like[T](), indices, ctx
                 ).to_dyn()
 
             return dt.dispatch_binarylike(binarylike)
         elif dt.is_null():
-            return Take.apply(array.as_null(), indices, ctx).to_dyn()
+            return TakeKernel.apply(array.as_null(), indices, ctx).to_dyn()
         elif dt.is_fixed_size_binary():
-            return Take.apply(
+            return TakeKernel.apply(
                 array.as_fixed_size_binary(), indices, ctx
             ).to_dyn()
         elif dt.is_struct():
-            return Take.apply(array.as_struct(), indices, ctx).to_dyn()
+            return TakeKernel.apply(array.as_struct(), indices, ctx).to_dyn()
         elif dt.is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> DynArray:
-                return Take.apply(
+                return TakeKernel.apply(
                     array.as_list_like[T](), indices, ctx
                 ).to_dyn()
 
             return dt.dispatch_listlike(listlike)
         elif dt.is_fixed_size_list():
-            return Take.apply(array.as_fixed_size_list(), indices, ctx).to_dyn()
+            return TakeKernel.apply(array.as_fixed_size_list(), indices, ctx).to_dyn()
         elif dt.is_dictionary():
-            return Take.apply(array.as_dictionary(), indices, ctx).to_dyn()
+            return TakeKernel.apply(array.as_dictionary(), indices, ctx).to_dyn()
         else:
             raise Self.error(t"unsupported dtype {dt}")
 
@@ -916,7 +916,7 @@ struct Take(Kernel):
                     pos += 1
         debug_assert(
             pos == total,
-            "Take.apply(list) wrote ",
+            "TakeKernel.apply(list) wrote ",
             pos,
             " child indices but sized its destination for ",
             total,
@@ -933,7 +933,7 @@ struct Take(Kernel):
         var bm: Optional[Bitmap[]] = None
         if need_bm:
             bm = bmb.to_immutable(length=n)
-        var new_child = Take.dispatch(array.values().copy(), child_indices, ctx)
+        var new_child = TakeKernel.dispatch(array.values().copy(), child_indices, ctx)
         return ListLikeArray[T](
             dtype=array.dtype.copy(),
             length=n,
@@ -1018,7 +1018,7 @@ struct Take(Kernel):
         var bm: Optional[Bitmap[]] = None
         if need_bm:
             bm = bmb.to_immutable(length=n)
-        var new_child = Take.dispatch(array.values().copy(), child_indices, ctx)
+        var new_child = TakeKernel.dispatch(array.values().copy(), child_indices, ctx)
         return FixedSizeListArray(
             dtype=array.dtype.copy(),
             length=n,
@@ -1037,7 +1037,7 @@ struct Take(Kernel):
         """Gather rows from a dictionary array: gather its (logical) index array
         with the fast primitive path and share the dictionary values unchanged.
         """
-        var new_indices = Take.dispatch(array.indices(), indices, ctx)
+        var new_indices = TakeKernel.dispatch(array.indices(), indices, ctx)
         return DictionaryArray(
             dtype=array.type(),
             length=len(indices),
@@ -1063,7 +1063,7 @@ struct Take(Kernel):
         var children = List[DynArray]()
         for c in range(len(array.children)):
             children.append(
-                Take.dispatch(
+                TakeKernel.dispatch(
                     array.children[c].slice(array.offset, n), indices, ctx
                 )
             )
@@ -1124,11 +1124,11 @@ def filter(
     # and an owned local would hand it a mutable one.
     ref m = mask.as_bool()
     if m.null_count() == 0:
-        return Filter.dispatch(array, m.values(), ctx)
+        return FilterKernel.dispatch(array, m.values(), ctx)
     var selected = Bitmap.intersect_views(
         Optional(m.values()), m.validity()
     ).value()
-    return Filter.dispatch(array, selected.view(), ctx)
+    return FilterKernel.dispatch(array, selected.view(), ctx)
 
 
 def take(
@@ -1137,11 +1137,11 @@ def take(
     ctx: ExecContext = ExecContext.serial(),
 ) raises -> DynArray:
     """Gather elements of `array` at `indices` (null index -> null element)."""
-    return Take.dispatch(array, indices, ctx)
+    return TakeKernel.dispatch(array, indices, ctx)
 
 
 def drop_null(
     array: DynArray, ctx: ExecContext = ExecContext.serial()
 ) raises -> DynArray:
     """Remove null elements using the validity bitmap as the selection."""
-    return Filter.drop_null(array, ctx)
+    return FilterKernel.drop_null(array, ctx)

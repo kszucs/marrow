@@ -29,14 +29,14 @@ from ...dtypes import (
 from ..aggregate import (
     AggKernel,
     Dispersion,
-    SumKernel,
+    SumFold,
     DistinctCount,
-    MaxKernel,
+    MaxFold,
     MaxOp,
-    MinKernel,
+    MinFold,
     MinOp,
     Fold,
-    StringExtremum,
+    LexicalExtremum,
     ValidCount,
 )
 from ...dtypes import StringType
@@ -185,11 +185,11 @@ def test_agg_string_min_max_one_slot() raises:
     """`StringMinMax` has no `whole` of its own — this branch is the only
     thing standing between the whole-input answer and an empty loop."""
     var values = _strings(["b", "a", "c"])
-    var lo = StringExtremum[MinOp, StringType].grouped(
-        Groups.single(3), _in[StringExtremum[MinOp, StringType]](values.copy())
+    var lo = LexicalExtremum[MinOp, StringType].grouped(
+        Groups.single(3), _in[LexicalExtremum[MinOp, StringType]](values.copy())
     )
-    var hi = StringExtremum[MaxOp, StringType].grouped(
-        Groups.single(3), _in[StringExtremum[MaxOp, StringType]](values^)
+    var hi = LexicalExtremum[MaxOp, StringType].grouped(
+        Groups.single(3), _in[LexicalExtremum[MaxOp, StringType]](values^)
     )
     assert_true(lo == array(["a"]))
     assert_true(hi == array(["c"]))
@@ -197,30 +197,30 @@ def test_agg_string_min_max_one_slot() raises:
 
 def test_agg_string_min_max_grouped() raises:
     var values = _strings(["b", "d", "a", "c"])
-    var lo = StringExtremum[MinOp, StringType].grouped(
+    var lo = LexicalExtremum[MinOp, StringType].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
-        _in[StringExtremum[MinOp, StringType]](values.copy()),
+        _in[LexicalExtremum[MinOp, StringType]](values.copy()),
     )
-    var hi = StringExtremum[MaxOp, StringType].grouped(
+    var hi = LexicalExtremum[MaxOp, StringType].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
-        _in[StringExtremum[MaxOp, StringType]](values^),
+        _in[LexicalExtremum[MaxOp, StringType]](values^),
     )
     assert_true(lo == array(["b", "a"]))
     assert_true(hi == array(["d", "c"]))
 
 
 def test_agg_string_min_skips_nulls_at_one_slot() raises:
-    var out = StringExtremum[MinOp, StringType].grouped(
+    var out = LexicalExtremum[MinOp, StringType].grouped(
         Groups.single(3),
-        _in[StringExtremum[MinOp, StringType]](_strings([None, "b", "a"])),
+        _in[LexicalExtremum[MinOp, StringType]](_strings([None, "b", "a"])),
     )
     assert_true(out == array(["a"]))
 
 
 def test_agg_string_min_of_all_nulls_is_null() raises:
-    var out = StringExtremum[MinOp, StringType].grouped(
+    var out = LexicalExtremum[MinOp, StringType].grouped(
         Groups.single(2),
-        _in[StringExtremum[MinOp, StringType]](_strings([None, None])),
+        _in[LexicalExtremum[MinOp, StringType]](_strings([None, None])),
     )
     assert_equal(len(out), 1)
     assert_true(out.is_null(0))
@@ -235,11 +235,11 @@ def test_agg_temporal_min_max_keeps_unit_and_timezone() raises:
     — and a dtype that disagreed with the schema would be a `Variant`
     misaccess at emit rather than a raise."""
     var values = _timestamps([30, 10, 20])
-    var lo = Fold[MinKernel, TimestampType].grouped(
-        Groups.single(3), _in[Fold[MinKernel, TimestampType]](values.copy())
+    var lo = Fold[MinFold, TimestampType].grouped(
+        Groups.single(3), _in[Fold[MinFold, TimestampType]](values.copy())
     )
-    var hi = Fold[MaxKernel, TimestampType].grouped(
-        Groups.single(3), _in[Fold[MaxKernel, TimestampType]](values^)
+    var hi = Fold[MaxFold, TimestampType].grouped(
+        Groups.single(3), _in[Fold[MaxFold, TimestampType]](values^)
     )
     assert_true(lo.type() == DynType(timestamp(microsecond, "UTC")))
     assert_true(hi.type() == DynType(timestamp(microsecond, "UTC")))
@@ -248,9 +248,9 @@ def test_agg_temporal_min_max_keeps_unit_and_timezone() raises:
 
 
 def test_agg_temporal_min_grouped() raises:
-    var out = Fold[MinKernel, TimestampType].grouped(
+    var out = Fold[MinFold, TimestampType].grouped(
         Groups(_ids([0, 0, 1, 1]), 2),
-        _in[Fold[MinKernel, TimestampType]](_timestamps([30, 10, 50, 40])),
+        _in[Fold[MinFold, TimestampType]](_timestamps([30, 10, 50, 40])),
     )
     assert_true(out.type() == DynType(timestamp(microsecond, "UTC")))
     assert_equal(len(out), 2)
@@ -260,11 +260,11 @@ def test_agg_temporal_min_grouped() raises:
 
 def test_agg_numeric_min_one_slot_and_grouped() raises:
     var values = array([3, 1, 4, 1], int64).to_dyn()
-    var whole = Fold[MinKernel, Int64Type].grouped(
-        Groups.single(4), _in[Fold[MinKernel, Int64Type]](values.copy())
+    var whole = Fold[MinFold, Int64Type].grouped(
+        Groups.single(4), _in[Fold[MinFold, Int64Type]](values.copy())
     )
-    var grouped = Fold[MinKernel, Int64Type].grouped(
-        Groups(_ids([0, 0, 1, 1]), 2), _in[Fold[MinKernel, Int64Type]](values^)
+    var grouped = Fold[MinFold, Int64Type].grouped(
+        Groups(_ids([0, 0, 1, 1]), 2), _in[Fold[MinFold, Int64Type]](values^)
     )
     assert_true(whole == array([1], int64))
     assert_true(grouped == array([1, 1], int64))
@@ -273,9 +273,9 @@ def test_agg_numeric_min_one_slot_and_grouped() raises:
 def test_agg_rejects_a_dtype_it_has_no_arm_for() raises:
     var raised = False
     try:
-        _ = Fold[MinKernel, Int64Type].grouped(
+        _ = Fold[MinFold, Int64Type].grouped(
             Groups.single(2),
-            _in[Fold[MinKernel, Int64Type]](_strings(["a", "b"])),
+            _in[Fold[MinFold, Int64Type]](_strings(["a", "b"])),
         )
     except:
         raised = True
@@ -301,7 +301,7 @@ def test_agg_out_dtype_agrees_with_the_column_produced() raises:
     var stamp_dtype = stamps.dtype()
     var number_dtype = numbers.dtype()
 
-    comptime StringMin = StringExtremum[MinOp, StringType]
+    comptime StringMin = LexicalExtremum[MinOp, StringType]
     assert_true(
         DistinctCount[True, StringArray].dtype(string_dtype)
         == DistinctCount[True]
@@ -316,15 +316,15 @@ def test_agg_out_dtype_agrees_with_the_column_produced() raises:
         == StringMin.grouped(Groups.single(3), _in[StringMin](strings^)).type()
     )
     assert_true(
-        Fold[MaxKernel, TimestampType].dtype(stamp_dtype)
-        == Fold[MaxKernel, TimestampType]
-        .grouped(Groups.single(3), _in[Fold[MaxKernel, TimestampType]](stamps^))
+        Fold[MaxFold, TimestampType].dtype(stamp_dtype)
+        == Fold[MaxFold, TimestampType]
+        .grouped(Groups.single(3), _in[Fold[MaxFold, TimestampType]](stamps^))
         .type()
     )
     assert_true(
-        Fold[MinKernel, Int64Type].dtype(number_dtype)
-        == Fold[MinKernel, Int64Type]
-        .grouped(Groups.single(3), _in[Fold[MinKernel, Int64Type]](numbers^))
+        Fold[MinFold, Int64Type].dtype(number_dtype)
+        == Fold[MinFold, Int64Type]
+        .grouped(Groups.single(3), _in[Fold[MinFold, Int64Type]](numbers^))
         .type()
     )
 

@@ -40,15 +40,15 @@ from ...kernels.aggregate import (
     DistinctCount,
     Fold,
     Foldable,
-    CountKernel,
-    MaxKernel,
+    CountFold,
+    MaxFold,
     MaxOp,
-    MeanKernel,
-    MinKernel,
+    MeanFold,
+    MinFold,
     MinOp,
-    ProductKernel,
-    StringExtremum,
-    SumKernel,
+    ProductFold,
+    LexicalExtremum,
+    SumFold,
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
@@ -90,7 +90,7 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
 
     That is why this is one struct rather than two. `col("v", int64).min()` and
     `col("ts", timestamp(us)).min()` are the *same aggregate* — both spell
-    `Aggregate[Fold[MinKernel], _]` — and differ only in whether their operand
+    `Aggregate[Fold[MinFold], _]` — and differ only in whether their operand
     can be read as a lane. The previous `FusedAggregate` / `BufferedAggregate`
     pair made that one difference into two node types, so every fluent method
     had to restate the split by hand and get it right.
@@ -145,7 +145,7 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
     `bind`, `validity` and `lane[W]` on its operand, and all three are
     `PrimitiveValue` members — so the narrower bound excluded temporal
     `min`/`max` from fusion for no reason the fused loop can see.
-    `TemporalValue.min()` and `.max()` already build a `Fold[MinKernel, V]`
+    `TemporalValue.min()` and `.max()` already build a `Fold[MinFold, V]`
     over a temporal `V`; the accumulator dtype comes from the `in_dtype:
     DynType` the fused operator is constructed with, not from `Self.A.Type()`,
     so the "a `TemporalType` is not `Defaultable`" obstacle that once justified
@@ -254,7 +254,7 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
 # ---------------------------------------------------------------------------
 # The vocabulary — one alias per aggregate, partially applied on its operand.
 #
-# `Sum[Self]` rather than `Aggregate[Fold[SumKernel], Self]` at every fluent
+# `Sum[Self]` rather than `Aggregate[Fold[SumFold], Self]` at every fluent
 # method. The long form names three things to say one, and it puts the *kernel*
 # vocabulary in `core.mojo`'s imports, where nothing else needs it: with these,
 # `core.mojo` names no `AggKernel` at all.
@@ -268,24 +268,24 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
 # Every fold alias names its operand, because `Fold[K, V]` is typed on its
 # input and `V` is exactly `A.Type` — the operand already knows it. That is
 # what removes the dtype dispatch from the comptime lane's folds entirely:
-# `col("ts", timestamp(us)).min()` is `Fold[MinKernel, TimestampType]`, not a
+# `col("ts", timestamp(us)).min()` is `Fold[MinFold, TimestampType]`, not a
 # runtime lookup. `StringMin`, `CountDistinct` and friends stay partially
 # applied, since their kernels are genuinely dtype-generic.
 # ---------------------------------------------------------------------------
-comptime Sum[A: PrimitiveValue] = Aggregate[Fold[SumKernel, A.Type], A]
-comptime Product[A: PrimitiveValue] = Aggregate[Fold[ProductKernel, A.Type], A]
-comptime Min[A: PrimitiveValue] = Aggregate[Fold[MinKernel, A.Type], A]
-comptime Max[A: PrimitiveValue] = Aggregate[Fold[MaxKernel, A.Type], A]
-comptime Mean[A: PrimitiveValue] = Aggregate[Fold[MeanKernel, A.Type], A]
-comptime Count[A: PrimitiveValue] = Aggregate[Fold[CountKernel, A.Type], A]
+comptime Sum[A: PrimitiveValue] = Aggregate[Fold[SumFold, A.Type], A]
+comptime Product[A: PrimitiveValue] = Aggregate[Fold[ProductFold, A.Type], A]
+comptime Min[A: PrimitiveValue] = Aggregate[Fold[MinFold, A.Type], A]
+comptime Max[A: PrimitiveValue] = Aggregate[Fold[MaxFold, A.Type], A]
+comptime Mean[A: PrimitiveValue] = Aggregate[Fold[MeanFold, A.Type], A]
+comptime Count[A: PrimitiveValue] = Aggregate[Fold[CountFold, A.Type], A]
 comptime Variance[ddof: Int, A: NumericValue] = Aggregate[
     Dispersion[ddof, False, A.Type], A
 ]
 comptime StdDev[ddof: Int, A: NumericValue] = Aggregate[
     Dispersion[ddof, True, A.Type], A
 ]
-comptime StringMin[A: StringValue] = Aggregate[StringExtremum[MinOp, A.Type], A]
-comptime StringMax[A: StringValue] = Aggregate[StringExtremum[MaxOp, A.Type], A]
+comptime StringMin[A: StringValue] = Aggregate[LexicalExtremum[MinOp, A.Type], A]
+comptime StringMax[A: StringValue] = Aggregate[LexicalExtremum[MaxOp, A.Type], A]
 # The three cardinalities are dtype-generic in what they *compute* — an int64
 # whatever was counted — but each still names the array it reads, because a
 # validity scan and a hash are both faster typed. In this lane the operand

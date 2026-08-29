@@ -339,7 +339,7 @@ struct ExecContext(
         one-worker stripe, so the no-parallelism path keeps exactly the shape it
         had before — no closure per stripe, no chunk arithmetic.
 
-        **Mark ``body`` ``@always_inline``.** Measured on `Take.apply`'s gather
+        **Mark ``body`` ``@always_inline``.** Measured on `TakeKernel.apply`'s gather
         over 1M elements: without it the conversion was ~10 % *slower* than the
         hand-rolled loop it replaced (median 3.1 ms vs 2.8 ms); with it, ~18 %
         faster (2.3 ms), and the striped path went 373 µs → 309 µs. A hand-rolled

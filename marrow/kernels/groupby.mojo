@@ -26,7 +26,7 @@ from ..dtypes import DynType, Field, struct_
 from .core import Groups
 from .hashtable import SwissHashTable
 from .hashing import RapidHashKernel
-from .filter import Take
+from .filter import TakeKernel
 from ..utils import RapidHash64
 
 
@@ -147,7 +147,7 @@ struct HashGrouper(Movable):
         if len(self._key_builders) == 0:
             for k in range(len(keys.children)):
                 self._key_builders.append(DynBuilder(keys.children[k].dtype()))
-        var gathered = Take.apply(keys, rows)
+        var gathered = TakeKernel.apply(keys, rows)
         for k in range(len(keys.children)):
             self._key_builders[k].extend(gathered.children[k])
 

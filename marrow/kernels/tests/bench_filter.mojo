@@ -16,7 +16,7 @@ from ...builders import (
     Int32Builder,
 )
 from ...dtypes import int64, Int64Type
-from ...kernels.filter import Filter, Take
+from ...kernels.filter import FilterKernel, TakeKernel
 from ...execution import ExecContext
 from ...utils.testing import Benchmark
 
@@ -54,7 +54,7 @@ def bench_filter50pct_10k(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -65,7 +65,7 @@ def bench_filter50pct_100k(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -76,7 +76,7 @@ def bench_filter50pct_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -92,7 +92,7 @@ def bench_filter10pct_100k(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -103,7 +103,7 @@ def bench_filter10pct_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -119,7 +119,7 @@ def bench_filter90pct_100k(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -130,7 +130,7 @@ def bench_filter90pct_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -146,7 +146,7 @@ def bench_filter50pct_nulls_100k(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -157,7 +157,7 @@ def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Filter.apply(arr, mask.values())))
+        keep(len(FilterKernel.apply(arr, mask.values())))
 
     b.iter(call)
 
@@ -170,7 +170,7 @@ def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 # Take (gather) benchmarks
 #
-# `Take.apply` is the hot gather behind joins, group-by and sort, and it owns
+# `TakeKernel.apply` is the hot gather behind joins, group-by and sort, and it owns
 # one of the hand-rolled `sync_parallelize` stripe loops (Q2.4). It had no
 # benchmark at all, so any change to that loop was unmeasurable — these exist to
 # make it measurable. Both the serial default and a forced-parallel context are
@@ -208,7 +208,7 @@ def _bench_take(mut b: Benchmark, size: Int, ctx: ExecContext) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Take.apply(arr, idx, ctx)))
+        keep(len(TakeKernel.apply(arr, idx, ctx)))
 
     b.iter(call)
     keep(arr)
@@ -235,7 +235,7 @@ def bench_take_nulls_1m(mut b: Benchmark) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(Take.apply(arr, idx, ExecContext.serial())))
+        keep(len(TakeKernel.apply(arr, idx, ExecContext.serial())))
 
     b.iter(call)
     keep(arr)
