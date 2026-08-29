@@ -151,8 +151,12 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
         The one place this leaf genuinely differs from `Column[T]`: a numeric
         dtype is `Defaultable` and can answer from its type, a temporal one
         cannot.
+
+        `field(name=...)` rather than `fields[get_field_index(...)]`: the index
+        form answers `-1` for an unknown column and `fields[-1]` is the *last*
+        field, so a typo silently reported a neighbour's dtype.
         """
-        return schema.fields[schema.get_field_index(self._name)].dtype.copy()
+        return schema.field(name=self._name).dtype.copy()
 
     # -- Evaluable ----------------------------------------------------------
 
@@ -414,7 +418,9 @@ struct ListColumn[T: ListLikeType](ColumnBound, ListValue):
     def dtype(self, schema: Schema) raises -> DynType:
         # From the schema: a list dtype carries its child field, which cannot
         # be conjured from `Self.T()` any more than a timestamp's unit can.
-        return schema.fields[schema.get_field_index(self._name)].dtype.copy()
+        # `field(name=...)` raises on an unknown column; the index form answers
+        # -1 and would report the last field's dtype instead.
+        return schema.field(name=self._name).dtype.copy()
 
     def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
         return batch.field(self._name).copy()
