@@ -100,6 +100,67 @@
 
 ### Refactors
 
+- **One naming rule across `marrow/kernels/`: a `*Kernel` is applied, a `*Fold`
+  is driven.** `dispatch_agg_array` took no array and knew no aggregate — it
+  maps a runtime dtype onto the *array type* holding it — and was the only free
+  `dispatch_*` in the package. It is now `arrays.dispatch_array`, beside the
+  type it narrows to; `expr.runtime.dispatch_agg` is `resolve_aggregate`
+  (name resolution, not dtype narrowing) and `StringExtremum` is
+  `LexicalExtremum`. The whole-array folds drop the `Kernel` suffix
+  (`SumKernel` → `SumFold`, and likewise product/mean/count/min/max), which
+  **dissolves the `MinKernel` collision**: `numeric.MinKernel` and
+  `aggregate.MinKernel` could not both be re-exported, so `kernels/__init__.mojo`
+  re-exported neither and documented the workaround. Both are exported now.
+  Conversely the 20 cast kernels and `Filter`/`Take` *gain* the suffix, removing
+  the five `as ...Kernel` import renames in `comptime/casts.mojo`.
+
+- **The aggregate vocabulary left the kernel layer.** `agg_vocabulary()`
+  answered "which names may a frontend say" from `kernels/aggregate.mojo`, with
+  one consumer in `expr/runtime/`. It is now `RuntimeAggregate.vocabulary()`.
+  The ten name constants stay in the kernel layer — they are `Kernel.name`
+  values — and the 18 hand-written literals that duplicated them (10 in
+  `runtime/values.mojo`, the actual resolver keys, and 8 in `comptime/core.mojo`)
+  now derive from them.
+
+- **14 of 16 identical `dtype` bodies collapsed to three trait defaults** on
+  `NumericValue`, `StringValue` and `BoolValue`. Not one default on
+  `ComptimeValue`: constructing a `Type()` needs `Defaultable`, which
+  `DataType` is not. `TemporalValue` keeps its override for the same reason,
+  and `BoolBinary`/`Not` keep theirs because they conform to `ComptimeValue`
+  directly — they produce bool but do not fuse, so a sub-trait default does not
+  satisfy the base requirement.
+
+- **`Fold._domain`'s family gate is gone.** It restated a check its only caller
+  had already run — `_fold_agg` binds `V` *from* `in_dtype` — and in the
+  comptime lane could not fire at all, since `Column[T].dtype` ignores the
+  schema. Both arms and their format strings shipped in every AOT binary. The
+  `holds[V]` check stays: `TemporalColumn[T].dtype` does read the schema, so it
+  is reachable.
+
+- **Six string-comparison kernels deleted from the expression layer.**
+  `comptime/strings.mojo` carried its own `StringCompareKernel` trait and six
+  `Str*` kernels duplicating `kernels/string.mojo`'s `StringPredicateKernel`
+  family, so the two lanes compared strings through different code. The node
+  binds the kernel layer's now — which also takes `StringSlice` where the local
+  copies took an owned `String`.
+
+- **Three module cycles removed.** `params.mojo` held two unrelated things: the
+  `Bindings` alias, which depends on nothing in the package, and `Param[T]`, a
+  comptime leaf — and sharing a file forced the alias to import `logical.Shape`
+  and `pruning.param_bounds`, both of which import it back. `Bindings` is now
+  `bindings.mojo`; `Param` sits with the other comptime leaves.
+  `BufferedAggregateOperator` moves to `physical.mojo` (its `Evaluable & Value`
+  bound never used the `Value` half), which was **the only reason the runtime
+  lane imported the comptime lane**. `Groups` leaves `kernels/core.mojo` for
+  `kernels/groups.mojo` — 25 modules import `Kernel`, 7 import `Groups`, and
+  the sets are disjoint.
+
+- **`marrow/expr/__init__.mojo` has a public surface.** It was 0 bytes, so the
+  claim that the reserved word `comptime` "only has to be spelled at the
+  boundary" was false in 33 places, including all ten binary-size gates and
+  `golden/prelude.mojo`. Every consumer outside the package now imports from
+  `marrow.expr`.
+
 - **The aggregate layer's four ragged seams, from the 2026-08-29 abstraction
   audit** (`docs/2026-08-29-expr-kernels-abstraction-audit.md`, §8 steps 2-4
   and 7). Net: one trait, one struct, two fields and one method deleted; one
