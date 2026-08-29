@@ -235,9 +235,14 @@ struct CapitalizeKernel(StringMapKernel):
 
 
 struct ConcatKernel(Kernel):
-    """Element-wise binary string concatenation (`a || b`). `combine` is the fusable
-    per-element primitive (the expression layer's `Concat` builds on it); `apply`
-    materializes the whole array, null-propagating."""
+    """Element-wise binary string concatenation (`a || b`). `combine` is the
+    fusable per-element primitive; `apply` materializes the whole array,
+    null-propagating.
+
+    **No expression node reaches this yet.** The docstring used to say the
+    expression layer's `Concat` builds on it; there is no such node in either
+    lane. Kept because a string-concat node is a real gap in the expression
+    surface, not because anything currently calls it."""
 
     comptime name = "binary_join_element_wise"
 

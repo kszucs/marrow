@@ -77,7 +77,6 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue, Unnamed):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -164,7 +163,6 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue, Unnamed):
     def columns(self) -> List[String]:
         return self.a.columns()
 
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -218,7 +216,6 @@ struct StringToNum[To: NumericType, A: StringValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -256,7 +253,6 @@ struct NumToString[To: StringLikeType, A: NumericValue](
 
     def columns(self) -> List[String]:
         return self.a.columns()
-
 
     # -- StringValue --------------------------------------------------------
 

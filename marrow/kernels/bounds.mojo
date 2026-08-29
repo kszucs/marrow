@@ -18,33 +18,6 @@ caller may only skip data it has *proven* cannot match: a wrong "maybe" costs
 time, a wrong "no" costs correctness. So the only question a kernel answers is
 *could this be TRUE here?*, and every unknown resolves to `True`.
 
-# Why this replaces `kernels/interval.mojo`
-
-`interval.mojo` held the same idea with a different representation and was
-deleted for it, not merely duplicated. Four concrete reasons:
-
-1. **It could not be read without runtime dispatch.** `Interval` carried
-   `Optional[DynScalar]` bounds and compared through `Interval._compare_scalar`,
-   which calls `DynType.dispatch_primitive` — a twenty-arm ladder *per
-   comparison node, per row group*, inside what has to be a fused,
-   comptime-typed predicate. `Bounds[dt]` is five register-sized fields, so a
-   fused predicate reads it with no dispatch at all and no allocation.
-2. **It conflated two domains in one struct.** `Interval` carried `lo`/`hi`
-   *and* `maybe_true`, so `AndInterval` and `OrInterval` were "interval
-   kernels" that never touched an interval. Here the boolean algebra lives on
-   `Truth` (`marrow/expr/pruning.mojo`) and this module is only about
-   intervals; that is why there are six kernels and not eight.
-3. **`Interval._three_way` was a known-open NaN defect** — see
-   `docs/superpowers/specs/2026-08-25-pruning-indexing-findings.md` §3: "still
-   wrong for a NaN reaching it by another path". Here `known` is computed as
-   `lo <= hi`, which is `False` for any NaN, so a NaN bound reads as *unknown*
-   once, at construction, instead of needing a NaN check at every comparison.
-4. **It had no notion of nulls at all**, so it could not express the one exactly
-   provable prune the format hands you for free: an all-null row group or page
-   makes every comparison over it `NULL`, and a filter keeps only valid `TRUE`.
-
-`interval.mojo` had zero consumers, which is what made replacing it rather than
-extending it a free choice.
 """
 
 from .core import Kernel

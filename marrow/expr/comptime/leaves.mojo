@@ -114,7 +114,8 @@ struct TemporalColumn[T: TemporalType](ColumnBound, TemporalValue):
     `date + date` must not compile.
 
     That is the whole duplication, and the point of the split is that it stops
-    at the leaf: everything above binds on `PrimitiveValue`, where `expr/`
+    at the leaf: everything above binds on `PrimitiveValue`, where the previous
+    expression package
     needs `TemporalColumn` *plus* duplicated comparison arms.
 
     **Comparison works too, but through its own node.** `TemporalCompare` is
@@ -246,7 +247,8 @@ struct BoolColumn(BoolValue, ColumnBound):
 
     Without this leaf a fused expression could not read a `bool` column at all,
     so any three-valued-logic test would have to synthesise its operands from
-    comparisons. `expr/` shipped without it for exactly that reason and had to
+    comparisons. the previous expression package shipped without it for exactly
+    that reason and had to
     add it later.
     """
 
@@ -487,30 +489,32 @@ struct ListLength[A: ListValue](ColumnBound, NumericValue, Unnamed):
 # shape when the plan is built, and a value only once something binds it. That is
 # why `Param` mirrors `Literal` — same families, same `Shape.scalar`, same
 # per-family split — rather than being a category of its own.
-# 
+#
 # **A parameter is a description; its value belongs to an execution.** The node
 # holds a name, a dtype, help text and an optional default, and nothing else — no
 # cell, no mutable state. Values arrive through `Bindings` when the plan is
 # turned into operators:
-# 
+#
 #     var min_a = param("min-a", int64)
 #     var plan = t.filter(col("a", int64) > min_a)
-# 
+#
 #     plan.execute(bindings=Bindings().set("min-a", Int64Scalar(4).to_dyn()))
-# 
+#
 # That is the layer's own rule — *a logical node is stateless* — applied here.
 # An earlier version of this module held the value in an `ArcPointer` cell shared
 # by every copy of the node, so `min_a.set(4)` reached into a built plan and
 # changed what it computed. It made a plan's result depend on hidden mutable
 # state, and it made executing one plan on two threads with two values a data
-# race: the same defect `expr/`'s process-global registry has, relocated into the
+# race: the same defect the previous expression package's process-global
+# registry has, relocated into the
 # node rather than removed.
-# 
+#
 # Passing the values *through* the execution instead means the plan stays
 # immutable, two executions with different values cannot interfere, and there is
 # no cell.
-# 
-# That one property removes an entire subsystem. `expr/` declares parameters
+#
+# That one property removes an entire subsystem. the previous expression
+# package declares parameters
 # *inline* at each use — `col("a") > param("min-a", int64)` written twice must
 # still share a cell — so it needs a process-global registry keyed by name, a
 # second lookup table for the runtime lane, dedup on every declaration, and a
@@ -518,16 +522,17 @@ struct ListLength[A: ListValue](ColumnBound, NumericValue, Unnamed):
 # plan built but never executed leaks its declarations into the next plan's
 # `--help`, and the globals are unsynchronised, so building two plans on two
 # threads is a data race.
-# 
+#
 # None of that exists here. Sharing is structural rather than name-keyed, so
 # there is no registry to leak and no global to race on, and one declaration
 # cannot conflict with itself.
-# 
+#
 # There is deliberately **no `params()` traversal**. Asking a plan which
 # parameters it takes is a sixteen-method walk that only a `--help` surface
 # would use, and nothing outside a test ever asked. Add it back when something
 # does; until then a plan's parameters are discovered the way its columns are —
-# by binding it and being told, by name, which one is missing. `expr/`'s
+# by binding it and being told, by name, which one is missing. the previous
+# expression package's
 # `ParamCell` raises "parameter is not bound" *without* naming it, because a
 # cell cannot know the name it is read through. Here the node **is** the
 # parameter, so it can.
@@ -542,7 +547,8 @@ struct Param[T: NumericType](NumericValue):
     broadcast, exactly as a literal does.
 
     An unbound parameter with no default raises **naming itself** — the node is
-    the parameter, so it can, where `expr/`'s cell explicitly cannot.
+    the parameter, so it can, where the previous expression package's cell
+    explicitly cannot.
     """
 
     comptime Type = Self.T
@@ -612,7 +618,8 @@ struct Param[T: NumericType](NumericValue):
     ) -> Bounds[Self.Type.native]:
         """A bound parameter prunes exactly as well as a literal, because
         pruning runs at *execution* time with the same `Bindings` `bind` will
-        see. `exprold` needed a process-global registry for this and still
+        see. the previous expression package needed a process-global registry
+        for this and still
         regressed a parameterised date filter to reading every row group.
 
         Unbound and undefaulted answers unknown and does not raise: the scan

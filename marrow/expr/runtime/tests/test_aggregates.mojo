@@ -202,4 +202,3 @@ def test_named_aggregate_vocabulary_all_resolves() raises:
     for ref name in RuntimeAggregate.vocabulary():
         var node = RuntimeAggregate(column("g"), name.copy())
         # Raises if the ladder has no arm for it; int64 is in every domain.
-

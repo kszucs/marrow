@@ -119,7 +119,8 @@ def test_project_carries_a_bare_column_field_whole() raises:
 
     Rebuilding the field from `dtype()` alone loses `nullable`, so projecting
     a column would produce a *different* schema for it than selecting the same
-    column does. `expr/` records that divergence with `nullable` False
+    column does. the previous expression package records that divergence with
+    `nullable` False
     becoming True.
     """
     var b = record_batch([array([1, 2], int64).copy()], names=["a"])
@@ -135,7 +136,8 @@ def test_project_names_a_computed_column_from_its_dtype() raises:
     """A computed value has no `Field` to carry, so `dtype()` answers instead.
 
     This is `dtype()`'s reason to exist: the schema must be known *before*
-    anything runs, and `expr/` got it by evaluating against a zero-row batch.
+    anything runs, and the previous expression package got it by evaluating
+    against a zero-row batch.
     """
     var b = _batch()
     var p = table(b.copy()).project(
@@ -255,7 +257,8 @@ def test_aggregate_schema_is_keys_then_aggregates() raises:
 def test_a_computed_key_is_named_by_position() raises:
     """A bare column keeps its name; anything computed has none.
 
-    `expr/` shipped a defect where one lane answered `d` and the other `key0`
+    the previous expression package shipped a defect where one lane answered
+    `d` and the other `key0`
     for the same `GROUP BY d`, giving one query two output schemas.
     """
     var plan = table(_keyed()).aggregate(
@@ -694,9 +697,7 @@ def test_rename_carries_the_source_field_over() raises:
     divergence that method exists to fix."""
     var fields = List[Field](capacity=1)
     fields.append(field("a", int64, nullable=False))
-    var b = RecordBatch(
-        Schema(fields=fields^), [array([1, 2], int64).to_dyn()]
-    )
+    var b = RecordBatch(Schema(fields=fields^), [array([1, 2], int64).to_dyn()])
     var renamed = table(b^).rename(["a"], ["z"]).schema()
     assert_equal(renamed.fields[0].name, String("z"))
     assert_true(renamed.fields[0].dtype.is_int64())

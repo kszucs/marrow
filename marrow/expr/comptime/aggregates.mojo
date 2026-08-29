@@ -284,8 +284,12 @@ comptime Variance[ddof: Int, A: NumericValue] = Aggregate[
 comptime StdDev[ddof: Int, A: NumericValue] = Aggregate[
     Dispersion[ddof, True, A.Type], A
 ]
-comptime StringMin[A: StringValue] = Aggregate[LexicalExtremum[MinOp, A.Type], A]
-comptime StringMax[A: StringValue] = Aggregate[LexicalExtremum[MaxOp, A.Type], A]
+comptime StringMin[A: StringValue] = Aggregate[
+    LexicalExtremum[MinOp, A.Type], A
+]
+comptime StringMax[A: StringValue] = Aggregate[
+    LexicalExtremum[MaxOp, A.Type], A
+]
 # The three cardinalities are dtype-generic in what they *compute* — an int64
 # whatever was counted — but each still names the array it reads, because a
 # validity scan and a hash are both faster typed. In this lane the operand
@@ -316,28 +320,13 @@ comptime StringApproxCountDistinct[A: StringValue] = Aggregate[
 # taxonomy, and it is named for *how the state is fed* rather than for what the
 # aggregate is called.
 #
-# **One struct held all three for a while, and every merge cost the same
-# thing.** A struct body admits no `comptime if`, so there are no conditional
-# fields: a merged operator carries every arm's state in every instantiation.
-# The last merge left `_scatters` unread by the fused arms and `_num_groups`
-# unread by the buffered one, and required the `fuses` predicate to be written
-# twice — once on the node to pick the operator and once on the operator to
-# pick the arm — with nothing enforcing that the two agreed. Both non-fusing
-# call sites additionally pinned the placement parameter to a "one implicit
-# slot" conformer while passing `grouped=True`, so the type said one thing and
-# the field another.
-#
-# The argument that kept them together does not transfer. It cited the *node*
-# split — `FusedAggregate` / `BufferedAggregate` — which forced every fluent
-# method to restate the split by hand and get it right. Splitting the
-# *operators* leaves `Aggregate` one node with one fluent surface;
-# `to_operator` already branched on `comptime if Self.fuses` and on `grouped`,
-# and all three are boxed in the same `DynOperator`, so nothing above sees more
-# than one type.
-#
-# **Splitting on placement costs no instantiations.** `scatters` was already a
-# comptime parameter, so the same two fused programs were emitted either way —
-# each now with a straight-line `push` and no field it does not read.
+# **The three stay separate, and the constraint is a language one.** A struct
+# body admits no `comptime if`, so a merged operator would carry every arm's
+# state in every instantiation and would need the `fuses` predicate written
+# twice -- once on the node to pick the operator, once on the operator to pick
+# the arm -- with nothing enforcing that the two agreed. Splitting on placement
+# costs no instantiations: `scatters` was already a comptime parameter, so the
+# same two fused programs are emitted either way.
 # ---------------------------------------------------------------------------
 
 

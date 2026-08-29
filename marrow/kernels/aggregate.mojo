@@ -266,40 +266,33 @@ struct ProductOp(WideningOp):
 # ---------------------------------------------------------------------------
 # Input domains — what a kernel requires of the column it folds
 # ---------------------------------------------------------------------------
-# `AccType` used to be bound on `NumericType`, and that bound was the
-# **intersection of four different requirements**: `count` needs nothing of the
-# type, `min`/`max` need an ordering, `sum` needs addition, `mean` needs
-# division. One bound for four requirements meant the most permissive kernel
-# was constrained by the least — `TemporalMinMax` existed only to work around
-# it — and no kernel stated what it actually needs.
+# `AccType` is bound on `PrimitiveType`, and these markers say the rest: `count`
+# needs nothing of the type, `min`/`max` need an ordering, `sum` needs addition,
+# `mean` needs division. One bound for four requirements would constrain the
+# most permissive kernel by the least. `FoldKernel.check_domain` enforces them
+# at compile time, so `sum(date)` is a build error rather than a silent nonsense
+# or a runtime raise.
 #
-# The bound is now `PrimitiveType` and these markers say the rest. They are
-# enforced by `FoldKernel.check_domain`, which every fold runs at compile
-# time, so `sum(date)` is a build error rather than a silent nonsense or a runtime
-# raise.
-#
-# **No marker means "accepts anything"** — that is `CountFold`, which reads
+# **No marker means "accepts anything"** -- that is `CountFold`, which reads
 # validity and never touches a value.
 #
 # Markers rather than a `comptime numeric_only: Bool` because a flag can be
-# wrong silently: `numeric_only = False` on a summing kernel compiles and
-# yields nonsense, whereas conformance is a claim the compiler checks and a
-# `where` clause can dispatch on. Mojo permits neither narrowing a trait method
-# with `where` (it becomes a different signature) nor narrowing an associated
+# wrong silently: `numeric_only = False` on a summing kernel compiles and yields
+# nonsense, whereas conformance is a claim the compiler checks. Mojo permits
+# neither narrowing a trait method with `where` nor narrowing an associated
 # type's bound in a conformer, so this is the closest sound form.
 #
-# They constrain the **input domain** only. State shape — variance's
-# sum+sumsq+count, a quantile sketch, `StringMinMax`'s per-group index — is a
-# separate axis and stays a kernel paired with a different state struct.
+# They constrain the **input domain** only. State shape -- variance's
+# sum+sumsq+count, a quantile sketch, a per-group index -- is a separate axis
+# and stays a kernel paired with a different state struct.
 #
-# **What unblocked the widening**: `NumericType` is `Defaultable`;
-# `TemporalType` and `DecimalType` are not, because a timestamp carries a unit
-# and timezone and a decimal a precision and scale. `AggState` used to build
-# its accumulator with `PrimitiveBuilder[Acc]()`, the no-dtype constructor that
-# only exists for numeric types. It now holds the dtype as a *value*, supplied
-# by `FoldKernel.acc_dtype(input_dtype)` — the one place that knows whether the
-# accumulator keeps the input's dtype (`min`/`max`) or names its own
-# (`sum` -> int64/float64, `count` -> int64, `mean` -> float64).
+# **Why the accumulator dtype is a value, not a type.** `NumericType` is
+# `Defaultable`; `TemporalType` and `DecimalType` are not, because a timestamp
+# carries a unit and timezone and a decimal a precision and scale. So `AggState`
+# holds the dtype as a value, supplied by `FoldKernel.acc_dtype(input_dtype)` --
+# the one place that knows whether the accumulator keeps the input's dtype
+# (`min`/`max`) or names its own (`sum` -> int64/float64, `count` -> int64,
+# `mean` -> float64).
 trait ArithmeticAgg(FoldKernel):
     """Needs addition or division, so numeric input only.
 

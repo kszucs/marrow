@@ -776,7 +776,9 @@ def test_binary_to_string_null_slot_bytes_are_not_validated() raises:
         values=built.values.copy(),
     )
 
-    var out = BinaryLikeCastKernel.apply[BinaryType, StringType, True](with_null)
+    var out = BinaryLikeCastKernel.apply[BinaryType, StringType, True](
+        with_null
+    )
     assert_equal(len(out), 3)
     assert_true(out.is_null(1))
     assert_equal(String(out[0]), "a")

@@ -58,7 +58,7 @@ def test_binding_reaches_a_nested_parameter() raises:
 
 
 def test_an_unbound_parameter_names_itself() raises:
-    """`expr/`'s cell raises "parameter is not bound" without naming it,
+    """The previous expression package's cell raises "parameter is not bound" without naming it,
     because a cell cannot know the name it is read through. Here the node is
     the parameter, so it can."""
     var missing = param("threshold", int64)

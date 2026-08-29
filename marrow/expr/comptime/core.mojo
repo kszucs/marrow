@@ -238,7 +238,8 @@ trait ComptimeValue(Evaluable, Prunable, Value):
     # (`bench_boolean.mojo`, 2026-08-22).
     #
     # One signature on the base would therefore have to serve both, which is
-    # how `expr/` ended up with two methods (`validity` and `state_validity`)
+    # how the previous expression package ended up with two methods (`validity`
+    # and `state_validity`)
     # and evaluated `coalesce`/`nullif`/`case_when` twice per fused pass.
 
     # ---------------------------------------------------------------------------
@@ -276,7 +277,8 @@ trait PrimitiveValue(ComptimeValue):
     `Type: NumericType` was a single bound standing for both "I can be read by
     a lane loop" and "I support arithmetic". Two claims in one bound meant a
     temporal column could not be read at all, because dates are not numeric —
-    even though reading one is the same instruction. `expr/` answered with a
+    even though reading one is the same instruction. the previous expression
+    package answered with a
     second `TemporalColumn` and a duplicated set of comparison arms.
 
     The domains are now markers on top: `NumericValue` and `TemporalValue` add
@@ -325,7 +327,8 @@ trait PrimitiveValue(ComptimeValue):
     unless the bound is `ImplicitlyCopyable`, and marrow's array types
     deliberately are not.
 
-    `expr/` called this `State`, which could mean anything. It is specifically
+    the previous expression package called this `State`, which could mean
+    anything. It is specifically
     *this subtree's column references, bound to this batch* — the stage between
     an expression and a per-element read.
     """
@@ -343,7 +346,8 @@ trait PrimitiveValue(ComptimeValue):
 
         A trait **default**, not a free driver, because it is the same for
         every numeric node and it is precisely what this trait means by
-        evaluating. `expr/` kept it as a free `_drive_numeric`; CLAUDE.md
+        evaluating. the previous expression package kept it as a free
+        `_drive_numeric`; CLAUDE.md
         records that re-defaulting a base trait's abstract method in a
         sub-trait recurses, but that limit is about returning
         `Self.ArrayType`, and `Datum` is concrete.
@@ -395,7 +399,8 @@ trait PrimitiveValue(ComptimeValue):
         Structural: a numeric node is null exactly where an operand is, so this
         intersects the operands' bitmaps and never reads their values. That is
         what lets it take the `Bound` and not the batch — a leaf's `Bound` *is*
-        its column, bitmap included. `expr/` needed a second method
+        its column, bitmap included. the previous expression package needed a
+        second method
         (`state_validity`) precisely because its first one took the batch and
         re-ran the whole selection kernel for `coalesce`, `nullif` and
         `case_when`.
@@ -1033,18 +1038,9 @@ trait BoolValue(ComptimeValue):
         return DynType(Self.Type())
 
     comptime Bound: Copyable & Deinitable
-    """Everything the lane loop needs, resolved once per batch.
-
-    A column leaf's is its typed column; a literal's is nothing; a binary node's
-    is `Tuple[L.Bound, R.Bound]`. Declared per concrete struct rather than
-    defaulted: a trait default cannot reduce at a `-> Self.Bound` return site
-    unless the bound is `ImplicitlyCopyable`, and marrow's array types
-    deliberately are not.
-
-    `expr/` called this `State`, which could mean anything. It is specifically
-    *this subtree's column references, bound to this batch* — the stage between
-    an expression and a per-element read.
-    """
+    """This subtree's column references, bound to this batch — as
+    `PrimitiveValue.Bound`, and declared per concrete struct for the same
+    reason."""
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         """Resolve this subtree against `batch`, once, before the lane loop.

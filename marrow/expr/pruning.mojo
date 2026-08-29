@@ -65,34 +65,13 @@ Consulted, and each rule below is a line of code somewhere in this file:
 
 # Scope, and what is deliberately absent
 
-`Truth` has two states; there is no `Facts`/`Index` trait, no bloom reading, and
-no page-level or partition-level machinery. Each of those was designed and cut,
-and the reasons are measurements rather than taste — see
-`docs/superpowers/specs/2026-08-27-index-and-pruning-plan.md` §0 and §5:
-
-- **Scalar blooms add +0.0%** over min/max on the real compound ClickBench
-  queries. Standalone they look like 57.7%; conjoined with `CounterID = 62`
-  they add nothing, because the queried hashes occur ~55,000 times per million
-  rows. They are not needle lookups.
-- **A trait per index kind has zero methods with two implementations.** An
-  index is *whoever constructs a `PruneStats`*; `pushdown.mojo` is the only
-  such producer today. When there is a second, `PruneStats` becomes a trait
-  with the same one method and a total default, which is a pure addition.
-- **Page granularity is a second producer, not a second abstraction.** A
-  `PruneStats` whose bounds came from `ColumnIndex` reads identically. What it
-  additionally needs is a row selection to intersect, and `RowSelection` has
-  `intersect` but no `union` (`parquet/reader.mojo:2437-2529`) — which is why
-  DataFusion restricts page filtering to single-column conjuncts
-  (`page_filter.rs:144,163-166`) and why this lands after, not with, row groups.
-
-# Honest value on the data marrow has
-
-On `hits_0.parquet` — two row groups of 450,560 and 549,440 rows, no
-ColumnIndex, no OffsetIndex — exactly one ClickBench predicate prunes anything:
-`CounterID = 62` skips one group of two. The whole-suite ceiling is **1.04x**,
-against **3.6x** measured for projection pushdown and **1.6-4.7x** for row-group
-windowing. This subsystem is built because it is correct, composable and needed
-for files that *do* carry page indexes — not because it will move that number.
+`Truth` has two states; there is no `Facts`/`Index` trait, no bloom reading,
+and no page-level or partition-level machinery. Each was designed and cut on
+measurements rather than taste — scalar blooms add +0.0% over min/max on the
+compound ClickBench queries, and an index trait would have zero methods with
+one implementation. The measurements, and the honest ceiling on the data
+marrow has (1.04x, against 3.6x for projection pushdown), are in
+`docs/superpowers/specs/2026-08-27-index-and-pruning-plan.md` §0 and §5.
 """
 
 from std.memory import ArcPointer
@@ -395,7 +374,8 @@ def param_bounds[
     **A late-bound predicate prunes exactly as well as a literal one**, and
     that falls out of pruning happening at execution time rather than plan
     time: `prune(stats, bindings)` mirrors `bind(batch, bindings)` and sees the
-    same `Bindings` the filter will. `exprold` had to reach a process-global
+    same `Bindings` the filter will. the previous expression package had to
+    reach a process-global
     parameter registry from inside `prune` to get this, and a parameterised
     date filter still read `unknown` and decoded every row group.
 
@@ -427,7 +407,8 @@ struct DynBounds(Copyable, Movable):
 
     Not `Bounds[dt]`, because a runtime node learns its dtype from the data and
     has no comptime type to project. Not
-    `exprold`'s `Interval` either: this holds no `maybe_true`, so the boolean
+    the previous expression package's `Interval` either: this holds no
+    `maybe_true`, so the boolean
     algebra stays on `Truth` and this type is only ever about intervals.
     """
 
@@ -462,9 +443,7 @@ struct DynBounds(Copyable, Movable):
         return Self(Optional(v.copy()), Optional(v^), False)
 
 
-def compare_dyn[
-    P: BoundsKernel
-](l: DynBounds, r: DynBounds) -> Truth:
+def compare_dyn[P: BoundsKernel](l: DynBounds, r: DynBounds) -> Truth:
     """One comparison, read over erased bounds — **the runtime lane's only
     dtype ladder**.
 

@@ -321,7 +321,12 @@ def test_pushdown_conjoined_does_not_mutate_its_receiver() raises:
 
 def test_pushdown_prunes_only_when_every_predicate_agrees() raises:
     var s = PruneStats(100, capacity=1)
-    s.add("a", Optional(Int64Scalar(0).to_dyn()), Optional(Int64Scalar(3).to_dyn()), 0)
+    s.add(
+        "a",
+        Optional(Int64Scalar(0).to_dyn()),
+        Optional(Int64Scalar(3).to_dyn()),
+        0,
+    )
 
     var keeps = Pushdown().conjoined(PrunePredicate(_gt_lit("a", 1)))
     assert_true(keeps.prune(s, Bindings()) == Truth.maybe)

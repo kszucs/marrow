@@ -49,7 +49,8 @@ def _outranks[L: NumericType, R: NumericType]() -> Bool:
        does not.
     2. Otherwise the wider one wins.
 
-    `expr/` folded both into a single rank by adding `1000` to a float's bit
+    the previous expression package folded both into a single rank by adding
+    `1000` to a float's bit
     width, which works only while no integer is 1000 bits wide and requires
     the reader to reconstruct rule 1 from the constant.
     """

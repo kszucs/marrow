@@ -396,14 +396,19 @@ def _summed(var key: DynArray, var vals: DynArray) raises -> Int64Array:
 
 
 def test_groupby_date32_key() raises:
-    var s = _summed(_date32([19000, 18500, 19000, 18500, 19000]), array([1, 2, 3, 4, 5], int32))
+    var s = _summed(
+        _date32([19000, 18500, 19000, 18500, 19000]),
+        array([1, 2, 3, 4, 5], int32),
+    )
     assert_equal(len(s), 2)
     assert_equal(s[0].value(), 9)  # 1 + 3 + 5
     assert_equal(s[1].value(), 6)  # 2 + 4
 
 
 def test_groupby_timestamp_key() raises:
-    var s = _summed(_timestamp([1_000, 2_000, 1_000]), array([10, 20, 30], int32))
+    var s = _summed(
+        _timestamp([1_000, 2_000, 1_000]), array([10, 20, 30], int32)
+    )
     assert_equal(len(s), 2)
     assert_equal(s[0].value(), 40)
     assert_equal(s[1].value(), 20)

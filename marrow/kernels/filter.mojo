@@ -76,7 +76,9 @@ struct FilterKernel(Kernel):
             # decimal columns raising `unsupported dtype`.
 
             def primitive[T: PrimitiveType](d: T) raises {imm} -> DynArray:
-                return FilterKernel.apply(array.as_primitive[T](), mask, ctx).to_dyn()
+                return FilterKernel.apply(
+                    array.as_primitive[T](), mask, ctx
+                ).to_dyn()
 
             return dt.dispatch_primitive(primitive)
         elif dt.is_binary_like():
@@ -98,11 +100,15 @@ struct FilterKernel(Kernel):
         elif dt.is_list_like():
 
             def listlike[T: ListLikeType](d: T) raises {imm} -> DynArray:
-                return FilterKernel.apply(array.as_list_like[T](), mask, ctx).to_dyn()
+                return FilterKernel.apply(
+                    array.as_list_like[T](), mask, ctx
+                ).to_dyn()
 
             return dt.dispatch_listlike(listlike)
         elif dt.is_fixed_size_list():
-            return FilterKernel.apply(array.as_fixed_size_list(), mask, ctx).to_dyn()
+            return FilterKernel.apply(
+                array.as_fixed_size_list(), mask, ctx
+            ).to_dyn()
         elif dt.is_dictionary():
             return FilterKernel.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
@@ -552,7 +558,9 @@ struct FilterKernel(Kernel):
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         var children = [
-            FilterKernel.dispatch(array.children[c].slice(array.offset, n), mask, ctx)
+            FilterKernel.dispatch(
+                array.children[c].slice(array.offset, n), mask, ctx
+            )
             for c in range(len(array.children))
         ]
 
@@ -635,9 +643,13 @@ struct TakeKernel(Kernel):
 
             return dt.dispatch_listlike(listlike)
         elif dt.is_fixed_size_list():
-            return TakeKernel.apply(array.as_fixed_size_list(), indices, ctx).to_dyn()
+            return TakeKernel.apply(
+                array.as_fixed_size_list(), indices, ctx
+            ).to_dyn()
         elif dt.is_dictionary():
-            return TakeKernel.apply(array.as_dictionary(), indices, ctx).to_dyn()
+            return TakeKernel.apply(
+                array.as_dictionary(), indices, ctx
+            ).to_dyn()
         else:
             raise Self.error(t"unsupported dtype {dt}")
 
@@ -933,7 +945,9 @@ struct TakeKernel(Kernel):
         var bm: Optional[Bitmap[]] = None
         if need_bm:
             bm = bmb.to_immutable(length=n)
-        var new_child = TakeKernel.dispatch(array.values().copy(), child_indices, ctx)
+        var new_child = TakeKernel.dispatch(
+            array.values().copy(), child_indices, ctx
+        )
         return ListLikeArray[T](
             dtype=array.dtype.copy(),
             length=n,
@@ -1018,7 +1032,9 @@ struct TakeKernel(Kernel):
         var bm: Optional[Bitmap[]] = None
         if need_bm:
             bm = bmb.to_immutable(length=n)
-        var new_child = TakeKernel.dispatch(array.values().copy(), child_indices, ctx)
+        var new_child = TakeKernel.dispatch(
+            array.values().copy(), child_indices, ctx
+        )
         return FixedSizeListArray(
             dtype=array.dtype.copy(),
             length=n,

@@ -1176,7 +1176,8 @@ def _rescale_up[
     FromN: DType, ToN: DType
 ](data: ArrayData, to: DynType, delta: Int, safe: Bool) raises -> DynArray:
     """Multiply by 10^delta, widening the scale. Shared by `DecimalRescaleKernel` and
-    `IntToDecimalKernel`, which is the only real overlap left between the five."""
+    `IntToDecimalKernel`, which is the only real overlap left between the five.
+    """
     var f = _pow10[ToN](delta)
 
     def up(x: Scalar[FromN]) raises {imm} -> Scalar[ToN]:
@@ -1535,9 +1536,13 @@ def cast(
     elif src.is_null():
         return NullCastKernel.dispatch(array, to, safe, ctx)  # null → any
     elif src.is_dictionary():
-        return DictionaryCastKernel.dispatch(array, to, safe, ctx)  # decode first
+        return DictionaryCastKernel.dispatch(
+            array, to, safe, ctx
+        )  # decode first
     elif src.is_binary_like() and to.is_binary_like():
-        return BinaryLikeCastKernel.dispatch(array, to, safe, ctx)  # bytes ↔ bytes
+        return BinaryLikeCastKernel.dispatch(
+            array, to, safe, ctx
+        )  # bytes ↔ bytes
     elif (src.is_fixed_size_binary() and to.is_binary_like()) or (
         src.is_binary_like() and to.is_fixed_size_binary()
     ):

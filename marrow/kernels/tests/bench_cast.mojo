@@ -40,7 +40,9 @@ def _bench_int32_to_float64(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(NumericCastKernel.apply[Int32Type, Float64Type, safe=True](src)))
+        keep(
+            len(NumericCastKernel.apply[Int32Type, Float64Type, safe=True](src))
+        )
 
     b.iter(call)
     keep(src)
@@ -69,7 +71,9 @@ def _bench_int64_to_int32_unsafe(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(NumericCastKernel.apply[Int64Type, Int32Type, safe=False](src)))
+        keep(
+            len(NumericCastKernel.apply[Int64Type, Int32Type, safe=False](src))
+        )
 
     b.iter(call)
     keep(src)
@@ -212,7 +216,9 @@ def _bench_binary_to_string_unsafe(mut b: Benchmark, n: Int) raises:
 
     @always_inline
     def call() raises {imm}:
-        keep(len(BinaryLikeCastKernel.apply[BinaryType, StringType, False](src)))
+        keep(
+            len(BinaryLikeCastKernel.apply[BinaryType, StringType, False](src))
+        )
 
     b.iter(call)
     keep(src)

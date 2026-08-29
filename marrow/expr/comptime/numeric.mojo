@@ -99,7 +99,6 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -181,7 +180,6 @@ struct NumericUnary[K: UnaryNumericKernel, A: NumericValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -257,7 +255,6 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -313,7 +310,6 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
 
     def columns(self) -> List[String]:
         return self.a.columns()
-
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -377,7 +373,6 @@ struct NumericCompare[
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
 
     # -- ComptimeValue ------------------------------------------------------
 
@@ -451,7 +446,8 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](
 
     **Not element-wise fused, deliberately.** `bind` computes the whole result
     through `kernels.conditional.case_when` and `lane` reads it back, so the
-    `Bound` is the answer rather than the operands. `expr/`'s `CaseWhen` does
+    `Bound` is the answer rather than the operands. the previous expression
+    package's `CaseWhen` does
     the same thing for the same reason: which branch supplies a row depends on
     the condition's *validity* as well as its value — a null condition counts
     as false, and a selected-but-null value stays null — and that three-way
@@ -597,7 +593,6 @@ struct TemporalCompare[
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
-
 
     # -- ComptimeValue ------------------------------------------------------
 

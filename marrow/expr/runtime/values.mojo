@@ -238,7 +238,8 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         would mean a promotion rule per tag, which is a second dispatch table
         keyed on the thing that must never select behaviour.
 
-        `expr/` probed *every* expression this way, comptime ones included.
+        the previous expression package probed *every* expression this way,
+        comptime ones included.
         Here the comptime lane answers from `Type` for free and only this lane
         pays, which is the asymmetry worth having.
         """
@@ -527,8 +528,8 @@ def coalesce(var values: List[RuntimeValue]) raises -> RuntimeValue:
     """First non-null across N expressions (PyArrow `pc.coalesce`).
 
     N-ary rather than a fold of binary nodes, because the kernel is already
-    n-ary — `expr/` folds only because its runtime node had no way to hold N
-    children.
+    n-ary — the previous expression package folded only because its runtime
+    node had no way to hold N children.
     """
     if len(values) == 0:
         raise Error("coalesce: needs at least one value")

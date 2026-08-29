@@ -92,7 +92,6 @@ struct StringCompare[K: StringPredicateKernel, L: StringValue, R: StringValue](
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-
     # -- ComptimeValue ------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -250,7 +249,6 @@ struct StringPredicate[
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
 
-
     # -- BoolValue ----------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
@@ -310,7 +308,6 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
 
     def columns(self) -> List[String]:
         return self.a.columns()
-
 
     # -- PrimitiveValue -----------------------------------------------------
 

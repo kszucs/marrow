@@ -160,10 +160,12 @@ def test_min_string_skips_nulls() raises:
     b.append_null()
     var a: DynArray = b.finish()
     assert_equal(
-        whole[LexicalExtremum[MinOp, StringType]](a).as_string().to_string(), "a"
+        whole[LexicalExtremum[MinOp, StringType]](a).as_string().to_string(),
+        "a",
     )
     assert_equal(
-        whole[LexicalExtremum[MaxOp, StringType]](a).as_string().to_string(), "m"
+        whole[LexicalExtremum[MaxOp, StringType]](a).as_string().to_string(),
+        "m",
     )
 
 
@@ -210,12 +212,8 @@ def test_min_max_date32_skips_nulls() raises:
     b.append_null()
     b.append(Scalar[int32.native](18500))
     var a: DynArray = b.finish()
-    assert_equal(
-        whole[Fold[MinFold, Date32Type]](a).as_date32().value(), 18500
-    )
-    assert_equal(
-        whole[Fold[MaxFold, Date32Type]](a).as_date32().value(), 19000
-    )
+    assert_equal(whole[Fold[MinFold, Date32Type]](a).as_date32().value(), 18500)
+    assert_equal(whole[Fold[MaxFold, Date32Type]](a).as_date32().value(), 19000)
 
 
 def test_min_max_date32_all_null_is_null() raises:

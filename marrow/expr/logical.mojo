@@ -7,13 +7,13 @@ freely copyable, shareable, inspectable and — once the optimizer exists —
 rewritable. `to_operator(ctx)` turns it into the physical operator that owns
 the running state.
 
-**Two methods, not eight.** `expr/`'s `DynRelation` carries `schema`,
-`to_operator`, `write`, `drop`, `kind`, `with_predicate`, `with_projection`
-and `children`. The last four exist for an optimizer that was never finished,
-and two of them cannot express any rewrite that changes a node's type or arity
-— which is every rewrite worth having. They are not reproduced here. When a
-rule needs to walk or rebuild a plan, `children` and its inverse arrive with
-that rule and are shaped by it.
+**Four slots, not eight.** The previous expression package's `DynRelation`
+carried `schema`, `to_operator`, `write`, `drop`, `kind`, `with_predicate`,
+`with_projection` and `children`. `schema`, `to_operator`, `write` and `drop`
+are here; the other four existed for an optimizer that was never finished, and
+two of them cannot express any rewrite that changes a node's type or arity —
+which is every rewrite worth having. When a rule needs to walk or rebuild a
+plan, `children` and its inverse arrive with that rule and are shaped by it.
 
 The one property that must survive whatever arrives: **nothing may name every
 node type in one place.** `DynRelation.__init__[T]` wires trampolines per
@@ -89,16 +89,17 @@ struct Shape(Copyable, Equatable, ImplicitlyCopyable, Movable, Writable):
 trait Value(Copyable, Deinitable, Writable):
     """What every expression is, in both lanes.
 
-    Five members: what it reads, what it is called, what type it produces,
-    whether it yields one value or one per row, and how to turn it into
-    something that runs.
+    Six members: what it reads, what it is called, what type it produces,
+    whether it yields one value or one per row, whether it is an aggregate, and
+    how to turn it into something that runs.
 
     **One trait, not three.** This was `Analyzable & Executable & Writable`, a
-    composite alias split that way in reaction to `expr/`'s nine-responsibility
+    composite alias split that way in reaction to the previous expression
+    package's nine-responsibility
     `Value` trait. The reaction overshot: nothing ever bound on `Analyzable`
     alone, and `Executable` was bound alone in exactly one place, for `shape`.
     Two names that only ever appeared composed back together are not two
-    abstractions — five members in one trait is the honest count, and it is
+    abstractions — six members in one trait is the honest count, and it is
     still not nine.
 
     `dtype` takes a `Schema` because the runtime lane learns its type from one.
@@ -187,12 +188,17 @@ struct DynValue(Copyable, Movable, Writable):
     and no Python frontend can build) and runtime expressions everywhere (which
     is the 4.91 MB configuration).
 
-    Five function slots — `columns`, `name`, `dtype`, `write`, `to_operator` —
-    plus `shape`, read once at construction because it is a comptime constant.
-    `expr/` carried seven and had no `dtype`, computing output types by
+    Six function slots — `columns`, `name`, `dtype`, `write`, `to_operator`
+    and `_drop` — plus two constant fields, `shape` and `aggregates`, read once
+    at construction because both are comptime constants. `_drop` is the
+    destructor trampoline every erased box here needs; erasure through
+    `rebind[ArcPointer[NoneType]]` forgets the pointee's destructor otherwise.
+    the previous expression package carried seven and had no `dtype`, computing
+    output types by
     evaluating against a zero-row batch instead.
 
-    `expr/`'s two extra slots were `name()`, which duplicated what `name` and
+    the previous expression package's two extra slots were `name()`, which
+    duplicated what `name` and
     `write` already answered, and `resolve_names` — a *rewrite*, carried by
     every boxed expression in every binary though it is a no-op in the comptime
     lane. Nothing here is a rewrite: parameter values travel *through* an
@@ -791,9 +797,10 @@ struct Filter(Relation, Writable):
             ctx,
             bindings,
             (
-                pushed.conjoined(self._pruner.value())
-                if self._pruner
-                else pushed^
+                pushed.conjoined(
+                    self._pruner.value()
+                ) if self._pruner else pushed
+                ^
             ),
         )
         pipe.append(
@@ -852,7 +859,8 @@ struct Project(Relation, Writable):
         over whole — dtype, `nullable` and metadata — rather than being
         rebuilt from its dtype alone. Rebuilding loses `nullable`, so
         projecting a column produced a *different* schema for it than
-        selecting the same column did; `expr/` records that as a real
+        selecting the same column did; the previous expression package records
+        that as a real
         divergence, with `nullable` False becoming True.
 
         Bare-column-ness is the composition `name() != "" and
@@ -953,7 +961,8 @@ struct Aggregate(Relation, Writable):
 
         A key that is a bare column keeps its own name; anything computed has
         none and is called `key0`, `key1`, … by position. That rule is not
-        cosmetic: `expr/` shipped a defect where one lane answered `d` and the
+        cosmetic: the previous expression package shipped a defect where one
+        lane answered `d` and the
         other `key0` for the same `GROUP BY d`, so one query had two output
         schemas depending on which lane built it.
         """

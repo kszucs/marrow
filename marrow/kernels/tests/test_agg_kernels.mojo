@@ -458,4 +458,3 @@ def test_agg_variance_is_numerically_stable() raises:
     var got = out[0].value()
     assert_true(got >= 0.0, "a variance is never negative")
     assert_true(_close(got, 1.25))
-

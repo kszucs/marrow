@@ -5,33 +5,22 @@ Pruning (`pruning.mojo`) is *evaluation over a different domain*. This module is
 the other half — **getting the predicate to where the statistics are**, and it
 is a separate problem with a separate failure mode.
 
-# The mechanism: information travels down the lowering, not into a copy of the plan
+# The mechanism: information travels down the lowering, not into a copy
 
-`params.mojo`'s central claim is that a plan is immutable and per-execution
+`bindings.mojo`'s central claim is that a plan is immutable and per-execution
 information travels *through* the execution. Pushdown gets the identical
-treatment: `Relation.to_operator` already takes `bindings` and threads it down
-a recursive descent from root to source, so a `Pushdown` rides the same
-descent.
+treatment: `Relation.to_operator` already threads its arguments down a
+recursive descent from root to source, so a `Pushdown` rides the same descent.
 
 There is no separate pass, no plan walk, no `children()`, no rewrite and no
-rebuilt node. That matters for three reasons that each killed the alternative:
+rebuilt node -- and a rewrite is not merely unnecessary but unavailable:
+`DynRelation(copy=self)` copies trampolines bound to `R`, so a rewritten node
+would have to have the same concrete type, and returning `Optional[DynRelation]`
+from a trampoline field makes the struct recursive, which the compiler rejects.
 
-- `logical.mojo`'s own docstring already refused the four rewrite methods,
-  "two of them cannot express any rewrite that changes a node's type or
-  arity — which is every rewrite worth having".
-- `DynRelation(copy=self)` copies trampolines bound to `R`, so a rewritten node
-  must have the *same concrete type*; and returning `Optional[DynRelation]`
-  from a trampoline field makes the struct recursive, which the compiler
-  rejects.
-- Only a rewrite forces the plan to be copied. Because this does not, `DynValue`
-  keeps its five slots and its stated property — "parameter values travel
-  *through* an execution rather than being substituted into a copy of the
-  plan" — survives untouched.
-
-One capability falls out for free: `exprold` pushed only into an **adjacent**
-scan, so `Filter(Sort(ParquetScan))` pruned nothing. Here the predicate rides
-the lowering all the way down. That is a capability gained by removing a
-mechanism rather than adding one.
+One capability falls out for free: the previous expression package pushed only
+into an **adjacent** scan, so `Filter(Sort(ParquetScan))` pruned nothing. Here
+the predicate rides the lowering all the way down.
 
 # Per-node rules, and the one that is a correctness trap
 
@@ -65,19 +54,12 @@ correctness-neutral by construction: delete every line of this module and
 # What is not here
 
 `Pushdown` carries a predicate and nothing else. **Projection pushdown is the
-obvious second field** — `needed: Optional[List[String]]`, established by
-`Project`/`Aggregate`, widened by `Filter`/`Sort`, consumed by `ParquetScan`
-(whose docstring already says "the schema is the projection") — and it is
-measured at **3.6x** against pruning's whole-suite **1.04x**, so it is the more
-valuable of the two. It is left out here only because it is a different change
-with a different test, and mixing them would make either measurement
-unreadable. Adding it is a field on a plain struct, not a slot on a box.
-
-Its one invariant, worth writing down before someone breaks it: `needed` may
-only ever be *established* by a node that also replaces the schema, and
-pass-through nodes may only ever *widen* it. That is what makes it safe for
-`Filter.schema()` to report fields the runtime batch no longer carries — by
-construction nothing above ever names them.
+obvious second field** -- and, at a measured 3.6x against pruning's 1.04x, the
+more valuable of the two. It is a field on this plain struct, not a slot on a
+box; it is left to its own change so the two measurements stay readable. The
+design and its one invariant (`needed` may only be *established* by a node that
+also replaces the schema, and only ever *widened* by pass-through nodes) are in
+`docs/backlog.md`.
 
 Also absent: conjunction splitting, to push half a predicate below a `Join`.
 `prune()` already handles a whole conjunction compositionally, so the only

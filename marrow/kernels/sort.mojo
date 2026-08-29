@@ -532,7 +532,9 @@ struct SortIndices(Kernel):
             ctx=ctx,
         )
         for i in reversed(range(last)):
-            var reordered = TakeKernel.dispatch(array.field(key_indices[i]), perm)
+            var reordered = TakeKernel.dispatch(
+                array.field(key_indices[i]), perm
+            )
             var local = SortIndices.dispatch(
                 reordered,
                 ascending=ascending[i],

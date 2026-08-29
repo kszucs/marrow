@@ -85,7 +85,6 @@ struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
     def columns(self) -> List[String]:
         return self.a.columns()
 
-
     # -- PrimitiveValue -----------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:

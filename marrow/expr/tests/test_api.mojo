@@ -378,7 +378,8 @@ def test_temporal_comparison_rejects_mismatched_units() raises:
 
 
 def test_coalesce_takes_the_first_non_null() raises:
-    """N-ary, because the kernel is — `expr/` folds binary nodes only because
+    """N-ary, because the kernel is — the previous expression package folds
+    binary nodes only because
     its runtime node could not hold N children."""
     var b = record_batch(
         [

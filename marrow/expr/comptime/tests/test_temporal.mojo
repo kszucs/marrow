@@ -247,8 +247,6 @@ def test_temporal_nodes_compose_into_a_plan() raises:
     `Aggregate._output_schema`, positionally, because it has no source
     column."""
     var b = _events()
-    var plan = table(b^).project(
-        ["y"], [col("ts", timestamp(second)).year()]
-    )
+    var plan = table(b^).project(["y"], [col("ts", timestamp(second)).year()])
     assert_equal(plan.execute().num_rows(), 3)
     assert_true(plan.schema().fields[0].dtype.is_int32())

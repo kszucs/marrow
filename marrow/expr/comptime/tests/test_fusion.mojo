@@ -58,7 +58,8 @@ def test_validity_matches_the_bound_column() raises:
     """`lane` produces data bits only, so validity is a separate contract.
 
     Reading it from the `Bound` rather than the batch is what stops the second
-    pass `expr/` needed; the property is that it still reports the same nulls.
+    pass the previous expression package needed; the property is that it still
+    reports the same nulls.
     """
     var b = _batch()
     var c = col("a", int64)
@@ -88,7 +89,7 @@ def test_a_comparison_over_a_null_is_null_not_false() raises:
     row is whatever the payload happened to be — usually zero, which reads as
     `False`. Only the validity bitmap records that the bit is meaningless.
     Reading the data bit without it is exactly what made NULL join keys match
-    each other in `expr/`.
+    each other in the previous expression package.
     """
     var b = _batch()  # a = [1, 2, None, 4]
     var pred = col("a", int64) > lit(2, int64)

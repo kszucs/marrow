@@ -173,7 +173,9 @@ def test_bounds_not_equal_prunes_only_two_identical_points() raises:
 # cast — where a plausible implementation is unsound
 # ---------------------------------------------------------------------------
 def test_bounds_cast_widens_monotonically() raises:
-    var b = Bounds[DType.int32].range(Scalar[DType.int32](-5), Scalar[DType.int32](7))
+    var b = Bounds[DType.int32].range(
+        Scalar[DType.int32](-5), Scalar[DType.int32](7)
+    )
     var w = b.cast[I64]()
     assert_true(w.known)
     assert_equal(Int(w.lo), -5)

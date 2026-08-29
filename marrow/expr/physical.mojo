@@ -906,7 +906,8 @@ struct JoinOperator(Operator):
     re-emit their tail once per morsel and SEMI would duplicate. Those kinds
     therefore buffer and probe once at `drain`. RIGHT is *not* among them: its
     extra rows are unmatched probe rows, and each probe row belongs to exactly
-    one morsel, so it streams correctly. `expr/` reached the same conclusion
+    one morsel, so it streams correctly. the previous expression package
+    reached the same conclusion
     and this carries it over deliberately.
     """
 
@@ -1090,12 +1091,6 @@ struct ParquetScanOperator(Operator):
     row is never decoded. Speed only: the `Filter` above still applies the
     predicate exactly, so an empty `Pushdown` and a full one return the same
     rows. Row-group *windowing* is still absent and is a separate change.
-
-    (superseded) `expr/`'s scan skips row groups whose statistics prove no
-    row can match, and windows several groups at once. Both need
-    `expr/pruning.mojo`, which has no `expr2` counterpart yet. Their absence
-    costs speed and never correctness — a `Filter` above the scan applies the
-    predicate exactly — so this is a smaller scan, not a wrong one.
     """
 
     var _path: String

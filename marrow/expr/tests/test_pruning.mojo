@@ -334,11 +334,12 @@ def _stats_i64(
     return s^
 
 
-def _gt_lit(var name: String, v: Int) -> _PComparison[
-    GtKernel, _PColumn[Int64Type], _PLiteral[Int64Type]
-]:
+def _gt_lit(
+    var name: String, v: Int
+) -> _PComparison[GtKernel, _PColumn[Int64Type], _PLiteral[Int64Type]]:
     return _PComparison[GtKernel, _PColumn[Int64Type], _PLiteral[Int64Type]](
-        _PColumn[Int64Type](name^), _PLiteral[Int64Type](Scalar[int64.native](v))
+        _PColumn[Int64Type](name^),
+        _PLiteral[Int64Type](Scalar[int64.native](v)),
     )
 
 
@@ -397,7 +398,12 @@ def test_pruning_a_foreign_dtype_answers_maybe_without_aborting() raises:
     provably safe. This case reaching its assertion at all is the result.
     """
     var s = PruneStats(100, capacity=1)
-    s.add("a", Optional(Int32Scalar(0).to_dyn()), Optional(Int32Scalar(3).to_dyn()), 0)
+    s.add(
+        "a",
+        Optional(Int32Scalar(0).to_dyn()),
+        Optional(Int32Scalar(3).to_dyn()),
+        0,
+    )
     assert_true(_gt_lit("a", 5).prune(s, Bindings()) == Truth.maybe)
 
 
@@ -516,13 +522,19 @@ def test_pruning_a_node_with_no_override_answers_unknown() raises:
 def test_pruning_a_bool_column_reads_its_maximum() raises:
     var all_false = PruneStats(100, capacity=1)
     all_false.add(
-        "b", Optional(BoolScalar(False).to_dyn()), Optional(BoolScalar(False).to_dyn()), 0
+        "b",
+        Optional(BoolScalar(False).to_dyn()),
+        Optional(BoolScalar(False).to_dyn()),
+        0,
     )
     assert_true(_PBoolColumn("b").prune(all_false, Bindings()) == Truth.never)
 
     var mixed = PruneStats(100, capacity=1)
     mixed.add(
-        "b", Optional(BoolScalar(False).to_dyn()), Optional(BoolScalar(True).to_dyn()), 0
+        "b",
+        Optional(BoolScalar(False).to_dyn()),
+        Optional(BoolScalar(True).to_dyn()),
+        0,
     )
     assert_true(_PBoolColumn("b").prune(mixed, Bindings()) == Truth.maybe)
 
@@ -537,19 +549,16 @@ def test_pruning_a_bool_column_reads_its_maximum() raises:
 def test_pruning_a_bound_parameter_prunes_like_a_literal() raises:
     """Pruning runs at execution time with the same `Bindings` the filter
     sees, so a late-bound predicate prunes exactly as well as a literal one.
-    `exprold` had to read a process-global registry from inside `prune` for
+    the previous expression package had to read a process-global registry from
+    inside `prune` for
     this, and still regressed a parameterised date filter to reading every row
     group."""
     var p = _PComparison[GtKernel, _PColumn[Int64Type], _PParam[Int64Type]](
         _PColumn[Int64Type]("a"), _PParam[Int64Type]("min-a")
     )
     var s = _stats_i64("a", 0, 3)
-    assert_true(
-        p.prune(s, {"min-a": Int64Scalar(5).to_dyn()}) == Truth.never
-    )
-    assert_true(
-        p.prune(s, {"min-a": Int64Scalar(1).to_dyn()}) == Truth.maybe
-    )
+    assert_true(p.prune(s, {"min-a": Int64Scalar(5).to_dyn()}) == Truth.never)
+    assert_true(p.prune(s, {"min-a": Int64Scalar(1).to_dyn()}) == Truth.maybe)
 
 
 def test_pruning_an_unbound_parameter_answers_maybe_without_raising() raises:
@@ -588,11 +597,21 @@ def test_pruning_promotes_operands_exactly_as_the_lane_does() raises:
         _PColumn[Int32Type]("a"), _PLiteral[Int64Type](Scalar[int64.native](5))
     )
     var s = PruneStats(100, capacity=1)
-    s.add("a", Optional(Int32Scalar(0).to_dyn()), Optional(Int32Scalar(3).to_dyn()), 0)
+    s.add(
+        "a",
+        Optional(Int32Scalar(0).to_dyn()),
+        Optional(Int32Scalar(3).to_dyn()),
+        0,
+    )
     assert_true(p.prune(s, Bindings()) == Truth.never)
 
     var wide = PruneStats(100, capacity=1)
-    wide.add("a", Optional(Int32Scalar(0).to_dyn()), Optional(Int32Scalar(9).to_dyn()), 0)
+    wide.add(
+        "a",
+        Optional(Int32Scalar(0).to_dyn()),
+        Optional(Int32Scalar(9).to_dyn()),
+        0,
+    )
     assert_true(p.prune(wide, Bindings()) == Truth.maybe)
 
 
@@ -736,7 +755,9 @@ def test_pruning_never_excludes_a_matching_group() raises:
         # 1) a > k
         var k = Int(_xorshift(seed) % 40) - 20
         var t1 = _gt_lit("a", k).prune(stats, Bindings())
-        var n1 = rel.filter(col("a", int64) > lit(k, int64)).execute().num_rows()
+        var n1 = (
+            rel.filter(col("a", int64) > lit(k, int64)).execute().num_rows()
+        )
         if t1 == Truth.never:
             pruned += 1
             assert_equal(n1, 0)
@@ -751,7 +772,9 @@ def test_pruning_never_excludes_a_matching_group() raises:
             _PLiteral[Int64Type](Scalar[int64.native](k)),
         )
         var t2 = eq.prune(stats, Bindings())
-        var n2 = rel.filter(col("a", int64) == lit(k, int64)).execute().num_rows()
+        var n2 = (
+            rel.filter(col("a", int64) == lit(k, int64)).execute().num_rows()
+        )
         if t2 == Truth.never:
             pruned += 1
             assert_equal(n2, 0)
@@ -789,7 +812,9 @@ def test_pruning_never_excludes_a_matching_group() raises:
             _PLiteral[Int64Type](Scalar[int64.native](k)),
         )
         var t4 = ne.prune(stats, Bindings())
-        var n4 = rel.filter(col("a", int64) != lit(k, int64)).execute().num_rows()
+        var n4 = (
+            rel.filter(col("a", int64) != lit(k, int64)).execute().num_rows()
+        )
         if t4 == Truth.never:
             pruned += 1
             assert_equal(n4, 0)
