@@ -62,12 +62,7 @@ from ..dtypes import (
     int32,
     int64,
 )
-from ..scalars import (
-    PrimitiveScalar,
-    DynScalar,
-    Int64Scalar,
-    Float64Scalar,
-)
+from ..scalars import PrimitiveScalar, DynScalar
 from ..views import reduce
 from .core import Kernel, Groups
 from ..execution import ExecContext
@@ -1008,18 +1003,6 @@ trait AggKernel(Deinitable, Kernel, Movable):
         state.update(groups, input)
         return state.finish()
 
-    @staticmethod
-    def empty() raises -> Optional[Self.OutArray]:
-        """The one-row answer over an input that produced **no column at all**,
-        or `None` when there is no such answer.
-
-        A filter that keeps nothing answers with no batch rather than an empty
-        one, so an aggregate above it never sees a dtype. `COUNT(DISTINCT x)`
-        of nothing is still `0` — SQL's answer and PyArrow's — and needs no
-        dtype to say so. An extremum does need one, so it declines here and the
-        caller supplies a null from the plan's schema."""
-        return None
-
 
 trait Foldable(AggKernel):
     """An `AggKernel` that wraps a lane algebra, and can name it.
@@ -1265,13 +1248,6 @@ struct Dispersion[ddof: Int, root: Bool, V: NumericType](AggKernel):
         time and could only fire if a caller had already resolved wrong."""
         return DynType(float64)
 
-    @staticmethod
-    def empty() raises -> Optional[Self.OutArray]:
-        # The dispersion of nothing is undefined, and unlike an extremum this
-        # can say so without a schema: the output dtype is float64 regardless
-        # of what was aggregated.
-        return Float64Scalar(None, float64).repeat(1)
-
     def reserve(mut self, slots: Int) raises:
         while len(self._n) < slots:
             self._n.append(0.0)
@@ -1471,18 +1447,6 @@ struct ValidCount[A: Array](AggKernel):
             out.append(Scalar[int64.native](self._counts[g]))
         return out.finish()
 
-    @staticmethod
-    def _per_group(groups: Groups, column: Self.InArray) raises -> Int64Array:
-        """The per-slot counts as a typed column — what `partials` hands the
-        parallel driver, which wants an `Int64Array` rather than a state."""
-        var state = Self(column.type())
-        state.update(groups, column.copy())
-        return state.finish()
-
-    @staticmethod
-    def empty() raises -> Optional[Self.OutArray]:
-        return Int64Scalar(Int64(0)).repeat(1)
-
 
 struct DistinctCount[exact: Bool, A: Array](AggKernel):
     """`COUNT(DISTINCT x)` exactly, or a HyperLogLog estimate of it.
@@ -1541,10 +1505,6 @@ struct DistinctCount[exact: Bool, A: Array](AggKernel):
     def dtype(in_dtype: DynType) raises -> DynType:
         # A cardinality, whatever was counted.
         return DynType(int64)
-
-    @staticmethod
-    def empty() raises -> Optional[Self.OutArray]:
-        return Int64Scalar(Int64(0)).repeat(1)
 
     def reserve(mut self, slots: Int) raises:
         if slots <= self._slots:

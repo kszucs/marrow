@@ -344,24 +344,6 @@ def test_agg_erased_face_answers_the_same() raises:
     assert_true(erased == direct)
 
 
-def test_agg_over_no_input_only_the_counts_answer() raises:
-    """An input that produced no column at all: a cardinality is still 0, an
-    extremum has no dtype to be null of and declines."""
-    var counted = DistinctCount[True, Int64Array].empty()
-    assert_true(Bool(counted))
-    assert_true(counted.value() == array([0], int64))
-    assert_true(not StringExtremum[MinOp, StringType].empty())
-    assert_true(not Fold[MaxKernel, Int64Type].empty())
-
-
-# ---------------------------------------------------------------------------
-# Dispersion — variance / stddev, the composite-accumulator aggregate
-#
-# Every expectation here was read off PyArrow (`pc.variance` / `pc.stddev`),
-# which is where the `n - ddof <= 0 -> null` rule and the `ddof=0` default come
-# from. Comparisons are tolerance-based: Welford's recurrence and Arrow's
-# implementation agree to floating point, not bit-for-bit.
-# ---------------------------------------------------------------------------
 def _close(got: Float64, want: Float64) -> Bool:
     return abs(got - want) < 1e-9
 
@@ -459,14 +441,6 @@ def test_agg_variance_grouped_slot_with_one_row_is_null_when_sampled() raises:
     )
     assert_true(out.is_null(0), "one row, ddof=1 -> no answer")
     assert_true(_close(out[1].value(), 2.0))
-
-
-def test_agg_variance_over_no_input_is_null() raises:
-    """Unlike an extremum, this can answer without a schema: the output dtype
-    is float64 whatever was aggregated."""
-    var answer = Dispersion[0, False, Int64Type].empty()
-    assert_true(Bool(answer))
-    assert_true(answer.value().is_null(0))
 
 
 def test_agg_variance_is_numerically_stable() raises:
