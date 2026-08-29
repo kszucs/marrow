@@ -40,7 +40,7 @@ from ..aggregate import (
     ValidCount,
 )
 from ...dtypes import StringType
-from ..core import Groups
+from ..groups import Groups
 
 
 def _ids(values: List[Optional[Int]]) raises -> Int32Array:

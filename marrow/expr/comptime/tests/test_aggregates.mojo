@@ -32,7 +32,7 @@ from ....dtypes import (
 )
 from ....builders import TimestampBuilder
 from ....tabular import RecordBatch, record_batch
-from ....kernels.core import Groups
+from ....kernels.groups import Groups
 from ...logical import DynValue
 from ...physical import Morsel
 from ..aggregates import Count, Max, Mean, Min, Product, Sum

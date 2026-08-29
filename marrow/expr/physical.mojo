@@ -48,7 +48,7 @@ from ..kernels.aggregate import AggKernel
 from ..kernels.concat import concat
 from ..execution import ExecContext
 from ..kernels.filter import filter, take
-from ..kernels.core import Groups
+from ..kernels.groups import Groups
 from ..kernels.groupby import HashGrouping
 from ..dtypes import DynType
 from ..parquet.reader import LeafSet, ParquetFile

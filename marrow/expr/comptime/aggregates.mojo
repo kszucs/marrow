@@ -56,7 +56,7 @@ from ..logical import Shape, Value
 from ..bindings import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
-from ...kernels.core import Groups
+from ...kernels.groups import Groups
 from ...arrays import DynArray
 from ..physical import (
     BufferedAggregateOperator,

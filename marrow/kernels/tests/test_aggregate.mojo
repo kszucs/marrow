@@ -26,7 +26,7 @@ from ...dtypes import (
     Int64Type,
     TimestampType,
 )
-from ...kernels.core import Groups
+from ...kernels.groups import Groups
 from ...kernels.aggregate import (
     AggKernel,
     Fold,

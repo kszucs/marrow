@@ -64,7 +64,8 @@ from ..dtypes import (
 )
 from ..scalars import PrimitiveScalar, DynScalar
 from ..views import reduce
-from .core import Kernel, Groups
+from .core import Kernel
+from .groups import Groups
 from ..execution import ExecContext
 from .distinct import (
     HLL_P_GROUPED,

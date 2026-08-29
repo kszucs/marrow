@@ -23,7 +23,7 @@ from std.memory import ArcPointer
 from std.testing import assert_equal
 from ...dtypes import DynType, int64
 from ...execution import ExecContext
-from ...kernels.core import Groups
+from ...kernels.groups import Groups
 from ...schema import Schema
 from ..logical import DynRelation, DynValue, Relation, Shape, Value
 from ..bindings import Bindings

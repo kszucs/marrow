@@ -24,7 +24,7 @@ from ...dtypes import int64, Int64Type, struct_, Field
 from ...kernels.join import JOIN_INNER, JOIN_ALL
 from ...kernels.join import HashJoin, hash_join
 from ...kernels.aggregate import Fold, SumFold
-from ...kernels.core import Groups
+from ...kernels.groups import Groups
 from ...execution import ExecContext
 from ...utils.testing import Benchmark
 

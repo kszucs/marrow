@@ -23,7 +23,7 @@ from ..arrays import (
 )
 from ..builders import DynBuilder, Int32Builder
 from ..dtypes import DynType, Field, struct_
-from .core import Groups
+from .groups import Groups
 from .hashtable import SwissHashTable
 from .hashing import RapidHashKernel
 from .filter import TakeKernel

@@ -202,7 +202,8 @@ from .conditional import (
 from .nested import ArrayLengthKernel, ArrayContainsKernel
 from .cast import CastKernel, cast
 from .concat import concat
-from .core import Kernel, Groups
+from .core import Kernel
+from .groups import Groups
 from .distinct import (
     count_distinct,
     approx_count_distinct,
