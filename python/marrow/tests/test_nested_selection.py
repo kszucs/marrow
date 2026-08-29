@@ -82,30 +82,3 @@ def test_take_matches_pyarrow(arr):
 def test_drop_null_matches_pyarrow(arr):
     got = pa.array(ma.compute.drop_null(ma.array(arr))).to_pylist()
     assert got == arr.drop_null().to_pylist()
-
-
-# ── group-by on a nested key column (exercises nested rapidhash) ──────────────
-
-
-def test_group_by_list_key():
-    rb = ma.record_batch(
-        {
-            "k": ma.array(
-                pa.array([[1, 2], [3], [1, 2], [3], [1, 2], [4]], pa.list_(pa.int64()))
-            ),
-            "v": ma.array([10, 20, 30, 40, 50, 60]),
-        }
-    )
-    out = rb.group_by("k").aggregate([("v", "sum")]).to_pylist()
-    got = {tuple(r["k"]): r["v_sum"] for r in out}
-    assert got == {(1, 2): 90, (3,): 60, (4,): 60}
-
-
-def test_group_by_struct_key():
-    sk = pa.array(
-        [{"a": 1, "b": "x"}, {"a": 1, "b": "x"}, {"a": 2, "b": "y"}],
-        pa.struct([("a", pa.int64()), ("b", pa.string())]),
-    )
-    rb = ma.record_batch({"k": ma.array(sk), "v": ma.array([1, 2, 3])})
-    out = rb.group_by("k").aggregate([("v", "sum")]).to_pylist()
-    assert sorted(r["v_sum"] for r in out) == [3, 3]

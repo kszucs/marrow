@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     23
     """
     var t = table("basic")
-    var q = t.aggregate(
+    return t.aggregate(
         aggs=[col("v", int64).sum().alias("total")],
     )
-    return q

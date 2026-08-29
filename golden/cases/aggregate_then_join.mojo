@@ -17,17 +17,9 @@ def plan() raises -> DynRelation:
         keys=[col("region", string)],
         aggs=[col("qty", int32).sum().alias("total")],
     )
-    var right = table("regions")
-    var joined = agg.join(
-        right,
-        left_on=[col("region", string)],
-        right_on=[col("region", string)],
-        how=JOIN_INNER,
-        strictness=JOIN_ALL,
-    )
+    var joined = agg.join(table("regions"), [0], [0], JOIN_INNER)
     var picked = joined.project(
         ["region", "total", "country"],
         [col("region", string), col("total", int64), col("country", string)],
     )
-    var q = picked.sort([col("region", string)], [True])
-    return q
+    return picked.sort_by([col("region", string)], [True])

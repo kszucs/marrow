@@ -22,5 +22,4 @@ def plan() raises -> DynRelation:
         keys=[col("ts", timestamp(microsecond)).date_trunc("month")],
         aggs=[count_star().alias("n")],
     )
-    var q = agg.sort([col("key0", timestamp(microsecond))], [True])
-    return q
+    return agg.sort_by([col("key0", timestamp(microsecond))], [True])

@@ -18,7 +18,6 @@ def plan() raises -> DynRelation:
     'east'	50	4.0
     """
     var t = table("sales")
-    var picked = t.select("region", "qty", "price")
+    var picked = t.select(["region", "qty", "price"])
     var renamed = picked.rename(["region", "qty"], ["area", "units"])
-    var q = renamed.sort([col("units", int32)], [True])
-    return q
+    return renamed.sort_by([col("units", int32)], [True])

@@ -8,7 +8,151 @@
 > findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
 > which indexes all twenty.
 
+### Removals
+
+- **`marrow/exprold/` is gone, and with it the machinery that only it kept
+  alive.** The previous expression layer is deleted outright — `values.mojo`,
+  `dynamic.mojo`, `aggregates.mojo`, `builders.mojo`, `params.mojo`,
+  `pruning.mojo`, `core.mojo` and its tests. `marrow/expr/` is the replacement
+  and the only expression layer. Nothing was relocated or shimmed: a capability
+  that was not already ported is simply absent, and the unported set is
+  recorded in `docs/backlog.md` rather than preserved behind an alias.
+
+  What went with it, each verified to have had no surviving caller outside
+  deleted code:
+
+  - **The eager group-by driver** (`marrow/kernels/groupby.mojo`): `GroupBy`,
+    `GroupedColumns`, `ThreadPartials`, `trait AggregateSet`, `OneAggregate`,
+    `aggregate_all`, `aggregate_columns`, `_thread_local_columns`,
+    `_by_partition`, `_choose_strategy`, and the `GROUP_SERIAL` /
+    `GROUP_THREAD_LOCAL` / `GROUP_RADIX` strategies. `AggregateSet` had exactly
+    two conformers — `OneAggregate`, which existed only so `aggregate[A]` could
+    reuse the driver, and `exprold`'s `FoldedAggregates`. With the second gone
+    the trait was an erasure boundary with nothing to erase.
+
+    **`HashGrouper` and the `Grouping` trait survive**, with `ScalarGrouping`
+    and `HashGrouping`: `marrow/expr/`'s `AggregateOperator` is parameterised
+    on placement and uses all three. Grouping was never the exprold-only part.
+
+  - **`trait Mergeable`** and the thread-local partial/merge protocol:
+    `AccArray`, `partials` and `merge` on the trait, on `Fold` and on
+    `ValidCount`, plus `AggState.into_partials` and `AggState.merge`. Their
+    sole driver was `GroupBy._thread_local_columns`.
+
+  - **`FoldKernel.reduce` and `FoldKernel.apply`**, the whole-array SIMD
+    reduce, and their four overrides on `Widening`, `MinMax`, `CountKernel` and
+    `MeanKernel`. `exprold`'s `Reduction` node was the only production caller;
+    `Fold` folds through `views.reduce` with `K.combine` and never named them.
+    The coverage they had is preserved through `AggKernel.grouped` with
+    `Groups.single(n)`, which is the same whole-column answer.
+
+  `AnyKernel` / `AllKernel` keep their own `reduce` — they are
+  `BoolReduceKernel`, not `FoldKernel`, and are live.
+
+- **Python API removed with it.** `RecordBatch.group_by(...)` /
+  `.aggregate(...)` and the `RecordBatchGroupBy` helper (the PyArrow-shaped
+  `rb.group_by("k").aggregate([("v", "sum")])`) are gone: they were backed by
+  `exprold`'s `FoldedAggregates`, the last non-test import of `exprold` from
+  inside `marrow/`. `marrow.compute`'s `sum`, `product`, `min`, `max`, `mean`,
+  `count_distinct` and `approx_count_distinct` are gone too — they were bound
+  through `exprold`'s `AggFunction` vocabulary. The `Expr` / `Agg` / `Plan`
+  binding types (`python/bindings/expressions.mojo`, `plan.mojo`) and the pure
+  Python frontend over them (`marrow/lazy.py`, `marrow/_expr_column.py`,
+  `LazyTable`, `memtable`, `col`, `lit`, `if_else`, `count_star`) are gone as
+  well; all of it was already non-building on this branch, and deleting it is
+  what makes `libmarrow.so` link again. The eager `Array` / `Scalar` /
+  `RecordBatch` / `Table` / IPC / Parquet surface is unaffected.
+
 ### Features
+
+- **The operator surface `marrow/exprold/` had and `marrow/expr/` did not:
+  arithmetic beyond `+ - *`, the temporal family, and the string fluent
+  spelling.** The golden corpus measured the gap exactly — the port left
+  **47 of its 154 cases with `-- skip mojo`**, and because `runner.generate_mojo`
+  drops a skipped case from the generated driver entirely, those 47 did not
+  appear in a test run as skips. `pytest golden` reported *106 passed, 1
+  xfailed* over 107 collected cases and looked green. All 47 skips are now gone
+  and the suite runs **153 passed, 1 xfailed** over 154.
+
+  Almost none of this is new compute. The kernels had been in
+  `kernels/numeric.mojo`, `kernels/temporal.mojo` and `kernels/boolean.mojo`
+  since long before this lane existed and were simply unreachable from an
+  expression; what landed is the nodes and the fluent methods that name them.
+
+  - **`NumericUnary[K, A]`** — keeps the operand's dtype, which is what
+    `abs(int32) -> int32` needs and what separates it from the float family.
+    `-`, `abs`, `sign`, `floor`, `ceil`, `round`, `trunc`.
+  - **`FloatBinary[K, L, R]` / `FloatUnary[K, A]`** — answer `float64`
+    whatever went in, because `/` and `sqrt` are not closed over the integers.
+    `/`, `**`, `sqrt`, `exp`, `ln`. `K` is bound on `BinaryKernel` /
+    `UnaryKernel` rather than a sub-trait: `DivKernel` is a
+    `BinaryNumericKernel` and `PowKernel` a `BinaryFloatKernel`, and the two
+    have no common sub-trait.
+  - **`Mod` / `Floordiv`** on `NumericBinary`. `%` takes the sign of the
+    **divisor**, so `-1 % 3` is 2 and `a == (a // b) * b + a % b` holds —
+    Python's convention, not SQL's, and deliberately so: PyArrow, arrow-rs and
+    SQL all truncate toward zero. `golden/cases/math_mod_int64.mojo` writes
+    floored modulo in SQL as `((n % 3) + 3) % 3` rather than asserting the
+    other convention.
+  - **`ValuePredicate[K, A]`** — `is_nan` / `is_inf`, which `NullPredicate`'s
+    docstring already anticipated as needing their own node: they read
+    *values*, so the operand bound is `NumericValue` and not `ComptimeValue`,
+    with the floating half a `comptime assert`. **A null is not a NaN**:
+    `is_null(NULL)` is TRUE and `is_nan(NULL)` is NULL, and the kernel is
+    already the only place that rule is written.
+  - **`comptime/temporal.mojo`** — `TemporalExtract[K, A]` (nine fields, all
+    `int32`, matching Arrow C++) and `DateTrunc[A]` (keeps the operand's dtype,
+    unit and timezone included). Its own module because the two land in
+    *different families* — extraction is a `NumericValue`, truncation a
+    `TemporalValue` — so they share an operand bound and nothing else.
+    `DateTrunc`'s unit is a field rather than a comptime parameter: it is
+    resolved once per batch and never read per row, so monomorphising seven
+    ways would trade binary size for no inner-loop win.
+  - **`StrLe` / `StrGe`.** `StringValue` had `__lt__`/`__gt__` and no
+    `__le__`/`__ge__` for exactly one reason — the two aliases did not exist —
+    so `region >= 'north'` was unwritable.
+
+- **The fluent surface the nodes were missing.** Reaching a node by naming it
+  (`Upper(col("region", string))`) was the only spelling for most of the string
+  family, and for the temporal family there was none at all.
+
+  - `StringValue` gains `__le__`, `__ge__`, `upper`, `lower`, `strip`,
+    `lstrip`, `rstrip`, `reverse`, `capitalize`, `length`, `startswith`,
+    `endswith`, `contains`, `like`, `ilike`.
+  - `NumericValue` gains `__truediv__`, `__floordiv__`, `__mod__`, `__pow__`,
+    `__neg__`, `abs`, `sign`, `floor`, `ceil`, `round`, `trunc`, `sqrt`,
+    `exp`, `ln`, `is_nan`, `is_inf`.
+  - **`TemporalValue` gains all six comparison dunders**, plus the nine
+    extractors and `date_trunc`. It had *none*: `TemporalCompare` and its six
+    aliases sat in `numeric.mojo` with no callers, and three of the six
+    (`TemporalNe`, `TemporalLe`, `TemporalGe`) had never had one. A family
+    whose whole documented purpose is "ordered and comparable, but not
+    arithmetic" could not be compared.
+
+  All are trait defaults on the family that knows its own types, never on
+  `ComptimeValue`: a default whose return type a conformer must change becomes
+  an ambiguous overload at every call site.
+
+  `date_trunc` parses its unit at **construction**, so
+  `date_trunc("fortnight")` fails when the plan is built rather than on the
+  first row that evaluates it. That is what `CalendarUnit` being a type rather
+  than a `String` is for.
+
+- **`DynRelation` gains `with_columns`, `drop`, `rename` and a variadic
+  `select`.** All four are sugar over `Project`, exactly as the list-taking
+  `select` already was — the surviving columns are runtime column reads, so no
+  caller supplies their dtypes and none of the four is generic over the input's
+  types.
+
+  Each owns one rule about the output schema. `with_columns` **replaces in
+  place** when the name already exists (Polars' rule, and the only one that
+  keeps the schema free of duplicates); `drop` keeps the survivors in input
+  order and **raises on a name that is not there**, because a typo otherwise
+  leaves the column it meant to remove alive; `rename` takes two parallel lists
+  because Mojo has no dict literal in argument position, and the renamed column
+  carries its **source `Field`** over — dtype, `nullable` and metadata —
+  because `Project._output_schema` recognises a bare column. Rebuilding from
+  the dtype alone turns `nullable=False` into `True`.
 
 - **`variance` and `stddev`, and the first aggregate that is a fold but not a
   `Fold`.** `Dispersion[ddof, root]` is a new `AggKernel` alongside `Fold`,
@@ -44,6 +188,26 @@
   entry so the two sides cannot drift again silently.
 
 ### Fixes
+
+- **`Fold.partials` skipped the `is_single()` branch, so a merged whole-table
+  fold answered NULL.** Every other entry point tests `Groups.is_single()`
+  before touching the state; `partials` drove `AggState` directly, whose loop
+  runs over `group_ids` — and `Groups.single(n)` carries none. Handed one, it
+  grew a slot, folded nothing, and `merge` answered NULL where 10 was correct.
+
+  `ValidCount.partials` routed through its own `update` and answered correctly
+  on identical input, which is what made this a design fault rather than a
+  typo: two conformers of one trait disagreeing. `partials` now goes through
+  `open`/`update` like everything else, so the branch cannot be missed again.
+
+  Latent when found — the only caller always builds `Groups` from a real
+  grouper — but `partials` is a public static that accepts a `Groups`, so it
+  advertised handling one it silently mishandled. `partials`/`merge` had **no
+  test coverage at all**, which is how it survived; there are now three,
+  including a two-worker round trip, and the single-slot case was confirmed to
+  fail against the old implementation.
+
+
 
 - **Every erased box leaked what it held.** `DynValue`, `DynRelation`,
   `DynOperator` and `ResolvedAggregate` each erase by
@@ -97,6 +261,97 @@
   raise at plan time. `Aggregate` and `RuntimeAggregate` no longer conform to
   `Evaluable`, and their `evaluate` methods are gone.
 
+### Tests
+
+- **`marrow/expr/comptime/tests/test_arithmetic.mojo` and `test_temporal.mojo`**,
+  plus fluent-surface cases appended to `test_strings.mojo` and verb cases to
+  `marrow/expr/tests/test_relations.mojo`. They pin *wiring*, which is what
+  this change is: which node each method builds and which of the three output
+  rules it follows. The rounding case asserts `floor`/`ceil`/`round`/`trunc`
+  against one column that disagrees on -1.5, because a mis-wiring that pointed
+  `trunc` at `FloorKernel` survives any test that only looks at a positive
+  value; the strip case does the same for `strip`/`lstrip`/`rstrip`.
+
+- **The five join cases the port left holding a removed API.**
+  `join_bool_key`, `join_float_key`, `join_multi_key_mixed_types`,
+  `join_self_on_int64` and `join_string_key_full` still called
+  `join(right, left_on=…, right_on=…, how=…, strictness=…)` and would not have
+  compiled; their skip cited only `rename`, which understated it. Because
+  `-- skip mojo` removes a case from codegen rather than marking it skipped,
+  the dead code was invisible. They now use positional key indices like the
+  eleven join cases the port did convert.
+
+- **`golden/cases/temporal_filter_timestamp.mojo` moved to the comptime lane.**
+  It was written through the runtime lane because the AOT lane could not
+  express a temporal comparison at all; it now spells
+  `col("ts", timestamp(microsecond)) > … .date_trunc("year")`, which is the
+  first golden case to exercise `TemporalCompare` end to end.
+
+- **`golden/`'s Mojo lane runs against `marrow/expr/`: 153 passed, 1 xfailed
+  over all 154 cases.** `prelude.mojo` and `helpers.mojo` import from
+  `marrow.expr.builders`, `marrow.expr.logical` and the four modules under
+  `marrow/expr/comptime/`, and every case body was respelled for the new verb
+  surface — `sort` became `sort_by`, `join` takes key *indices* and a
+  `JoinKind` rather than key expressions plus `how` / `strictness`,
+  `lit("x")` became `lit("x", string)`, and a plan is returned directly because
+  `DynRelation` is no longer `ImplicitlyCopyable`. No case was deleted and no
+  query was changed.
+
+  **The port initially left 47 of the 154 carrying `-- skip mojo`** — the
+  corpus's own mechanism, used because the suite is one compilation unit and
+  one uncompilable case would take all 154 with it. Each named the missing node
+  in its docstring: the `rename` / `drop` / `with_columns` verbs (9 cases);
+  `abs`, `sign`, `sqrt`, `ln`, `exp`, `ceil`, `floor`, `round`, `is_nan`,
+  `is_inf` and the `/`, `%`, `**` and unary-minus operators (19); `capitalize`,
+  `contains`, `endswith`, `lstrip`, `rstrip`, `reverse` and `>=` / `<=` on
+  strings (7); and temporal field extraction and `date_trunc` (12). **All 47
+  are gone** — the nodes and fluent methods they named are the Features entries
+  above.
+
+  Worth recording because it nearly hid the gap: `runner.generate_mojo` drops a
+  skipped case from the generated driver *entirely*, so a `-- skip mojo` case
+  produces no import, no wrapper and no `SKIPPED` line. The suite read
+  "106 passed, 1 xfailed" over 107 collected items with nothing saying 47 had
+  vanished.
+
+  `temporal_group_by_date` now passes and its prose was rewritten: it recorded
+  a defect where a temporal `GROUP BY` key came back as `key0` in one lane and
+  as its column name in the other, and `Aggregate._output_schema` settles it.
+
+  The **Python lane is down** and this does not change that:
+  `golden/test_cases.py` needs the deleted `marrow.LazyTable` / `col` /
+  `count_star` / `if_else` / `memtable`. It now **skips at module level** rather
+  than failing to import: a collection error there aborts the whole session and
+  makes the passing Mojo lane report zero cases run, which reads as a pass.
+  `pytest golden` reports 153 passed, 1 skipped, 1 xfailed — and that one skip
+  is 154 Python-lane cases, which is the larger remaining hole.
+
+- **The 12 binary-size gates written against the old package were ported, not
+  deleted.** The suite's value is cross-program comparability, so it keeps all
+  fourteen programs. Four carry over exactly (`query_arith`, `query_join`,
+  `query_streaming`, `query_streaming_agg_fused`); seven port with a loss stated
+  in their own docstring — `query_sort` loses top-K (the new `Sort` has no
+  `limit`, so a separate `LimitOperator` slices), `query_scan` loses statistics
+  pruning and pushdown, `query_exprs` loses `IsIn` and calendar arithmetic (so
+  `kernels/temporal.mojo` is now linked by no gate), `query_param` loses the
+  whole `execute_cli` tail and keeps only `Param[Int64Type]` + `Bindings` +
+  `marrow/utils/argparse.mojo`, and `query_streaming_agg` now measures *more*
+  than its name claims because `RuntimeAggregate` cannot take a fused operand,
+  conflating runtime aggregate identity with a runtime operand. One is
+  degenerate: `query_scan_typed` measured byte-identical `__text` to
+  `query_scan`, because `ParquetScanOperator` hardcodes `LeafSet.all()` and the
+  leaf-set parameter it existed to vary no longer exists.
+
+  `compare.py` no longer aborts the suite on the first failed build — it records
+  `BUILD FAILED`, measures the rest, and exits non-zero at the end — and it
+  unlinks stale artifacts first, so a failed build can no longer be measured as
+  a stale success. Its per-module symbol buckets named four modules that no
+  longer exist and had been silently reporting 0 for every program.
+
+  **`baseline.json` is deliberately untouched.** Five of its seven recorded
+  gates now measure a different program, so those numbers are meaningless and
+  re-recording the floor is a judgement call, not a side effect of this port.
+
 ### Features
 
 - **Aggregates stream: `AggKernel` is a state machine, and buffering is gone.**
@@ -133,6 +388,64 @@
   column.
 
 ### Refactors
+
+- **The aggregate kernels are typed, with one erased dispatcher on top.** The
+  same shape every other kernel family here has: `filter`, `take`, `cast` and
+  `concat` put their logic in typed overloads and expose one erased entry point
+  that narrows and delegates. Aggregates did the opposite — `List[DynArray]`
+  appeared in the trait itself, so every conformer re-narrowed on every morsel
+  and the trait could not say what it consumed.
+
+  `AggKernel` now declares `comptime InArray: ArrayInput` and
+  `comptime OutArray: Array`, with `update(groups, input: Self.InArray)` and
+  `finish() -> Self.OutArray`. `Fold[K, V]` eats a `PrimitiveArray[V]`,
+  `StringExtremum[Op, T]` a `BinaryLikeArray[T]`, `Dispersion[ddof, root, V]` a
+  `PrimitiveArray[V]`. That removes `Dispersion`'s and `StringExtremum`'s
+  per-morsel `dispatch_numeric`/`dispatch_stringlike` re-dispatch entirely.
+
+  **`ArrayInput` is the new bound, and it is what makes one boundary enough.**
+  Two members — `__init__(ArrayData)` and `type()` — so
+  `Self.InArray(column.to_data())` narrows *any* conformer and `DynAgg` needs
+  no per-kernel hook. `Array` already required both; `DynArray` now conforms
+  too, which is deliberate: `ValidCount` and `DistinctCount` read only a
+  validity bitmap and a hash, never a value's type, so naming an array type for
+  them would name a type they never use — and since every caller holds an
+  erased column, that "narrowing" would be an unchecked *reinterpret* rather
+  than a conversion. They consume `DynArray`, which is the truthful statement.
+  `ValidCount` avoids the per-row cost by reading the bitmap once per morsel
+  through `to_data().validity()` instead of calling `is_valid(i)` per row,
+  which is what the measured 4.9x was actually about.
+
+- **`DynAgg` replaces `ResolvedAggregate`, and moves to `kernels/`.** One box
+  holding the output dtype, the empty answer, the opened state and four
+  trampolines — the erased face of the typed stack, next to the kernels it
+  erases rather than in the expression layer. It carries the `_drop` trampoline
+  from the start, which matters most here: the state it boxes is O(distinct
+  values).
+
+  It also closes the hazard the typed contract introduced. `DynAgg.update` is
+  the sole place a runtime dtype meets a comptime `InArray`, and
+  `Array.__init__` from `ArrayData` does not re-validate — so it checks the
+  column's dtype against the one it resolved for. Every morsel of a scan shares
+  a schema, so that is one comparison per morsel, not per row, and without it a
+  mismatch reaches `as_type`'s `debug_assert`, which **aborts the process**
+  rather than raising.
+
+- **Aggregates take one column, not a list.** `dtype(List[DynType])` became
+  `dtype(DynType)` and `RuntimeAggregate._inputs: List[DynValue]` became
+  `_input: DynValue`. The list only ever held one operand while costing five
+  conformers an arity check apiece — five chances to word the same error
+  differently — and letting a two-input call typecheck and fail at run time. A
+  genuinely two-operand aggregate (`corr`, `covar`) is a different family with
+  a different trait, not a longer list. `AggregateFn._solo` went with it.
+
+  `Mergeable` is typed the same way, and `merge` lost its `in_dtype` argument:
+  neither conformer read it. `Fold` takes the accumulator's dtype off the first
+  partial — the only correct source, since `min`/`max` keep the input's unit
+  and timezone and `AccType` cannot recover them — and `ValidCount` counts.
+  `OneAggregate` lost its `_in_dtype` field for the same reason.
+
+
 
 - **The runtime aggregate resolution no longer allocates at plan time.**
   `ResolvedAggregate.of[Agg]` called `Agg.open(...)`, so

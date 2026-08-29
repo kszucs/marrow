@@ -17,5 +17,4 @@ def plan() raises -> DynRelation:
     4
     """
     var t = table("events")
-    var q = t.project(["q"], [col("ts", timestamp(microsecond)).quarter()])
-    return q
+    return t.project(["q"], [col("ts", timestamp(microsecond)).quarter()])

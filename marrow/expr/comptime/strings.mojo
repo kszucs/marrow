@@ -105,6 +105,22 @@ struct StrGtKernel(StringCompareKernel):
         return a > b
 
 
+struct StrLeKernel(StringCompareKernel):
+    comptime name = StaticString("str_le")
+
+    @staticmethod
+    def core(a: String, b: String) -> Bool:
+        return a <= b
+
+
+struct StrGeKernel(StringCompareKernel):
+    comptime name = StaticString("str_ge")
+
+    @staticmethod
+    def core(a: String, b: String) -> Bool:
+        return a >= b
+
+
 struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
     BoolValue, Unnamed
 ):
@@ -172,6 +188,16 @@ comptime StrEq = StringCompare[StrEqKernel, _, _]
 comptime StrNe = StringCompare[StrNeKernel, _, _]
 comptime StrLt = StringCompare[StrLtKernel, _, _]
 comptime StrGt = StringCompare[StrGtKernel, _, _]
+comptime StrLe = StringCompare[StrLeKernel, _, _]
+comptime StrGe = StringCompare[StrGeKernel, _, _]
+"""All six comparisons, not the four the port shipped with.
+
+`StringValue` had `__lt__`/`__gt__` and no `__le__`/`__ge__` precisely because
+these two aliases did not exist, so `region >= 'north'` — an ordinary SQL
+predicate, and the one `golden/cases/filter_string_ordering.mojo` asks for —
+was unwritable. Nothing about the ordering is new: `String.__le__` is the same
+bytewise comparison `String.__lt__` already was.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -269,8 +295,8 @@ struct StringPredicate[
 
     comptime Bound = BoolArray
     """The computed result, and — via `ColumnBound` — the sole source of
-    validity. `exprold` re-intersected the operands' bitmaps here because its
-    `validity` took the batch rather than the state; the kernel had already
+    validity. The previous expression layer re-intersected the operands'
+    bitmaps here because its `validity` took the batch rather than the state; the kernel had already
     done that AND, so the answer is simply read off the bound."""
 
     var l: Self.L
@@ -356,7 +382,8 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
         var s = self.a.evaluate(batch, bindings).to_array(len(batch))
         # The typed `apply`, not `dispatch`: `A.Type` is a comptime parameter
-        # here, so the runtime dtype resolution `exprold` needed is gone.
+        # here, so the runtime dtype resolution the previous layer needed is
+        # gone.
         return LengthKernel.apply(s.as_type[BinaryLikeArray[Self.A.Type]]())
 
     @always_inline

@@ -147,9 +147,18 @@ trait Value(Copyable, Deinitable, Writable):
         ...
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         """The stateful thing that runs this value.
+
+        `schema` describes this value's **input**, and it is what lets a
+        name-resolved aggregate pick its kernel here, at plan-build time,
+        rather than on the first morsel. That is the difference between the
+        runtime lane holding an erased aggregate state and holding a *typed*
+        one behind the `DynOperator` box every operator already pays for:
+        `dispatch_numeric` hands each arm a concrete `V`, so the arm can
+        construct `AggregateOperator[Fold[K, V], RuntimeValue, G]` outright.
+        Every relation has its input's schema where it calls this.
 
         `grouped` picks a fold's placement and is ignored by everything else.
         `bindings` supplies this execution's parameter values — the operator
@@ -197,7 +206,7 @@ struct DynValue(Copyable, Movable, Writable):
     var _dtype: def(ArcPointer[NoneType], Schema) thin raises -> DynType
     var _write: def(ArcPointer[NoneType]) thin -> String
     var _to_operator: def(
-        ArcPointer[NoneType], Bool, Bindings
+        ArcPointer[NoneType], Schema, Bool, Bindings
     ) thin raises -> DynOperator
     var _shape: Shape
     var _aggregates: Bool
@@ -229,9 +238,14 @@ struct DynValue(Copyable, Movable, Writable):
     def _to_operator_tramp[
         V: Value
     ](
-        ptr: ArcPointer[NoneType], grouped: Bool, bindings: Bindings
+        ptr: ArcPointer[NoneType],
+        schema: Schema,
+        grouped: Bool,
+        bindings: Bindings,
     ) raises -> DynOperator:
-        return rebind[ArcPointer[V]](ptr)[].to_operator(grouped, bindings)
+        return rebind[ArcPointer[V]](ptr)[].to_operator(
+            schema, grouped, bindings
+        )
 
     @staticmethod
     def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -271,7 +285,7 @@ struct DynValue(Copyable, Movable, Writable):
         return self._dtype(self._boxed, schema)
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         """The stateful thing that runs this value.
 
@@ -280,7 +294,7 @@ struct DynValue(Copyable, Movable, Writable):
         elementwise value reaches an `EvalOperator`. The caller cannot tell,
         which is the point.
         """
-        return self._to_operator(self._boxed, grouped, bindings)
+        return self._to_operator(self._boxed, schema, grouped, bindings)
 
     def aggregates(self) -> Bool:
         """Whether the boxed value answers from `drain` rather than per batch.
@@ -453,11 +467,140 @@ struct DynRelation(Copyable, Movable, Writable):
             values.append(column(n.copy()))
         return Project(self.copy(), names.copy(), values^)
 
+    def select(self, *names: String) raises -> DynRelation:
+        """`select("a", "b")` — the same verb without the brackets.
+
+        Kept as a second overload rather than replacing the list form: the
+        golden corpus's Python twin spells it `select(*names)` and its Mojo
+        twin spelled it `select("ts", "label")` until the port rewrote every
+        case to a list, so one of the two lanes has to grow the other's
+        spelling for the corpus to stay one text. A `VariadicListMem` cannot
+        be forwarded to another function's variadic parameter (CLAUDE.md), so
+        this copies into a `List` and delegates rather than the list overload
+        delegating here.
+        """
+        var owned = List[String](capacity=len(names))
+        for ref n in names:
+            owned.append(n.copy())
+        return self.select(owned)
+
     def project(
         self, var names: List[String], var values: List[DynValue]
     ) raises -> DynRelation:
         """`SELECT <values> AS <names>` — new columns over the same rows."""
         return Project(self.copy(), names^, values^)
+
+    def with_columns(
+        self, var names: List[String], var values: List[DynValue]
+    ) raises -> DynRelation:
+        """`SELECT *, <values> AS <names>` — append to the existing columns.
+
+        A name that already exists is **replaced in place** rather than
+        appended, which is Polars' `with_columns` rule and the only one that
+        keeps the output schema free of duplicates. Position is preserved:
+        replacing `qty` leaves `qty` where it was.
+
+        Sugar over `project`, like `select` — the surviving columns are runtime
+        column reads, so no caller has to supply their dtypes. That is the same
+        reason `select` is not generic: a fused `Column[T]` would make this
+        method parametric over every column in the input.
+        """
+        if len(names) != len(values):
+            raise Error(
+                "with_columns: ",
+                len(names),
+                " names but ",
+                len(values),
+                " values",
+            )
+        var input_schema = self.schema()
+        var out_names = List[String]()
+        var out_values = List[DynValue]()
+        for ref f in input_schema.fields:
+            var replaced = -1
+            for i in range(len(names)):
+                if names[i] == f.name:
+                    replaced = i
+            out_names.append(f.name.copy())
+            if replaced >= 0:
+                out_values.append(values[replaced].copy())
+            else:
+                out_values.append(column(f.name.copy()))
+        for i in range(len(names)):
+            if input_schema.get_field_index(names[i]) == -1:
+                out_names.append(names[i].copy())
+                out_values.append(values[i].copy())
+        return Project(self.copy(), out_names^, out_values^)
+
+    def drop(self, names: List[String]) raises -> DynRelation:
+        """`SELECT <everything except names>` — say what goes, not what stays.
+
+        The survivors keep their **input order**, which is what distinguishes
+        this from spelling out the complement with `select`: a caller who
+        writes the complement by hand has to know the order too, and gets it
+        wrong the moment a column is added upstream.
+
+        A name that is not in the schema raises rather than being ignored. A
+        typo in a `drop` list is otherwise silent — the column it meant to
+        remove survives — and that is the failure mode this verb exists to
+        avoid.
+        """
+        var input_schema = self.schema()
+        for ref n in names:
+            if input_schema.get_field_index(n) == -1:
+                raise Error("drop: column '", n, "' not found in schema")
+        var out_names = List[String]()
+        var out_values = List[DynValue]()
+        for ref f in input_schema.fields:
+            var dropped = False
+            for ref n in names:
+                if n == f.name:
+                    dropped = True
+            if not dropped:
+                out_names.append(f.name.copy())
+                out_values.append(column(f.name.copy()))
+        return Project(self.copy(), out_names^, out_values^)
+
+    def rename(
+        self, names: List[String], new_names: List[String]
+    ) raises -> DynRelation:
+        """Rename `names[i]` to `new_names[i]`, keeping every other column.
+
+        Two parallel lists rather than a mapping because Mojo has no dict
+        literal in argument position; `golden/helpers.py` adapts the Python
+        frontend's dict spelling to this one for exactly that reason.
+
+        The renamed column keeps its **source `Field`** — dtype, `nullable`
+        and metadata — because `Project._output_schema` carries a bare column's
+        field over whole. Rebuilding from the dtype alone would silently turn
+        `nullable=False` into `True`, which is the divergence that method
+        exists to fix.
+        """
+        if len(names) != len(new_names):
+            raise Error(
+                "rename: ",
+                len(names),
+                " names but ",
+                len(new_names),
+                " new names",
+            )
+        var input_schema = self.schema()
+        for ref n in names:
+            if input_schema.get_field_index(n) == -1:
+                raise Error("rename: column '", n, "' not found in schema")
+        var out_names = List[String]()
+        var out_values = List[DynValue]()
+        for ref f in input_schema.fields:
+            var renamed = -1
+            for i in range(len(names)):
+                if names[i] == f.name:
+                    renamed = i
+            if renamed >= 0:
+                out_names.append(new_names[renamed].copy())
+            else:
+                out_names.append(f.name.copy())
+            out_values.append(column(f.name.copy()))
+        return Project(self.copy(), out_names^, out_values^)
 
     def limit(self, length: Int, offset: Int = 0) raises -> DynRelation:
         """`OFFSET offset LIMIT length`."""
@@ -570,7 +713,10 @@ struct Filter(Relation, Writable):
         var pipe = self._input.to_operator(ctx, bindings)
         pipe.append(
             FilterOperator(
-                self._predicate.to_operator(False, bindings), ctx.copy()
+                self._predicate.to_operator(
+                    self._input.schema(), False, bindings
+                ),
+                ctx.copy(),
             )
         )
         return pipe^
@@ -665,7 +811,7 @@ struct Project(Relation, Writable):
         var pipe = self._input.to_operator(ctx, bindings)
         var values = List[DynOperator](capacity=len(self._values))
         for ref v in self._values:
-            values.append(v.to_operator(False, bindings))
+            values.append(v.to_operator(self._input.schema(), False, bindings))
         pipe.append(ProjectOperator(values^, self._schema.copy()))
         return pipe^
 
@@ -742,11 +888,11 @@ struct Aggregate(Relation, Writable):
         var grouped = len(self._keys) > 0
         var folds = List[DynOperator](capacity=len(self._aggs))
         for ref a in self._aggs:
-            folds.append(a.to_operator(grouped, bindings))
+            folds.append(a.to_operator(self._input.schema(), grouped, bindings))
         var pipe = self._input.to_operator(ctx, bindings)
         var keys = List[DynOperator](capacity=len(self._keys))
         for ref k in self._keys:
-            keys.append(k.to_operator(False, bindings))
+            keys.append(k.to_operator(self._input.schema(), False, bindings))
         pipe.append(
             GroupByOperator(keys^, folds^, self._schema.copy(), ctx.copy())
         )
@@ -845,7 +991,7 @@ struct Sort(Relation, Writable):
         var pipe = self._input.to_operator(ctx, bindings)
         pipe.append(
             SortOperator(
-                _to_operators(self._keys, bindings),
+                _to_operators(self._keys, self._input.schema(), bindings),
                 self._ascending.copy(),
                 self._nulls_first,
                 ctx.copy(),
@@ -862,7 +1008,7 @@ struct Sort(Relation, Writable):
 
 
 def _to_operators(
-    values: List[DynValue], bindings: Bindings
+    values: List[DynValue], schema: Schema, bindings: Bindings
 ) raises -> List[DynOperator]:
     """Turn a list of logical values into the operators that run them.
 
@@ -872,7 +1018,7 @@ def _to_operators(
     """
     var out = List[DynOperator](capacity=len(values))
     for ref v in values:
-        out.append(v.to_operator(False, bindings))
+        out.append(v.to_operator(schema, False, bindings))
     return out^
 
 

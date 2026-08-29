@@ -50,7 +50,7 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Aggregates: `sum`, `product`, `min`, `max`, `mean`, `any`, `all` (null-skipping)
 - Distinct counts: `count_distinct` (exact), `approx_count_distinct` (HyperLogLog); whole-array and grouped
 - Cast: `cast` — numeric/bool/temporal/decimal families, string↔numeric parse/format, dictionary decode; safe (checked) and unsafe modes
-- Group-by: `GroupBy(keys).sum(values)` / `.min` / `.max` / typed `.aggregate[K]`; radix-partition-parallel, returns `RecordBatch`
+- Group-by: `HashGrouper` resolves key rows to dense group ids; `Grouping` (`ScalarGrouping` / `HashGrouping`) is what the aggregate operators fold through. Group-by as a *query* is `rel.aggregate(keys, aggs)` in `marrow.expr`
 - Hashing: `hash_` for primitive, string, and struct arrays
 - Selection: `filter`, `drop_null`, `take`
 - Sort: `sort_indices` (returns index array), `sort`; LSD radix for N ≥ 32 768, PDQsort below; parallel radix for N ≥ 524 288; `nulls_first`/`nulls_last`; multi-column `SortIndices.multi(StructArray, key_indices, ascending)`
@@ -60,11 +60,11 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Conditional: `case_when`, `coalesce`, `nullif`, `fill_null`; membership: `is_in`; nested: `array_length`, `array_contains`
 
 **Expression execution** (`marrow.expr`) — two lanes behind one relational API (see `docs/architecture.md`)
-- **Runtime lane** — the `DynValue` node (`marrow/exprold/dynamic.mojo`). Its operand *dtypes* are resolved at run time, but its operation is not: each node carries a pointer to its evaluator, so a binary links exactly the kernels its expressions mention. Build expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …).
-- **AOT lane** — the comptime-typed algebra (`marrow/exprold/values.mojo`), fully monomorphized: every operand is bound on a family trait, the output dtype is a comptime type, and a subtree fuses into one SIMD loop with no dispatch.
-- **One plan IR over both.** `BoxedValue` (`marrow/exprold/relations.mojo`) is the single box both lanes erase into, so each relational operator compiles exactly once. Plan nodes `InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Limit`, `Sort`, `Aggregate`, `Join` chain via `.filter()`, `.select()`, `.aggregate()`, `.sort()`, `.limit()`, `.join()`; `plan.execute()` opens a pull-based processor tree. A `.filter` directly above a `ParquetScan` pushes its predicate into the scan for row-group and page pruning.
+- **Runtime lane** — the `RuntimeValue` node (`marrow/expr/runtime/values.mojo`). Its operand *dtypes* are resolved at run time. Build expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …).
+- **AOT lane** — the comptime-typed algebra (`marrow/expr/comptime/`), fully monomorphized: every operand is bound on a family trait, the output dtype is a comptime type, and a subtree fuses into one SIMD loop with no dispatch.
+- **One plan IR over both.** `DynValue` (`marrow/expr/logical.mojo`) is the single box both lanes erase into, so each relational operator compiles exactly once. Plan nodes `InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Limit`, `Sort`, `Aggregate`, `Join` chain via `.filter()`, `.select()`, `.project()`, `.aggregate()`, `.sort_by()`, `.limit()`, `.join()`; `plan.execute()` builds the push-based operator tree in `marrow/expr/physical.mojo` and drains it into one `RecordBatch`. Predicate/projection pushdown and statistics-based row-group and page pruning are **not currently implemented** — they went with the previous expression layer and have not been ported back.
 - The AOT lane's whole point is that the closed world is dead-code-eliminable: the fused gate binary is several times smaller in `__text` than the runtime equivalent. `benchmarks/binary_size/` is the live gate — trust it over any ratio quoted in prose.
-- **Late-bound parameters, in both lanes.** `param("min-a", int64)` is a constant supplied at run time rather than compile time — structurally a literal whose value sits behind a cell resolved once per batch, so the fused inner loop is unchanged and a parameter costs nothing per row. `plan.execute_cli()` then binds them from `argv`, which is what makes a query compilable into a standalone binary — see **Compiled queries (AOT)** below.
+- **Late-bound parameters, in both lanes.** `param("min-a", int64)` is a constant supplied at run time rather than compile time — structurally a literal whose value sits behind a cell resolved once per batch, so the fused inner loop is unchanged and a parameter costs nothing per row. Values are supplied per execution through `Bindings` (`plan.execute(bindings=…)`); the `argv`-binding CLI entry point described under **Compiled queries (AOT)** below is currently unported.
 
 **Parquet I/O** (`marrow/parquet`) — a from-scratch reader/writer, no PyArrow at runtime
 - `read_table(path, columns=None)` — decode a Parquet file into a marrow `Table`, with optional column projection
@@ -247,6 +247,13 @@ See `docs/alpha-clickbench-coverage.md` for the per-query table and
 
 ## Compiled queries (AOT)
 
+> **Status: unported.** The `execute_cli()` entry point, the generated
+> `--help` / `--describe` surface and the `-D MARROW_CLI_WRITERS` output
+> writers all lived in the previous expression package and were removed with
+> it. `marrow compile` still builds a Mojo program against marrow, and
+> `param()` / `Bindings` still work — but the CLI layer described below is not
+> in the tree today. The section is kept as the design being reimplemented.
+
 **The third frontend, and the one nothing else here can do.** A query written
 against the Mojo expression layer compiles to a standalone binary that carries
 no Python, no interpreter and no PyArrow — only the values it needs are
@@ -258,17 +265,14 @@ paths late-bound. `param()` sits beside `col()` and `lit()`: `col` reads from
 data, `lit` is a constant, `param` is a constant supplied later.
 
 ```mojo
-from marrow.exprold.builders import col, param
+from marrow.expr.builders import col, param, scan
 from marrow.dtypes import int64, string
 
 def main() raises:
-    var plan = DynRelation(
-        ParquetScan[...](path=param("src", string, help=String("input parquet")),
-                         schema=sch)
-    ).filter(
-        BoxedValue(col("a", int64) > param("min-a", int64, default=0))
+    var plan = scan("data.parquet", sch).filter(
+        col("a", int64) > param("min-a", int64, default=0)
     )
-    plan.execute_cli()
+    plan.execute_cli()   # not implemented today — see the status note above
 ```
 
 ```bash
@@ -390,7 +394,6 @@ from marrow.kernels.arithmetic import add, subtract, multiply, divide, sqrt, log
 from marrow.kernels.aggregate import sum, min, max, mean, any, all
 from marrow.kernels.filter import filter, drop_null, take
 from marrow.kernels.compare import equal, less, greater_equal
-from marrow.kernels.groupby import GroupBy
 
 var x = array[int64]([1, 2, 3, 4])
 var y = array[int64]([10, 20, 30, 40])
@@ -409,27 +412,27 @@ var f = array[float64]([1.0, 4.0, 9.0, 16.0])
 var s = sqrt(f)                 # Float64Array([1.0, 2.0, 3.0, 4.0])
 var l = log(f)                  # natural log
 
-# Group-by — GroupBy(keys).sum/min/max(values) → RecordBatch
-var keys = array[int64]([1, 2, 1, 2, 1])
-var vals = array[float64]([10.0, 20.0, 30.0, 40.0, 50.0])
-var result = GroupBy(keys).sum(vals)   # RecordBatch: key=[1,2], sum=[90.0, 60.0]
+# Group-by is a query, not a kernel call — see the expression example below:
+#   table(batch).aggregate(keys=["k"], aggs=[col("v", float64).sum()])
 ```
 
 ### Expression execution
 
 ```mojo
-from marrow.exprold import col, lit, in_memory_table, execute
+from marrow.expr.builders import col, lit, table
+from marrow.dtypes import int64
 from marrow.tabular import record_batch
 
 var batch = record_batch(
     [array[int64]([25, 35, 45]), array[String](["Alice", "Bob", "Carol"])],
     names=["age", "name"],
 )
-var plan = in_memory_table(batch)
-    .filter(col("age") > lit(30))
-    .select("name", "age")
-
-var result = execute(plan)   # a single RecordBatch
+var result = (
+    table(batch)
+    .filter(col("age", int64) > lit(30, int64))
+    .select(["name", "age"])
+    .execute()      # a single RecordBatch
+)
 ```
 
 ### Parquet I/O

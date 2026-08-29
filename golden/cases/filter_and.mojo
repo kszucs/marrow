@@ -11,7 +11,6 @@ def plan() raises -> DynRelation:
     'c'	4	40
     """
     var t = table("basic")
-    var q = t.filter(
+    return t.filter(
         (col("v", int64) > lit(2, int64)) & (col("w", int64) < lit(60, int64))
     )
-    return q

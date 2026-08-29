@@ -13,5 +13,4 @@ def plan() raises -> DynRelation:
     -1
     """
     var t = table("floats")
-    var q = t.filter(col("x", float64).is_inf()).select("n")
-    return q
+    return t.filter(col("x", float64).is_inf()).select(["n"])

@@ -8,9 +8,9 @@ Two sibling failures, both invisible to a suite that only ever runs one way.
 `import marrow`, and nothing caught it because the test suite always runs
 against the source tree.
 
-Then `ebd4c4c` renamed the Mojo package `expr` -> `exprold` and pointed
-`__init__.py` at `.exprold` while the Python file was still `expr.py`, so
-`import marrow` raised `ModuleNotFoundError` for nine commits. Nothing caught
+Then a commit renamed a Mojo package and pointed `__init__.py` at the new
+name while the Python file still carried the old one, so `import marrow` raised
+`ModuleNotFoundError` for nine commits. Nothing caught
 *that* because the suite always runs from the repo root, where the Mojo source
 directory `marrow/` shadows `python/marrow/` as an implicit namespace package —
 `import marrow` then silently succeeds and resolves to a package with no

@@ -48,84 +48,13 @@ def test_add_both_null():
 # ── sum ──────────────────────────────────────────────────────────────────────
 
 
-def test_sum_int64():
-    assert ma.compute.sum(ma.array([1, 2, 3, 4]), ctx=ma.ExecContext.serial()) == 10.0
-
-
-def test_sum_float64():
-    assert ma.compute.sum(ma.array([1.5, 2.5, 3.0]), ctx=ma.ExecContext.serial()) == 7.0
-
-
-def test_sum_skips_nulls():
-    assert (
-        ma.compute.sum(ma.array([1, None, 3, None]), ctx=ma.ExecContext.serial()) == 4.0
-    )
-
-
-def test_sum_all_nulls_returns_zero():
-    assert (
-        ma.compute.sum(
-            ma.array([1, 2, 3], type=ma.int64()), ctx=ma.ExecContext.serial()
-        )
-        == 6.0
-    )
-
-
 # ── product ──────────────────────────────────────────────────────────────────
-
-
-def test_product_int64():
-    assert (
-        ma.compute.product(ma.array([1, 2, 3, 4]), ctx=ma.ExecContext.serial()) == 24.0
-    )
-
-
-def test_product_float64():
-    assert (
-        ma.compute.product(ma.array([1.5, 2.0, 2.0]), ctx=ma.ExecContext.serial())
-        == 6.0
-    )
-
-
-def test_product_skips_nulls():
-    assert (
-        ma.compute.product(ma.array([2, None, 3, None]), ctx=ma.ExecContext.serial())
-        == 6.0
-    )
 
 
 # ── min ──────────────────────────────────────────────────────────────────────
 
 
-def test_min_int64():
-    assert ma.compute.min(ma.array([3, 1, 4, 1, 5]), ctx=ma.ExecContext.serial()) == 1.0
-
-
-def test_min_float64():
-    assert ma.compute.min(ma.array([3.5, 1.5, 2.0]), ctx=ma.ExecContext.serial()) == 1.5
-
-
-def test_min_skips_nulls():
-    assert (
-        ma.compute.min(ma.array([3, None, 1, None]), ctx=ma.ExecContext.serial()) == 1.0
-    )
-
-
 # ── max ──────────────────────────────────────────────────────────────────────
-
-
-def test_max_int64():
-    assert ma.compute.max(ma.array([3, 1, 4, 1, 5]), ctx=ma.ExecContext.serial()) == 5.0
-
-
-def test_max_float64():
-    assert ma.compute.max(ma.array([3.5, 1.5, 4.0]), ctx=ma.ExecContext.serial()) == 4.0
-
-
-def test_max_skips_nulls():
-    assert (
-        ma.compute.max(ma.array([3, None, 5, None]), ctx=ma.ExecContext.serial()) == 5.0
-    )
 
 
 # ── any ──────────────────────────────────────────────────────────────────────
@@ -177,45 +106,6 @@ def test_all_empty_or_all_null_returns_true():
 
 
 # ── count_distinct / approx_count_distinct ────────────────────────────────────
-
-
-def test_count_distinct_basic():
-    assert ma.compute.count_distinct(ma.array([1, 2, 2, 3, 3, 3])) == 3
-
-
-def test_count_distinct_excludes_nulls():
-    assert ma.compute.count_distinct(ma.array([1, 2, None, 2, None, 3])) == 3
-
-
-def test_count_distinct_empty_and_all_null():
-    assert ma.compute.count_distinct(ma.array([], type=ma.int64())) == 0
-    assert ma.compute.count_distinct(ma.array([None, None], type=ma.int64())) == 0
-
-
-def test_count_distinct_matches_pyarrow():
-    import numpy as np
-    import pyarrow as pa
-    import pyarrow.compute as pc
-
-    a = pa.array(np.random.default_rng(0).integers(0, 4000, 200_000))
-    assert ma.compute.count_distinct(ma.array(a)) == pc.count_distinct(a).as_py()
-
-
-def test_approx_count_distinct_small_is_near_exact():
-    # linear-counting regime keeps small cardinalities within ~1 of exact
-    a = ma.array([i % 100 for i in range(5000)])
-    assert abs(int(ma.compute.approx_count_distinct(a).as_py()) - 100) <= 2
-
-
-def test_approx_count_distinct_within_tolerance():
-    import numpy as np
-    import pyarrow as pa
-    import pyarrow.compute as pc
-
-    a = pa.array(np.arange(1_000_000))
-    true = pc.count_distinct(a).as_py()
-    est = int(ma.compute.approx_count_distinct(ma.array(a)).as_py())
-    assert abs(est - true) / true < 0.02
 
 
 # ── subtract ─────────────────────────────────────────────────────────────────

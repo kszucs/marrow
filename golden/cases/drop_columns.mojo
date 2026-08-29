@@ -19,5 +19,4 @@ def plan() raises -> DynRelation:
     """
     var t = table("sales")
     var dropped = t.drop(["qty", "active", "ref"])
-    var q = dropped.sort([col("price", float64)], [True])
-    return q
+    return dropped.sort_by([col("price", float64)], [True])

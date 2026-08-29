@@ -7,12 +7,18 @@ Run via `pixi run binary_size` from the repo root, or directly:
     python3 benchmarks/binary_size/compare.py
 
 Pass gate names to measure only those (query_streaming is always included, as
-the ratio baseline) -- a full sweep is eleven -O3 builds and about ten to
+the ratio baseline) -- a full sweep is fourteen -O3 builds and about ten to
 twenty minutes:
     python3 benchmarks/binary_size/compare.py query_dynvalue
 
 **Sizes are reported as the `__text` section, not file size.** See
 `text_section_size` for why that distinction is the whole point of this script.
+
+**A gate that fails to build is reported and skipped, not fatal.** It used to
+abort the sweep on the first failure, which blinded every gate after it in
+NAMES -- so one program left behind by an API change hid the numbers for all
+the others. The table now carries a `BUILD FAILED` row instead, and the exit
+status is non-zero so CI still notices.
 """
 
 import re
@@ -37,6 +43,8 @@ NAMES = [
     "query_streaming_agg",
     "query_dynvalue",
     "query_runtime",
+    "query_expr2_streaming",
+    "query_expr2_agg_fused",
 ]
 
 # Symbol-name substrings to group by, in report order. A symbol may match
@@ -54,6 +62,7 @@ MODULE_BUCKETS = [
     "marrow::kernels::join",
     "marrow::kernels::groupby",
     "marrow::kernels::boolean",
+    "marrow::kernels::cast",
     "marrow::parquet::reader",
     "marrow::parquet::codecs",
     "marrow::parquet::schema",
@@ -61,10 +70,19 @@ MODULE_BUCKETS = [
     "marrow::parquet::writer",
     "marrow::scalars",
     "marrow::buffers",
-    "marrow::expr::values",
-    "marrow::expr::dynamic",
-    "marrow::expr::relations",
-    "marrow::expr::execution",
+    # The expression layer's own modules. These changed with the package: the
+    # old `marrow::expr::{values,dynamic,relations,execution}` buckets name
+    # modules that no longer exist, so they silently reported 0 for every gate.
+    # `marrow::expr::builders` does not collide with `marrow::builders` -- the
+    # match is a substring test and the longer name does not contain the
+    # shorter one.
+    "marrow::expr::logical",
+    "marrow::expr::physical",
+    "marrow::expr::comptime",
+    "marrow::expr::runtime",
+    "marrow::expr::params",
+    "marrow::expr::builders",
+    "marrow::utils::argparse",
     "marrow::tabular",
     "marrow::c_data",
     "marrow::schema",
@@ -80,6 +98,11 @@ def run(cmd: list[str], **kwargs) -> str:
 def build_and_strip(name: str) -> None:
     binary = HERE / name
     stripped = HERE / f"{name}_stripped"
+    # Remove the previous run's artifacts first: `mojo build` leaves them in
+    # place when it fails, so measuring without this reports a stale binary's
+    # size as if the failed build had succeeded.
+    binary.unlink(missing_ok=True)
+    stripped.unlink(missing_ok=True)
     subprocess.run(
         [
             "mojo",
@@ -161,9 +184,18 @@ def main() -> None:
         # query_streaming is the ratio baseline, so it is always measured.
         NAMES = [n for n in NAMES if n in wanted or n == "query_streaming"]
 
+    failed = []
     for name in NAMES:
         print(f"building {name} ...", file=sys.stderr)
-        build_and_strip(name)
+        try:
+            build_and_strip(name)
+        except subprocess.CalledProcessError as exc:
+            # One broken gate must not blind the rest of the sweep: record it,
+            # drop it from the tables, and keep going. The exit status below
+            # still fails, so CI does not read this as a pass.
+            print(f"  BUILD FAILED ({exc}) -- skipping {name}", file=sys.stderr)
+            failed.append(name)
+    NAMES = [n for n in NAMES if n not in failed]
 
     rows = []
     for name in NAMES:
@@ -190,13 +222,16 @@ def main() -> None:
             f"{r['name']:<16} {r['unstripped']:>12,} {r['stripped']:>12,} "
             f"{r['syms']:>8,} {r['syms_stripped']:>12,} {r['text']:>12,}"
         )
+    for name in failed:
+        print(f"{name:<16} {'BUILD FAILED':>12}")
 
-    base = next(r for r in rows if r["name"] == "query_streaming")
-    print()
-    print("ratio vs. query_streaming (__text -- code only, not page-padded):")
-    for r in rows:
-        ratio = r["text"] / base["text"]
-        print(f"  {r['name']:<16} {ratio:>6.1f}x")
+    base = next((r for r in rows if r["name"] == "query_streaming"), None)
+    if base is not None:
+        print()
+        print("ratio vs. query_streaming (__text -- code only, not page-padded):")
+        for r in rows:
+            ratio = r["text"] / base["text"]
+            print(f"  {r['name']:<16} {ratio:>6.1f}x")
     print()
     print("Compare runs on __text. The stripped column is page-granular (16 KB on")
     print("Apple Silicon) and moves in steps -- do not quote deltas from it.")
@@ -212,6 +247,13 @@ def main() -> None:
         for name in NAMES:
             row += f"{per_name_counts[name][bucket]:>16,}"
         print(row)
+
+    if failed:
+        print()
+        sys.exit(
+            f"FAIL: {', '.join(failed)} did not build; every other gate above "
+            "was still measured."
+        )
 
 
 if __name__ == "__main__":

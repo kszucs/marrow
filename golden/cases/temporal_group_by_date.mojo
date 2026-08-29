@@ -9,28 +9,17 @@ def plan() raises -> DynRelation:
     back as date32 — the grouper materializes keys through `DynBuilder(dtype)`,
     so a key that lost its type would show up here as an int32 day count.
 
-    **The two lanes disagree here, and this case is the record of it.**
-    `Relation.aggregate` names a key after its source column when
-    `BoxedValue.bound_column(schema)` finds one, and `key<i>` when it does not
-    (`marrow/exprold/relations.mojo`). `NumericColumn`, `BoolColumn` and
-    `StringColumn` each override `bound_column`; `TemporalColumn` and
-    `ListColumn` do not, so they inherit the `Value` default that always
-    answers -1. A date or timestamp group key therefore comes back as `key0`
-    in the AOT lane, and the Mojo lane fails with `Column 'd' not found.` when
-    the following sort looks for it. The runtime lane is unaffected —
-    `DynValue.bound_column` resolves the name — which is why the Python lane
-    answers `d` and passes.
+    **This case is the record of a disagreement that `marrow/expr` settled.**
+    `Aggregate._output_schema` names a key after its source column when the
+    key is a bare column and `key<i>` by position when it is computed
+    (`marrow/expr/logical.mojo`). The lane the key was written in no longer
+    changes the answer. The predecessor package resolved the name through a
+    `bound_column` method that `TemporalColumn` never overrode, so a date or
+    timestamp key came back as `key0` in the AOT lane and as `d` in the
+    runtime one — one query with two output schemas.
 
     The expectation is DuckDB's, and DuckDB is right: `GROUP BY d` produces a
-    column called `d`. Renaming the case's expectation to `key0` would make
-    both lanes green by writing marrow's bug down as the specification.
-
-    `-- skip python` is here only because the mark below is strict and applies
-    to both lanes: the runtime lane already answers correctly, so without the
-    skip it would report an xpass. The bug is the Mojo lane's alone. Groups
-    on a temporal key is still covered in *both* lanes by
-    `temporal_group_by_date_trunc_month`, whose key is computed and so is
-    named `key0` by both.
+    column called `d`. Both lanes now say so.
 
     -- expected
     d:date32	n:int64
@@ -45,5 +34,4 @@ def plan() raises -> DynRelation:
         keys=[col("d", date32())],
         aggs=[count_star().alias("n")],
     )
-    var q = agg.sort([col("d", date32())], [True])
-    return q
+    return agg.sort_by([col("d", date32())], [True])

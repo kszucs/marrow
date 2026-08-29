@@ -78,6 +78,8 @@ immutable and lets two executions use different values without interfering.
 Missing names are not an error here — a parameter with a default is satisfied
 without one, and `Param` raises naming itself when it has neither.
 """
+
+
 struct Param[T: NumericType](NumericValue):
     """A late-bound numeric scalar — `Literal[T]` whose value arrives later.
 

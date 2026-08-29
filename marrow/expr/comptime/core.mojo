@@ -54,6 +54,8 @@ from ..logical import Shape, Value
 from ..params import Bindings
 from .aggregates import (
     ApproxCountDistinct,
+    StringApproxCountDistinct,
+    StringCountDistinct,
     Count,
     CountDistinct,
     Max,
@@ -66,9 +68,72 @@ from .aggregates import (
     Sum,
     Variance,
 )
-from .numeric import Add, Sub, Mul, Eq, Ne, Lt, Le, Gt, Ge
-from .boolean import And, Not, Or, Xor
-from .strings import StrEq, StrNe, StrLt, StrGt
+from .numeric import (
+    Abs,
+    Add,
+    Ceil,
+    Div,
+    Eq,
+    Exp,
+    Floor,
+    Floordiv,
+    Ge,
+    Gt,
+    Le,
+    Ln,
+    Lt,
+    Mod,
+    Mul,
+    Ne,
+    Neg,
+    Pow,
+    Round,
+    Sign,
+    Sqrt,
+    Sub,
+    TemporalEq,
+    TemporalGe,
+    TemporalGt,
+    TemporalLe,
+    TemporalLt,
+    TemporalNe,
+    Trunc,
+)
+from .boolean import And, IsInf, IsNan, Not, Or, Xor
+from .strings import (
+    Capitalize,
+    EndsWith,
+    ILike,
+    LStrip,
+    Like,
+    Lower,
+    Reverse,
+    RStrip,
+    StartsWith,
+    StrContains,
+    StrEq,
+    StrGe,
+    StrGt,
+    StrLe,
+    StrLt,
+    StrNe,
+    StringLength,
+    Strip,
+    Upper,
+)
+from .temporal import (
+    DateTrunc,
+    Day,
+    DayOfWeek,
+    DayOfYear,
+    Hour,
+    Minute,
+    Month,
+    Quarter,
+    Second,
+    Year,
+)
+from ...kernels.temporal import CalendarUnit
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 
@@ -98,7 +163,7 @@ trait ComptimeValue(Evaluable, Value):
         ...
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         """Every comptime node becomes the same operator — one that forwards
         each batch to the fused driver. `grouped` is ignored: an elementwise
@@ -111,35 +176,27 @@ trait ComptimeValue(Evaluable, Value):
         """
         return EvalOperator[Self](self.copy(), bindings.copy())
 
-    # -- the lane-agnostic aggregate surface --------------------------------
+    # -- the cardinality surface, per family --------------------------------
     #
-    # One default each, on the base trait rather than three copies on the
-    # family traits: a cardinality is an int64 whatever was counted, so there
-    # is no per-family variation to express. Every family gets them, including
-    # the ones with no lane at all.
+    # These used to be two defaults on this trait, on the argument that "a
+    # cardinality is an int64 whatever was counted, so there is no per-family
+    # variation to express". That is true of the *answer* and false of the
+    # *access*: `DistinctCount[exact, A]` hashes an `A`, and a hash is faster
+    # typed. Each family knows the array its values evaluate to — a
+    # `PrimitiveValue` to `PrimitiveArray[Self.Type]`, a `StringValue` to
+    # `BinaryLikeArray[Self.Type]` — so the method belongs where that is known.
     #
-    # They return an `Aggregate` that cannot fuse, which **materialises the
-    # aggregate but
-    # not the operand**: `count_distinct(upper(region))` still compiles
-    # `upper(region)` into one fused loop and only the distinct count runs over
-    # a column. `count_distinct` has no fold algebra — no identity, no combine,
-    # no finalize — so there is no `K` a fully fused node could be
-    # parameterised on, and that is the one thing being given up.
+    # This is the one-way door the old comment named: a trait default whose
+    # return type a conformer must change becomes an ambiguous overload at
+    # every call site, so the defaults had to be *removed* here rather than
+    # specialised below.
     #
-    # It is a one-way door: CLAUDE.md records that a trait default whose return
-    # type a conformer must change becomes an ambiguous overload at every call
-    # site, so `NumericValue` can never later specialise these to a fused form.
-
-    def count_distinct(self) -> CountDistinct[Self]:
-        """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
-        return CountDistinct[Self](self.copy())
-
-    def approx_count_distinct(
-        self,
-    ) -> ApproxCountDistinct[Self]:
-        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
-        standard error, nulls excluded."""
-        return ApproxCountDistinct[Self](self.copy())
+    # They still return an `Aggregate` that cannot fuse, which materialises the
+    # aggregate but **not the operand**: `count_distinct(upper(region))` still
+    # compiles `upper(region)` into one fused loop and only the distinct count
+    # runs over a column. `count_distinct` has no fold algebra — no identity,
+    # no combine, no finalize — so there is no `K` a fully fused node could be
+    # parameterised on, and that is the one thing given up.
 
     comptime Type: DataType
     """This node's output type, known without a schema.
@@ -218,6 +275,19 @@ trait PrimitiveValue(ComptimeValue):
     """
 
     comptime Type: PrimitiveType
+
+    def count_distinct(self) -> CountDistinct[Self]:
+        """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics).
+
+        Names the array its values evaluate to, `PrimitiveArray[Self.Type]`,
+        which is what lets `DistinctCount` hash a typed column instead of
+        walking an erased one."""
+        return CountDistinct[Self](self.copy())
+
+    def approx_count_distinct(self) -> ApproxCountDistinct[Self]:
+        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
+        standard error, nulls excluded."""
+        return ApproxCountDistinct[Self](self.copy())
 
     comptime Bound: Copyable & Deinitable
     """Everything the lane loop needs, resolved once per batch.
@@ -347,6 +417,15 @@ trait StringValue(ComptimeValue):
 
     comptime Type: StringLikeType
 
+    def count_distinct(self) -> StringCountDistinct[Self]:
+        """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
+        return StringCountDistinct[Self](self.copy())
+
+    def approx_count_distinct(self) -> StringApproxCountDistinct[Self]:
+        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
+        standard error, nulls excluded."""
+        return StringApproxCountDistinct[Self](self.copy())
+
     comptime Bound: Copyable & Deinitable
     """This subtree's column references, bound to this batch — as
     `NumericValue.Bound`, and declared per concrete struct for the same
@@ -411,6 +490,88 @@ trait StringValue(ComptimeValue):
 
     def __gt__[Rhs: StringValue](self, o: Rhs) -> StrGt[Self, Rhs]:
         return StrGt(self.copy(), o.copy())
+
+    def __le__[Rhs: StringValue](self, o: Rhs) -> StrLe[Self, Rhs]:
+        return StrLe(self.copy(), o.copy())
+
+    def __ge__[Rhs: StringValue](self, o: Rhs) -> StrGe[Self, Rhs]:
+        return StrGe(self.copy(), o.copy())
+
+    # -- transforms ---------------------------------------------------------
+    #
+    # Every one of these wraps a node that already existed in `strings.mojo`
+    # and had no way to be *reached*: `Upper` … `Capitalize` were aliased,
+    # `StartsWith` … `ILike` were aliased, and the only spelling was to name
+    # the node — `Upper(col("region", string))` — which is what
+    # `golden/prelude.mojo` re-exports them for. Seven of the golden cases
+    # spell the fluent form instead and were skipped for want of these
+    # thirteen one-line methods.
+    #
+    # Trait defaults rather than methods on each leaf, for the same reason
+    # `NumericValue`'s operators are: a default costs nothing in a binary that
+    # never calls it, and repeating them per conformer is how `StringColumn`
+    # and `StringLiteral` drift apart.
+
+    def upper(self) -> Upper[Self]:
+        """ASCII upper-case. Non-ASCII bytes pass through — `UpperKernel`
+        does not decode UTF-8, matching Arrow's `ascii_upper`."""
+        return Upper[Self](self.copy())
+
+    def lower(self) -> Lower[Self]:
+        """ASCII lower-case, the counterpart of `upper`."""
+        return Lower[Self](self.copy())
+
+    def strip(self) -> Strip[Self]:
+        """Whitespace removed from both ends."""
+        return Strip[Self](self.copy())
+
+    def lstrip(self) -> LStrip[Self]:
+        """Whitespace removed from the left."""
+        return LStrip[Self](self.copy())
+
+    def rstrip(self) -> RStrip[Self]:
+        """Whitespace removed from the right."""
+        return RStrip[Self](self.copy())
+
+    def reverse(self) -> Reverse[Self]:
+        """Bytes reversed. Byte-wise, not code-point-wise: reversing a
+        multi-byte UTF-8 sequence produces invalid UTF-8, which is what
+        Arrow's `binary_reverse` does and why it is named for binary."""
+        return Reverse[Self](self.copy())
+
+    def capitalize(self) -> Capitalize[Self]:
+        """First byte upper-cased, the rest lower-cased."""
+        return Capitalize[Self](self.copy())
+
+    def length(self) -> StringLength[Self]:
+        """Byte length as `int32`. A null string has a null length, not 0 —
+        the kernel records it and `StringLength` reads it back."""
+        return StringLength[Self](self.copy())
+
+    # -- predicates ---------------------------------------------------------
+
+    def startswith[Rhs: StringValue](self, o: Rhs) -> StartsWith[Self, Rhs]:
+        """`self LIKE o || '%'`, without the pattern compile."""
+        return StartsWith[Self, Rhs](self.copy(), o.copy())
+
+    def endswith[Rhs: StringValue](self, o: Rhs) -> EndsWith[Self, Rhs]:
+        """`self LIKE '%' || o`, without the pattern compile."""
+        return EndsWith[Self, Rhs](self.copy(), o.copy())
+
+    def contains[Rhs: StringValue](self, o: Rhs) -> StrContains[Self, Rhs]:
+        """Substring search. Literal, not a pattern — `%` and `_` are
+        ordinary characters here, which is the whole difference from
+        `like`."""
+        return StrContains[Self, Rhs](self.copy(), o.copy())
+
+    def like[Rhs: StringValue](self, o: Rhs) -> Like[Self, Rhs]:
+        """SQL `LIKE`. A `Shape.scalar` pattern is compiled once per batch
+        rather than once per row — see `StringPredicate`."""
+        return Like[Self, Rhs](self.copy(), o.copy())
+
+    def ilike[Rhs: StringValue](self, o: Rhs) -> ILike[Self, Rhs]:
+        """SQL `ILIKE` — `like`, case-insensitively."""
+        return ILike[Self, Rhs](self.copy(), o.copy())
 
     # -- aggregates ---------------------------------------------------------
     #
@@ -545,6 +706,99 @@ trait NumericValue(PrimitiveValue):
     def __ge__[Rhs: NumericValue](self, o: Rhs) -> Ge[Self, Rhs]:
         return Ge(self.copy(), o.copy())
 
+    # The three operators whose answer is *not* the wider operand. `/` and
+    # `**` produce `float64` whatever went in, so they route to `FloatBinary`
+    # rather than `NumericBinary`; `%` and `//` stay in the operand type but
+    # take Python's sign convention rather than SQL's — see `Mod`.
+
+    def __truediv__[Rhs: NumericValue](self, o: Rhs) -> Div[Self, Rhs]:
+        """True division: `5 / 2` is 2.5, not 2. PyArrow's `divide` answers 2
+        on integer input; marrow follows Python so that `/`, `//` and `%`
+        agree with each other."""
+        return Div(self.copy(), o.copy())
+
+    def __floordiv__[Rhs: NumericValue](self, o: Rhs) -> Floordiv[Self, Rhs]:
+        """Floored division, the `//` that makes
+        `a == (a // b) * b + a % b` hold."""
+        return Floordiv(self.copy(), o.copy())
+
+    def __mod__[Rhs: NumericValue](self, o: Rhs) -> Mod[Self, Rhs]:
+        """Remainder taking the sign of the **divisor**: `-1 % 3` is 2."""
+        return Mod(self.copy(), o.copy())
+
+    def __pow__[Rhs: NumericValue](self, o: Rhs) -> Pow[Self, Rhs]:
+        """`self ** o`, in `float64`. `PowKernel` asserts a floating lane, so
+        integer operands are widened rather than rejected."""
+        return Pow(self.copy(), o.copy())
+
+    # -- unary --------------------------------------------------------------
+    #
+    # The kernels for all of these have been in `kernels/numeric.mojo` since
+    # long before this lane existed and were entirely unreferenced from it.
+    # These methods and the two nodes they name (`NumericUnary`, `FloatUnary`)
+    # are the wiring, not new compute.
+
+    def __neg__(self) -> Neg[Self]:
+        """`-self`, keeping the operand's dtype."""
+        return Neg[Self](self.copy())
+
+    def abs(self) -> Abs[Self]:
+        """`|self|`. Keeps the dtype, so `abs(INT64_MIN)` wraps rather than
+        widening — the same overflow C and Arrow C++ have."""
+        return Abs[Self](self.copy())
+
+    def sign(self) -> Sign[Self]:
+        """-1, 0 or 1, in the operand's dtype."""
+        return Sign[Self](self.copy())
+
+    def floor(self) -> Floor[Self]:
+        """Round toward negative infinity, keeping the dtype. On an integer
+        operand this is the identity."""
+        return Floor[Self](self.copy())
+
+    def ceil(self) -> Ceil[Self]:
+        """Round toward positive infinity, keeping the dtype."""
+        return Ceil[Self](self.copy())
+
+    def round(self) -> Round[Self]:
+        """Round to nearest, keeping the dtype."""
+        return Round[Self](self.copy())
+
+    def trunc(self) -> Trunc[Self]:
+        """Round toward zero, keeping the dtype. The one that differs from
+        `floor` on negatives."""
+        return Trunc[Self](self.copy())
+
+    def sqrt(self) -> Sqrt[Self]:
+        """Square root, in `float64` — not closed over the integers, so
+        unlike `abs` this cannot keep the operand's dtype."""
+        return Sqrt[Self](self.copy())
+
+    def exp(self) -> Exp[Self]:
+        """`e ** self`, in `float64`."""
+        return Exp[Self](self.copy())
+
+    def ln(self) -> Ln[Self]:
+        """Natural logarithm, in `float64`. `ln(0)` is `-inf` and `ln(-1)` is
+        NaN — IEEE 754 values, not nulls."""
+        return Ln[Self](self.copy())
+
+    # -- value predicates ---------------------------------------------------
+
+    def is_nan(self) -> IsNan[Self]:
+        """True where the value is NaN, **NULL where the value is null**.
+
+        That second half is the whole distinction from `is_null`:
+        `is_null(NULL)` is TRUE, `is_nan(NULL)` is NULL. Floating operands
+        only — the node asserts it at compile time.
+        """
+        return IsNan[Self](self.copy())
+
+    def is_inf(self) -> IsInf[Self]:
+        """True where the value is an infinity of either sign, NULL where it
+        is null — as `is_nan`."""
+        return IsInf[Self](self.copy())
+
 
 trait TemporalValue(PrimitiveValue):
     """Marker: ordered and comparable, but not arithmetic.
@@ -575,6 +829,95 @@ trait TemporalValue(PrimitiveValue):
         """`MAX(self)`. Keeps the input's dtype — unit and timezone
         included."""
         return Max[Self](self.copy())
+
+    # -- comparison ---------------------------------------------------------
+    #
+    # `TemporalCompare` and its six aliases existed with **no callers at
+    # all**: naming `TemporalGt(a, b)` by hand was the only way to reach the
+    # node, and `TemporalNe`/`TemporalLe`/`TemporalGe` had not even that. A
+    # family whose whole documented purpose is "ordered and comparable, but
+    # not arithmetic" could not be compared.
+    #
+    # `Rhs`, not `R`: a trait default's parameter must not collide with a
+    # conformer's struct parameter, and `TemporalCompare` binds `L`/`R`.
+    # Both sides must already share a representation — `TemporalCompare`
+    # asserts the width at compile time and checks the unit per batch, because
+    # cross-unit coercion is a promotion decision this lane has not made.
+
+    def __eq__[Rhs: TemporalValue](self, o: Rhs) -> TemporalEq[Self, Rhs]:
+        return TemporalEq(self.copy(), o.copy())
+
+    def __ne__[Rhs: TemporalValue](self, o: Rhs) -> TemporalNe[Self, Rhs]:
+        return TemporalNe(self.copy(), o.copy())
+
+    def __lt__[Rhs: TemporalValue](self, o: Rhs) -> TemporalLt[Self, Rhs]:
+        return TemporalLt(self.copy(), o.copy())
+
+    def __le__[Rhs: TemporalValue](self, o: Rhs) -> TemporalLe[Self, Rhs]:
+        return TemporalLe(self.copy(), o.copy())
+
+    def __gt__[Rhs: TemporalValue](self, o: Rhs) -> TemporalGt[Self, Rhs]:
+        return TemporalGt(self.copy(), o.copy())
+
+    def __ge__[Rhs: TemporalValue](self, o: Rhs) -> TemporalGe[Self, Rhs]:
+        return TemporalGe(self.copy(), o.copy())
+
+    # -- field extraction ---------------------------------------------------
+    #
+    # Nine kernels that `kernels/temporal.mojo` has carried unreferenced.
+    # `int32` for every one, which is Arrow C++'s and PyArrow's answer.
+
+    def year(self) -> Year[Self]:
+        """The proleptic Gregorian year."""
+        return Year[Self](self.copy())
+
+    def month(self) -> Month[Self]:
+        """Month of year, 1-12."""
+        return Month[Self](self.copy())
+
+    def day(self) -> Day[Self]:
+        """Day of month, 1-31."""
+        return Day[Self](self.copy())
+
+    def hour(self) -> Hour[Self]:
+        """Hour of day, 0-23."""
+        return Hour[Self](self.copy())
+
+    def minute(self) -> Minute[Self]:
+        """Minute of hour, 0-59."""
+        return Minute[Self](self.copy())
+
+    def second(self) -> Second[Self]:
+        """Second of minute, 0-59. Sub-second digits are dropped, not
+        rounded."""
+        return Second[Self](self.copy())
+
+    def quarter(self) -> Quarter[Self]:
+        """Quarter of year, 1-4."""
+        return Quarter[Self](self.copy())
+
+    def day_of_week(self) -> DayOfWeek[Self]:
+        """ISO weekday, **Monday = 0** — PyArrow's default, not DuckDB's
+        Sunday = 0."""
+        return DayOfWeek[Self](self.copy())
+
+    def day_of_year(self) -> DayOfYear[Self]:
+        """Day of year, 1-366."""
+        return DayOfYear[Self](self.copy())
+
+    # -- truncation ---------------------------------------------------------
+
+    def date_trunc(self, unit: String) raises -> DateTrunc[Self]:
+        """Floor to a `second`/`minute`/`hour`/`day`/`month`/`quarter`/`year`
+        boundary, keeping this value's own type.
+
+        The unit is parsed **here**, at plan-construction time, so a
+        misspelling raises when the query is built rather than on the first row
+        that evaluates it. That is the entire reason `CalendarUnit` is a type
+        and not a `String`: past this call an unsupported unit is
+        unrepresentable.
+        """
+        return DateTrunc[Self](self.copy(), CalendarUnit.parse(unit))
 
 
 # ---------------------------------------------------------------------------

@@ -14,8 +14,8 @@ countable.
 The aggregates used to be the worst of it —
 `AggExpr.of[NumericAgg[SumKernel, Int64Type]](x).alias("total")` — and needed
 nine shims. It turned out marrow already had `col("v", int64).sum()`, on
-`NumericValue`, documented in `Relation.aggregate` and used throughout
-`marrow/exprold/tests`; the corpus was simply spelling it the long way. That is
+`NumericValue`, documented in `Relation.aggregate` and used throughout the
+expression layer's own tests; the corpus was simply spelling it the long way. That is
 the shape of the remaining work: check whether the nicer spelling already
 exists before designing one.
 

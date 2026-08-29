@@ -40,25 +40,24 @@ from marrow.dtypes import (
     string,
     timestamp,
 )
-from marrow.exprold.builders import col, count_star, lit
-from marrow.exprold.relations import DynRelation
-from marrow.exprold.values import (
+from marrow.expr.builders import col, count_star, lit
+from marrow.expr.logical import DynRelation
+from marrow.expr.`comptime`.boolean import IsNull, NotNull
+from marrow.expr.`comptime`.casts import (
     BoolToNum,
-    CaseWhen,
-    Coalesce,
-    EndsWith,
-    FillNull,
-    ILike,
-    IsNull,
-    Like,
-    Lower,
-    NotNull,
     NumToBool,
     NumToString,
     NumericCast,
+    StringToNum,
+)
+from marrow.expr.`comptime`.numeric import CaseWhen, Coalesce, FillNull
+from marrow.expr.`comptime`.strings import (
+    EndsWith,
+    ILike,
+    Like,
+    Lower,
     StartsWith,
     StringLength,
-    StringToNum,
     Strip,
     Upper,
 )

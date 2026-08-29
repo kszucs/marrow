@@ -12,5 +12,4 @@ def plan() raises -> DynRelation:
     NULL	7	70
     """
     var t = table("basic")
-    var q = t.filter(col("v", int64) > lit(3, int64))
-    return q
+    return t.filter(col("v", int64) > lit(3, int64))

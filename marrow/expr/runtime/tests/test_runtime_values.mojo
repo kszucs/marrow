@@ -45,7 +45,6 @@ def _batch() raises -> RecordBatch:
     )
 
 
-
 def test_runtime_shape_is_always_columnar() raises:
     """The lane materialises unconditionally, so it answers truthfully rather
     than aspirationally — `Datum.to_array` never has to broadcast its result."""

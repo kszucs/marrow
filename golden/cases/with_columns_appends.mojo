@@ -16,5 +16,4 @@ def plan() raises -> DynRelation:
     NULL	7	70	77
     """
     var t = table("basic")
-    var q = t.with_columns(["s"], [col("v", int64) + col("w", int64)])
-    return q
+    return t.with_columns(["s"], [col("v", int64) + col("w", int64)])

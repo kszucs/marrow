@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     5.0
     """
     var t = table("nulls")
-    var q = t.aggregate(
+    return t.aggregate(
         aggs=[col("b", int64).mean().alias("m")],
     )
-    return q

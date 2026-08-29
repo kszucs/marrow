@@ -26,5 +26,4 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("floats")
-    var q = t.project(["s"], [col("x", float64).sign()])
-    return q
+    return t.project(["s"], [col("x", float64).sign()])

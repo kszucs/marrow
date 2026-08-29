@@ -18,8 +18,8 @@ Three shapes, each following the tier scheme used by the numeric kernels
   compiles the pattern once instead of per row.
 
 Variable-width ops cannot lane-fuse the way numeric kernels do (there is no
-fixed W-wide lane), so the expression layer (`marrow.exprold.values`) materializes
-them. Only `LengthKernel` exposes a fusable, offset-based fast path there.
+fixed W-wide lane), so the expression layer
+(`marrow/expr/comptime/strings.mojo`) materializes them. Only `LengthKernel` exposes a fusable, offset-based fast path there.
 """
 
 from std.sys import size_of
@@ -426,8 +426,8 @@ struct StringNeKernel(StringPredicateKernel):
 # order. These are the string half of `<` `<=` `>` `>=` `==` `!=`; the numeric
 # half lives in `compare.mojo` as `NumericCompareKernel` conformers. The two are
 # separate families because a variable-width predicate is elementwise and cannot
-# vectorize, so whoever interprets the operator pairs them (see `_compare` in
-# `marrow/exprold/dynamic.mojo`).
+# vectorize, so whoever interprets the operator pairs them — the runtime lane
+# in `marrow/expr/runtime/values.mojo`.
 
 
 struct StringLtKernel(StringPredicateKernel):
@@ -751,9 +751,9 @@ def _match_arrays[
     `LikeKernel.predicate` has to compile its pattern before it can match --
     so an array x array LIKE rebuilt the whole `LikePattern` (a token list, a
     literal buffer and a `String`) for every element. That is the shape the
-    runtime expression lane produces: `marrow.exprold.dynamic` evaluates a
-    literal by `DynScalar.repeat(num_rows)`, so a constant pattern arrives as
-    n identical rows and every one of those n compiles was redundant.
+    runtime expression lane produces: it evaluates a literal by
+    `DynScalar.repeat(num_rows)`, so a constant pattern arrives as n identical
+    rows and every one of those n compiles was redundant.
 
     Remembering the last pattern text collapses the constant case to a single
     compile without special-casing it: a genuinely varying right operand still

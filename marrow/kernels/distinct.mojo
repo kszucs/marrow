@@ -8,7 +8,7 @@ folded in as a per-register max, matching ``pyarrow.compute.approx_count_distinc
 
 Both come in a whole-array form (returns an ``int64`` scalar) and a **grouped**
 form (``*_grouped(gids, value, num_groups)`` → one ``int64`` per group), the
-latter driving ``GroupBy``'s ``count_distinct`` / ``approx_count_distinct``:
+latter backing the ``count_distinct`` / ``approx_count_distinct`` aggregates:
 
 - exact grouped dedups ``(group_id, value)`` pairs in a single ``SwissHashTable``
   (the join's table) and bumps a per-group counter on each newly-seen pair — one
@@ -164,5 +164,5 @@ def approx_count_distinct(
 
 
 # ---------------------------------------------------------------------------
-# Grouped — one distinct-count per group id (driven by GroupBy)
+# Grouped — one distinct-count per group id (driven by `DistinctCount`)
 # ---------------------------------------------------------------------------

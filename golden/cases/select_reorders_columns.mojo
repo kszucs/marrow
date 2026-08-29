@@ -17,6 +17,5 @@ def plan() raises -> DynRelation:
     4.0	'east'
     """
     var t = table("sales")
-    var picked = t.select("price", "region")
-    var q = picked.sort([col("price", float64)], [True])
-    return q
+    var picked = t.select(["price", "region"])
+    return picked.sort_by([col("price", float64)], [True])

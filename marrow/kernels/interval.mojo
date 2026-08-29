@@ -19,8 +19,12 @@ an operator has no useful interval rule, the answer is "maybe true". A caller
 may only ever skip data it has *proven* cannot match, so a wrong "maybe" costs
 time and a wrong "no" costs correctness.
 
-`marrow.exprold.pruning` is the consumer: it turns a row group's or page's column
-statistics into `Interval`s and drives these kernels over an expression tree.
+The intended consumer is statistics-based predicate pruning — turning a row
+group's or page's column statistics into `Interval`s and driving these kernels
+over an expression tree. **That consumer does not currently exist**: it lived in
+the previous expression layer and was deleted with it, and `marrow/expr/` has no
+replacement yet. These kernels are the half that was already shared, and they
+need no work when it returns.
 """
 
 from .core import Kernel

@@ -7,7 +7,6 @@ from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import DynArray
 from marrow.dtypes import DynType
-from marrow.scalars import DynScalar
 import marrow.kernels as mk
 
 # ``mk.filter`` collides with the like-named submodule, so the package alias
@@ -15,18 +14,6 @@ import marrow.kernels as mk
 from marrow.kernels.filter import filter as _filter_kernel
 from marrow.kernels.boolean import IsNullKernel, NotNullKernel
 from marrow.execution import ExecContext
-from marrow.exprold.aggregates import (
-    Sum,
-    Product,
-    Mean,
-    Min,
-    Max,
-    CountDistinct,
-    ApproxCountDistinct,
-)
-from marrow.exprold.aggregates import AggFunction
-from marrow.kernels.aggregate import AggKernel
-from marrow.kernels.core import Groups
 
 from helpers import pyfunction
 
@@ -66,27 +53,6 @@ def cast(
     return mk.cast(array, target, safe, ctx)
 
 
-# Whole-column aggregates. The column's dtype is a runtime value here, so each
-# one resolves its `AggFunction` to the `AggKernel` implementing it (the same
-# path a `GROUP BY` plan takes, with one implicit group) and reads the single
-# row back out — the thin `(DynArray, ExecContext) -> DynScalar` shape
-# `pykernel` expects.
-#
-# `ctx` is accepted but no longer reaches the aggregate: `AggKernel.grouped`
-# carries no context, so each one resolves its own parallelism from
-# `ExecContext.auto()`. The signature stays because `pykernel` pins it.
-def aggregate[
-    F: AggFunction
-](array: DynArray, ctx: ExecContext) raises -> DynScalar:
-    var box = List[DynScalar]()
-
-    def run[A: AggKernel]() raises {mut box, imm}:
-        box.append(A.grouped(Groups.single(len(array)), [array.copy()])[0])
-
-    F.resolve(array.dtype(), run)
-    return box[0].copy()
-
-
 # ``pykernel`` — wrap a marrow kernel of uniform shape
 # ``(DynArray..., ExecContext) -> R`` as a Python-callable. Each overload
 # pins the full signature so Mojo can resolve the DynArray runtime overload
@@ -102,12 +68,6 @@ def pykernel[
 
 def pykernel[
     func: def(DynArray, ExecContext) raises thin -> DynArray,
-]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
-    return pyfunction[func]()
-
-
-def pykernel[
-    func: def(DynArray, ExecContext) raises thin -> DynScalar,
 ]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     return pyfunction[func]()
 
@@ -130,11 +90,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.SubKernel.dispatch]()]("subtract")
     mb.def_function[pykernel[mk.MulKernel.dispatch]()]("multiply")
     mb.def_function[pykernel[mk.DivKernel.dispatch]()]("divide")
-    mb.def_function[pykernel[aggregate[Sum]]()]("sum")
-    mb.def_function[pykernel[aggregate[Product]]()]("product")
-    mb.def_function[pykernel[aggregate[Min]]()]("min")
-    mb.def_function[pykernel[aggregate[Max]]()]("max")
-    mb.def_function[pykernel[aggregate[Mean]]()]("mean")
     mb.def_function[pykernel[mk.AnyKernel.dispatch]()]("any")
     mb.def_function[pykernel[mk.AllKernel.dispatch]()]("all")
     mb.def_function[pykernel[IsNullKernel.dispatch]()]("is_null")
@@ -147,10 +102,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.LeKernel.dispatch]()]("less_equal")
     mb.def_function[pykernel[mk.GtKernel.dispatch]()]("greater")
     mb.def_function[pykernel[mk.GeKernel.dispatch]()]("greater_equal")
-    mb.def_function[pykernel[aggregate[CountDistinct]]()]("count_distinct")
-    mb.def_function[pykernel[aggregate[ApproxCountDistinct]]()](
-        "approx_count_distinct"
-    )
     mb.def_function[pyfunction[sort_indices]()]("sort_indices")
     mb.def_function[pyfunction[sort]()]("sort")
     mb.def_function[pyfunction[take]()]("take")

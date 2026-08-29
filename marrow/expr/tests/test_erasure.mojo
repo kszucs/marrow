@@ -1,6 +1,6 @@
 """The erased boxes destroy what they hold.
 
-`DynValue`, `DynRelation`, `DynOperator` and `ResolvedAggregate` each erase a
+`DynValue`, `DynRelation`, `DynOperator` and `DynAgg` each erase a
 typed value by `rebind`ing an `ArcPointer[T]` to `ArcPointer[NoneType]`. That
 keeps the allocation and the refcount and **forgets the destructor**: the final
 release runs `NoneType`'s, so the boxed object's `__deinit__` never runs and
@@ -12,7 +12,7 @@ The fix is a `_drop` trampoline per box, and these are the tests that hold it in
 place. They count destructions rather than measuring memory, so they fail
 deterministically rather than statistically.
 
-The leak is worst where it is least visible: `ResolvedAggregate` boxes a fold
+The leak is worst where it is least visible: `DynAgg` boxes a fold
 state whose size is O(distinct values), so an un-dropped `count_distinct` loses
 a whole `SwissHashTable` per query, while the plan-node boxes lose a few
 strings.
@@ -23,12 +23,10 @@ from std.testing import assert_equal
 from ...dtypes import DynType, int64
 from ...execution import ExecContext
 from ...kernels.core import Groups
-from ...kernels.aggregate import DistinctCount
 from ...schema import Schema
 from ..logical import DynRelation, DynValue, Relation, Shape, Value
 from ..params import Bindings
 from ..physical import Datum, DynOperator, Morsel, Operator, Pipeline
-from ..runtime.aggregates import ResolvedAggregate
 
 
 comptime Deaths = ArcPointer[List[Int]]
@@ -83,7 +81,7 @@ struct _ValueProbe(Copyable, Movable, Value, Writable):
         return int64
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         raise Error("probe is not runnable")
 
@@ -175,31 +173,3 @@ def test_erased_copies_share_one_destruction() raises:
     assert_equal(len(deaths[]), 1, "released twice, but a copy is still alive")
     _ = third^
     assert_equal(len(deaths[]), 2, "the last release destroys, exactly once")
-
-
-def _open_a_fold_state(var in_dtypes: List[DynType]) raises:
-    var resolved = ResolvedAggregate.of[DistinctCount[True]](in_dtypes)
-    resolved.open(in_dtypes)
-    assert_equal(resolved.dtype, int64)
-
-
-def test_resolved_aggregate_destroys_its_fold_state() raises:
-    """`count_distinct`'s state is a whole hash table. This box holds it, and
-    `ResolvedAggregate` was the box that leaked the most per query.
-
-    There is no probe to count here — the boxed type is the real kernel — so
-    what this pins is that dropping an *opened* state is well-formed at all:
-    the `_drop` trampoline rebinds to `DistinctCount[True]`, and getting that
-    wrong is a double free rather than a leak."""
-    var in_dtypes = List[DynType](capacity=1)
-    in_dtypes.append(int64)
-    _open_a_fold_state(in_dtypes.copy())
-
-
-def test_unopened_resolved_aggregate_destroys_cleanly() raises:
-    """`dtype` and `empty` resolve without opening, so the box is routinely
-    destroyed holding no state at all — the `Optional` must not be unwrapped."""
-    var in_dtypes = List[DynType](capacity=1)
-    in_dtypes.append(int64)
-    var resolved = ResolvedAggregate.of[DistinctCount[True]](in_dtypes)
-    assert_equal(resolved.dtype, int64)

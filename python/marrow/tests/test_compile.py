@@ -145,13 +145,13 @@ def test_resolve_marrow_path_reports_every_location(tmp_path, monkeypatch):
 # --- CLI_WRITERS define -----------------------------------------------------
 #
 # The Parquet/IPC output writers are gated behind
-# `-D MARROW_CLI_WRITERS=true` in `marrow/exprold/relations.mojo` (off by
-# default at the Mojo level, since linking them costs 572,288 bytes of
-# `__text`). `marrow compile` has to pass that define by default so the
-# documented `-o result.parquet` contract works out of the box; `--no-writers`
-# (exercised through `build_command`'s `writers=False`) is the opt-out for the
-# minimum-size build. Note the *compiler* define is `MARROW_CLI_WRITERS`, not
-# the internal Mojo comptime name `CLI_WRITERS_ENABLED`.
+# `-D MARROW_CLI_WRITERS=true`. Their Mojo-side implementation went away with
+# the previous expression package, so the define currently gates nothing — but
+# `marrow compile` still passes it by default (linking the writers cost 572,288
+# bytes of `__text`, which is why it is a define and not unconditional), and
+# `--no-writers` (exercised through `build_command`'s `writers=False`) is the
+# opt-out. Note the *compiler* define is `MARROW_CLI_WRITERS`, not the internal
+# Mojo comptime name `CLI_WRITERS_ENABLED`.
 
 
 def test_build_command_default_includes_writers_define(tmp_path):

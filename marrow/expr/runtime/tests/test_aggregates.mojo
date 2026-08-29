@@ -12,13 +12,29 @@ written rather than on the first morsel.
 
 from std.testing import assert_equal, assert_true
 
+from ....arrays import StringArray
 from ....builders import array
-from ....dtypes import DynType, int64, string
-from ....kernels.aggregate import Dispersion
+from ....dtypes import DynType, Int64Type, float64, int32, int64, string
+from ....dtypes import StringType
+from ....kernels.aggregate import (
+    AggKernel,
+    Dispersion,
+    DistinctCount,
+    Fold,
+    MaxKernel,
+    MaxOp,
+    MeanKernel,
+    MinKernel,
+    MinOp,
+    ProductKernel,
+    StringExtremum,
+    SumKernel,
+    ValidCount,
+)
 from ....tabular import RecordBatch, record_batch
 from ...builders import col, table
 from ...logical import DynValue, Shape
-from ..aggregates import RuntimeAggregate
+from ..aggregates import RuntimeAggregate, dispatch_agg
 from ..values import column
 
 
@@ -40,28 +56,49 @@ def test_named_aggregate_rejects_an_unknown_name_where_it_is_written() raises:
     """
     var raised = False
     try:
-        _ = RuntimeAggregate(DynValue(column("s")), String("summ"))
+        _ = RuntimeAggregate(column("s"), String("summ"))
     except:
         raised = True
     assert_true(raised)
     # And a real one does not.
-    _ = RuntimeAggregate(DynValue(column("s")), String("count_distinct"))
+    _ = RuntimeAggregate(column("s"), String("count_distinct"))
+
+
+def _out_dtype(name: String, in_dtype: DynType) raises -> DynType:
+    """The catalog's answer, through the one ladder both callers use."""
+
+    def job[Agg: AggKernel]() raises {imm} -> DynType:
+        return Agg.dtype(in_dtype)
+
+    return dispatch_agg(name, in_dtype, job)
 
 
 def test_named_aggregate_resolution_answers_dtype_and_fold_together() raises:
-    """One ladder, so the schema dtype and the implementation cannot disagree.
+    """The catalog's dtype and the kernel that will run cannot disagree.
 
-    Both come off the same `AggKernel` on the same branch — which is
-    what replaces the compiler check `Aggregation.dtype` used to get from
-    having to match `grouped`'s return type.
+    `agg_out_dtype` answers from each kernel's own `dtype` static rather than
+    restating a constant, so `min` over a string column reports `string`
+    because `StringExtremum` says so — not because an arm here spells it.
     """
-    var dtypes = List[DynType](capacity=1)
-    dtypes.append(DynType(string))
-    var counted = col("s").count_distinct().resolve(dtypes)
-    assert_true(counted.dtype == DynType(int64))
+    assert_true(_out_dtype("count_distinct", DynType(string)) == int64)
+    assert_true(_out_dtype("count", DynType(string)) == int64)
+    assert_true(_out_dtype("min", DynType(string)) == string)
+    assert_true(_out_dtype("max", DynType(string)) == string)
+    # `sum(int32)` widens; the widening rule is `SumKernel`'s, not the
+    # catalog's.
+    assert_true(_out_dtype("sum", DynType(int32)) == int64)
+    assert_true(_out_dtype("variance", DynType(int64)) == float64)
 
-    var extremum = col("s").min().resolve(dtypes)
-    assert_true(extremum.dtype == DynType(string))
+
+def test_named_aggregate_rejects_a_dtype_it_has_no_arm_for() raises:
+    """The catalog is the domain gate: a `sum` over strings raises at plan
+    time, where the query was written, not on the first morsel."""
+    var raised = False
+    try:
+        _ = _out_dtype("sum", DynType(string))
+    except:
+        raised = True
+    assert_true(raised)
 
 
 def test_named_aggregate_is_scalar_shaped_and_named_by_its_function() raises:
@@ -112,7 +149,7 @@ def test_named_aggregate_covers_the_folds_the_comptime_lane_fuses() raises:
 
     The comptime lane fuses these into `Aggregate`; a frontend that only
     has a string reaches the same algebra through `Fold` and
-    `ValidCount` instead. Same answers, one materialised column.
+    `ValidCount[StringArray]` instead. Same answers, one materialised column.
     """
     var plan = table(_batch()).aggregate(
         [
@@ -162,12 +199,9 @@ def test_named_aggregate_vocabulary_all_resolves() raises:
     the accept list, and every query naming them raised "unknown aggregate"
     from the constructor.
     """
-    var dtypes = List[DynType](capacity=1)
-    dtypes.append(DynType(int64))
     for ref name in RuntimeAggregate.vocabulary():
-        var node = RuntimeAggregate(DynValue(column("g")), name.copy())
+        var node = RuntimeAggregate(column("g"), name.copy())
         # Raises if the ladder has no arm for it; int64 is in every domain.
-        _ = node.resolve(dtypes)
 
 
 def test_named_aggregate_empty_agrees_with_its_kernel() raises:
@@ -184,7 +218,7 @@ def test_named_aggregate_empty_agrees_with_its_kernel() raises:
     """
 
     def node(var name: String) raises -> RuntimeAggregate:
-        return RuntimeAggregate(DynValue(column("g")), name^)
+        return RuntimeAggregate(column("g"), name^)
 
     # Counting nothing is 0 -- SQL's answer, and PyArrow's.
     assert_true(Bool(node(String("count")).empty()))
@@ -196,7 +230,7 @@ def test_named_aggregate_empty_agrees_with_its_kernel() raises:
     assert_true(Bool(node(String("stddev")).empty()))
     assert_true(
         Bool(node(String("variance")).empty())
-        == Bool(Dispersion[0, False].empty())
+        == Bool(Dispersion[0, False, Int64Type].empty())
     )
 
     # The rest decline: their dtype is known only to the plan's schema.
@@ -209,3 +243,39 @@ def test_named_aggregate_empty_agrees_with_its_kernel() raises:
     # And every name in the vocabulary can answer at all.
     for ref name in RuntimeAggregate.vocabulary():
         _ = node(name.copy()).empty()
+
+
+def test_empty_agrees_across_every_dtype_selected_kernel() raises:
+    """The invariant `RuntimeAggregate.empty()` rests on.
+
+    `empty()` is asked when **no morsel ever arrived**, so there is no real
+    dtype to resolve against and the ladder is probed with a fabricated
+    `int64`. For `min`/`max` over a string column that selects
+    `Fold[MinKernel, Int64Type]` rather than `StringExtremum` — a *different
+    kernel* than the one that would have run.
+
+    That is sound, but only because of a property of the vocabulary rather
+    than of the code: the four aggregates that answer anything but `None` are
+    selected by **name alone** and can never be reached by the wrong arm,
+    while every dtype-selected arm is a fold or an extremum and inherits the
+    trait's `None`. Nothing in the type system enforces it, and a new kernel
+    whose `empty` differed from its dtype-selected sibling's would break
+    `empty()` silently. This is that enforcement.
+    """
+    # Dtype-selected: the arms a fabricated probe can pick between. Every one
+    # must decline, or the probe's answer depends on the dtype it invented.
+    assert_true(not Bool(Fold[MinKernel, Int64Type].empty()))
+    assert_true(not Bool(Fold[MaxKernel, Int64Type].empty()))
+    assert_true(not Bool(Fold[SumKernel, Int64Type].empty()))
+    assert_true(not Bool(Fold[ProductKernel, Int64Type].empty()))
+    assert_true(not Bool(Fold[MeanKernel, Int64Type].empty()))
+    assert_true(not Bool(StringExtremum[MinOp, StringType].empty()))
+    assert_true(not Bool(StringExtremum[MaxOp, StringType].empty()))
+
+    # Name-selected: these do answer, and no dtype can steer the ladder away
+    # from them — which is why their answers survive the probe intact.
+    assert_true(Bool(ValidCount[StringArray].empty()))
+    assert_true(Bool(DistinctCount[True, StringArray].empty()))
+    assert_true(Bool(DistinctCount[False, StringArray].empty()))
+    assert_true(Bool(Dispersion[0, False, Int64Type].empty()))
+    assert_true(Bool(Dispersion[0, True, Int64Type].empty()))

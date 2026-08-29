@@ -20,5 +20,4 @@ def plan() raises -> DynRelation:
         keys=[Upper(col("region", string))], aggs=[count_star().alias("n")]
     )
     var named = agg.rename(["key0"], ["r"])
-    var q = named.sort([col("r", string)], [True])
-    return q
+    return named.sort_by([col("r", string)], [True])

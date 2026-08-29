@@ -582,54 +582,6 @@ def test_mojo_div_pyarrow_arrays(pa_type: pa.DType) -> None:
 # ── aggregates ───────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("pa_type", INT_TYPES)
-def test_mojo_sum_pyarrow_int(pa_type: pa.DType) -> None:
-    pa_a = pa.array([1, 2, 3, 4], type=pa_type())
-    assert ma.compute.sum(ma.array(pa_a), ctx=None) == 10.0
-
-
-@pytest.mark.parametrize("pa_type", FLOAT_TYPES)
-def test_mojo_sum_pyarrow_float(pa_type: pa.DType) -> None:
-    pa_a = pa.array([1.5, 2.5, 3.0], type=pa_type())
-    assert ma.compute.sum(ma.array(pa_a), ctx=None) == pytest.approx(7.0)
-
-
-@pytest.mark.parametrize("pa_type", INT_TYPES)
-def test_mojo_sum_pyarrow_skips_nulls(pa_type: pa.DType) -> None:
-    pa_a = pa.array([1, None, 3, None], type=pa_type())
-    assert ma.compute.sum(ma.array(pa_a), ctx=None) == 4.0
-
-
-@pytest.mark.parametrize("pa_type", INT_TYPES)
-def test_mojo_min_pyarrow(pa_type: pa.DType) -> None:
-    pa_a = pa.array([3, 1, 4, 1, 5], type=pa_type())
-    assert ma.compute.min(ma.array(pa_a), ctx=None) == 1.0
-
-
-@pytest.mark.parametrize("pa_type", INT_TYPES)
-def test_mojo_max_pyarrow(pa_type: pa.DType) -> None:
-    pa_a = pa.array([3, 1, 4, 1, 5], type=pa_type())
-    assert ma.compute.max(ma.array(pa_a), ctx=None) == 5.0
-
-
-@pytest.mark.parametrize("pa_type", INT_TYPES)
-def test_mojo_min_pyarrow_skips_nulls(pa_type: pa.DType) -> None:
-    pa_a = pa.array([3, None, 1, None], type=pa_type())
-    assert ma.compute.min(ma.array(pa_a), ctx=None) == 1.0
-
-
-@pytest.mark.parametrize("pa_type", INT_TYPES)
-def test_mojo_max_pyarrow_skips_nulls(pa_type: pa.DType) -> None:
-    pa_a = pa.array([3, None, 5, None], type=pa_type())
-    assert ma.compute.max(ma.array(pa_a), ctx=None) == 5.0
-
-
-@pytest.mark.parametrize("pa_type", INT_TYPES)
-def test_mojo_product_pyarrow(pa_type: pa.DType) -> None:
-    pa_a = pa.array([2, 3, 4], type=pa_type())
-    assert ma.compute.product(ma.array(pa_a), ctx=None) == 24.0
-
-
 # ── filter ───────────────────────────────────────────────────────────────────
 
 

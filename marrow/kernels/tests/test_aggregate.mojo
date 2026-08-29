@@ -12,6 +12,7 @@ from ...builders import (
     TimestampBuilder,
 )
 from ...dtypes import (
+    StringType,
     int32,
     int64,
     float64,
@@ -47,13 +48,15 @@ def whole[A: AggKernel](value: DynArray) raises -> DynScalar:
     `AggKernel` branches on it first, so this reaches each one's whole-column
     fast path rather than a scatter loop over an id array that does not exist.
     """
-    return A.grouped(Groups.single(len(value)), [value.copy()])[0]
+    return A.grouped(
+        Groups.single(len(value)), A.InArray(value.to_data())
+    ).to_dyn()[0]
 
 
 def test_sumtyped() raises:
-    var a = array([1, 2, 3, 4, 5], int64)
-    var result = SumKernel.reduce[Int64Type](a)
-    assert_equal(result.value(), 15)
+    var a: DynArray = array([1, 2, 3, 4, 5], int64)
+    var result = whole[Fold[SumKernel, Int64Type]](a)
+    assert_equal(result.as_int64().value(), 15)
 
 
 def test_sumwith_nulls() raises:
@@ -62,57 +65,27 @@ def test_sumwith_nulls() raises:
     a.append(10)
     a.append(20)
     a.append_null()  # index 2 is null
-    var result = SumKernel.reduce[Int32Type](a.finish())
-    assert_equal(result.value(), 30)
+    var col: DynArray = a.finish()
+    var result = whole[Fold[SumKernel, Int32Type]](col)
+    assert_equal(result.as_int64().value(), 30)
 
 
 def test_sumall_nulls() raises:
-    var a = nulls(5, int64)
-    var result = SumKernel.reduce[Int64Type](a)
-    assert_equal(result.value(), 0)
+    var a: DynArray = nulls(5, int64)
+    var result = whole[Fold[SumKernel, Int64Type]](a)
+    assert_equal(result.as_int64().value(), 0)
 
 
 def test_sumempty() raises:
-    var a = array(int32)
-    var result = SumKernel.reduce[Int32Type](a)
-    assert_equal(result.value(), 0)
+    var a: DynArray = array(int32)
+    var result = whole[Fold[SumKernel, Int32Type]](a)
+    assert_equal(result.as_int64().value(), 0)
 
 
 def test_sumuntyped() raises:
     var a: DynArray = array([1, 2, 3], int64)
     var result = whole[Fold[SumKernel, Int64Type]](a)
     assert_equal(result.as_int64().value(), 6)
-
-
-def test_reduce_typed_sum_widens() raises:
-    """Typed `reduce[V]` on a narrow int returns a widened int64 scalar directly
-    (no erased `DynScalar`)."""
-    var result = SumKernel.reduce(array([1, 2, 3, 4, 5], int32))
-    assert_true(result.type() == int64)
-    assert_equal(result.value(), 15)
-
-
-def test_reduce_typed_min_keeps_type() raises:
-    """`min`/`max` keep the operand dtype through the typed path."""
-    var result = MinKernel.reduce(array([4, 1, 3, 2], int32))
-    assert_true(result.type() == int32)
-    assert_equal(result.value(), 1)
-
-
-def test_reduce_typed_mean_float() raises:
-    var result = MeanKernel.reduce(array([1, 2, 3, 4], int32))
-    assert_true(result.type() == float64)
-    assert_equal(result.value(), 2.5)
-
-
-def test_reduce_typed_count() raises:
-    var b = Int32Builder(3)
-    b.append(1)
-    b.append_null()
-    b.append(3)
-    var result = CountKernel.reduce(b.finish())
-    assert_true(result.type() == int64)
-    assert_equal(result.value(), 2)
 
 
 def test_mean_int() raises:
@@ -167,14 +140,14 @@ def _strings(var items: List[String]) raises -> DynArray:
 
 def test_min_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[StringExtremum[MinOp]](a)
+    var r = whole[StringExtremum[MinOp, StringType]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "apple")
 
 
 def test_max_string() raises:
     var a = _strings(["banana", "apple", "cherry"])
-    var r = whole[StringExtremum[MaxOp]](a)
+    var r = whole[StringExtremum[MaxOp, StringType]](a)
     assert_true(r.type() == string)
     assert_equal(r.as_string().to_string(), "cherry")
 
@@ -186,8 +159,12 @@ def test_min_string_skips_nulls() raises:
     b.append("a")
     b.append_null()
     var a: DynArray = b.finish()
-    assert_equal(whole[StringExtremum[MinOp]](a).as_string().to_string(), "a")
-    assert_equal(whole[StringExtremum[MaxOp]](a).as_string().to_string(), "m")
+    assert_equal(
+        whole[StringExtremum[MinOp, StringType]](a).as_string().to_string(), "a"
+    )
+    assert_equal(
+        whole[StringExtremum[MaxOp, StringType]](a).as_string().to_string(), "m"
+    )
 
 
 def test_min_string_all_null_is_null() raises:
@@ -195,14 +172,14 @@ def test_min_string_all_null_is_null() raises:
     b.append_null()
     b.append_null()
     var a: DynArray = b.finish()
-    assert_false(whole[StringExtremum[MinOp]](a).is_valid())
-    assert_false(whole[StringExtremum[MaxOp]](a).is_valid())
+    assert_false(whole[StringExtremum[MinOp, StringType]](a).is_valid())
+    assert_false(whole[StringExtremum[MaxOp, StringType]](a).is_valid())
 
 
 def test_min_string_empty_is_null() raises:
     var b = StringBuilder(0)
     var a: DynArray = b.finish()
-    assert_false(whole[StringExtremum[MinOp]](a).is_valid())
+    assert_false(whole[StringExtremum[MinOp, StringType]](a).is_valid())
 
 
 # ---------------------------------------------------------------------------

@@ -10,14 +10,21 @@ before this gate nothing linked it — a plan that never joins should not pay fo
 any of it, and this is what proves it still doesn't.
 
     pixi run binary_size query_join
+
+**Ported from the old expression package on 2026-08-29.** The join carries
+over whole: same kernel, same key indices, same `JOIN_INNER` from
+`marrow.kernels.join`.
+Two mechanical differences, neither of which changes what is measured — the
+output schema is derived by `Join._output_schema` instead of being passed in,
+and the plan is spelled with the `join` verb rather than by naming the node.
+The recorded baseline predates the port and is stale.
 """
 
 from marrow.builders import array
-from marrow.dtypes import int64, field
-from marrow.schema import schema
-from marrow.tabular import record_batch
-from marrow.exprold.relations import InMemoryTable, Join, DynRelation
+from marrow.expr.builders import table
+from marrow.dtypes import int64
 from marrow.kernels.join import JOIN_INNER
+from marrow.tabular import record_batch
 
 
 def main() raises:
@@ -29,19 +36,4 @@ def main() raises:
     var rv = array([200, 300, 400], int64)
     var right = record_batch([rk.copy(), rv.copy()], names=["k", "rv"])
 
-    var joined = Join(
-        left=DynRelation(InMemoryTable(batch=left)),
-        right=DynRelation(InMemoryTable(batch=right)),
-        left_key_indices=[0],
-        right_key_indices=[0],
-        join_kind=JOIN_INNER,
-        strictness=0,
-        schema=schema(
-            [
-                field("k", int64),
-                field("lv", int64),
-                field("rv", int64),
-            ]
-        ),
-    )
-    print(DynRelation(joined^).execute())
+    print(table(left^).join(table(right^), [0], [0], JOIN_INNER).execute())

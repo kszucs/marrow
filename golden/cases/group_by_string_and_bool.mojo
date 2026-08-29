@@ -19,7 +19,6 @@ def plan() raises -> DynRelation:
         keys=[col("region", string), col("active", bool_)],
         aggs=[count_star().alias("n")],
     )
-    var q = agg.sort(
+    return agg.sort_by(
         [col("region", string), col("active", bool_)], [True, True]
     )
-    return q

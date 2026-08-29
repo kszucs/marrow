@@ -13,13 +13,5 @@ def plan() raises -> DynRelation:
     NULL	NULL	30	'ops'
     """
     var left = table("emp")
-    var right = table("dept")
-    var joined = left.join(
-        right,
-        left_on=[col("dept", int64)],
-        right_on=[col("did", int64)],
-        how=JOIN_RIGHT,
-        strictness=JOIN_ALL,
-    )
-    var q = joined.sort([col("did", int64), col("eid", int64)], [True, True])
-    return q
+    var joined = left.join(table("dept"), [1], [0], JOIN_RIGHT)
+    return joined.sort_by([col("did", int64), col("eid", int64)], [True, True])

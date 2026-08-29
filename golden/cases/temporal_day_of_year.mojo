@@ -18,7 +18,4 @@ def plan() raises -> DynRelation:
     365
     """
     var t = table("events")
-    var q = t.project(
-        ["doy"], [col("ts", timestamp(microsecond)).day_of_year()]
-    )
-    return q
+    return t.project(["doy"], [col("ts", timestamp(microsecond)).day_of_year()])

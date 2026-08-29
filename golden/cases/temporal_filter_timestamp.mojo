@@ -8,13 +8,17 @@ def plan() raises -> DynRelation:
     A predicate comparing two timestamps, which drops the null and the one
     row that sits exactly on its own year boundary.
 
-    The comparison is spelled through the **runtime** lane — `col("ts")` with no
-    dtype — because the AOT lane cannot express a temporal comparison at all:
-    `TemporalValue` (`marrow/exprold/values.mojo`) carries the extraction,
-    truncation and min/max methods but no relational operators, and `lit` has no
-    temporal overload, so neither `col("ts", timestamp(microsecond)) > ...` nor a
-    timestamp constant compiles. Comparing the column against a truncation of
-    itself is a genuine timestamp comparison that both lanes can spell.
+    The right-hand side is a truncation of the column rather than a constant
+    because `lit` has no temporal overload in either lane, so a timestamp
+    literal cannot be written down at all. Comparing a column against a
+    truncation of itself is still a genuine timestamp comparison.
+
+    It is spelled in the **comptime** lane. It could not be until
+    `TemporalValue` grew its six comparison dunders: `TemporalCompare` and its
+    aliases existed with no callers, so the only way to reach one was to name
+    `TemporalGt(...)` by hand. Both operands are `timestamp[us]`, which is what
+    the node's per-batch dtype check requires — cross-unit comparison raises
+    rather than silently coercing.
 
     -- expected
     ts:timestamp	label:string
@@ -24,6 +28,8 @@ def plan() raises -> DynRelation:
     '2021-12-31T23:59:59.999999'	'b'
     """
     var t = table("events")
-    var kept = t.filter(col("ts") > col("ts").date_trunc("year"))
-    var q = kept.select("ts", "label")
-    return q
+    var kept = t.filter(
+        col("ts", timestamp(microsecond))
+        > col("ts", timestamp(microsecond)).date_trunc("year")
+    )
+    return kept.select(["ts", "label"])

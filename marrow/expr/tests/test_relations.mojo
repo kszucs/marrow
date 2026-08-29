@@ -18,8 +18,8 @@ from ...builders import array
 from ...dtypes import DynType, Int64Type, float64, int64
 from ...execution import ExecContext
 from ...kernels.join import JOIN_INNER, JOIN_LEFT, JOIN_SEMI
-from ...dtypes import field
-from ...schema import schema
+from ...dtypes import Field, field
+from ...schema import Schema, schema
 from ...parquet.writer import write_table
 from ...tabular import Table
 from ...tabular import RecordBatch, record_batch
@@ -592,3 +592,111 @@ def test_a_non_aggregate_value_is_still_projectable() raises:
         .execute()
     )
     assert_equal(out.num_rows(), 4)
+
+
+# ---------------------------------------------------------------------------
+# with_columns / drop / rename — the verbs that say what changes
+# ---------------------------------------------------------------------------
+# All three are sugar over `Project`, exactly as `select` is: the surviving
+# columns are runtime column reads, so no caller has to supply their dtypes.
+# What each one owns is a *rule about the output schema*, and that is what
+# these cases pin — the row values follow from `Project`, which is already
+# covered above.
+
+
+def test_with_columns_appends_and_keeps_the_input_order() raises:
+    """A new name goes on the end; the existing columns keep their positions
+    and their fields. `select` cannot express this without the caller writing
+    out the complement, which is wrong the moment a column is added
+    upstream."""
+    var out = (
+        table(_batch())
+        .with_columns(["s"], [(col("a", int64) + col("b", int64))])
+        .execute()
+    )
+    assert_equal(out.num_columns(), 3)
+    assert_equal(out.schema.fields[0].name, String("a"))
+    assert_equal(out.schema.fields[1].name, String("b"))
+    assert_equal(out.schema.fields[2].name, String("s"))
+    assert_equal(out.column(2).as_int64()[1].value(), Int64(22))
+
+
+def test_with_columns_replaces_an_existing_name_in_place() raises:
+    """Polars' rule, and the only one that keeps the output free of
+    duplicates: `b` is overwritten where it already sits rather than appended
+    a second time."""
+    var out = (
+        table(_batch())
+        .with_columns(["b"], [(col("b", int64) * lit(2, int64))])
+        .execute()
+    )
+    assert_equal(out.num_columns(), 2)
+    assert_equal(out.schema.fields[1].name, String("b"))
+    assert_equal(out.column(1).as_int64()[0].value(), Int64(20))
+
+
+def test_drop_keeps_the_survivors_in_input_order() raises:
+    """`drop` says what goes; everything else stays where it was."""
+    var out = table(_batch()).drop(["a"]).execute()
+    assert_equal(out.num_columns(), 1)
+    assert_equal(out.schema.fields[0].name, String("b"))
+
+
+def test_drop_rejects_a_name_that_is_not_there() raises:
+    """A typo in a `drop` list is otherwise silent — the column it meant to
+    remove survives — which is the failure this verb exists to avoid."""
+    var raised = False
+    try:
+        _ = table(_batch()).drop(["nope"])
+    except e:
+        raised = True
+        assert_true("not found" in String(e))
+    assert_true(raised, "dropping an unknown column must raise")
+
+
+def test_rename_carries_the_source_field_over() raises:
+    """Not just the name: dtype, `nullable` and metadata come from the source
+    field, because `Project._output_schema` recognises a bare column. Rebuilding
+    from the dtype alone turns `nullable=False` into `True`, which is the
+    divergence that method exists to fix."""
+    var fields = List[Field](capacity=1)
+    fields.append(field("a", int64, nullable=False))
+    var b = RecordBatch(
+        Schema(fields=fields^), [array([1, 2], int64).to_dyn()]
+    )
+    var renamed = table(b^).rename(["a"], ["z"]).schema()
+    assert_equal(renamed.fields[0].name, String("z"))
+    assert_true(renamed.fields[0].dtype.is_int64())
+    assert_true(not renamed.fields[0].nullable)
+
+
+def test_rename_leaves_untouched_columns_alone() raises:
+    """Two parallel lists rather than a mapping, because Mojo has no dict
+    literal in argument position. Columns not named keep their own names and
+    their positions."""
+    var out = table(_batch()).rename(["b"], ["total"]).execute()
+    assert_equal(out.num_columns(), 2)
+    assert_equal(out.schema.fields[0].name, String("a"))
+    assert_equal(out.schema.fields[1].name, String("total"))
+    assert_equal(out.column(1).as_int64()[3].value(), Int64(40))
+
+
+def test_rename_rejects_mismatched_list_lengths() raises:
+    var raised = False
+    try:
+        _ = table(_batch()).rename(["a", "b"], ["z"])
+    except e:
+        raised = True
+        assert_true("new names" in String(e))
+    assert_true(raised, "rename with unequal lists must raise")
+
+
+def test_variadic_select_matches_the_list_form() raises:
+    """`select("a")` and `select(["a"])` are one verb. The variadic spelling is
+    what the golden corpus's Python twin uses, so the two lanes cannot be one
+    text without it."""
+    var one = table(_batch()).select("b", "a").execute()
+    var two = table(_batch()).select(["b", "a"]).execute()
+    assert_equal(one.schema.fields[0].name, two.schema.fields[0].name)
+    assert_equal(one.schema.fields[1].name, String("a"))
+    assert_equal(one.num_columns(), 2)

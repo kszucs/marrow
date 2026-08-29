@@ -14,7 +14,6 @@ def plan() raises -> DynRelation:
     20	False
     """
     var t = table("sales")
-    var picked = t.select("qty", "active")
+    var picked = t.select(["qty", "active"])
     var filtered = picked.filter(~col("active", bool_))
-    var q = filtered.sort([col("qty", int32)], [True])
-    return q
+    return filtered.sort_by([col("qty", int32)], [True])

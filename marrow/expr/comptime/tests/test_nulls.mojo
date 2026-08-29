@@ -202,10 +202,10 @@ def test_nullif_manufactures_a_null_neither_operand_has() raises:
 def test_coalesce_null_survives_a_fused_parent() raises:
     """The regression this port exists to not reintroduce.
 
-    `exprold` answered validity from the batch as well as from the state, and
-    its batch-side answer re-ran `combine` over both operands to recover a
-    bitmap the result already carried (`marrow/exprold/values.mojo:2578-2588`).
-    Here `bind` computes once and a fused parent reads `validity(bound)`.
+    The previous expression layer answered validity from the batch as well as
+    from the state, and its batch-side answer re-ran `combine` over both
+    operands to recover a bitmap the result already carried. Here `bind`
+    computes once and a fused parent reads `validity(bound)`.
     """
     var b = _batch()
     var got = (

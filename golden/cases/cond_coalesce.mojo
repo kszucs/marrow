@@ -16,5 +16,4 @@ def plan() raises -> DynRelation:
     7
     """
     var t = table("basic")
-    var q = t.project(["c"], [Coalesce(col("v", int64), col("w", int64))])
-    return q
+    return t.project(["c"], [Coalesce(col("v", int64), col("w", int64))])

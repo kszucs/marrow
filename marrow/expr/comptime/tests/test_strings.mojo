@@ -12,7 +12,7 @@ from std.testing import assert_equal, assert_true
 from ...builders import col, lit, table
 from ...params import Bindings
 from ....builders import array, Int64Builder
-from ....arrays import StringArray
+from ....arrays import BoolArray, StringArray
 from ....dtypes import (
     DynType,
     Int64Type,
@@ -25,6 +25,7 @@ from ....tabular import RecordBatch, record_batch
 from ...logical import DynValue
 from ...logical import DynRelation, Filter, InMemoryTable, Project
 from ..boolean import And
+from ..core import BoolValue, StringValue
 from ..leaves import Column, Literal, StringColumn, StringLiteral
 from ..numeric import Gt
 from ..strings import (
@@ -390,3 +391,135 @@ def test_string_predicate_feeds_a_filter() raises:
         StartsWith(col("name", string), lit("p", string))
     )
     assert_equal(plan.execute().num_rows(), 1)
+
+
+# ---------------------------------------------------------------------------
+# The fluent surface — nodes that existed but could not be reached
+# ---------------------------------------------------------------------------
+# Every alias in `strings.mojo` had been in the tree since the lane was
+# written, and the only spelling was to name the node: `Upper(col(...))`.
+# `StringValue` carried the two aggregates and four comparisons and nothing
+# else, so `col("name", string).upper()` did not compile. These cases pin the
+# methods to the nodes they wrap.
+
+
+def _strings(v: Some[StringValue], b: RecordBatch) raises -> StringArray:
+    return (
+        v.evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .as_string()
+        .copy()
+    )
+
+
+def test_string_fluent_transforms_reach_their_nodes() raises:
+    """`.upper()` and `Upper(...)` are the same node, not two spellings of two
+    things — asserted by comparing their results rather than their types,
+    which is the only property a caller can observe."""
+    var b = _batch()
+    var fluent = _strings(col("name", string).upper(), b)
+    var explicit = _strings(Upper(col("name", string)), b)
+    assert_true(fluent == explicit)
+    assert_equal(fluent[0].value(), String("PEAR"))
+    assert_true(fluent.is_null(2))
+
+
+def test_string_fluent_strip_variants_differ() raises:
+    """`lstrip` and `rstrip` were unreachable and `strip` was not, so the
+    three are asserted against one padded input rather than separately: a
+    wiring mistake that pointed all three at `StripKernel` would pass any
+    test that only ever checked `strip`."""
+    var padded: List[Optional[String]] = ["  pad  "]
+    var b = record_batch([array(padded).to_dyn()], names=["name"])
+    assert_equal(
+        _strings(col("name", string).strip(), b)[0].value(), String("pad")
+    )
+    assert_equal(
+        _strings(col("name", string).lstrip(), b)[0].value(), String("pad  ")
+    )
+    assert_equal(
+        _strings(col("name", string).rstrip(), b)[0].value(), String("  pad")
+    )
+
+
+def test_string_fluent_reverse_and_capitalize() raises:
+    """`reverse` is bytewise, which is why the kernel is Arrow's
+    `binary_reverse` and not a codepoint walk."""
+    var b = _batch()
+    assert_equal(
+        _strings(col("name", string).reverse(), b)[0].value(), String("raep")
+    )
+    assert_equal(
+        _strings(col("name", string).capitalize(), b)[1].value(),
+        String("Quince"),
+    )
+
+
+def test_string_fluent_length_matches_the_node() raises:
+    """`length` returns `int32` and a null string has a *null* length, not
+    zero — the distinction the kernel records and `ColumnBound` reads back."""
+    var b = _batch()
+    var got = (
+        col("name", string)
+        .length()
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(4)
+        .as_int32()
+        .copy()
+    )
+    assert_equal(got[0].value(), Int32(4))
+    assert_true(got.is_null(2))
+
+
+def _bits(v: Some[BoolValue], b: RecordBatch) raises -> BoolArray:
+    """The three non-null rows of a predicate over `_batch()`: 'pear',
+    'quince' and 'apple' (index 2 is the null)."""
+    return (
+        v.evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .as_bool()
+        .copy()
+    )
+
+
+def test_string_fluent_predicates_reach_their_nodes() raises:
+    """`startswith` / `endswith` / `contains` / `like` / `ilike`. `contains`
+    is the one worth stating: its argument is a literal substring, so `%` in
+    it matches a percent sign rather than anything."""
+    var b = _batch()
+
+    var starts = _bits(col("name", string).startswith(lit("p", string)), b)
+    assert_true(starts[0].value() and not starts[1].value())
+    assert_true(not starts[3].value())
+
+    var ends = _bits(col("name", string).endswith(lit("e", string)), b)
+    assert_true(not ends[0].value() and ends[1].value() and ends[3].value())
+
+    var has = _bits(col("name", string).contains(lit("ppl", string)), b)
+    assert_true(not has[0].value() and has[3].value())
+
+    var liked = _bits(col("name", string).like(lit("p%", string)), b)
+    assert_true(liked[0].value() and not liked[1].value())
+
+    var iliked = _bits(col("name", string).ilike(lit("P%", string)), b)
+    assert_true(iliked[0].value() and not iliked[1].value())
+
+
+def test_string_ordering_has_all_six_comparisons() raises:
+    """`>=` and `<=` on strings did not exist: `StrLe`/`StrGe` were absent, so
+    `StringValue` could declare only four of the six dunders. `>=` differs
+    from `>` exactly on the equal row, which is what this pins."""
+    var b = _batch()
+
+    # 'pear' (0), 'quince' (1) and 'apple' (3), against 'pear'.
+    var gt = _bits(col("name", string) > lit("pear", string), b)
+    assert_true(not gt[0].value() and gt[1].value() and not gt[3].value())
+
+    var ge = _bits(col("name", string) >= lit("pear", string), b)
+    assert_true(ge[0].value() and ge[1].value() and not ge[3].value())
+
+    var lt = _bits(col("name", string) < lit("pear", string), b)
+    assert_true(not lt[0].value() and not lt[1].value() and lt[3].value())
+
+    var le = _bits(col("name", string) <= lit("pear", string), b)
+    assert_true(le[0].value() and not le[1].value() and le[3].value())

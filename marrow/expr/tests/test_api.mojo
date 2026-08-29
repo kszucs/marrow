@@ -100,10 +100,7 @@ def test_sort_by_then_limit_is_top_n() raises:
     silently returns a null row instead of the largest value.
     """
     var top_null = (
-        _table()
-        .sort_by([col("amount", int64)], [False])
-        .limit(1)
-        .execute()
+        _table().sort_by([col("amount", int64)], [False]).limit(1).execute()
     )
     assert_true(top_null.columns[1].as_int64().is_null(0))
 
@@ -200,10 +197,12 @@ def test_having_is_a_filter_after_aggregate() raises:
 # join
 # ---------------------------------------------------------------------------
 def test_join_composes_with_the_other_verbs() raises:
-    var customers = table(record_batch(
-                [array([1, 2], int64).copy(), array([100, 200], int64).copy()],
-                names=["customer", "credit"],
-            ))
+    var customers = table(
+        record_batch(
+            [array([1, 2], int64).copy(), array([100, 200], int64).copy()],
+            names=["customer", "credit"],
+        )
+    )
     var out = customers.join(_table(), [0], [0], JOIN_INNER).execute()
     assert_equal(out.num_rows(), 4)
     assert_equal(out.num_columns(), 4)

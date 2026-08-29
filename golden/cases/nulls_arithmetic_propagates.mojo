@@ -13,5 +13,4 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("nulls")
-    var q = t.project(["s"], [col("a", int64) + col("b", int64)])
-    return q
+    return t.project(["s"], [col("a", int64) + col("b", int64)])

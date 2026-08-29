@@ -16,5 +16,4 @@ def plan() raises -> DynRelation:
     True
     """
     var t = table("basic")
-    var q = t.project(["gt"], [col("v", int64) > lit(3, int64)])
-    return q
+    return t.project(["gt"], [col("v", int64) > lit(3, int64)])

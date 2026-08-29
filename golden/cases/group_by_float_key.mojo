@@ -20,5 +20,4 @@ def plan() raises -> DynRelation:
     var agg = t.aggregate(
         keys=[col("price", float64)], aggs=[count_star().alias("n")]
     )
-    var q = agg.sort([col("price", float64)], [True])
-    return q
+    return agg.sort_by([col("price", float64)], [True])

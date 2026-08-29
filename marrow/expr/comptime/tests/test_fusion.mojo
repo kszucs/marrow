@@ -10,6 +10,7 @@ fused result with the nulls it should have kept.
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import col, lit, table
+from ....schema import Schema
 from ...params import Bindings
 from ....builders import array
 from ....dtypes import DynType, Int64Type, int64
@@ -42,7 +43,7 @@ def test_dtype_agrees_with_evaluation_comptime() raises:
     var v = col("a", int64)
     # A value is reached only through `to_operator` now: it is a stateless
     # description, and running it is the operator's job.
-    var op = v.to_operator(False)
+    var op = v.to_operator(Schema(), False)
     var produced = (
         op.push(Morsel.ungrouped(b.to_struct_array()))
         .value()
@@ -161,13 +162,13 @@ def test_sub_and_mul_fuse_like_add() raises:
     while still type-checking.
     """
     var b = _batch()
-    var op = (col("b", int64) - col("a", int64)).to_operator(False)
+    var op = (col("b", int64) - col("a", int64)).to_operator(Schema(), False)
     var got = op.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(4)
     # b = [10, 20, 30, 40], a = [1, 2, None, 4]
     assert_true(got.as_int64()[0].value() == 9)
     assert_true(got.as_int64().is_null(2))
 
-    var m = (col("a", int64) * lit(3, int64)).to_operator(False)
+    var m = (col("a", int64) * lit(3, int64)).to_operator(Schema(), False)
     var prod = m.push(Morsel.ungrouped(b.to_struct_array())).value().to_array(4)
     assert_true(prod.as_int64()[1].value() == 6)
 

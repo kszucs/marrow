@@ -18,8 +18,7 @@ def plan() raises -> DynRelation:
     NULL	NULL	NULL
     """
     var t = table("flags")
-    var q = t.project(
+    return t.project(
         ["p", "q", "r"],
         [col("p", bool_), col("q", bool_), col("p", bool_) | col("q", bool_)],
     )
-    return q

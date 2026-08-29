@@ -33,9 +33,9 @@ from ...dtypes import (
 from ...arrays import StructArray
 from ...dtypes import Field, struct_
 from ...kernels.aggregate import Fold, SumKernel
-from ...kernels.groupby import GroupBy
+from ...kernels.groupby import HashGrouping
 
-from ...arrays import UInt64Array
+from ...arrays import UInt64Array, Int64Array
 from ...builders import Int64Builder
 from ...utils import RapidHash64
 from ...kernels.hashing import RapidHashKernel, NULL_HASH_SENTINEL
@@ -381,27 +381,30 @@ def test_hash_dictionary_with_null_index() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_groupby_date32_key() raises:
-    var keys = _date32([19000, 18500, 19000, 18500, 19000])
-    var vals: DynArray = array([1, 2, 3, 4, 5], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
+def _summed(var key: DynArray, var vals: DynArray) raises -> Int64Array:
+    """Group `key` through `HashGrouping` and sum `vals` per slot.
 
-    assert_equal(result.num_rows(), 2)
-    ref k = result.keys[0].as_date32()
-    assert_equal(k[0].value(), 19000)
-    assert_equal(k[1].value(), 18500)
-    ref s = result.aggregates[0].as_int64()
+    The subject is the *hash dispatch* for the key's dtype: a layout the hash
+    kernel cannot narrow assigns every row its own slot (or collides them all),
+    so the per-group sums are what makes a dispatch gap visible.
+    """
+    var keys = List[DynArray]()
+    keys.append(key^)
+    var g = HashGrouping()
+    var groups = g.assign(keys, len(vals))
+    return Fold[SumKernel, Int32Type].grouped(groups, vals.as_int32().copy())
+
+
+def test_groupby_date32_key() raises:
+    var s = _summed(_date32([19000, 18500, 19000, 18500, 19000]), array([1, 2, 3, 4, 5], int32))
+    assert_equal(len(s), 2)
     assert_equal(s[0].value(), 9)  # 1 + 3 + 5
     assert_equal(s[1].value(), 6)  # 2 + 4
 
 
 def test_groupby_timestamp_key() raises:
-    var keys = _timestamp([1_000, 2_000, 1_000])
-    var vals: DynArray = array([10, 20, 30], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
-
-    assert_equal(result.num_rows(), 2)
-    ref s = result.aggregates[0].as_int64()
+    var s = _summed(_timestamp([1_000, 2_000, 1_000]), array([10, 20, 30], int32))
+    assert_equal(len(s), 2)
     assert_equal(s[0].value(), 40)
     assert_equal(s[1].value(), 20)
 
@@ -410,14 +413,10 @@ def test_groupby_large_string_key() raises:
     var lb = LargeStringBuilder(4)
     for s in ["a", "b", "a", "b"]:
         lb.append(s)
-    var keys: DynArray = lb.finish()
-    var vals: DynArray = array([1, 2, 3, 4], int32)
-    var result = GroupBy(keys).aggregate[Fold[SumKernel, Int32Type]](vals)
-
-    assert_equal(result.num_rows(), 2)
-    ref s = result.aggregates[0].as_int64()
-    assert_equal(s[0].value(), 4)
-    assert_equal(s[1].value(), 6)
+    var sums = _summed(lb.finish(), array([1, 2, 3, 4], int32))
+    assert_equal(len(sums), 2)
+    assert_equal(sums[0].value(), 4)
+    assert_equal(sums[1].value(), 6)
 
 
 # ===========================================================================

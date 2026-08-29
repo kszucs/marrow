@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("nulls")
-    var q = t.aggregate(
+    return t.aggregate(
         aggs=[col("a", int64).sum().alias("total")],
     )
-    return q

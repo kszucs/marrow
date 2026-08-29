@@ -18,9 +18,8 @@ def plan() raises -> DynRelation:
     'south'	False	20
     """
     var t = table("sales")
-    var picked = t.select("region", "active", "qty")
-    var q = picked.sort(
+    var picked = t.select(["region", "active", "qty"])
+    return picked.sort_by(
         [col("region", string), col("active", bool_), col("qty", int32)],
         [True, False, True],
     )
-    return q

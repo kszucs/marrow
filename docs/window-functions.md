@@ -1,7 +1,9 @@
 # Window functions — design (unimplemented)
 
-**Nothing in the target design below is shipped.** What exists in the tree is a
-two-node toy; §1 states exactly what that is, and §2 onward is a forward spec.
+**Nothing in the target design below is shipped.** §1 described a two-node toy
+that lived in the previous expression layer; **that layer was deleted on
+2026-08-29, so the tree now has no window support at all** and §1 is history.
+§2 onward is a forward spec against `marrow/expr/`.
 `docs/backlog.md` M2.3 owns the sequencing and is authoritative — it is not
 restated here. The execution model this design plugs into (`Value`/`Breaker`
 polarity, `Datum`, `OutShape`, `Context` staging, fuse-above-breaker) is
@@ -14,8 +16,9 @@ Grounded in ibis (`func: Analytic | Reduction`), DataFusion (`WindowExpr`,
 
 ## 1. Current state — a two-node toy
 
-Everything window-related in the tree is `marrow/exprold/values.mojo:1975-2039`,
-plus two cases in `marrow/exprold/tests/test_values.mojo`. Verified at `265df9b`:
+Everything window-related *used to be* a ~65-line block in the previous AOT
+lane plus two of its test cases; all of it went with that package on
+2026-08-29. Verified at `265df9b`, before the deletion:
 
 - **`WindowSpec` (`:1981`) carries frame bounds only** — `start` and `end`, and
   its own docstring says "the toy carries frame bounds only". There is **no
@@ -44,7 +47,7 @@ What *is* right about the toy, and worth keeping: `WindowFunction`
 (`:2028-2036`) loads that column per lane. So **arithmetic already fuses above a
 window** — `row_number() + 1` is one fused pass over a staged column, not two
 eager applies (`test_arithmetic_above_window_materializes`,
-`marrow/exprold/tests/test_values.mojo:226`).
+the old AOT lane's value tests).
 
 ## 2. Target design
 

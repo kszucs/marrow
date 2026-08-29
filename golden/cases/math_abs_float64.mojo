@@ -22,5 +22,4 @@ def plan() raises -> DynRelation:
     var finite = t.filter(
         (~col("x", float64).is_nan()) & (~col("x", float64).is_inf())
     )
-    var q = finite.project(["a"], [col("x", float64).abs()])
-    return q
+    return finite.project(["a"], [col("x", float64).abs()])

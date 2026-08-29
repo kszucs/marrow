@@ -32,10 +32,9 @@ from ...dtypes import DynType, NumericType
 from ...kernels.groupby import Grouping, HashGrouping, ScalarGrouping
 from std.sys.info import simd_width_of
 
-from ...arrays import Int32Array, StructArray
+from ...arrays import BinaryLikeArray, PrimitiveArray, Int32Array, StructArray
 from ...kernels.aggregate import (
     FoldKernel,
-    AggState,
     AggKernel,
     Dispersion,
     DistinctCount,
@@ -60,6 +59,7 @@ from ...kernels.concat import concat
 from ...kernels.core import Groups
 from ...arrays import DynArray
 from ..physical import (
+    Evaluable,
     Datum,
     EvalOperator,
     DynOperator,
@@ -67,10 +67,10 @@ from ..physical import (
     Operator,
 )
 
-from .core import ComptimeValue, NumericValue, PrimitiveValue
+from .core import ComptimeValue, NumericValue, PrimitiveValue, StringValue
 
 
-struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
+struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
     """One aggregate over one operand — every aggregate, both ways of running.
 
     **Whether this fuses is computed, not declared.** `to_operator` asks two
@@ -167,9 +167,7 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
         schema. `Agg.dtype` applies the same widening rule either way, so
         `sum(int32)` still answers int64.
         """
-        var in_dtypes = List[DynType](capacity=1)
-        in_dtypes.append(self._input.dtype(schema))
-        return Self.Agg.dtype(in_dtypes)
+        return Self.Agg.dtype(self._input.dtype(schema))
 
     comptime shape = Shape.scalar
     """An aggregate yields one value per group, so it is scalar-shaped in the
@@ -178,7 +176,7 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
     # -- to_operator --------------------------------------------------------
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
         """Pick the machine and the placement, once, when the plan is built.
 
@@ -198,17 +196,26 @@ struct Aggregate[Agg: AggKernel, A: ComptimeValue](Value):
         comptime if Self.fuses:
             if grouped:
                 return AggregateOperator[Self.Agg, Self.A, HashGrouping](
-                    self._input.copy(), bindings.copy(), True
+                    self._input.copy(),
+                    bindings.copy(),
+                    True,
+                    self._input.dtype(schema),
                 )
             return AggregateOperator[Self.Agg, Self.A, ScalarGrouping](
-                self._input.copy(), bindings.copy(), False
+                self._input.copy(),
+                bindings.copy(),
+                False,
+                self._input.dtype(schema),
             )
         else:
             # `G` is pinned: the non-fusing arm reads `_scatters` at run time,
             # so instantiating both groupings for it would double the code for
             # nothing — measured at +4.6%.
             return AggregateOperator[Self.Agg, Self.A, ScalarGrouping](
-                self._input.copy(), bindings.copy(), grouped
+                self._input.copy(),
+                bindings.copy(),
+                grouped,
+                self._input.dtype(schema),
             )
 
     def alias(self, var name: String) -> Self:
@@ -250,19 +257,35 @@ comptime Min[A: PrimitiveValue] = Aggregate[Fold[MinKernel, A.Type], A]
 comptime Max[A: PrimitiveValue] = Aggregate[Fold[MaxKernel, A.Type], A]
 comptime Mean[A: PrimitiveValue] = Aggregate[Fold[MeanKernel, A.Type], A]
 comptime Count[A: PrimitiveValue] = Aggregate[Fold[CountKernel, A.Type], A]
-comptime Variance[ddof: Int, A: ComptimeValue] = Aggregate[
-    Dispersion[ddof, False], A
+comptime Variance[ddof: Int, A: NumericValue] = Aggregate[
+    Dispersion[ddof, False, A.Type], A
 ]
-comptime StdDev[ddof: Int, A: ComptimeValue] = Aggregate[
-    Dispersion[ddof, True], A
+comptime StdDev[ddof: Int, A: NumericValue] = Aggregate[
+    Dispersion[ddof, True, A.Type], A
 ]
-comptime StringMin = Aggregate[StringExtremum[MinOp], _]
-comptime StringMax = Aggregate[StringExtremum[MaxOp], _]
-comptime CountDistinct = Aggregate[DistinctCount[True], _]
-comptime ApproxCountDistinct = Aggregate[DistinctCount[False], _]
+comptime StringMin[A: StringValue] = Aggregate[StringExtremum[MinOp, A.Type], A]
+comptime StringMax[A: StringValue] = Aggregate[StringExtremum[MaxOp, A.Type], A]
+# The three cardinalities are dtype-generic in what they *compute* — an int64
+# whatever was counted — but each still names the array it reads, because a
+# validity scan and a hash are both faster typed. In this lane the operand
+# knows it: a `PrimitiveValue` evaluates to a `PrimitiveArray[A.Type]` and a
+# `StringValue` to a `BinaryLikeArray[A.Type]`, so each family's fluent method
+# supplies the array and no `ArrayType` companion is needed on the node.
+comptime CountDistinct[A: PrimitiveValue] = Aggregate[
+    DistinctCount[True, PrimitiveArray[A.Type]], A
+]
+comptime ApproxCountDistinct[A: PrimitiveValue] = Aggregate[
+    DistinctCount[False, PrimitiveArray[A.Type]], A
+]
+comptime StringCountDistinct[A: StringValue] = Aggregate[
+    DistinctCount[True, BinaryLikeArray[A.Type]], A
+]
+comptime StringApproxCountDistinct[A: StringValue] = Aggregate[
+    DistinctCount[False, BinaryLikeArray[A.Type]], A
+]
 
 
-struct AggregateOperator[Agg: AggKernel, A: ComptimeValue, G: Grouping](
+struct AggregateOperator[Agg: AggKernel, A: Evaluable & Value, G: Grouping](
     Operator
 ):
     """Any aggregate over a comptime operand — one struct, two ways of feeding
@@ -306,7 +329,7 @@ struct AggregateOperator[Agg: AggKernel, A: ComptimeValue, G: Grouping](
     the node — which is what keeps the plan immutable and lets two executions
     of it bind different values."""
 
-    var _state: Optional[Self.Agg]
+    var _state: Self.Agg
     """`None` until the first morsel: `Agg.open` needs the input's dtype, and
     an operator is built before any schema is in hand."""
 
@@ -318,21 +341,22 @@ struct AggregateOperator[Agg: AggKernel, A: ComptimeValue, G: Grouping](
     var _emitted: Bool
 
     def __init__(
-        out self, var input: Self.A, var bindings: Bindings, scatters: Bool
-    ):
+        out self,
+        var input: Self.A,
+        var bindings: Bindings,
+        scatters: Bool,
+        in_dtype: DynType,
+    ) raises:
+        """The kernel is built here, from the operand's dtype, which the plan
+        already knows: `to_operator` takes the input schema. That is what let
+        `AggKernel.open` disappear — and with it this operator's
+        `Optional[Agg]` and the `_opened` latch that guarded it."""
         self._input = input^
         self._bindings = bindings^
-        self._state = None
+        self._state = Self.Agg(in_dtype)
         self._scatters = scatters
         self._num_groups = 1 if not scatters else 0
         self._emitted = False
-
-    def _opened(mut self, dtype: DynType) raises:
-        """Open the kernel against the first morsel's dtype."""
-        if not self._state:
-            var in_dtypes = List[DynType](capacity=1)
-            in_dtypes.append(dtype.copy())
-            self._state = Self.Agg.open(in_dtypes)
 
     def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
         """Absorb one morsel, two ways.
@@ -350,8 +374,7 @@ struct AggregateOperator[Agg: AggKernel, A: ComptimeValue, G: Grouping](
                 self._num_groups = morsel.groups.num_groups
             var num_groups = self._num_groups
             var n = len(batch)
-            self._opened(Self.A.Type().to_dyn())
-            ref agg = self._state.value()
+            ref agg = self._state
             if n == 0:
                 return None
             comptime W = simd_width_of[Scalar[Self.Agg.Acc]]()
@@ -481,31 +504,26 @@ struct AggregateOperator[Agg: AggKernel, A: ComptimeValue, G: Grouping](
             var column = self._input.evaluate(
                 morsel.batch, self._bindings
             ).to_array(n)
-            self._opened(column.dtype())
-            var inputs = List[DynArray](capacity=1)
-            inputs.append(column^)
             var groups = (
                 morsel.groups.copy() if self._scatters else Groups.single(n)
             )
-            self._state.value().update(groups, inputs)
+            # The one narrowing in this lane, and it is comptime-resolved:
+            # `Agg` is a parameter here, so `InArray` is a concrete type and
+            # this is a conversion rather than a dispatch.
+            self._state.update(groups, Self.Agg.InArray(column.to_data()))
             return None
 
     def drain(mut self) raises -> Optional[Datum]:
         if self._emitted:
             return None
         self._emitted = True
-        if not self._state:
-            # No morsel ever arrived. A fold still answers -- `sum` of no rows
-            # is one NULL, not no rows -- so it opens here; an aggregate whose
-            # dtype is not knowable without data declines and
-            # `GroupByOperator` fills the slot from the plan's schema.
-            comptime if Self.fuses:
-                self._opened(Self.A.Type().to_dyn())
-            else:
-                var answer = Self.Agg.empty()
-                if answer:
-                    return Datum(answer.value().copy())
-                return None
+        # No "did a morsel arrive?" branch: the kernel is built at
+        # construction, so an aggregate over zero rows answers from an
+        # untouched state — `sum` of nothing is one NULL — exactly as it would
+        # after a morsel that folded nothing.
         comptime if Self.fuses:
-            self._state.value().grow(self._num_groups)
-        return Datum(self._state.value().finish())
+            # A fused aggregate over zero rows never grew a slot — `push`
+            # returns early at `n == 0` — so `drain` seeds them here. That is
+            # what makes `sum` of nothing one NULL rather than no rows.
+            self._state.grow(self._num_groups)
+        return Datum(self._state.finish())

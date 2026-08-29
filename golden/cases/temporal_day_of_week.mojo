@@ -32,7 +32,4 @@ def plan() raises -> DynRelation:
     4
     """
     var t = table("events")
-    var q = t.project(
-        ["dow"], [col("ts", timestamp(microsecond)).day_of_week()]
-    )
-    return q
+    return t.project(["dow"], [col("ts", timestamp(microsecond)).day_of_week()])

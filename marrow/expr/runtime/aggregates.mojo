@@ -44,10 +44,27 @@ program built from `col("a", int64)` reaches `AggKernel` conformers
 directly and never this ladder.
 """
 
-from ...arrays import DynArray, StructArray
-from ...dtypes import DynType, NumericType, TemporalType, int64
+from ...arrays import (
+    Array,
+    BinaryLikeArray,
+    BoolArray,
+    DynArray,
+    Int64Array,
+    PrimitiveArray,
+    StructArray,
+)
+from ...dtypes import (
+    DynType,
+    NumericType,
+    PrimitiveType,
+    StringLikeType,
+    TemporalType,
+    int64,
+)
 from ...kernels.aggregate import (
+    dispatch_agg_array,
     ArithmeticAgg,
+    MinMaxOp,
     FoldKernel,
     AggKernel,
     Dispersion,
@@ -65,6 +82,9 @@ from ...kernels.aggregate import (
 )
 from ...schema import Schema
 from ..logical import DynValue, Shape, Value, merged
+from ..`comptime`.aggregates import AggregateOperator
+from ...kernels.groupby import ScalarGrouping
+from .values import RuntimeValue
 from ..params import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
@@ -79,6 +99,8 @@ from ..physical import (
 )
 
 
+# ---------------------------------------------------------------------------
+# RuntimeAggregate — the node
 comptime SUM = "sum"
 comptime PRODUCT = "product"
 comptime MEAN = "mean"
@@ -91,115 +113,125 @@ comptime MIN = "min"
 comptime MAX = "max"
 
 
-@fieldwise_init
-struct ResolvedAggregate(Copyable, Movable):
-    """What a named aggregate becomes once its input types are known: the
-    output dtype **and** the opened, type-erased state machine that produces it.
+def _fold_agg[
+    R: Movable, //, K: FoldKernel, Func: def[Agg: AggKernel]() raises -> R
+](in_dtype: DynType, func: Func) raises -> R:
+    """A lane algebra against a runtime dtype.
 
-    **One type, because the two halves must agree.** `of[Agg]` names `Agg`
-    exactly once and takes both answers from it, so the declared dtype and the
-    implementation cannot disagree — a mismatch is a `Variant` misaccess at
-    emit, not a raise. A separate `dtype` struct beside a separate kernel box
-    would be two tables to keep in step.
+    The dispatch lives here, not in `Fold`: `Fold[K, V]` is typed on its input
+    like every other kernel, so something has to map a runtime dtype onto `V`,
+    and that is the expression layer's job — the same one it does for `filter`,
+    `take` and `cast`.
 
-    **Glue, not compute, which is why the erasure lives here.** The runtime
-    lane resolves a *name* to a kernel, so it cannot name the type it got;
-    nothing in `marrow.kernels` has that problem. The mechanism is `DynValue`'s
-    — an `ArcPointer[NoneType]` plus thin trampolines that `rebind` it back —
-    except that these trampolines *mutate* the boxed value, because an
-    `AggKernel` is a state machine (`open` / `update` / `finish`) and a bare
-    function pointer cannot carry state.
-
-    Mojo has no dynamic dispatch, so the indirection is not avoidable here —
-    but it is paid once per morsel, not once per row, and the comptime lane
-    never constructs one.
+    Numeric and temporal are separate arms rather than one
+    `dispatch_primitive`, so a kernel whose domain excludes temporal columns is
+    never instantiated over one: `AggState`'s compile-time domain assertion
+    would fail the *build* rather than raise.
     """
 
-    var dtype: DynType
-    """What the produced column will be typed as.
+    def numeric[V: NumericType](d: V) raises {imm func} -> R:
+        return func[Fold[K, V]]()
 
-    Bare `dtype`, because there is no *input* dtype in this struct for a prefix
-    to disambiguate against — the inputs were consumed by `of`.
+    def temporal[V: TemporalType](d: V) raises {imm func} -> R:
+        return func[Fold[K, V]]()
+
+    comptime if conforms_to(K, ArithmeticAgg):
+        if not in_dtype.is_numeric():
+            raise Error(
+                "aggregate '",
+                K.name,
+                "' needs arithmetic, so it is not defined for ",
+                in_dtype,
+                " columns",
+            )
+        return in_dtype.dispatch_numeric(numeric)
+    else:
+        if in_dtype.is_numeric():
+            return in_dtype.dispatch_numeric(numeric)
+        elif in_dtype.is_temporal():
+            return in_dtype.dispatch_temporal(temporal)
+        else:
+            raise Error(
+                "aggregate '",
+                K.name,
+                "' is not defined for ",
+                in_dtype,
+                " columns",
+            )
+
+
+def dispatch_agg[
+    R: Movable, //, Func: def[Agg: AggKernel]() raises -> R
+](name: StringSlice, in_dtype: DynType, func: Func) raises -> R:
+    """**The** name x dtype ladder — one, not two.
+
+    Every arm names a single `AggKernel` and hands it to `func`, so whatever
+    the caller wants — an output dtype, an operator — comes off the same type
+    on the same branch. Two ladders could disagree, and `min` over
+    `timestamp[us]` declaring `timestamp[s]` is a `Variant` misaccess at emit
+    rather than a raise.
+
+    The job is a parametric *value*, the same mechanism `DynType.dispatch_*`
+    uses. That is what lets one ladder serve two callers: a closure cannot be
+    generic over its own trait bound, but a job whose signature names
+    `AggKernel` directly can be.
     """
+    if name == COUNT or name == COUNT_DISTINCT or name == APPROX_COUNT_DISTINCT:
 
-    var empty: Optional[DynArray]
-    """This aggregate's answer over an input that produced no column at all.
+        def counted[A: Array]() raises {imm func, imm name} -> R:
+            if name == COUNT:
+                return func[ValidCount[A]]()
+            elif name == COUNT_DISTINCT:
+                return func[DistinctCount[True, A]]()
+            else:
+                return func[DistinctCount[False, A]]()
 
-    Taken off the same `Agg` as `dtype`, for the same reason: `empty` is
-    dtype-independent for every conformer (the trait default declines, and
-    `ValidCount`, `DistinctCount` and `Dispersion` each answer without one), so
-    nothing but provenance keeps a restatement of it in step — and a
-    restatement had already drifted from `Dispersion`.
-    """
+        return dispatch_agg_array(in_dtype, counted)
+    elif name == VARIANCE or name == STDDEV:
+        # `ddof=0` — the population form, Arrow's default. A sample variance is
+        # `Dispersion[1, root, V]`: two more names here and nothing else.
+        def dispersed[V: NumericType](d: V) raises {imm func, imm name} -> R:
+            if name == VARIANCE:
+                return func[Dispersion[0, False, V]]()
+            else:
+                return func[Dispersion[0, True, V]]()
 
-    var _boxed: Optional[ArcPointer[NoneType]]
-    """The opened state, `None` until an execution actually folds.
+        if not in_dtype.is_numeric():
+            raise Error(
+                "aggregate '",
+                name,
+                "' needs arithmetic, so it is not defined for ",
+                in_dtype,
+                " columns",
+            )
+        return in_dtype.dispatch_numeric(dispersed)
+    elif name == MIN or name == MAX:
+        # The only place a *dtype* selects an implementation. A string extremum
+        # is a bytewise scan and a fixed-width one is a fold — two kernels
+        # rather than one with a runtime branch, so neither compiles the
+        # other's body.
+        def extremum[T: StringLikeType](d: T) raises {imm func, imm name} -> R:
+            if name == MIN:
+                return func[StringExtremum[MinOp, T]]()
+            else:
+                return func[StringExtremum[MaxOp, T]]()
 
-    `dtype` and `empty` are dtype-free statics on `AggKernel` and neither needs
-    `open`, so resolving to read a dtype must not construct a fold state.
-    `RuntimeAggregate.dtype(schema)` resolves at *plan* time and discards
-    everything but the dtype; opening eagerly allocated an `ArcPointer` and a
-    per-group state on every such call, and `empty()` does the same through its
-    probe. Deferring it costs one more trampoline and makes both allocation
-    free."""
-
-    var _open: def(List[DynType]) thin raises -> ArcPointer[NoneType]
-    var _update: def(ArcPointer[NoneType], Groups, List[DynArray]) thin raises
-    var _finish: def(ArcPointer[NoneType]) thin raises -> DynArray
-    var _drop: def(var ArcPointer[NoneType]) thin
-    """Erasure forgets the pointee's destructor; this carries it.
-
-    It matters more here than anywhere else the pattern appears. The other
-    boxes hold a plan node — a few strings — while this one holds a fold state
-    whose size is O(distinct values): without it, `count_distinct` leaks an
-    entire `SwissHashTable` per query. See `DynOperator._virt_drop`.
-    """
-
-    @staticmethod
-    def of[Agg: AggKernel](in_dtypes: List[DynType]) raises -> Self:
-        """Both halves of a resolution, off **one** `AggKernel`. The only thing
-        that builds one, so neither the box/trampoline pairing nor the
-        dtype/implementation pairing can be wrong."""
-
-        def update(
-            ptr: ArcPointer[NoneType], groups: Groups, inputs: List[DynArray]
-        ) raises:
-            rebind[ArcPointer[Agg]](ptr)[].update(groups, inputs)
-
-        def finish(ptr: ArcPointer[NoneType]) raises -> DynArray:
-            return rebind[ArcPointer[Agg]](ptr)[].finish()
-
-        def open(dtypes: List[DynType]) raises -> ArcPointer[NoneType]:
-            var ptr = ArcPointer[Agg](Agg.open(dtypes))
-            return rebind[ArcPointer[NoneType]](ptr^)
-
-        def drop(var ptr: ArcPointer[NoneType]):
-            var typed = rebind[ArcPointer[Agg]](ptr)
-            _ = ptr^
-            _ = typed^
-
-        return Self(
-            Agg.dtype(in_dtypes), Agg.empty(), None, open, update, finish, drop
-        )
-
-    def open(mut self, in_dtypes: List[DynType]) raises:
-        """Construct the state. Called once, on the first morsel."""
-        self._boxed = self._open(in_dtypes)
-
-    def update(mut self, groups: Groups, inputs: List[DynArray]) raises:
-        self._update(self._boxed.value(), groups, inputs)
-
-    def finish(mut self) raises -> DynArray:
-        return self._finish(self._boxed.value())
-
-    def __deinit__(deinit self):
-        if self._boxed:
-            self._drop(self._boxed.take())
+        if in_dtype.is_string() or in_dtype.is_large_string():
+            return in_dtype.dispatch_stringlike(extremum)
+        elif name == MIN:
+            return _fold_agg[K=MinKernel](in_dtype, func)
+        else:
+            return _fold_agg[K=MaxKernel](in_dtype, func)
+    elif name == SUM:
+        return _fold_agg[K=SumKernel](in_dtype, func)
+    elif name == PRODUCT:
+        return _fold_agg[K=ProductKernel](in_dtype, func)
+    elif name == MEAN:
+        return _fold_agg[K=MeanKernel](in_dtype, func)
+    else:
+        raise Error("unknown aggregate '", name, "'")
 
 
-# ---------------------------------------------------------------------------
-# RuntimeAggregate — the node
-# ---------------------------------------------------------------------------
 struct RuntimeAggregate(Value):
     """An aggregate resolved by name, over erased operands.
 
@@ -222,8 +254,15 @@ struct RuntimeAggregate(Value):
     """It answers from `RuntimeAggregateOperator.drain`, never per batch — the same
     answer `Aggregate` gives, for the same reason."""
 
-    var _inputs: List[DynValue]
-    """The operands, erased. A `List` because `AggregateFn` takes one."""
+    var _input: RuntimeValue
+    """The operand.
+
+    Typed as `RuntimeValue` rather than boxed in a `DynValue`, and singular
+    rather than a list. Every construction site already passes exactly one
+    `RuntimeValue`; the box cost an erasure hop per morsel and the list cost
+    five kernels an arity check apiece. A genuinely two-operand aggregate
+    (`corr`, `covar`) is a different family with a different trait, not a
+    longer list."""
 
     var _name: String
     """The aggregate's own name, and the resolver key. **Validated in
@@ -240,350 +279,124 @@ struct RuntimeAggregate(Value):
     Defaults to the aggregate's own name, the same way
     `col("a", int64).sum()` is named `"sum"`."""
 
-    def __init__(out self, var input: DynValue, var name: String) raises:
-        self._inputs = [input^]
+    def __init__(out self, var input: RuntimeValue, var name: String) raises:
+        self._input = input^
         self._alias = name.copy()
         self._name = Self._checked(name^)
 
     def __init__(
         out self,
-        var inputs: List[DynValue],
+        var input: RuntimeValue,
         var name: String,
         var display: String,
     ) raises:
-        self._inputs = inputs^
+        self._input = input^
         self._name = Self._checked(name^)
         self._alias = display^
 
     @staticmethod
     def vocabulary() -> List[String]:
-        """Every aggregate name this lane serves.
-
-        Public because it is the *only* thing that can keep `_checked` and
-        `resolve` in step. They are two tables over one vocabulary, and the
-        hazard is real rather than theoretical: `variance` and `stddev` were
-        added to `resolve` first, and every query naming them raised "unknown
-        aggregate" from `__init__` before reaching it.
-
-        `resolve` cannot be derived from this list — its arms bind types, not
-        strings — so instead `test_named_aggregate_vocabulary_all_resolves`
-        walks this list and resolves each entry, which fails loudly the next
-        time one side gains a name the other lacks.
-        """
-        return [
-            SUM,
-            PRODUCT,
-            MEAN,
-            VARIANCE,
-            STDDEV,
-            COUNT,
-            COUNT_DISTINCT,
-            APPROX_COUNT_DISTINCT,
-            MIN,
-            MAX,
-        ]
+        """Every name this node accepts — the kernels' own catalog."""
+        var out = List[String](capacity=10)
+        out.append(SUM)
+        out.append(PRODUCT)
+        out.append(MEAN)
+        out.append(COUNT)
+        out.append(COUNT_DISTINCT)
+        out.append(APPROX_COUNT_DISTINCT)
+        out.append(VARIANCE)
+        out.append(STDDEV)
+        out.append(MIN)
+        out.append(MAX)
+        return out^
 
     @staticmethod
     def _checked(var name: String) raises -> String:
-        """`name`, or a raise naming it. The only gate on the vocabulary."""
+        """`name`, or a raise naming it. The only gate on the vocabulary, and
+        it runs in `__init__` so `col("s").count_distnct()` raises where it was
+        written rather than on the first morsel of a long scan."""
         for ref known in Self.vocabulary():
             if name == known:
                 return name^
         raise Error("unknown aggregate '", name, "'")
 
-    @staticmethod
-    def _solo(name: StringSlice, in_dtypes: List[DynType]) raises:
-        """The sole input dtype, or a raise naming the aggregate.
-
-        One gate, not two: `_fold` and the `min`/`max` arm both need the single
-        operand and both used to spell the same arity check.
-        """
-        if len(in_dtypes) != 1:
-            raise Error(
-                "aggregate '",
-                name,
-                "' takes exactly one input, got ",
-                len(in_dtypes),
-            )
-
-    @staticmethod
-    def _fold[
-        K: FoldKernel
-    ](in_dtypes: List[DynType]) raises -> ResolvedAggregate:
-        """Resolve a lane algebra against a runtime dtype.
-
-        **The dispatch lives here, not in `Fold`.** `Fold[K, V]` is typed on
-        its input like every other kernel, so something has to map a runtime
-        dtype onto `V` — and that is the expression layer's job, the same one
-        it does for `filter`, `take` and `cast`. `Fold` used to do it itself
-        and paid for it: once it had to hold state across morsels, the state
-        could not be a typed field and went behind an `ArcPointer`.
-
-        The numeric and temporal arms are separate rather than one
-        `dispatch_primitive`, so a kernel whose domain excludes temporal
-        columns is never instantiated over one — `AggState`'s compile-time
-        domain assertion would fail the build rather than raise.
-        """
-        Self._solo(K.name, in_dtypes)
-        ref d = in_dtypes[0]
-        var box = Optional[ResolvedAggregate](None)
-
-        def numeric[V: NumericType](x: V) raises {mut box, imm}:
-            box = ResolvedAggregate.of[Fold[K, V]](in_dtypes)
-
-        comptime if conforms_to(K, ArithmeticAgg):
-            if not d.is_numeric():
-                raise Error(
-                    "aggregate '",
-                    K.name,
-                    "' needs arithmetic, so it is not defined for ",
-                    d,
-                    " columns",
-                )
-            d.dispatch_numeric(numeric)
-        else:
-            if d.is_numeric():
-                d.dispatch_numeric(numeric)
-            elif d.is_temporal():
-
-                def temporal[V: TemporalType](x: V) raises {mut box, imm}:
-                    box = ResolvedAggregate.of[Fold[K, V]](in_dtypes)
-
-                d.dispatch_temporal(temporal)
-            else:
-                raise Error(
-                    "aggregate '",
-                    K.name,
-                    "' is not defined for ",
-                    d,
-                    " columns",
-                )
-        return box.take()
-
-    def resolve(self, in_dtypes: List[DynType]) raises -> ResolvedAggregate:
-        """The one name x dtype ladder in the system.
-
-        Public because the **operator holds this node** and calls it on first
-        push, the same way `FusedAggregateOperator` reaches into the `A` it holds. That
-        is what lets one type carry both the plan-time and the execution-time
-        answer instead of a separate function object beside it.
-
-        Each arm names a single `AggKernel` and takes **both** answers
-        from it, so the output dtype and the implementation cannot disagree —
-        they come from the same type on the same branch. Two hand-written
-        tables could, and `min` over `timestamp[us]` declaring `timestamp[s]`
-        is a `Variant` misaccess at emit rather than a raise.
-
-        `List[DynType]` rather than one dtype because `string_agg(x, sep)` has
-        two different input dtypes; every aggregate resolved today takes one,
-        which each conformer's `dtype` states for itself.
-        """
-        if self._name == COUNT_DISTINCT:
-            return ResolvedAggregate.of[DistinctCount[True]](in_dtypes)
-        elif self._name == APPROX_COUNT_DISTINCT:
-            return ResolvedAggregate.of[DistinctCount[False]](in_dtypes)
-        elif self._name == COUNT:
-            # A validity scan, defined for every dtype — which is why it is
-            # not a `Fold[CountKernel]` here. The comptime lane still
-            # fuses numeric `count`; see `ValidCount`.
-            return ResolvedAggregate.of[ValidCount](in_dtypes)
-        elif self._name == SUM:
-            return Self._fold[SumKernel](in_dtypes)
-        elif self._name == PRODUCT:
-            return Self._fold[ProductKernel](in_dtypes)
-        elif self._name == MEAN:
-            return Self._fold[MeanKernel](in_dtypes)
-        elif self._name == VARIANCE:
-            # `ddof=0` — the population form, Arrow's default. A sample
-            # variance is `Dispersion[1, False]`, which needs two more names
-            # here (`var_samp`, `stddev_samp`) and nothing else.
-            return ResolvedAggregate.of[Dispersion[0, False]](in_dtypes)
-        elif self._name == STDDEV:
-            return ResolvedAggregate.of[Dispersion[0, True]](in_dtypes)
-        elif self._name == MIN or self._name == MAX:
-            # The only place a *dtype* selects an implementation. A string
-            # extremum is a bytewise scan and a fixed-width one is a grouped, and
-            # they are two `AggKernel`s rather than one with a runtime
-            # branch, so neither compiles the other's body.
-            Self._solo(self._name, in_dtypes)
-            ref d = in_dtypes[0]
-            var stringly = d.is_string() or d.is_large_string()
-            if self._name == MIN:
-                if stringly:
-                    return ResolvedAggregate.of[StringExtremum[MinOp]](
-                        in_dtypes
-                    )
-                return Self._fold[MinKernel](in_dtypes)
-            else:
-                if stringly:
-                    return ResolvedAggregate.of[StringExtremum[MaxOp]](
-                        in_dtypes
-                    )
-                return Self._fold[MaxKernel](in_dtypes)
-        else:
-            raise Error("unknown aggregate '", self._name, "'")
-
-    def empty(self) raises -> Optional[DynArray]:
-        """This aggregate's answer over an input that produced no column at
-        all, or `None` when it has none.
-
-        Answered by the **same ladder** `resolve` uses, so it cannot drift from
-        the kernel the way the restated arm list it replaced did: `variance` and `stddev`
-        answer a float64 null without a schema, and a hand-written arm list
-        here declined for both.
-
-        The probe dtype is sound because `AggKernel.empty` is a dtype-free
-        static on every conformer — `int64` selects `Fold` over
-        `StringExtremum` for the extrema, and both decline. `sum`, `mean` and
-        the extrema still answer `None`; their dtype is known only to the
-        plan's schema, so `GroupByOperator` fills the slot.
-        """
-        var probe = List[DynType](capacity=1)
-        probe.append(DynType(int64))
-        var resolved = self.resolve(probe)
-        if resolved.empty:
-            return resolved.empty.value().copy()
-        return None
-
-    # -- Value --------------------------------------------------------------
-
     def columns(self) -> List[String]:
-        var out = List[String]()
-        for ref i in self._inputs:
-            out = merged(out^, i.columns())
-        return out^
+        return self._input.columns()
 
     def name(self) -> String:
         return self._alias.copy()
 
-    def dtype(self, schema: Schema) raises -> DynType:
-        """Resolve from schema-derived dtypes and keep only the output type.
-
-        The `AggregateFn` this also produces is discarded, deliberately: it is
-        one function-pointer assignment, and paying it is what makes the dtype
-        and the implementation come from the same branch.
-        """
-        var in_dtypes = List[DynType](capacity=len(self._inputs))
-        for ref i in self._inputs:
-            in_dtypes.append(i.dtype(schema))
-        return self.resolve(in_dtypes).dtype.copy()
-
     comptime shape = Shape.scalar
     """One value per group, so scalar-shaped in the same sense a literal is."""
+
+    # -- plan time ----------------------------------------------------------
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        """The output dtype, at plan time, before any data exists."""
+        var d = self._input.dtype(schema)
+
+        def job[Agg: AggKernel]() raises {imm} -> DynType:
+            return Agg.dtype(d)
+
+        return dispatch_agg(self._name, d, job)
+
+    def empty(self) raises -> Optional[DynArray]:
+        """The answer over an input that produced **no column at all**.
+
+        Takes no dtype, because there is none: a filter that keeps nothing
+        answers with no batch, so an aggregate above it never sees one. That is
+        also why this cannot go through `dispatch_agg` — and why only the
+        cardinalities answer, since they are the only kernels whose `empty` is
+        independent of the type they were resolved for.
+
+        `variance`/`stddev` decline here while `Dispersion.empty()` answers a
+        float64 null, and the asymmetry is real rather than drift: that static
+        can only be asked once `V` is known. `GroupByOperator` fills the slot
+        from the plan's schema instead — the same route `sum` and the extrema
+        take.
+        """
+        if self._name == COUNT:
+            var e = ValidCount[Int64Array].empty()
+            return DynArray(e.take()) if e else None
+        elif self._name == COUNT_DISTINCT:
+            var e = DistinctCount[True, Int64Array].empty()
+            return DynArray(e.take()) if e else None
+        elif self._name == APPROX_COUNT_DISTINCT:
+            var e = DistinctCount[False, Int64Array].empty()
+            return DynArray(e.take()) if e else None
+        else:
+            return None
 
     # -- to_operator --------------------------------------------------------
 
     def to_operator(
-        self, grouped: Bool, bindings: Bindings = Bindings()
+        self, schema: Schema, grouped: Bool, bindings: Bindings = Bindings()
     ) raises -> DynOperator:
-        """`grouped` stays a runtime `Bool` here rather than becoming a
-        comptime placement: there is no fused loop for the choice to
-        specialise, and the operator only needs to know whether to keep the
-        group ids."""
-        var inputs = List[DynOperator](capacity=len(self._inputs))
-        for ref i in self._inputs:
-            inputs.append(i.to_operator(False, bindings))
-        return RuntimeAggregateOperator(inputs^, self.copy(), grouped)
+        """Resolve the name against the input dtype and hand back a **fully
+        typed** operator, in the box every operator already pays for.
+
+        This is why `to_operator` takes a schema. `dispatch_agg` binds a
+        concrete `Agg`, so the job below constructs
+        `AggregateOperator[Fold[K, V], RuntimeValue, ScalarGrouping]` outright:
+        no erased aggregate state, no per-morsel narrowing, no second box.
+
+        `G` is pinned to `ScalarGrouping` because nothing fuses over a runtime
+        operand — `grouped` is read as a plain `Bool` — so instantiating both
+        groupings would double the code for nothing.
+        """
+        var d = self._input.dtype(schema)
+
+        def job[Agg: AggKernel]() raises {imm} -> DynOperator:
+            return AggregateOperator[Agg, RuntimeValue, ScalarGrouping](
+                self._input.copy(), bindings.copy(), grouped, d
+            )
+
+        return dispatch_agg(self._name, d, job)
 
     def alias(self, var name: String) raises -> Self:
         """Rename this aggregate. Changes **only** `_alias`, so the resolver
-        still sees `_name` and `.alias("n")` cannot change which kernel
-        runs."""
-        return Self(self._inputs.copy(), self._name.copy(), name^)
+        still sees `_name` and `.alias("n")` cannot change which kernel runs."""
+        return Self(self._input.copy(), self._name.copy(), name^)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._name, "(")
-        for i in range(len(self._inputs)):
-            if i > 0:
-                writer.write(", ")
-            writer.write(self._inputs[i])
-        writer.write(")")
-
-
-struct RuntimeAggregateOperator(Operator):
-    """The runtime lane's aggregate operator: a **name**, resolved on the first
-    morsel, over erased inputs — and streaming, like its comptime sibling.
-
-    Erased in three places, all forced by the lane rather than chosen: the
-    operands are `DynOperator` because a `RuntimeValue` subtree has no type to
-    keep, the kernel is a `ResolvedAggregate` because the name is not known until
-    run time, and the inputs' dtypes are not known until a morsel arrives.
-    `ColumnAggregateOperator` in `comptime/` is the same machine with all three
-    known statically, and shares no code with this on purpose: erasure is the
-    only difference, and paying for it in a lane that does not need it is what
-    the size gates exist to catch.
-
-    It holds O(groups), not O(rows). Both operators used to buffer every
-    morsel's columns and concatenate at `drain`, because `AggKernel.grouped`
-    was one-shot; the kernel is a state machine now and absorbs each morsel as
-    it arrives.
-    """
-
-    var _inputs: List[DynOperator]
-    var _kernel: Optional[ResolvedAggregate]
-    """`None` until the first morsel: resolving the name needs the inputs'
-    real dtypes, and a `RuntimeValue` operand has none until a schema is in
-    hand."""
-
-    var _node: RuntimeAggregate
-    """The node itself, kept to resolve against those first dtypes."""
-
-    var _scatters: Bool
-    var _emitted: Bool
-
-    def __init__(
-        out self,
-        var inputs: List[DynOperator],
-        var node: RuntimeAggregate,
-        scatters: Bool,
-    ) raises:
-        self._inputs = inputs^
-        self._kernel = None
-        self._node = node^
-        self._scatters = scatters
-        self._emitted = False
-
-    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        """Evaluate this aggregate's inputs and let the kernel absorb them.
-
-        Empty batches are absorbed too rather than skipped: an empty column
-        still carries its dtype, which is the one thing a name-resolved
-        aggregate needs and the one thing a later batch cannot supply
-        retroactively.
-        """
-        var n = len(morsel.batch)
-        var columns = List[DynArray](capacity=len(self._inputs))
-        # Indexed: an operator is move-only, so a `List` of them cannot be
-        # iterated by reference.
-        for i in range(len(self._inputs)):
-            var d = self._inputs[i].push(morsel)
-            columns.append(d.value().to_array(n))
-        if not self._kernel:
-            var in_dtypes = List[DynType](capacity=len(columns))
-            for i in range(len(columns)):
-                in_dtypes.append(columns[i].dtype())
-            var resolved = self._node.resolve(in_dtypes)
-            # The state is built here, on the first morsel — `resolve` itself
-            # allocates nothing, so the plan-time calls that only want a dtype
-            # do not pay for one.
-            resolved.open(in_dtypes)
-            self._kernel = resolved^
-        var groups = morsel.groups.copy() if self._scatters else Groups.single(
-            n
-        )
-        self._kernel.value().update(groups, columns)
-        return None
-
-    def drain(mut self) raises -> Optional[Datum]:
-        if self._emitted:
-            return None
-        self._emitted = True
-        if not self._kernel:
-            # No morsel ever arrived, so there was no dtype to resolve against.
-            # A distinct count still has an answer; an extremum does not, and
-            # `GroupByOperator` fills its slot from the output schema.
-            var answer = self._node.empty()
-            if answer:
-                return Datum(answer.value().copy())
-            return None
-        return Datum(self._kernel.value().finish())
+        writer.write(self._name, "(", self._input, ")")

@@ -9,5 +9,4 @@ def plan() raises -> DynRelation:
     a:int64	b:int64	g:string
     """
     var t = table("nulls")
-    var q = t.filter(col("a", int64) > lit(0, int64))
-    return q
+    return t.filter(col("a", int64) > lit(0, int64))

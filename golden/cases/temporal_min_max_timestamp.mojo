@@ -16,10 +16,9 @@ def plan() raises -> DynRelation:
     '2020-02-29T23:59:59'	'2021-12-31T23:59:59.999999'
     """
     var t = table("events")
-    var q = t.aggregate(
+    return t.aggregate(
         aggs=[
             col("ts", timestamp(microsecond)).min().alias("lo"),
             col("ts", timestamp(microsecond)).max().alias("hi"),
         ]
     )
-    return q

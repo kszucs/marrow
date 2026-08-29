@@ -1,10 +1,17 @@
 # Expression evaluation: typed state, and one traversal
 
-Design for the AOT lane, `marrow/exprold/values.mojo`. Supersedes the ad-hoc
-protocol described in the "Known follow-ups" comment at the top of that file.
+> **Superseded, 2026-08-29.** This was a design for the *previous* AOT lane,
+> which has since been deleted along with the rest of that package. Its central
+> idea — bind once into typed state, then let a fused parent read the bound —
+> was implemented in `marrow/expr/comptime/` as `ComptimeValue.Bound` / `.bind`
+> (`marrow/expr/comptime/core.mojo`). Read this for the reasoning; the file
+> paths and type names below no longer exist.
 
-Status: **design, with its central mechanism validated by spike (2026-08-03).**
-Nothing is implemented. The binary-size question is open and is the first gate.
+Design for the AOT lane. Supersedes the ad-hoc protocol described in the
+"Known follow-ups" comment at the top of the file it targeted.
+
+Status: **design, with its central mechanism validated by spike (2026-08-03),
+and since implemented in `marrow/expr/comptime/`.**
 
 ---
 
@@ -297,7 +304,7 @@ Each step independently revertible and gate-checked.
    breaker only. Gate: `query_streaming` `__text` at 1,309,032 (live 2026-08-05; the 1,302,900 previously written here predates B12, which added 8,260 to this gate). **Stop here if it
    regresses.**
 2. **Convert the numeric family**, then bool, string, temporal, list. Gate per
-   family: `pixi run -e dev pytest marrow/exprold/tests` plus the size number.
+   family: the expression-layer suite plus the size number.
 3. **Fold validity into `State`.** First behaviour change — it fixes the two
    verified null defects (backlog B14, B15). Add tests for both *first*.
 4. **Delete `Context`, `Breaker`, `materialize`, the `execute` overloads.**

@@ -169,9 +169,10 @@ struct ExecContext(
         it asked for the GPU, and no CPU test can observe it.
 
         This has already happened three times. `HashJoin` destructured to a bare
-        `_num_threads` and rebuilt at five internal sites; `GroupBy` did the same
-        and rebuilt at two; `Aggregation.whole` took `num_threads: Int` across
-        its API boundary so the device was gone before it was ever called.
+        `_num_threads` and rebuilt at five internal sites; the eager group-by
+        driver did the same and rebuilt at two; `Aggregation.whole` took
+        `num_threads: Int` across its API boundary so the device was gone before
+        it was ever called.
         """
         return Self(num_threads=num_threads, device=self.device.copy())
 
@@ -355,8 +356,8 @@ struct ExecContext(
         **``body`` may not raise.** `sync_parallelize`'s value form — the one
         used here — takes a non-raising worker. A caller whose body genuinely
         raises should park the first error and re-raise after the join, which is
-        what `GroupBy._thread_local_columns`, `RadixPartitioner.map_partitions`
-        and the Parquet row-group reader do. Do **not** reach for
+        what `RadixPartitioner.map_partitions` and the Parquet row-group reader
+        do. Do **not** reach for
         `sync_parallelize`'s parameter form instead: it accepts a raising worker
         but needs an implicitly-capturing closure whose captures are silently
         not made, and the body then reads garbage at run time. The tell is an

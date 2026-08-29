@@ -11,11 +11,19 @@ still described the `Breaker` / `Context` / `prepare` staging model that
 `7d57398` deleted. Treat a section's line references as evidence it was checked,
 and re-check anything that cites a symbol you cannot find.
 
+**§3-§7 were repointed on 2026-08-29 after the expression layer was rewritten**
+into `marrow/expr/` (`logical.mojo` + `physical.mojo`, with `comptime/` and
+`runtime/` for the two lanes); the package it replaced has been deleted. Names and paths were corrected;
+line references into the old `values.mojo` were dropped rather than re-guessed,
+and the sections have not otherwise been re-derived against the new tree.
+Statistics-based pruning, predicate/projection pushdown and the CLI-output layer
+did not survive the rewrite and are not in the tree today.
+
 Three claims carry the whole design:
 
 1. **One core, two runners.** A kernel defines its per-lane functor once; eager
    execution and fused execution both consume that one definition.
-2. **The erasure boundary is the fusion boundary.** `BoxedValue` is the single
+2. **The erasure boundary is the fusion boundary.** `DynValue` is the single
    box; inside it a subtree is monomorphized and fused, outside it the plan is a
    walkable runtime tree.
 3. **The plan self-executes.** Every relational node builds its own operator.
@@ -28,8 +36,8 @@ Five standing invariants, in force for any change to this stack:
   monomorphizes to one straight-line SIMD loop, `lane[W]` inlining across
   the whole subtree with no dispatch. Preserve it for every node that fuses.
 - **No feature may live in only one lane** — the runtime lane
-  (`marrow/exprold/dynamic.mojo`) must reach parity. Window functions currently
-  violate this; see `docs/window-functions.md`.
+  (`marrow/expr/runtime/values.mojo`) must reach parity with the comptime lane
+  (`marrow/expr/comptime/`).
 - **Kernels are the shared substrate; only the driver differs.**
 - **Fusion is the default; *breaking* is what a trait marks** — the minority is
   marked, so a new node fuses unless it says otherwise.
@@ -285,27 +293,30 @@ fused subtree without a node for the operation.
 
 | Expression | Node | Status |
 |---|---|---|
-| `a + b`, `a * 2`, `a / b` | `NumericBinary` `:664` / `FloatBinary` `:780` | fused SIMD |
-| `-a`, `abs(a)`, `sqrt(a)` | `NumericUnary` `:716` / `FloatUnary` `:826` | fused SIMD |
-| `a < b`, `a == b` (numeric) | `NumericCompare` `:932` | fused SIMD → bit-packed |
-| `p and q`, `not p` | `BoolBinary` `:1027` / `BoolUnary` `:1099` | fused SIMD |
-| `a.cast(int64)`, num ↔ bool | `NumericCast` `:749`, `NumToBool` `:1255`, `BoolToNum` `:1286` | fused SIMD |
-| `is_nan(a)`, `is_inf(a)` | `NumericPredicate` `:1182` | fused SIMD |
-| `upper(s)`, `s1 + s2` | `StringUnary` `:1562`, `Concat` `:1533` | fused **per-row** (one builder pass) |
-| `date_trunc(ts)` | `DateTrunc` `:2271` | materialize-only, like a column |
-| `is_null(x)`, `not_null(x)` | `NullPredicate` `:1214` | breaker — reads validity through the kernel |
-| `s.len()` | `StringLength` `:1785` | breaker → `Int32Array` (two passes, Q7.1) |
-| `s1 == s2`, `s.contains(x)`, `LIKE` | `StringPredicate` `:1685` | breaker → full `BoolArray` (Q7.1) |
-| `x IN (…)` | `IsIn` `:1751` | breaker → `BoolArray` |
-| `coalesce`, `nullif`, `CASE WHEN` | `ConditionalBinary` `:2056`, `CaseWhen` `:2102` | breaker |
-| `year(ts)` and the extract family | `TemporalExtract` `:2236` | breaker → `Int32Array` |
-| string → num/bool parse; casts *to* string | `:1316`, `:1349`, `:1601`-`:1653` | breaker |
-| `sum(a)`, `mean(a)`, `min(a)` | `Reduction` `:1922` | breaker, `OutShape == 0` |
-| `any(p)`, `all(p)` | `BoolReduce` `:1137` | breaker, scalar |
-| `row_number()` | `WindowFunction` `:2012` | breaker, columnar |
+| `a + b`, `a * 2`, `a / b` | `NumericBinary` / `FloatBinary` | fused SIMD |
+| `-a`, `abs(a)`, `sqrt(a)` | `NumericUnary` / `FloatUnary` | fused SIMD |
+| `a < b`, `a == b` (numeric) | `NumericCompare` | fused SIMD → bit-packed |
+| `p and q`, `not p` | `BoolBinary` / `BoolUnary` | fused SIMD |
+| `a.cast(int64)`, num ↔ bool | `NumericCast`, `NumToBool`, `BoolToNum` | fused SIMD |
+| `is_nan(a)`, `is_inf(a)` | `NumericPredicate` | fused SIMD |
+| `upper(s)`, `s1 + s2` | `StringUnary`, `Concat` | fused **per-row** (one builder pass) |
+| `date_trunc(ts)` | `DateTrunc` | materialize-only, like a column |
+| `is_null(x)`, `not_null(x)` | `NullPredicate` | breaker — reads validity through the kernel |
+| `s.len()` | `StringLength` | breaker → `Int32Array` (two passes, Q7.1) |
+| `s1 == s2`, `s.contains(x)`, `LIKE` | `StringPredicate` | breaker → full `BoolArray` (Q7.1) |
+| `x IN (…)` | `IsIn` | breaker → `BoolArray` |
+| `coalesce`, `nullif`, `CASE WHEN` | `ConditionalBinary`, `CaseWhen` | breaker |
+| `year(ts)` and the extract family | `TemporalExtract` | breaker → `Int32Array` |
+| string → num/bool parse; casts *to* string | the cast nodes in `casts.mojo` | breaker |
+| `sum(a)`, `mean(a)`, `min(a)` | `Reduction` | breaker, `OutShape == 0` |
+| `any(p)`, `all(p)` | `BoolReduce` | breaker, scalar |
+| `row_number()` | `WindowFunction` | breaker, columnar |
 | `filter`, `take`, `sort`, `group_by`, `join`, `concat` | relational operators | outside the expression layer |
 
-Line numbers are `marrow/exprold/values.mojo`. Worked examples:
+The nodes live in `marrow/expr/comptime/` (`numeric.mojo`, `boolean.mojo`,
+`strings.mojo`, `casts.mojo`, `aggregates.mojo`). Line references were dropped
+rather than re-guessed after the rewrite, and `IsIn` / `WindowFunction` no
+longer exist as nodes. Worked examples:
 
 ```
 upper(s1) + s2 + "!"
@@ -320,7 +331,7 @@ s1 == s2  and  a > b
     then the AND fuses over that mask and the numeric compare.
 ```
 
-Known follow-ups on this model are recorded at `values.mojo:238-246`:
+Known follow-ups on this model were recorded in the previous `values.mojo`:
 `Context.get` copies a `Datum` per lane; positional slots forgo CSE, so `sum(a)`
 used twice recomputes; and independent breakers run sequentially in `prepare`
 when they could be scheduled concurrently.
@@ -329,9 +340,9 @@ when they could be scheduled concurrently.
 
 The expression layer is **two lanes that share no node types**.
 
-| | AOT lane — `marrow/exprold/values.mojo` | Runtime lane — `marrow/exprold/dynamic.mojo` |
+| | AOT lane — `marrow/expr/comptime/` | Runtime lane — `marrow/expr/runtime/values.mojo` |
 |---|---|---|
-| Node | one struct per protocol, parameterized by kernel and operands | one struct, `DynValue` (`dynamic.mojo:236`) |
+| Node | one struct per protocol, parameterized by kernel and operands | one struct, `RuntimeValue` |
 | Operand types | bound on a family trait (`L: NumericValue`) | not known until execute |
 | Output dtype | a comptime type (`Self.OutType`) | `DynType`, answered at run time |
 | Shape | `comptime OutShape ∈ {0, 1}` | the active variant member of `Datum` |
@@ -339,56 +350,55 @@ The expression layer is **two lanes that share no node types**.
 | Built by | `col("a", int64)`, `lit(3, int64)` | `col("a")`, `lit[Int64Type](3)` |
 
 **What is runtime in the runtime lane is the operand *dtype*, not the
-operation.** `DynValue` carries a pointer to its evaluator —
-`comptime EvalFn = def(List[DynArray], DynPayload, RecordBatch) thin raises ->
-DynArray` (`dynamic.mojo:209`) — so `__sub__` names `_binary[SubKernel]` and a
-binary links exactly the kernels its expressions mention. The tag string it also
-carries drives only `render`/`prune`/`name` and never selects a kernel. Written
-first as a single `_eval` switch over ~70 tags, it cost **+1,807,168 bytes of
-`__text` (+45.7%)** on `query_dynvalue`, because every arm became reachable from
-every node.
+operation.** A `RuntimeValue` carries a tag, its children behind `ArcPointer`,
+and an optional payload. The per-node evaluator function pointer this section
+used to describe was removed: it triggered a compiler miscompile in a
+self-referential struct, and the lane now interprets by switching on the tag
+(`docs/backlog.md`). That cost is paid only by a binary that builds a runtime
+expression at all — the comptime lane never reaches the interpreter, so both
+AOT size gates measured **+0 bytes** when the pointer went away.
 
-**`BoxedValue` (`relations.mojo:155`) is the erasure box — the one box both lanes
-erase into.** It is a wrapper, not an interpreter: `_exec_tramp[V]` calls
-`V.execute` on the *concrete* node, so a fused expression stays monomorphized and
-its SIMD loop is entered through one indirect call per morsel. The constructor is
-generic; the struct is not — which is why `Filter`/`Project`/`FilterProcessor`
+**`DynValue` (`marrow/expr/logical.mojo`) is the erasure box — the one box both
+lanes erase into.** It is a wrapper, not an interpreter: its trampolines call
+through to the *concrete* node, so a fused expression stays monomorphized and its
+SIMD loop is entered through one indirect call per morsel. The constructor is
+generic; the struct is not — which is why `Filter`/`Project`/`FilterOperator`
 compile exactly **once** no matter how many expression types exist.
 Parameterizing the operators instead (`Filter[P]`) would fuse just as well and
 duplicate the whole operator per predicate.
 
-The box exposes only *metadata* beyond `execute`: `prune`, `name`, `render`,
-`referenced_columns`, `bound_column`, `resolve_names`. That list is deliberate —
-it is exactly what a plan rewrite needs and nothing that would require seeing
+The box carries five function slots — `columns`, `name`, `dtype`, `write`,
+`to_operator` — plus a comptime `shape` read once at construction. That list is
+deliberately short: it is what a plan needs and nothing that would require seeing
 inside a fused subtree.
 
-> **A node never needs an erased variant.** `DynValue` conforms to `Value` and to
-> nothing else, because `Value`'s members are all runtime methods. It used to also
-> claim `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` so fused nodes
-> would take it as an *operand*; that was unsound — those traits promise a comptime
-> `OutType: NumericType` and a `vectorwise` lane the box could only stub. Erase into
-> a trait of methods, never into one with comptime members you cannot supply.
+> **A node never needs an erased variant.** `DynValue` conforms to *nothing* it
+> erases — not `Value`, not the family traits. It once claimed
+> `NumericValue`/`BoolValue`/`StringValue`/`TemporalValue` so fused nodes would
+> take it as an *operand*; that was unsound — those traits promise a comptime
+> `OutType: NumericType` and a lane the box could only stub. A box may hold a
+> trait-bound value; it should not be one.
 
 ## 5. Relations — a walkable plan that executes itself
 
-`marrow/exprold/relations.mojo` holds the plan IR. `trait Relation`
-(`relations.mojo:119`) nodes are **pure, immutable descriptions**: they hold their
-parameters and child relations, and no execution state. `DynRelation`
-(`relations.mojo:413`) erases a node behind an `ArcPointer`, so copying a plan is
-an O(1) share and the plan is a reusable, inspectable, rewritable template.
+`marrow/expr/logical.mojo` holds the plan IR. `trait Relation` nodes are **pure,
+immutable descriptions**: they hold their parameters and child relations, and no
+execution state. `DynRelation` erases a node behind an `ArcPointer`, so copying a
+plan is an O(1) share and the plan is a reusable, inspectable template.
 
-Execution is a separate layer. `Relation.to_processor(ctx)` (`relations.mojo:187`)
-builds the stateful `Processor` (`execution.mojo:104`) that runs, opening its
-children recursively; the processor owns *all* mutable state — scan offset, built
-hash index, grouper, child processors. `DynProcessor` (`execution.mojo:120`) erases
-it and drives the pull loop; `collect()` (`execution.mojo:161`) drains it into one
-`RecordBatch`. `DynRelation.execute()` (`relations.mojo:571`) is
-`to_processor(ctx).collect()`, and it never mutates the plan — so a plan runs
+Execution is a separate layer, `marrow/expr/physical.mojo`.
+`Relation.to_operator(ctx)` builds the stateful `Operator` that runs, opening its
+children recursively; the operator owns *all* mutable state — scan offset, built
+hash index, grouper, child operators. `DynOperator` erases it. **The engine
+pushes**: `push(batch)` answers with what that batch produced and `drain()` with
+whatever the operator was still holding; `collect()` runs the whole tree down to
+one `StructArray`. `DynRelation.execute()` is `to_operator(ctx).collect()`
+wrapped back into a `RecordBatch`, and it never mutates the plan — so a plan runs
 repeatedly and concurrently.
 
 **There is no `Planner`.** Each node builds its own operator through its own
-`to_processor`. A central builder switching over node kinds would make
-`AggregateProcessor` and `JoinProcessor` — and therefore `kernels/join`,
+`to_operator`. A central builder switching over node kinds would make
+`GroupByOperator` and `JoinOperator` — and therefore `kernels/join`,
 `kernels/groupby`, `kernels/hashing` — reachable from *every* plan, including one
 that never aggregates or joins. That single open dispatcher is what the closed
 design exists to avoid.
@@ -429,14 +439,16 @@ Silicon and will invent or hide a regression.
 
 Above the boundary — relations, projection lists, predicates — everything is
 runtime, walkable and rewritable, and does not fuse (it is already columnar and
-`DynArray`-erased). Below it, inside one `BoxedValue`, is a single monomorphized
+`DynArray`-erased). Below it, inside one `DynValue`, is a single monomorphized
 fused kernel, opaque to rewrites. That partitions the rewrites cleanly:
 
 - **Move, drop or reorder whole sub-expressions** — projection pushdown,
   predicate pushdown, conjunct splitting, join reordering. These live *above* the
-  boundary and need only metadata from each box (`referenced_columns`,
-  `bound_column`, `name`), never its internals, plus O(1) cloning, which an
-  `ArcPointer` already gives. **Fully supported.**
+  boundary and need only metadata from each box (`columns`, `name`, `dtype`),
+  never its internals, plus O(1) cloning, which an `ArcPointer` already gives.
+  **Admitted by the design, but not implemented** — no rewrite pass, no
+  pushdown and no statistics-based pruning exists in the tree today; they went
+  with the previous expression package and have not been ported back.
 - **Restructure the inside of an expression** — CSE across expressions,
   reassociating `a + b + c`, constant folding inside a fused tree. These need to
   see *through* the box, so they must happen **before boxing** or they cost
@@ -446,11 +458,12 @@ Boxing loses zero fusion, because the relational layer never fused across
 operators in the first place: a `Filter` materializes its mask and then filters
 each column. All fusion is intra-expression, and it lives entirely inside one box.
 
-Two properties make relation-level rewrites cheap. Columns resolve **by name**
-against `batch.schema` at execute time (`values.mojo:575`, `:1479`), so narrowing
-a scan changes column positions without rewriting a single expression. And
-`BoxedValue.resolve_names` swaps only the erased pointer, keeping the node's type
-— which is why binding names is not a re-boxing.
+One property makes relation-level rewrites cheap: columns resolve **by name**
+against the input schema at bind time, so narrowing a scan changes column
+positions without rewriting a single expression. There is no `resolve_names`
+rewrite — parameter values travel *through* an execution as `Bindings` rather
+than being substituted into a copy of the plan, so the box never hands back a
+re-boxed `DynValue`.
 
 Granularity is a lowering choice, not a fixed rule: one box per predicate gives
 maximum fusion and opaque internals; one box per conjunct keeps full fusion

@@ -20,5 +20,4 @@ def plan() raises -> DynRelation:
     """
     var t = table("floats")
     var zeroes = t.filter(col("x", float64) == lit(0.0, float64))
-    var q = zeroes.project(["e"], [col("x", float64).exp()])
-    return q
+    return zeroes.project(["e"], [col("x", float64).exp()])
