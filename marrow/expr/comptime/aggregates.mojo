@@ -53,12 +53,13 @@ from ...kernels.aggregate import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape, Value
-from ..params import Bindings
+from ..bindings import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
 from ...kernels.core import Groups
 from ...arrays import DynArray
 from ..physical import (
+    BufferedAggregateOperator,
     Evaluable,
     Datum,
     EvalOperator,
@@ -625,85 +626,3 @@ struct RegisterAggregateOperator[Agg: Foldable, A: PrimitiveValue](Operator):
         # One slot, always: `sum` of nothing is one NULL, not no rows. `push`
         # returns early at `n == 0` and never grew it, so the seed is here.
         return _emit_fold(self._state, 1)
-
-
-struct BufferedAggregateOperator[Agg: AggKernel, A: Evaluable & Value](
-    Operator
-):
-    """The aggregate that cannot fold lanes: evaluate the operand to a column,
-    hand it to the kernel.
-
-    Reached when `Agg` has no lane algebra (`count_distinct` keeps a hash set
-    or a sketch, `min`/`max` over a string is a bytewise scan, a dispersion
-    keeps Welford's triple) or the operand is not lane-readable.
-
-    **The operand still stays typed.** Only the aggregation step
-    materialises: `count_distinct(upper(region))` still compiles
-    `upper(region)` into one fused loop, and `A` is a type parameter rather
-    than a `DynValue` precisely so that fusion is not thrown away along with
-    the aggregate's.
-
-    **Not O(rows).** This buffered *columns* once, calling a one-shot
-    `grouped` at `drain`; every `AggKernel` is now streaming, so each morsel is
-    absorbed into per-slot state and released. The name is historical, and what
-    it now buffers is one evaluated column at a time.
-    """
-
-    var _input: Self.A
-    var _bindings: Bindings
-    """This execution's parameter values, held by the *operator* rather than
-    the node — which is what keeps the plan immutable and lets two executions
-    of it bind different values."""
-
-    var _state: Self.Agg
-    """The accumulator, built at construction from the operand's dtype."""
-
-    var _scatters: Bool
-    """Whether the query has `GROUP BY` keys.
-
-    A field and not a parameter, unlike the fused operator's: this arm reads it
-    once per morsel to build a `Groups`, not once per row, so specialising on
-    it would double the instantiation for a branch that never reaches the inner
-    loop — measured at +4.6%.
-    """
-
-    var _emitted: Bool
-
-    def __init__(
-        out self,
-        var input: Self.A,
-        var bindings: Bindings,
-        scatters: Bool,
-        in_dtype: DynType,
-    ) raises:
-        self._input = input^
-        self._bindings = bindings^
-        self._state = Self.Agg(in_dtype)
-        self._scatters = scatters
-        self._emitted = False
-
-    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
-        var n = len(morsel.batch)
-        var column = self._input.evaluate(
-            morsel.batch, self._bindings
-        ).to_array(n)
-        var groups = morsel.groups.copy() if self._scatters else Groups.single(
-            n
-        )
-        # The one narrowing in this lane, and it is comptime-resolved:
-        # `Agg` is a parameter here, so `InArray` is a concrete type and
-        # this is a conversion rather than a dispatch.
-        self._state.update(groups, Self.Agg.InArray(column.to_data()))
-        return None
-
-    def drain(mut self) raises -> Optional[Datum]:
-        if self._emitted:
-            return None
-        self._emitted = True
-        if not self._scatters:
-            # One implicit slot, and an input that produced no morsel at all
-            # never grew it. `count_distinct` of nothing is one 0 and `min` of
-            # nothing is one NULL — both one row, which is what the stage above
-            # builds its output batch from.
-            self._state.reserve(1)
-        return Datum(self._state.finish())

@@ -84,15 +84,15 @@ from ...kernels.aggregate import (
 )
 from ...schema import Schema
 from ..logical import DynValue, Shape, Value, merged
-from ..`comptime`.aggregates import BufferedAggregateOperator
 from .values import RuntimeValue
-from ..params import Bindings
+from ..bindings import Bindings
 from ...execution import ExecContext
 from ...kernels.concat import concat
 from std.memory import ArcPointer
 
 from ...kernels.core import Groups
 from ..physical import (
+    BufferedAggregateOperator,
     Datum,
     DynOperator,
     Morsel,

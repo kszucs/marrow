@@ -30,7 +30,7 @@ from ..kernels.join import JoinKind, JOIN_INNER
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field
-from .params import Bindings
+from .bindings import Bindings
 from .pruning import PrunePredicate, Prunable
 from .pushdown import Pushdown
 from .runtime.values import column

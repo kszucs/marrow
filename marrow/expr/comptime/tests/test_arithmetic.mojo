@@ -26,7 +26,7 @@ from std.testing import (
 )
 
 from ...builders import col, lit
-from ...params import Bindings
+from ...bindings import Bindings
 from ....arrays import BoolArray, Float64Array, Int64Array
 from ....builders import array
 from ....dtypes import float64, int64

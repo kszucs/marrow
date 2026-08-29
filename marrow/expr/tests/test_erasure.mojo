@@ -26,7 +26,7 @@ from ...execution import ExecContext
 from ...kernels.core import Groups
 from ...schema import Schema
 from ..logical import DynRelation, DynValue, Relation, Shape, Value
-from ..params import Bindings
+from ..bindings import Bindings
 from ..pruning import Prunable, PrunePredicate, PruneStats, Truth
 from ..pushdown import Pushdown
 from ..physical import Datum, DynOperator, Morsel, Operator, Pipeline

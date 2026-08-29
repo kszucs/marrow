@@ -13,7 +13,7 @@ distinguishes them.
 from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit
-from ...params import Bindings
+from ...bindings import Bindings
 from ....builders import Int64Builder, array
 from ....arrays import Int64Array, StringArray
 from ....dtypes import (

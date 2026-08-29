@@ -55,7 +55,7 @@ from ...schema import Schema
 from ...dtypes import BoolType, DynType
 from ..builders import col, lit, table
 from ..logical import DynRelation, DynValue, Shape, Value
-from ..params import Bindings
+from ..bindings import Bindings
 from ..physical import DynOperator
 from ..`comptime`.rules import promote
 from ..pruning import (

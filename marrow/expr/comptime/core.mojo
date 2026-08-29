@@ -51,7 +51,7 @@ from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
 from ..logical import Shape, Value
-from ..params import Bindings
+from ..bindings import Bindings
 from ...kernels.bounds import Bounds
 from ..pruning import PruneStats, Prunable, Truth
 from .aggregates import (

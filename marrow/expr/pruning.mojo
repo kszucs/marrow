@@ -100,7 +100,7 @@ from std.memory import ArcPointer
 from ..dtypes import BoolType, DynType, NumericType, PrimitiveType
 from ..kernels.bounds import Bounds, BoundsKernel, Ord
 from ..scalars import DynScalar
-from .params import Bindings
+from .bindings import Bindings
 
 
 # ---------------------------------------------------------------------------

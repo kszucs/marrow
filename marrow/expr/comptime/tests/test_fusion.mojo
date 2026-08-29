@@ -11,7 +11,7 @@ from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import col, lit, table
 from ....schema import Schema
-from ...params import Bindings
+from ...bindings import Bindings
 from ....builders import array
 from ....dtypes import DynType, Int64Type, int64
 from ....tabular import RecordBatch, record_batch

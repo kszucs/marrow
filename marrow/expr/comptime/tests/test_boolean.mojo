@@ -10,7 +10,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit
 from ....arrays import BoolArray
-from ...params import Bindings
+from ...bindings import Bindings
 from ....builders import BoolBuilder, array
 from ....dtypes import Int64Type, int64
 from ....tabular import RecordBatch, record_batch

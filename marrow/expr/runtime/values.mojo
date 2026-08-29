@@ -64,7 +64,7 @@ from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, Value, merged
-from ..params import Bindings
+from ..bindings import Bindings
 from ...kernels.bounds import (
     EqBounds,
     GeBounds,

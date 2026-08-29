@@ -9,7 +9,7 @@ and a wrong one is silent — a plan that narrows the wrong columns still runs.
 from std.testing import assert_equal, assert_true
 
 from ....arrays import StructArray, DynArray
-from ...params import Bindings
+from ...bindings import Bindings
 from ....builders import array
 from ....dtypes import int64
 from ....scalars import DynScalar, Int32Scalar, Int64Scalar, StringScalar

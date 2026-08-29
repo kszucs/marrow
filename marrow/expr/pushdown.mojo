@@ -87,7 +87,7 @@ it.
 
 from ..parquet.reader import LeafSet, ParquetFile
 from ..parquet.source import ByteSource
-from .params import Bindings
+from .bindings import Bindings
 from .pruning import PrunePredicate, PruneStats, Truth
 
 

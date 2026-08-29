@@ -40,7 +40,7 @@ from ...kernels.cast import (
 )
 from ...schema import Schema
 from ..logical import Shape
-from ..params import Bindings
+from ..bindings import Bindings
 from .core import (
     BoolValue,
     ColumnBound,

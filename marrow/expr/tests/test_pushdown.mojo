@@ -22,7 +22,7 @@ from ...dtypes import Int64Type, int64
 from ...parquet.reader import ParquetFile
 from ...scalars import Int64Scalar
 from ...tabular import Table
-from ..params import Bindings
+from ..bindings import Bindings
 from ..pruning import PrunePredicate, PruneStats, Truth
 from ..pushdown import Pushdown, read_plan, row_group_stats
 from .test_pruning import (

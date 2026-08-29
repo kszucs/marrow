@@ -41,7 +41,13 @@ from ...kernels.string import (
     RStripKernel,
     ReverseKernel,
     StartsWithKernel,
+    StringEqKernel,
+    StringGeKernel,
+    StringGtKernel,
+    StringLeKernel,
+    StringLtKernel,
     StringMapKernel,
+    StringNeKernel,
     StringPredicateKernel,
     StripKernel,
     UpperKernel,
@@ -49,79 +55,14 @@ from ...kernels.string import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape, merged
-from ..params import Bindings
+from ..bindings import Bindings
 from ..physical import Datum
 
 from .rules import widest_shape
 from .core import BoolValue, ColumnBound, NumericValue, StringValue, Unnamed
 
 
-trait StringCompareKernel:
-    """A two-string predicate.
-
-    Local to this module rather than reused from `kernels.numeric`: those
-    kernels are `core[dtype, W](SIMD, SIMD) -> SIMD[bool, W]`, a shape a
-    variable-width encoding cannot satisfy. The parameter stays a *type* for
-    the same reason it does there — routing on a name would put every string
-    predicate into every binary that builds any expression.
-    """
-
-    comptime name: StaticString
-
-    @staticmethod
-    def core(a: String, b: String) -> Bool:
-        ...
-
-
-struct StrEqKernel(StringCompareKernel):
-    comptime name = StaticString("str_eq")
-
-    @staticmethod
-    def core(a: String, b: String) -> Bool:
-        return a == b
-
-
-struct StrNeKernel(StringCompareKernel):
-    comptime name = StaticString("str_ne")
-
-    @staticmethod
-    def core(a: String, b: String) -> Bool:
-        return a != b
-
-
-struct StrLtKernel(StringCompareKernel):
-    comptime name = StaticString("str_lt")
-
-    @staticmethod
-    def core(a: String, b: String) -> Bool:
-        return a < b
-
-
-struct StrGtKernel(StringCompareKernel):
-    comptime name = StaticString("str_gt")
-
-    @staticmethod
-    def core(a: String, b: String) -> Bool:
-        return a > b
-
-
-struct StrLeKernel(StringCompareKernel):
-    comptime name = StaticString("str_le")
-
-    @staticmethod
-    def core(a: String, b: String) -> Bool:
-        return a <= b
-
-
-struct StrGeKernel(StringCompareKernel):
-    comptime name = StaticString("str_ge")
-
-    @staticmethod
-    def core(a: String, b: String) -> Bool:
-        return a >= b
-
-
-struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
+struct StringCompare[K: StringPredicateKernel, L: StringValue, R: StringValue](
     BoolValue, Unnamed
 ):
     """A comparison over two string operands, producing packed bits.
@@ -172,7 +113,7 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         var out = SIMD[DType.bool, W](fill=False)
         for j in range(W):
-            out[j] = Self.K.core(
+            out[j] = Self.K.predicate(
                 self.l.lane(bound[0], idx + j),
                 self.r.lane(bound[1], idx + j),
             )
@@ -182,12 +123,12 @@ struct StringCompare[K: StringCompareKernel, L: StringValue, R: StringValue](
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
 
 
-comptime StrEq = StringCompare[StrEqKernel, _, _]
-comptime StrNe = StringCompare[StrNeKernel, _, _]
-comptime StrLt = StringCompare[StrLtKernel, _, _]
-comptime StrGt = StringCompare[StrGtKernel, _, _]
-comptime StrLe = StringCompare[StrLeKernel, _, _]
-comptime StrGe = StringCompare[StrGeKernel, _, _]
+comptime StrEq = StringCompare[StringEqKernel, _, _]
+comptime StrNe = StringCompare[StringNeKernel, _, _]
+comptime StrLt = StringCompare[StringLtKernel, _, _]
+comptime StrGt = StringCompare[StringGtKernel, _, _]
+comptime StrLe = StringCompare[StringLeKernel, _, _]
+comptime StrGe = StringCompare[StringGeKernel, _, _]
 """All six comparisons, not the four the port shipped with.
 
 `StringValue` had `__lt__`/`__gt__` and no `__le__`/`__ge__` precisely because

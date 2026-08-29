@@ -25,13 +25,14 @@ from .`comptime`.leaves import (
     Column,
     ListColumn,
     ListLength,
+    Param,
     TemporalColumn,
     Literal,
     StringColumn,
     StringLiteral,
 )
 from .logical import DynRelation, InMemoryTable, ParquetScan
-from .params import Param
+
 from .runtime.values import RuntimeValue, column, literal
 from ..dtypes import (
     BoolType,

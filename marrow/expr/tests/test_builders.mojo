@@ -8,7 +8,7 @@ differs is only what the caller had to know, and when it is resolved.
 from std.testing import assert_equal, assert_true
 
 from ...schema import Schema
-from ..params import Bindings
+from ..bindings import Bindings
 from ...builders import Date32Builder, array
 from ...dtypes import Date32Type, DynType, Int64Type, bool_, date32, int64
 from ...scalars import DynScalar, Int64Scalar

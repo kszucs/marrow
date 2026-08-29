@@ -37,7 +37,7 @@ from ...kernels.boolean import (
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape, merged
-from ..params import Bindings
+from ..bindings import Bindings
 from ..pruning import PruneStats, Truth
 from ..physical import Datum
 from .core import (

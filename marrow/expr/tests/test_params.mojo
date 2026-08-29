@@ -13,7 +13,7 @@ from ...dtypes import Int64Type, int64
 from ...scalars import Int64Scalar
 from ...tabular import record_batch
 from ..builders import col, param, table
-from ..params import Bindings
+from ..bindings import Bindings
 from ..logical import DynRelation, DynValue, InMemoryTable
 from ..`comptime`.leaves import Column
 from ..`comptime`.boolean import Not

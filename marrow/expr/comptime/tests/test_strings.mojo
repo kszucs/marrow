@@ -10,7 +10,7 @@ and drives a `Filter` unchanged.
 from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit, table
-from ...params import Bindings
+from ...bindings import Bindings
 from ....builders import array, Int64Builder
 from ....arrays import BoolArray, StringArray
 from ....dtypes import (
