@@ -583,6 +583,39 @@ def test_filtering_on_an_aggregate_raises() raises:
     assert_true(raised, "filtering on an aggregate must raise")
 
 
+def test_sorting_on_an_aggregate_raises() raises:
+    """The third per-row position, and one of the two that kept aborting.
+
+    `Filter` and `Project` grew the guard; `Sort` and `Aggregate`'s keys did
+    not, so this reached `SortOperator`, which calls `.value()` on the `None`
+    an aggregate answers from `push`. Four positions need the check and two
+    had it — which is why it now lives in one `reject_aggregate` rather than
+    being copied per node.
+    """
+    var raised = False
+    try:
+        _ = table(_batch()).sort_by([col("a", int64).sum()], [True])
+    except e:
+        raised = True
+        assert_true("is an aggregate" in String(e))
+    assert_true(raised, "sorting on an aggregate must raise")
+
+
+def test_grouping_by_an_aggregate_raises() raises:
+    """The fourth, and the one where the asymmetry is the whole point: an
+    aggregate in `aggs` is what the node is *for*, and the same expression in
+    `keys` is the abort."""
+    var raised = False
+    try:
+        _ = table(_batch()).aggregate(
+            [col("b", int64).count().alias("n")], [col("a", int64).sum()]
+        )
+    except e:
+        raised = True
+        assert_true("is an aggregate" in String(e))
+    assert_true(raised, "grouping by an aggregate must raise")
+
+
 def test_a_non_aggregate_value_is_still_projectable() raises:
     """The gate reads `Value.aggregates`, so an ordinary fused subtree — which
     is also `Shape.scalar` when it is a literal — is untouched."""

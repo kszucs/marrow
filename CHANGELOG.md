@@ -10,6 +10,20 @@
 
 ### Removals
 
+- **`AggKernel.empty()` and `ValidCount._per_group` are gone.** `empty()`
+  answered the aggregate over an input that produced no column at all, for the
+  three kernels that can say so without a dtype. It has had no production
+  caller since the aggregate rearchitecture deleted the last one: `reserve`
+  seeds the slot from the state the operator already built with the *real*
+  dtype, so every aggregate answers its own empty case — all ten names, rather
+  than the three a fabricated `int64` probe could reach. What was left was a
+  dead virtual on the trait every aggregate conforms to, three overrides, and
+  17 assertions in two test files that exercised nothing else. `_per_group` had
+  zero callers anywhere and a docstring citing a `partials` that does not exist
+  in this layer. `AggKernel.grouped()` is **kept** — it has ~40 live call sites
+  across the kernel tests and benches, which is the purpose its docstring
+  claims.
+
 - **`marrow/kernels/interval.mojo` is gone**, replaced rather than extended by
   `marrow/kernels/bounds.mojo`. It had zero consumers — its consumer was
   `exprold`'s pruner, deleted with the package — so this breaks nothing, and
@@ -160,6 +174,25 @@
 
 ### Fixes
 
+- **`Aggregate` and `Sort` reject an aggregate in a key position**
+  (`marrow/expr/logical.mojo`). `Value.aggregates` exists so a node can refuse
+  an aggregate where a value is needed per row, and four node positions are
+  per-row: `Filter`'s predicate, `Project`'s values, `Aggregate`'s **keys**,
+  and `Sort`'s keys. Only the first two checked. An aggregate's operator
+  answers `None` to every `push` and yields at `drain`, and both remaining
+  consumers unwrap that `None` without checking — so
+  `rel.sort_by([col("a", int64).sum()], [True])` and the same expression as a
+  `GROUP BY` key **aborted the process** rather than raising. The check is now
+  one `reject_aggregate` helper called from all four, each supplying the remedy
+  for its own node.
+
+- **A `TemporalColumn` or `ListColumn` naming an unknown column raises**
+  (`marrow/expr/comptime/leaves.mojo`). Both `dtype` methods read
+  `schema.fields[schema.get_field_index(name)]`. `get_field_index` answers `-1`
+  when the name is absent and `fields[-1]` is the *last* field, so a typo
+  silently reported a neighbouring column's dtype from a method already
+  declared `raises`. Both now use `Schema.field(name=...)`, which raises.
+
 - **`Groups` states whether it is the one-slot assignment instead of inferring
   it** (backlog AG-1, `marrow/kernels/core.mojo`). `is_single()` was
   `len(ids) == 0 and num_groups == 1`, which is the same predicate for two
@@ -188,6 +221,19 @@
   all-null right ones, and `SEMI`/`ANTI` described an empty probe side with the
   left schema entirely. Both schemas are now passed in from `Join.to_operator`,
   which has them.
+
+### Tests
+
+- **`test_erasure.mojo` covers the fourth erased box.** `rebind[ArcPointer[
+  NoneType]]` appears in exactly four places in `marrow/expr/`, and each needs a
+  `_drop` trampoline or the boxed object's `__deinit__` never runs. The suite
+  counted destructions for `DynValue`, `DynRelation` and `DynOperator` but not
+  for `PrunePredicate`, the newest — and this bug class is invisible without
+  counting, since every answer stays correct and only memory is lost.
+
+- **The aggregate guard is tested on all four per-row positions.** `Project`
+  and `Filter` had cases; `Sort` and `Aggregate`'s keys now do too, which is
+  where the guard was missing.
 
 ### Features
 

@@ -1,8 +1,8 @@
 """The runtime lane: expressions whose structure lives in fields.
 
-One struct — a tag, its children, a payload, and a pointer to the function that
-evaluates it. Where the comptime lane puts a whole subtree in a type and fuses
-it into one SIMD loop, this materialises a `DynArray` **per node, per morsel**.
+One struct — a tag, its children behind `ArcPointer`, and an optional payload.
+Where the comptime lane puts a whole subtree in a type and fuses it into one
+SIMD loop, this materialises a `DynArray` **per node, per morsel**.
 
 That is the trade, and it is why the two lanes exist rather than one:
 
@@ -11,18 +11,26 @@ That is the trade, and it is why the two lanes exist rather than one:
 | structure | in the type | in the fields |
 | per node | inlined into one loop | one materialised column |
 | built from | Mojo source | anything, including Python at run time |
-| binary | 1.46 MB | 4.91 MB (same plan) |
 
 The runtime lane is what a frontend uses when the query is not known until the
 program runs, which is every frontend that is not the Mojo DSL. It is also why
-this package has a box at all: a plan holds either lane through `DynValue`,
-and that mixing is what buys the 1.46 MB.
+this package has a box at all: a plan holds either lane through `DynValue`, and
+that mixing is what keeps an AOT binary off this file entirely. The measured
+gap between the two lanes is several times the binary; the current figures live
+in `benchmarks/binary_size/` rather than here, so they cannot go stale in a
+docstring.
 
-**A tag never selects a kernel.** `_tag` is how a node prints and how it
-prunes; `_eval` is how it computes, and it is a function pointer bound at
-construction. Routing on the tag would put every kernel in every binary that
-builds any expression — the same closed-erasure property that keeps unused
-operators out of a plan.
+**The tag selects the kernel, and that is deliberate.** `evaluate` switches on
+`_tag`, so this file is an interpreter. A program that builds expressions at
+run time has already accepted one — it cannot know its kernels at compile time,
+and a frontend constructing queries dynamically reaches most of them anyway.
+The cost is paid only by binaries that use this lane at all, and the comptime
+lane never reaches it.
+
+**Do not replace the switch with a per-node function pointer.** That design
+existed, put a thin `fn` field in this self-referential struct, and the compiler
+miscompiled it. See `docs/backlog.md`; this docstring described that removed
+design, in the present tense, long after it was gone.
 """
 
 from std.memory import ArcPointer

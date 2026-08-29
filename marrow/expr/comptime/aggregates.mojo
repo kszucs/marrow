@@ -115,7 +115,7 @@ struct Aggregate[Agg: AggKernel, A: Evaluable & Value](Value):
     and is boxed by the same `DynValue`. There is no `AggValue` trait: once
     every logical node answers `to_operator`, an aggregate stopped being a
     different *kind* of node and became one that answers from
-    `Operator.finish` rather than from `Operator.push`. That difference is
+    `Operator.drain` rather than from `Operator.push`. That difference is
     behavioural, not structural, and is deliberately not encoded as a marker
     trait — a trait constraining nothing documents nothing. When a planner
     needs to *check* it (to reject `project([col("a").sum()])` by inspection

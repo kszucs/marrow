@@ -120,10 +120,13 @@ trait Value(Copyable, Deinitable, Writable):
 
     An aggregate is an ordinary `Value` in every other respect, so nothing
     structural distinguishes it and the relations that cannot accept one had no
-    way to say so. `Project` and `Filter` read this and raise; before it,
+    way to say so. All four per-row positions read this through
+    `reject_aggregate` and raise: `Filter`'s predicate, `Project`'s values,
+    `Aggregate`'s **keys**, and `Sort`'s keys. Before it,
     `project([col("a").sum()])` reached `ProjectOperator.push`, which called
     `.value()` on the `None` an aggregate answers with and **aborted the
-    process**.
+    process** — and `Aggregate` and `Sort` kept aborting that way until the
+    check reached them too.
 
     A defaulted `comptime` rather than a marker trait, because a trait
     constraining nothing documents nothing: every value would still satisfy
@@ -1043,8 +1046,8 @@ struct Sort(Relation, Writable):
 
     Sorting is blocking by nature: no prefix of the input determines the first
     output row, so the operator buffers every morsel and orders once at
-    `finish`. That the engine expresses this with the same two methods a filter
-    uses is the point of the push interface.
+    `drain`. That the engine expresses this with the same methods a filter uses
+    is the point of the push interface.
     """
 
     var _input: DynRelation

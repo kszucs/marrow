@@ -4,18 +4,23 @@ A `Relation` describes a query and is immutable, shareable and rewritable. This
 is what that description becomes when it runs, and it owns everything mutable —
 a grouper's table, an accumulator's slots.
 
-**The engine pushes.** An operator is handed a batch and answers with what it
+**The engine pushes.** An operator is handed a morsel and answers with what it
 produced, if anything:
 
-    push(batch) -> Optional[StructArray]
-    finish()    -> Optional[StructArray]
+    push(morsel: Morsel) -> Optional[Datum]
+    drain()              -> Optional[Datum]
+    done()               -> Bool
 
 That one interface covers streaming and blocking alike, because **blocking
 stops being a type distinction and becomes *when you return `Some`***. `Filter`
-and `Project` answer from `push` and nothing from `finish`; an aggregate
+and `Project` answer from `push` and nothing from `drain`; an aggregate
 accumulates through every `push`, answers `None`, and produces its whole result
-from `finish`. Under the old pull design those were two different shapes and
+from `drain`. Under the old pull design those were two different shapes and
 therefore two different erased boxes.
+
+`drain` rather than a one-shot `finish`: it is repeatable, which is what lets
+the same trait cover sources, and it lets an operator emit *several* batches at
+end of stream — a chunking sort, a fanning join.
 
 **Sources stay pull, and drive.** A scan is I/O and naturally a generator, so
 the source operator answers from `drain` and `Pipeline.collect` pushes what
@@ -176,8 +181,9 @@ struct Morsel(Copyable, Movable):
 trait Operator(Deinitable, Movable):
     """A stage that transforms pushed batches.
 
-    Two methods, and that is the whole physical contract. Streaming and
-    blocking operators differ only in *when* they answer `Some`.
+    Three methods — `push`, `drain` and `done` — and that is the whole physical
+    contract. Streaming and blocking operators differ only in *when* they
+    answer `Some`.
 
     Both answer a `Datum`, which is what lets one trait cover the two things
     that produce different shapes: a relational stage produces a batch, a
@@ -578,7 +584,7 @@ struct GroupByOperator(Operator):
     """Blocking: fold every pushed morsel, then emit one row per group.
 
     The shape the push interface exists for — `push` answers `None` all the way
-    through the stream and `finish` answers the whole result. Under the old
+    through the stream and `drain` answers the whole result. Under the old
     pull design this needed a different trait from `Filter` and `Project`, and
     therefore a second erased box.
 
@@ -773,7 +779,7 @@ struct LimitOperator(Operator):
 struct SortOperator(Operator):
     """`ORDER BY` — blocking, because a global order needs every row.
 
-    Buffers each morsel and sorts once at `finish`. That is not a limitation of
+    Buffers each morsel and sorts once at `drain`. That is not a limitation of
     the engine but of the operation: no prefix of the input determines the
     first output row.
 

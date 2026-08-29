@@ -1,6 +1,6 @@
 """The erased boxes destroy what they hold.
 
-`DynValue`, `DynRelation`, `DynOperator` and `DynAgg` each erase a
+`DynValue`, `DynRelation`, `DynOperator` and `PrunePredicate` each erase a
 typed value by `rebind`ing an `ArcPointer[T]` to `ArcPointer[NoneType]`. That
 keeps the allocation and the refcount and **forgets the destructor**: the final
 release runs `NoneType`'s, so the boxed object's `__deinit__` never runs and
@@ -12,10 +12,11 @@ The fix is a `_drop` trampoline per box, and these are the tests that hold it in
 place. They count destructions rather than measuring memory, so they fail
 deterministically rather than statistically.
 
-The leak is worst where it is least visible: `DynAgg` boxes a fold
-state whose size is O(distinct values), so an un-dropped `count_distinct` loses
-a whole `SwissHashTable` per query, while the plan-node boxes lose a few
-strings.
+**One test per box, and the set must stay complete.** `rebind[ArcPointer[
+NoneType]]` appears in exactly four places in the package; each needs a `_drop`
+field, a `_drop_tramp`, and a `__deinit__` that calls it. Three virtual methods
+plus a pointer looks complete and is not, so a box added without the fourth
+trampoline leaks silently — add its case here in the same commit.
 """
 
 from std.memory import ArcPointer
@@ -26,6 +27,7 @@ from ...kernels.core import Groups
 from ...schema import Schema
 from ..logical import DynRelation, DynValue, Relation, Shape, Value
 from ..params import Bindings
+from ..pruning import Prunable, PrunePredicate, PruneStats, Truth
 from ..pushdown import Pushdown
 from ..physical import Datum, DynOperator, Morsel, Operator, Pipeline
 
@@ -114,6 +116,19 @@ struct _RelationProbe(Copyable, Movable, Relation, Writable):
         writer.write("probe")
 
 
+struct _PrunableProbe(Copyable, Movable, Prunable):
+    var _deaths: Deaths
+
+    def __init__(out self, var deaths: Deaths):
+        self._deaths = deaths^
+
+    def __deinit__(deinit self):
+        self._deaths[].append(1)
+
+    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
+        return Truth.never
+
+
 # ---------------------------------------------------------------------------
 # the contract
 # ---------------------------------------------------------------------------
@@ -156,6 +171,24 @@ def test_dyn_relation_destroys_its_node() raises:
     _ = probe^
     assert_equal(len(deaths[]), 1)
     assert_equal(len(boxed.schema()), 0)
+    _ = boxed^
+    assert_equal(len(deaths[]), 2, "erasure must not drop the destructor")
+
+
+def test_prune_predicate_destroys_its_node() raises:
+    """The fourth box, and the one added last.
+
+    `PrunePredicate` is not a plan-node box — it erases a `Prunable` behind a
+    single function pointer, built at `filter()` where the concrete type is
+    still visible. It gets the same trampoline for the same reason, and it went
+    untested for a release because the other three cases did not name it.
+    """
+    var deaths = _tally()
+    var probe = _PrunableProbe(deaths.copy())
+    var boxed = PrunePredicate(probe)
+    _ = probe^
+    assert_equal(len(deaths[]), 1, "the caller's original, not the box's copy")
+    assert_equal(boxed.prune(PruneStats(), Bindings()), Truth.never)
     _ = boxed^
     assert_equal(len(deaths[]), 2, "erasure must not drop the destructor")
 
