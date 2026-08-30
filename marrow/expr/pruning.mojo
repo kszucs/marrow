@@ -71,7 +71,8 @@ measurements rather than taste — scalar blooms add +0.0% over min/max on the
 compound ClickBench queries, and an index trait would have zero methods with
 one implementation. The measurements, and the honest ceiling on the data
 marrow has (1.04x, against 3.6x for projection pushdown), are in
-`docs/superpowers/specs/2026-08-27-index-and-pruning-plan.md` §0 and §5.
+the pruning/indexing plan, consolidated into `docs/backlog.md` on
+2026-08-30 (original: `git show 8f365d14:docs/superpowers/specs/2026-08-27-index-and-pruning-plan.md`).
 """
 
 from std.memory import ArcPointer

@@ -981,7 +981,8 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   and works — the previous expression layer's `Value.prune`, `name` and
   `bound_column` were each a trait default overridden by its conformers. The incident above had a
   differing return type, which is the actual trigger; verified again in
-  `docs/superpowers/specs/2026-08-21-aot-rewrite-research.md`.
+  the AOT rewrite research, consolidated into `docs/backlog.md` on 2026-08-30
+  (original: `git show 8f365d14:docs/superpowers/specs/2026-08-21-aot-rewrite-research.md`).
 - **A trait default method's parameter name must not collide with a
   *conformer's* struct parameter**, or that struct fails with `name conflict
   between parameter 'R' in the default trait method and a parameter in the

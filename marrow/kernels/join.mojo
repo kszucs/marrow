@@ -28,7 +28,7 @@ algorithm, so a new one is a new struct, not a conformance:
 
 Profiling notes and the queued optimizations live in `docs/backlog.md`.
 
-See ``docs/architecture.md`` for the layering this sits in, and
+See ``docs/backlog.md`` for the constraints this sits under, and
 ``docs/backlog.md`` §8 for the designs this replaced — the original spec's
 ``JoinHashTable`` with an intrusive ``_chain_next`` list was superseded by
 ``SwissHashTable`` plus a CSR ``_offsets``/``_rows`` index.

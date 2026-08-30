@@ -7,6 +7,11 @@
 > measurement traps went to its §0, ruled-out designs to §7, and defend-this
 > findings to §8. To read an original: `git show c0831f5:docs/alpha-findings/README.md`,
 > which indexes all twenty.
+>
+> **The same applies to `docs/superpowers/**` and the top-level design docs**,
+> consolidated into `docs/backlog.md` on 2026-08-30 and deleted. Entries below
+> that cite them still name the original path; recover any of them with
+> `git show 8f365d14:<path>`.
 
 ### Removals
 
