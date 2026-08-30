@@ -46,8 +46,10 @@ from ...kernels.aggregate import (
     MIN,
     PRODUCT,
     STDDEV,
+    STDDEV_SAMP,
     SUM,
     VARIANCE,
+    VAR_SAMP,
 )
 from ...kernels.boolean import AndKernel, NotKernel, OrKernel, XorKernel
 from ...kernels.cast import cast as cast_array
@@ -382,54 +384,62 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
     # Every one of them raises, because `RuntimeAggregate` validates its name
     # in `__init__` — which is what makes an unknown aggregate impossible to
     # build from here, and keeps each verb's name literal in exactly one place.
+    #
+    # **The semantics are documented on the kernels, once.** These verbs, the
+    # comptime lane's, and the kernels themselves were three places saying what
+    # `min` does, and they had already drifted -- `min` was described three
+    # different ways. A verb here names the SQL form and the kernel that
+    # answers it; what the kernel *does* belongs to the kernel.
 
     def sum(self) raises -> RuntimeAggregate:
-        """`SUM(self)`. Integers widen to int64; floats stay float64."""
+        """`SUM(self)` — see `SumFold`."""
         return RuntimeAggregate(self.copy(), String(SUM))
 
     def product(self) raises -> RuntimeAggregate:
-        """`PRODUCT(self)`."""
+        """`PRODUCT(self)` — see `ProductFold`."""
         return RuntimeAggregate(self.copy(), String(PRODUCT))
 
     def mean(self) raises -> RuntimeAggregate:
-        """`AVG(self)`. Accumulates in float64 over the valid values, so nulls
-        are excluded rather than counted as zero."""
+        """`AVG(self)` — see `MeanFold`."""
         return RuntimeAggregate(self.copy(), String(MEAN))
 
     def variance(self) raises -> RuntimeAggregate:
         """`VAR_POP(self)` — the population variance, Arrow's default.
 
-        The sample form is `Dispersion[1, False]` in the comptime lane. It is
-        absent here only because no name is bound to it; adding `var_samp`
-        costs one string and one arm of `resolve`.
+        `var_samp()` is the sample form (`ddof=1`).
         """
         return RuntimeAggregate(self.copy(), String(VARIANCE))
 
+    def var_samp(self) raises -> RuntimeAggregate:
+        """`VAR_SAMP(self)` — the sample variance, `ddof=1`."""
+        return RuntimeAggregate(self.copy(), String(VAR_SAMP))
+
     def stddev(self) raises -> RuntimeAggregate:
-        """`STDDEV_POP(self)` — the square root of `variance()`."""
+        """`STDDEV_POP(self)` — see `Dispersion`."""
         return RuntimeAggregate(self.copy(), String(STDDEV))
 
+    def stddev_samp(self) raises -> RuntimeAggregate:
+        """`STDDEV_SAMP(self)` — the square root of `var_samp()`."""
+        return RuntimeAggregate(self.copy(), String(STDDEV_SAMP))
+
     def min(self) raises -> RuntimeAggregate:
-        """`MIN(self)`. Keeps the input's dtype — a timestamp's unit and
-        timezone included; lexicographic over a string column."""
+        """`MIN(self)` — see `MinFold`, or `LexicalExtremum` for strings."""
         return RuntimeAggregate(self.copy(), String(MIN))
 
     def max(self) raises -> RuntimeAggregate:
-        """`MAX(self)`."""
+        """`MAX(self)` — see `MaxFold`."""
         return RuntimeAggregate(self.copy(), String(MAX))
 
     def count(self) raises -> RuntimeAggregate:
-        """`COUNT(self)` — the *non-null* values of `self`, not the row
-        count."""
+        """`COUNT(self)` — see `ValidCount`."""
         return RuntimeAggregate(self.copy(), String(COUNT))
 
     def count_distinct(self) raises -> RuntimeAggregate:
-        """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics)."""
+        """`COUNT(DISTINCT self)` — see `DistinctCount`."""
         return RuntimeAggregate(self.copy(), String(COUNT_DISTINCT))
 
     def approx_count_distinct(self) raises -> RuntimeAggregate:
-        """`APPROX_COUNT_DISTINCT(self)` — a HyperLogLog estimate, ~0.65%
-        standard error, nulls excluded."""
+        """`APPROX_COUNT_DISTINCT(self)` — see `DistinctCount[exact=False]`."""
         return RuntimeAggregate(self.copy(), String(APPROX_COUNT_DISTINCT))
 
     def write_to[W: Writer](self, mut writer: W):

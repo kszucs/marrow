@@ -428,6 +428,25 @@ structs toward `Pointer[Self, MutUntrackedOrigin]` with manual allocation
 (`manual/structs/reference.mdx`) rather than value-nested containers, and
 `_kids` was *already* forced behind `ArcPointer` by a compiler rejection.
 
+### The `marrow.expr` binary-size gates deadlock the compiler — **root-caused 2026-08-24, widened 2026-08-30, fix open**
+
+**Update 2026-08-30: `query_streaming` now hangs too, and it is the same bug.**
+The entry below says "`expr/`'s `query_streaming` filters and builds" — that
+was true while that gate was built on the *previous* expression package. It was
+ported onto `marrow.expr` on 2026-08-29, so it now has **both** recorded
+ingredients: it calls `.filter(Gt(...))` (the erased `filter` ladder) and
+imports from `marrow.expr` (which threads `Bindings` over `DynScalar` through
+every boxed expression). Three independent builds were observed parked at 0.0%
+CPU with flat RSS, one sampled showing the main thread in
+`semaphore_wait_trap` — the signature below, unchanged.
+
+Consequence: **`pixi run binary_size` cannot run at all**, where before it
+could run with two gates removed. Every size claim in
+`docs/expr-kernels-audit.md` and in the 2026-08-29/30 cleanup commits is
+therefore *inferred from mechanism, not measured*, and `baseline.json` remains
+stale. Re-recording it has to wait for this fix.
+
+---
 ### Both `expr2` binary-size gates deadlock the compiler — **root-caused 2026-08-24, fix open**
 
 `query_expr2_streaming` and `query_expr2_agg_fused` no longer build. A single

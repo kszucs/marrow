@@ -61,8 +61,10 @@ from ...kernels.aggregate import (
     MIN,
     PRODUCT,
     STDDEV,
+    STDDEV_SAMP,
     SUM,
     VARIANCE,
+    VAR_SAMP,
     ArithmeticAgg,
     MinMaxOp,
     FoldKernel,
@@ -172,12 +174,24 @@ def resolve_aggregate[
                 return func[DistinctCount[False, A]]()
 
         return dispatch_array(in_dtype, counted)
-    elif name == VARIANCE or name == STDDEV:
-        # `ddof=0` — the population form, Arrow's default. A sample variance is
-        # `Dispersion[1, root, V]`: two more names here and nothing else.
+    elif (
+        name == VARIANCE
+        or name == STDDEV
+        or name == VAR_SAMP
+        or name == STDDEV_SAMP
+    ):
+        # Four names over one kernel: `ddof` (population vs sample) and
+        # `root` (variance vs standard deviation) are both comptime
+        # parameters, so each combination is a separate instantiation and a
+        # separate name. The comptime lane spells them `variance[ddof=1]`;
+        # this lane has only names, so it needs four.
         def dispersed[V: NumericType](d: V) raises {imm func, imm name} -> R:
             if name == VARIANCE:
                 return func[Dispersion[0, False, V]]()
+            elif name == VAR_SAMP:
+                return func[Dispersion[1, False, V]]()
+            elif name == STDDEV_SAMP:
+                return func[Dispersion[1, True, V]]()
             else:
                 return func[Dispersion[0, True, V]]()
 
@@ -280,39 +294,55 @@ struct RuntimeAggregate(Value):
         self._name = Self._checked(name^)
         self._alias = display^
 
+    comptime VOCABULARY = [
+        StaticString(SUM),
+        StaticString(PRODUCT),
+        StaticString(MEAN),
+        StaticString(COUNT),
+        StaticString(COUNT_DISTINCT),
+        StaticString(APPROX_COUNT_DISTINCT),
+        StaticString(VARIANCE),
+        StaticString(VAR_SAMP),
+        StaticString(STDDEV),
+        StaticString(STDDEV_SAMP),
+        StaticString(MIN),
+        StaticString(MAX),
+    ]
+    """Every name this node accepts.
+
+    The catalog lives *here*, not in `kernels/aggregate.mojo`: "which names may
+    a frontend say" is a question about this layer's surface, and this node is
+    its only consumer. The kernel layer keeps the constants, because those are
+    `Kernel.name` values -- a real kernel property the comptime lane reads --
+    and every entry below is one of them, so the two cannot drift.
+
+    A comptime array, so `_checked` scans a compile-time constant instead of
+    building a fresh twelve-element heap list on **every** `RuntimeAggregate`
+    construction -- which is what calling `vocabulary()` per check did.
+    `StaticString` and not `String`, and `materialize` at each use: a comptime
+    value has to be asked for explicitly to cross into runtime, and what
+    crosses here is twelve spans on the stack rather than twelve heap `String`
+    allocations.
+
+    `any` and `all` are deliberately absent: they are `BoolReduceKernel`s, not
+    `AggKernel`s, and no node resolves to them.
+    """
+
     @staticmethod
     def vocabulary() -> List[String]:
-        """Every name this node accepts.
-
-        The catalog lives *here*, not in `kernels/aggregate.mojo`: "which names
-        may a frontend say" is a question about this layer's surface, and this
-        node is its only consumer. The kernel layer keeps the ten constants,
-        because those are `Kernel.name` values -- a real kernel property the
-        comptime lane reads -- and every entry below is one of them, so the two
-        cannot drift.
-
-        `any` and `all` are deliberately absent: they are `BoolReduceKernel`s,
-        not `AggKernel`s, and no node resolves to them.
-        """
-        return [
-            String(SUM),
-            String(PRODUCT),
-            String(MEAN),
-            String(COUNT),
-            String(COUNT_DISTINCT),
-            String(APPROX_COUNT_DISTINCT),
-            String(VARIANCE),
-            String(STDDEV),
-            String(MIN),
-            String(MAX),
-        ]
+        """`VOCABULARY` as owned strings, for a frontend enumerating it."""
+        var names = materialize[Self.VOCABULARY]()
+        var out = List[String](capacity=len(names))
+        for ref name in names:
+            out.append(String(name))
+        return out^
 
     @staticmethod
     def _checked(var name: String) raises -> String:
         """`name`, or a raise naming it. The only gate on the vocabulary, and
         it runs in `__init__` so `col("s").count_distnct()` raises where it was
         written rather than on the first morsel of a long scan."""
-        for ref known in Self.vocabulary():
+        for ref known in materialize[Self.VOCABULARY]():
             if name == known:
                 return name^
         raise Error("unknown aggregate '", name, "'")
