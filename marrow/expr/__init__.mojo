@@ -23,7 +23,16 @@ binary that never sorts applies here too.
 """
 
 from .bindings import Bindings
-from .builders import col, count_star, if_else, lit, param, scan, table
+from .builders import (
+    array_length,
+    col,
+    count_star,
+    if_else,
+    lit,
+    param,
+    scan,
+    table,
+)
 from .logical import (
     Aggregate,
     DynRelation,
@@ -96,6 +105,7 @@ from .`comptime`.numeric import (
     Lt,
     Mul,
     Ne,
+    Nullif,
     NumericBinary,
     NumericCompare,
     Sub,
