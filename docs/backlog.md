@@ -473,7 +473,20 @@ measured size argument).
 
 ---
 
-### The `marrow.expr` binary-size gates deadlock the compiler — **root-caused 2026-08-24, widened 2026-08-30, fix open**
+### The `marrow.expr` binary-size gates deadlock the compiler — **CLOSED 2026-08-30**
+
+**Fixed by `42bbcb14`.** The trigger was never the erased ladder or the
+`Bindings` type: it is a **t-string interpolating a recursive `Writable` value
+inside a function-level recursion cycle**. `raise Self.error(t"unsupported
+dtype {dt}")` at three sites deadlocked the compiler;
+`String("unsupported dtype ", dt)` — same message, same value — builds. Three
+ingredients, each independently necessary.
+
+All fourteen gates build and `pixi run binary_size` reports normally. The
+history below is kept because two confident diagnoses were refuted along the
+way and both are worth not re-proposing.
+
+
 
 **Update 2026-08-30: `query_streaming` now hangs too, and it is the same bug.**
 The entry below says "`expr/`'s `query_streaming` filters and builds" — that
@@ -492,7 +505,12 @@ therefore *inferred from mechanism, not measured*, and `baseline.json` remains
 stale. Re-recording it has to wait for this fix.
 
 ---
-### Both `expr2` binary-size gates deadlock the compiler — **root-caused 2026-08-24, fix open**
+### Both `expr2` binary-size gates deadlock the compiler — **CLOSED 2026-08-30, same fix**
+
+Same fault as the entry above; `42bbcb14` clears both. Kept for the bisection
+record.
+
+
 
 `query_expr2_streaming` and `query_expr2_agg_fused` no longer build. A single
 `mojo build -O3 -g0 -I . benchmarks/binary_size/query_expr2_streaming.mojo`
@@ -630,7 +648,18 @@ design decision in `DynValue`'s docstring that values travel *through* an
 execution rather than being substituted into a rewritten plan. **What remains:**
 pick a fix, and file the eight-line upstream repro alongside the `dispatch` one.
 
-### `dispatch` hangs a narrow compilation unit — **open, blocks `test_distinct`**
+### `dispatch` hangs a narrow compilation unit — **CLOSED 2026-08-30**
+
+**Same fault, same fix (`42bbcb14`).** Open since 2026-08-17. The 37-arm
+fan-out was never the cause — the t-string in `hashing.mojo:247` was, and the
+fan-out is only where it sat. Evidence: `pytest
+marrow/kernels/tests/test_distinct.mojo` -> **11 passed, compiled in 25 s**,
+where this entry recorded it as unbuildable.
+
+**All three `unsupported dtype` sites had to change together**: fixing only
+`hashing.mojo` still hangs, because it imports `take` from `.filter`.
+
+
 
 `RapidHashKernel.dispatch` (the 37-arm runtime dtype fan-out) hangs the Mojo
 toolchain when it is the *only* substantial thing in a compilation unit. Eight
@@ -1019,7 +1048,7 @@ designs are in §7, and their defend-this findings are in §8. To read one:
 | **A-5** | **`JoinProcessor` streams 8192-row morsels; probe cost flattens at ~256k.** Per-row probe falls **23.7 -> 3.3 ns/row** from 8192 to 262144 rows/call. Raising the morsel would cut per-row cost ~7x and erase the probe-only shortfall that remains after the radix fix. Plan-layer change, deliberately not made by the kernel agent. | `o5-join-threshold.md` | S |
 | **A-6** | **The runtime lane splats a constant string literal to n rows.** `DynValue._literal` builds an n-row copy of e.g. `"%google%"` per morsel (4.2% + 2.9% self). `dynamic.mojo::_string_binary` should detect a literal right operand and call `apply_scalar`, which every `StringPredicateKernel` already has and `values.mojo` already does. Helps `startswith`/`endswith`/`contains` and string comparison too. | `o3-string-alloc.md` §6 | S |
 | **A-8** | **`BitmapView.load_bits` over-reads 3-7 bytes past a bitmap.** Benign for heap integrity today (out-of-range bytes are written back unchanged) and now assertion-bounded, but optimistic for FOREIGN buffers, which the producer allocated and which the spec does not require to be padded. Tapering costs a per-lane branch; recommendation is to copy imported bitmaps that land exactly on a 64-byte boundary. | `g1-buffer-invariants.md` | S |
-| **A-10** | **The binary-size baseline is stale in both directions.** `check_gate.py` compares to `baseline.json`, not to the branch under test, and four of five recorded values sit above the current tree — so gates read as "shrinking" while the branch-to-branch measurement showed every gate **grew** ~16 KB (~15.3 KB of it C1's builder fix, i.e. the price of fixing a process-killing abort). A gate that passes is not the same as no regression. Re-record deliberately, as a decision, not as a side effect — an agent attempted the latter and it was reverted. | `g3-regression-check.md` | S |
+| **A-10** | **CLOSED 2026-08-30 — superseded.** The baseline was re-recorded 2026-08-29 after the `exprold` deletion, and a full `pixi run binary_size` on 2026-08-30 matches it: four of seven gates *exactly*, the other three within 0.05% and all three **below** baseline. What was still stale was the warning in `check_gate.py`'s own docstring claiming every number was stale — that text outlived the re-record and was itself read as evidence during the 2026-08-29 audit. Fixed there. | `g3-regression-check.md` | S |
 | **A-11** | **A3's temporal branch is held out of the alpha.** `worktree-agent-af8dec5bed6238e2e` adds working `uint16 -> date32` and ISO-8601 string<->temporal casts, but pushes `query_dynvalue` +113,472 bytes (+2.33%) against a 0.5% budget. Not on any ClickBench query's path. The residual is structural — `cast()` is one ladder reachable from `_promote_operands`, so any new cast kernel taxes every binary that promotes operands. Merge once that ladder is split (its own §1 finding). | `a3-temporal.md` | M |
 
 **Not ours:** `mojo-regex`'s optional-group defect is upstream and appears
@@ -1148,9 +1177,10 @@ Two things follow, neither done here:
   `query_streaming_agg_fused` measured "the cost of a runtime aggregate
   identity", which is still the right question for the surviving lane.
 
-Related: **A-10** (the baseline is stale in both directions). Until it is
-re-recorded, an A/B of the two live gates across the change under test is a
-better measurement than a comparison against `baseline.json`.
+Related: **A-10**, closed 2026-08-30 — the baseline was re-recorded and a full
+run matches it, so a comparison against `baseline.json` is once again a valid
+measurement. An A/B across the change under test remains the stronger one when
+a gate's *program* has changed rather than its size.
 
 ### 5.1 Deliberately not scheduled
 

@@ -825,6 +825,29 @@ validation.
 — CLAUDE.md is explicit that a public rename under `marrow/` leaves `precompile`
 at 0/0 while the tree is broken.
 
+### Status as of 2026-08-30 — read this before the plan below
+
+Waves 1-3 all landed, plus most of the spike list. The plan below is kept as
+the record of how the work was scoped; **`docs/backlog.md` is authoritative on
+what is still open.** Differences:
+
+| item | plan below says | actual |
+|---|---|---|
+| **P1** — the string `lane` copy | spike | **done.** `lane` borrows; `Bound` owns the bytes |
+| **Top-K** | spike | **won't fix** — needs a `Pushdown` row-limit channel *and* a per-node rule table where a wrong rule silently returns wrong rows |
+| **`ConcatKernel`/`ArrayContainsKernel`** | spike | **won't fix** — correct and tested, reachable from no node; wiring them is feature work |
+| **Re-record `baseline.json`** | spike | **moot.** It was re-recorded 2026-08-29 and a full run on 2026-08-30 matches it. The compiler deadlock that blocked the gate is fixed (`42bbcb14`) |
+| **F5b** — move `DynBounds` | Wave 2 | **won't fix** — moving it means exposing `PruneStats._cols` |
+| **F11** — file seams | not scheduled | **partial.** `Groups` and the decimal casts split out; six files remain over 1,000 lines |
+
+Two claims in §4 were **refuted by later measurement** and should not be acted
+on: the audit's `grouped()` is *not* dead (~40 live call sites), and the 16
+duplicate `dtype` bodies collapse to **14**, not 16 — `BoolBinary` and `Not`
+conform to `ComptimeValue` directly, so a `BoolValue` default does not satisfy
+the base requirement.
+
+---
+
 ### Needs a spike, not a patch
 
 - **P1 — the string `lane` copy.** Design a borrowed reading that coexists with
