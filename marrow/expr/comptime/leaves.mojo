@@ -335,8 +335,16 @@ struct StringColumn[T: StringLikeType](ColumnBound, StringValue):
         return batch.field(self._name).as_type[Self.Bound]().copy()
 
     @always_inline
-    def lane(self, bound: Self.Bound, idx: Int) -> String:
-        return String(bound.unsafe_get(UInt(idx)))
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # `unsafe_get` borrows from `bound.values`, a *field*; the trait
+        # promises a borrow from `bound`. A field borrow is valid for at least
+        # as long as the struct that holds it, so widening is sound -- Mojo
+        # just will not do it implicitly.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
@@ -348,7 +356,12 @@ struct StringLiteral[T: StringLikeType](StringValue, Unnamed):
 
     comptime Type = Self.T
     comptime shape = Shape.scalar
-    comptime Bound = Bool
+    comptime Bound = String
+    """The value itself, so `lane` can borrow it.
+
+    A `Bool` placeholder before, which forced `lane` to answer
+    `self._value.copy()` -- one allocation **per row** for a constant. `bind`
+    runs once per batch."""
 
     var _value: String
 
@@ -371,15 +384,17 @@ struct StringLiteral[T: StringLikeType](StringValue, Unnamed):
     # -- StringValue --------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        # Nothing to resolve: a constant reads no column.
-        return False
+        # One copy per batch, so every row of the loop borrows it.
+        return self._value.copy()
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return None
 
     @always_inline
-    def lane(self, bound: Self.Bound, idx: Int) -> String:
-        return self._value.copy()
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        return StringSlice(bound)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write('"', self._value, '"')
