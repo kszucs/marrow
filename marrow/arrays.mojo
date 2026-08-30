@@ -1350,7 +1350,8 @@ struct ListLikeArray[T: ListLikeType](Array):
         var n = offsets.length - 1
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if var m := mask^:
+        var m = mask^
+        if m:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -1624,7 +1625,8 @@ struct FixedSizeListArray(Array):
         var n = values.length() // list_size if list_size > 0 else 0
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if var m := mask^:
+        var m = mask^
+        if m:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):
@@ -2021,7 +2023,8 @@ struct StructArray(Array):
         var n = children[0].length() if len(children) > 0 else 0
         var null_count = 0
         var bitmap: Optional[Bitmap[mut=False]] = None
-        if var m := mask^:
+        var m = mask^
+        if m:
             var bm = Bitmap[mut=True].alloc_zeroed(n)
             for i in range(n):
                 if m.value().values().test(i):

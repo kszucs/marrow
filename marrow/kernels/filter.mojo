@@ -156,7 +156,8 @@ struct FilterKernel(Kernel):
         # Filter validity bitmap.
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
-        if var val_bm := array.validity():
+        var val_bm = array.validity()
+        if val_bm:
             var filtered_bm, nc = val_bm.value().filter(
                 mask, sel_start, sel_end, out_len
             )

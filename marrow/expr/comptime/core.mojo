@@ -210,12 +210,14 @@ trait ComptimeValue(Evaluable, Prunable, Value):
     # no combine, no finalize — so there is no `K` a fully fused node could be
     # parameterised on, and that is the one thing given up.
 
-    comptime Type: DataType
-    """This node's output type, known without a schema.
-
-    `Analyzable.dtype(schema)` ignores its argument in this lane and answers
-    from here. The runtime lane is the reason that method takes a schema at all.
-    """
+    # `Type` is deliberately **not** declared here. Every family below declares
+    # it with its own bound -- `PrimitiveType`, `StringLikeType`, `NumericType`,
+    # `TemporalType`, `ListLikeType`, and `BoolType` fixed outright -- and as of
+    # Mojo 1.1.0.dev2026083005 a sub-trait re-declaring a base's associated type
+    # with a narrower bound is rejected: "trait composition has conflicting
+    # types for 'Type'". Declaring it once per family keeps the narrowing that
+    # makes `date + date` a compile error, at the cost that nothing generic over
+    # a bare `ComptimeValue` can read `Self.Type`.
 
     # `Bound`, `bind` and `validity` are deliberately **not** here. All
     # three are *fusion* machinery, and this trait does not mean "fuses" --
