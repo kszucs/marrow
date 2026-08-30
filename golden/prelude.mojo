@@ -36,11 +36,12 @@ from marrow.dtypes import (
     float64,
     int32,
     int64,
+    list_,
     microsecond,
     string,
     timestamp,
 )
-from marrow.expr import col, count_star, lit
+from marrow.expr import array_length, col, count_star, lit
 from marrow.expr import DynRelation
 from marrow.expr import IsNull, NotNull
 from marrow.expr import (
@@ -50,7 +51,7 @@ from marrow.expr import (
     NumericCast,
     StringToNum,
 )
-from marrow.expr import CaseWhen, Coalesce, FillNull
+from marrow.expr import CaseWhen, Coalesce, FillNull, Nullif
 from marrow.expr import (
     EndsWith,
     ILike,

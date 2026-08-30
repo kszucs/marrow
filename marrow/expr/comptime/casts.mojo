@@ -263,10 +263,15 @@ struct NumToString[To: StringLikeType, A: NumericValue](
         )
 
     @always_inline
-    def lane(self, bound: Self.Bound, idx: Int) -> String:
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
         # `unsafe_get`, not `bound[idx]`: `lane` cannot raise, and the driver
-        # has already consulted validity before asking for this row.
-        return String(bound.unsafe_get(UInt(idx)))
+        # has already consulted validity before asking for this row. The
+        # `rebind` widens a borrow of `bound.values` to one of `bound`.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("cast(", self.a, ", ", Self.Type(), ")")

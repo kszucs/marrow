@@ -144,14 +144,20 @@ bytewise comparison `String.__lt__` already was.
 struct StringUnary[K: StringMapKernel, A: StringValue](StringValue, Unnamed):
     """Elementwise `string -> string`: `upper`, `lower`, `strip`, and friends.
 
-    Composes in one builder pass, so `upper(col)` feeding a comparison never
-    materialises `upper(col)`. The transform itself lives in the kernel; this
-    node only says where it goes.
+    The transform lives in the kernel; this node only says where it goes.
+
+    **The one string node that produces new bytes, so it is the one whose
+    `bind` materialises.** `StringValue.lane` borrows from `Bound`, and a
+    transform has nowhere to borrow from -- it has to put the result
+    somewhere. Doing it per row is what the old owning `lane` did: one
+    allocation per element. `bind` runs the kernel's own null-preserving
+    `apply` once per batch instead, which is the same shape `NumToString`
+    already had, and `lane` then borrows like every other conformer.
     """
 
     comptime Type = Self.A.Type
     comptime shape = Self.A.shape
-    comptime Bound = Self.A.Bound
+    comptime Bound = BinaryLikeArray[Self.Type]
 
     var a: Self.A
 
@@ -169,18 +175,25 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue, Unnamed):
     # -- StringValue --------------------------------------------------------
 
     def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        return self.a.bind(batch, bindings)
+        var arr = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return Self.K.apply[Self.Type](arr.as_type[Self.Bound]())
 
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        # A map transforms values, never validity: `upper(null)` is null.
-        return self.a.validity(bound)
+        # A map transforms values, never validity: `upper(null)` is null, and
+        # `K.apply` is null-preserving, so the bound column already says so.
+        return bound.bitmap
 
     @always_inline
-    def lane(self, bound: Self.Bound, idx: Int) -> String:
-        # Bound to a local first: a `StringSlice` over a temporary `String`
-        # dangles the moment the temporary is destroyed.
-        var s = self.a.lane(bound, idx)
-        return Self.K.transform(StringSlice(s))
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # `unsafe_get` borrows from `bound.values`, a *field*; the trait
+        # promises a borrow from `bound`. A field borrow is valid for at least
+        # as long as the struct that holds it, so widening is sound -- Mojo
+        # just will not do it implicitly.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.a, ")")

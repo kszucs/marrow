@@ -112,7 +112,7 @@ struct FilterKernel(Kernel):
         elif dt.is_dictionary():
             return FilterKernel.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
-            raise Self.error(t"unsupported dtype {dt}")
+            raise Self.error(String("unsupported dtype ", dt))
 
     @staticmethod
     def drop_null[
@@ -156,7 +156,8 @@ struct FilterKernel(Kernel):
         # Filter validity bitmap.
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
-        if var val_bm := array.validity():
+        var val_bm = array.validity()
+        if val_bm:
             var filtered_bm, nc = val_bm.value().filter(
                 mask, sel_start, sel_end, out_len
             )
@@ -651,7 +652,7 @@ struct TakeKernel(Kernel):
                 array.as_dictionary(), indices, ctx
             ).to_dyn()
         else:
-            raise Self.error(t"unsupported dtype {dt}")
+            raise Self.error(String("unsupported dtype ", dt))
 
     @staticmethod
     def apply[

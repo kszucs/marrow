@@ -14,16 +14,13 @@ Run via:
 After an intentional size change, re-record the baseline:
     pixi run -e dev python3 benchmarks/binary_size/check_gate.py --update
 
-⚠️ **Every number in `baseline.json` is stale as of 2026-08-29.** The gates were
-ported from the old expression package onto `marrow.expr` on that date, and the
-recorded numbers were measured against the old one. Five of the seven gates in
-the file changed program: `query_streaming`, `query_join`,
-`query_streaming_agg_fused`, `query_streaming_agg` and `query_dynvalue`. Any
-pass or fail this script reports for them is meaningless until someone decides,
-deliberately, to re-record — which is a judgement call about what the new floor
-should be, not a side effect of the port. `query_expr2_streaming` and
-`query_expr2_agg_fused` were already on `marrow.expr` and their numbers still
-mean what they say.
+The baseline was re-recorded 2026-08-29 after the `exprold` deletion and the
+aggregate rearchitecture, because five of the seven gates changed program and the
+previous floor could not distinguish a regression from the port. A full run on
+2026-08-30 confirms it: four gates match exactly, three are within 0.05% and
+below. **Do not re-record without a reason** — this docstring previously carried
+a blanket "every number is stale" warning that outlived the re-record by a day
+and was then cited as evidence that the gate was meaningless.
 
 `threshold_pct` is 0.5, tighter than the 1% often used as a rule of thumb,
 because the regression that motivated this gate (B12, `docs/backlog.md`)

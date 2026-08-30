@@ -244,7 +244,7 @@ struct HashKernel[H: Hasher](Kernel):
 
             return dt.dispatch_primitive(primitive)
         else:
-            raise Self.error(t"unsupported dtype {dt}")
+            raise Self.error(String("unsupported dtype ", dt))
 
     @staticmethod
     def apply(

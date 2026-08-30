@@ -210,12 +210,14 @@ trait ComptimeValue(Evaluable, Prunable, Value):
     # no combine, no finalize — so there is no `K` a fully fused node could be
     # parameterised on, and that is the one thing given up.
 
-    comptime Type: DataType
-    """This node's output type, known without a schema.
-
-    `Analyzable.dtype(schema)` ignores its argument in this lane and answers
-    from here. The runtime lane is the reason that method takes a schema at all.
-    """
+    # `Type` is deliberately **not** declared here. Every family below declares
+    # it with its own bound -- `PrimitiveType`, `StringLikeType`, `NumericType`,
+    # `TemporalType`, `ListLikeType`, and `BoolType` fixed outright -- and as of
+    # Mojo 1.1.0.dev2026083005 a sub-trait re-declaring a base's associated type
+    # with a narrower bound is rejected: "trait composition has conflicting
+    # types for 'Type'". Declaring it once per family keeps the narrowing that
+    # makes `date + date` a compile error, at the cost that nothing generic over
+    # a bare `ComptimeValue` can read `Self.Type`.
 
     # `Bound`, `bind` and `validity` are deliberately **not** here. All
     # three are *fusion* machinery, and this trait does not mean "fuses" --
@@ -513,9 +515,22 @@ trait StringValue(ComptimeValue):
         ...
 
     @always_inline
-    def lane(self, bound: Self.Bound, idx: Int) -> String:
-        """One row. The elementwise counterpart of the SIMD families'
-        `lane[W]`, and the only shape a variable-width encoding admits."""
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        """One row, **borrowed from `bound`**. The elementwise counterpart of
+        the SIMD families' `lane[W]`, and the only shape a variable-width
+        encoding admits.
+
+        Returning a `String` here allocated and copied once per row *per
+        operand*: `col("s") == lit("x")` over an 8192-row morsel did 16,384
+        allocations to answer 8,192 comparisons, and the kernel layer's own
+        predicates take `StringSlice` and copy nothing. Borrowing costs every
+        conformer one thing instead -- **`Bound` must own the bytes** -- which
+        is what `NumToString` already did and what the two nodes that
+        genuinely produce new bytes (`StringUnary`, and a literal, once per
+        batch rather than once per row) now do too.
+        """
         ...
 
     # -- operators ----------------------------------------------------------

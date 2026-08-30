@@ -77,7 +77,8 @@ name, and the break only surfaced when `pytest golden` tried to build
 `libmarrow.so` and bailed out of the whole session before running a case —
 reported as `exit code 0`, which reads like a pass. After any change to a
 public name under `marrow/`, run `pixi run build_python` (bindings) and
-`pixi run -e dev pytest golden` (154 cases), and grep `benchmarks/binary_size/`
+`pixi run -e dev pytest golden` (278 cases, 193 of them compiled — the rest
+carry `-- skip mojo`; see `golden/COVERAGE.md`), and grep `benchmarks/binary_size/`
 for the name.
 
 A single test file **cannot** be compiled on its own: with no `main()` there is
@@ -975,7 +976,9 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   **This was once written as the broader "a struct method does not override a
   trait default", and that is false.** A *same-signature* override is ordinary
   and works — the previous expression layer's `Value.prune`, `name` and
-  `bound_column` were each a trait default overridden by its conformers.
+  `bound_column` were each a trait default overridden by its conformers. The
+  incident above had a differing return type, which is the actual trigger;
+  verified again in the AOT rewrite research.
 - **A trait default method's parameter name must not collide with a
   *conformer's* struct parameter**, or that struct fails with `name conflict
   between parameter 'R' in the default trait method and a parameter in the
