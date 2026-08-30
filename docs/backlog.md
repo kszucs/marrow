@@ -428,6 +428,51 @@ structs toward `Pointer[Self, MutUntrackedOrigin]` with manual allocation
 (`manual/structs/reference.mdx`) rather than value-nested containers, and
 `_kids` was *already* forced behind `ArcPointer` by a compiler rejection.
 
+### Deferred from the 2026-08-29 expr/kernels audit — **won't fix this cycle, with reasons**
+
+Everything else in `docs/expr-kernels-audit.md` landed on 2026-08-29/30. These
+four did not, and each has a reason that is not "no time".
+
+**Top-K never reaches `sort_indices`.** Its `limit` parameter is passed
+non-`None` at exactly two sites, both tests, so `sort_by(...).limit(k)` fully
+sorts and then discards — a real missed optimization on a plan shape
+`golden/cases/sort_top_k.mojo` exercises. Wiring it needs a `row_limit` channel
+through `Pushdown` (the existing root-to-source descent) **plus a per-node rule
+table**, and the rules are where the danger is: `Limit(Sort(x))` may take the
+top K, but `Limit(Filter(Sort(x)))` may not — the filter runs after the sort, so
+a K-row sort returns fewer than K rows and the answer is silently wrong. That
+is a feature with a specification and its own tests, not a cleanup, and a wrong
+rule returns wrong rows with no crash to notice.
+
+**`ConcatKernel` and `ArrayContainsKernel` stay unwired.** Both are correct,
+tested at the kernel layer, and reachable from no expression node. Deleting
+working kernels loses capability; wiring them means new nodes in both lanes,
+which is feature work. The `ConcatKernel` docstring that claimed an expression
+layer `Concat` builds on it — there is none — was corrected on 2026-08-29.
+
+**`DynBounds` / `compare_dyn` / `PruneStats.dyn_bounds` stay in
+`pruning.mojo`.** The audit proposed moving them into `runtime/`, since
+`runtime/values.mojo` is their only consumer and the comptime lane relies on
+DCE to avoid them. But `dyn_bounds` reads `PruneStats._cols` — private — so
+moving it means either exposing the column list or adding an accessor that
+exists for one caller. `PruneStats` already hosts three readings of itself
+(`bounds[T]` comptime, `bool_truth`, `dyn_bounds`); moving one out and leaving
+two is arbitrary, and trading encapsulation for a file boundary is not a
+simplification. The DCE the comptime lane relies on here is the same
+closed-erasure property the whole design rests on.
+
+**The large files stay large.** `logical.mojo` (1,237), `physical.mojo`
+(1,159), `comptime/core.mojo` (1,166), `kernels/aggregate.mojo` (1,692) and
+`kernels/filter.mojo` (1,147) all have identified seams in the audit's §4 F11,
+but splitting them is thousands of lines of pure motion across files that were
+just heavily edited — it would swamp review for no behaviour change. Two seams
+with hard internal boundaries *were* taken: `Groups` out of `kernels/core.mojo`
+(disjoint consumer sets) and the decimal family out of `kernels/cast.mojo`
+(six kernels and four helpers that talk only to each other, carrying their own
+measured size argument).
+
+---
+
 ### The `marrow.expr` binary-size gates deadlock the compiler — **root-caused 2026-08-24, widened 2026-08-30, fix open**
 
 **Update 2026-08-30: `query_streaming` now hangs too, and it is the same bug.**
