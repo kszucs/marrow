@@ -112,7 +112,7 @@ struct FilterKernel(Kernel):
         elif dt.is_dictionary():
             return FilterKernel.apply(array.as_dictionary(), mask, ctx).to_dyn()
         else:
-            raise Self.error(t"unsupported dtype {dt}")
+            raise Self.error(String("unsupported dtype ", dt))
 
     @staticmethod
     def drop_null[
@@ -651,7 +651,7 @@ struct TakeKernel(Kernel):
                 array.as_dictionary(), indices, ctx
             ).to_dyn()
         else:
-            raise Self.error(t"unsupported dtype {dt}")
+            raise Self.error(String("unsupported dtype ", dt))
 
     @staticmethod
     def apply[
