@@ -42,7 +42,8 @@ The product layer is one verb deep. **Between `b2de85a0` (2026-08-29) and
 They have since been rebuilt on the runtime lane, so `read_parquet` /
 `memtable` / `col` / `lit` and the nine relational verbs work again, and
 `README.md` describes what exists. **Everything else on this page still
-stands**: the frontend reads Parquet and IPC only, there is no optimizer
+stands**: the frontend reads Parquet and IPC only, the optimizer has no cost
+model
 reachable from it, and the AOT lane still has no entry point — `execute_cli()`
 does not exist (`python/marrow/compile.py:9`).
 
@@ -72,17 +73,14 @@ does not exist (`python/marrow/compile.py:9`).
    cache (`crates/polars-io/src/{cloud,file_cache,hive}.rs`,
    `crates/polars-stream/src/nodes/io_sources/multi_scan/`).
 
-3. **There is no optimizer.** The one optimization that exists is predicate
-   pushdown into Parquet statistics, and it rides `to_operator`'s recursive
-   descent rather than a pass (`marrow/expr/pushdown.mojo`). DuckDB runs ~45
-   named passes (`src/optimizer/optimizer.cpp:171-445`); DataFusion runs 2
-   analyzer + 25 logical + 21 physical rules
-   (`datafusion/optimizer/src/optimizer.rs:291-318`,
-   `physical-optimizer/src/optimizer.rs:152-250`). marrow's absent list includes
-   every entry-level member of that set: projection pushdown — which the
-   project's own note puts at **3.6x against pruning's 1.04x**
-   (`marrow/expr/pushdown.mojo`) — limit pushdown, TopN rewrite, expression
-   simplification / constant folding, and common-subexpression elimination.
+3. ~~**There is no optimizer.**~~ **Resolved 2026-08-31.** There are now 16
+   rules and a column-pruning pass (`marrow/expr/optimizer.mojo`), covering
+   every entry-level member of the set this item listed: projection pushdown,
+   limit pushdown below a projection, TopN, constant folding, filter pushdown
+   through project/sort/join/aggregate, and conjunction splitting. What remains
+   absent is CSE, statistics propagation and a cost model — and join
+   reordering, which is blocked by the join's positional output schema rather
+   than by the optimizer. See §1.4.
 
 Behind those sit two correctness defects that would fail a proof-of-concept:
 `GROUP BY` on a float column silently merges distinct keys
@@ -121,7 +119,7 @@ no end-to-end `marrow compile` — and 1.48 MB still links `libmax`/AsyncRT, so
 | Target | Distance |
 |---|---|
 | *A usable Arrow library for Python* (arrays, Parquet, IPC, interop) | **Already there**, minus CSV/JSON. |
-| *A usable dataframe library* (a polars or ibis-backend alternative) | **Far.** The frontend must be rebuilt, and ~85 measured expression gaps, an optimizer, parallel aggregation, and set/window operations sit behind it. |
+| *A usable dataframe library* (a polars or ibis-backend alternative) | **Far**, but less so: the frontend is rebuilt (`a27167aa`) and the optimizer exists (§1.4). ~85 measured expression gaps, parallel aggregation, and set/window operations remain. |
 | *A niche AOT query compiler nobody else serves* | **Closest of the three.** The engine works; what is missing is an entry point, output writers, and promoting the schema handle from spike to API. |
 
 ---
@@ -183,7 +181,11 @@ plus `date_trunc`, `array_length`/`array_contains`, `concat`.
   point than DataFusion's pull-based async streams for a single-process engine.
 - Predicate pushdown to Parquet statistics, threaded through the lowering rather
   than as a rewrite pass, with correct per-node rules including the
-  `Limit`-must-clear trap (`marrow/expr/pushdown.mojo:30-45`).
+  `Limit`-must-clear trap (`marrow/expr/pushdown.mojo:30-45`). It survived the
+  optimizer rewrite unchanged and is independent of the rule set.
+- A plan optimizer: 16 rules and a column-pruning pass in one file, producing an
+  inspectable rewritten plan (`marrow/expr/optimizer.mojo`, §1.4). The rule set
+  is a comptime parameter, so an AOT binary links only the rules it names.
 - A one-sided pruning algebra: `Truth`/`Bounds[dt]` typed by the same comptime
   parameters as the fused `lane`, so pruning is the fusion mechanism read over a
   second domain (`marrow/expr/pruning.mojo:1-55`). It cites
@@ -325,20 +327,59 @@ seam's stated purpose but needs an HTTP client marrow does not have.
 
 ### 1.4 An optimizer
 
-**What exists.** Exactly one optimization, and it is a good one: predicate
-pushdown into Parquet row-group and page statistics. `Pushdown` is a list of
-`PrunePredicate` threaded down `to_operator`'s existing recursive descent, with
-per-node rules — `Filter` conjoins, `Sort` forwards, `Limit`/`Project`/
-`Aggregate`/`Join` clear (`marrow/expr/pushdown.mojo:30-45`), and it correctly
-identifies that `Limit` must clear or rows silently disappear. There is no pass
-framework, no `children()` on `DynRelation`, no rewrite and no rebuilt node — by
-design, and the design note explains why a rewrite is not merely unnecessary but
-unavailable given `DynRelation`'s trampoline layout.
+> **Largely resolved 2026-08-31** (branch `optimizer`, `e478d7ed`..`35af41e5`).
+> The section below is kept because its survey of the incumbents is still the
+> right map; only marrow's side has moved.
 
-**Absent:** projection pushdown / column pruning, filter reordering, conjunction
-splitting to push half a predicate below a join, limit pushdown, TopN rewrite,
-expression simplification and constant folding, common-subexpression
+**What exists.** A plan-to-plan rewriter in `marrow/expr/optimizer.mojo` —
+**16 rules and one downward pass**, invoked as `plan.optimize[AllRules]()`,
+which returns an ordinary `DynRelation` that prints, diffs and executes:
+
+    Limit(Sort(Filter(ParquetScan(...))))  ->  Sort(Filter(ParquetScan(...)) top 10)
+
+| | |
+|---|---|
+| elimination | `EliminateFilter`, `RemoveEmptyLimit`, `PropagateEmpty`, `RemoveNoOpProject`, `RemoveRedundantSort`, `RemoveSortBeforeAggregate` |
+| merging | `MergeProjects`, `MergeLimits` |
+| splitting | `SplitConjunction` |
+| pushdown | `PushFilterBelowProject`, `PushFilterBelowSort`, `PushFilterBelowJoin`, `PushFilterBelowAggregate`, `PushLimitBelowProject` |
+| reparameterization | `TopN` |
+| downward pass | `ColumnPruning` |
+
+plus constant folding in the `RuntimeValue` constructors, and the original
+Parquet statistics pushdown, which still rides `to_operator`'s descent unchanged.
+
+The rule set is a comptime parameter, so a binary links exactly the rules it
+names and `execute()` alone optimizes nothing. `DynRelation` became **a variant
+for inspection and a trampoline for lowering**: `isa[R]()`/`get[R]()` let a rule
+read a real typed node and construct one, while `to_operator` stays on a
+per-type slot — routing it through the variant instead cost **+348%** of
+`__text` on `query_streaming`, because that ladder instantiates every node's
+lowering and `ParquetScan.to_operator` reaches `kernels::cast` in a plan with no
+Parquet in it.
+
+**The design note this section used to cite is wrong and has been corrected.**
+`pushdown.mojo` claimed a rewrite was "not merely unnecessary but unavailable"
+given `DynRelation`'s layout. Trampolines returning `List[Self]`, `Self` and
+`Optional[Self]` all compile; what the compiler rejects is a by-value recursive
+*field*, which is a different thing. See
+`docs/optimizer-experiment-findings.md` §3.
+
+**Still absent:** common-subexpression elimination, duplicate group/sort key
 elimination, statistics propagation, aggregate pushdown, and any cost model.
+
+**Blocked in the kernel, not the optimizer:** join reordering and build-side
+selection. `Join._output_schema` is positional (left fields then right) and
+`JoinOperator` hardcodes build=left, so both rewrites change the output column
+order and are not expressible as plan rewrites at all. They need
+`kernels/join.mojo` to accept an output ordering.
+
+**Two engine bugs surfaced by building it**, both fixed: an ungrouped aggregate
+above a `Limit` returned zero rows (`Pipeline.drain` skipped every stage above
+a finished one), and `RecordBatch.__eq__` was not reflexive (`Buffer.__eq__`
+compared the 64-byte-aligned allocation past the logical end). Neither was
+visible to a harness that compares an optimized plan against an unoptimized one
+— both sides agree and pass.
 
 **What the incumbents do.** DuckDB's pipeline is ~45 individually-disable-able
 passes (`src/optimizer/optimizer.cpp:171-445`), including `EXPRESSION_REWRITER`
@@ -378,15 +419,23 @@ cost model.
 **A cheap pass worth copying early:** polars' fast count-star. It is also the
 mirror image of marrow's `count_star()` defect below — the same expression that
 blocks projection pushdown is the one an optimizer most wants to special-case.
+(marrow's projection pushdown now clamps rather than special-cases: it never
+prunes a source to zero columns. Fast count-star remains uncopied.)
 
-**What it would take.** Projection pushdown first, as a second field on the
-`Pushdown` struct that already exists. **Its blocker is recorded and must be
-fixed first:** `count_star()` desugars to `lit(1, int64).count()`, whose
-`columns()` is empty, so a projection pushdown would prune every column, the
-scan would yield column-less batches, and `RecordBatch.num_rows()` returns 0
-(`marrow/expr/builders.mojo:223`, `docs/backlog.md` §1.1). Anything beyond
-pushdown needs `children()` on `DynRelation` and therefore a real plan
-representation — a structural change, not an increment.
+**What it would take — done, and the estimate was wrong in an instructive
+way.** This said projection pushdown was "a second field on the `Pushdown`
+struct", and that anything beyond it needed "a real plan representation — a
+structural change, not an increment." The structural change is what shipped:
+`DynRelation` is variant-backed, nodes carry `traverse`, and rules rewrite
+plans. Projection pushdown turned out **not** to fit the `Pushdown` struct at
+all — it needs a downward pass with an accumulator, where `Pushdown` carries
+per-node facts.
+
+The `count_star()` hazard was real and is handled rather than fixed:
+`ColumnPruning` never narrows a source to zero columns, keeping the first
+column when the demand is empty, because a `RecordBatch` carries its row count
+in its columns. The underlying desugaring (`lit(1, int64).count()` with empty
+`columns()`) is unchanged.
 
 ### 1.5 Window functions
 
@@ -904,12 +953,13 @@ the schema from the Parquet footer; then a `MultiFileScan` node over a glob with
 hive partition columns synthesised from the path. Every real Parquet dataset is
 a directory, and step 1's users hit this immediately.
 
-**6. Projection pushdown.** The project's own measurement says 3.6x. Fix the
-`count_star()` empty-`columns()` defect first or it returns zero rows. It is a
-second field on a struct that already exists, which makes it the last major
-optimizer win available without a plan rewrite. Add limit pushdown and the TopN
-rewrite in the same change — the dead `sort_indices(limit=)` parameter is
-waiting for it.
+**6. ~~Projection pushdown.~~ Done 2026-08-31**, along with TopN — which did
+wire up the dead `sort_indices(limit=)` parameter, on the primary-key pass only,
+since the multi-key decomposition needs full permutations to compose. Limit
+pushdown *into the scan* was rejected rather than skipped: `Pipeline.drain`'s
+early termination already stops the source once a `Limit` reports done, and the
+scan yields one row group per drain, so `LIMIT 10` already reads exactly one.
+See §1.4.
 
 **7. Parallel group-by.** Thread-local partials plus a radix merge — previously
 built, since removed. Group-by is where analytical queries spend their time, and
