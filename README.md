@@ -255,7 +255,7 @@ non-null values in both, `count_star()` counts rows in both.
   and no `GROUP BY` on a float column (it merges distinct keys —
   `golden/cases/group_by_float_key.mojo`).
 
-`docs/CAPABILITY-GAPS.md` is the full inventory, measured against polars,
+`docs/backlog.md` is the full inventory, measured against polars,
 DuckDB, DataFusion and ibis.
 
 ## Compiled queries (AOT)

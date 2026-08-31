@@ -166,7 +166,7 @@
   cited `docs/alpha-clickbench-coverage.md` and `docs/alpha-findings/README.md`
   (both deleted), and carried a 40/43 ClickBench claim whose harness went with
   them. Rewritten against what the code does, and pointed at
-  `docs/CAPABILITY-GAPS.md`.
+  `docs/backlog.md`.
 
 ### Removals
 
