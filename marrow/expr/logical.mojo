@@ -1370,8 +1370,20 @@ struct Join(Relation, Writable):
 
     var left: ArcPointer[DynRelation]
     var right: ArcPointer[DynRelation]
-    var left_keys: List[Int]
-    var right_keys: List[Int]
+    var left_keys: List[String]
+    var right_keys: List[String]
+    """Join keys by **name**, resolved from the caller's indices once, here.
+
+    The public verb still takes indices — `plan.mojo` and every existing caller
+    pass them — but a plan node must not *store* them. An index is a position
+    in a child's schema, so any rewrite that changes a child silently rebinds
+    the join to different columns: projection pushdown narrowing a scan is
+    exactly such a rewrite, and it produces a join on the wrong columns with no
+    error anywhere. Resolving to names at construction, where both child
+    schemas are in hand and correct, makes that unrepresentable.
+
+    `to_operator` resolves back to indices against whatever schema the child
+    actually has when the plan runs, which is the point."""
     var kind: JoinKind
     var strictness: UInt8
     var _schema: Schema
@@ -1398,10 +1410,82 @@ struct Join(Relation, Writable):
         self._schema = Self._output_schema(left.schema(), right.schema(), kind)
         self.left = ArcPointer(left^)
         self.right = ArcPointer(right^)
-        self.left_keys = left_keys^
-        self.right_keys = right_keys^
+        self.left_keys = Self._names_for(
+            self.left[].schema(), left_keys, "left"
+        )
+        self.right_keys = Self._names_for(
+            self.right[].schema(), right_keys, "right"
+        )
         self.kind = kind
         self.strictness = strictness
+
+    def __init__(
+        out self,
+        var left: DynRelation,
+        var right: DynRelation,
+        *,
+        var left_names: List[String],
+        var right_names: List[String],
+        kind: JoinKind = JOIN_INNER,
+        strictness: UInt8 = 0,
+    ) raises:
+        """By name, for a rewrite putting a join back together.
+
+        The index form is the public verb; this is what `traverse` and
+        `optimizer.mojo` use, because a rewrite already holds names and
+        converting back to indices only to have them re-resolved would be a
+        round trip through the representation this node exists to avoid.
+        """
+        self._schema = Self._output_schema(left.schema(), right.schema(), kind)
+        self.left = ArcPointer(left^)
+        self.right = ArcPointer(right^)
+        self.left_keys = left_names^
+        self.right_keys = right_names^
+        self.kind = kind
+        self.strictness = strictness
+
+    @staticmethod
+    def _names_for(
+        schema: Schema, indices: List[Int], side: String
+    ) raises -> List[String]:
+        """The column names at `indices`, or a diagnosable error.
+
+        Out-of-range is caught here rather than at execution, where it would
+        surface as an opaque kernel failure well after the plan was built.
+        """
+        var out = List[String](capacity=len(indices))
+        for idx in indices:
+            if idx < 0 or idx >= len(schema.fields):
+                raise Error(
+                    "join: ",
+                    side,
+                    " key index ",
+                    idx,
+                    " out of range for ",
+                    len(schema.fields),
+                    " columns",
+                )
+            out.append(schema.fields[idx].name.copy())
+        return out^
+
+    @staticmethod
+    def _indices_for(
+        schema: Schema, names: List[String], side: String
+    ) raises -> List[Int]:
+        """Where `names` live in `schema` now.
+
+        Called at lowering, not construction, so a rewrite that reordered or
+        narrowed the child is followed rather than ignored.
+        """
+        var out = List[Int](capacity=len(names))
+        for ref n in names:
+            var at = schema.get_field_index(n)
+            if at < 0:
+                raise Error(
+                    "join: ", side, " key '", n, "' is not in the input"
+                )
+            out.append(at)
+        return out^
 
     @staticmethod
     def _output_schema(
@@ -1431,10 +1515,10 @@ struct Join(Relation, Writable):
         return Join(
             f(self.left[]),
             f(self.right[]),
-            self.left_keys.copy(),
-            self.right_keys.copy(),
-            self.kind,
-            self.strictness,
+            left_names=self.left_keys.copy(),
+            right_names=self.right_keys.copy(),
+            kind=self.kind,
+            strictness=self.strictness,
         )
 
     def schema(self) -> Schema:
@@ -1451,8 +1535,12 @@ struct Join(Relation, Writable):
         probe.append(
             JoinOperator(
                 self.left[].to_operator(ctx, bindings, Pushdown()),
-                self.left_keys.copy(),
-                self.right_keys.copy(),
+                Self._indices_for(
+                    self.left[].schema(), self.left_keys, "left"
+                ),
+                Self._indices_for(
+                    self.right[].schema(), self.right_keys, "right"
+                ),
                 self.kind,
                 self.strictness,
                 self._schema.copy(),

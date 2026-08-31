@@ -448,10 +448,20 @@ struct Pipeline(Operator):
         return Datum(out[0].copy().to_dyn())
 
     def done(self) -> Bool:
+        return self._first_done() >= 0
+
+    def _first_done(self) -> Int:
+        """The lowest stage that has everything it needs, or `-1`.
+
+        `done` answers whether *any* stage is finished; `drain` needs to know
+        *which*, because a finished stage stops the ones below it and says
+        nothing about the ones above. Collapsing the two is what made an
+        aggregate over a `Limit` return no rows.
+        """
         for i in range(len(self._ops)):
             if self._ops[i].done():
-                return True
-        return False
+                return i
+        return -1
 
     def drain(mut self) raises -> Optional[Datum]:
         """One batch of whatever the chain still has, `None` when spent.
@@ -476,11 +486,21 @@ struct Pipeline(Operator):
                 )
                 for ref b in out:
                     self._pending.append(b.copy())
-                # Early termination: a `Limit` with its rows stops the chain
-                # rather than letting the source drain — the one thing a push
-                # engine must add back that a pull engine got for free.
-                if self.done():
-                    self._stage = len(self._ops)
+                # Early termination: a `Limit` with its rows stops the
+                # stages **below** it from producing more — the one thing a
+                # push engine must add back that a pull engine got for free.
+                #
+                # It must not skip the stages **above** it. This read
+                # `self._stage = len(self._ops)`, which jumped past every
+                # remaining stage, so an `Aggregate` over a `Limit` never had
+                # `drain` called and emitted nothing at all: `SELECT sum(a)
+                # FROM (SELECT * FROM t LIMIT 3)` returned zero rows where an
+                # ungrouped aggregate must always return one. Anything that
+                # answers only from `drain` — every aggregate, and a `Sort` —
+                # was silently dropped the moment a `Limit` sat below it.
+                var stop = self._first_done()
+                if stop >= 0 and stop + 1 > self._stage:
+                    self._stage = stop + 1
             else:
                 self._stage += 1
 
