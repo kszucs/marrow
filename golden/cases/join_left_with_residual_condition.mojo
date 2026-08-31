@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     this records.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     eid:int64	dept:int64	did:int64	dname:string

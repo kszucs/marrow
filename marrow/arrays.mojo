@@ -1907,23 +1907,47 @@ struct StructArray(Array):
         return self.children[self._index_for_field_name(name)]
 
     def field(self, index: Int) raises -> DynArray:
-        """Access a child array by field index.
+        """Access a child array by field index, **with this struct's slice
+        applied**.
 
-        Matches PyArrow's StructArray.field(index) API.
+        Matches PyArrow's StructArray.field(index) API, which also carries the
+        parent's offset and length down to the child.
+
+        The slice is not optional bookkeeping. `slice()` is zero-copy: it moves
+        `self.offset`/`self.length` and shares `children` untouched, so a child
+        read raw is the *parent's* full column, not the slice's. Returning it
+        that way was wrong for every consumer of a sliced struct, and the two
+        expression lanes failed differently on it:
+
+        - the runtime lane materialises the child and `Datum.to_array` catches
+          the length mismatch -- `expected a column of 4 rows, got 7` from
+          `limit(4).filter(...)`, which is how this was found;
+        - the comptime lane reads elements `[0, len(batch))` of the child, and
+          the child's own offset is 0, so it silently read the **wrong window**
+          whenever this struct's offset was non-zero -- `limit(n, offset=k)`,
+          or any morsel where `LimitOperator` skipped rows. With offset 0 it
+          was right by coincidence.
+
+        `kernels/sort.mojo` reads its keys the same way and had the same
+        exposure. Slicing is O(1) ref-count bumps, and on an unsliced struct
+        (offset 0, full length) it is a no-op, so nothing pays for the fix.
         """
         if index < 0 or index >= len(self.children):
             raise Error(
                 t"field index {index} out of bounds for"
                 t" {len(self.children)} fields"
             )
-        return self.children[index].copy()
+        return self.children[index].slice(self.offset, self.length)
 
     def field(self, name: StringSlice) raises -> DynArray:
-        """Access a child array by field name.
+        """Access a child array by field name, with this struct's slice applied.
 
-        Matches PyArrow's StructArray.field(name) API.
+        Matches PyArrow's StructArray.field(name) API. See the index overload
+        for why the slice has to travel with it.
         """
-        return self.children[self._index_for_field_name(name)].copy()
+        return self.children[self._index_for_field_name(name)].slice(
+            self.offset, self.length
+        )
 
     def __getitem__(self, index: Int) raises -> StructScalar:
         if index < 0 or index >= self.length:

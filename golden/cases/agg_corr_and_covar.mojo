@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     the one-operand aggregates never have to state.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     c:double	cv:double

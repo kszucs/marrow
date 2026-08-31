@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     that carries its own sort.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     f:string	l:string

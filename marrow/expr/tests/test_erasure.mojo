@@ -25,7 +25,16 @@ from ...dtypes import DynType, int64
 from ...execution import ExecContext
 from ...kernels.groups import Groups
 from ...schema import Schema
-from ..logical import DynRelation, DynValue, Relation, Shape, Value
+from ...builders import array
+from ...tabular import record_batch
+from ..logical import (
+    DynRelation,
+    DynValue,
+    InMemoryTable,
+    Relation,
+    Shape,
+    Value,
+)
 from ..bindings import Bindings
 from ..pruning import Prunable, PrunePredicate, PruneStats, Truth
 from ..pushdown import Pushdown
@@ -92,30 +101,6 @@ struct _ValueProbe(Copyable, Movable, Value, Writable):
         writer.write("probe")
 
 
-struct _RelationProbe(Copyable, Movable, Relation, Writable):
-    var _deaths: Deaths
-
-    def __init__(out self, var deaths: Deaths):
-        self._deaths = deaths^
-
-    def __deinit__(deinit self):
-        self._deaths[].append(1)
-
-    def schema(self) -> Schema:
-        return Schema()
-
-    def to_operator(
-        self,
-        ctx: ExecContext,
-        bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
-    ) raises -> Pipeline:
-        raise Error("probe is not runnable")
-
-    def write_to(self, mut writer: Some[Writer]):
-        writer.write("probe")
-
-
 struct _PrunableProbe(Copyable, Movable, Prunable):
     var _deaths: Deaths
 
@@ -164,15 +149,27 @@ def test_dyn_value_destroys_its_node() raises:
     assert_equal(len(deaths[]), 2, "erasure must not drop the destructor")
 
 
-def test_dyn_relation_destroys_its_node() raises:
-    var deaths = _tally()
-    var probe = _RelationProbe(deaths.copy())
-    var boxed = DynRelation(probe)
-    _ = probe^
-    assert_equal(len(deaths[]), 1)
-    assert_equal(len(boxed.schema()), 0)
-    _ = boxed^
-    assert_equal(len(deaths[]), 2, "erasure must not drop the destructor")
+def test_dyn_relation_owns_its_node_by_construction() raises:
+    """`DynRelation` cannot drop a destructor, so there is nothing to count.
+
+    The other three boxes here erase through `rebind[ArcPointer[NoneType]]`,
+    which forgets the pointee's type and so runs `NoneType`'s destructor unless
+    a `_drop` trampoline carries the real one. `DynRelation` is backed by a
+    `Variant` instead: the variant knows which member is active and destroys it
+    at its own type, exactly as `DynArray` does.
+
+    **This test is a placeholder for a hazard that was designed out**, and it
+    is kept as a named case so the absence is visible rather than looking like
+    an oversight. It also records what the variant costs: a probe type is what
+    the previous version of this test used, and a variant cannot hold one —
+    the eight members are the whole set, so nothing outside `logical.mojo` can
+    be a relation node.
+    """
+    var batch = record_batch(
+        [array([1, 2, 3], int64).copy()], names=["a"]
+    )
+    var boxed: DynRelation = InMemoryTable(batch^)
+    assert_equal(len(boxed.schema()), 1)
 
 
 def test_prune_predicate_destroys_its_node() raises:

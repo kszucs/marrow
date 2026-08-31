@@ -497,8 +497,28 @@ struct Buffer[*, mut: Bool = False](
         before the buffer is read.
         """
         var size = Buffer._aligned_size[T](Int(length))
+        var logical = Int(length) * size_of[T]()
         var raw = unsafe_alloc[UInt8](size, alignment=64)
         var ptr = rebind[Pointer[UInt8, MutUntrackedOrigin]](raw)
+        # **The alignment padding is zeroed; the elements are not.**
+        #
+        # `_aligned_size` rounds up to 64, so a buffer of four `int64` values
+        # holds 32 logical bytes in a 64-byte allocation. Nothing may read the
+        # remaining 32 — but `Buffer.__eq__` compares `_size // 8` words, i.e.
+        # the whole allocation, and `ArrayData.__eq__` is its one caller.
+        # `DynArray.__eq__` routes through `to_data()` to dodge a compiler
+        # deadlock, so `RecordBatch.__eq__` reaches it: two logically identical
+        # results compared **unequal** depending on what the allocator last
+        # left in those bytes. It reproduced as a test that passed alone and
+        # failed in a full suite.
+        #
+        # Zeroing at most 63 bytes per allocation makes that comparison
+        # deterministic without changing what it means, and costs nothing
+        # measurable against an allocation that is about to be filled anyway.
+        # The elements themselves stay uninitialised, which is what this
+        # factory is for.
+        if size > logical:
+            unsafe_memset_zero(raw.unsafe_offset(logical), size - logical)
         return Buffer[mut=True](
             size=size,
             ptr=rebind[Pointer[UInt8, MutUntrackedOrigin]](ptr),

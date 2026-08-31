@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     `array_agg` returns a list, which the expectation block cannot hold.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     k:string	s:string

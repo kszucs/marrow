@@ -12,6 +12,7 @@ def plan() raises -> DynRelation:
     There is no set-operation node in `marrow/expr/logical.mojo`.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     region:string

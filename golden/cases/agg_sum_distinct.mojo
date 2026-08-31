@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     something to do: seven rows, two distinct lengths, one of them null.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     n:int64

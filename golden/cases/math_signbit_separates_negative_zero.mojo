@@ -14,6 +14,7 @@ def plan() raises -> DynRelation:
     `marrow/kernels/numeric.mojo` has no such kernel.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     b:bool

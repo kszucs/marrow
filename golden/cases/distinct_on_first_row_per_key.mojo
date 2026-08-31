@@ -14,6 +14,7 @@ def plan() raises -> DynRelation:
     carry `qty` through.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     region:string	qty:int32

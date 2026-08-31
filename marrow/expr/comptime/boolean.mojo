@@ -36,7 +36,7 @@ from ...kernels.boolean import (
 )
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Shape, merged
+from ..logical import DynValue, Shape, merged
 from ..bindings import Bindings
 from ..pruning import PruneStats, Truth
 from ..physical import Datum
@@ -102,6 +102,20 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
 
     def columns(self) -> List[String]:
         return merged(self.l.columns(), self.r.columns())
+
+    def conjuncts(self) -> List[DynValue]:
+        """`AND` splits; `OR` and `XOR` do not.
+
+        Each side is boxed whole, so `L` and `R` stay fused — splitting moves
+        the erasure boundary rather than crossing it, which is what keeps a
+        comptime predicate out of the runtime lane.
+        """
+        comptime if Self.K.name == AndKernel.name:
+            var out = self.l.conjuncts()
+            for ref c in self.r.conjuncts():
+                out.append(c.copy())
+            return out^
+        return [DynValue(self.copy())]
 
     def dtype(self, schema: Schema) raises -> DynType:
         """Spelled out, where the fusing bool nodes inherit it from

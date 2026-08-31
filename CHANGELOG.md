@@ -100,6 +100,13 @@
 
 ### Query optimizer
 
+- A plan rewriter with fifteen rules in one file: elimination, merging,
+  conjunction splitting, four pushdowns, and TopN.
+- Column pruning as a preparatory downward pass carrying a
+  needed-column accumulator, plus join pushdown and named join keys.
+- The rule set is a compile-time parameter, so `plan.optimize[AllRules]()`
+  links exactly the rules it names and `execute()` alone optimizes
+  nothing.
 - Statistics-based pruning: predicates push into `ParquetScan` and skip
   row groups; the page index skips pages within a group.
 - Projection pushdown into `ParquetScan`, so a scan decodes only the

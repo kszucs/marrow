@@ -12,6 +12,7 @@ def plan() raises -> DynRelation:
     `marrow/kernels/aggregate.mojo` has no mode kernel.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     m:string

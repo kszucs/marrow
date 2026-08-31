@@ -12,6 +12,7 @@ def plan() raises -> DynRelation:
     `subquery_exists` cover.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     k:string	v:int64	w:int64

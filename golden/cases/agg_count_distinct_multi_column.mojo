@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     semantics — which is the same rule `setop_union_distinct` states.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     n:int64

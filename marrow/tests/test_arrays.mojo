@@ -1020,6 +1020,46 @@ def test_struct_array_field_by_name() raises:
     assert_equal(val_arr[1].value(), 20)
 
 
+def test_struct_array_field_carries_the_slice() raises:
+    """`slice()` is zero-copy — it moves the struct's offset and shares the
+    children whole — so `field()` has to apply that slice on the way out.
+
+    Returning the raw child gave every consumer of a sliced struct the
+    *parent's* full column. It reached the engine through `LimitOperator`,
+    which emits `batch.slice(start, wanted)`: the runtime expression lane
+    raised `expected a column of 4 rows, got 7`, and the comptime lane read
+    elements `[0, len)` of an unsliced child, which is the wrong window
+    whenever the offset is non-zero.
+    """
+    var sb = StructBuilder([field("v", int32)], capacity=5)
+    for i in range(5):
+        sb.field_builder(0).as_int32().append(Int32(10 * i))
+        sb.append_valid()
+    var sa = sb.finish()
+
+    # The whole struct: unchanged, and the slice is a no-op.
+    var whole = sa.field("v")
+    assert_equal(len(whole), 5)
+    assert_equal(whole.as_int32()[0].value(), 0)
+
+    # A slice that starts at 0 -- the case that was right by coincidence.
+    var head = sa.slice(0, 3).field("v")
+    assert_equal(len(head), 3)
+    assert_equal(head.as_int32()[0].value(), 0)
+    assert_equal(head.as_int32()[2].value(), 20)
+
+    # A slice with a non-zero offset -- the case that was silently wrong.
+    var middle = sa.slice(2, 2).field("v")
+    assert_equal(len(middle), 2)
+    assert_equal(middle.as_int32()[0].value(), 20)
+    assert_equal(middle.as_int32()[1].value(), 30)
+
+    # By index as well as by name: both overloads share the defect.
+    var by_index = sa.slice(3, 2).field(0)
+    assert_equal(len(by_index), 2)
+    assert_equal(by_index.as_int32()[0].value(), 30)
+
+
 def test_struct_array_field_bounds() raises:
     var sb = StructBuilder([field("x", int32)], capacity=1)
     sb.field_builder(0).as_int32().append(1)

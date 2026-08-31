@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     `False` among the non-null values) rather than null.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     a:bool	o:bool

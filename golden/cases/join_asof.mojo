@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     of the semantics rather than an optimisation.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     eid:int64	dept:int64	did:int64

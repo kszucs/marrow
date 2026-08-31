@@ -14,6 +14,7 @@ def plan() raises -> DynRelation:
     other case here needs.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     ts:timestamp	d:date32	label:string

@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     has only the three-valued form (`nulls_equality_with_null_is_null`).
 
     -- skip mojo
+    -- skip python
 
     -- expected
     v:int64	b:bool

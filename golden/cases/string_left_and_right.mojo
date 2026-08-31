@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     `marrow/kernels/string.mojo` has no such kernel.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     l:string	r:string

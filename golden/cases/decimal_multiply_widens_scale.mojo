@@ -12,6 +12,7 @@ def plan() raises -> DynRelation:
     from the operands' *parameters* rather than their families.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     p:string

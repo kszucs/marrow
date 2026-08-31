@@ -14,6 +14,7 @@ def plan() raises -> DynRelation:
     `marrow/kernels/aggregate.mojo` has no order-statistic kernel.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     m:double

@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     null — and a null *element* does contribute one.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     e:int64

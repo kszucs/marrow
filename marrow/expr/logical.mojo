@@ -1,29 +1,44 @@
 """The logical layer: an immutable description of a query.
 
-Paired with `physical.mojo`, which holds what these become when they run.
+Paired with `physical.mojo`, which holds what these become when they run, and
+with `optimizer.mojo`, which rewrites one plan into a simpler one.
 
 A `Relation` says *what* to compute. It owns nothing that runs, so a plan is
-freely copyable, shareable, inspectable and — once the optimizer exists —
-rewritable. `to_operator(ctx)` turns it into the physical operator that owns
-the running state.
+freely copyable, shareable, inspectable and rewritable. `to_operator(ctx)` turns
+it into the physical operator that owns the running state.
 
-**Four slots, not eight.** The previous expression package's `DynRelation`
-carried `schema`, `to_operator`, `write`, `drop`, `kind`, `with_predicate`,
-`with_projection` and `children`. `schema`, `to_operator`, `write` and `drop`
-are here; the other four existed for an optimizer that was never finished, and
-two of them cannot express any rewrite that changes a node's type or arity —
-which is every rewrite worth having. When a rule needs to walk or rebuild a
-plan, `children` and its inverse arrive with that rule and are shaped by it.
+**A variant for inspection, a trampoline for lowering.** `DynRelation` erases
+the nine node types behind a `Variant`, so `isa[R]()`/`get[R]()` let an
+optimizer rule read a real typed node and construct one — the capability the
+previous trampoline-only box lacked, which left its "rules" as four comptime
+flags and eight scattered calls inside `to_operator` with no file to read.
 
-The one property that must survive whatever arrives: **nothing may name every
-node type in one place.** `DynRelation.__init__[T]` wires trampolines per
-constructed type, with no registry, which is why `kernels::sort` occupies zero
-bytes in a binary that never sorts. A `match` over all kinds would make every
-operator reachable from any plan.
+Lowering is the exception, and the reason is measured. `_dispatch` resolves the
+active member with a `comptime for` over every member, so anything routed
+through it is instantiated nine times; for `to_operator` that makes
+`Sort.to_operator` reach `kernels::sort` and `ParquetScan.to_operator` reach the
+Parquet reader and `kernels::cast`, in plans containing neither. It cost
+**+348%** of `__text` on `query_streaming`, with `kernels::cast` going from 0 to
+694 symbols in the fused gates. So `to_operator` binds a per-type trampoline at
+construction and links only what a plan actually uses.
+
+This supersedes the rule that used to head this file — "nothing may name every
+node type in one place". The variant does name them. The narrower rule that
+survives contact with the measurement is: **a closed type set may be a variant;
+what must never go through its ladder is anything that reaches a kernel.**
+`schema` and `write_to` stay on it deliberately — one returns a stored field,
+the other formats a string.
+
+Nodes carry `traverse(f)`, which applies `f` to their own children and rebuilds
+themselves, so the optimizer holds no ladder over node types and a relation
+added later needs no change there.
 """
 
+from std.builtin.rebind import downcast
 from std.collections import Set
 from std.memory import ArcPointer
+from std.os import abort
+from std.utils import Variant
 
 from ..execution import ExecContext
 from ..kernels.join import JoinKind, JOIN_INNER
@@ -33,6 +48,7 @@ from ..dtypes import DynType, Field, field
 from .bindings import Bindings
 from .pruning import PrunePredicate, Prunable
 from .pushdown import Pushdown
+from .optimizer import RuleSet, optimize
 from .runtime.values import column
 from .physical import (
     Datum,
@@ -138,6 +154,40 @@ trait Value(Copyable, Deinitable, Writable):
     """`Shape.scalar` or `Shape.columnar` — whether this yields one value or
     one per row. Known without running, which is why it lives here and not on
     the operator."""
+
+    def conjuncts(self) -> List[DynValue]:
+        """This predicate split on `AND`, or `[self]` if it is not one.
+
+        Decided at the `.filter()` verb like `constant_bool`, and for the same
+        reason — the concrete type is visible there and nowhere later. Each
+        conjunct is boxed **whole**, so a comptime subtree stays fused: this
+        moves the erasure boundary, it never crosses it.
+
+        What splitting buys is that each conjunct prunes and moves
+        independently. A compound `AND` node prunes only as well as its weaker
+        half, and cannot be pushed below a join at all when one half names the
+        left side and the other the right.
+
+        Defaulted to "this is one conjunct", which is always sound.
+        """
+        return [DynValue(self.copy())]
+
+    def constant_bool(self) -> Optional[Bool]:
+        """`True`/`False` if this is a constant boolean, else `None`.
+
+        **A trait default, deliberately not a `DynValue` slot.** It is read at
+        the `.filter()` verb, where the concrete type is still visible, and the
+        answer is stored on the `Filter` node — the same placement argument
+        `PrunePredicate` makes, and for the same reason: a slot on `DynValue`
+        is paid for every projection value, every sort key and every aggregate
+        input in the program, to serve the one caller that filters.
+
+        Defaulted to `None` — "not known to be constant" — so a node that has
+        not been taught costs an optimization and never an answer. Only
+        `RuntimeValue` overrides it; a comptime literal could too, but a fused
+        predicate that is constant is a program someone wrote by hand.
+        """
+        return None
 
     def columns(self) -> List[String]:
         """Which columns this expression reads, deduplicated, first-seen
@@ -384,8 +434,25 @@ def reject_aggregate(
         )
 
 
-trait Relation(Copyable, Deinitable, Movable):
+trait Relation(Copyable, Deinitable, Movable, Writable):
     """An immutable description of a query."""
+
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        """This node with `f` applied to each of its children.
+
+        The one method an optimizer needs from a node in order to walk a plan,
+        and the reason `optimizer.mojo` contains no ladder over node types: a
+        node knows its own children and how to put itself back together, so a
+        traversal is `node.traverse(rewrite)` rather than eight `isa` arms that
+        have to be extended every time a node is added.
+
+        Defaulted to "no children", which is correct for the two leaves and
+        conservative for anything added later — an untraversed node is left
+        whole rather than rebuilt wrongly.
+        """
+        return DynRelation(self.copy())
 
     def schema(self) -> Schema:
         """The columns this relation produces.
@@ -402,80 +469,126 @@ trait Relation(Copyable, Deinitable, Movable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        """The running operator for this description.
-
-        Takes a context because this is the seam where one logical operator may
-        become different physical ones — a hash join or a merge join, a CPU or
-        a GPU pass. Nothing exercises that yet; the argument is here because
-        removing the seam is the part that would be hard to undo.
-
-        `bindings` is threaded down to the values this plan contains and is
-        consumed there, by `Param.bind`. A relation never reads one.
-        """
+        """The running operator for this description."""
         ...
 
 
 struct DynRelation(Copyable, Movable, Writable):
-    """A `Relation` of any operator, erased.
+    """A `Relation` of any node, erased — a `Variant` for inspection, a
+    trampoline for lowering.
 
-    Copyable, unlike `Pipeline`: a plan owns nothing that runs, so sharing
-    one is an `ArcPointer` bump and two consumers cannot interfere.
+    **Inspection is a variant**, the same shape as `DynArray`, `DynScalar` and
+    `DynBuilder`: `isa[R]()` is a discriminant compare and `get[R]()` a borrow,
+    so `optimizer.mojo`'s rules read a real typed node and can build one.
+    Neither instantiates anything per member, so the optimizer's API costs
+    nothing in a binary that never optimizes. It also needs no `_drop` slot —
+    a variant destroys its member at the true type, where
+    `rebind[ArcPointer[NoneType]]` erasure forgot the destructor entirely.
+
+    **Lowering is a trampoline**, and that split is the whole design. Resolving
+    `to_operator` through the variant's `comptime for` instantiates it for
+    *every* member, so `Sort.to_operator` reaches `kernels::sort` and
+    `ParquetScan.to_operator` reaches the Parquet reader and `kernels::cast` —
+    in a plan containing neither. Measured at **+348%** of `__text` on
+    `query_streaming`, with `kernels::cast` going 0 -> 694 symbols in the fused
+    gates. A trampoline binds the single type its caller constructed, so a
+    binary links only the operators its plans actually use.
+
+    `schema` and `write_to` stay on the variant ladder deliberately: also
+    instantiated nine times, but one returns a stored field and the other
+    formats a string. Neither reaches a kernel.
+
+    Children sit behind `ArcPointer`: a variant containing a node containing
+    that variant by value has no finite size, and the compiler says so —
+    *"attempt to resolve a recursive reference to declaration
+    'DynRelation.__move_ctor_is_trivial'"*. Same indirection `StructArray` uses
+    inside a variant-backed `DynArray`, so copying a plan stays O(1).
     """
 
-    var _data: ArcPointer[NoneType]
-    var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
-    var _virt_to_operator: def(
-        ArcPointer[NoneType], ExecContext, Bindings, var Pushdown
-    ) thin raises -> Pipeline
-    var _virt_write: def(ArcPointer[NoneType]) thin -> String
-    var _drop: def(var ArcPointer[NoneType]) thin
-    """Erasure forgets the pointee's destructor; this carries it. See
-    `DynOperator._virt_drop` for why the release has to happen at the true
-    type, and for the probe that measured it."""
+    comptime VariantType = Variant[
+        EmptyRelation,
+        InMemoryTable,
+        Filter,
+        Project,
+        Aggregate,
+        Limit,
+        Sort,
+        Join,
+        ParquetScan,
+    ]
 
-    @staticmethod
-    def _schema_tramp[
-        R: Relation & Writable
-    ](ptr: ArcPointer[NoneType]) -> Schema:
-        return rebind[ArcPointer[R]](ptr)[].schema()
+    var _v: Self.VariantType
+
+    var _virt_to_operator: def(
+        Self.VariantType, ExecContext, Bindings, var Pushdown
+    ) thin raises -> Pipeline
+    """Lowering, wired per **constructed** node type. See the struct docstring
+    for the 348% this one slot is worth."""
 
     @staticmethod
     def _to_operator_tramp[
         R: Relation
     ](
-        ptr: ArcPointer[NoneType],
+        v: Self.VariantType,
         ctx: ExecContext,
         bindings: Bindings,
         var pushed: Pushdown,
     ) raises -> Pipeline:
-        return rebind[ArcPointer[R]](ptr)[].to_operator(ctx, bindings, pushed^)
-
-    @staticmethod
-    def _write_tramp[
-        R: Relation & Writable
-    ](ptr: ArcPointer[NoneType]) -> String:
-        return String(rebind[ArcPointer[R]](ptr)[])
-
-    @staticmethod
-    def _drop_tramp[R: Relation & Writable](var ptr: ArcPointer[NoneType]):
-        var typed = rebind[ArcPointer[R]](ptr)
-        _ = ptr^
-        _ = typed^
+        return v[R].to_operator(ctx, bindings, pushed^)
 
     @implicit
-    def __init__[R: Relation & Writable](out self, value: R):
-        var ptr = ArcPointer[R](value.copy())
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_schema = Self._schema_tramp[R]
+    def __init__[R: Relation](out self, var value: R):
+        self._v = Self.VariantType(value^)
         self._virt_to_operator = Self._to_operator_tramp[R]
-        self._virt_write = Self._write_tramp[R]
-        self._drop = Self._drop_tramp[R]
 
-    def __deinit__(deinit self):
-        self._drop(self._data^)
+    def __init__(out self, *, copy: Self):
+        self._v = Self.VariantType(copy=copy._v)
+        self._virt_to_operator = copy._virt_to_operator
+
+    def isa[R: Relation](self) -> Bool:
+        """Is this node an `R`? The question every rule opens with."""
+        return self._v.isa[R]()
+
+    def get[R: Relation](ref self) -> ref [self._v[R]] R:
+        """This node as an `R`, borrowed. Undefined unless `isa[R]()`."""
+        return self._v[R]
+
+    def _dispatch[
+        R: Movable, //, Func: def[T: Relation](T) raises -> R
+    ](self, func: Func) raises -> R:
+        """Run `func` on the active member, narrowed to `Relation`.
+
+        Instantiates `func` once per member, which is why `to_operator` does
+        **not** come through here. Written out rather than routed through a
+        shared helper, for the reason `DynArray._dispatch` records: a narrowing
+        closure between caller and ladder is inlined into every arm of every
+        instantiation, measured at +662,740 bytes on one gate.
+        """
+        comptime for i in range(len(Self.VariantType.Ts)):
+            comptime T = Self.VariantType.Ts[i]
+            comptime if conforms_to(T, Relation):
+                if self._v.isa[T]():
+                    return func(rebind[downcast[T, Relation]](self._v[T]))
+        abort("DynRelation._dispatch: no arm matched")
+
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        """`traverse` on whichever node this is."""
+
+        def job[T: Relation](node: T) raises {imm} -> DynRelation:
+            return node.traverse(f)
+
+        return self._dispatch(job)
 
     def schema(self) -> Schema:
-        return self._virt_schema(self._data)
+        def job[T: Relation](node: T) raises {imm} -> Schema:
+            return node.schema()
+
+        try:
+            return self._dispatch(job)
+        except:
+            abort("DynRelation.schema: no arm matched")
 
     def to_operator(
         self,
@@ -483,7 +596,18 @@ struct DynRelation(Copyable, Movable, Writable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        return self._virt_to_operator(self._data, ctx, bindings, pushed^)
+        return self._virt_to_operator(self._v, ctx, bindings, pushed^)
+
+    def write_to[W: Writer](self, mut writer: W):
+        def job[T: Relation](node: T) raises {imm} -> String:
+            return String(node)
+
+        try:
+            writer.write(self._dispatch(job))
+        except:
+            writer.write("<relation>")
+
+
 
     # -- the plan-building API ----------------------------------------------
     #
@@ -518,7 +642,9 @@ struct DynRelation(Copyable, Movable, Writable):
         return Filter(
             self.copy(),
             DynValue(predicate.copy()),
-            Optional(PrunePredicate(predicate^)),
+            Optional(PrunePredicate(predicate.copy())),
+            predicate.constant_bool(),
+            predicate.conjuncts(),
         )
 
     def select(self, names: List[String]) raises -> DynRelation:
@@ -707,6 +833,15 @@ struct DynRelation(Copyable, Movable, Writable):
         """Equijoin. `self` is the build side and `right` streams."""
         return Join(self.copy(), right^, left_keys^, right_keys^, kind)
 
+    def optimize[R: RuleSet](self) raises -> DynRelation:
+        """This plan, rewritten by `R` until nothing changes.
+
+        Returns an ordinary plan, so the result prints, composes and executes
+        like any other and can be diffed against its input. `execute()` alone
+        optimizes nothing, and a binary links exactly the rules it names.
+        """
+        return optimize[R](self)
+
     def execute(
         self,
         ctx: ExecContext = ExecContext.auto(),
@@ -718,20 +853,57 @@ struct DynRelation(Copyable, Movable, Writable):
         # a batch. Cheap — children move, schema comes off the struct dtype.
         return RecordBatch.from_struct_array(p.collect(self.schema()))
 
+
+struct EmptyRelation(Relation, Writable):
+    """Zero rows, with a schema. What a plan collapses to when it provably
+    returns nothing.
+
+    Exists so a rule never has to answer "no relation". `optimize` returns a
+    plan, always; a rewrite that proves a subtree empty replaces it with this
+    rather than with an `Optional` that every caller then has to unwrap. It
+    also keeps the schema, so everything above it still type-checks and still
+    reports the right columns for an empty result.
+
+    Its operator emits nothing and reports `done` immediately, which is what
+    lets a `LIMIT 0` stop a scan before it reads a byte.
+    """
+
+    var batch: RecordBatch
+    """A zero-row batch of the right schema.
+
+    Holding a batch rather than a bare `Schema` means this reuses
+    `BatchSourceOperator` unchanged instead of introducing a second kind of
+    source that yields nothing — one fewer operator, and the empty case travels
+    exactly the code path the non-empty one does."""
+
+    def __init__(out self, var batch: RecordBatch):
+        self.batch = batch^
+
+    def schema(self) -> Schema:
+        return self.batch.schema.copy()
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
+    ) raises -> Pipeline:
+        return Pipeline(BatchSourceOperator(self.batch.to_struct_array()))
+
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._virt_write(self._data))
+        writer.write("Empty(", len(self.batch.schema), " cols)")
 
 
 struct InMemoryTable(Relation, Writable):
     """A batch already in memory, as a source."""
 
-    var _batch: RecordBatch
+    var batch: RecordBatch
 
     def __init__(out self, var batch: RecordBatch):
-        self._batch = batch^
+        self.batch = batch^
 
     def schema(self) -> Schema:
-        return self._batch.schema.copy()
+        return self.batch.schema.copy()
 
     def to_operator(
         self,
@@ -740,10 +912,10 @@ struct InMemoryTable(Relation, Writable):
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The one relation that *creates* a pipeline; every other appends."""
-        return Pipeline(BatchSourceOperator(self._batch.to_struct_array()))
+        return Pipeline(BatchSourceOperator(self.batch.to_struct_array()))
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("InMemoryTable(", self._batch.num_rows(), " rows)")
+        writer.write("InMemoryTable(", self.batch.num_rows(), " rows)")
 
 
 struct Filter(Relation, Writable):
@@ -756,10 +928,24 @@ struct Filter(Relation, Writable):
     not have.
     """
 
-    var _input: DynRelation
-    var _predicate: DynValue
+    var input: ArcPointer[DynRelation]
+    var predicate: DynValue
 
-    var _pruner: Optional[PrunePredicate]
+    var conjuncts: List[DynValue]
+    """The predicate split on `AND`, decided at the verb.
+
+    Empty when the predicate arrived already boxed, which reads as "not
+    split" — the `predicate` field is what actually filters either way, so an
+    empty list costs an optimization and never an answer."""
+
+    var constant: Optional[Bool]
+    """Whether the predicate is a constant, decided at the verb.
+
+    `EliminateFilter` reads this. Like `pruner`, it is `Optional` because the
+    erased overload cannot answer — and like `pruner`, a `None` costs only an
+    optimization."""
+
+    var pruner: Optional[PrunePredicate]
     """The predicate again, typed, for statistics pruning — `None` when it
     arrived already boxed.
 
@@ -773,6 +959,8 @@ struct Filter(Relation, Writable):
         var input: DynRelation,
         var predicate: DynValue,
         var pruner: Optional[PrunePredicate] = None,
+        constant: Optional[Bool] = None,
+        var conjuncts: List[DynValue] = [],
     ) raises:
         reject_aggregate(
             predicate,
@@ -780,12 +968,40 @@ struct Filter(Relation, Writable):
             predicate.name(),
             "put it in .aggregate() and filter the result (HAVING)",
         )
-        self._input = input^
-        self._predicate = predicate^
-        self._pruner = pruner^
+        self.input = ArcPointer(input^)
+        self.predicate = predicate^
+        self.pruner = pruner^
+        self.constant = constant
+        self.conjuncts = conjuncts^
+
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return self.with_input(f(self.input[]))
+
+    def with_input(self, var input: DynRelation) raises -> Filter:
+        """This filter over a different input, carrying everything else.
+
+        **The only way a rule should move a filter.** A `Filter` holds five
+        things — input, predicate, pruner, constant, conjuncts — and the last
+        three are analysis decided at the verb, where the predicate's concrete
+        type was still visible. A rule that rebuilds with
+        `Filter(new_input, predicate, pruner)` silently drops the other two,
+        which does not fail: the filter still filters, `EliminateFilter` and
+        `SplitConjunction` just stop firing. That is exactly what happened when
+        `constant` and `conjuncts` were added and six call sites were not
+        updated.
+        """
+        return Filter(
+            input^,
+            self.predicate.copy(),
+            self.pruner.copy(),
+            self.constant,
+            self.conjuncts.copy(),
+        )
 
     def schema(self) -> Schema:
-        return self._input.schema()
+        return self.input[].schema()
 
     def to_operator(
         self,
@@ -793,20 +1009,20 @@ struct Filter(Relation, Writable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(
+        var pipe = self.input[].to_operator(
             ctx,
             bindings,
             (
                 pushed.conjoined(
-                    self._pruner.value()
-                ) if self._pruner else pushed
+                    self.pruner.value()
+                ) if self.pruner else pushed
                 ^
             ),
         )
         pipe.append(
             FilterOperator(
-                self._predicate.to_operator(
-                    self._input.schema(), False, bindings
+                self.predicate.to_operator(
+                    self.input[].schema(), False, bindings
                 ),
                 ctx.copy(),
             )
@@ -814,7 +1030,7 @@ struct Filter(Relation, Writable):
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("Filter(", self._input, ", ", self._predicate, ")")
+        writer.write("Filter(", self.input[], ", ", self.predicate, ")")
 
 
 struct Project(Relation, Writable):
@@ -825,9 +1041,9 @@ struct Project(Relation, Writable):
     type and a name.
     """
 
-    var _input: DynRelation
-    var _names: List[String]
-    var _values: List[DynValue]
+    var input: ArcPointer[DynRelation]
+    var names: List[String]
+    var values: List[DynValue]
     var _schema: Schema
 
     def __init__(
@@ -845,9 +1061,9 @@ struct Project(Relation, Writable):
                 values[i], "project", names[i], "use .aggregate() instead"
             )
         self._schema = Self._output_schema(input.schema(), names, values)
-        self._input = input^
-        self._names = names^
-        self._values = values^
+        self.input = ArcPointer(input^)
+        self.names = names^
+        self.values = values^
 
     @staticmethod
     def _output_schema(
@@ -889,6 +1105,53 @@ struct Project(Relation, Writable):
                 fields.append(field(names[i].copy(), v.dtype(input)))
         return schema(fields^)
 
+    def passes_through(self, name: String) -> Bool:
+        """Does column `name` reach this projection's input untouched?
+
+        True only when some output is exactly that column: it reads one column,
+        that column is the name it is emitted as, and it is not an aggregate.
+        A **rename** reads one column too, which is why the name is compared
+        and not just the arity — pushing a predicate past a rename would have
+        it name a column that does not exist below.
+        """
+        for i in range(len(self.values)):
+            if self.names[i] == name:
+                ref v = self.values[i]
+                if v.aggregates():
+                    return False
+                var cols = v.columns()
+                return (
+                    len(cols) == 1 and cols[0] == name and v.name() == name
+                )
+        return False
+
+    def passes_through_all(self, names: List[String]) -> Bool:
+        """Do all of `names` reach the input untouched?"""
+        for ref n in names:
+            if not self.passes_through(n):
+                return False
+        return True
+
+    def computes_an_aggregate(self) -> Bool:
+        """Does any projected value collapse its input to one row?
+
+        `Project` rejects aggregates at construction, so this answers `False`
+        today; it is asked anyway by the rule that moves a `Limit` below a
+        projection, because that rewrite is only sound for a row-preserving
+        node and should not depend on a constructor check staying in place.
+        """
+        for ref v in self.values:
+            if v.aggregates():
+                return True
+        return False
+
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Project(
+            f(self.input[]), self.names.copy(), self.values.copy()
+        )
+
     def schema(self) -> Schema:
         return self._schema.copy()
 
@@ -898,19 +1161,19 @@ struct Project(Relation, Writable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
-        var values = List[DynOperator](capacity=len(self._values))
-        for ref v in self._values:
-            values.append(v.to_operator(self._input.schema(), False, bindings))
+        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        var values = List[DynOperator](capacity=len(self.values))
+        for ref v in self.values:
+            values.append(v.to_operator(self.input[].schema(), False, bindings))
         pipe.append(ProjectOperator(values^, self._schema.copy()))
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("Project(", self._input, ", ")
-        for i in range(len(self._names)):
+        writer.write("Project(", self.input[], ", ")
+        for i in range(len(self.names)):
             if i > 0:
                 writer.write(", ")
-            writer.write(self._names[i], "=", self._values[i])
+            writer.write(self.names[i], "=", self.values[i])
         writer.write(")")
 
 
@@ -930,9 +1193,9 @@ struct Aggregate(Relation, Writable):
     branch could not have made that choice.
     """
 
-    var _input: DynRelation
-    var _keys: List[DynValue]
-    var _aggs: List[DynValue]
+    var input: ArcPointer[DynRelation]
+    var keys: List[DynValue]
+    var aggs: List[DynValue]
     var _schema: Schema
 
     def __init__(
@@ -949,9 +1212,9 @@ struct Aggregate(Relation, Writable):
                 "group by a column or a per-row expression, not an aggregate",
             )
         self._schema = Self._output_schema(input.schema(), keys, aggs)
-        self._input = input^
-        self._keys = keys^
-        self._aggs = aggs^
+        self.input = ArcPointer(input^)
+        self.keys = keys^
+        self.aggs = aggs^
 
     @staticmethod
     def _output_schema(
@@ -977,6 +1240,13 @@ struct Aggregate(Relation, Writable):
             fields.append(field(a.name(), a.dtype(input)))
         return schema(fields^)
 
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Aggregate(
+            f(self.input[]), self.keys.copy(), self.aggs.copy()
+        )
+
     def schema(self) -> Schema:
         return self._schema.copy()
 
@@ -986,24 +1256,24 @@ struct Aggregate(Relation, Writable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var grouped = len(self._keys) > 0
-        var folds = List[DynOperator](capacity=len(self._aggs))
-        for ref a in self._aggs:
-            folds.append(a.to_operator(self._input.schema(), grouped, bindings))
-        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
-        var keys = List[DynOperator](capacity=len(self._keys))
-        for ref k in self._keys:
-            keys.append(k.to_operator(self._input.schema(), False, bindings))
+        var grouped = len(self.keys) > 0
+        var folds = List[DynOperator](capacity=len(self.aggs))
+        for ref a in self.aggs:
+            folds.append(a.to_operator(self.input[].schema(), grouped, bindings))
+        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        var keys = List[DynOperator](capacity=len(self.keys))
+        for ref k in self.keys:
+            keys.append(k.to_operator(self.input[].schema(), False, bindings))
         pipe.append(
             GroupByOperator(keys^, folds^, self._schema.copy(), ctx.copy())
         )
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("Aggregate(", self._input)
-        for ref k in self._keys:
+        writer.write("Aggregate(", self.input[])
+        for ref k in self.keys:
             writer.write(", by=", k)
-        for ref a in self._aggs:
+        for ref a in self.aggs:
             writer.write(", ", a)
         writer.write(")")
 
@@ -1016,17 +1286,22 @@ struct Limit(Relation, Writable):
     the source: in a push engine nothing downstream can otherwise halt a scan.
     """
 
-    var _input: DynRelation
-    var _offset: Int
-    var _length: Int
+    var input: ArcPointer[DynRelation]
+    var offset: Int
+    var length: Int
 
     def __init__(out self, var input: DynRelation, offset: Int, length: Int):
-        self._input = input^
-        self._offset = offset
-        self._length = length
+        self.input = ArcPointer(input^)
+        self.offset = offset
+        self.length = length
+
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Limit(f(self.input[]), self.offset, self.length)
 
     def schema(self) -> Schema:
-        return self._input.schema()
+        return self.input[].schema()
 
     def to_operator(
         self,
@@ -1034,18 +1309,18 @@ struct Limit(Relation, Writable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings, Pushdown())
-        pipe.append(LimitOperator(self._offset, self._length))
+        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        pipe.append(LimitOperator(self.offset, self.length))
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Limit(",
-            self._input,
+            self.input[],
             ", offset=",
-            self._offset,
+            self.offset,
             ", length=",
-            self._length,
+            self.length,
             ")",
         )
 
@@ -1059,10 +1334,21 @@ struct Sort(Relation, Writable):
     is the point of the push interface.
     """
 
-    var _input: DynRelation
-    var _keys: List[DynValue]
-    var _ascending: List[Bool]
-    var _nulls_first: Bool
+    var input: ArcPointer[DynRelation]
+    var keys: List[DynValue]
+    var ascending: List[Bool]
+    var nulls_first: Bool
+
+    var limit: Optional[Int]
+    """The TopN bound — how many ordered rows the consumer actually needs.
+
+    `None` means "order everything", which is what every `Sort` says until the
+    `TopN` rule rewrites one. It lives here rather than being discovered at
+    execution because only the plan knows what sits above: a `Limit` directly
+    above reads as a bound, a `Filter` between them does not — the filter runs
+    *after* the sort, so a k-row sort would feed it fewer than k rows and the
+    query would silently return too few. `optimizer.mojo` owns that
+    distinction."""
 
     def __init__(
         out self,
@@ -1070,6 +1356,7 @@ struct Sort(Relation, Writable):
         var keys: List[DynValue],
         var ascending: List[Bool],
         nulls_first: Bool = True,
+        limit: Optional[Int] = None,
     ) raises:
         if len(keys) != len(ascending):
             raise Error(
@@ -1088,13 +1375,25 @@ struct Sort(Relation, Writable):
                 k.name(),
                 "aggregate first, then sort the result",
             )
-        self._input = input^
-        self._keys = keys^
-        self._ascending = ascending^
-        self._nulls_first = nulls_first
+        self.input = ArcPointer(input^)
+        self.keys = keys^
+        self.ascending = ascending^
+        self.nulls_first = nulls_first
+        self.limit = limit
+
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Sort(
+            f(self.input[]),
+            self.keys.copy(),
+            self.ascending.copy(),
+            self.nulls_first,
+            self.limit,
+        )
 
     def schema(self) -> Schema:
-        return self._input.schema()
+        return self.input[].schema()
 
     def to_operator(
         self,
@@ -1102,22 +1401,25 @@ struct Sort(Relation, Writable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self._input.to_operator(ctx, bindings, pushed^)
+        var pipe = self.input[].to_operator(ctx, bindings, pushed^)
         pipe.append(
             SortOperator(
-                _to_operators(self._keys, self._input.schema(), bindings),
-                self._ascending.copy(),
-                self._nulls_first,
+                _to_operators(self.keys, self.input[].schema(), bindings),
+                self.ascending.copy(),
+                self.nulls_first,
+                self.limit,
                 ctx.copy(),
             )
         )
         return pipe^
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("Sort(", self._input)
-        for i in range(len(self._keys)):
-            writer.write(", ", self._keys[i])
-            writer.write(" asc" if self._ascending[i] else " desc")
+        writer.write("Sort(", self.input[])
+        if self.limit:
+            writer.write(" top ", self.limit.value())
+        for i in range(len(self.keys)):
+            writer.write(", ", self.keys[i])
+            writer.write(" asc" if self.ascending[i] else " desc")
         writer.write(")")
 
 
@@ -1151,12 +1453,24 @@ struct Join(Relation, Writable):
     and this layer does not have one.
     """
 
-    var _left: DynRelation
-    var _right: DynRelation
-    var _left_keys: List[Int]
-    var _right_keys: List[Int]
-    var _kind: JoinKind
-    var _strictness: UInt8
+    var left: ArcPointer[DynRelation]
+    var right: ArcPointer[DynRelation]
+    var left_keys: List[String]
+    var right_keys: List[String]
+    """Join keys by **name**, resolved from the caller's indices once, here.
+
+    The public verb still takes indices — `plan.mojo` and every existing caller
+    pass them — but a plan node must not *store* them. An index is a position
+    in a child's schema, so any rewrite that changes a child silently rebinds
+    the join to different columns: projection pushdown narrowing a scan is
+    exactly such a rewrite, and it produces a join on the wrong columns with no
+    error anywhere. Resolving to names at construction, where both child
+    schemas are in hand and correct, makes that unrepresentable.
+
+    `to_operator` resolves back to indices against whatever schema the child
+    actually has when the plan runs, which is the point."""
+    var kind: JoinKind
+    var strictness: UInt8
     var _schema: Schema
 
     def __init__(
@@ -1179,12 +1493,84 @@ struct Join(Relation, Writable):
         if len(left_keys) == 0:
             raise Error("join: needs at least one key pair")
         self._schema = Self._output_schema(left.schema(), right.schema(), kind)
-        self._left = left^
-        self._right = right^
-        self._left_keys = left_keys^
-        self._right_keys = right_keys^
-        self._kind = kind
-        self._strictness = strictness
+        self.left = ArcPointer(left^)
+        self.right = ArcPointer(right^)
+        self.left_keys = Self._names_for(
+            self.left[].schema(), left_keys, "left"
+        )
+        self.right_keys = Self._names_for(
+            self.right[].schema(), right_keys, "right"
+        )
+        self.kind = kind
+        self.strictness = strictness
+
+    def __init__(
+        out self,
+        var left: DynRelation,
+        var right: DynRelation,
+        *,
+        var left_names: List[String],
+        var right_names: List[String],
+        kind: JoinKind = JOIN_INNER,
+        strictness: UInt8 = 0,
+    ) raises:
+        """By name, for a rewrite putting a join back together.
+
+        The index form is the public verb; this is what `traverse` and
+        `optimizer.mojo` use, because a rewrite already holds names and
+        converting back to indices only to have them re-resolved would be a
+        round trip through the representation this node exists to avoid.
+        """
+        self._schema = Self._output_schema(left.schema(), right.schema(), kind)
+        self.left = ArcPointer(left^)
+        self.right = ArcPointer(right^)
+        self.left_keys = left_names^
+        self.right_keys = right_names^
+        self.kind = kind
+        self.strictness = strictness
+
+    @staticmethod
+    def _names_for(
+        schema: Schema, indices: List[Int], side: String
+    ) raises -> List[String]:
+        """The column names at `indices`, or a diagnosable error.
+
+        Out-of-range is caught here rather than at execution, where it would
+        surface as an opaque kernel failure well after the plan was built.
+        """
+        var out = List[String](capacity=len(indices))
+        for idx in indices:
+            if idx < 0 or idx >= len(schema.fields):
+                raise Error(
+                    "join: ",
+                    side,
+                    " key index ",
+                    idx,
+                    " out of range for ",
+                    len(schema.fields),
+                    " columns",
+                )
+            out.append(schema.fields[idx].name.copy())
+        return out^
+
+    @staticmethod
+    def _indices_for(
+        schema: Schema, names: List[String], side: String
+    ) raises -> List[Int]:
+        """Where `names` live in `schema` now.
+
+        Called at lowering, not construction, so a rewrite that reordered or
+        narrowed the child is followed rather than ignored.
+        """
+        var out = List[Int](capacity=len(names))
+        for ref n in names:
+            var at = schema.get_field_index(n)
+            if at < 0:
+                raise Error(
+                    "join: ", side, " key '", n, "' is not in the input"
+                )
+            out.append(at)
+        return out^
 
     @staticmethod
     def _output_schema(
@@ -1206,6 +1592,20 @@ struct Join(Relation, Writable):
                 fields.append(f.copy())
         return schema(fields^)
 
+    def traverse[
+        F: def (DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        """Both sides, which is why this takes a function rather than a single
+        child: a join is the one node with two inputs."""
+        return Join(
+            f(self.left[]),
+            f(self.right[]),
+            left_names=self.left_keys.copy(),
+            right_names=self.right_keys.copy(),
+            kind=self.kind,
+            strictness=self.strictness,
+        )
+
     def schema(self) -> Schema:
         return self._schema.copy()
 
@@ -1216,17 +1616,21 @@ struct Join(Relation, Writable):
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The probe side is the pipeline; the build side is a stage's cargo."""
-        var probe = self._right.to_operator(ctx, bindings, Pushdown())
+        var probe = self.right[].to_operator(ctx, bindings, Pushdown())
         probe.append(
             JoinOperator(
-                self._left.to_operator(ctx, bindings, Pushdown()),
-                self._left_keys.copy(),
-                self._right_keys.copy(),
-                self._kind,
-                self._strictness,
+                self.left[].to_operator(ctx, bindings, Pushdown()),
+                Self._indices_for(
+                    self.left[].schema(), self.left_keys, "left"
+                ),
+                Self._indices_for(
+                    self.right[].schema(), self.right_keys, "right"
+                ),
+                self.kind,
+                self.strictness,
                 self._schema.copy(),
-                self._left.schema(),
-                self._right.schema(),
+                self.left[].schema(),
+                self.right[].schema(),
                 ctx.copy(),
             )
         )
@@ -1234,7 +1638,7 @@ struct Join(Relation, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
-            "Join(", self._left, ", ", self._right, ", ", self._kind, ")"
+            "Join(", self.left[], ", ", self.right[], ", ", self.kind, ")"
         )
 
 
@@ -1251,11 +1655,11 @@ struct ParquetScan(Relation, Writable):
     yet. The operator opens it on first `drain`.
     """
 
-    var _path: String
+    var path: String
     var _schema: Schema
 
     def __init__(out self, var path: String, var schema: Schema):
-        self._path = path^
+        self.path = path^
         self._schema = schema^
 
     def schema(self) -> Schema:
@@ -1269,7 +1673,7 @@ struct ParquetScan(Relation, Writable):
     ) raises -> Pipeline:
         return Pipeline(
             ParquetScanOperator(
-                self._path.copy(),
+                self.path.copy(),
                 self._schema.copy(),
                 pushed^,
                 bindings.copy(),
@@ -1277,4 +1681,4 @@ struct ParquetScan(Relation, Writable):
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("ParquetScan(", self._path, ")")
+        writer.write("ParquetScan(", self.path, ")")

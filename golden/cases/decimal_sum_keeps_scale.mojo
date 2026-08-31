@@ -15,6 +15,7 @@ def plan() raises -> DynRelation:
     expression.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     total:string

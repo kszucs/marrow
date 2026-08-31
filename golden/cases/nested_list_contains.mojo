@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     different answers to "is 5 in there".
 
     -- skip mojo
+    -- skip python
 
     -- expected
     b:bool

@@ -14,6 +14,7 @@ def plan() raises -> DynRelation:
     input with the same answer for a different reason.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     v:int64	w:int64

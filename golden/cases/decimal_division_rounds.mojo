@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     can still disagree.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     d:string

@@ -12,6 +12,7 @@ def plan() raises -> DynRelation:
     treats the set as a hash lookup will get this wrong in the natural way.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     k:string	v:int64	w:int64
