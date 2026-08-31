@@ -3,6 +3,13 @@
 A leaf is where a fused subtree touches the batch, and therefore where `bind`
 does its work — every schema lookup and `Variant` unwrap happens here so the
 lane loop above does none.
+
+The list-consuming nodes — `ListLength`, `ArrayContains` — live here too,
+beside the `ListColumn` they read. They are not leaves, but a list is only
+ever read *from* one: `ListValue` declares no lane because a list element is a
+whole sub-array, so every list operation is a node of another family that
+binds the column and produces a fixed-width result. Keeping them next to the
+leaf they consume is what makes that one-way relationship legible.
 """
 
 from ...arrays import (
@@ -23,10 +30,10 @@ from ...dtypes import (
 from ...scalars import PrimitiveScalar, StringScalar
 from ...arrays import StructArray, Int32Array
 from ...dtypes import Int32Type
-from ...kernels.nested import ArrayLengthKernel
+from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
-from ..logical import Shape
+from ..logical import Shape, merged
 from ..bindings import Bindings
 from ...kernels.bounds import Bounds
 from ..pruning import PruneStats, Truth, param_bounds
@@ -495,6 +502,78 @@ struct ListLength[A: ListValue](ColumnBound, NumericValue, Unnamed):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("array_length(", self.a, ")")
+
+
+struct ArrayContains[L: ListValue, E: NumericValue](
+    BoolValue, ColumnBound, Unnamed
+):
+    """`array_contains(list, elem)` — does `list[i]` hold the value `elem[i]`?
+
+    `ListLength`'s sibling and the second instance of the shape that entry
+    describes: a `ListValue` bound, a lane of another family out. The
+    difference is only which family — a length is numeric, a membership test
+    is boolean — so this is a `BoolValue` breaker in the mould of
+    `NullPredicate`: `bind` runs the kernel over the whole column and `lane`
+    reads the bits back.
+
+    Two parameters rather than one because both operands are typed at compile
+    time: `L.Type` picks the offset width and `E.Type` the element type, so
+    `ArrayContainsKernel.apply` binds directly. Going through its `dispatch`
+    would open a listlike x numeric ladder — every offset width against every
+    numeric type — for a pair this lane already knows.
+
+    **The search value is a column, not a constant**, matching the kernel:
+    row `i` looks for `elem[i]` in `list[i]`. A constant search value is
+    `lit(3, int64)`, which stays `Shape.scalar` until `evaluate` broadcasts it.
+
+    Nulls follow the kernel and are not restated here: the result is null
+    exactly where the list row is, and a null search value gives `FALSE`.
+    """
+
+    comptime NativeType = DType.int32
+    """Sizes the bit-pack driver's lane. Neither operand's width is relevant —
+    `lane` reads bits out of a `BoolArray` the kernel already produced."""
+
+    comptime shape = Shape.columnar
+    comptime Bound = BoolArray
+
+    var list: Self.L
+    var elem: Self.E
+
+    def __init__(out self, var list: Self.L, var elem: Self.E):
+        self.list = list^
+        self.elem = elem^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return merged(self.list.columns(), self.elem.columns())
+
+    # -- BoolValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        """Bind the list, materialise the search column, run the kernel.
+
+        `as_primitive` needs no dtype guard here, unlike `_as_bool` one file
+        over. That guard exists because a Kleene operand is bound on
+        `ComptimeValue`, so an `int64` operand type-checks and is only wrong at
+        run time. `E` is a `NumericValue`, and a `PrimitiveValue` evaluates to
+        an array of its own `Type` by construction — a batch whose column
+        disagrees fails earlier, in the leaf's own `bind`.
+        """
+        return ArrayContainsKernel.apply(
+            self.list.bind(batch, bindings),
+            self.elem.evaluate(batch, bindings)
+            .to_array(len(batch))
+            .as_primitive[Self.E.Type](),
+        )
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("array_contains(", self.list, ", ", self.elem, ")")
 
 
 # ---------------------------------------------------------------------------

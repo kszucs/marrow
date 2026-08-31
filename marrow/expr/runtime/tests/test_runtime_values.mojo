@@ -10,6 +10,10 @@ from std.testing import assert_equal, assert_true
 
 from ....arrays import StructArray, DynArray
 from ...bindings import Bindings
+from ...builders import array_contains as build_array_contains
+from ...builders import array_length as build_array_length
+from ...builders import col as build_col
+from ...builders import is_in as build_is_in
 from ....builders import array
 from ....dtypes import Date32Type, DynType, date32, float64, int32, int64
 from ....scalars import DynScalar, Int32Scalar, Int64Scalar, StringScalar
@@ -28,6 +32,7 @@ from ..values import (
     abs,
     add,
     and_,
+    array_contains,
     array_length,
     cast,
     ceil,
@@ -539,3 +544,68 @@ def test_runtime_conditionals_leave_a_hopeless_mix_to_the_kernel() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def _runtime_lists() raises -> RecordBatch:
+    """`xs` = [[1, 2, 3], [4], [], null], `needle` = [2, 4, 1, 1]."""
+    var ints = Int64Builder()
+    var lists = ListBuilder(ints^)
+    var child_any = lists.values()
+    ref child = child_any.as_int64()
+    child.append(1)
+    child.append(2)
+    child.append(3)
+    lists.append_valid()
+    child.append(4)
+    lists.append_valid()
+    lists.append_valid()
+    lists.append_null()
+    return record_batch(
+        [lists.finish().to_dyn(), array([2, 4, 1, 1], int64).to_dyn()],
+        names=["xs", "needle"],
+    )
+
+
+def test_runtime_array_contains_over_a_list_column() raises:
+    """Two children rather than a payload, unlike `isin`: the search value is
+    one per row, so there is nothing constant to hoist out of the morsel."""
+    var b = _runtime_lists()
+    var got = (
+        array_contains(column("xs"), column("needle"))
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(4)
+        .as_bool()
+        .copy()
+    )
+    assert_true(got[0].value())
+    assert_true(got[1].value())
+    assert_true(not got[2].value())
+    assert_true(got.is_null(3))  # a null list has no members
+
+
+def test_builder_verbs_select_the_runtime_overload() raises:
+    """The point of the annotations: each `var v: RuntimeValue` is a
+    compile-time proof that the erased overload was chosen.
+
+    A concrete overload does not always beat a trait-bound generic one in Mojo
+    — a `filter` overload on a concrete predicate type compiled clean and was
+    silently never called. Here the generic sibling binds `ComptimeValue` /
+    `ListValue`, which `RuntimeValue` deliberately does not satisfy, and these
+    assignments are what says so rather than assuming it.
+    """
+    var b = _runtime_lists()
+    var n: RuntimeValue = build_array_length(build_col("xs"))
+    var c: RuntimeValue = build_array_contains(
+        build_col("xs"), build_col("needle")
+    )
+    var m: RuntimeValue = build_is_in(
+        build_col("needle"), array([1, 2], int64).to_dyn()
+    )
+
+    var sa = b.to_struct_array()
+    var lengths = n.evaluate(sa, Bindings()).to_array(4).as_int32().copy()
+    assert_equal(Int(lengths[0].value()), 3)
+    assert_true(c.evaluate(sa, Bindings()).to_array(4).as_bool()[0].value())
+    var member = m.evaluate(sa, Bindings()).to_array(4).as_bool().copy()
+    assert_true(member[0].value())  # needle 2 is in {1, 2}
+    assert_true(not member[1].value())  # needle 4 is not

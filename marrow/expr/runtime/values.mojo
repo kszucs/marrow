@@ -67,7 +67,7 @@ from ...kernels.conditional import coalesce as coalesce_kernel
 from ...kernels.conditional import fill_null as fill_null_kernel
 from ...kernels.conditional import nullif as nullif_kernel
 from ...kernels.membership import IsInKernel
-from ...kernels.nested import ArrayLengthKernel
+from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 from ...kernels.numeric import (
     AbsKernel,
     AddKernel,
@@ -675,6 +675,12 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             return EndsWithKernel.dispatch(l^, r^)
         if self._tag == "contains":
             return ContainsKernel.dispatch(l^, r^)
+
+        # Nested. A binary tag rather than a payload one, unlike `isin`: the
+        # search value varies per row, so it is a column the batch supplies and
+        # not a constant the plan carries.
+        if self._tag == "array_contains":
+            return ArrayContainsKernel.dispatch(l^, r^)
 
         # `NullifKernel` and `FillNullKernel` both call `expect_same_dtype`,
         # so a mixed pair has to meet before the kernel sees it -- otherwise
@@ -1303,9 +1309,12 @@ def isin(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
 
     The set is a `DynArray` payload rather than a child: it is the same set on
     every row and every batch, so hashing it into the probe table is work that
-    belongs to the plan, not to the morsel. The comptime lane has no
-    counterpart -- `IsInKernel` decides membership on the 64-bit hash alone
-    and has no typed leaf to fuse into.
+    belongs to the plan, not to the morsel.
+
+    The comptime lane's counterpart is `IsIn`, and it is a **breaker** there
+    rather than a fusing node: `IsInKernel` decides membership on the 64-bit
+    hash alone, so it has no typed leaf to fuse into and the node runs it over
+    a whole column. `builders.is_in` reaches both.
     """
     return RuntimeValue("isin", a, Payload(value_set^))
 
@@ -1329,7 +1338,19 @@ def array_length(var a: RuntimeValue) -> RuntimeValue:
 
     A list column consumed into a numeric one, which is the only way a list is
     read: a list element is a whole sub-array rather than a value a lane can
-    hold. Same reason `builders.array_length` is the comptime lane's only list
-    verb.
+    hold.
     """
     return RuntimeValue("array_length", a)
+
+
+def array_contains(
+    var list: RuntimeValue, var elem: RuntimeValue
+) -> RuntimeValue:
+    """True where `list[i]` contains the value `elem[i]`.
+
+    Both operands are children, where `isin`'s value set is a payload: the
+    search value here is a *column*, one value per row, so there is nothing
+    constant to hoist out of the morsel. `ArrayContainsKernel` takes numeric
+    elements only and says so itself when it does not.
+    """
+    return RuntimeValue("array_contains", list, elem)

@@ -34,6 +34,7 @@ from ...kernels.boolean import (
     ValuePredicateKernel,
     XorKernel,
 )
+from ...kernels.membership import IsInKernel
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, merged
@@ -338,3 +339,77 @@ struct ValuePredicate[K: ValuePredicateKernel, A: NumericValue](
 
 comptime IsNan = ValuePredicate[IsNanKernel, _]
 comptime IsInf = ValuePredicate[IsInfKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# IsIn — membership against a constant value set
+# ---------------------------------------------------------------------------
+struct IsIn[A: ComptimeValue](BoolValue, ColumnBound, Unnamed):
+    """`a IN (...)` — is each of `a`'s values one of `value_set`'s?
+
+    The operand is bound on `ComptimeValue` rather than on a family, for the
+    reason `NullPredicate`'s is: `IsInKernel` decides membership on the 64-bit
+    hash alone, so it takes a `DynArray` and every type `RapidHashKernel`
+    supports funnels through one implementation. There is no typed leaf to
+    fuse into and there is not meant to be one — a per-lane formulation would
+    have to re-hash the set on every row.
+
+    So this is a **breaker**, exactly like `NullPredicate` and
+    `StringPredicate`: `bind` builds the probe table and runs the whole column
+    through it, and `lane` reads the resulting bits back out. A breaker is a
+    first-class citizen of this lane — what fuses is everything *under* the
+    operand, so `is_in(upper(region), set)` still compiles `upper(region)`
+    into one loop.
+
+    **The value set is a field, not an operand.** It is the same set on every
+    row and every batch, so it is a constant the node carries rather than a
+    column something has to broadcast — the same argument the runtime lane's
+    `isin` payload makes.
+
+    **The result is never null**, and that is `IsInKernel`'s rule rather than
+    one restated here: a null in `a` is `TRUE` exactly when the set contains a
+    null, matching PyArrow's `null_matching_behavior="match"`. The kernel
+    returns an all-valid `BoolArray` and `ColumnBound` reports it.
+    """
+
+    comptime NativeType = DType.int32
+    """Sizes the bit-pack driver's lane. The operand has no relevant width —
+    `lane` reads bits out of a `BoolArray` the kernel already produced."""
+
+    comptime shape = Shape.columnar
+    """Always columnar: `bind` materialises a length-N `BoolArray` whatever the
+    operand's shape was."""
+
+    comptime Bound = BoolArray
+
+    var a: Self.A
+    var _value_set: DynArray
+
+    def __init__(out self, var a: Self.A, var value_set: DynArray):
+        self.a = a^
+        self._value_set = value_set^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    # -- BoolValue ----------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        """Hash the set into a probe table, then run the column through it.
+
+        `dispatch` rather than `apply`, so a set whose dtype disagrees with the
+        operand's raises here and names both — the check `IsInKernel` owns.
+        """
+        return IsInKernel.dispatch(
+            self.a.evaluate(batch, bindings).to_array(len(batch)),
+            self._value_set.copy(),
+        )
+
+    @always_inline
+    def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(IsInKernel.name, "(", self.a, ", ", self._value_set, ")")
