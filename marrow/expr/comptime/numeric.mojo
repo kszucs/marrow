@@ -153,16 +153,24 @@ toward zero and answer -1. That divergence is deliberate and recorded in
 `((n % 3) + 3) % 3` rather than asserting SQL's convention against marrow's.
 """
 
-comptime Least = NumericBinary[MinKernel, _, _]
-comptime Greatest = NumericBinary[MaxKernel, _, _]
-"""SQL's `LEAST` / `GREATEST` — the element-wise pair, not the aggregates.
+comptime MinElementWise = NumericBinary[MinKernel, _, _]
+comptime MaxElementWise = NumericBinary[MaxKernel, _, _]
+"""The row-wise extrema — `pc.min_element_wise` / `pc.max_element_wise`.
 
-They are `NumericBinary` and not a family of their own because they follow
-exactly its rule: the wider operand wins, and a null on either side makes the
-row null. That last part is SQL's answer and PyArrow's `min_element_wise`
-default (`skip_nulls=False`), and it is what separates them from `MIN(x)` /
-`MAX(x)`, which fold a column and ignore nulls. The names differ for the same
-reason -- `col("a", int64).min()` is the aggregate and is already taken.
+`NumericBinary` and not a family of their own because they follow exactly its
+rules: the wider operand wins, and a null on either side makes the row null.
+
+**Deliberately not named `least` / `greatest`.** Those are SQL's spelling and
+SQL *skips* nulls — `LEAST(NULL, 3)` is 3, not NULL — which is also PyArrow's
+`skip_nulls=True` default. `MinKernel` intersects validity like every other
+`BinaryNumericKernel` (`kernels/tests/test_arithmetic.mojo::test_min_with_nulls`),
+so these are the `skip_nulls=False` form and only that. Giving them SQL's name
+would put a known-wrong answer behind it;
+`golden/cases/math_greatest_and_least.mojo` pins the skipping semantics and
+stays skipped until a kernel provides them.
+
+They are still distinct from `MIN(x)` / `MAX(x)`, which fold a whole column —
+`col("a", int64).min()` is the aggregate and is already taken.
 """
 
 

@@ -42,7 +42,7 @@ all of them.
 | 6 | **Parallel group-by** — thread-local partials plus a radix merge | Group-by is where analytical queries spend their time; single-threaded loses every benchmark. `groupby.mojo` is 224 lines with no parallelism | **M** | — |
 | 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
 | 8 | **String and temporal surface** — 16 + 13 skipped golden cases | The long tail a dataframe user hits immediately after the basics work | **M** | — |
-| 9 | ~~**Cheap expression nodes over kernels that already exist**~~ — done 2026-08-31 | Nine kernels had no node. `is_in`, `array_contains`, `least`/`greatest` and six float unaries now reach both lanes; see §1.5 for what is left and why it is not cheap | **S** | — |
+| 9 | ~~**Cheap expression nodes over kernels that already exist**~~ — done 2026-08-31 | Nine kernels had no node. `is_in`, `array_contains`, `min`/`max_element_wise` and six float unaries now reach both lanes; see §1.5 for what is left and why it is not cheap | **S** | — |
 | 10 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
 | 11 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 10, 12 |
 | 12 | **Statistics propagation and a cost model** | Feeds 11. Note two of three incumbents ship without one — DataFusion and polars both have none | **L** | — |
@@ -152,10 +152,15 @@ have a node and a verb in both lanes:
 - `IsInKernel` — it had a runtime `isin` tag but no comptime node and no verb,
   so `IN (...)` could not be written from the one surface that spans both
   lanes. Now `IsIn` (`comptime/boolean.mojo`) and `builders.is_in`.
-- `MinKernel` / `MaxKernel` (`min_element_wise` / `max_element_wise`) — dead in
-  both lanes. Now `Least` / `Greatest` and `builders.least` / `.greatest`.
-  They cannot be spelled `.min()` / `.max()`: those are the *aggregates*, and
-  SQL draws the same distinction with the same two words.
+- `MinKernel` / `MaxKernel` — dead in both lanes. Now `MinElementWise` /
+  `MaxElementWise` and `builders.min_element_wise` / `.max_element_wise`.
+  **Deliberately not spelled `least` / `greatest`**: those are SQL's names and
+  SQL *skips* nulls (`LEAST(NULL, 3)` is 3), while `MinKernel` intersects
+  validity like every other `BinaryNumericKernel`. Naming them for SQL would
+  have put a wrong answer behind the name;
+  `golden/cases/math_greatest_and_least.mojo` pins the skipping semantics and
+  stays skipped, since providing them is a kernel change. `.min()` / `.max()`
+  were unavailable anyway — those are the aggregates.
 - `Exp2Kernel`, `Log2Kernel`, `Log10Kernel`, `Log1pKernel`, `SinKernel`,
   `CosKernel` — six `UnaryFloatKernel`s where `NumericValue` named three. Now
   `.exp2()` … `.cos()` and the matching runtime tags.
@@ -192,6 +197,16 @@ concatenates only by leaving the lane.
 - `hashing.mojo`, `hashtable.mojo`, `partition.mojo` and `distinct.mojo`'s
   public defs are building blocks other kernels consume, not user-facing
   compute. `distinct` is reached through `aggregate.DistinctCount`.
+
+**Six skipped golden cases are now unblocked by API but not by semantics.**
+`math_trigonometry`, `math_log_bases`, `nested_list_contains`,
+`filter_in_literal_list` and `filter_not_in_list_with_null` name verbs that now
+exist and should be re-checked against their SQL twins and un-skipped.
+`math_greatest_and_least` is the exception and must **not** be: its expected
+rows encode SQL's null-skipping, which `MinKernel` / `MaxKernel` do not do.
+That case needs a `skip_nulls=True` kernel first. Its docstring still says "no
+expression node exposes them", which is now half true — the node exists, the
+null rule does not.
 
 ### 1.6 ~~Top-K is a dead parameter~~ — done 2026-08-31
 

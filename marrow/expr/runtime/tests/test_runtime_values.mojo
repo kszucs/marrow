@@ -17,8 +17,8 @@ from ...bindings import Bindings
 from ...builders import array_contains as build_array_contains
 from ...builders import array_length as build_array_length
 from ...builders import col as build_col
-from ...builders import greatest as build_greatest
-from ...builders import least as build_least
+from ...builders import max_element_wise as build_max_element_wise
+from ...builders import min_element_wise as build_min_element_wise
 from ...builders import is_in as build_is_in
 from ....builders import array
 from ....dtypes import Date32Type, DynType, date32, float64, int32, int64
@@ -52,7 +52,6 @@ from ..values import (
     floor,
     floordiv,
     ge,
-    greatest,
     gt,
     ilike,
     if_else,
@@ -60,7 +59,6 @@ from ..values import (
     is_valid,
     isin,
     le,
-    least,
     length,
     like,
     literal,
@@ -68,6 +66,8 @@ from ..values import (
     log1p,
     log2,
     lt,
+    max_element_wise,
+    min_element_wise,
     mod,
     month,
     mul,
@@ -650,7 +650,7 @@ def test_runtime_the_rest_of_the_float_unary_family() raises:
     assert_almost_equal(cosines[0].value(), Float64(1.0))
 
 
-def test_runtime_least_and_greatest_pick_per_row() raises:
+def test_runtime_element_wise_extrema_pick_per_row() raises:
     """Two `_binary` tags routed through `_arith`, not `_float_binary`: they
     select an operand rather than computing a new value, so the result keeps
     the promoted operand type instead of widening to float64.
@@ -658,25 +658,32 @@ def test_runtime_least_and_greatest_pick_per_row() raises:
     **Narrowed to `Int64Array` before comparing, and that is load-bearing.**
     `DynArray.__eq__` compares whole buffers, and a binary kernel computes
     every lane before masking, so the byte under `a`'s null holds `max(0, 30)`
-    where a builder writes 0. Erased `==` fails on `greatest` and *passes* on
-    `least` purely because `min(0, 30)` happens to be 0 — the trap
+    where a builder writes 0. Erased `==` fails on the max and *passes* on the
+    min purely because `min(0, 30)` happens to be 0 — the trap
     `docs/backlog.md` §1.9 records, caught here.
     """
-    var smaller = _ints(least(column("a"), column("b"))).as_int64().copy()
+    var smaller = (
+        _ints(min_element_wise(column("a"), column("b"))).as_int64().copy()
+    )
     assert_true(smaller == array([1, 2, None, 4], int64))
-    var larger = _ints(greatest(column("a"), column("b"))).as_int64().copy()
+    var larger = (
+        _ints(max_element_wise(column("a"), column("b"))).as_int64().copy()
+    )
     assert_true(larger == array([10, 20, None, 40], int64))
-    # Null-in-null-out, and the type is the promoted operand's, not float64.
+    # Null-in-null-out — SQL's `GREATEST` would answer 30 on this row, which
+    # is why these verbs do not carry that name. The type is the promoted
+    # operand's, not float64.
     assert_true(larger.is_null(2))
     assert_true(
-        _ints(least(column("a"), column("b"))).dtype() == DynType(int64)
+        _ints(min_element_wise(column("a"), column("b"))).dtype()
+        == DynType(int64)
     )
 
 
-def test_builder_least_and_greatest_select_the_runtime_overload() raises:
+def test_builder_element_wise_extrema_select_the_runtime_overload() raises:
     """As `test_builder_verbs_select_the_runtime_overload`: the annotation is
     the proof, since the generic sibling binds `NumericValue`."""
-    var l: RuntimeValue = build_least(build_col("a"), build_col("b"))
-    var g: RuntimeValue = build_greatest(build_col("a"), build_col("b"))
+    var l: RuntimeValue = build_min_element_wise(build_col("a"), build_col("b"))
+    var g: RuntimeValue = build_max_element_wise(build_col("a"), build_col("b"))
     assert_true(_ints(l).as_int64().copy() == array([1, 2, None, 4], int64))
     assert_true(_ints(g).as_int64().copy() == array([10, 20, None, 40], int64))

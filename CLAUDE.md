@@ -436,9 +436,9 @@ share no node types**:
   and an optional payload; `RuntimeAggregate` is an aggregate named at run time
   and resolved against the input schema at plan-build time. What stays runtime
   is the *dtype* of the operands, not the operation.
-- **`builders.mojo`** — `col`, `lit`, `if_else`, `is_in`, `least`, `greatest`,
-  `array_length`, `array_contains`, `param`, `count_star`, `table()`,
-  `scan()`: the one surface spanning both lanes. `col("a", int64)` gives a
+- **`builders.mojo`** — `col`, `lit`, `if_else`, `is_in`, `min_element_wise`,
+  `max_element_wise`, `array_length`, `array_contains`, `param`,
+  `count_star`, `table()`, `scan()`: the one surface spanning both lanes. `col("a", int64)` gives a
   comptime `Column[Int64Type]`, `col("a")` a `RuntimeValue`. **Every verb here
   carries one overload per lane**, and they must stay in this file: a split
   overload set shadows rather than overloads, so which one a call site got
@@ -547,7 +547,7 @@ marrow/
 ├── expr/
 │   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
 │   ├── physical.mojo     # Operator / DynOperator push engine
-│   ├── builders.mojo     # col, lit, if_else, is_in, least/greatest,
+│   ├── builders.mojo     # col, lit, if_else, is_in, min/max_element_wise,
 │                         #   array_length/array_contains, param, count_star,
 │                         #   table, scan
 │   ├── params.mojo       # Param[T], Bindings

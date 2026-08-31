@@ -689,12 +689,12 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         if self._tag == "pow":
             return Self._float_binary[PowKernel](l^, r^)
 
-        # `_arith`, not `_float_binary`: `LEAST`/`GREATEST` pick one of their
-        # operands rather than computing a new value, so the result keeps the
-        # promoted operand type instead of widening to float64.
-        if self._tag == "least":
+        # `_arith`, not `_float_binary`: the row-wise extrema pick one of
+        # their operands rather than computing a new value, so the result
+        # keeps the promoted operand type instead of widening to float64.
+        if self._tag == "min_element_wise":
             return Self._arith[MinKernel](l^, r^)
-        if self._tag == "greatest":
+        if self._tag == "max_element_wise":
             return Self._arith[MaxKernel](l^, r^)
 
         if self._tag == "startswith":
@@ -1092,18 +1092,20 @@ def pow(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
     return RuntimeValue("pow", l, r)
 
 
-def least(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
-    """`LEAST(l, r)` — the smaller of the two, per row.
+def min_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The smaller of the two, per row — `pc.min_element_wise`.
 
-    Not `min`, which on `RuntimeValue` is the aggregate that folds a column.
-    Null-in-null-out, as SQL and `pc.min_element_wise` are by default.
+    Not `min`, which on `RuntimeValue` is the aggregate that folds a column,
+    and **not** SQL's `LEAST`: this is null-in-null-out, where `LEAST` skips
+    nulls. See `MinElementWise` in the comptime lane for why the SQL name is
+    withheld.
     """
-    return RuntimeValue("least", l, r)
+    return RuntimeValue("min_element_wise", l, r)
 
 
-def greatest(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
-    """`GREATEST(l, r)` — the larger of the two, per row."""
-    return RuntimeValue("greatest", l, r)
+def max_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The larger of the two, per row — `pc.max_element_wise`."""
+    return RuntimeValue("max_element_wise", l, r)
 
 
 def neg(var a: RuntimeValue) -> RuntimeValue:

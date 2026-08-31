@@ -35,10 +35,12 @@
     binds directly instead of opening its listlike x numeric ladder. Plus an
     `array_contains` tag in the runtime lane — a *binary* tag, not a payload
     one, because the search value varies per row.
-  - `least` / `greatest` — `MinKernel` / `MaxKernel` (`min_element_wise` /
-    `max_element_wise`) were dead in both lanes. They cannot be `.min()` /
-    `.max()`, which are the aggregates; SQL draws the same distinction with
-    the same two words.
+  - `min_element_wise` / `max_element_wise` — `MinKernel` / `MaxKernel` were
+    dead in both lanes. **Not** named `least` / `greatest`: SQL's pair *skips*
+    nulls (`LEAST(NULL, 3)` is 3) and these intersect validity like every
+    other `BinaryNumericKernel`, so the SQL name would have shipped a wrong
+    answer. `golden/cases/math_greatest_and_least.mojo` pins the skipping
+    semantics and stays skipped until a kernel provides them.
   - `exp2`, `log2`, `log10`, `log1p`, `sin`, `cos` — six `UnaryFloatKernel`s
     where `NumericValue` named three.
 
