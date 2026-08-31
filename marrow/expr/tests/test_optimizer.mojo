@@ -18,7 +18,8 @@ from ...builders import array
 from ...dtypes import int64, string
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
-from ..builders import col, lit, table
+from ..builders import col, count_star, lit, table
+from ...kernels.join import JOIN_INNER, JOIN_LEFT
 from ..logical import DynRelation, DynValue
 from ..optimizer import (
     AllRules,
@@ -290,6 +291,7 @@ def test_optimizer_empty_propagates_through_a_filter() raises:
         .limit(0)
         .filter(col("b", int64) > lit(20, int64))
     )
+    _fires(plan)
     var out = String(plan.optimize[AllRules]())
     assert_equal(_occurrences(out, "Filter("), 0)
     assert_true("Empty(" in out, out)
@@ -326,21 +328,39 @@ def test_optimizer_removes_a_no_op_projection() raises:
     _check(plan, [[3, 1, 4, 1, 5, 9], [10, 20, 30, 40, 50, 60]])
 
 
-def test_optimizer_keeps_a_narrowing_projection() raises:
-    """`select("a")` changes the schema, so it is **not** a no-op.
+def test_optimizer_narrowing_projection_dissolves_into_the_source() raises:
+    """`select("a")` ends up with **no** projection, and that is correct.
 
-    The negative case matters more than the positive one: matching on
-    expressions rather than on the resulting schema would delete this and
-    silently return an extra column.
+    The projection is not "deleted because it looked redundant" — column
+    pruning narrows the source to `a` first, which *makes* it redundant, and
+    `RemoveNoOpProject` then removes a genuine no-op. Two rules composing.
+
+    This case previously asserted the projection survived, which was true
+    before pruning existed and is now simply a worse plan.
     """
     var plan = table(_batch()).select("a")
-    assert_true("Project(" in String(plan.optimize[AllRules]()))
+    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Project("), 0)
     _check(plan, [[3, 1, 4, 1, 5, 9]])
+
+
+def test_optimizer_keeps_a_reordering_projection() raises:
+    """A projection that **reorders** columns is not a no-op, however much its
+    field set matches.
+
+    The negative that matters: `RemoveNoOpProject` compares schemas, and a
+    schema carries order. Matching on the field *set* instead would delete this
+    and silently return the columns the other way round — which no assertion on
+    row values alone would catch, since both columns contain the right data.
+    """
+    var plan = table(_batch()).select("b", "a")
+    assert_true("Project(" in String(plan.optimize[AllRules]()))
+    _check(plan, [[10, 20, 30, 40, 50, 60], [3, 1, 4, 1, 5, 9]])
 
 
 def test_optimizer_merges_stacked_projections() raises:
     """`Project(Project(x))` collapses when the outer only selects."""
     var plan = table(_batch()).select("a", "b").select("a")
+    _fires(plan)
     assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Project("), 1)
     _check(plan, [[3, 1, 4, 1, 5, 9]])
 
@@ -350,6 +370,7 @@ def test_optimizer_pushes_a_filter_below_a_projection() raises:
     var plan = table(_batch()).select("a", "b").filter(
         col("a", int64) > lit(3, int64)
     )
+    _fires(plan)
     _check(plan, [[4, 5, 9], [30, 50, 60]])
 
 
@@ -419,3 +440,195 @@ def test_an_aggregate_above_a_limit_emits_one_row() raises:
     var out = plan.optimize[NoRules]().execute(ctx)
     assert_equal(out.num_rows(), 1, "an ungrouped aggregate must emit one row")
     _ = ctx^
+
+
+# ---------------------------------------------------------------------------
+# Column pruning — the downward pass
+# ---------------------------------------------------------------------------
+def _wide() raises -> RecordBatch:
+    """Four columns, so pruning has something to remove and the survivors can
+    be checked by position."""
+    return record_batch(
+        [
+            array([3, 1, 4], int64).copy(),
+            array([10, 20, 30], int64).copy(),
+            array([100, 200, 300], int64).copy(),
+            array([7, 8, 9], int64).copy(),
+        ],
+        names=["a", "b", "c", "d"],
+    )
+
+
+def test_pruning_narrows_a_source_to_the_projected_columns() raises:
+    """`select("a")` over four columns reads one."""
+    var plan = table(_wide()).select("a")
+    var out = String(plan.optimize[AllRules]())
+    assert_true("1 cols" in out or "InMemoryTable" in out, out)
+    _check(plan, [[3, 1, 4]])
+
+
+def test_pruning_keeps_columns_a_filter_reads() raises:
+    """A predicate's columns are needed below even though the output drops
+    them — this is the case a naive "keep what the output names" gets wrong,
+    and it fails as a missing column rather than as wrong rows."""
+    var plan = table(_wide()).filter(col("b", int64) > lit(15, int64)).select(
+        "a"
+    )
+    _check(plan, [[1, 4]])
+
+
+def test_pruning_keeps_columns_a_sort_reads() raises:
+    var plan = table(_wide()).sort_by([col("c", int64)], [False]).select("a")
+    _check(plan, [[4, 1, 3]])
+
+
+def test_pruning_keeps_columns_an_aggregate_groups_by() raises:
+    var plan = table(_wide()).aggregate(
+        [col("b", int64).sum().alias("total")], [col("a", int64)]
+    )
+    _check(plan, [[3, 1, 4], [10, 20, 30]])
+
+
+def test_pruning_never_leaves_a_source_with_no_columns() raises:
+    """`count_star()` reads no columns at all.
+
+    A `RecordBatch` carries its row count in its columns, so pruning to the
+    empty set would make the source report zero rows and the count come back
+    `0` — a wrong answer, not a slow one. The source keeps its first column.
+    """
+    var plan = table(_wide()).aggregate([count_star()])
+    _check(plan, [[3]])
+
+
+def test_pruning_preserves_source_column_order() raises:
+    """A source keeps *its* order, not the order the consumer named.
+
+    Reordering here would move every positional reference above it.
+    """
+    var plan = table(_wide()).select("d", "a")
+    _check(plan, [[7, 8, 9], [3, 1, 4]])
+
+
+def test_pruning_is_off_without_the_rule_set() raises:
+    """`NoRules.prepare` is the identity, which is what makes it the control
+    arm every `_check` above depends on."""
+    var plan = table(_wide()).select("a")
+    assert_equal(String(plan), String(plan.optimize[NoRules]()))
+
+
+# ---------------------------------------------------------------------------
+# Filter pushdown through a join
+# ---------------------------------------------------------------------------
+def _left_table() raises -> RecordBatch:
+    return record_batch(
+        [
+            array([1, 2, 3], int64).copy(),
+            array([10, 20, 30], int64).copy(),
+        ],
+        names=["id", "lval"],
+    )
+
+
+def _right_table() raises -> RecordBatch:
+    return record_batch(
+        [
+            array([1, 2, 3], int64).copy(),
+            array([100, 200, 300], int64).copy(),
+        ],
+        names=["rid", "rval"],
+    )
+
+
+def test_optimizer_pushes_a_filter_into_the_left_side_of_a_join() raises:
+    """A predicate reading only left columns shrinks the left input first."""
+    var plan = table(_left_table()).join(
+        table(_right_table()), [0], [0], JOIN_INNER
+    ).filter(col("lval", int64) > lit(15, int64))
+    _fires(plan)
+    var out = String(plan.optimize[AllRules]())
+    assert_true(out.find("Join(") < out.find("Filter("), out)
+    _check(plan, [[2, 3], [20, 30], [2, 3], [200, 300]])
+
+
+def test_optimizer_pushes_a_filter_into_the_right_side_of_a_join() raises:
+    var plan = table(_left_table()).join(
+        table(_right_table()), [0], [0], JOIN_INNER
+    ).filter(col("rval", int64) > lit(150, int64))
+    _fires(plan)
+    _check(plan, [[2, 3], [20, 30], [2, 3], [200, 300]])
+
+
+def test_optimizer_does_not_push_a_filter_below_an_outer_join() raises:
+    """The rule that would silently return nothing.
+
+    An outer join manufactures NULL rows for non-matches, and a predicate
+    evaluated before that step never sees them. `LEFT JOIN ... WHERE r IS NULL`
+    is the anti-join idiom; pushing its predicate into the right side answers
+    empty. Asserted as *inert* rather than only on rows, because a wrong answer
+    here depends on the data happening to contain a non-match.
+    """
+    var plan = table(_left_table()).join(
+        table(_right_table()), [0], [0], JOIN_LEFT
+    ).filter(col("rval", int64) > lit(150, int64))
+    _inert(plan)
+
+
+def test_optimizer_leaves_an_ambiguous_join_predicate_alone() raises:
+    """A predicate on a column both sides carry could belong to either, so the
+    rule declines rather than guessing a side."""
+    var both = record_batch(
+        [array([1, 2, 3], int64).copy(), array([9, 9, 9], int64).copy()],
+        names=["id", "lval"],
+    )
+    var plan = table(both^).join(
+        table(_left_table()), [0], [0], JOIN_INNER
+    ).filter(col("lval", int64) > lit(5, int64))
+    _inert(plan)
+
+
+# ---------------------------------------------------------------------------
+# Negative cases for the rules that had none
+# ---------------------------------------------------------------------------
+def test_optimizer_does_not_merge_limits_across_a_filter() raises:
+    """`Limit(Filter(Limit(x)))` is not two adjacent limits, and merging them
+    would skip the filter's row reduction entirely."""
+    var plan = (
+        table(_batch())
+        .limit(4)
+        .filter(col("b", int64) > lit(15, int64))
+        .limit(2)
+    )
+    _check(plan, [[1, 4], [20, 30]])
+
+
+def test_optimizer_does_not_remove_a_sort_across_a_limit() raises:
+    """`Sort(Limit(Sort(x)))` keeps both: the inner sort decides *which* rows
+    the limit takes, so discarding it changes the row set, not just the
+    order."""
+    var plan = (
+        table(_batch())
+        .sort_by([col("a", int64)], [True])
+        .limit(3)
+        .sort_by([col("b", int64)], [True])
+    )
+    _check(plan, [[3, 1, 1], [10, 20, 40]])
+
+
+def test_optimizer_empty_propagates_through_sort_and_project() raises:
+    """The `Sort` and `Project` arms of `PropagateEmpty`, which the `Filter`
+    case did not exercise.
+
+    The `Project` arm is the one with a rule of its own: it must keep the
+    *projection's* schema, not the input's, or an empty result comes back with
+    the wrong columns.
+    """
+    var plan = (
+        table(_batch())
+        .limit(0)
+        .sort_by([col("a", int64)], [True])
+        .select("b")
+    )
+    var out = String(plan.optimize[AllRules]())
+    assert_equal(_occurrences(out, "Sort("), 0)
+    assert_true("Empty(" in out, out)
+    _check(plan, [List[Int]()])

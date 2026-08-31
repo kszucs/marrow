@@ -66,6 +66,7 @@ Soundness is by construction, not by review:
   the argument at their definition.
 """
 
+from ..kernels.join import JOIN_INNER
 from ..schema import Field, Schema, schema
 from ..tabular import RecordBatch
 from .logical import (
@@ -461,6 +462,84 @@ struct PushFilterBelowProject(Rule):
         return built^
 
 
+struct PushFilterBelowJoin(Rule):
+    """`Filter(Join(L, R))` -> the filter moved into whichever side it reads.
+
+    The single most valuable reordering on a join-heavy workload: a predicate
+    that only touches one input shrinks that input *before* it is hashed or
+    probed, rather than after the join has already produced the rows it will
+    throw away.
+
+    **Only for `INNER`.** An outer join manufactures NULL rows for
+    non-matches, and a predicate evaluated before that step never sees them —
+    `LEFT JOIN ... WHERE r.x IS NULL` is the canonical anti-join idiom and
+    pushing its predicate into the right side silently returns nothing. `SEMI`
+    and `ANTI` are excluded for the same reason on the right, and are not worth
+    a special case on the left.
+
+    **The side is decided by name, not by position.** `Join` stores its keys as
+    names and both children carry schemas, so "does this predicate read only
+    left columns" is a set question with an exact answer. Positional indices
+    could not answer it after any rewrite had touched a child, which is the
+    defect that kept this rule out of the file until the keys changed.
+
+    A predicate spanning *both* sides stays put: splitting it needs conjunction
+    splitting, which the erasure boundary does not currently allow.
+    """
+
+    comptime NAME = "PushFilterBelowJoin"
+
+    @staticmethod
+    def _reads_only(names: List[String], schema: Schema) -> Bool:
+        for ref n in names:
+            if schema.get_field_index(n) < 0:
+                return False
+        return True
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Filter]():
+            return node.copy()
+        ref f = node.get[Filter]()
+        var input = f.input[].copy()
+        if not input.isa[Join]():
+            return node.copy()
+        ref j = input.get[Join]()
+        if j.kind != JOIN_INNER:
+            return node.copy()
+
+        var reads = f.predicate.columns()
+        var left_schema = j.left[].schema()
+        var right_schema = j.right[].schema()
+        var left_only = Self._reads_only(reads, left_schema)
+        var right_only = Self._reads_only(reads, right_schema)
+
+        # A key column appears on both sides by name, so a predicate on one
+        # could look like either. Ambiguity is left alone rather than guessed.
+        if left_only == right_only:
+            return node.copy()
+
+        if left_only:
+            var out: DynRelation = Join(
+                Filter(j.left[].copy(), f.predicate.copy(), f.pruner.copy()),
+                j.right[].copy(),
+                left_names=j.left_keys.copy(),
+                right_names=j.right_keys.copy(),
+                kind=j.kind,
+                strictness=j.strictness,
+            )
+            return out^
+        var out: DynRelation = Join(
+            j.left[].copy(),
+            Filter(j.right[].copy(), f.predicate.copy(), f.pruner.copy()),
+            left_names=j.left_keys.copy(),
+            right_names=j.right_keys.copy(),
+            kind=j.kind,
+            strictness=j.strictness,
+        )
+        return out^
+
+
 struct PushLimitBelowProject(Rule):
     """`Limit(Project(x))` -> `Project(Limit(x))`.
 
@@ -727,14 +806,35 @@ trait RuleSet(Copyable, Movable):
     """
 
     @staticmethod
+    def prepare(plan: DynRelation) raises -> DynRelation:
+        """Whatever this set wants done **once**, before the rewrite loop.
+
+        Column pruning lives here rather than in `rewrite` because it is a
+        downward pass with an accumulator, where every `Rule` is a local
+        bottom-up match — running it to a fixpoint would re-derive the same
+        answer every time.
+
+        A hook returning a plan rather than a `Bool` the driver branches on:
+        neither `Self.R.PRUNE_COLUMNS` nor `Self.R.prune_columns()` resolves
+        off a struct parameter inside a `comptime if`. A plain method call
+        sidesteps that, and DCE still holds — a rule set whose `prepare` is the
+        identity never mentions `ColumnPruning`, so nothing links it.
+        """
+        ...
+
+    @staticmethod
     def rewrite(node: DynRelation) raises -> DynRelation:
-        """The first rule in this set that applies, or `None`."""
+        """Every rule in this set, applied to one node."""
         ...
 
 
 struct NoRules(RuleSet):
     """The identity — `optimize[NoRules]()` returns the plan unchanged, which
     makes it the control arm of an equivalence test."""
+
+    @staticmethod
+    def prepare(plan: DynRelation) raises -> DynRelation:
+        return plan.copy()
 
     @staticmethod
     def rewrite(node: DynRelation) raises -> DynRelation:
@@ -779,6 +879,7 @@ struct AllRules(RuleSet):
         out = RemoveRedundantSort.apply(out)
         out = PushFilterBelowProject.apply(out)
         out = PushFilterBelowSort.apply(out)
+        out = PushFilterBelowJoin.apply(out)
         out = PushLimitBelowProject.apply(out)
         return TopN.apply(out)
 
