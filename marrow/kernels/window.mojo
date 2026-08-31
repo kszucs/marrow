@@ -229,24 +229,44 @@ struct WindowKernel(Kernel):
 
     @staticmethod
     def frame_edge_indices(
-        extents: WindowExtents, first: Bool
+        extents: WindowExtents,
+        first: Bool,
+        is_rows: Bool = False,
+        preceding: Int = 0,
+        following: Int = 0,
     ) raises -> Int32Array:
-        """Source rows for `FIRST_VALUE` / `LAST_VALUE` under the default frame.
+        """Source rows for `FIRST_VALUE` / `LAST_VALUE` — the frame's two ends.
 
-        The default frame is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
-        ROW`, whose *end* is the current row's peer group — not the partition's
-        last row. So `FIRST_VALUE` is constant across a partition and
-        `LAST_VALUE` tracks the current row, which is the single most
-        surprising thing about window frames and is `window_first_and_last_value`'s
-        whole subject.
+        Under the **default** frame (`RANGE BETWEEN UNBOUNDED PRECEDING AND
+        CURRENT ROW`) the start is the partition's first row and the end is the
+        current row's *peer group* — not the current row and not the
+        partition's last row. So `FIRST_VALUE` is constant across a partition
+        and `LAST_VALUE` tracks the current row, which is the single most
+        surprising thing about window frames and is
+        `window_first_and_last_value`'s whole subject.
 
-        Never null: a partition is non-empty by construction, so both edges
-        name a real row.
+        Under an explicit `ROWS` frame both ends move with the row and are
+        clamped to the partition. **Taking the default edges regardless of the
+        frame would be a silent wrong answer** rather than an unsupported one,
+        which is why this takes the frame rather than assuming it.
+
+        Null only where the frame is empty — which `ROWS` can express (a frame
+        entirely before or after the partition) and the default frame cannot.
         """
         var out = Int32Builder(len(extents))
         for j in range(len(extents)):
-            if first:
-                out.append(Int32(extents.partition_start[j]))
+            var start: Int
+            var stop: Int
+            if is_rows:
+                start = max(extents.partition_start[j], j + preceding)
+                stop = min(extents.partition_end[j], j + following + 1)
             else:
-                out.append(Int32(extents.peer_end[j] - 1))
+                start = extents.partition_start[j]
+                stop = extents.peer_end[j]
+            if stop <= start:
+                out.append_null()
+            elif first:
+                out.append(Int32(start))
+            else:
+                out.append(Int32(stop - 1))
         return out.finish()

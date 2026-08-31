@@ -1088,7 +1088,11 @@ struct WindowOperator(Operator):
                 indices = WindowKernel.offset_indices(extents, expr.func.offset)
             else:
                 indices = WindowKernel.frame_edge_indices(
-                    extents, kind == WindowKind.first_value
+                    extents,
+                    kind == WindowKind.first_value,
+                    expr.frame.is_rows,
+                    expr.frame.preceding,
+                    expr.frame.following,
                 )
             return take(argument^, indices, self._ctx)
 
