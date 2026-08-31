@@ -42,8 +42,8 @@ from std.memory import ArcPointer
 from ..arrays import DynArray, Int32Array, StructArray
 from ..scalars import DynScalar
 from std.utils import Variant
-from ..builders import nulls
-from ..dtypes import Field, struct_
+from ..builders import Int32Builder, nulls
+from ..dtypes import Field, field, struct_
 from ..kernels.aggregate import AggKernel
 from ..kernels.concat import concat
 from ..execution import ExecContext
@@ -56,9 +56,11 @@ from ..parquet.source import MappedFile
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
 from .bindings import Bindings
+from .logical import DynValue, WindowExpr, WindowKind
 from .pushdown import Pushdown, read_plan, row_group_stats
-from ..kernels.sort import sort_indices
-from ..schema import Schema
+from ..kernels.sort import SortIndices, sort_indices
+from ..kernels.window import WindowExtents, WindowKernel, mark_changes
+from ..schema import Schema, schema
 from ..tabular import RecordBatch
 
 
@@ -887,6 +889,272 @@ struct SortOperator(Operator):
         if not order:
             return Datum(whole^.to_dyn())
         return Datum(take(whole.copy().to_dyn(), order.value(), self._ctx))
+
+
+struct WindowOperator(Operator):
+    """`OVER (...)` — blocking, because a window function needs its partition.
+
+    Buffers every morsel and answers once at `drain`, the same shape as
+    `SortOperator` and for the same reason: no prefix of the input determines
+    any output row, since the row that ends up adjacent may not have arrived.
+
+    **The partitioning is a prefix of the sort key, not a second mechanism.**
+    `PARTITION BY k ORDER BY v` is the ordering `[k, v]`, so one
+    `SortIndices.multi` answers both questions, and `kernels/window.mojo` reads
+    partition and peer boundaries straight off the result. Hash-partitioning
+    first and sorting each bucket would need `HashGrouping`, a gather per
+    bucket, and a second null convention to keep consistent with `GROUP BY`'s
+    — three moving parts to express what the sort already expresses.
+
+    **Rows come out in input order.** The sort is an internal device, so the
+    computed columns are scattered back through the inverse permutation rather
+    than the batch being reordered to match them. `with_columns` means
+    `SELECT *, f() OVER ()`, and a verb that silently reordered its input
+    would be a surprising thing for one added column to do — every golden case
+    sorts afterwards and so could not tell, which is exactly why it is worth
+    getting right here rather than relying on the consumer.
+    """
+
+    var _names: List[String]
+    var _exprs: List[WindowExpr]
+    """Every expression on this node shares one window spec — `with_columns`
+    stacks a separate node per distinct spec, so one sort serves them all."""
+
+    var _input_schema: Schema
+    var _output_schema: Schema
+    var _bindings: Bindings
+    var _ctx: ExecContext
+    var _batches: List[StructArray]
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var names: List[String],
+        var exprs: List[WindowExpr],
+        var input_schema: Schema,
+        var output_schema: Schema,
+        var bindings: Bindings,
+        var ctx: ExecContext,
+    ):
+        self._names = names^
+        self._exprs = exprs^
+        self._input_schema = input_schema^
+        self._output_schema = output_schema^
+        self._bindings = bindings^
+        self._ctx = ctx^
+        self._batches = List[StructArray]()
+        self._emitted = False
+
+    def push(mut self, morsel: Morsel) raises -> Optional[Datum]:
+        self._batches.append(morsel.batch.copy())
+        return None
+
+    def _eval(self, value: DynValue, batch: StructArray) raises -> DynArray:
+        """`value` as a column over `batch`, the way `SortOperator` reads a
+        key."""
+        var op = value.to_operator(self._input_schema, False, self._bindings)
+        var produced = op.push(Morsel.ungrouped(batch.copy()))
+        return produced.value().to_array(len(batch))
+
+    def drain(mut self) raises -> Optional[Datum]:
+        if self._emitted or len(self._batches) == 0:
+            return None
+        self._emitted = True
+
+        var whole = _concat_batches(
+            self._batches, self._input_schema, self._ctx
+        )
+        var n = len(whole)
+
+        # -- one ordering answers both questions ----------------------------
+        var num_partition = len(self._exprs[0].partition_by)
+        var keys = List[DynArray]()
+        var ascending = List[Bool]()
+        for ref k in self._exprs[0].partition_by:
+            keys.append(self._eval(k, whole))
+            # Direction is irrelevant to a partition: it groups equal rows,
+            # and every order puts equal rows together.
+            ascending.append(True)
+        for i in range(len(self._exprs[0].order_by)):
+            keys.append(self._eval(self._exprs[0].order_by[i], whole))
+            ascending.append(self._exprs[0].ascending[i])
+
+        var perm = self._permutation(
+            keys, ascending, self._exprs[0].nulls_first, n
+        )
+
+        # -- boundaries ------------------------------------------------------
+        var sorted_keys = List[DynArray](capacity=len(keys))
+        for ref k in keys:
+            sorted_keys.append(take(k.copy(), perm, self._ctx))
+
+        var new_partition = List[Bool](length=n, fill=False)
+        if n > 0:
+            new_partition[0] = True
+        for i in range(num_partition):
+            mark_changes(sorted_keys[i], new_partition, self._ctx)
+        var new_peer = new_partition.copy()
+        for i in range(num_partition, len(sorted_keys)):
+            mark_changes(sorted_keys[i], new_peer, self._ctx)
+        var extents = WindowExtents(new_partition^, new_peer^)
+
+        # -- the sorted batch, and the way back ------------------------------
+        var sorted_columns = List[DynArray]()
+        for i in range(len(self._input_schema.fields)):
+            sorted_columns.append(take(whole.field(i), perm, self._ctx))
+        var sorted_batch = _struct_of(self._input_schema, sorted_columns^, n)
+        var inverse = self._inverse(perm, n)
+
+        # -- one column per expression ---------------------------------------
+        var columns = List[DynArray]()
+        for i in range(len(self._input_schema.fields)):
+            columns.append(whole.field(i))
+        for ref e in self._exprs:
+            var computed = self._compute(e, extents, sorted_batch)
+            columns.append(take(computed^, inverse, self._ctx))
+
+        return Datum(_struct_of(self._output_schema, columns^, n).to_dyn())
+
+    def _permutation(
+        self,
+        keys: List[DynArray],
+        ascending: List[Bool],
+        nulls_first: Bool,
+        n: Int,
+    ) raises -> Int32Array:
+        """The order the window is evaluated in.
+
+        Identity when the window names no keys at all — `OVER ()` is one
+        partition in input order, and `SortIndices.multi` rejects an empty key
+        list rather than answering that.
+        """
+        if len(keys) == 0:
+            var identity = Int32Builder(n)
+            for i in range(n):
+                identity.append(Int32(i))
+            return identity.finish()
+        var fields = List[Field](capacity=len(keys))
+        var indices = List[Int](capacity=len(keys))
+        for i in range(len(keys)):
+            fields.append(field(String("k", i), keys[i].dtype()))
+            indices.append(i)
+        var key_batch = _struct_of(schema(fields^), keys.copy(), n)
+        return SortIndices.multi(
+            key_batch,
+            indices,
+            ascending,
+            nulls_first=nulls_first,
+            stable=True,
+            ctx=self._ctx,
+        )
+
+    def _inverse(self, perm: Int32Array, n: Int) raises -> Int32Array:
+        """`inv[perm[j]] = j` — where each input row landed in the sort.
+
+        Gathering a sorted result under this puts it back beside the row it
+        describes, which is what lets the batch itself stay in input order.
+        """
+        var positions = List[Int](length=n, fill=0)
+        for j in range(n):
+            positions[Int(perm[j].value())] = j
+        var out = Int32Builder(n)
+        for i in range(n):
+            out.append(Int32(positions[i]))
+        return out.finish()
+
+    def _compute(
+        self,
+        expr: WindowExpr,
+        extents: WindowExtents,
+        sorted_batch: StructArray,
+    ) raises -> DynArray:
+        """One window expression's column, in **sorted** order."""
+        var kind = expr.func.kind
+        if kind == WindowKind.row_number:
+            return WindowKernel.row_number(extents).to_dyn()
+        elif kind == WindowKind.rank:
+            return WindowKernel.rank(extents).to_dyn()
+        elif kind == WindowKind.dense_rank:
+            return WindowKernel.dense_rank(extents).to_dyn()
+        elif kind == WindowKind.aggregate:
+            return self._framed_aggregate(expr, extents, sorted_batch)
+        else:
+            # `lag`, `lead`, `first_value`, `last_value` — all four gather the
+            # argument under indices this row's extents name, so they share one
+            # path and differ only in which index kernel names them.
+            var argument = self._eval(expr.func.argument.value(), sorted_batch)
+            var indices: Int32Array
+            if kind == WindowKind.lag or kind == WindowKind.lead:
+                indices = WindowKernel.offset_indices(extents, expr.func.offset)
+            else:
+                indices = WindowKernel.frame_edge_indices(
+                    extents, kind == WindowKind.first_value
+                )
+            return take(argument^, indices, self._ctx)
+
+    def _framed_aggregate(
+        self,
+        expr: WindowExpr,
+        extents: WindowExtents,
+        sorted_batch: StructArray,
+    ) raises -> DynArray:
+        """An aggregate evaluated once per frame.
+
+        **The aggregate runs through its own operator**, on a slice of the
+        sorted batch. That is what makes every aggregate a window aggregate at
+        once — `SUM`, `MIN`, `COUNT`, `AVG` and anything added later — with the
+        kernel's own null semantics rather than a second implementation of
+        them: `SUM` over an all-null frame answers null here because `SumFold`
+        answers null, not because this file decided it should.
+
+        The cost is one operator per row, since an aggregate accumulates and
+        frames overlap, so nothing can be carried from one frame to the next
+        through this interface. That is O(rows) operator constructions and it
+        is the honest price of the reuse; a running accumulator would be a
+        per-aggregate, per-dtype kernel and is what to write when this shows up
+        in a profile.
+
+        Slicing rather than gathering keeps the per-frame cost at O(1) for the
+        batch itself — `StructArray.slice` is zero-copy and `field()` pushes
+        the offset down to each child — so only the aggregate's own scan is
+        linear in the frame.
+        """
+        var n = len(extents)
+        var dtype = expr.dtype(self._input_schema)
+        if n == 0:
+            return nulls(0, dtype^)
+        var parts = List[DynArray](capacity=n)
+        for j in range(n):
+            var start: Int
+            var stop: Int
+            if expr.frame.is_rows:
+                start = max(
+                    extents.partition_start[j], j + expr.frame.preceding
+                )
+                stop = min(
+                    extents.partition_end[j], j + expr.frame.following + 1
+                )
+            else:
+                # The default `RANGE` frame ends at the current row's peer
+                # group, not at the current row — which is why `LAST_VALUE`
+                # is not the partition's last value.
+                start = extents.partition_start[j]
+                stop = extents.peer_end[j]
+            if stop <= start:
+                parts.append(nulls(1, dtype.copy()))
+            else:
+                var frame = sorted_batch.slice(start, stop - start)
+                var op = expr.func.argument.value().to_operator(
+                    self._input_schema, False, self._bindings
+                )
+                var produced = op.push(Morsel.ungrouped(frame^))
+                if not produced:
+                    produced = op.drain()
+                if produced:
+                    parts.append(produced.value().to_array(1))
+                else:
+                    parts.append(nulls(1, dtype.copy()))
+        return concat(parts^, self._ctx)
 
 
 struct BatchSourceOperator(Operator):

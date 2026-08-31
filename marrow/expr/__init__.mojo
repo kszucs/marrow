@@ -27,9 +27,12 @@ from .builders import (
     array_length,
     col,
     count_star,
+    dense_rank,
     if_else,
     lit,
     param,
+    rank,
+    row_number,
     scan,
     table,
 )
@@ -47,6 +50,11 @@ from .logical import (
     Shape,
     Sort,
     Value,
+    Window,
+    WindowExpr,
+    WindowFn,
+    WindowFrame,
+    WindowKind,
 )
 from .physical import Datum, DynOperator, Morsel, Operator, Pipeline
 from .pruning import PrunePredicate, PruneStats, Prunable, Truth
