@@ -19,7 +19,7 @@ imports. That is the same failure the wildcard-import ban exists to prevent.
 
 from .`comptime`.aggregates import Aggregate
 from .`comptime`.boolean import IsIn
-from .`comptime`.numeric import CaseWhen
+from .`comptime`.numeric import CaseWhen, Greatest, Least
 from .`comptime`.core import BoolValue, ComptimeValue, ListValue, NumericValue
 from .`comptime`.leaves import (
     ArrayContains,
@@ -38,7 +38,9 @@ from .logical import DynRelation, InMemoryTable, ParquetScan
 from .runtime.values import RuntimeValue, column, literal
 from .runtime.values import array_contains as _rt_array_contains
 from .runtime.values import array_length as _rt_array_length
+from .runtime.values import greatest as _rt_greatest
 from .runtime.values import isin as _rt_isin
+from .runtime.values import least as _rt_least
 from ..arrays import DynArray
 from ..dtypes import (
     BoolType,
@@ -241,6 +243,43 @@ def is_in[A: ComptimeValue](var a: A, var value_set: DynArray) -> IsIn[A]:
 def is_in(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
     """The runtime lane's `is_in`, spelled `isin` inside that lane."""
     return _rt_isin(a^, value_set^)
+
+
+# ---------------------------------------------------------------------------
+# least / greatest — the element-wise pair
+# ---------------------------------------------------------------------------
+# Free verbs rather than methods, because `.min()` and `.max()` are already the
+# *aggregates* on both lanes' value surfaces. SQL draws the same distinction
+# with the same two words, and PyArrow with `min_element_wise` — which is what
+# `MinKernel.name` says.
+
+
+def least[
+    L: NumericValue, Rhs: NumericValue
+](var l: L, var r: Rhs) -> Least[L, Rhs]:
+    """`LEAST(l, r)` — the smaller of the two, per row, fused.
+
+    The wider operand type wins, and a null on either side makes the row null:
+    `NumericBinary`'s rules, which are also SQL's here.
+    """
+    return Least[L, Rhs](l^, r^)
+
+
+def least(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The runtime lane's `least`."""
+    return _rt_least(l^, r^)
+
+
+def greatest[
+    L: NumericValue, Rhs: NumericValue
+](var l: L, var r: Rhs) -> Greatest[L, Rhs]:
+    """`GREATEST(l, r)` — the larger of the two, per row, fused."""
+    return Greatest[L, Rhs](l^, r^)
+
+
+def greatest(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The runtime lane's `greatest`."""
+    return _rt_greatest(l^, r^)
 
 
 # ---------------------------------------------------------------------------

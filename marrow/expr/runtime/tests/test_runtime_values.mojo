@@ -6,13 +6,19 @@ itself before anything evaluates it. Those answers are what the optimizer reads,
 and a wrong one is silent — a plan that narrows the wrong columns still runs.
 """
 
-from std.testing import assert_equal, assert_true
+from std.testing import (
+    assert_almost_equal,
+    assert_equal,
+    assert_true,
+)
 
 from ....arrays import StructArray, DynArray
 from ...bindings import Bindings
 from ...builders import array_contains as build_array_contains
 from ...builders import array_length as build_array_length
 from ...builders import col as build_col
+from ...builders import greatest as build_greatest
+from ...builders import least as build_least
 from ...builders import is_in as build_is_in
 from ....builders import array
 from ....dtypes import Date32Type, DynType, date32, float64, int32, int64
@@ -38,12 +44,15 @@ from ..values import (
     ceil,
     coalesce,
     column,
+    cos,
     date_trunc,
     eq,
+    exp2,
     fill_null,
     floor,
     floordiv,
     ge,
+    greatest,
     gt,
     ilike,
     if_else,
@@ -51,9 +60,13 @@ from ..values import (
     is_valid,
     isin,
     le,
+    least,
     length,
     like,
     literal,
+    log10,
+    log1p,
+    log2,
     lt,
     mod,
     month,
@@ -64,6 +77,7 @@ from ..values import (
     nullif,
     or_,
     quarter,
+    sin,
     sqrt,
     startswith,
     strip,
@@ -609,3 +623,60 @@ def test_builder_verbs_select_the_runtime_overload() raises:
     var member = m.evaluate(sa, Bindings()).to_array(4).as_bool().copy()
     assert_true(member[0].value())  # needle 2 is in {1, 2}
     assert_true(not member[1].value())  # needle 4 is not
+
+
+def test_runtime_the_rest_of_the_float_unary_family() raises:
+    """Six `_unary` tags the lane had no arm for. `f` is [4, 8, 1, 2], so
+    `exp2` and `log2` are exact on it, and `f - f` is the zero at which
+    `log1p`, `sin` and `cos` are."""
+    var b = record_batch(
+        [array([4.0, 8.0, 1.0, 2.0], float64).to_dyn()], names=["f"]
+    )
+    assert_true(
+        _over(b, exp2(column("f"))) == array([16.0, 256.0, 2.0, 4.0], float64)
+    )
+    assert_true(
+        _over(b, log2(column("f"))) == array([2.0, 3.0, 0.0, 1.0], float64)
+    )
+    var decimal_log = _over(b, log10(column("f"))).as_float64().copy()
+    assert_almost_equal(decimal_log[2].value(), Float64(0.0))
+
+    var zeros = sub(column("f"), column("f"))
+    var shifted = _over(b, log1p(zeros.copy())).as_float64().copy()
+    assert_almost_equal(shifted[0].value(), Float64(0.0))
+    var sines = _over(b, sin(zeros.copy())).as_float64().copy()
+    assert_almost_equal(sines[0].value(), Float64(0.0))
+    var cosines = _over(b, cos(zeros^)).as_float64().copy()
+    assert_almost_equal(cosines[0].value(), Float64(1.0))
+
+
+def test_runtime_least_and_greatest_pick_per_row() raises:
+    """Two `_binary` tags routed through `_arith`, not `_float_binary`: they
+    select an operand rather than computing a new value, so the result keeps
+    the promoted operand type instead of widening to float64.
+
+    **Narrowed to `Int64Array` before comparing, and that is load-bearing.**
+    `DynArray.__eq__` compares whole buffers, and a binary kernel computes
+    every lane before masking, so the byte under `a`'s null holds `max(0, 30)`
+    where a builder writes 0. Erased `==` fails on `greatest` and *passes* on
+    `least` purely because `min(0, 30)` happens to be 0 — the trap
+    `docs/backlog.md` §1.9 records, caught here.
+    """
+    var smaller = _ints(least(column("a"), column("b"))).as_int64().copy()
+    assert_true(smaller == array([1, 2, None, 4], int64))
+    var larger = _ints(greatest(column("a"), column("b"))).as_int64().copy()
+    assert_true(larger == array([10, 20, None, 40], int64))
+    # Null-in-null-out, and the type is the promoted operand's, not float64.
+    assert_true(larger.is_null(2))
+    assert_true(
+        _ints(least(column("a"), column("b"))).dtype() == DynType(int64)
+    )
+
+
+def test_builder_least_and_greatest_select_the_runtime_overload() raises:
+    """As `test_builder_verbs_select_the_runtime_overload`: the annotation is
+    the proof, since the generic sibling binds `NumericValue`."""
+    var l: RuntimeValue = build_least(build_col("a"), build_col("b"))
+    var g: RuntimeValue = build_greatest(build_col("a"), build_col("b"))
+    assert_true(_ints(l).as_int64().copy() == array([1, 2, None, 4], int64))
+    assert_true(_ints(g).as_int64().copy() == array([10, 20, None, 40], int64))

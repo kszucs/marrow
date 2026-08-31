@@ -15,6 +15,44 @@
 
 ### Features
 
+- **Nine kernels that no expression could reach now have nodes and verbs**
+  (`docs/backlog.md` §1.5, closed). The kernels were written and tested; only
+  the node and the builder verb were missing, and every one lands in **both**
+  lanes:
+
+  - `is_in` — `IN (...)`. `IsIn[A: ComptimeValue]` in
+    `marrow/expr/comptime/boolean.mojo` is a `BoolValue` breaker in the mould
+    of `NullPredicate`: `bind` hashes the value set into the probe table and
+    runs the column through it, `lane` reads the bits back. The operand binds
+    the base trait because `IsInKernel` decides membership on the 64-bit hash
+    alone, so numeric, string, bool and temporal all funnel through one call.
+    The set is a field rather than an operand — it is the same set on every
+    row. `IsInKernel` had a runtime `isin` tag already but no verb, so `IN`
+    was unreachable from `marrow.expr`.
+  - `array_contains` — `ArrayContains[L: ListValue, E: NumericValue]` in
+    `comptime/leaves.mojo`, `ListLength`'s sibling: bind a list, produce
+    another family's lane. Two type parameters so `ArrayContainsKernel.apply`
+    binds directly instead of opening its listlike x numeric ladder. Plus an
+    `array_contains` tag in the runtime lane — a *binary* tag, not a payload
+    one, because the search value varies per row.
+  - `least` / `greatest` — `MinKernel` / `MaxKernel` (`min_element_wise` /
+    `max_element_wise`) were dead in both lanes. They cannot be `.min()` /
+    `.max()`, which are the aggregates; SQL draws the same distinction with
+    the same two words.
+  - `exp2`, `log2`, `log10`, `log1p`, `sin`, `cos` — six `UnaryFloatKernel`s
+    where `NumericValue` named three.
+
+  `array_length` was not on the backlog's list and should have been: it had a
+  verb in each lane, but the **overload set was split** across `builders.mojo`
+  and `runtime/values.mojo`, so `from marrow.expr import array_length` was
+  comptime-only. That is the exact failure `builders.mojo`'s docstring warns
+  about, and the runtime overload now sits beside the comptime one.
+
+  `test_builder_verbs_select_the_runtime_overload` annotates each result
+  `var v: RuntimeValue`, which is a *compile-time* proof that the erased
+  overload was chosen — a concrete overload does not always beat a
+  trait-bound generic one in Mojo, and the losing case compiles clean.
+
 - **A plan optimizer: twelve rules and a column-pruning pass**
   (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
   `DynRelation` you can print, diff and execute — `Limit(Sort(Filter(scan)))`

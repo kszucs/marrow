@@ -25,11 +25,11 @@ from std.testing import (
     assert_true,
 )
 
-from ...builders import col, lit
+from ...builders import col, greatest, least, lit
 from ...bindings import Bindings
 from ....arrays import BoolArray, Float64Array, Int64Array
 from ....builders import array
-from ....dtypes import float64, int64
+from ....dtypes import float64, int32, int64
 from ....tabular import RecordBatch, record_batch
 from ..core import BoolValue, NumericValue
 
@@ -270,3 +270,70 @@ def test_arithmetic_nodes_still_fuse_into_one_pass() raises:
     )
     var expected: List[Optional[Int]] = [24, 6, 2, None]
     assert_true(got == array(expected, int64))
+
+
+# ---------------------------------------------------------------------------
+# The rest of the two families — kernels that had no verb until 2026-08-31
+# ---------------------------------------------------------------------------
+
+
+def test_the_rest_of_the_float_unary_family_is_reachable() raises:
+    """Six `UnaryFloatKernel`s that `NumericValue` named none of.
+
+    Exactness is chosen the way the `sqrt`/`exp`/`ln` case above chooses it.
+    `y` is [2, 4, 1, 2], so `exp2` and `log2` land on powers of two and are
+    exact; `y - y` is zero, the one input at which `log1p`, `sin` and `cos`
+    are.
+    """
+    var b = _floats()
+    var powers: List[Optional[Float64]] = [4.0, 16.0, 2.0, 4.0]
+    assert_true(_as_f64(col("y", float64).exp2(), b) == array(powers, float64))
+    var logs: List[Optional[Float64]] = [1.0, 2.0, 0.0, 1.0]
+    assert_true(_as_f64(col("y", float64).log2(), b) == array(logs, float64))
+    assert_almost_equal(
+        _as_f64(col("y", float64).log10(), b)[2].value(), Float64(0.0)
+    )
+    var zero = col("y", float64) - col("y", float64)
+    assert_almost_equal(_as_f64(zero.log1p(), b)[0].value(), Float64(0.0))
+    assert_almost_equal(_as_f64(zero.sin(), b)[0].value(), Float64(0.0))
+    assert_almost_equal(_as_f64(zero.cos(), b)[0].value(), Float64(1.0))
+
+
+def test_the_new_float_unaries_propagate_a_null() raises:
+    """`FloatUnary` forwards its operand's validity, so a null stays a null
+    rather than turning into a NaN — the rule `sqrt` already followed."""
+    var b = _floats()
+    assert_true(_as_f64(col("x", float64).sin(), b).is_null(3))
+    assert_true(_as_f64(col("x", float64).exp2(), b).is_null(3))
+
+
+def test_least_and_greatest_choose_between_two_operands() raises:
+    """`LEAST`/`GREATEST`, not `MIN`/`MAX`.
+
+    The aggregates fold a column and skip nulls; these pick between two
+    operands on each row and are null-in-null-out, which is SQL's rule and
+    PyArrow's `min_element_wise` default. They are `NumericBinary` nodes, so
+    they inherit both behaviours rather than restating either.
+    """
+    var b = _ints()
+    var smaller: List[Optional[Int]] = [-9, 0, 3, None]
+    assert_true(
+        _as_i64(least(col("n", int64), col("d", int64)), b)
+        == array(smaller, int64)
+    )
+    var larger: List[Optional[Int]] = [3, 3, 4, None]
+    assert_true(
+        _as_i64(greatest(col("n", int64), col("d", int64)), b)
+        == array(larger, int64)
+    )
+
+
+def test_least_promotes_a_narrower_operand() raises:
+    """`promote` is `NumericBinary`'s, unchanged: an `int32` literal against
+    an `int64` column gives an `int64` result, so `_as_i64` can read it."""
+    var b = _ints()
+    var capped: List[Optional[Int]] = [-9, 0, 2, None]
+    assert_true(
+        _as_i64(least(col("n", int64), lit(2, int32)), b)
+        == array(capped, int64)
+    )

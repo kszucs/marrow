@@ -31,10 +31,18 @@ from ...kernels.numeric import (
     NegKernel,
     NumericCompareKernel,
     BinaryNumericKernel,
+    CosKernel,
+    Exp2Kernel,
+    Log2Kernel,
+    Log10Kernel,
+    Log1pKernel,
+    MaxKernel,
+    MinKernel,
     MulKernel,
     PowKernel,
     RoundKernel,
     SignKernel,
+    SinKernel,
     SqrtKernel,
     SubKernel,
     TruncKernel,
@@ -143,6 +151,18 @@ comptime Floordiv = NumericBinary[FloordivKernel, _, _]
 toward zero and answer -1. That divergence is deliberate and recorded in
 `golden/cases/math_mod_int64.mojo`, whose SQL twin spells floored modulo as
 `((n % 3) + 3) % 3` rather than asserting SQL's convention against marrow's.
+"""
+
+comptime Least = NumericBinary[MinKernel, _, _]
+comptime Greatest = NumericBinary[MaxKernel, _, _]
+"""SQL's `LEAST` / `GREATEST` — the element-wise pair, not the aggregates.
+
+They are `NumericBinary` and not a family of their own because they follow
+exactly its rule: the wider operand wins, and a null on either side makes the
+row null. That last part is SQL's answer and PyArrow's `min_element_wise`
+default (`skip_nulls=False`), and it is what separates them from `MIN(x)` /
+`MAX(x)`, which fold a column and ignore nulls. The names differ for the same
+reason -- `col("a", int64).min()` is the aggregate and is already taken.
 """
 
 
@@ -336,6 +356,20 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
 comptime Sqrt = FloatUnary[SqrtKernel, _]
 comptime Exp = FloatUnary[ExpKernel, _]
 comptime Ln = FloatUnary[LogKernel, _]
+comptime Exp2 = FloatUnary[Exp2Kernel, _]
+comptime Log2 = FloatUnary[Log2Kernel, _]
+comptime Log10 = FloatUnary[Log10Kernel, _]
+comptime Log1p = FloatUnary[Log1pKernel, _]
+comptime Sin = FloatUnary[SinKernel, _]
+comptime Cos = FloatUnary[CosKernel, _]
+"""The rest of `UnaryFloatKernel`, which the lane named three of.
+
+Nothing here is new machinery: each is the same partial specialisation as
+`Sqrt`, over a kernel that has been in `kernels/numeric.mojo` and tested since
+before this lane existed. `log1p` computes `log(1 + a)` rather than calling
+`math.log1p`, which recent nightlies upcast to `float64` -- the kernel says so
+and the node inherits it.
+"""
 
 
 struct NumericCompare[

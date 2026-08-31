@@ -73,11 +73,18 @@ from ...kernels.numeric import (
     AddKernel,
     BinaryKernel,
     CeilKernel,
+    CosKernel,
     DivKernel,
+    Exp2Kernel,
     ExpKernel,
     FloorKernel,
     FloordivKernel,
+    Log2Kernel,
+    Log10Kernel,
+    Log1pKernel,
     LogKernel,
+    MaxKernel,
+    MinKernel,
     ModKernel,
     MulKernel,
     NegKernel,
@@ -85,6 +92,7 @@ from ...kernels.numeric import (
     PowKernel,
     RoundKernel,
     SignKernel,
+    SinKernel,
     SqrtKernel,
     SubKernel,
     TruncKernel,
@@ -573,6 +581,18 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             return Self._float_unary[ExpKernel](a^)
         if self._tag == "ln":
             return Self._float_unary[LogKernel](a^)
+        if self._tag == "exp2":
+            return Self._float_unary[Exp2Kernel](a^)
+        if self._tag == "log2":
+            return Self._float_unary[Log2Kernel](a^)
+        if self._tag == "log10":
+            return Self._float_unary[Log10Kernel](a^)
+        if self._tag == "log1p":
+            return Self._float_unary[Log1pKernel](a^)
+        if self._tag == "sin":
+            return Self._float_unary[SinKernel](a^)
+        if self._tag == "cos":
+            return Self._float_unary[CosKernel](a^)
 
         # Null and value predicates. `is_null`/`is_valid` read the validity
         # bitmap and are never null themselves; `is_nan`/`is_inf` read the
@@ -668,6 +688,14 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             return Self._float_binary[DivKernel](l^, r^)
         if self._tag == "pow":
             return Self._float_binary[PowKernel](l^, r^)
+
+        # `_arith`, not `_float_binary`: `LEAST`/`GREATEST` pick one of their
+        # operands rather than computing a new value, so the result keeps the
+        # promoted operand type instead of widening to float64.
+        if self._tag == "least":
+            return Self._arith[MinKernel](l^, r^)
+        if self._tag == "greatest":
+            return Self._arith[MaxKernel](l^, r^)
 
         if self._tag == "startswith":
             return StartsWithKernel.dispatch(l^, r^)
@@ -1064,6 +1092,20 @@ def pow(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
     return RuntimeValue("pow", l, r)
 
 
+def least(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`LEAST(l, r)` — the smaller of the two, per row.
+
+    Not `min`, which on `RuntimeValue` is the aggregate that folds a column.
+    Null-in-null-out, as SQL and `pc.min_element_wise` are by default.
+    """
+    return RuntimeValue("least", l, r)
+
+
+def greatest(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`GREATEST(l, r)` — the larger of the two, per row."""
+    return RuntimeValue("greatest", l, r)
+
+
 def neg(var a: RuntimeValue) -> RuntimeValue:
     """`-a`."""
     return RuntimeValue("neg", a)
@@ -1117,6 +1159,36 @@ def exp(var a: RuntimeValue) -> RuntimeValue:
 def ln(var a: RuntimeValue) -> RuntimeValue:
     """The natural logarithm, as `float64`."""
     return RuntimeValue("ln", a)
+
+
+def exp2(var a: RuntimeValue) -> RuntimeValue:
+    """`2 ** a`, as `float64`."""
+    return RuntimeValue("exp2", a)
+
+
+def log2(var a: RuntimeValue) -> RuntimeValue:
+    """The base-2 logarithm, as `float64`."""
+    return RuntimeValue("log2", a)
+
+
+def log10(var a: RuntimeValue) -> RuntimeValue:
+    """The base-10 logarithm, as `float64`."""
+    return RuntimeValue("log10", a)
+
+
+def log1p(var a: RuntimeValue) -> RuntimeValue:
+    """`ln(1 + a)`, as `float64`."""
+    return RuntimeValue("log1p", a)
+
+
+def sin(var a: RuntimeValue) -> RuntimeValue:
+    """The sine of an angle in radians, as `float64`."""
+    return RuntimeValue("sin", a)
+
+
+def cos(var a: RuntimeValue) -> RuntimeValue:
+    """The cosine of an angle in radians, as `float64`."""
+    return RuntimeValue("cos", a)
 
 
 # ---------------------------------------------------------------------------

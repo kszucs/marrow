@@ -84,15 +84,20 @@ from .numeric import (
     Abs,
     Add,
     Ceil,
+    Cos,
     Div,
     Eq,
     Exp,
+    Exp2,
     Floor,
     Floordiv,
     Ge,
     Gt,
     Le,
     Ln,
+    Log10,
+    Log1p,
+    Log2,
     Lt,
     Mod,
     Mul,
@@ -101,6 +106,7 @@ from .numeric import (
     Pow,
     Round,
     Sign,
+    Sin,
     Sqrt,
     Sub,
     TemporalEq,
@@ -847,6 +853,41 @@ trait NumericValue(PrimitiveValue):
         """Natural logarithm, in `float64`. `ln(0)` is `-inf` and `ln(-1)` is
         NaN — IEEE 754 values, not nulls."""
         return Ln[Self](self.copy())
+
+    # The rest of the float-returning unary family. Same node, same rule as
+    # `sqrt`/`exp`/`ln` above — listed one per line because a verb is how a
+    # kernel becomes reachable, and these six had none.
+
+    def exp2(self) -> Exp2[Self]:
+        """`2 ** self`, in `float64`."""
+        return Exp2[Self](self.copy())
+
+    def log2(self) -> Log2[Self]:
+        """Base-2 logarithm, in `float64`. Domain errors follow IEEE 754 as
+        `ln`'s do, not nulls."""
+        return Log2[Self](self.copy())
+
+    def log10(self) -> Log10[Self]:
+        """Base-10 logarithm, in `float64`."""
+        return Log10[Self](self.copy())
+
+    def log1p(self) -> Log1p[Self]:
+        """`ln(1 + self)`, in `float64`.
+
+        `Log1pKernel` spells it as `log(a + 1)` rather than calling
+        `math.log1p`, which recent nightlies upcast to `float64` — so this does
+        **not** carry libm's extra accuracy for a tiny operand. The name is
+        the API's, not a precision claim.
+        """
+        return Log1p[Self](self.copy())
+
+    def sin(self) -> Sin[Self]:
+        """Sine of an angle in radians, in `float64`."""
+        return Sin[Self](self.copy())
+
+    def cos(self) -> Cos[Self]:
+        """Cosine of an angle in radians, in `float64`."""
+        return Cos[Self](self.copy())
 
     # -- value predicates ---------------------------------------------------
 
