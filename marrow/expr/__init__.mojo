@@ -129,7 +129,13 @@ from .runtime.values import RuntimeValue
 
 from .optimizer import (
     AllRules,
+    ColumnPruning,
+    EliminateFilter,
     MergeLimits,
+    MergeProjects,
+    PropagateEmpty,
+    PushFilterBelowAggregate,
+    PushFilterBelowJoin,
     Optimizer,
     RemoveEmptyLimit,
     NoRules,

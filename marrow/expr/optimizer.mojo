@@ -66,7 +66,14 @@ Soundness is by construction, not by review:
   the argument at their definition.
 """
 
-from ..kernels.join import JOIN_INNER
+from ..kernels.join import (
+    JOIN_ANTI,
+    JOIN_FULL,
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_SEMI,
+)
 from ..schema import Field, Schema, schema
 from ..tabular import RecordBatch
 from .logical import (
@@ -138,6 +145,44 @@ struct RemoveNoOpProject(Rule):
             if not project.passes_through(n):
                 return node.copy()
         return input^
+
+
+struct EliminateFilter(Rule):
+    """`Filter(FALSE)` -> `Empty`, and `Filter(TRUE)` -> its input.
+
+    **This is what makes constant folding worth doing.** Folding turns
+    `x AND FALSE` into `FALSE` in the value constructors, and without this rule
+    that only saves evaluating a comparison per row. With it, the whole subtree
+    below collapses — scan, join, sort and all — and `PropagateEmpty` carries
+    the emptiness up through whatever sits above.
+
+    Real predicates fold to constants far more often than anyone writes
+    `LIMIT 0`: a parameter bound to an impossible range, a generated `WHERE`
+    with a contradictory pair, a frontend appending `AND true` per clause.
+
+    The constant is read off `Filter.constant`, decided at the `.filter()` verb
+    where the predicate's type was still concrete. A rule cannot ask a
+    `DynValue` what it is, and the alternative — a slot on that box — is paid
+    for by every projection value and sort key in the program.
+
+    A **null** constant is not a constant here. A filter keeps rows where the
+    predicate is `TRUE`, and a null predicate is not `FALSE`; it merely fails
+    to select. `constant_bool` already answers `None` for it.
+    """
+
+    comptime NAME = "EliminateFilter"
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Filter]():
+            return node.copy()
+        ref f = node.get[Filter]()
+        if not f.constant:
+            return node.copy()
+        if f.constant.value():
+            return f.input[].copy()
+        var out: DynRelation = EmptyRelation(RecordBatch.empty(node.schema()))
+        return out^
 
 
 struct RemoveEmptyLimit(Rule):
@@ -258,6 +303,14 @@ struct PropagateEmpty(Rule):
     above it reads that schema. Getting this backwards would produce an empty
     result with the wrong columns, which is the kind of wrong that only shows
     up in a frontend rendering headers.
+
+    **`Join` depends on the kind, and only some kinds collapse.** An `INNER`
+    join with either side empty is empty, and so is a `SEMI`. A `LEFT` join
+    with an empty *left* is empty, but with an empty *right* it still emits
+    every left row padded with NULLs — collapsing that would delete rows the
+    query asked for. `ANTI` with an empty right emits **all** of the left. So
+    only the cases that are provably empty are taken, and the rest are left
+    alone.
 
     `Aggregate` is deliberately **not** included: an ungrouped aggregate over
     zero rows produces one row (`count(*) = 0`, `sum = NULL`), not zero rows.
@@ -422,7 +475,7 @@ struct PushFilterBelowSort(Rule):
             # bound keeps — the same hazard as `Limit`.
             return node.copy()
         var built: DynRelation = Sort(
-            Filter(sort.input[].copy(), filter.predicate.copy(), filter.pruner.copy()),
+            filter.with_input(sort.input[].copy()),
             sort.keys.copy(),
             sort.ascending.copy(),
             sort.nulls_first,
@@ -455,11 +508,47 @@ struct PushFilterBelowProject(Rule):
         if not project.passes_through_all(filter.predicate.copy().columns()):
             return node.copy()
         var built: DynRelation = Project(
-            Filter(project.input[].copy(), filter.predicate.copy(), filter.pruner.copy()),
+            filter.with_input(project.input[].copy()),
             project.names.copy(),
             project.values.copy(),
         )
         return built^
+
+
+struct SplitConjunction(Rule):
+    """`Filter(a AND b)` -> `Filter(a)` over `Filter(b)`.
+
+    Stacked filters are not tidier — they are what lets every *other* filter
+    rule work per conjunct. `PushFilterBelowJoin` cannot move `a AND b` when
+    `a` names the left side and `b` the right; split, it moves `a` into the
+    left and `b` into the right. `PushFilterBelowProject` cannot move a
+    predicate that mentions one computed column; split, it moves the half that
+    does not. And each conjunct carries its own `PrunePredicate`, where a
+    compound `AND` prunes only as well as its weaker half.
+
+    The split itself is decided at the `.filter()` verb, where the predicate's
+    concrete type is visible, and each conjunct is boxed whole so a comptime
+    subtree stays fused. Rebuilding through `.filter()` re-derives each
+    conjunct's own pruner and constant for free.
+
+    Answers unchanged, nulls included: a row survives `a AND b` under Kleene
+    semantics exactly when both are `TRUE`, which is the row set two stacked
+    filters keep — a null selects in neither.
+    """
+
+    comptime NAME = "SplitConjunction"
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Filter]():
+            return node.copy()
+        ref f = node.get[Filter]()
+        if len(f.conjuncts) < 2:
+            return node.copy()
+        var out = f.input[].copy()
+        for ref c in f.conjuncts:
+            out = out.filter(c.copy())
+        return out^
 
 
 struct PushFilterBelowJoin(Rule):
@@ -483,8 +572,10 @@ struct PushFilterBelowJoin(Rule):
     could not answer it after any rewrite had touched a child, which is the
     defect that kept this rule out of the file until the keys changed.
 
-    A predicate spanning *both* sides stays put: splitting it needs conjunction
-    splitting, which the erasure boundary does not currently allow.
+    A predicate spanning *both* sides stays put here — but `SplitConjunction`
+    runs first, so `a AND b` arrives as two filters and each half is placed
+    independently. Only a genuinely inseparable predicate (`l.x + r.y > 5`)
+    remains above the join.
     """
 
     comptime NAME = "PushFilterBelowJoin"
@@ -521,7 +612,7 @@ struct PushFilterBelowJoin(Rule):
 
         if left_only:
             var out: DynRelation = Join(
-                Filter(j.left[].copy(), f.predicate.copy(), f.pruner.copy()),
+                f.with_input(j.left[].copy()),
                 j.right[].copy(),
                 left_names=j.left_keys.copy(),
                 right_names=j.right_keys.copy(),
@@ -531,11 +622,69 @@ struct PushFilterBelowJoin(Rule):
             return out^
         var out: DynRelation = Join(
             j.left[].copy(),
-            Filter(j.right[].copy(), f.predicate.copy(), f.pruner.copy()),
+            f.with_input(j.right[].copy()),
             left_names=j.left_keys.copy(),
             right_names=j.right_keys.copy(),
             kind=j.kind,
             strictness=j.strictness,
+        )
+        return out^
+
+
+struct PushFilterBelowAggregate(Rule):
+    """`Filter(Aggregate(x))` -> `Aggregate(Filter(x))`, for group keys only.
+
+    `GROUP BY region ... WHERE region = 'west'` is written as a filter above
+    the aggregate by every frontend that has a `HAVING`, and grouping every row
+    before discarding most of them is pure waste. A predicate on a **group
+    key** can move below, because grouping does not change a key's value — the
+    rows that would have been grouped and then dropped are simply never
+    grouped.
+
+    **Only group keys.** A predicate naming an aggregate's *output* — `HAVING
+    sum(x) > 100` — cannot move below the node that computes it, and neither
+    can one naming a column the aggregate does not emit. Both are caught by
+    requiring every column the predicate reads to be a group key by name.
+
+    A grouped aggregate only. A **keyless** aggregate emits exactly one row, so
+    a filter above it either keeps that row or drops it, and pushing the
+    predicate down would filter the *input* instead — a different question with
+    a different answer.
+    """
+
+    comptime NAME = "PushFilterBelowAggregate"
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Filter]():
+            return node.copy()
+        ref f = node.get[Filter]()
+        var input = f.input[].copy()
+        if not input.isa[Aggregate]():
+            return node.copy()
+        ref agg = input.get[Aggregate]()
+        if len(agg.keys) == 0:
+            return node.copy()
+
+        var key_names = List[String]()
+        for ref k in agg.keys:
+            var n = k.name()
+            if n == "":
+                return node.copy()  # an unnamed key cannot be matched by name
+            key_names.append(n^)
+        for ref want in f.predicate.columns():
+            var found = False
+            for ref have in key_names:
+                if have == want:
+                    found = True
+                    break
+            if not found:
+                return node.copy()
+
+        var out: DynRelation = Aggregate(
+            f.with_input(agg.input[].copy()),
+            agg.keys.copy(),
+            agg.aggs.copy(),
         )
         return out^
 
@@ -724,10 +873,7 @@ struct ColumnPruning(Copyable, Movable):
             var below = Self._widened(
                 needed.copy(), f.predicate.columns()
             )
-            var out: DynRelation = Filter(
-                Self.apply(f.input[], below), f.predicate.copy(),
-                f.pruner.copy(),
-            )
+            var out: DynRelation = f.with_input(Self.apply(f.input[], below))
             return out^
 
         if node.isa[Sort]():
@@ -870,16 +1016,19 @@ struct AllRules(RuleSet):
         answer unchanged when they do not apply, so threading the value through
         all of them is free.
         """
-        var out = RemoveEmptyLimit.apply(node)
+        var out = EliminateFilter.apply(node)
+        out = RemoveEmptyLimit.apply(out)
         out = PropagateEmpty.apply(out)
         out = RemoveNoOpProject.apply(out)
         out = MergeProjects.apply(out)
         out = RemoveSortBeforeAggregate.apply(out)
         out = MergeLimits.apply(out)
         out = RemoveRedundantSort.apply(out)
+        out = SplitConjunction.apply(out)
         out = PushFilterBelowProject.apply(out)
         out = PushFilterBelowSort.apply(out)
         out = PushFilterBelowJoin.apply(out)
+        out = PushFilterBelowAggregate.apply(out)
         out = PushLimitBelowProject.apply(out)
         return TopN.apply(out)
 

@@ -132,8 +132,8 @@ from ...kernels.temporal import (
     SecondKernel,
     YearKernel,
 )
-from ...dtypes import DynType, float64
-from ...scalars import DynScalar
+from ...dtypes import DynType, bool_, float64
+from ...scalars import BoolScalar, DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, Value, merged
@@ -325,6 +325,15 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         for ref kid in self._kids:
             out = merged(out^, kid[].columns())
         return out^
+
+    def constant_bool(self) -> Optional[Bool]:
+        """A non-null boolean literal answers; everything else does not.
+
+        Shares `_bool_const`'s rule about nulls: `NULL` is not a constant this
+        may fold on, because a filter keeps rows where the predicate is `TRUE`
+        and a null predicate is not `FALSE` — it merely fails to select.
+        """
+        return _bool_const(self)
 
     def name(self) -> String:
         if self._tag == "column" and self._payload.isa[String]():
@@ -853,13 +862,53 @@ def ge(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
     return RuntimeValue("ge", l, r)
 
 
+def _bool_const(v: RuntimeValue) -> Optional[Bool]:
+    """`True`/`False` if `v` is a non-null boolean literal, else `None`.
+
+    A **null** boolean literal answers `None` deliberately. Under Kleene
+    semantics `x AND NULL` is neither `x` nor `NULL` — it is `FALSE` when `x`
+    is false and `NULL` otherwise — so folding a null as if it were false
+    changes answers.
+    """
+    if v._tag != "literal" or not v._payload.isa[DynScalar]():
+        return None
+    ref boxed = v._payload[DynScalar]
+    if boxed.type() != bool_ or not boxed.is_valid():
+        return None
+    return boxed.as_bool().value()
+
+
 def and_(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
-    """Three-valued AND, matching the fused lane's Kleene semantics."""
+    """Three-valued AND, matching the fused lane's Kleene semantics.
+
+    **Folded here, at construction, rather than by a plan rule.** A rule would
+    have to look inside a `DynValue`, which the box does not allow and which
+    would drag a comptime predicate into the runtime lane if it did. The
+    operands are still concrete at this point, so the question is free to ask.
+
+    `x AND TRUE` is `x`, and `x AND FALSE` is `FALSE` — both hold in Kleene
+    logic, the second because `FALSE` annihilates even a null. Folding matters
+    beyond tidiness: `Filter(FALSE)` is what lets `PropagateEmpty` collapse a
+    subtree, and predicates fold to constants far more often than anyone writes
+    `LIMIT 0`.
+    """
+    var lc = _bool_const(l)
+    var rc = _bool_const(r)
+    if lc:
+        return r^ if lc.value() else l^
+    if rc:
+        return l^ if rc.value() else r^
     return RuntimeValue("and", l, r)
 
 
 def or_(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
-    """Three-valued OR."""
+    """Three-valued OR. `x OR FALSE` is `x`; `x OR TRUE` is `TRUE`."""
+    var lc = _bool_const(l)
+    var rc = _bool_const(r)
+    if lc:
+        return l^ if lc.value() else r^
+    if rc:
+        return r^ if rc.value() else l^
     return RuntimeValue("or", l, r)
 
 
@@ -869,7 +918,15 @@ def xor(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
 
 
 def not_(var a: RuntimeValue) -> RuntimeValue:
-    """Three-valued NOT: null stays null."""
+    """Three-valued NOT: null stays null.
+
+    `NOT NOT x` cancels, and a literal negates in place.
+    """
+    if a._tag == "not" and len(a._kids) == 1:
+        return a._kids[0][].copy()
+    var c = _bool_const(a)
+    if c:
+        return literal(BoolScalar(not c.value()).to_dyn())
     return RuntimeValue("not", a)
 
 

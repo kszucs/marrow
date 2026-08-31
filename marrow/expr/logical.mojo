@@ -143,6 +143,40 @@ trait Value(Copyable, Deinitable, Writable):
     one per row. Known without running, which is why it lives here and not on
     the operator."""
 
+    def conjuncts(self) -> List[DynValue]:
+        """This predicate split on `AND`, or `[self]` if it is not one.
+
+        Decided at the `.filter()` verb like `constant_bool`, and for the same
+        reason — the concrete type is visible there and nowhere later. Each
+        conjunct is boxed **whole**, so a comptime subtree stays fused: this
+        moves the erasure boundary, it never crosses it.
+
+        What splitting buys is that each conjunct prunes and moves
+        independently. A compound `AND` node prunes only as well as its weaker
+        half, and cannot be pushed below a join at all when one half names the
+        left side and the other the right.
+
+        Defaulted to "this is one conjunct", which is always sound.
+        """
+        return [DynValue(self.copy())]
+
+    def constant_bool(self) -> Optional[Bool]:
+        """`True`/`False` if this is a constant boolean, else `None`.
+
+        **A trait default, deliberately not a `DynValue` slot.** It is read at
+        the `.filter()` verb, where the concrete type is still visible, and the
+        answer is stored on the `Filter` node — the same placement argument
+        `PrunePredicate` makes, and for the same reason: a slot on `DynValue`
+        is paid for every projection value, every sort key and every aggregate
+        input in the program, to serve the one caller that filters.
+
+        Defaulted to `None` — "not known to be constant" — so a node that has
+        not been taught costs an optimization and never an answer. Only
+        `RuntimeValue` overrides it; a comptime literal could too, but a fused
+        predicate that is constant is a program someone wrote by hand.
+        """
+        return None
+
     def columns(self) -> List[String]:
         """Which columns this expression reads, deduplicated, first-seen
         order."""
@@ -596,7 +630,9 @@ struct DynRelation(Copyable, Movable, Writable):
         return Filter(
             self.copy(),
             DynValue(predicate.copy()),
-            Optional(PrunePredicate(predicate^)),
+            Optional(PrunePredicate(predicate.copy())),
+            predicate.constant_bool(),
+            predicate.conjuncts(),
         )
 
     def select(self, names: List[String]) raises -> DynRelation:
@@ -883,6 +919,20 @@ struct Filter(Relation, Writable):
     var input: ArcPointer[DynRelation]
     var predicate: DynValue
 
+    var conjuncts: List[DynValue]
+    """The predicate split on `AND`, decided at the verb.
+
+    Empty when the predicate arrived already boxed, which reads as "not
+    split" — the `predicate` field is what actually filters either way, so an
+    empty list costs an optimization and never an answer."""
+
+    var constant: Optional[Bool]
+    """Whether the predicate is a constant, decided at the verb.
+
+    `EliminateFilter` reads this. Like `pruner`, it is `Optional` because the
+    erased overload cannot answer — and like `pruner`, a `None` costs only an
+    optimization."""
+
     var pruner: Optional[PrunePredicate]
     """The predicate again, typed, for statistics pruning — `None` when it
     arrived already boxed.
@@ -897,6 +947,8 @@ struct Filter(Relation, Writable):
         var input: DynRelation,
         var predicate: DynValue,
         var pruner: Optional[PrunePredicate] = None,
+        constant: Optional[Bool] = None,
+        var conjuncts: List[DynValue] = [],
     ) raises:
         reject_aggregate(
             predicate,
@@ -907,12 +959,33 @@ struct Filter(Relation, Writable):
         self.input = ArcPointer(input^)
         self.predicate = predicate^
         self.pruner = pruner^
+        self.constant = constant
+        self.conjuncts = conjuncts^
 
     def traverse[
         F: def (DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
+        return self.with_input(f(self.input[]))
+
+    def with_input(self, var input: DynRelation) raises -> Filter:
+        """This filter over a different input, carrying everything else.
+
+        **The only way a rule should move a filter.** A `Filter` holds five
+        things — input, predicate, pruner, constant, conjuncts — and the last
+        three are analysis decided at the verb, where the predicate's concrete
+        type was still visible. A rule that rebuilds with
+        `Filter(new_input, predicate, pruner)` silently drops the other two,
+        which does not fail: the filter still filters, `EliminateFilter` and
+        `SplitConjunction` just stop firing. That is exactly what happened when
+        `constant` and `conjuncts` were added and six call sites were not
+        updated.
+        """
         return Filter(
-            f(self.input[]), self.predicate.copy(), self.pruner.copy()
+            input^,
+            self.predicate.copy(),
+            self.pruner.copy(),
+            self.constant,
+            self.conjuncts.copy(),
         )
 
     def schema(self) -> Schema:

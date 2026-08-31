@@ -18,7 +18,9 @@ from ...builders import array
 from ...dtypes import int64, string
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
+from ...scalars import BoolScalar, Int64Scalar
 from ..builders import col, count_star, lit, table
+from ..runtime.values import and_, column, gt, literal, not_
 from ...kernels.join import JOIN_INNER, JOIN_LEFT
 from ..logical import DynRelation, DynValue
 from ..optimizer import (
@@ -632,3 +634,190 @@ def test_optimizer_empty_propagates_through_sort_and_project() raises:
     assert_equal(_occurrences(out, "Sort("), 0)
     assert_true("Empty(" in out, out)
     _check(plan, [List[Int]()])
+
+
+# ---------------------------------------------------------------------------
+# Constant folding, done in the value constructors
+# ---------------------------------------------------------------------------
+def test_folding_collapses_a_conjunction_with_true() raises:
+    """`x AND TRUE` is `x`, folded where the operands are still concrete."""
+    var p = and_(gt(column("a"), literal(Int64Scalar(1).to_dyn())), literal(BoolScalar(True).to_dyn()))
+    assert_equal(String(p), String(gt(column("a"), literal(Int64Scalar(1).to_dyn()))))
+
+
+def test_folding_annihilates_a_conjunction_with_false() raises:
+    """`x AND FALSE` is `FALSE` — true in Kleene logic even against a null."""
+    var p = and_(gt(column("a"), literal(Int64Scalar(1).to_dyn())), literal(BoolScalar(False).to_dyn()))
+    assert_equal(String(p), String(literal(BoolScalar(False).to_dyn())))
+
+
+def test_folding_leaves_a_null_literal_alone() raises:
+    """`x AND NULL` is neither `x` nor `NULL`, so it must not fold.
+
+    It is `FALSE` when `x` is false and `NULL` otherwise. Folding a null as if
+    it were false is the one way this rewrite changes answers.
+    """
+    var p = and_(
+        gt(column("a"), literal(Int64Scalar(1).to_dyn())),
+        literal(BoolScalar.null().to_dyn()),
+    )
+    assert_true("and" in String(p), String(p))
+
+
+def test_folding_cancels_double_negation() raises:
+    assert_equal(String(not_(not_(col("a")))), String(col("a")))
+
+
+def test_a_folded_false_filter_collapses_the_plan() raises:
+    """Why folding matters: it is what lets `PropagateEmpty` reach a real
+    query. Nobody writes `LIMIT 0`, but predicates fold to `FALSE` often.
+    """
+    var plan = table(_batch()).filter(
+        and_(gt(column("a"), literal(Int64Scalar(1).to_dyn())), literal(BoolScalar(False).to_dyn()))
+    )
+    assert_true("Empty(" in String(plan.optimize[AllRules]()), String(plan))
+
+
+# ---------------------------------------------------------------------------
+# Filter below an aggregate
+# ---------------------------------------------------------------------------
+def test_optimizer_pushes_a_filter_below_a_group_key() raises:
+    """A predicate on a group key filters before grouping, not after."""
+    var plan = table(_batch()).aggregate(
+        [col("b", int64).sum().alias("total")], [col("a", int64)]
+    ).filter(col("a", int64) > lit(3, int64))
+    _fires(plan)
+    var out = String(plan.optimize[AllRules]())
+    assert_true(out.find("Aggregate(") < out.find("Filter("), out)
+
+
+def test_optimizer_does_not_push_a_filter_on_an_aggregate_output() raises:
+    """`HAVING sum(...) > n` names a column the aggregate computes, so it
+    cannot move below the node that computes it."""
+    var plan = table(_batch()).aggregate(
+        [col("b", int64).sum().alias("total")], [col("a", int64)]
+    ).filter(col("total", int64) > lit(30, int64))
+    _inert(plan)
+
+
+def test_optimizer_does_not_push_a_filter_below_a_keyless_aggregate() raises:
+    """A keyless aggregate emits one row; a filter above it asks a different
+    question than one below."""
+    var plan = table(_batch()).aggregate(
+        [col("a", int64).sum().alias("total")]
+    ).filter(col("total", int64) > lit(1, int64))
+    _inert(plan)
+
+
+# ---------------------------------------------------------------------------
+# Empty through a join, per kind
+# ---------------------------------------------------------------------------
+def test_optimizer_inner_join_with_an_empty_side_is_empty() raises:
+    var plan = table(_left_table()).limit(0).join(
+        table(_right_table()), [0], [0], JOIN_INNER
+    )
+    _fires(plan)
+    assert_true("Empty(" in String(plan.optimize[AllRules]()))
+
+
+def test_optimizer_left_join_with_an_empty_right_is_not_empty() raises:
+    """The case that would delete rows: a `LEFT JOIN` with an empty right
+    still emits every left row, padded with NULLs."""
+    var plan = table(_left_table()).join(
+        table(_right_table()).limit(0), [0], [0], JOIN_LEFT
+    )
+    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Join("), 1)
+
+
+# ---------------------------------------------------------------------------
+# EliminateFilter and SplitConjunction
+# ---------------------------------------------------------------------------
+def test_optimizer_eliminates_a_constant_true_filter() raises:
+    var plan = table(_batch()).filter(literal(BoolScalar(True).to_dyn()))
+    _fires(plan)
+    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Filter("), 0)
+    _check(plan, [[3, 1, 4, 1, 5, 9], [10, 20, 30, 40, 50, 60]])
+
+
+def test_optimizer_a_constant_false_filter_becomes_empty() raises:
+    var plan = table(_batch()).filter(literal(BoolScalar(False).to_dyn()))
+    _fires(plan)
+    assert_true("Empty(" in String(plan.optimize[AllRules]()))
+    _check(plan, [List[Int](), List[Int]()])
+
+
+def test_optimizer_a_null_predicate_is_not_a_constant() raises:
+    """A filter keeps rows where the predicate is `TRUE`. A null predicate is
+    not `FALSE` — it merely fails to select — so it must not be folded into
+    either branch."""
+    var plan = table(_batch()).filter(literal(BoolScalar.null().to_dyn()))
+    _inert(plan)
+
+
+def test_optimizer_splits_a_conjunction_into_stacked_filters() raises:
+    var plan = table(_batch()).filter(
+        (col("a", int64) > lit(1, int64)) & (col("b", int64) < lit(50, int64))
+    )
+    _fires(plan)
+    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Filter("), 2)
+    # a > 1 keeps rows 0,2,4,5; b < 50 keeps 0,1,2,3; both keep 0 and 2.
+    _check(plan, [[3, 4], [10, 30]])
+
+
+def test_optimizer_splits_a_conjunction_recursively() raises:
+    """`a AND (b AND c)` reaches three filters, terminating at the first
+    operand that is not an `AND`."""
+    var plan = table(_batch()).filter(
+        (col("a", int64) > lit(0, int64))
+        & (
+            (col("b", int64) < lit(50, int64))
+            & (col("a", int64) < lit(5, int64))
+        )
+    )
+    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Filter("), 3)
+    _check(plan, [[3, 1, 4, 1], [10, 20, 30, 40]])
+
+
+def test_optimizer_does_not_split_a_disjunction() raises:
+    """`OR` is not a conjunction; splitting it would keep rows neither half
+    selects."""
+    var plan = table(_batch()).filter(
+        (col("a", int64) > lit(8, int64)) | (col("b", int64) < lit(15, int64))
+    )
+    assert_equal(_occurrences(String(plan.optimize[AllRules]()), "Filter("), 1)
+    _check(plan, [[3, 9], [10, 60]])
+
+
+def test_optimizer_split_conjuncts_reach_both_sides_of_a_join() raises:
+    """The payoff: `a AND b` spanning both inputs used to stay above the join.
+
+    Split, each half lands in the side it names — which is why splitting runs
+    before the pushdown rules rather than after.
+    """
+    var plan = table(_left_table()).join(
+        table(_right_table()), [0], [0], JOIN_INNER
+    ).filter(
+        (col("lval", int64) > lit(15, int64))
+        & (col("rval", int64) > lit(150, int64))
+    )
+    var out = String(plan.optimize[AllRules]())
+    assert_true(out.find("Join(") < out.find("Filter("), out)
+    _check(plan, [[2, 3], [20, 30], [2, 3], [200, 300]])
+
+
+def test_optimizer_reaches_a_fixpoint_with_splitting_and_pushdown() raises:
+    """Splitting rebuilds through `.filter()`, which re-enters the loop.
+
+    If splitting and any pushdown rule ever disagreed, the driver would spin
+    until `MAX_PASSES` truncated it — silently returning a half-optimized plan
+    rather than hanging. This asserts they converge on the shape most likely to
+    expose it: multiple conjuncts over a join.
+    """
+    var plan = table(_left_table()).join(
+        table(_right_table()), [0], [0], JOIN_INNER
+    ).filter(
+        (col("lval", int64) > lit(15, int64))
+        & (col("rval", int64) > lit(150, int64))
+    )
+    var once = plan.optimize[AllRules]()
+    assert_equal(String(once), String(once.optimize[AllRules]()))
