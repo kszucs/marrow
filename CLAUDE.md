@@ -998,6 +998,51 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
   struct`. This is why every binary operator on `NumericValue` names its
   parameter `Rhs`: `NumericBinary`/`FloatBinary`/`ConditionalBinary` already use
   `L`/`R`.
+- **A concrete overload does not beat a trait-bound generic overload — it is
+  silently never selected.** Measured 2026-08-31 while trying to split
+  conjunctions at the `.filter()` verb. Given
+
+  ```mojo
+  def filter[V: Value & Prunable](self, var predicate: V) -> DynRelation
+  def filter[L: ComptimeValue, R: ComptimeValue](           # never chosen
+      self, var predicate: BoolBinary[AndKernel, L, R]) -> DynRelation
+  ```
+
+  the second **compiles at 0/0, raises no ambiguity diagnostic, and is not
+  called**: Mojo picks the generic. `precompile` cannot detect this, because a
+  generic overload is only instantiated at a call site — the library is clean
+  whether or not the overload is ever selected. Only an instantiating test
+  shows it. The working alternative is a trait *default* the concrete type
+  overrides (`Value.conjuncts`), read where the type is still visible.
+
+- **`_type_is_eq` does not exist** (*"use of unknown declaration"*), and
+  matching a generic parameter against a variant member does not need it:
+  `Variant`'s constructor takes a member directly, which is the whole of
+  `DynArray.__init__[T: Array]`.
+
+- **An implicit conversion does not chain through `Optional`.** `DynRelation`
+  has an `@implicit` constructor from any `Relation`, yet returning `Limit(...)`
+  from a function typed `Optional[DynRelation]` fails with *"cannot implicitly
+  convert"*. Bind a typed local first.
+
+- **A struct parameter must be qualified inside a static method** —
+  `R.rewrite(x)` inside `struct Optimizer[R: RuleSet]` gives *"unqualified
+  access to struct parameter 'R'; use 'Self.R' instead"*. And a **method the
+  trait does not declare** cannot be reached through that projection at all; if
+  `Self.R.foo()` reports *"'Trait' value has no attribute 'foo'"*, check the
+  trait declares `foo` before concluding anything about defaults versus
+  requirements.
+
+- **`len(String)` is rejected outright.** UTF-8 makes a single length
+  ambiguous: use `byte_length()`, `len(s.codepoints())` or `len(s.graphemes())`.
+  Compare against `""` to test emptiness.
+
+- **A `Variant` closes its type set permanently.** Nothing outside the module
+  can add a member, so a test-local conformer cannot be boxed. That is what
+  `DynRelation` traded for `isa`/`get`; it also designs out the
+  `rebind[ArcPointer[NoneType]]` destructor-drop hazard, since a variant
+  destroys its member at the true type.
+
 - **`constrained` is gone; the compile-time assertion is `comptime assert`.**
   `comptime assert i >= 0, "unknown column: " + String(name)` fails the
   build with `constraint failed: unknown column: nope`, message included.

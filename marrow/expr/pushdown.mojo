@@ -24,7 +24,7 @@ function pointer is one word whatever its signature mentions. What the compiler
 rejects is a by-value recursive *field*: `var x: DynRelation` gives *"attempt to
 resolve a recursive reference to declaration
 'DynRelation.__move_ctor_is_trivial'"*. The two produce the same intuition and
-different diagnostics. See `docs/optimizer-experiment-findings.md` section 3.
+different diagnostics.
 
 One capability falls out for free: the previous expression package pushed only
 into an **adjacent** scan, so `Filter(Sort(ParquetScan))` pruned nothing. Here

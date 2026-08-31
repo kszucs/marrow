@@ -363,7 +363,8 @@ Parquet in it.
 given `DynRelation`'s layout. Trampolines returning `List[Self]`, `Self` and
 `Optional[Self]` all compile; what the compiler rejects is a by-value recursive
 *field*, which is a different thing. See
-`docs/optimizer-experiment-findings.md` §3.
+`CLAUDE.md`'s Mojo gotchas, and `marrow/expr/pushdown.mojo`'s own
+corrected docstring.
 
 **Still absent:** common-subexpression elimination, duplicate group/sort key
 elimination, statistics propagation, aggregate pushdown, and any cost model.

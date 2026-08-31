@@ -46,7 +46,8 @@ at all.
 node types in one box makes every operator reachable from any plan; the
 trampoline design that avoided it could not let a rule read a node or build
 one, which left the rules scattered across the nodes themselves and unreadable.
-The trade is recorded in `docs/optimizer-experiment-findings.md`.
+The trade is recorded in `docs/backlog.md`'s first architectural invariant,
+which this measurement amended.
 
 # What a rule may assume
 
@@ -1132,7 +1133,8 @@ def optimize[R: RuleSet](plan: DynRelation) raises -> DynRelation:
 #   construct the two `Filter`s — but still unsafe: `Join` keys are positional
 #   `List[Int]` indices into each child's schema, so any rewrite that changes a
 #   child renumbers them silently. Fix the keys first
-#   (`docs/optimizer-experiment-findings.md` §4).
+#   (fixed 2026-08-31: `Join` stores names, resolved from the caller's
+#   indices at construction and back at lowering).
 #
 # - **Projection pushdown / column pruning.** The highest-value rule missing,
 #   measured by this project at 3.6x against pruning's 1.04x. It needs a
