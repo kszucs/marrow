@@ -173,6 +173,17 @@ This replaces the old `-D MARROW_CLI_WRITERS=true` build flag. Putting the
 choice in the source means the query file states which formats its binary
 supports, and no build invocation can disagree with it.
 
+Measured on the `query_cli` program, `__text`, same machine and same
+invocation:
+
+| Build | `__text` | vs. text-only |
+|---|---:|---|
+| `cli.run(plan)` — table and CSV | 2,965,016 | — |
+| `cli.run[parquet=True, ipc=True](plan)` | 3,621,592 | **+656,576** |
+
+`nm -C` on the two: `marrow::parquet::writer` is **0** symbols in the first and
+7 in the second, and `marrow::expr::runtime` is 0 in both.
+
 ### Errors
 
 A usage error prints the usage line and exits **2**; an execution error exits
