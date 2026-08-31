@@ -15,6 +15,47 @@
 
 ### Features
 
+- **`QueryCli` — the AOT lane, as a shippable command-line program**
+  (`marrow/expr/cli.mojo`). The comptime lane compiled a fused plan into a
+  binary with no interpreter in it and there was no way to *use* one:
+  `execute_cli()` had been deleted, `python/marrow/compile.py` still referenced
+  it, and `docs/guide/compile.qmd` documented an API that did not exist.
+  `QueryCli` is the replacement, and it is one declaration per argument rather
+  than the old two:
+
+  ```mojo
+  var cli = QueryCli("orders", description="Orders above a minimum.")
+  var min_amount = cli.param("min-amount", int64, default=0, help="lower bound")
+  cli.argument("src", help="input Parquet file")
+
+  if cli.parse():
+      cli.run(scan(cli.get("src"), sch^).filter(col("amount", int64) >= min_amount))
+  ```
+
+  `cli.param(...)` returns the ordinary `Param[T]` node the plan uses *and*
+  registers the `--min-amount` option, its `--help` entry and the
+  string-to-scalar coercion that binds it, so the parser and the plan cannot
+  disagree. Every binary gets `-h/--help`, `--describe` (print the plan and
+  exit — a compiled binary is otherwise opaque about the query baked into it),
+  `-o/--output`, `--format` and `--max-rows` without the author declaring them.
+
+  It costs nothing a program does not name. Coercion is monomorphic — one
+  `_coerce_param[Int64Type]` stored as a thin function pointer, not a
+  `dispatch_numeric` ladder over eleven widths — and the Parquet and Arrow IPC
+  writers are behind comptime parameters on `run` (`cli.run[parquet=True](plan)`),
+  so a text-only query does not link them. `marrow::expr::runtime` links **0**
+  symbols in the new `query_cli` gate.
+
+- **`render_table` / `render_csv` (`marrow/expr/cli.mojo`) — query results you
+  can actually read.** `print(batch)` prints
+  `RecordBatch(num_rows=2, schema=...)` and no data at all: fine as a repr,
+  useless as the output of a report, and it was the only thing every example in
+  the tree did with a result. `render_table` aligns columns and reports
+  truncation in its footer; `render_csv` is RFC 4180 with a header, never
+  truncated, so a pipe cannot silently lose rows. Both are exported from
+  `marrow.expr` and usable without the CLI.
+
+
 - **A plan optimizer: twelve rules and a column-pruning pass**
   (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
   `DynRelation` you can print, diff and execute — `Limit(Sort(Filter(scan)))`

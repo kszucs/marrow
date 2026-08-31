@@ -23,6 +23,7 @@ binary that never sorts applies here too.
 """
 
 from .bindings import Bindings
+from .cli import QueryCli, render_csv, render_table
 from .builders import (
     array_length,
     col,
