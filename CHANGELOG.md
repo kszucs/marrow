@@ -15,6 +15,44 @@
 
 ### Features
 
+- **A plan optimizer: twelve rules and a column-pruning pass**
+  (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
+  `DynRelation` you can print, diff and execute — `Limit(Sort(Filter(scan)))`
+  becomes `Sort(Filter(scan) top 10)`. Every rule is a struct in one file:
+  `RemoveEmptyLimit`, `PropagateEmpty`, `RemoveNoOpProject`, `MergeProjects`,
+  `MergeLimits`, `RemoveRedundantSort`, `RemoveSortBeforeAggregate`,
+  `PushFilterBelowProject`, `PushFilterBelowSort`, `PushFilterBelowJoin`,
+  `PushLimitBelowProject` and `TopN`, plus `ColumnPruning` as a downward pass.
+  The rule set is a comptime parameter, so a binary links exactly what it
+  names and `execute()` alone optimizes nothing.
+
+  `DynRelation` became **a variant for inspection and a trampoline for
+  lowering**. `isa[R]()`/`get[R]()` let a rule read a real typed node and build
+  one; routing `to_operator` through the variant instead instantiated it for
+  every member and cost **+348%** of `__text` on `query_streaming`, since
+  `ParquetScan.to_operator` reaches `kernels::cast` in a plan with no Parquet
+  in it. Lowering stays on a per-type slot: the fused gates land at +1.6-2.6%.
+
+  `TopN` finally passes the `limit=` that `sort_indices` has always accepted
+  and `SortOperator` never sent — on the primary-key pass only, since the
+  multi-key decomposition needs full permutations to compose.
+
+### Fixes
+
+- **An aggregate above a `Limit` returned zero rows.** `Pipeline.drain`'s early
+  termination skipped every stage above a finished one, so anything answering
+  only from `drain` was dropped: `SELECT sum(a) FROM (SELECT * FROM t LIMIT 3)`
+  returned nothing where an ungrouped aggregate must return one row.
+
+- **`RecordBatch.__eq__` was not reflexive.** `DynArray.__eq__` routes through
+  `to_data()` to dodge a compiler deadlock, reaching `ArrayData.__eq__` and
+  `Buffer.__eq__`, which compares the whole 64-byte-aligned allocation
+  including bytes past the logical end. `alloc_uninit` now zeroes that padding.
+  Both bugs were found by asserting results against hand-written expected rows;
+  comparing an optimized plan against an unoptimized one sees both return zero
+  rows and passes.
+
+
 - **The Python query API is back**, rebuilt on the runtime expression lane
   rather than restored from the deleted `exprold` bindings. `marrow.memtable`
   and `marrow.read_parquet` give a `LazyTable`; `col`, `lit`, `if_else`,

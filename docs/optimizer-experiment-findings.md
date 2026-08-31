@@ -179,7 +179,14 @@ corrected before it misdirects further work.
 
 ---
 
-## 4. Join keys are positional `List[Int]`, through the public API
+## 4. Join keys are positional `List[Int]` — FIXED in `1fcf3302`
+
+> **Resolved 2026-08-31.** `Join` now stores key *names*, resolved from the
+> caller's indices at construction and back to indices at lowering. The public
+> verb still takes indices, so `plan.mojo` and every existing caller are
+> unchanged. This was the prerequisite for both column pruning below a join and
+> `PushFilterBelowJoin`.
+
 
 **Severity: a prerequisite, not a bug today. It becomes a silent wrong-answer
 bug the moment projection pushdown reaches a join.**
@@ -284,7 +291,17 @@ positional join keys (§4) anyway.
 
 ---
 
-## 6. `RecordBatch.__eq__` is not reflexive — CONFIRMED, and flaky
+## 6. `RecordBatch.__eq__` is not reflexive — FIXED in `371c27f2`
+
+> **Resolved 2026-08-31.** The chain was `DynArray.__eq__` -> `to_data()` ->
+> `ArrayData.__eq__` -> `Buffer.__eq__`, which compares `_size // 8` words over
+> the 64-byte-aligned allocation — including bytes past the logical end.
+> §2 had the mechanism right; what was wrong was concluding it was unreachable
+> from `RecordBatch`, since `DynArray.__eq__` takes the `ArrayData` route to
+> dodge a compiler deadlock and never reaches `PrimitiveArray.__eq__`, which
+> carefully avoids the problem. Fixed by zeroing the alignment padding in
+> `alloc_uninit`. `test_executing_one_plan_twice_agrees` passes.
+
 
 > **Status 2026-08-31: confirmed.** This entry was briefly retracted on the
 > strength of a run where the control passed; that retraction was wrong and the
@@ -414,7 +431,15 @@ an oversight later.
 
 ---
 
-## 8. An aggregate above a `Limit` returns zero rows
+## 8. An aggregate above a `Limit` returns zero rows — FIXED in `371c27f2`
+
+> **Resolved 2026-08-31.** The hypothesis recorded below was right:
+> `Pipeline.drain`'s early termination set `_stage = len(self._ops)` whenever
+> *any* stage reported done, skipping every stage above the `Limit`. Anything
+> answering only from `drain` — every aggregate, and a `Sort` — was dropped.
+> `done` split into `_first_done()` so the drain resumes just above the
+> finished stage.
+
 
 **Severity: silent wrong answer on a plan shape the engine accepts.**
 Confirmed 2026-08-31, independent of the optimizer.
