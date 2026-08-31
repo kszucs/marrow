@@ -192,8 +192,24 @@ orders: error: --min-amount expects an integer, got 'abc'
 `col("amount", int64)` fixes the column's *dtype* at compile time — that is
 what makes the predicate fuse — but the *name* is resolved against the schema
 when the plan is built, so a typo is a run-time error naming the column, not a
-compile error. A compile-time schema handle has been prototyped and is not
-wired into this surface.
+compile error — `marrow/schema.mojo`'s `field(name=...)` raises
+``Field with name `amont` not found.``, which `run()` reports as
+`orders: error: Field with name \`amont\` not found.`.
+
+**It could be a compile error, and that is the obvious next step for this
+surface.** `marrow/expr/comptime/tests/test_schema_handle.mojo` pins the four
+compiler contracts it needs — a struct with heap-allocated fields *is* a valid
+comptime parameter, `__getattr_param__` fires for a missing attribute, its
+return type may depend on the attribute name and still satisfy `Column`'s
+`NumericType` bound, and `comptime assert` turns an unknown name into a build
+failure carrying its own message. With a schema as a comptime parameter,
+`t.amount` resolves to `Column[Float64Type]` and `t.amont` fails the build with
+`constraint failed: unknown column: amont`.
+
+What does not exist yet is the production side of it: the handle and the
+comptime schema in that file are defined *in the test*, and nothing derives one
+from a Parquet footer at build time. Until that lands, `col(name, dtype)` is
+the working spelling and a bad name is caught when the plan is built.
 
 ## `marrow compile` — building the binary
 
