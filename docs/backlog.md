@@ -649,17 +649,15 @@ replaces.
   The shipped `_choose_strategy` (`groupby.mojo:402-412`) never looks at the key
   type at all: it selects on **row count and a sampled cardinality estimate**.
   Reading the design as a guide to the code inverts the whole decision.
-- **`GROUP_THREAD_LOCAL` (`groupby.mojo:312`) is a strategy the design never
-  proposed** — a DuckDB-style thread-local partial aggregation that splits by
-  row range and merges partials, chosen for large *low*-cardinality inputs where
-  radix cannot use more threads than there are distinct keys. Conversely
-  ClickHouse's 256-bucket two-level merge, the design's headline recommendation,
-  was not built; `GROUP_RADIX` uses 64 partitions (`RADIX_BITS = 6`,
-  `groupby.mojo:304`).
-- **The `group_id(keys) -> PrimitiveArray[uint32]` public API does not exist.**
-  The entry point is the `GroupBy` struct (`groupby.mojo:321`) with
-  `aggregate[A]` / `apply[F]` / `aggregate_columns`. The companion `unique` was
-  never written and is still wanted — **M2.2**.
+- **The parallel strategies are gone, and this entry described a tree that no
+  longer exists.** It cited `GROUP_THREAD_LOCAL` at `groupby.mojo:312`,
+  `_choose_strategy` at `:402-412` and `GROUP_RADIX` at `:304` — in a file that
+  is now **224 lines** with no parallelism in it at all: no `sync_parallelize`,
+  no thread-local partials, no radix placement. The only mentions of "radix"
+  are as a *future* runtime choice. Verified 2026-08-31.
+
+  Parallel group-by is therefore **absent**, not "shipped differently from the
+  design", and `docs/CAPABILITY-GAPS.md` item 7 is the accurate description.
 
 ### Joins
 

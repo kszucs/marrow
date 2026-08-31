@@ -49,17 +49,13 @@ does not exist (`python/marrow/compile.py:9`).
 
 ### The three things that most block adoption
 
-1. ~~**There is no query API from Python.**~~ **Closed 2026-08-30.**
-   `python/bindings/lib.mojo` now registers ten submodules, two of them the
-   expression and plan layers, and the runtime lane grew the ~45 verbs the
-   comptime lane already had so the two surfaces match verb for verb. What
-   this *does not* close is everything the frontend then runs into — items 2
-   and 3 below, and every Tier-1 gap. **The next-most-blocking item is now the
-   absence of a CSV reader**, since a first user reaches marrow with a CSV, not
-   a Parquet file.
+1. **There is no CSV or JSON reader, and no dataset concept.** A first user
+   reaches marrow with a CSV, not a Parquet file. (The Python query API, listed
+   first here until 2026-08-30, is closed: `python/bindings/lib.mojo` registers
+   ten submodules including the expression and plan layers, and the runtime
+   lane matches the comptime lane verb for verb.)
 
-2. **There is no CSV or JSON reader, and no dataset concept.** Parquet and Arrow
-   IPC are the only formats — `find marrow -iname '*csv*' -o -iname '*json*'`
+   Parquet and Arrow IPC are the only formats — `find marrow -iname '*csv*' -o -iname '*json*'`
    returns empty. `scan()` takes exactly one file path *and requires the caller
    to write out the schema by hand* (`marrow/expr/builders.mojo:213`), and
    `ByteSource` has one implementation, a local `mmap`. No globs, no
@@ -73,7 +69,7 @@ does not exist (`python/marrow/compile.py:9`).
    cache (`crates/polars-io/src/{cloud,file_cache,hive}.rs`,
    `crates/polars-stream/src/nodes/io_sources/multi_scan/`).
 
-3. ~~**There is no optimizer.**~~ **Resolved 2026-08-31.** There are now 16
+2. **There is no cost model, and no CSE.** The optimizer landed 2026-08-31 with 16
    rules and a column-pruning pass (`marrow/expr/optimizer.mojo`), covering
    every entry-level member of the set this item listed: projection pushdown,
    limit pushdown below a projection, TopN, constant folding, filter pushdown
@@ -119,7 +115,7 @@ no end-to-end `marrow compile` — and 1.48 MB still links `libmax`/AsyncRT, so
 | Target | Distance |
 |---|---|
 | *A usable Arrow library for Python* (arrays, Parquet, IPC, interop) | **Already there**, minus CSV/JSON. |
-| *A usable dataframe library* (a polars or ibis-backend alternative) | **Far**, but less so: the frontend is rebuilt (`a27167aa`) and the optimizer exists (§1.4). ~85 measured expression gaps, parallel aggregation, and set/window operations remain. |
+| *A usable dataframe library* (a polars or ibis-backend alternative) | **Far.** ~85 measured expression gaps, no CSV/JSON reader, single-threaded group-by, and no set or window operations. |
 | *A niche AOT query compiler nobody else serves* | **Closest of the three.** The engine works; what is missing is an entry point, output writers, and promoting the schema handle from spike to API. |
 
 ---
@@ -325,11 +321,7 @@ of sources and yielding row groups across them, plus hive-path parsing to
 synthesise partition columns. (c) An object-store `ByteSource`, which is the
 seam's stated purpose but needs an HTTP client marrow does not have.
 
-### 1.4 An optimizer
-
-> **Largely resolved 2026-08-31** (branch `optimizer`, `e478d7ed`..`35af41e5`).
-> The section below is kept because its survey of the incumbents is still the
-> right map; only marrow's side has moved.
+### 1.4 The optimizer: no cost model, no CSE
 
 **What exists.** A plan-to-plan rewriter in `marrow/expr/optimizer.mojo` —
 **16 rules and one downward pass**, invoked as `plan.optimize[AllRules]()`,
@@ -924,23 +916,17 @@ Found while establishing the inventory; each would mislead a reader.
 A sequence, not a wishlist. Each step is chosen because it unblocks the next, or
 because nothing after it matters without it.
 
-**1. ~~Restore the Python query frontend.~~ Done 2026-08-30**, README included.
-The error taxonomy (§2.10) was *not* landed with it, which was the cheap moment
-to do it — a typed exception hierarchy is nearly free while the boundary is
-being written and expensive to retrofit across 244 raise sites. It is now a
-retrofit. Do it before the surface grows further.
-
-**2. Fix the two wrong answers.** Float group keys collapsing, and the three
+**1. Fix the two wrong answers.** Float group keys collapsing, and the three
 integer-semantics xfails. A library that returns wrong `GROUP BY` results cannot
 be trialled, and both are bounded fixes with golden cases already written that
 turn red the moment they are correct.
 
-**3. CSV reader with schema inference, then NDJSON.** The largest ratio of user
+**2. CSV reader with schema inference, then NDJSON.** The largest ratio of user
 value to engineering novelty available, and it can run in parallel with 1 and 2
 because nothing downstream depends on it. No user reaches marrow's Parquet path
 without having first had a CSV.
 
-**4. Cheap expression nodes over kernels that already exist.** `IN` over
+**3. Cheap expression nodes over kernels that already exist.** `IN` over
 `is_in`, `bool_and`/`bool_or` over `AnyKernel`/`AllKernel`, `list_contains` over
 `ArrayContainsKernel`, `concat` over `ConcatKernel`, `greatest`/`least` over
 `MinKernel`/`MaxKernel`, `StructField` for struct access, and — the one that
@@ -949,33 +935,25 @@ not a kernel, and each deletes a `skip mojo` line. Doing these early also
 settles whether the two-lane parity invariant is cheap to maintain, which every
 later feature depends on; restore `test_parity.mojo` here, not later.
 
-**5. `scan(path)` without a hand-written schema, then multi-file scans.** Derive
+**4. `scan(path)` without a hand-written schema, then multi-file scans.** Derive
 the schema from the Parquet footer; then a `MultiFileScan` node over a glob with
 hive partition columns synthesised from the path. Every real Parquet dataset is
 a directory, and step 1's users hit this immediately.
 
-**6. ~~Projection pushdown.~~ Done 2026-08-31**, along with TopN — which did
-wire up the dead `sort_indices(limit=)` parameter, on the primary-key pass only,
-since the multi-key decomposition needs full permutations to compose. Limit
-pushdown *into the scan* was rejected rather than skipped: `Pipeline.drain`'s
-early termination already stops the source once a `Limit` reports done, and the
-scan yields one row group per drain, so `LIMIT 10` already reads exactly one.
-See §1.4.
-
-**7. Parallel group-by.** Thread-local partials plus a radix merge — previously
+**5. Parallel group-by.** Thread-local partials plus a radix merge — previously
 built, since removed. Group-by is where analytical queries spend their time, and
 running it on one core makes every benchmark comparison unwinnable.
 
-**8. String and temporal function surface.** The 16 + 13 skipped cases, minus
+**6. String and temporal function surface.** The 16 + 13 skipped cases, minus
 regex and timezones. Ordinary kernels over existing machinery: high volume, low
 risk, directly measured by the corpus.
 
-**9. Window functions.** A `Window` node, a blocking partition-and-sort operator
+**7. Window functions.** A `Window` node, a blocking partition-and-sort operator
 over the existing kernels, and a frame evaluator — from which running aggregates
 fall out free, because a reduction under an unbounded-preceding frame *is* one.
 The largest single feature a user will ask for that has no partial answer today.
 
-**10. A nested-loop join, then set operations and `distinct`.** The nested-loop
+**8. A nested-loop join, then set operations and `distinct`.** The nested-loop
 join is small and turns cross/non-equi joins from *unexpressible* into merely
 slow, which is a categorical improvement. Set ops and `unique` follow.
 
