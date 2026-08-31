@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     SQL `LIKE`, which is a different language.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     b:bool

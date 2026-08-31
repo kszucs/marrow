@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     answer over an empty relation rather than a null from an outer join.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     region:string	qty:int32	n:int64

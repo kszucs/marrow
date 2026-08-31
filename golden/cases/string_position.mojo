@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     the boolean question; this one needs the offset.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     p:int64

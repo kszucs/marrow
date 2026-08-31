@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     not to zero.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     s:int64

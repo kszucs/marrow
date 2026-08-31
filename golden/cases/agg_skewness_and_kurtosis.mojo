@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     whether `kurtosis` is excess or raw.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     s:double	k:double

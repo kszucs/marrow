@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     marrow would have to carry a predicate on the aggregate node.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     k:string	total:int64

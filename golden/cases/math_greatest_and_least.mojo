@@ -14,6 +14,7 @@ def plan() raises -> DynRelation:
     kernels this needs, but no expression node exposes them.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     g:int64	l:int64

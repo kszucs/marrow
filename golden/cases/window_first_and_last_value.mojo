@@ -18,6 +18,7 @@ def plan() raises -> DynRelation:
     operator in `physical.mojo`.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     v:int64	f:int64	l:int64

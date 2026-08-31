@@ -11,27 +11,62 @@ from std.testing import assert_equal, assert_true
 from ....arrays import StructArray, DynArray
 from ...bindings import Bindings
 from ....builders import array
-from ....dtypes import int64
+from ....dtypes import Date32Type, DynType, date32, float64, int32, int64
 from ....scalars import DynScalar, Int32Scalar, Int64Scalar, StringScalar
 from ....tabular import RecordBatch, record_batch
 from ...logical import Shape
-from ....builders import StringBuilder
+from ....builders import (
+    Int64Builder,
+    ListBuilder,
+    PrimitiveBuilder,
+    StringBuilder,
+)
 from ....dtypes import string
 from ..values import (
     Payload,
     RuntimeValue,
+    abs,
+    add,
     and_,
+    array_length,
+    cast,
+    ceil,
+    coalesce,
     column,
+    date_trunc,
     eq,
+    fill_null,
+    floor,
+    floordiv,
     ge,
     gt,
+    ilike,
+    if_else,
+    is_null,
+    is_valid,
+    isin,
     le,
+    length,
+    like,
     literal,
     lt,
+    mod,
+    month,
+    mul,
     ne,
+    neg,
     not_,
+    nullif,
     or_,
+    quarter,
+    sqrt,
+    startswith,
+    strip,
+    sub,
+    truediv,
+    upper,
     xor,
+    year,
 )
 
 
@@ -202,3 +237,305 @@ def test_runtime_predicate_reports_its_columns() raises:
         cols += c
         cols += ","
     assert_equal(cols, "a,b,")
+
+
+# ---------------------------------------------------------------------------
+# Arithmetic, math, strings, temporal — the surface the Python frontend binds
+# ---------------------------------------------------------------------------
+#
+# These are the tags the lane grew so a query built at run time can express
+# what the comptime lane already could. Each case pins the *answer*, not the
+# rendering: a tag that reaches the wrong kernel still renders correctly.
+
+
+def _ints(v: RuntimeValue) raises -> DynArray:
+    """Evaluate over `_batch()` — `a` is [1, 2, null, 4], `b` [10, 20, 30, 40].
+    """
+    var b = _batch()
+    return v.evaluate(b.to_struct_array(), Bindings()).to_array(4)
+
+
+def test_runtime_arithmetic_over_two_columns() raises:
+    assert_true(
+        _ints(add(column("b"), column("b"))) == array([20, 40, 60, 80], int64)
+    )
+    assert_true(
+        _ints(sub(column("b"), _lit(10))) == array([0, 10, 20, 30], int64)
+    )
+    assert_true(
+        _ints(mul(column("b"), _lit(2))) == array([20, 40, 60, 80], int64)
+    )
+    assert_true(
+        _ints(floordiv(column("b"), _lit(3))) == array([3, 6, 10, 13], int64)
+    )
+    assert_true(_ints(mod(column("b"), _lit(3))) == array([1, 2, 0, 1], int64))
+
+
+def test_runtime_arithmetic_propagates_nulls() raises:
+    """Null in, null out — `a`'s null at index 2 survives the add.
+
+    Checked per element rather than against `array([11, 22, None, 44])`:
+    `__eq__` is structural, and the kernel computes every lane before masking,
+    so the byte under the null holds `0 + 30` while the builder writes 0
+    there. Both are valid Arrow — the value under a null is unspecified — so
+    the assertion has to read the validity, not the buffer.
+    """
+    var got = _ints(add(column("a"), column("b"))).as_int64().copy()
+    assert_equal(Int(got[0].value()), 11)
+    assert_equal(Int(got[1].value()), 22)
+    assert_true(got.is_null(2))
+    assert_equal(Int(got[3].value()), 44)
+
+
+def test_runtime_division_is_always_float64() raises:
+    """`5 / 2` is 2.5, not 2 — `FloatBinary`'s rule, and the reason marrow
+    diverges from `pc.divide` on two integer columns."""
+    var got = _ints(truediv(column("b"), _lit(4)))
+    assert_true(got.dtype() == DynType(float64))
+    assert_true(got == array([2.5, 5.0, 7.5, 10.0], float64))
+
+
+def test_runtime_arithmetic_widens_rather_than_narrows() raises:
+    """An int32 column plus a literal too large for int32 must widen to int64.
+
+    The earlier promotion rule cast the right operand to the left's type and
+    fell back on failure, so this raised instead of adding.
+    """
+    var b = record_batch([array([1, 2], int32).to_dyn()], names=["c"])
+    var big = literal(DynScalar(Int64Scalar(Int64(1) << 40)))
+    var v = add(column("c"), big^)
+    var got = v.evaluate(b.to_struct_array(), Bindings()).to_array(2)
+    assert_true(got.dtype() == DynType(int64))
+    assert_true(got == array([(1 << 40) + 1, (1 << 40) + 2], int64))
+
+
+def test_runtime_arithmetic_rejects_non_numeric_operands() raises:
+    """A clear message at the operand, rather than a kernel's "no arm matched".
+    """
+    var sb = StringBuilder(1)
+    sb.append("x")
+    var b = record_batch([sb.finish().to_dyn()], names=["s"])
+    var v = add(column("s"), column("s"))
+    # A string `+` is concatenation, so it must *not* raise.
+    var joined = v.evaluate(b.to_struct_array(), Bindings()).to_array(1)
+    assert_true(joined.dtype().is_string_like())
+
+    var bad = sub(column("s"), column("s"))
+    var raised = False
+    try:
+        _ = bad.evaluate(b.to_struct_array(), Bindings())
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def _over(b: RecordBatch, var v: RuntimeValue) raises -> DynArray:
+    """Evaluate `v` over `b`. A free function rather than a closure per test:
+    a nested `def` capturing the batch needs an explicit capture list, and
+    four of them would say the same thing four ways."""
+    return v.evaluate(b.to_struct_array(), Bindings()).to_array(b.num_rows())
+
+
+def test_runtime_unary_math() raises:
+    var b = record_batch(
+        [array([-2.5, 2.5, -1.0, 4.0], float64).to_dyn()], names=["f"]
+    )
+
+    assert_true(
+        _over(b, neg(column("f"))) == array([2.5, -2.5, 1.0, -4.0], float64)
+    )
+    assert_true(
+        _over(b, abs(column("f"))) == array([2.5, 2.5, 1.0, 4.0], float64)
+    )
+    assert_true(
+        _over(b, floor(column("f"))) == array([-3.0, 2.0, -1.0, 4.0], float64)
+    )
+    assert_true(
+        _over(b, ceil(column("f"))) == array([-2.0, 3.0, -1.0, 4.0], float64)
+    )
+    assert_true(_over(b, sqrt(column("f")).copy()).dtype() == DynType(float64))
+
+
+def test_runtime_float_unary_casts_an_integer_operand() raises:
+    """`sqrt`/`exp`/`ln` are float64 out whatever went in — `FloatUnary`."""
+    var got = _ints(sqrt(column("b")))
+    assert_true(got.dtype() == DynType(float64))
+
+
+def test_runtime_null_predicates_read_validity() raises:
+    """`is_null` is never null itself; that is what separates it from a
+    comparison against NULL."""
+    assert_equal(_bits(is_null(column("a"))), "fftf")
+    assert_equal(_bits(is_valid(column("a"))), "ttft")
+
+
+def test_runtime_fill_null_and_nullif() raises:
+    assert_true(
+        _ints(fill_null(column("a"), _lit(0))) == array([1, 2, 0, 4], int64)
+    )
+    var nulled = _ints(nullif(column("a"), _lit(2))).as_int64().copy()
+    assert_equal(Int(nulled[0].value()), 1)
+    assert_true(nulled.is_null(1))  # equal to 2 -> nulled
+    assert_true(nulled.is_null(2))  # already null -> stays null
+    assert_equal(Int(nulled[3].value()), 4)
+
+
+def test_runtime_coalesce_and_if_else() raises:
+    assert_true(
+        _ints(coalesce([column("a"), column("b")]))
+        == array([1, 2, 30, 4], int64)
+    )
+    var v = if_else(gt(column("b"), _lit(20)), column("b"), _lit(0))
+    assert_true(_ints(v^) == array([0, 0, 30, 40], int64))
+
+
+def test_runtime_isin_hashes_the_set_once() raises:
+    """The value set is a payload, not a child — one probe table per batch."""
+    var v = isin(column("b"), array([20, 40], int64).to_dyn())
+    assert_equal(_bits(v^), "ftft")
+
+
+def test_runtime_cast_carries_its_safety_on_the_tag() raises:
+    """`Payload` holds one value and the target dtype is already it, so `safe`
+    rides the tag. Both spellings must reach the same kernel."""
+    var safe = cast(column("b"), DynType(int32))
+    assert_true(_ints(safe^).dtype() == DynType(int32))
+    var unsafe = cast(column("b"), DynType(int32), safe=False)
+    assert_true(_ints(unsafe^).dtype() == DynType(int32))
+
+
+def test_runtime_string_verbs() raises:
+    var sb = StringBuilder(3)
+    sb.append("  Apple ")
+    sb.append("pear")
+    sb.append_null()
+    var b = record_batch([sb.finish().to_dyn()], names=["s"])
+
+    var up = _over(b, upper(column("s"))).as_string().copy()
+    assert_equal(up[0].value(), "  APPLE ")
+    var st = _over(b, strip(column("s"))).as_string().copy()
+    assert_equal(st[0].value(), "Apple")
+    var ln_ = _over(b, length(column("s"))).as_int32().copy()
+    assert_equal(Int(ln_[0].value()), 8)
+    assert_true(ln_.is_null(2))
+
+    var pred = _over(b, like(column("s"), "%ear")).as_bool().copy()
+    assert_true(not pred[0].value())
+    assert_true(pred[1].value())
+    var ipred = _over(b, ilike(column("s"), "%APPLE%")).as_bool().copy()
+    assert_true(ipred[0].value())
+
+    var sw = _over(
+        b, startswith(column("s"), literal(DynScalar(StringScalar("pe"))))
+    )
+    assert_true(sw.as_bool()[1].value())
+
+
+def test_runtime_temporal_verbs() raises:
+    """`date32` days since epoch: 0 is 1970-01-01, 19723 is 2024-01-01."""
+    var db = PrimitiveBuilder[Date32Type](date32(), capacity=2)
+    db.append(Int32(0))
+    db.append(Int32(19723))
+    var b = record_batch([db.finish().to_dyn()], names=["d"])
+
+    var y = _over(b, year(column("d"))).as_int32().copy()
+    assert_equal(Int(y[0].value()), 1970)
+    assert_equal(Int(y[1].value()), 2024)
+    var m = _over(b, month(column("d"))).as_int32().copy()
+    assert_equal(Int(m[1].value()), 1)
+    var q = _over(b, quarter(column("d"))).as_int32().copy()
+    assert_equal(Int(q[1].value()), 1)
+    # date_trunc keeps the input's type rather than widening it.
+    assert_true(
+        _over(b, date_trunc(column("d"), "year")).dtype() == DynType(date32())
+    )
+
+
+def test_runtime_date_trunc_rejects_a_bad_unit_at_construction() raises:
+    """The unit is parsed when the plan is built, not on the first row that
+    evaluates it — which is why `CalendarUnit` is a type and not a `String`."""
+    var raised = False
+    try:
+        _ = date_trunc(column("d"), "fortnight")
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_runtime_array_length_over_a_list_column() raises:
+    var lb = ListBuilder(Int64Builder())
+    var child_any = lb.values()
+    ref child = child_any.as_int64()
+    child.append(1)
+    child.append(2)
+    child.append(3)
+    lb.append_valid()  # [1, 2, 3]
+    lb.append_valid()  # []
+    lb.append_null()  # null
+    var b = record_batch([lb.finish().to_dyn()], names=["xs"])
+    var got = (
+        array_length(column("xs"))
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(3)
+        .as_int32()
+        .copy()
+    )
+    assert_equal(Int(got[0].value()), 3)
+    assert_equal(Int(got[1].value()), 0)
+    assert_true(got.is_null(2))
+
+
+def test_runtime_unknown_tag_names_itself() raises:
+    """The one error message `evaluate` still owns after the split into
+    `_unary` / `_binary` — both of which answer `None` rather than raising so
+    this stays in one place."""
+    var v = RuntimeValue("frobnicate", column("a"))
+    var b = _batch()
+    var msg = String()
+    try:
+        _ = v.evaluate(b.to_struct_array(), Bindings())
+    except e:
+        msg = String(e)
+    assert_true("frobnicate" in msg)
+
+
+def test_runtime_conditionals_unify_mixed_branches() raises:
+    """`coalesce`, `case_when`, `nullif` and `fill_null` all pick one of their
+    inputs per row, so their kernels call `expect_same_dtype`.
+
+    Without unification `float_col.fill_null(0)` raises on a literal that
+    inferred `int64` — which is exactly what a Python caller writes.
+    """
+    var b = record_batch(
+        [array([1.5, None, 3.5], float64).to_dyn()], names=["f"]
+    )
+    var int_lit = literal(DynScalar(Int64Scalar(0)))
+
+    var filled = _over(b, fill_null(column("f"), int_lit.copy()))
+    assert_true(filled.dtype() == DynType(float64))
+    assert_true(filled == array([1.5, 0.0, 3.5], float64))
+
+    var merged_ = _over(b, coalesce([column("f"), int_lit.copy()]))
+    assert_true(merged_.dtype() == DynType(float64))
+
+    var chosen = _over(
+        b, if_else(is_null(column("f")), int_lit.copy(), column("f"))
+    )
+    assert_true(chosen.dtype() == DynType(float64))
+    assert_true(chosen == array([1.5, 0.0, 3.5], float64))
+
+
+def test_runtime_conditionals_leave_a_hopeless_mix_to_the_kernel() raises:
+    """`coalesce(string, int)` has no common type, so the guess is not made
+    here — the kernel raises and its message names both dtypes."""
+    var sb = StringBuilder(1)
+    sb.append("x")
+    var b = record_batch(
+        [sb.finish().to_dyn(), array([1], int64).to_dyn()], names=["s", "n"]
+    )
+    var raised = False
+    try:
+        _ = _over(b, coalesce([column("s"), column("n")]))
+    except:
+        raised = True
+    assert_true(raised)

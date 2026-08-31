@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     asserts for lists.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     n:int64

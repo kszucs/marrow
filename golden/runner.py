@@ -56,7 +56,11 @@ XFAIL = "-- xfail "
 # Set from `conftest.py`'s `pytest_configure`; the `Golden` fixture that used
 # to read them off `request.config` is gone, so that `table(name)` reads the
 # same in both lanes instead of carrying a config argument into every case.
-MORSEL_SIZE = 8192
+#
+# `MORSEL_SIZE` was here too and is gone: `morsel_size` does not exist anywhere
+# under `marrow/` -- it went with the old expression package, and neither
+# `InMemoryTable` nor `marrow.memtable` takes one. Its single reader was
+# `helpers.table`, which passed it to a `memtable` that no longer accepts it.
 NUM_THREADS = 0
 
 
@@ -688,18 +692,67 @@ def prepare():
 
 _VAR_RE = re.compile(r"^(\s*)var\s+")
 
+_DDOF_RE = re.compile(r"\.(stddev|variance)\[([01])\]\(\)")
+"""A comptime `ddof` parameter — `.stddev[1]()` — as the Python verb.
+
+`NumericValue.stddev[ddof]` and `.variance[ddof]` take their delta degrees of
+freedom as a *compile-time parameter*, which is the whole reason the fused lane
+can specialise them. Python has no reading for `[1]` after a method, so the two
+spellings are mapped here: ddof 0 is the population form and keeps the base
+name, ddof 1 is the sample form and takes Arrow's `_samp` name -- the same
+pairing `RuntimeValue` exposes as `stddev`/`stddev_samp`.
+
+Only 0 and 1 are matched, which is the whole domain marrow implements; a case
+asking for ddof 2 will fail loudly here rather than transpile to something that
+silently means ddof 1.
+"""
+
+_MOVE_RE = re.compile(r"\b(\w+)\^(?=\s*[,)])")
+"""A transfer sigil in argument position — `join(right^, ...)` — dropped.
+
+Narrow on purpose. It fires only for an *identifier* immediately followed by
+`^` and then a comma or a close paren, which is the one shape Mojo forces on a
+case: `DynRelation.join` takes `var right`, and `DynRelation` is deliberately
+not `ImplicitlyCopyable`, so the sigil is not optional there.
+
+The two other `^`s in the corpus are untouched by construction.
+`col("p", bool_) ^ col("q", bool_)` is the XOR *operator* — spaced, and
+preceded by `)` rather than a word character. `regexp_matches("^[a-z],")` has
+its `^` inside a string, preceded by a quote. Both fail the lookbehind.
+"""
+
+
+def _ddof(match):
+    """`.stddev[1]()` -> `.stddev_samp()`; `.variance[0]()` -> `.variance()`."""
+    verb, ddof = match.group(1), match.group(2)
+    if ddof == "0":
+        return f".{verb}()"
+    return ".stddev_samp()" if verb == "stddev" else ".var_samp()"
+
 
 def transpile(case):
     """The case body as a Python `plan()`.
 
-    One rule — drop `var` — because the signature is written here rather than
-    transcribed, so `raises` and the `-> DynRelation` annotation never reach
-    Python and `DynRelation` need not exist in its namespace. The rule holds
-    only while bodies stay inside the intersection of the two grammars: no type
-    annotations, and no transfer sigils (`q^` has no Python reading, so every
-    helper a case calls takes its arguments borrowed).
+    Three rules — drop `var`, drop a transfer sigil in argument position, and
+    rewrite a comptime `ddof` parameter to its Python verb —
+    because the signature is written here rather than transcribed, so `raises`
+    and the `-> DynRelation` annotation never reach Python and `DynRelation`
+    need not exist in its namespace. The rules hold only while bodies stay
+    inside the intersection of the two grammars, which for now means no type
+    annotations.
+
+    **This docstring used to say transfer sigils never appear**, on the
+    reasoning that "every helper a case calls takes its arguments borrowed".
+    Five join cases have carried `join(right^, ...)` since they were written,
+    and Python read it as an XOR with a missing operand -- a `SyntaxError` that
+    aborts collection for the *whole* corpus, not just those five. It went
+    unseen because `test_cases.py` skipped this lane at module level while
+    marrow had no Python frontend; restoring the frontend on 2026-08-30 is what
+    surfaced it.
     """
     lines = [_VAR_RE.sub(r"\1", line) for line in case.body.split("\n")]
+    lines = [_MOVE_RE.sub(r"\1", line) for line in lines]
+    lines = [_DDOF_RE.sub(_ddof, line) for line in lines]
     doc = case.sql if not case.prose else f"{case.sql}\n\n{case.prose}"
     return (
         f"def plan():\n"

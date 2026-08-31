@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     cross join.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     eid:int64	did:int64

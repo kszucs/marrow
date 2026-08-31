@@ -13,6 +13,123 @@
 > that cite them still name the original path; recover any of them with
 > `git show 8f365d14:<path>`.
 
+### Features
+
+- **The Python query API is back**, rebuilt on the runtime expression lane
+  rather than restored from the deleted `exprold` bindings. `marrow.memtable`
+  and `marrow.read_parquet` give a `LazyTable`; `col`, `lit`, `if_else`,
+  `case_when`, `coalesce` and `count_star` build expressions; `filter`,
+  `select`, `project`, `with_columns`, `drop`, `rename`, `order_by`, `limit`,
+  `aggregate`, `join`, `explain` and `collect` are the verbs. Two new binding
+  modules (`python/bindings/expressions.mojo`, `python/bindings/plan.mojo`) and
+  two new Python modules (`python/marrow/_expr.py`, `python/marrow/lazy.py`),
+  with 90 cases across `test_expressions.py` and `test_lazy.py`.
+
+  **The Python surface is the Mojo typed lane's surface, verb for verb.**
+  `col("a", int64) * lit(2, int64)` and `col("a") * lit(2)` build the same
+  query and differ only in when the dtype is resolved. That parity is what
+  drove the change below.
+
+- **The runtime expression lane gained the ~45 verbs the comptime lane already
+  had.** It could previously express comparisons, three-valued boolean logic,
+  `coalesce` and `case_when` — enough for a predicate and nothing else, so a
+  Python frontend could not have written `col("a") + 1`. Added: arithmetic
+  (`add`/`sub`/`mul`/`truediv`/`floordiv`/`mod`/`pow`/`neg`), elementwise math
+  (`abs`/`sign`/`floor`/`ceil`/`round`/`trunc`/`sqrt`/`exp`/`ln`), the string
+  verbs (`upper`/`lower`/the strip family/`reverse`/`capitalize`/`length`/
+  `startswith`/`endswith`/`contains`/`like`/`ilike`), the temporal extractors
+  and `date_trunc`, the null and value predicates (`is_null`/`is_valid`/
+  `is_nan`/`is_inf`), `fill_null`, `nullif`, `cast`, `isin`, `array_length`
+  and `if_else`. Every one is an existing kernel reached by a new tag; no new
+  kernel was written.
+
+  `evaluate`'s tag switch is split into `_unary` / `_binary` helpers that
+  answer `Optional[DynArray]`, so the "unknown runtime node" message stays in
+  one place and the three shapes that are *not* a plain kernel call
+  (`coalesce`, `case_when`, the comparison promotion) stay readable.
+
+  `RuntimeValue` grew a `(tag, child, payload)` constructor for the nodes whose
+  second operand is a constant the kernel takes directly — a cast target, a
+  `LIKE` pattern, an `IN` value set — so those are not smuggled through a
+  `literal` child and broadcast to the batch length once per morsel. `safe`
+  rides `cast`'s *tag* rather than its payload, since `Payload` holds one value
+  and the target dtype is already it.
+
+### Fixes
+
+- **`StructArray.field()` dropped the parent's slice.** `slice()` is zero-copy:
+  it moves the struct's `offset`/`length` and shares `children` untouched. So
+  `field()` returning `children[i].copy()` handed back the *parent's* full
+  column, not the slice's. `LimitOperator` emits exactly that
+  (`batch.slice(start, wanted)`), and the two expression lanes failed
+  differently on it:
+
+  - the runtime lane materialised the whole child and `Datum.to_array` caught
+    the mismatch -- `limit(4).filter(col("v") > 2)` raised *"expected a column
+    of 4 rows, got 7"*, which is how this was found;
+  - the comptime lane read elements `[0, len(batch))` of the child, whose own
+    offset is 0, so it silently took the **wrong window** whenever the struct's
+    offset was non-zero -- `limit(n, offset=k)`, or any morsel where the limit
+    skipped rows. At offset 0 it was right by coincidence, which is why every
+    existing test passed.
+
+  `kernels/sort.mojo` reads its keys through `field()` too and had the same
+  exposure. Both overloads now slice; on an unsliced struct that is a no-op, so
+  nothing pays for it. There was no test for `field()` on a sliced struct at
+  all — `test_struct_array_field_carries_the_slice` covers both overloads at
+  offset 0 and offset > 0, and
+  `test_filter_above_limit_with_offset_reads_the_limited_rows` pins the plan
+  shape in **both** lanes.
+
+  Found only because restoring the Python frontend re-enabled golden's Python
+  lane, where `limit_then_filter` had been dark since 2026-08-29.
+
+- **Runtime comparison no longer narrows the wrong operand.** `_compare` cast
+  the right operand to the left's type and fell back to the reverse on
+  failure, which reads as symmetric and is not: `cast` accepts a *narrowing*
+  integer conversion and rejects it only per value, so `int32_col > lit(2**40)`
+  tried `int64 -> int32` first, succeeded structurally, and raised on the
+  literal instead of comparing. `promote_dyn` replaces it with a real widening
+  rule — the runtime twin of `comptime/rules.mojo`'s `promote[L, R]`, stating
+  the same two rules (a float outranks any integer whatever the widths;
+  otherwise the wider wins) — and both `_compare` and the new `_arith` go
+  through it. Widening cannot narrow, so there is no ordering to get wrong.
+
+- **The golden corpus's Python lane was dark and had rotted.**
+  `test_cases.py` skipped it at module level while marrow had no Python
+  frontend — with a comment asking for the guard's deletion when the bindings
+  returned. Restoring them surfaced four separate breakages, none of which
+  could have been seen while the lane was skipped:
+
+  - `runner.transpile` had no rule for a transfer sigil, so `join(right^, ...)`
+    in five join cases read as an XOR with a missing operand. That is a
+    `SyntaxError` at *collection*, which aborts the whole corpus — Mojo lane
+    included — not just those five. The docstring asserted sigils never appear;
+    they had appeared since those cases were written.
+  - `helpers.table` passed `morsel_size=` to `memtable`, and `morsel_size`
+    exists nowhere under `marrow/` any more. `runner.MORSEL_SIZE` had that one
+    reader and is gone with it.
+  - `_Relation` required a `strictness` argument `DynRelation.join` no longer
+    takes, defined `sort` where cases write `sort_by`, passed a fourth
+    `stable` argument `Plan.sort` no longer takes, and shimmed `array_length`
+    to a `list_length` that is neither lane's name.
+  - 84 cases whose feature is absent from *both* lanes carried only
+    `-- skip mojo`; they now carry `-- skip python` as well, so each case
+    states its own gap per lane.
+
+  `transpile` also learned to map a comptime `ddof` parameter
+  (`.stddev[1]()`) to its Python verb (`.stddev_samp()`), which is the same
+  class of grammar difference as the sigil. The corpus now runs both lanes:
+  380 passed, 84 skipped, 8 xfailed.
+
+- **`README.md`'s lazy-query section documented a deleted API.** It described
+  `morsel_size` and `strictness` arguments that no longer exist, claimed
+  `explain()` "renders one node, not the tree" when plans render recursively,
+  cited `docs/alpha-clickbench-coverage.md` and `docs/alpha-findings/README.md`
+  (both deleted), and carried a 40/43 ClickBench claim whose harness went with
+  them. Rewritten against what the code does, and pointed at
+  `docs/CAPABILITY-GAPS.md`.
+
 ### Removals
 
 - **`AggKernel.empty()` and `ValidCount._per_group` are gone.** `empty()`

@@ -420,6 +420,18 @@ def read_ipc_stream_schema(path):
     return RecordBatch.wrap(_ma.read_ipc_stream_schema(path))
 
 
-# Imported last: `compute` pulls Array/Scalar/RecordBatch back out of this
-# module, so it can only be bound once those exist.
+# Imported last: each of these pulls Array/Scalar/RecordBatch back out of this
+# module, so they can only be bound once those exist.
 from . import compute  # noqa: E402
+from ._expr import (  # noqa: E402
+    Aggregate,
+    Column,
+    case_when,
+    coalesce,
+    col,
+    count_star,
+    if_else,
+    lit,
+)
+from .lazy import LazyTable, memtable, read_parquet  # noqa: E402
+from . import lazy  # noqa: E402

@@ -19,6 +19,7 @@ def plan() raises -> DynRelation:
     packed booleans, which is a different operation on a different layout.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     a:int64	o:int64	x:int64	l:int64

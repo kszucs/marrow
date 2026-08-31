@@ -51,12 +51,44 @@ from ...kernels.aggregate import (
     VARIANCE,
     VAR_SAMP,
 )
-from ...kernels.boolean import AndKernel, NotKernel, OrKernel, XorKernel
+from ...kernels.boolean import (
+    AndKernel,
+    IsInfKernel,
+    IsNanKernel,
+    IsNullKernel,
+    NotKernel,
+    NotNullKernel,
+    OrKernel,
+    XorKernel,
+)
 from ...kernels.cast import cast as cast_array
 from ...kernels.conditional import case_when as case_when_kernel
 from ...kernels.conditional import coalesce as coalesce_kernel
+from ...kernels.conditional import fill_null as fill_null_kernel
+from ...kernels.conditional import nullif as nullif_kernel
+from ...kernels.membership import IsInKernel
+from ...kernels.nested import ArrayLengthKernel
 from ...kernels.numeric import (
+    AbsKernel,
+    AddKernel,
+    BinaryKernel,
+    CeilKernel,
+    DivKernel,
+    ExpKernel,
+    FloorKernel,
+    FloordivKernel,
+    LogKernel,
+    ModKernel,
+    MulKernel,
+    NegKernel,
     NumericCompareKernel,
+    PowKernel,
+    RoundKernel,
+    SignKernel,
+    SqrtKernel,
+    SubKernel,
+    TruncKernel,
+    UnaryFloatKernel,
     EqKernel,
     GeKernel,
     GtKernel,
@@ -65,7 +97,21 @@ from ...kernels.numeric import (
     NeKernel,
 )
 from ...kernels.string import (
+    CapitalizeKernel,
+    ConcatKernel,
+    ContainsKernel,
+    EndsWithKernel,
+    ILikeKernel,
+    LStripKernel,
+    LengthKernel,
+    LikeKernel,
+    LowerKernel,
+    RStripKernel,
+    ReverseKernel,
+    StartsWithKernel,
     StringPredicateKernel,
+    StripKernel,
+    UpperKernel,
     StringEqKernel,
     StringGeKernel,
     StringGtKernel,
@@ -73,7 +119,20 @@ from ...kernels.string import (
     StringLtKernel,
     StringNeKernel,
 )
-from ...dtypes import DynType
+from ...kernels.temporal import (
+    CalendarUnit,
+    DateTruncKernel,
+    DayKernel,
+    DayOfWeekKernel,
+    DayOfYearKernel,
+    HourKernel,
+    MinuteKernel,
+    MonthKernel,
+    QuarterKernel,
+    SecondKernel,
+    YearKernel,
+)
+from ...dtypes import DynType, float64
 from ...scalars import DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
@@ -91,6 +150,35 @@ from ..pruning import DynBounds, PruneStats, Prunable, Truth, compare_dyn
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 from .aggregates import RuntimeAggregate
+
+
+def promote_dyn(l: DynType, r: DynType) raises -> DynType:
+    """The common numeric domain of two runtime dtypes.
+
+    The runtime twin of `comptime/rules.mojo`'s `promote[L, R]`, and it states
+    the same two rules: a float outranks any integer whatever the widths, and
+    otherwise the wider one wins. It lives here rather than beside its twin
+    because `rules.mojo` belongs to the comptime lane -- reaching across would
+    make this file import the package it exists to stay out of.
+
+    **Widening, not "try a cast each way".** The earlier rule cast the right
+    operand to the left's type and fell back to the reverse on failure, which
+    reads as symmetric and is not: `cast` accepts a *narrowing* integer
+    conversion and only rejects it per value, so `int32_col > lit(2**40)`
+    tried `int64 -> int32` first, succeeded structurally, and raised on the
+    literal instead of comparing. Widening cannot narrow, so there is no
+    ordering to get wrong.
+    """
+    if l == r:
+        return l.copy()
+    if not l.is_numeric() or not r.is_numeric():
+        raise Error("promote: no common numeric type for ", l, " and ", r)
+    var l_float = l.is_floating_point()
+    if l_float != r.is_floating_point():
+        return l.copy() if l_float else r.copy()
+    # `byte_width`, not `bit_width`: `DynType` has only the former, and the
+    # ordering it induces over the numeric types is the same one.
+    return l.copy() if l.byte_width() >= r.byte_width() else r.copy()
 
 
 comptime Payload = Variant[NoneType, String, DynType, DynArray, DynScalar]
@@ -144,6 +232,21 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         self._tag = tag^
         self._kids = [ArcPointer(a.copy())]
         self._payload = Payload(NoneType())
+
+    def __init__(out self, var tag: String, a: Self, var payload: Payload):
+        """One child *and* a payload — `cast`, `like`, `date_trunc`, `isin`.
+
+        The payload-only constructor above builds a leaf, so without this a
+        node whose operand is an expression and whose second operand is a
+        constant the kernel takes directly (a target dtype, a compiled
+        pattern, a value set) would have to smuggle the constant through a
+        `literal` child and unpack it again at evaluation. That would make the
+        constant a `DynArray` broadcast to the batch length — one allocation
+        per morsel for a value the kernel wants as a scalar.
+        """
+        self._tag = tag^
+        self._kids = [ArcPointer(a.copy())]
+        self._payload = payload^
 
     def __init__(out self, var tag: String, var kids: List[Self]):
         """N children. `if_else` needs three and `case_when` needs `2n + 1`, so
@@ -300,6 +403,10 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         for ref kid in self._kids:
             kids.append(kid[].evaluate(batch, bindings).to_array(len(batch)))
 
+        if len(kids) == 1:
+            var d = self._unary(kids[0].copy())
+            if d:
+                return Datum(d.take())
         # Comparisons and boolean connectives. The `_tag` selects the kernel
         # here, which the comptime lane never does -- see this module's
         # docstring on why that trade is right for the interpreted lane.
@@ -324,23 +431,33 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
                 return Datum(OrKernel.dispatch(l^, r^))
             if self._tag == "xor":
                 return Datum(XorKernel.dispatch(l^, r^))
-        if len(kids) == 1 and self._tag == "not":
-            return Datum(NotKernel.dispatch(kids[0].copy()))
+            var d = self._binary(kids[0].copy(), kids[1].copy())
+            if d:
+                return Datum(d.take())
 
         if self._tag == "coalesce":
-            return Datum(coalesce_kernel(kids))
+            return Datum(coalesce_kernel(Self._unified(kids^)))
         if self._tag == "case_when":
             var has_else = len(kids) % 2 == 1
             var n = (len(kids) - 1) // 2 if has_else else len(kids) // 2
             var conds = List[BoolArray](capacity=n)
             for i in range(n):
                 conds.append(kids[i].as_bool().copy())
-            var vals = List[DynArray](capacity=n)
+            # The conditions are bool and the branches are whatever the caller
+            # wrote, so only the branches are unified -- and the else arm is
+            # one of them, which is why it goes through the same list.
+            var branches = List[DynArray](capacity=n + 1)
             for i in range(n):
-                vals.append(kids[n + i].copy())
+                branches.append(kids[n + i].copy())
+            if has_else:
+                branches.append(kids[len(kids) - 1].copy())
+            branches = Self._unified(branches^)
             var otherwise = Optional[DynArray](None)
             if has_else:
-                otherwise = kids[len(kids) - 1].copy()
+                otherwise = branches[n].copy()
+            var vals = List[DynArray](capacity=n)
+            for i in range(n):
+                vals.append(branches[i].copy())
             return Datum(case_when_kernel(conds, vals, otherwise^))
         raise Error("evaluate: unknown runtime node '", self._tag, "'")
 
@@ -355,20 +472,242 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         and nothing else. Mixed numeric widths are promoted to the wider domain
         first, so `int32_col > int64_lit` compares rather than raising.
         """
-        if l.dtype().is_string_like():
+        if l.dtype().is_string_like() or r.dtype().is_string_like():
+            if not (l.dtype().is_string_like() and r.dtype().is_string_like()):
+                raise Error(
+                    "compare: cannot compare ", l.dtype(), " with ", r.dtype()
+                )
             return S.dispatch(l^, r^)
-        var lt = l.dtype()
-        var rt = r.dtype()
-        if lt != rt:
-            if lt.is_string_like() or rt.is_string_like():
-                raise Error("compare: cannot compare ", lt, " with ", rt)
-            # Cast the narrower side up. `cast` decides what "wider" means; a
-            # pair it rejects raises there rather than comparing raw bits.
-            try:
-                r = cast_array(r^, lt)
-            except:
-                l = cast_array(l^, rt)
-        return K.dispatch(l^, r^)
+        if l.dtype() == r.dtype():
+            return K.dispatch(l^, r^)
+        if l.dtype().is_numeric() and r.dtype().is_numeric():
+            var to = promote_dyn(l.dtype(), r.dtype())
+            return K.dispatch(cast_array(l^, to), cast_array(r^, to))
+        # Anything else -- two temporal columns at different resolutions, say
+        # -- meets on the left operand's type. `promote_dyn` deliberately has
+        # no answer outside the numeric domain, and inventing one here would
+        # be a second promotion rule that could disagree with it.
+        var to = l.dtype()
+        return K.dispatch(l^, cast_array(r^, to))
+
+    @staticmethod
+    def _arith[
+        K: BinaryKernel
+    ](var l: DynArray, var r: DynArray) raises -> DynArray:
+        """`+ - * // %` — both operands promoted to their common domain first.
+
+        `promote_dyn` is the same rule the comptime lane's `promote[L, R]`
+        applies at compile time. Doing it here rather than letting the kernel's
+        `expect_same_dtype` raise is what makes `int32_col + int64_lit` add
+        instead of failing, and doing it *by widening* rather than by trying a
+        cast in each direction is what keeps it from silently narrowing.
+        """
+        if not l.dtype().is_numeric() or not r.dtype().is_numeric():
+            raise Error(
+                "arithmetic is not defined for ",
+                l.dtype(),
+                " and ",
+                r.dtype(),
+            )
+        var to = promote_dyn(l.dtype(), r.dtype())
+        return K.dispatch(cast_array(l^, to), cast_array(r^, to))
+
+    @staticmethod
+    def _float_binary[
+        K: BinaryKernel
+    ](var l: DynArray, var r: DynArray) raises -> DynArray:
+        """`/` and `**` — always `float64`, whatever went in.
+
+        The runtime half of `FloatBinary`: both operands are cast up *before*
+        the kernel, so `5 / 2` is 2.5 rather than an integer division widened
+        afterwards. See that struct on why marrow diverges from `pc.divide`
+        here.
+        """
+        var to = DynType(float64)
+        return K.dispatch(cast_array(l^, to), cast_array(r^, to))
+
+    @staticmethod
+    def _float_unary[K: UnaryFloatKernel](var a: DynArray) raises -> DynArray:
+        """`sqrt` / `exp` / `ln` — the runtime half of `FloatUnary`."""
+        return K.dispatch(cast_array(a^, DynType(float64)))
+
+    def _unary(self, var a: DynArray) raises -> Optional[DynArray]:
+        """The one-operand tags, or `None` when this node is not one of them.
+
+        Split out of `evaluate` rather than inlined into it because that method
+        is already the module's one interpreter loop and forty more `if`s in it
+        would bury the three shapes that are *not* a plain kernel call
+        (`coalesce`, `case_when`, the promotion in `_compare`).
+
+        `Optional` rather than a raise, so `evaluate` keeps ownership of the
+        one error message that names the unknown tag.
+        """
+        if self._tag == "not":
+            return NotKernel.dispatch(a^)
+        if self._tag == "neg":
+            return NegKernel.dispatch(a^)
+        if self._tag == "abs":
+            return AbsKernel.dispatch(a^)
+        if self._tag == "sign":
+            return SignKernel.dispatch(a^)
+        if self._tag == "floor":
+            return FloorKernel.dispatch(a^)
+        if self._tag == "ceil":
+            return CeilKernel.dispatch(a^)
+        if self._tag == "round":
+            return RoundKernel.dispatch(a^)
+        if self._tag == "trunc":
+            return TruncKernel.dispatch(a^)
+        if self._tag == "sqrt":
+            return Self._float_unary[SqrtKernel](a^)
+        if self._tag == "exp":
+            return Self._float_unary[ExpKernel](a^)
+        if self._tag == "ln":
+            return Self._float_unary[LogKernel](a^)
+
+        # Null and value predicates. `is_null`/`is_valid` read the validity
+        # bitmap and are never null themselves; `is_nan`/`is_inf` read the
+        # values and are null where the input is -- the same split the
+        # comptime lane draws between `NullPredicate` and `ValuePredicate`.
+        if self._tag == "is_null":
+            return IsNullKernel.apply(a).to_dyn()
+        if self._tag == "is_valid":
+            return NotNullKernel.apply(a).to_dyn()
+        if self._tag == "is_nan":
+            return IsNanKernel.apply(a).to_dyn()
+        if self._tag == "is_inf":
+            return IsInfKernel.apply(a).to_dyn()
+
+        if self._tag == "upper":
+            return UpperKernel.dispatch(a^)
+        if self._tag == "lower":
+            return LowerKernel.dispatch(a^)
+        if self._tag == "strip":
+            return StripKernel.dispatch(a^)
+        if self._tag == "lstrip":
+            return LStripKernel.dispatch(a^)
+        if self._tag == "rstrip":
+            return RStripKernel.dispatch(a^)
+        if self._tag == "reverse":
+            return ReverseKernel.dispatch(a^)
+        if self._tag == "capitalize":
+            return CapitalizeKernel.dispatch(a^)
+        if self._tag == "length":
+            return LengthKernel.dispatch(a^)
+        if self._tag == "array_length":
+            return ArrayLengthKernel.dispatch(a^)
+
+        if self._tag == "year":
+            return YearKernel.dispatch(a^)
+        if self._tag == "month":
+            return MonthKernel.dispatch(a^)
+        if self._tag == "day":
+            return DayKernel.dispatch(a^)
+        if self._tag == "hour":
+            return HourKernel.dispatch(a^)
+        if self._tag == "minute":
+            return MinuteKernel.dispatch(a^)
+        if self._tag == "second":
+            return SecondKernel.dispatch(a^)
+        if self._tag == "quarter":
+            return QuarterKernel.dispatch(a^)
+        if self._tag == "day_of_week":
+            return DayOfWeekKernel.dispatch(a^)
+        if self._tag == "day_of_year":
+            return DayOfYearKernel.dispatch(a^)
+
+        # The payload-carrying unary nodes: the second operand is a constant
+        # the kernel takes directly rather than a column it has to broadcast.
+        if self._tag == "like":
+            return LikeKernel.dispatch(a, self._payload[String])
+        if self._tag == "ilike":
+            return ILikeKernel.dispatch(a, self._payload[String])
+        if self._tag == "date_trunc":
+            return DateTruncKernel.apply(
+                a, CalendarUnit.parse(self._payload[String])
+            )
+        if self._tag == "isin":
+            return IsInKernel.dispatch(
+                a, self._payload[DynArray].copy()
+            ).to_dyn()
+        if self._tag == "cast" or self._tag == "cast_unsafe":
+            return cast_array(
+                a^, self._payload[DynType].copy(), self._tag == "cast"
+            )
+        return None
+
+    def _binary(
+        self, var l: DynArray, var r: DynArray
+    ) raises -> Optional[DynArray]:
+        """The two-operand tags `evaluate` does not spell out itself."""
+        if self._tag == "add":
+            # `+` over erased operands cannot know at build time whether it
+            # means addition or concatenation, so the runtime dtype decides --
+            # which is the call `ConcatKernel.dispatch` exists for.
+            if l.dtype().is_string_like():
+                return ConcatKernel.dispatch(l^, r^)
+            return Self._arith[AddKernel](l^, r^)
+        if self._tag == "sub":
+            return Self._arith[SubKernel](l^, r^)
+        if self._tag == "mul":
+            return Self._arith[MulKernel](l^, r^)
+        if self._tag == "floordiv":
+            return Self._arith[FloordivKernel](l^, r^)
+        if self._tag == "mod":
+            return Self._arith[ModKernel](l^, r^)
+        if self._tag == "truediv":
+            return Self._float_binary[DivKernel](l^, r^)
+        if self._tag == "pow":
+            return Self._float_binary[PowKernel](l^, r^)
+
+        if self._tag == "startswith":
+            return StartsWithKernel.dispatch(l^, r^)
+        if self._tag == "endswith":
+            return EndsWithKernel.dispatch(l^, r^)
+        if self._tag == "contains":
+            return ContainsKernel.dispatch(l^, r^)
+
+        # `NullifKernel` and `FillNullKernel` both call `expect_same_dtype`,
+        # so a mixed pair has to meet before the kernel sees it -- otherwise
+        # `float_col.fill_null(0)` raises on a literal that infers `int64`.
+        if self._tag == "nullif":
+            var pair = Self._unified([l^, r^])
+            return nullif_kernel(pair[0], pair[1])
+        if self._tag == "fill_null":
+            var pair = Self._unified([l^, r^])
+            return fill_null_kernel(pair[0], pair[1])
+        return None
+
+    @staticmethod
+    def _unified(var arrays: List[DynArray]) raises -> List[DynArray]:
+        """Cast a set of *alternatives* to one common type.
+
+        The n-ary counterpart of `_arith`'s promotion, for the conditionals --
+        `coalesce`, `case_when` and the two-armed `nullif` / `fill_null`. Each
+        of those kernels picks one of its inputs per row and therefore needs
+        them to agree on a dtype, which two independently written expressions
+        will not: `coalesce(int_col, lit(0.5))` is an ordinary thing to write.
+
+        A non-numeric mismatch is left alone rather than guessed at, so the
+        kernel raises and its message names both dtypes. That is the honest
+        answer for `coalesce(string_col, int_col)`, which has no common type.
+        """
+        var to = arrays[0].dtype()
+        var mixed = False
+        for ref a in arrays:
+            if a.dtype() != to:
+                mixed = True
+        if not mixed:
+            return arrays^
+        for ref a in arrays:
+            if not a.dtype().is_numeric():
+                return arrays^
+        for ref a in arrays:
+            to = promote_dyn(to, a.dtype())
+        var out = List[DynArray](capacity=len(arrays))
+        for ref a in arrays:
+            out.append(cast_array(a.copy(), to))
+        return out^
 
     # -- Writable -----------------------------------------------------------
 
@@ -593,3 +932,347 @@ def case_when(
     if else_:
         kids.append(else_.value().copy())
     return RuntimeValue("case_when", kids^)
+
+
+def if_else(
+    var cond: RuntimeValue, var then: RuntimeValue, var otherwise: RuntimeValue
+) raises -> RuntimeValue:
+    """`CASE WHEN cond THEN then ELSE otherwise END` — the runtime twin of
+    `builders.if_else`, which builds the comptime lane's `CaseWhen[C, T, E]`.
+
+    One branch of `case_when` rather than its own tag: the multi-branch node
+    already carries this shape, and a second tag meaning the same thing is how
+    two evaluators drift into disagreeing about whether a null condition
+    selects the else arm.
+    """
+    return case_when([cond^], [then^], Optional(otherwise^))
+
+
+# ---------------------------------------------------------------------------
+# Arithmetic
+# ---------------------------------------------------------------------------
+#
+# The runtime half of `NumericValue`'s operator surface. Every verb below is
+# one line because the work is in `evaluate`'s `_binary` / `_unary`; what
+# these fix is the *spelling*, so one expression reads the same in either
+# lane:
+#
+#     col("a", int64) * lit(2, int64)   # comptime, fuses
+#     col("a") * lit(2)                 # runtime,  materialises
+#
+# `+` is the one that cannot be decided here: over erased operands it means
+# addition or concatenation according to the runtime dtype, so `_binary`
+# picks between `AddKernel` and `ConcatKernel` when the batch arrives.
+
+
+def add(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l + r`, or string concatenation if the operands turn out to be
+    strings."""
+    return RuntimeValue("add", l, r)
+
+
+def sub(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l - r`."""
+    return RuntimeValue("sub", l, r)
+
+
+def mul(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l * r`."""
+    return RuntimeValue("mul", l, r)
+
+
+def truediv(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l / r` — always `float64`, so `5 / 2` is 2.5. See `FloatBinary`."""
+    return RuntimeValue("truediv", l, r)
+
+
+def floordiv(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l // r` — see `FloordivKernel`."""
+    return RuntimeValue("floordiv", l, r)
+
+
+def mod(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l % r` — see `ModKernel`."""
+    return RuntimeValue("mod", l, r)
+
+
+def pow(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """`l ** r` — always `float64`, like `/`."""
+    return RuntimeValue("pow", l, r)
+
+
+def neg(var a: RuntimeValue) -> RuntimeValue:
+    """`-a`."""
+    return RuntimeValue("neg", a)
+
+
+# ---------------------------------------------------------------------------
+# Elementwise math
+# ---------------------------------------------------------------------------
+
+
+def abs(var a: RuntimeValue) -> RuntimeValue:
+    """`|a|`."""
+    return RuntimeValue("abs", a)
+
+
+def sign(var a: RuntimeValue) -> RuntimeValue:
+    """-1, 0 or 1 by the sign of `a`."""
+    return RuntimeValue("sign", a)
+
+
+def floor(var a: RuntimeValue) -> RuntimeValue:
+    """Round toward minus infinity."""
+    return RuntimeValue("floor", a)
+
+
+def ceil(var a: RuntimeValue) -> RuntimeValue:
+    """Round toward plus infinity."""
+    return RuntimeValue("ceil", a)
+
+
+def round(var a: RuntimeValue) -> RuntimeValue:
+    """Round half away from zero."""
+    return RuntimeValue("round", a)
+
+
+def trunc(var a: RuntimeValue) -> RuntimeValue:
+    """Round toward zero."""
+    return RuntimeValue("trunc", a)
+
+
+def sqrt(var a: RuntimeValue) -> RuntimeValue:
+    """The square root, as `float64`."""
+    return RuntimeValue("sqrt", a)
+
+
+def exp(var a: RuntimeValue) -> RuntimeValue:
+    """`e ** a`, as `float64`."""
+    return RuntimeValue("exp", a)
+
+
+def ln(var a: RuntimeValue) -> RuntimeValue:
+    """The natural logarithm, as `float64`."""
+    return RuntimeValue("ln", a)
+
+
+# ---------------------------------------------------------------------------
+# Null and value predicates
+# ---------------------------------------------------------------------------
+#
+# `is_null` / `is_valid` read the *validity bitmap* and are never null
+# themselves; `is_nan` / `is_inf` read the *values* and are null where the
+# input is. That is the same split the comptime lane draws between
+# `NullPredicate` and `ValuePredicate`, and it is why `is_nan(NULL)` is NULL
+# while `is_null(NULL)` is TRUE.
+
+
+def is_null(var a: RuntimeValue) -> RuntimeValue:
+    """True where `a` is null. Never null itself."""
+    return RuntimeValue("is_null", a)
+
+
+def is_valid(var a: RuntimeValue) -> RuntimeValue:
+    """True where `a` is *not* null — Arrow's spelling of `~is_null`."""
+    return RuntimeValue("is_valid", a)
+
+
+def is_nan(var a: RuntimeValue) -> RuntimeValue:
+    """True where this floating column is NaN; null where it is null."""
+    return RuntimeValue("is_nan", a)
+
+
+def is_inf(var a: RuntimeValue) -> RuntimeValue:
+    """True where this floating column is +/-infinity."""
+    return RuntimeValue("is_inf", a)
+
+
+def nullif(var a: RuntimeValue, var b: RuntimeValue) -> RuntimeValue:
+    """SQL `NULLIF(a, b)` — see `NullifKernel`."""
+    return RuntimeValue("nullif", a, b)
+
+
+def fill_null(var a: RuntimeValue, var fill: RuntimeValue) -> RuntimeValue:
+    """`fill` wherever `a` is null — see `FillNullKernel`."""
+    return RuntimeValue("fill_null", a, fill)
+
+
+# ---------------------------------------------------------------------------
+# Strings
+# ---------------------------------------------------------------------------
+
+
+def upper(var a: RuntimeValue) -> RuntimeValue:
+    """Upper-case each element."""
+    return RuntimeValue("upper", a)
+
+
+def lower(var a: RuntimeValue) -> RuntimeValue:
+    """Lower-case each element."""
+    return RuntimeValue("lower", a)
+
+
+def strip(var a: RuntimeValue) -> RuntimeValue:
+    """Drop leading and trailing whitespace."""
+    return RuntimeValue("strip", a)
+
+
+def lstrip(var a: RuntimeValue) -> RuntimeValue:
+    """Drop leading whitespace."""
+    return RuntimeValue("lstrip", a)
+
+
+def rstrip(var a: RuntimeValue) -> RuntimeValue:
+    """Drop trailing whitespace."""
+    return RuntimeValue("rstrip", a)
+
+
+def reverse(var a: RuntimeValue) -> RuntimeValue:
+    """Reverse each element."""
+    return RuntimeValue("reverse", a)
+
+
+def capitalize(var a: RuntimeValue) -> RuntimeValue:
+    """Upper-case the first character and lower-case the rest."""
+    return RuntimeValue("capitalize", a)
+
+
+def length(var a: RuntimeValue) -> RuntimeValue:
+    """Byte length per element, as `int32` — pyarrow's `utf8_length`."""
+    return RuntimeValue("length", a)
+
+
+def startswith(var a: RuntimeValue, var prefix: RuntimeValue) -> RuntimeValue:
+    """True where `a` starts with `prefix`."""
+    return RuntimeValue("startswith", a, prefix)
+
+
+def endswith(var a: RuntimeValue, var suffix: RuntimeValue) -> RuntimeValue:
+    """True where `a` ends with `suffix`."""
+    return RuntimeValue("endswith", a, suffix)
+
+
+def contains(var a: RuntimeValue, var needle: RuntimeValue) -> RuntimeValue:
+    """True where `needle` occurs anywhere in `a`."""
+    return RuntimeValue("contains", a, needle)
+
+
+def like(var a: RuntimeValue, var pattern: String) -> RuntimeValue:
+    """SQL `LIKE` — `%` and `_` wildcards, case-sensitive.
+
+    The pattern is a payload rather than a child so `LikeKernel` compiles it
+    once per batch instead of once per row.
+    """
+    return RuntimeValue("like", a, Payload(pattern^))
+
+
+def ilike(var a: RuntimeValue, var pattern: String) -> RuntimeValue:
+    """SQL `ILIKE` — as `like`, case-insensitive."""
+    return RuntimeValue("ilike", a, Payload(pattern^))
+
+
+# ---------------------------------------------------------------------------
+# Temporal
+# ---------------------------------------------------------------------------
+
+
+def year(var a: RuntimeValue) -> RuntimeValue:
+    """The calendar year, as `int32`."""
+    return RuntimeValue("year", a)
+
+
+def month(var a: RuntimeValue) -> RuntimeValue:
+    """The month, 1-12."""
+    return RuntimeValue("month", a)
+
+
+def day(var a: RuntimeValue) -> RuntimeValue:
+    """The day of the month, 1-31."""
+    return RuntimeValue("day", a)
+
+
+def hour(var a: RuntimeValue) -> RuntimeValue:
+    """The hour, 0-23."""
+    return RuntimeValue("hour", a)
+
+
+def minute(var a: RuntimeValue) -> RuntimeValue:
+    """The minute, 0-59."""
+    return RuntimeValue("minute", a)
+
+
+def second(var a: RuntimeValue) -> RuntimeValue:
+    """The second, 0-59."""
+    return RuntimeValue("second", a)
+
+
+def quarter(var a: RuntimeValue) -> RuntimeValue:
+    """The quarter, 1-4."""
+    return RuntimeValue("quarter", a)
+
+
+def day_of_week(var a: RuntimeValue) -> RuntimeValue:
+    """The day of the week, Monday = 0."""
+    return RuntimeValue("day_of_week", a)
+
+
+def day_of_year(var a: RuntimeValue) -> RuntimeValue:
+    """The day of the year, 1-366."""
+    return RuntimeValue("day_of_year", a)
+
+
+def date_trunc(var a: RuntimeValue, var unit: String) raises -> RuntimeValue:
+    """Floor to a `CalendarUnit` boundary, keeping the input's type.
+
+    The unit is parsed **here**, at construction, so a bad spelling fails when
+    the plan is built rather than on the row that first evaluates it -- which
+    is the reason `CalendarUnit` is a type and not a `String` in the first
+    place. The parsed value is not what gets stored: `Payload` has no
+    `CalendarUnit` member, and adding one to buy a second parse is not worth a
+    variant member. `evaluate` re-parses a string this call has already proved
+    valid.
+    """
+    _ = CalendarUnit.parse(unit)
+    return RuntimeValue("date_trunc", a, Payload(unit^))
+
+
+# ---------------------------------------------------------------------------
+# Membership, casting, nested
+# ---------------------------------------------------------------------------
+
+
+def isin(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
+    """True where `a`'s value appears in `value_set` — SQL `IN (...)`.
+
+    The set is a `DynArray` payload rather than a child: it is the same set on
+    every row and every batch, so hashing it into the probe table is work that
+    belongs to the plan, not to the morsel. The comptime lane has no
+    counterpart -- `IsInKernel` decides membership on the 64-bit hash alone
+    and has no typed leaf to fuse into.
+    """
+    return RuntimeValue("isin", a, Payload(value_set^))
+
+
+def cast(
+    var a: RuntimeValue, var to: DynType, safe: Bool = True
+) -> RuntimeValue:
+    """Cast to `to`. With `safe` a lossy conversion raises; without it the
+    truncating/wrapping conversion is used and an unparseable string is nulled.
+
+    `safe` rides the **tag** rather than the payload, because `Payload` holds
+    one value and the target dtype is already it. Two tags for one kernel is
+    the cheaper of the two, and `_unary` reads the flag back off the tag it
+    matched.
+    """
+    return RuntimeValue("cast" if safe else "cast_unsafe", a, Payload(to^))
+
+
+def array_length(var a: RuntimeValue) -> RuntimeValue:
+    """The number of elements in each list, as `int32`.
+
+    A list column consumed into a numeric one, which is the only way a list is
+    read: a list element is a whole sub-array rather than a value a lane can
+    hold. Same reason `builders.array_length` is the comptime lane's only list
+    verb.
+    """
+    return RuntimeValue("array_length", a)

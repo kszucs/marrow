@@ -55,8 +55,16 @@ The only user-visible item here. `docs/guide/expressions.qmd` documents
 `from marrow.expr import col, lit, parquet_scan` — there is no such Python
 module — and calls the engine "pull-based" when `physical.mojo` is push/drain.
 `docs/guide/compile.qmd` documents `plan.execute_cli()`, deleted with the CLI
-entry point. `README.md` contradicts itself between two sections. These are on
-the rendered site.
+entry point. These are on the rendered site.
+
+**`README.md` came off this list on 2026-08-30**, when the Python query API was
+restored: its lazy-query section had described `morsel_size` and `strictness`
+arguments that no longer exist, claimed `explain()` "renders one node, not the
+tree" when plans render recursively, cited two deleted docs, and carried a
+40/43 ClickBench claim whose harness went with them. The guides are still
+wrong, and `docs/guide/expressions.qmd`'s import line is now *nearly* right —
+the names are `marrow.col` / `marrow.lit` / `marrow.read_parquet`, not
+`marrow.expr.*`.
 
 ### 1.3 Latent compiler hazards
 
@@ -87,11 +95,17 @@ Three of these need only a node over a kernel marrow already has: `bool_and`/
 `bool_or` over `AnyKernel`/`AllKernel`, `list_contains` over
 `ArrayContainsKernel`, and `IN` over `is_in`.
 
-### 1.5 Two kernels reachable from no expression node
+### 1.5 One kernel reachable from no expression node
 
-`ConcatKernel` (`kernels/string.mojo`) and `ArrayContainsKernel`
-(`kernels/nested.mojo`) are correct and tested but wired to nothing. Either add
-the nodes or delete the kernels; do not leave a public kernel with no consumer.
+`ArrayContainsKernel` (`kernels/nested.mojo`) is correct and tested but wired
+to nothing. Either add the node or delete the kernel; do not leave a public
+kernel with no consumer.
+
+`ConcatKernel` (`kernels/string.mojo`) came off this list on 2026-08-30: the
+runtime lane's `add` tag dispatches to it when the operands turn out to be
+strings, which is the call its own docstring already said it existed for. The
+comptime lane still has no `+` on `StringValue` -- a typed string column
+concatenates only by leaving the lane.
 
 ### 1.6 Top-K is a dead parameter and a missed optimization
 
@@ -137,7 +151,82 @@ encapsulation for a file boundary is not a simplification.
   job cannot pass, and the binary-size gate is not in CI at all — which is how a
   +55% size regression once survived ten commits.
 
-### 1.9 Undocumented subsystems
+### 1.9 Measurement trap: `==` on an erased array
+
+`DynArray.__eq__` routes through `ArrayData.__eq__`, which compares the
+**layout** — dtype, length, null count, *offset*, validity, whole buffers,
+children — and says so in its own docstring: "two layouts holding the same
+values at different offsets are not equal here". Two consequences bite in
+tests, and both cost time on 2026-08-30:
+
+- **A filtered result over-allocates its buffer**, so comparing one to a fresh
+  `array([...])` of the same values answers False. `PrimitiveArray[T].__eq__`
+  loops over the valid elements and is immune; the erased one is not. Assert
+  element by element, or compare typed arrays.
+- **A value under a null is unspecified.** A kernel computes every lane and
+  masks afterwards, so `add(a, b)` holds `a[i] + b[i]` under a null where a
+  builder writes 0. Whole-array `==` sees the difference.
+
+CLAUDE.md's "prefer `assert_true(result == expected)`" is about
+`PrimitiveArray[T].__eq__` and holds there. It does not transfer to `DynArray`.
+
+### 1.10 Python binding limits, measured 2026-08-30
+
+Audited against the `std.python.bindings` surface at Mojo
+1.1.0.dev2026083005 while restoring the Python query API. Each was verified by
+reading `mojo/stdlib/std/python/{bindings,_python_func}.mojo` **and** by
+running the built `.so`; none is a marrow bug, and each dictates a shape the
+bindings currently have.
+
+- **`PythonTypeBuilder.bind` installs four slots** -- `tp_new`, `tp_init`,
+  `tp_dealloc`, `tp_repr` -- and nothing else. `def_method` fills the type's
+  `tp_dict`, not a CPython slot, so a registered `__str__` is reachable as
+  `obj.__str__()` and **not** as `str(obj)`, which falls back to `tp_repr`.
+  Measured: `str(expr)` returns `"<marrow.Expr: gt(a, 1)>"` while
+  `expr.__str__()` returns `"gt(a, 1)"`. Every Python wrapper that wants the
+  real text calls `._binding.__str__()` explicitly (`LazyTable._plan_text`).
+  The same limit is why operators live in Python: a registered `__add__` would
+  never fire for `+`, and a registered `__eq__` would never fire for `==`.
+
+- **No `__eq__` reaches `tp_richcompare`, and none is registered anyway.**
+  `ma.int32() == ma.int32()` is `False` and `ma.array([1,2]) == ma.array([1,2])`
+  is `False` -- both identity comparisons. The Python suite compares dtypes by
+  `str()` for exactly this reason. Fixing it needs a slot, not a method.
+
+- **`def_property` does not exist.** The `tp_getset` slot is unexposed (there
+  is a design doc for it in the modular tree, unlanded). So `Array.type()` and
+  `RecordBatch.num_rows()` are methods where PyArrow has properties. That is a
+  real divergence from the "follow PyArrow closely" rule and it is not
+  currently fixable from this side.
+
+- **A dotted type name sets `__module__` but breaks attribute lookup.** CPython
+  3.14 emits `DeprecationWarning: builtin type X has no __module__ attribute`
+  once per registered type -- 11 per import today. Passing `"probe.Dotted"` to
+  `add_type` does set `__module__` correctly, but `finalize(module)` uses the
+  same string as the module *attribute* key, so the type lands at
+  `vars(m)["probe.Dotted"]` and `m.Dotted` stops resolving. Verified both ways.
+  The warning cannot be silenced without an upstream change that splits the
+  `PyType_Spec` name from the attribute name. Worth reporting.
+
+- **`PyObjectFunction` supports 8 positional arguments, kwargs, and a typed
+  self** -- more than the bindings use. The typed-self form takes
+  `Pointer[T, MutAnyOrigin]` as its first parameter and downcasts
+  automatically, which would delete the `py_self.downcast_value_ptr[T]()` line
+  at the top of most binding functions and most of `helpers.mojo`'s `pymethod`
+  factory family. Not adopted here: it is a mechanical sweep across ten binding
+  modules and belongs in its own change. The kwargs form is deliberately *not*
+  adopted -- keyword sugar lives in pure Python by project rule.
+
+- **Statistics pruning is unreachable from Python.** `DynRelation.filter` has
+  two overloads: the erased one takes `DynValue` and reads every row group, and
+  the pruning one takes `V: Value & Prunable` and captures the concrete type.
+  A `PythonObject` has already erased that type by the time it crosses the
+  boundary, so `Plan.filter` can only reach the first. `RuntimeValue` *does*
+  conform to `Prunable`, so what is missing is a way to carry the unerased
+  value across, not the pruning itself -- the `Expr` box holds a
+  `RuntimeValue` and could call the pruning overload directly.
+
+### 1.11 Undocumented subsystems
 
 Nine substantial pieces of the codebase have no design document and never did:
 the whole Parquet subsystem (nine modules, ~380 KB), the Arrow IPC layer, the C

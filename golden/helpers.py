@@ -233,8 +233,14 @@ def Nullif(value, other):
 
 
 def array_length(value):
-    """The number of elements in each list."""
-    return value.list_length()
+    """The number of elements in each list.
+
+    `Column.array_length` is the Python spelling and `builders.array_length`
+    the Mojo one, so the shim only re-associates the call. It named
+    `list_length` for a while, which is neither lane's name and was invisible
+    while this lane was skipped.
+    """
+    return value.array_length()
 
 
 # ---------------------------------------------------------------------------
@@ -339,10 +345,14 @@ class _Relation:
         return _Relation(
             marrow.lazy.LazyTable.wrap(
                 self._lazy.unwrap().sort(
-                    [k.unwrap() for k in keys], list(ascending), nulls_first, True
+                    [k.unwrap() for k in keys], list(ascending), nulls_first
                 )
             )
         )
+
+    # `DynRelation`'s verb is `sort_by`; `sort` is what the *binding* calls it.
+    # Cases write the Mojo name, so the shim answers to both.
+    sort_by = sort
 
     def aggregate(self, aggs, keys=()):
         """`keys` is optional, matching the Mojo overload.
@@ -353,14 +363,24 @@ class _Relation:
         """
         return _Relation(self._lazy.aggregate(keys, *aggs))
 
-    def join(self, other, left_on, right_on, how, strictness):
+    def join(self, other, left_on, right_on, how):
+        """Keys are column **indices**, as `DynRelation.join` takes them.
+
+        This reaches past `LazyTable.join`, which takes *names* and resolves
+        them against each side's schema -- the friendlier spelling, and not the
+        one a case writes: the Mojo lane has no schema in hand at plan-build
+        time and names its keys positionally.
+
+        There is no `strictness` argument in either lane. `DynRelation.join`
+        carried one until the expression layer was rewritten; the shim still
+        required it, which made every join case a `TypeError` the moment this
+        lane was un-skipped.
+        """
         return _Relation(
-            self._lazy.join(
-                other._lazy,
-                left_on=left_on,
-                right_on=right_on,
-                how=how,
-                strictness=strictness,
+            marrow.lazy.LazyTable.wrap(
+                self._lazy.unwrap().join(
+                    other._lazy.unwrap(), list(left_on), list(right_on), how
+                )
             )
         )
 
@@ -375,7 +395,7 @@ def table(name):
     lane; Parquet and IPC keep their own suites.
     """
     batch = marrow.read_ipc_file(str(runner.fixture_path(name)))[0]
-    return _Relation(marrow.memtable(batch, morsel_size=runner.MORSEL_SIZE))
+    return _Relation(marrow.memtable(batch))
 
 
 def check(name, plan):

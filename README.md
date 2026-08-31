@@ -213,37 +213,50 @@ t.filter(col("url").cast(ma.string()).like("%google%"))
 t.aggregate(by=["k"], n=ma.count_star(), s=("sum", "v"))
 t.order_by(("c", "descending")).limit(10, offset=100)
 t.join(other, on="k", how="inner")
+t.explain()                             # the plan as text, rendered recursively
 t.collect()  /  t.to_pyarrow()
 ```
 
-`aggregate` takes `sum`, `mean`, `min`, `max`, `product`, `count` and
-`count_distinct`; `ma.count_star()` is `COUNT(*)`, which differs from
+`aggregate` takes `sum`, `mean`, `min`, `max`, `product`, `count`,
+`count_distinct`, `approx_count_distinct`, `variance`, `var_samp`, `stddev` and
+`stddev_samp`; `ma.count_star()` is `COUNT(*)`, which differs from
 `("count", col)` on a nullable column. `HAVING` needs no special support —
 `t.aggregate(...).filter(...)` evaluates against the aggregate's output. Group
-keys may be arbitrary expressions, not just column names.
+keys may be arbitrary expressions, not just column names, and keys with no
+aggregates is `SELECT DISTINCT`.
 
-Column expressions cover arithmetic and comparison operators, `&`/`|`/`~`,
-`abs`/`floor`/`ceil`/`round`/`sqrt`/`exp`/`ln`, `upper`/`lower`/`strip`/
+Column expressions cover arithmetic and comparison operators, `&`/`|`/`~`/`^`,
+`abs`/`sign`/`floor`/`ceil`/`round`/`trunc`/`sqrt`/`exp`/`ln`,
+`upper`/`lower`/`strip`/`lstrip`/`rstrip`/`reverse`/`capitalize`/
 `length`/`startswith`/`endswith`/`contains`/`like`/`ilike`, the temporal
-extractors and `date_trunc`, plus `cast`, `isin`, `is_null`, `is_valid`,
-`fill_null`, `coalesce`, `nullif` and `if_else`.
+extractors and `date_trunc`, plus `cast`, `isin`, `array_length`, `is_null`,
+`is_valid`, `is_nan`, `is_inf`, `fill_null`, `coalesce`, `nullif`, `if_else`
+and `case_when`.
+
+**This is the same verb list the Mojo typed lane has**, and deliberately so:
+`col("a", int64) * lit(2, int64)` in Mojo and `col("a") * lit(2)` here build
+the same query, and the only difference is when the dtype is resolved. Where
+the two could diverge they do not — `/` is `float64` in both, `count()` counts
+non-null values in both, `count_star()` counts rows in both.
 
 ### Alpha status, honestly
 
-- **40 of the 43 [ClickBench](https://github.com/ClickHouse/ClickBench) queries**
-  run through this API against the 1M-row `hits` dataset, cross-checked against
-  DuckDB. Q29 needs `REGEXP_REPLACE`, which has no kernel; two more hit a
-  known segfault in grouped `COUNT(DISTINCT)`.
+- **Parquet and Arrow IPC are the only sources.** There is no CSV or JSON
+  reader, and `read_parquet` takes one file — no globs, no directories, no
+  hive partitioning, no object storage.
 - **String kernels require `string`, not `binary`.** Parquet `BYTE_ARRAY`
   columns with no logical type arrive as `binary`, so `col("url").cast(ma.string())`
   before `like`/`length`/`upper`. `BinaryType` is not a `StringLikeType`.
-- **`explain()` renders one node, not the tree** — `Relation` has no `inputs()`
-  yet, so there is no real EXPLAIN and no optimiser pass.
-- No window functions in this lane, no `distinct`/`union`, no statistical
-  aggregates, no regex, no decimal arithmetic.
+- **No optimizer.** Statistics pruning exists but is not reachable from Python:
+  `Plan.filter` takes an already-erased predicate, and the pruning overload
+  needs the unerased type. There is no projection pushdown, no limit pushdown
+  and no TopN rewrite.
+- No window functions, no `distinct`/`union`, no regex, no decimal arithmetic,
+  and no `GROUP BY` on a float column (it merges distinct keys —
+  `golden/cases/group_by_float_key.mojo`).
 
-See `docs/alpha-clickbench-coverage.md` for the per-query table and
-`docs/alpha-findings/README.md` for the known structural issues.
+`docs/CAPABILITY-GAPS.md` is the full inventory, measured against polars,
+DuckDB, DataFusion and ibis.
 
 ## Compiled queries (AOT)
 

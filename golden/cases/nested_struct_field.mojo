@@ -14,6 +14,7 @@ def plan() raises -> DynRelation:
     overloads.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     a:int64	b:string

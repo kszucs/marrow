@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     The rows where `v` is null are skipped rather than winning the minimum.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     lo:string	hi:string

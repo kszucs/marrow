@@ -11,6 +11,7 @@ def plan() raises -> DynRelation:
     constant is the workaround and needs a constant column first.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     eid:int64	did:int64

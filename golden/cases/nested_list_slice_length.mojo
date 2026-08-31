@@ -10,6 +10,7 @@ def plan() raises -> DynRelation:
     error, and the null list stays null.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     n:int64

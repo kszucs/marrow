@@ -16,6 +16,7 @@ def plan() raises -> DynRelation:
     has is correct.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     n:int64

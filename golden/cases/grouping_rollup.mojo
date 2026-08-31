@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     There is no multi-grouping node: `Aggregate` carries one key list.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     k:string	total:int64	g:int64

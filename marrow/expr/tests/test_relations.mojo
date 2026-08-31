@@ -29,6 +29,12 @@ from ..`comptime`.leaves import Column, Literal
 from ..`comptime`.aggregates import Min, Sum
 from ..`comptime`.numeric import Add, Gt
 from ..builders import col, lit, scan, table
+from ..runtime.values import (
+    column as runtime_column,
+    gt as runtime_gt,
+    literal as runtime_literal,
+)
+from ...scalars import Int64Scalar
 from ..logical import (
     Aggregate,
     Join,
@@ -734,3 +740,60 @@ def test_variadic_select_matches_the_list_form() raises:
     assert_equal(one.schema.fields[0].name, two.schema.fields[0].name)
     assert_equal(one.schema.fields[1].name, String("a"))
     assert_equal(one.num_columns(), 2)
+
+
+def test_filter_above_limit_with_offset_reads_the_limited_rows() raises:
+    """A filter *above* an offset limit, in **both** lanes.
+
+    `LimitOperator` emits `batch.slice(start, wanted)`, and a struct slice is
+    zero-copy: it moves the struct's offset and shares its children whole. So
+    `StructArray.field` had to learn to carry that slice, and until it did the
+    two lanes failed differently on the same plan:
+
+    - the runtime lane materialised the parent's full child and `to_array`
+      caught the length mismatch, raising rather than answering;
+    - the comptime lane read elements `[0, len)` of an unsliced child, which
+      is the *wrong window* the moment the offset is non-zero -- a silent wrong
+      answer, and the reason this case uses `offset=2` rather than a bare
+      `limit`. With offset 0 both lanes were right by coincidence.
+
+    `sort_by` first so the four kept rows are determined by value rather than
+    by input order.
+
+    **Asserted element by element, not with `==`.** `DynArray.__eq__` goes
+    through `ArrayData.__eq__`, which compares the layout — offset and whole
+    buffers included — and is documented as such: "two layouts holding the same
+    values at different offsets are not equal here". A filtered result
+    over-allocates its buffer, so `got.column("v") == array([5, 7], int64)`
+    answers False on the *right* values. `PrimitiveArray[T].__eq__` does loop
+    and would have worked; the erased one does not.
+    """
+    var t = table(
+        record_batch(
+            [array([5, 3, 7, 1, 9, 2, 4], int64).to_dyn()], names=["v"]
+        )
+    )
+    # Sorted: 1 2 3 4 5 7 9. Skip 2, keep 4 -> 3 4 5 7. Then keep > 4 -> 5 7.
+    var limited = t.sort_by([DynValue(Column[Int64Type]("v"))], [True]).limit(
+        4, offset=2
+    )
+
+    var fused = limited.filter(
+        Gt(Column[Int64Type]("v"), Literal[Int64Type](Int64(4)))
+    )
+    var got = fused.execute()
+    assert_equal(got.num_rows(), 2)
+    ref fused_v = got.column("v").as_int64()
+    assert_equal(Int(fused_v[0].value()), 5)
+    assert_equal(Int(fused_v[1].value()), 7)
+
+    var erased = limited.filter(
+        DynValue(
+            runtime_gt(runtime_column("v"), runtime_literal(Int64Scalar(4)))
+        )
+    )
+    var got2 = erased.execute()
+    assert_equal(got2.num_rows(), 2)
+    ref erased_v = got2.column("v").as_int64()
+    assert_equal(Int(erased_v[0].value()), 5)
+    assert_equal(Int(erased_v[1].value()), 7)

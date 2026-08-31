@@ -35,22 +35,27 @@ streaming operator model with early termination, hash join in seven kinds, hash
 group-by, radix sort, and a genuinely well-reasoned one-sided pruning algebra
 (`marrow/expr/pruning.mojo`).
 
-The product layer does not exist. **As of commit `b2de85a0` (2026-08-29) there
-is no way to run a query from Python at all** — `python/marrow/lazy.py`,
-`python/bindings/plan.mojo` and `python/bindings/expressions.mojo` were deleted
-with the old expression package and never replaced. `README.md:178-247` still
-documents the deleted API in detail, ClickBench claim included. The AOT lane,
-marrow's one genuinely novel idea, likewise has no entry point: `execute_cli()`
+The product layer is one verb deep. **Between `b2de85a0` (2026-08-29) and
+2026-08-30 there was no way to run a query from Python at all** —
+`python/marrow/lazy.py`, `python/bindings/plan.mojo` and
+`python/bindings/expressions.mojo` were deleted with the old expression package.
+They have since been rebuilt on the runtime lane, so `read_parquet` /
+`memtable` / `col` / `lit` and the nine relational verbs work again, and
+`README.md` describes what exists. **Everything else on this page still
+stands**: the frontend reads Parquet and IPC only, there is no optimizer
+reachable from it, and the AOT lane still has no entry point — `execute_cli()`
 does not exist (`python/marrow/compile.py:9`).
 
 ### The three things that most block adoption
 
-1. **There is no query API from Python.** The entire relational layer is
-   reachable only from Mojo. `python/bindings/lib.mojo` registers eight
-   submodules and none of them is the expression layer. The population that
-   would evaluate marrow against polars or DuckDB is, essentially entirely,
-   Python users; today they find an eager PyArrow-shaped array library with 21
-   compute functions and a README describing something that was deleted.
+1. ~~**There is no query API from Python.**~~ **Closed 2026-08-30.**
+   `python/bindings/lib.mojo` now registers ten submodules, two of them the
+   expression and plan layers, and the runtime lane grew the ~45 verbs the
+   comptime lane already had so the two surfaces match verb for verb. What
+   this *does not* close is everything the frontend then runs into — items 2
+   and 3 below, and every Tier-1 gap. **The next-most-blocking item is now the
+   absence of a CSV reader**, since a first user reaches marrow with a CSV, not
+   a Parquet file.
 
 2. **There is no CSV or JSON reader, and no dataset concept.** Parquet and Arrow
    IPC are the only formats — `find marrow -iname '*csv*' -o -iname '*json*'`
@@ -237,12 +242,21 @@ is the clearest possible evidence that the frontend is the product and the
 engine is the commodity. polars, DuckDB and DataFusion are all primarily
 consumed from Python.
 
-**What it would take.** Re-bind `marrow/expr`'s runtime lane through
-`python/bindings/`. The runtime lane was built for exactly this shape (`col("a")`
-→ `RuntimeValue`, `RuntimeAggregate`), all eight relation nodes and the fluent
-verbs already exist, and the deleted bindings are recoverable
-(`git show b2de85a0^:python/bindings/plan.mojo`). This is re-wiring, not new
-engine work — but it is the difference between having users and not.
+**Done, 2026-08-30 — and it was not only re-wiring.** The estimate above said
+"the runtime lane was built for exactly this shape", and that was half right.
+The relation nodes and fluent verbs were indeed ready. The *expression* lane
+was not: it could express comparisons, three-valued boolean logic, `coalesce`
+and `case_when` and nothing else — no arithmetic, no strings, no temporal
+extraction, no casts, no null predicates. A frontend on that could not have
+written `col("a") + 1`. Restoring the API therefore meant adding ~45 verbs to
+`RuntimeValue`, each a new tag over an existing kernel, plus the two binding
+modules and the two Python modules.
+
+It also surfaced one wrong answer: `_compare` promoted mixed dtypes by casting
+the right operand to the left's type and falling back to the reverse, which
+narrows rather than widens, so `int32_col > lit(2**40)` raised instead of
+comparing. `promote_dyn` now states the same rule the comptime lane's
+`promote[L, R]` does.
 
 ### 1.2 CSV and JSON readers
 
@@ -860,14 +874,11 @@ Found while establishing the inventory; each would mislead a reader.
 A sequence, not a wishlist. Each step is chosen because it unblocks the next, or
 because nothing after it matters without it.
 
-**1. Restore the Python query frontend.** Re-bind `marrow/expr`'s runtime lane
-through `python/bindings/`. Until this exists marrow has no users to learn from
-and every other item on this page is unfalsifiable in practice. The deleted
-bindings are a starting point (`git show b2de85a0^:python/bindings/plan.mojo`)
-and the runtime lane was built for exactly this consumer. Land the error
-taxonomy (§2.10) in the same change — a typed exception hierarchy is nearly free
-while the boundary is being written and expensive to retrofit across 244 raise
-sites afterwards. *Then fix the README, which currently promises all of this.*
+**1. ~~Restore the Python query frontend.~~ Done 2026-08-30**, README included.
+The error taxonomy (§2.10) was *not* landed with it, which was the cheap moment
+to do it — a typed exception hierarchy is nearly free while the boundary is
+being written and expensive to retrofit across 244 raise sites. It is now a
+retrofit. Do it before the surface grows further.
 
 **2. Fix the two wrong answers.** Float group keys collapsing, and the three
 integer-semantics xfails. A library that returns wrong `GROUP BY` results cannot

@@ -15,6 +15,7 @@ def plan() raises -> DynRelation:
     and an element is not a value a fused lane can hold.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     first:int64	third:int64

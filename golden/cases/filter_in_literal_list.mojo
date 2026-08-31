@@ -13,6 +13,7 @@ def plan() raises -> DynRelation:
     what a plan must do today — at O(n) comparisons instead of one hash probe.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     k:string	v:int64	w:int64

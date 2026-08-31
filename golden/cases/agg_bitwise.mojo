@@ -10,6 +10,7 @@ def plan() raises -> DynRelation:
     shape. Nulls are skipped, so `bit_and` is not 0.
 
     -- skip mojo
+    -- skip python
 
     -- expected
     a:int64	o:int64	x:int64
