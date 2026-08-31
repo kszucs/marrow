@@ -793,6 +793,11 @@ struct SortOperator(Operator):
     var _keys: List[DynOperator]
     var _ascending: List[Bool]
     var _nulls_first: Bool
+    var _limit: Optional[Int]
+    """How many ordered rows the plan above actually needs, or `None` for all.
+
+    Set only by `optimizer.mojo`'s `TopN` rule, which alone knows that nothing
+    between the `Limit` and this `Sort` drops rows."""
     var _batches: List[StructArray]
     var _ctx: ExecContext
     var _emitted: Bool
@@ -802,11 +807,13 @@ struct SortOperator(Operator):
         var keys: List[DynOperator],
         var ascending: List[Bool],
         nulls_first: Bool,
+        limit: Optional[Int],
         var ctx: ExecContext,
     ):
         self._keys = keys^
         self._ascending = ascending^
         self._nulls_first = nulls_first
+        self._limit = limit
         self._batches = List[StructArray]()
         self._ctx = ctx^
         self._emitted = False
@@ -833,11 +840,19 @@ struct SortOperator(Operator):
             )
             if order:
                 key = take(key, order.value(), self._ctx)
+            # **The bound applies to the primary key only.** The multi-key
+            # decomposition sorts stably from the least significant key to the
+            # most, composing each pass onto the previous permutation, so every
+            # pass but the last must return a *full* permutation for the next
+            # one to permute. Truncating an earlier pass discards rows the
+            # later keys still have to order, which loses answers rather than
+            # reordering them. `k == 0` is the final, most significant pass.
             var pass_order = sort_indices(
                 key,
                 ascending=self._ascending[k],
                 nulls_first=self._nulls_first,
                 stable=True,
+                limit=self._limit if k == 0 else None,
                 ctx=self._ctx,
             )
             if order:

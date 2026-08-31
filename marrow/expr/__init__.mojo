@@ -126,3 +126,20 @@ from .`comptime`.strings import (
 # -- the runtime lane ----------------------------------------------------------
 from .runtime.aggregates import RuntimeAggregate
 from .runtime.values import RuntimeValue
+
+from .optimizer import (
+    AllRules,
+    MergeLimits,
+    Optimizer,
+    RemoveEmptyLimit,
+    NoRules,
+    PushFilterBelowProject,
+    PushFilterBelowSort,
+    PushLimitBelowProject,
+    RemoveNoOpProject,
+    RemoveRedundantSort,
+    Rule,
+    RuleSet,
+    TopN,
+    optimize,
+)
