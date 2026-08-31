@@ -11,9 +11,9 @@ query_cli.mojo` and running it.
 from std.testing import assert_equal, assert_true
 
 from ...builders import array
-from ...dtypes import int64
+from ...dtypes import float64, int64
 from ...tabular import RecordBatch, record_batch
-from ..cli import render_csv, render_table
+from ..cli import QueryCli, render_csv, render_table
 
 
 def _batch() raises -> RecordBatch:
@@ -83,3 +83,64 @@ def test_render_csv_quotes_delimiters_and_quotes() raises:
 def test_render_csv_writes_a_null_as_an_empty_field() raises:
     var batch = record_batch([array([1, None, 3], int64)], names=["v"])
     assert_equal(render_csv(batch), String("v\n1\n\n3\n"))
+
+
+def test_query_cli_declares_help_for_every_argument() raises:
+    """`param` / `argument` / `option` / `flag` all reach `--help`.
+
+    Also the only thing that instantiates `_coerce_param` for a *float* dtype:
+    the coercion is monomorphic on purpose, so a branch no program declares is
+    a branch nothing elaborates, and `query_cli`'s single `int64` parameter
+    would leave the floating-point arm unbuilt.
+    """
+    var cli = QueryCli(
+        String("report"), description=String("A report.")
+    )
+    var lo = cli.param(
+        String("min-amount"),
+        int64,
+        default=Int64(0),
+        help=String("lower bound"),
+    )
+    var rate = cli.param(
+        String("rate"), float64, help=String("a required float")
+    )
+    cli.argument(String("src"), help=String("input file"))
+    cli.option(String("tag"), default=String("none"), help=String("a label"))
+    cli.flag(String("dry-run"), short=String("n"), help=String("do nothing"))
+
+    var text = cli.help_text()
+    var wanted: List[String] = [
+        "A report.",
+        "--min-amount",
+        "lower bound",
+        "(default: 0)",
+        "--rate",
+        "a required float",
+        "src",
+        "input file",
+        "--tag",
+        "-n, --dry-run",
+        "--describe",
+        "-o, --output",
+        "--format",
+        "--max-rows",
+    ]
+    for ref expected in wanted:
+        assert_true(expected in text, "missing from --help: " + expected)
+
+    # The declarations are ordinary nodes: the plan sees `Param[T]`, not a
+    # CLI object.
+    assert_equal(lo.name(), String("min-amount"))
+    assert_equal(rate.name(), String("rate"))
+
+
+def test_query_cli_reading_before_parse_is_a_named_error() raises:
+    var cli = QueryCli(String("report"))
+    cli.argument(String("src"))
+    var raised = String()
+    try:
+        _ = cli.get(String("src"))
+    except e:
+        raised = String(e)
+    assert_true("call parse() before" in raised, raised)
