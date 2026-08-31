@@ -422,11 +422,16 @@ struct QueryCli(Movable):
             tail.append(String(raw[i]))
         try:
             self._args = self._parser.parse(tail)
+            self._parsed = True
+            # Validated here rather than where it is read: a misspelled
+            # `--format` is a usage error, and reporting it from `run()` would
+            # give it an execution error's exit code after the query had
+            # already run.
+            _ = self._resolve_format(String())
         except e:
             print(self._parser.usage())
-            print(self._parser.prog + ": error: " + String(e))
+            print(self._parser.prog + ": error: " + _unprefixed(String(e)))
             exit(2)
-        self._parsed = True
         if self._args.help_requested:
             print(self._parser.help_text())
             return False
@@ -538,7 +543,7 @@ struct QueryCli(Movable):
             try:
                 self._execute[parquet, ipc](plan^, ctx)
             except e:
-                print(self._parser.prog + ": error: " + String(e))
+                print(self._parser.prog + ": error: " + _unprefixed(String(e)))
                 exit(1)
 
     def _execute[
@@ -584,6 +589,19 @@ struct QueryCli(Movable):
     def help_text(self) -> String:
         """The `--help` text, for a caller that renders it somewhere else."""
         return self._parser.help_text()
+
+
+def _unprefixed(var message: String) -> String:
+    """`message` without a leading `argparse: `.
+
+    `ArgumentParser` names itself so its errors read well when a caller prints
+    them raw. Here the program has already named itself — `orders: error: ...`
+    — and `orders: error: argparse: unrecognized option` names a module the
+    user has never heard of."""
+    if message.startswith("argparse: "):
+        return String(message.removeprefix("argparse: "))
+    else:
+        return message^
 
 
 def _require_path(path: String, fmt: String) raises -> String:

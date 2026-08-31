@@ -39,6 +39,7 @@ NAMES = [
     "query_scan",
     "query_scan_typed",
     "query_param",
+    "query_cli",
     "query_streaming_agg_fused",
     "query_streaming_agg",
     "query_dynvalue",

@@ -1,20 +1,21 @@
 """``marrow compile`` — compile a ``.mojo`` query file into a standalone binary.
 
-A user writes a ``.mojo`` file that declares its parameters with ``param(...)``
-and ends in ``plan.execute_cli()``. This module builds that file with the same
-recipe ``benchmarks/binary_size/compare.py:build_and_strip`` uses to measure
-gate binaries: ``mojo build -O3 -g0 -I <marrow> <src> -o <out>``, then
-``strip``.
+A user writes a ``.mojo`` file that builds a plan against a known schema,
+declares its late-bound values with ``QueryCli.param``/``.argument``, and ends
+in ``cli.run(plan)``. This module builds that file with the same recipe
+``benchmarks/binary_size/compare.py:build_and_strip`` uses to measure gate
+binaries: ``mojo build -O3 -g0 -I <marrow> <src> -o <out>``, then ``strip``.
 
-**The CLI entry point is currently unimplemented.** ``execute_cli()``, the
-generated ``--help``/``--describe`` surface and the Parquet + Arrow IPC output
-writers all lived in the previous expression package, which was removed when
-``marrow/expr/`` replaced it; nothing in the tree defines them today. This
-module still builds a ``.mojo`` file against marrow, and it still passes
-``-D MARROW_CLI_WRITERS=true`` by default (``--no-writers`` opts out), but that
-define currently gates nothing: when the writers linked, they cost 572,288
-bytes of ``__text``, which is why the flag exists at all. Restore the Mojo side
-before treating ``-o result.parquet`` as a supported contract.
+See ``benchmarks/binary_size/query_cli.mojo`` for a complete example, and
+``docs/guide/compile.qmd`` for the guide.
+
+**The output writers are chosen in the source, not here.** They used to be
+gated by a ``-D MARROW_CLI_WRITERS=true`` define this module passed by default,
+which is why it once carried a ``--no-writers`` flag. ``QueryCli.run`` takes
+them as comptime parameters instead — ``cli.run[parquet=True](plan)`` links the
+Parquet writer, ``cli.run(plan)`` does not — so the query file says which
+formats its binary supports and there is no build flag that can disagree with
+it.
 """
 
 from __future__ import annotations
@@ -49,29 +50,29 @@ _NIGHTLY_HELP = (
 
 _VERSION_RE = re.compile(r"Mojo (\d+)\.(\d+)\.(\d+)")
 
-_WRITERS_DEFINE = "MARROW_CLI_WRITERS=true"
-
-
 def build_command(
     src: Path,
     out: Path,
     marrow_path: Path,
     opt: str = "-O3",
-    writers: bool = True,
 ) -> list[str]:
     """The `mojo build` invocation for compiling `src` into `out`.
 
     Mirrors `benchmarks/binary_size/compare.py:build_and_strip`'s recipe:
-    `mojo build -O3 -g0 -I <marrow_path> <src> -o <out>`. `writers=True`
-    (the default) adds `-D MARROW_CLI_WRITERS=true`, which is what makes
-    `execute_cli`'s documented `-o result.parquet` / `-o result.arrow`
-    contract work in the compiled binary — see the module docstring.
+    `mojo build -O3 -g0 -I <marrow_path> <src> -o <out>`, so a compiled
+    query's size is directly comparable to the gate numbers.
     """
-    cmd = ["mojo", "build", opt, "-g0"]
-    if writers:
-        cmd += ["-D", _WRITERS_DEFINE]
-    cmd += ["-I", str(marrow_path), str(src), "-o", str(out)]
-    return cmd
+    return [
+        "mojo",
+        "build",
+        opt,
+        "-g0",
+        "-I",
+        str(marrow_path),
+        str(src),
+        "-o",
+        str(out),
+    ]
 
 
 def _is_system_dep(path: str) -> bool:
@@ -515,7 +516,7 @@ def _add_compile_subparser(
         "compile",
         help="compile a marrow query (.mojo) into a standalone binary",
         description="Compile a marrow query (.mojo, ending in "
-        "plan.execute_cli()) into a standalone binary.",
+        "cli.run(plan)) into a standalone binary.",
     )
     parser.add_argument("file", type=Path, help="the .mojo source file to compile")
     parser.add_argument(
@@ -551,13 +552,6 @@ def _add_compile_subparser(
         "--no-strip",
         action="store_true",
         help="skip stripping debug symbols from the output binary",
-    )
-    parser.add_argument(
-        "--no-writers",
-        action="store_true",
-        help="build without -D MARROW_CLI_WRITERS=true: saves roughly "
-        "572 KB of __text but disables `-o result.parquet` / "
-        "`-o result.arrow` in the compiled binary (it raises instead)",
     )
     parser.add_argument(
         "--bundle",
@@ -609,7 +603,7 @@ def _run_compile(args: argparse.Namespace) -> int:
     else:
         out = Path.cwd() / src.stem
     opt = "-O1" if args.fast else "-O3"
-    cmd = build_command(src, out, marrow_path, opt=opt, writers=not args.no_writers)
+    cmd = build_command(src, out, marrow_path, opt=opt)
 
     if args.verbose:
         print(" ".join(cmd))
