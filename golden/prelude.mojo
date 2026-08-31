@@ -42,6 +42,7 @@ from marrow.dtypes import (
     timestamp,
 )
 from marrow.expr import array_length, col, count_star, lit
+from marrow.expr import dense_rank, rank, row_number
 from marrow.expr import DynRelation
 from marrow.expr import IsNull, NotNull
 from marrow.expr import (

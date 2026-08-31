@@ -9,10 +9,6 @@ def plan() raises -> DynRelation:
     and no frame. The second sort key makes the numbering deterministic, which
     a window over a non-total order would not be.
 
-    There is no window node in `marrow/expr/logical.mojo` and no windowed
-    operator in `physical.mojo`.
-
-    -- skip mojo
     -- skip python
 
     -- expected

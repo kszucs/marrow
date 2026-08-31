@@ -10,10 +10,6 @@ def plan() raises -> DynRelation:
     ROW` applies and the column is a running total that restarts at each `k`.
     The NULL partition is its own group, exactly as in `GROUP BY`.
 
-    There is no window node in `marrow/expr/logical.mojo` and no windowed
-    operator in `physical.mojo`.
-
-    -- skip mojo
     -- skip python
 
     -- expected

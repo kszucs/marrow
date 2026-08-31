@@ -10,10 +10,6 @@ def plan() raises -> DynRelation:
     agree only when the order key has no duplicates. A two-row sliding sum is
     the smallest frame that shows the window moving.
 
-    There is no window node in `marrow/expr/logical.mojo` and no windowed
-    operator in `physical.mojo`.
-
-    -- skip mojo
     -- skip python
 
     -- expected

@@ -15,6 +15,45 @@
 
 ### Features
 
+- **Window functions: `OVER (PARTITION BY ... ORDER BY ...)`**
+  (`marrow/kernels/window.mojo`, a `Window` node in `marrow/expr/logical.mojo`,
+  `WindowOperator` in `physical.mojo`). Seven functions —
+  `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`,
+  `last_value` — plus any aggregate over a frame, reached through
+  `t.with_columns(["rn"], [row_number().over(order_by=[col("v", int64)])])`.
+  The seven `window_*` golden cases lose their `-- skip mojo`.
+
+  **`PARTITION BY` is a prefix of the sort key, not a second mechanism.**
+  `PARTITION BY k ORDER BY v` is the ordering `[k, v]`, so one
+  `SortIndices.multi` answers both questions and the kernel reads partition
+  and peer boundaries straight off the result. Hash-partitioning first would
+  have needed `HashGrouping`, a gather per bucket, and a second null
+  convention to keep consistent with `GROUP BY`'s.
+
+  Tie handling is the whole of the ranking difference and falls out of the two
+  boundaries: `row_number` counts rows, `rank` names a peer group by its first
+  position (so it gaps), `dense_rank` by its ordinal (so it does not).
+  Boundaries compare with `IS NOT DISTINCT FROM` — nulls are peers and null
+  partition keys are one partition, matching `GROUP BY` — which `equal` alone
+  cannot express, since `equal(null, null)` is null.
+
+  `lag`/`lead`/`first_value`/`last_value` answer with an `Int32Array` of source
+  rows and let `take` gather, so they need no per-dtype arm: `take` already
+  maps a null index to a null element. A framed aggregate runs through **its
+  own operator** on a zero-copy slice of the sorted batch, so every aggregate
+  is a window aggregate at once and `SUM` over an all-null frame is null
+  because `SumFold` says so. The cost is one operator construction per row.
+
+  `WindowExpr` deliberately **does not conform to `Value`** — a window
+  function has no per-row answer, so there is no honest `to_operator` for one —
+  which is also what makes the second `with_columns` overload unambiguous.
+  Rows come out in **input order**: the sort is internal, and the computed
+  columns are scattered back through the inverse permutation.
+
+  Not implemented: `RANGE` frames with explicit numeric bounds, `EXCLUDE`,
+  `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`, and window functions in the
+  Python frontend (the golden cases keep `-- skip python`).
+
 - **A plan optimizer: twelve rules and a column-pruning pass**
   (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
   `DynRelation` you can print, diff and execute — `Limit(Sort(Filter(scan)))`

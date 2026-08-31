@@ -14,10 +14,6 @@ def plan() raises -> DynRelation:
     Nulls sort last so the constant `first_value` is a real value rather than a
     null, which would have made the two columns harder to tell apart.
 
-    There is no window node in `marrow/expr/logical.mojo` and no windowed
-    operator in `physical.mojo`.
-
-    -- skip mojo
     -- skip python
 
     -- expected
