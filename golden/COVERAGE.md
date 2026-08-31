@@ -125,9 +125,26 @@ filter; group by a date and by a truncated timestamp.
 
 `array_length` over a list column — the one list verb the expression layer has.
 
+### Window functions
+
+Seven cases over `OVER (PARTITION BY ... ORDER BY ...)`. `window_row_number`
+takes the no-partition, no-frame base case; `window_rank_and_dense_rank`
+separates the two functions that differ only on ties;
+`window_partitioned_running_sum` is an aggregate under the default `RANGE`
+frame, restarting per partition and answering NULL for an all-null one;
+`window_explicit_rows_frame` is the `ROWS` counterpart, which agrees with it
+only when the order key has no duplicates; `window_lag_and_lead` reads
+neighbouring rows and both partition edges; `window_first_and_last_value` is
+the frame trap — `last_value` is the *current* row, not the partition's last;
+and `window_qualify` filters on a window function's output.
+
+Not covered here and not implemented: `RANGE` frames with explicit numeric
+bounds, `EXCLUDE`, and `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`. All
+seven keep `-- skip python` — the window surface is Mojo-only.
+
 ## Recorded as unsupported
 
-85 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+78 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **Set operations** (4) — `setop_union_all`, `setop_union_distinct`,
 `setop_except`, `setop_intersect`. There is no set-operation node in
@@ -137,13 +154,6 @@ itself, which no other part of the corpus does.
 **DISTINCT ON** (1) — `distinct_on_first_row_per_key`. `SELECT DISTINCT` is an
 `aggregate` with keys and no aggregates; `DISTINCT ON` keeps whole rows and
 cannot be.
-
-**Window functions** (7) — `window_row_number`, `window_rank_and_dense_rank`,
-`window_lag_and_lead`, `window_partitioned_running_sum`,
-`window_explicit_rows_frame`, `window_first_and_last_value`, `window_qualify`.
-No window node and no windowed operator. Covers ranking with ties, neighbour
-access, running aggregation, an explicit `ROWS` frame versus the default
-`RANGE` one, the `last_value` frame trap, and `QUALIFY`.
 
 **GROUPING SETS / ROLLUP / CUBE** (3) — `grouping_rollup`, `grouping_cube`,
 `grouping_sets_explicit`. `Aggregate` carries one key list. `grouping_rollup`

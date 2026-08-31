@@ -26,4 +26,4 @@ def plan() raises -> DynRelation:
         ["rn"],
         [row_number().over(order_by=[col("v", int64), col("w", int64)])],
     )
-    return numbered.sort_by([col("rn", int64)], [True])
+    return numbered.select(["k", "v", "rn"]).sort_by([col("rn", int64)], [True])
