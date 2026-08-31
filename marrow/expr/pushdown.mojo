@@ -12,11 +12,19 @@ information travels *through* the execution. Pushdown gets the identical
 treatment: `Relation.to_operator` already threads its arguments down a
 recursive descent from root to source, so a `Pushdown` rides the same descent.
 
-There is no separate pass, no plan walk, no `children()`, no rewrite and no
-rebuilt node -- and a rewrite is not merely unnecessary but unavailable:
-`DynRelation(copy=self)` copies trampolines bound to `R`, so a rewritten node
-would have to have the same concrete type, and returning `Optional[DynRelation]`
-from a trampoline field makes the struct recursive, which the compiler rejects.
+There is no separate pass, no plan walk and no rebuilt node *here* -- pruning
+rides the descent because a source consumes it, and rebuilding N nodes to reach
+the same operator tree would buy nothing.
+
+**This paragraph used to claim a rewrite was "not merely unnecessary but
+unavailable" given `DynRelation`'s layout. That was wrong**, and it discouraged
+the optimizer that now exists (`optimizer.mojo`, 16 rules). Trampolines
+returning `List[Self]`, `Self` and `Optional[Self]` all compile at 0/0 -- a
+function pointer is one word whatever its signature mentions. What the compiler
+rejects is a by-value recursive *field*: `var x: DynRelation` gives *"attempt to
+resolve a recursive reference to declaration
+'DynRelation.__move_ctor_is_trivial'"*. The two produce the same intuition and
+different diagnostics. See `docs/optimizer-experiment-findings.md` section 3.
 
 One capability falls out for free: the previous expression package pushed only
 into an **adjacent** scan, so `Filter(Sort(ParquetScan))` pruned nothing. Here

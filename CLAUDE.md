@@ -445,9 +445,18 @@ share no node types**:
 
 Tests live in `expr/tests/`, `expr/comptime/tests/` and `expr/runtime/tests/`.
 
-**Statistics-based pruning, predicate/projection pushdown and the CLI-output
-layer are unported.** They lived in the previous expression package and have no
-replacement in the tree yet — do not describe them as available.
+- **`optimizer.mojo`** — the plan rewriter. `plan.optimize[AllRules]()` returns
+  a new `DynRelation` you can print and diff. 16 rules in one file
+  (elimination, merging, `SplitConjunction`, four pushdowns, `TopN`) plus
+  `ColumnPruning`, a downward pass with a needed-column accumulator. The rule
+  set is a comptime parameter, so a binary links exactly the rules it names and
+  `execute()` alone optimizes nothing.
+
+**Statistics-based pruning is ported** (`pruning.mojo`, riding `to_operator`'s
+descent). **The CLI-output layer is not** — it lived in the previous expression
+package and has no replacement; do not describe it as available. **A cost model
+does not exist**, and join reordering and build-side selection are blocked by
+the join's positional output schema rather than by the optimizer.
 
 Two standing constraints:
 

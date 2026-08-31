@@ -1,25 +1,37 @@
 """The logical layer: an immutable description of a query.
 
-Paired with `physical.mojo`, which holds what these become when they run.
+Paired with `physical.mojo`, which holds what these become when they run, and
+with `optimizer.mojo`, which rewrites one plan into a simpler one.
 
 A `Relation` says *what* to compute. It owns nothing that runs, so a plan is
-freely copyable, shareable, inspectable and — once the optimizer exists —
-rewritable. `to_operator(ctx)` turns it into the physical operator that owns
-the running state.
+freely copyable, shareable, inspectable and rewritable. `to_operator(ctx)` turns
+it into the physical operator that owns the running state.
 
-**Four slots, not eight.** The previous expression package's `DynRelation`
-carried `schema`, `to_operator`, `write`, `drop`, `kind`, `with_predicate`,
-`with_projection` and `children`. `schema`, `to_operator`, `write` and `drop`
-are here; the other four existed for an optimizer that was never finished, and
-two of them cannot express any rewrite that changes a node's type or arity —
-which is every rewrite worth having. When a rule needs to walk or rebuild a
-plan, `children` and its inverse arrive with that rule and are shaped by it.
+**A variant for inspection, a trampoline for lowering.** `DynRelation` erases
+the nine node types behind a `Variant`, so `isa[R]()`/`get[R]()` let an
+optimizer rule read a real typed node and construct one — the capability the
+previous trampoline-only box lacked, which left its "rules" as four comptime
+flags and eight scattered calls inside `to_operator` with no file to read.
 
-The one property that must survive whatever arrives: **nothing may name every
-node type in one place.** `DynRelation.__init__[T]` wires trampolines per
-constructed type, with no registry, which is why `kernels::sort` occupies zero
-bytes in a binary that never sorts. A `match` over all kinds would make every
-operator reachable from any plan.
+Lowering is the exception, and the reason is measured. `_dispatch` resolves the
+active member with a `comptime for` over every member, so anything routed
+through it is instantiated nine times; for `to_operator` that makes
+`Sort.to_operator` reach `kernels::sort` and `ParquetScan.to_operator` reach the
+Parquet reader and `kernels::cast`, in plans containing neither. It cost
+**+348%** of `__text` on `query_streaming`, with `kernels::cast` going from 0 to
+694 symbols in the fused gates. So `to_operator` binds a per-type trampoline at
+construction and links only what a plan actually uses.
+
+This supersedes the rule that used to head this file — "nothing may name every
+node type in one place". The variant does name them. The narrower rule that
+survives contact with the measurement is: **a closed type set may be a variant;
+what must never go through its ladder is anything that reaches a kernel.**
+`schema` and `write_to` stay on it deliberately — one returns a stored field,
+the other formats a string.
+
+Nodes carry `traverse(f)`, which applies `f` to their own children and rebuilds
+themselves, so the optimizer holds no ladder over node types and a relation
+added later needs no change there.
 """
 
 from std.builtin.rebind import downcast

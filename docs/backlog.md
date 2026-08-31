@@ -41,13 +41,15 @@ A fix needs a sign correction **and** a validity mask derived from the divisor.
 It was invisible because `math_mod_int64` asks `((n % 3) + 3) % 3` — the one
 form both rules agree on.
 
-**`count(*)` desugars to `count(lit(1))`, and that breaks the day projection
-pushdown lands.** `builders.mojo` returns `lit(1, int64).count().alias("count_star")`.
-Its `columns()` is empty, so a projection pushdown would prune every column, the
-scan would yield column-less batches, and `RecordBatch.num_rows()` returns **0**
-when there are no columns (`tabular.mojo`). Latent today *only* because
-projection pushdown does not exist. Rescued from the deleted reductions design,
-which is the only place it was written down.
+**`count(*)` desugars to `count(lit(1))`.** `builders.mojo` returns
+`lit(1, int64).count().alias("count_star")`, whose `columns()` is empty — so
+anything that prunes by "what does this read" prunes every column, and
+`RecordBatch.num_rows()` returns **0** when there are none (`tabular.mojo`).
+
+**Projection pushdown landed 2026-08-31 and handles it rather than fixing it:**
+`ColumnPruning` never narrows a source to zero columns, keeping the first when
+the demand is empty. The desugaring is unchanged, so the trap still waits for
+the next thing that reads `columns()` and believes the answer.
 
 ### 1.2 The published guides document APIs that do not exist
 
@@ -107,25 +109,37 @@ strings, which is the call its own docstring already said it existed for. The
 comptime lane still has no `+` on `StringValue` -- a typed string column
 concatenates only by leaving the lane.
 
-### 1.6 Top-K is a dead parameter and a missed optimization
+### 1.6 ~~Top-K is a dead parameter~~ — done 2026-08-31
 
-`sort_indices(..., limit=)` is passed non-`None` at exactly two sites, both
-tests. `SortOperator` never passes it, so `sort_by(...).limit(k)` sorts fully
-and discards — a plan shape `golden/cases/sort_top_k.mojo` exercises.
+`TopN` in `marrow/expr/optimizer.mojo` rewrites `Limit(Sort(x))` to a bounded
+sort, and `SortOperator` now passes `sort_indices(limit=)`. Two details the
+original entry got right and one it did not:
 
-Wiring it needs a `row_limit` channel through `Pushdown` (the existing
-root-to-source descent) **and a per-node rule table**, and the rules are the
-hazard: `Limit(Sort(x))` may take the top K, `Limit(Filter(Sort(x)))` may not —
-the filter runs after the sort, so a K-row sort returns fewer than K rows and
-the answer is silently wrong. A feature with a specification, not a cleanup.
+- The `Limit(Filter(Sort(x)))` hazard is real, and the rule requires the
+  `Limit` to be **directly** above the `Sort` — which makes it unrepresentable
+  rather than merely avoided. `PushFilterBelowSort` runs first and moves the
+  common offender out of the way, so adjacency is less restrictive than it
+  sounds.
+- The bound is `offset + length`, not `length`: the `Limit` still skips
+  `offset` rows of the ordered result.
+- The bound applies to the **primary-key pass only**. Multi-key sort composes
+  stable passes from least to most significant key, so truncating an earlier
+  pass drops rows the later keys still have to order. The original entry did
+  not mention this and it is the one way to get `TopN` silently wrong.
+
+It did **not** need "a `row_limit` channel through `Pushdown` and a per-node
+rule table" — that was the shape the demand-lattice design would have required.
+It is a field on `Sort` and one rule.
 
 ### 1.7 Structure
 
-**Six files over 1,000 lines**, with seams identified: `kernels/aggregate.mojo`
+**Seven files over 1,000 lines** (`expr/optimizer.mojo` joined at ~1,100, and
+is the one file that should stay whole — it exists so every rule is readable in
+one place), with seams identified: `kernels/aggregate.mojo`
 (1,573 — fold algebras | `AggState`, whose storage/driver/policy should split
-three ways | the `AggKernel` conformers), `expr/logical.mojo` (1,280 — the value
+three ways | the `AggKernel` conformers), `expr/logical.mojo` (**1,672** — the value
 layer | `Relation`+`DynRelation`+the fluent verbs | the eight relation nodes),
-`kernels/cast.mojo` (1,246), `expr/physical.mojo` (1,246 — wire types |
+`kernels/cast.mojo` (1,246), `expr/physical.mojo` (1,281 — wire types |
 contract | `Pipeline` | the operators), `comptime/core.mojo` (1,212 — machinery
 | the family traits, ~85% fluent surface), `kernels/filter.mojo` (1,163 — two
 structs of ~520 lines each; split by layout, not by struct).
@@ -248,6 +262,18 @@ obvious. Read before planning anything.
 1. **Small-binary DCE.** Preserve the closed-erasure property: no open
    dispatchers, fused-only value boxes, closed per-dtype kernels. Gate on
    `pixi run binary_size`.
+
+   **Amended 2026-08-31.** `DynRelation` is now a `Variant`, which does name
+   all nine relation nodes in one place — the thing this invariant forbids.
+   That is deliberate and its price is bounded by *where* the variant is used:
+   `isa`/`get` instantiate nothing per member, so inspection is free, while
+   `to_operator` stays on a per-type trampoline. Routing lowering through the
+   variant's ladder instead measured **+348%** of `__text` on `query_streaming`,
+   because it makes every node's operator — and therefore `kernels::sort`,
+   `kernels::join` and the Parquet reader — reachable from any plan. The
+   working rule is narrower than the original: **a closed type set may be a
+   variant; what must never go through its ladder is anything that reaches a
+   kernel.**
 2. **One engine, two drivers.** No feature may exist in only one lane. This was
    enforced by a `test_parity.mojo` across four axes — op names read off the
    kernel, pruning, values, aggregates through a keyless plan — which went with
@@ -568,7 +594,10 @@ replaces.
   64-partition default came from a *one-shot* 10M sweep, and morsel streaming
   pays it per call.
 - **`inputs()`-based optimizer traversal — rejected for `children()` +
-  `with_projection()`.** See M1.1.
+  `with_projection()`.** Both were superseded 2026-08-31: the optimizer walks
+  plans through `Relation.traverse(f)`, one method per node that applies `f` to
+  its own children and rebuilds itself. No `children()`, no `with_projection()`,
+  and no ladder over node types in the optimizer.
 - **Building a temporal literal through the storage integer and relabelling with
   `relabel_array` — rejected on measurement.** It avoids six
   `PrimitiveBuilder`/`PrimitiveArray` monomorphisations (+23,668 bytes on
