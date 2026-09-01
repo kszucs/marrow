@@ -113,14 +113,23 @@ from .numeric import (
 )
 from .boolean import And, IsInf, IsNan, Not, Or, Xor
 from .strings import (
+    Ascii,
     Capitalize,
+    CharLength,
     EndsWith,
     ILike,
+    LPad,
     LStrip,
+    Left,
     Like,
     Lower,
+    Position,
+    RPad,
+    Replace,
     Reverse,
     RStrip,
+    Right,
+    SplitPart,
     StartsWith,
     StrContains,
     StrEq,
@@ -129,13 +138,25 @@ from .strings import (
     StrLe,
     StrLt,
     StrNe,
+    StringConcat,
     StringLength,
+    StringRepeat,
     Strip,
+    Substr,
+    TrimChars,
+    UnusedNumber,
+    UnusedText,
     Upper,
 )
 from .temporal import (
     DateTrunc,
     Day,
+    DayName,
+    Epoch,
+    IsoYear,
+    LastDay,
+    MonthName,
+    Week,
     DayOfWeek,
     DayOfYear,
     Hour,
@@ -604,6 +625,217 @@ trait StringValue(ComptimeValue):
         the kernel records it and `StringLength` reads it back."""
         return StringLength[Self](self.copy())
 
+    # -- the SQL function surface -------------------------------------------
+    #
+    # Everything below counts **characters**, where `length` above counts
+    # bytes, and answers `int64` where it answers `int32`. Both halves are
+    # deliberate: these are the SQL spellings, and SQL's `length` is
+    # `octet_length`'s sibling rather than its synonym.
+    #
+    # Each is a wrapper over `StringFunction` or `StringMeasure`, whose
+    # arguments are **operands**: `substr(s, 2, 3)` and
+    # `substr(s, col("from", int64), col("len", int64))` are the same node with
+    # different operand types. Each comes in two spellings — one taking plain
+    # `Int` / `String` constants, which wraps them in the literal leaves, and
+    # one taking values. The constant form is not sugar over an inferior path:
+    # a literal operand stays `Shape.scalar` and broadcasts once per batch,
+    # which is what the arguments-as-constants version did in the kernel loop
+    # anyway.
+
+    def substr[
+        StartArg: NumericValue, CountArg: NumericValue
+    ](self, start: StartArg, count: CountArg) -> Substr[
+        Self, StartArg, CountArg
+    ]:
+        """SQL `substr(self, start, count)` — 1-based, counting characters,
+        with both arguments read per row.
+
+        A `start` below 1 is *not* clamped: the window still ends at
+        `start + count`, so the characters before the string are consumed by
+        the count and `substr(s, 0, 2)` yields one character, not two."""
+        return Substr[Self, StartArg, CountArg](
+            self.copy(),
+            UnusedText(String()),
+            UnusedText(String()),
+            start.copy(),
+            count.copy(),
+        )
+
+    def substr(
+        self, start: Int, length: Int
+    ) -> Substr[Self, UnusedNumber, UnusedNumber]:
+        """SQL `substr(self, start, length)` with constant bounds."""
+        return self.substr(
+            UnusedNumber(Int64(start)), UnusedNumber(Int64(length))
+        )
+
+    def left[
+        CountArg: NumericValue
+    ](self, count: CountArg) -> Left[Self, CountArg]:
+        """SQL `left(self, count)` — the first `count` characters, or all but
+        the last `|count|` when it is negative."""
+        return Left[Self, CountArg](
+            self.copy(),
+            UnusedText(String()),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            count.copy(),
+        )
+
+    def left(self, count: Int) -> Left[Self, UnusedNumber]:
+        """SQL `left(self, count)` with a constant count."""
+        return self.left(UnusedNumber(Int64(count)))
+
+    def right[
+        CountArg: NumericValue
+    ](self, count: CountArg) -> Right[Self, CountArg]:
+        """SQL `right(self, count)` — the last `count` characters, or all but
+        the first `|count|` when it is negative."""
+        return Right[Self, CountArg](
+            self.copy(),
+            UnusedText(String()),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            count.copy(),
+        )
+
+    def right(self, count: Int) -> Right[Self, UnusedNumber]:
+        """SQL `right(self, count)` with a constant count."""
+        return self.right(UnusedNumber(Int64(count)))
+
+    def lpad[
+        WidthArg: NumericValue, FillArg: StringValue
+    ](self, width: WidthArg, fill: FillArg) -> LPad[Self, FillArg, WidthArg]:
+        """SQL `lpad(self, width, fill)` — pad on the left to `width`
+        characters, **truncating** when the input is already longer."""
+        return LPad[Self, FillArg, WidthArg](
+            self.copy(),
+            fill.copy(),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            width.copy(),
+        )
+
+    def lpad(
+        self, width: Int, var fill: String
+    ) -> LPad[Self, UnusedText, UnusedNumber]:
+        """SQL `lpad(self, width, fill)` with a constant width and fill."""
+        return self.lpad(UnusedNumber(Int64(width)), UnusedText(fill^))
+
+    def rpad[
+        WidthArg: NumericValue, FillArg: StringValue
+    ](self, width: WidthArg, fill: FillArg) -> RPad[Self, FillArg, WidthArg]:
+        """SQL `rpad(self, width, fill)` — `lpad` from the other end."""
+        return RPad[Self, FillArg, WidthArg](
+            self.copy(),
+            fill.copy(),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            width.copy(),
+        )
+
+    def rpad(
+        self, width: Int, var fill: String
+    ) -> RPad[Self, UnusedText, UnusedNumber]:
+        """SQL `rpad(self, width, fill)` with a constant width and fill."""
+        return self.rpad(UnusedNumber(Int64(width)), UnusedText(fill^))
+
+    def replace[
+        PatArg: StringValue, ReplArg: StringValue
+    ](self, pattern: PatArg, replacement: ReplArg) -> Replace[
+        Self, PatArg, ReplArg
+    ]:
+        """SQL `replace` — **every** occurrence, literally. An empty `pattern`
+        returns the input unchanged."""
+        return Replace[Self, PatArg, ReplArg](
+            self.copy(),
+            pattern.copy(),
+            replacement.copy(),
+            UnusedNumber(Int64(0)),
+            UnusedNumber(Int64(0)),
+        )
+
+    def replace(
+        self, var pattern: String, var replacement: String
+    ) -> Replace[Self, UnusedText, UnusedText]:
+        """SQL `replace` with a constant pattern and replacement."""
+        return self.replace(UnusedText(pattern^), UnusedText(replacement^))
+
+    def split_part[
+        SepArg: StringValue, IndexArg: NumericValue
+    ](self, sep: SepArg, index: IndexArg) -> SplitPart[Self, SepArg, IndexArg]:
+        """SQL `split_part(self, sep, index)` — the `index`-th field, 1-based.
+        An index past the last field answers the empty string, not null."""
+        return SplitPart[Self, SepArg, IndexArg](
+            self.copy(),
+            sep.copy(),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            index.copy(),
+        )
+
+    def split_part(
+        self, var sep: String, index: Int
+    ) -> SplitPart[Self, UnusedText, UnusedNumber]:
+        """SQL `split_part` with a constant separator and index."""
+        return self.split_part(UnusedText(sep^), UnusedNumber(Int64(index)))
+
+    def strip[
+        SetArg: StringValue
+    ](self, characters: SetArg) -> TrimChars[Self, SetArg]:
+        """SQL `trim(self, characters)` — strip any leading or trailing
+        character that is a **member of the set**, not the literal substring.
+
+        An overload of the no-argument `strip` above, which trims whitespace:
+        the two differ in arity, so naming them alike costs nothing and keeps
+        the SQL spelling."""
+        return TrimChars[Self, SetArg](
+            self.copy(),
+            characters.copy(),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            UnusedNumber(Int64(0)),
+        )
+
+    def strip(self, var characters: String) -> TrimChars[Self, UnusedText]:
+        """SQL `trim(self, characters)` with a constant character set."""
+        return self.strip(UnusedText(characters^))
+
+    def char_length(self) -> CharLength[Self]:
+        """SQL `length(self)` — **characters** as `int64`, where `length()`
+        above answers bytes as `int32`. `héllo wörld` is 11 here and 13
+        there."""
+        return CharLength[Self](self.copy(), UnusedText(String()))
+
+    def position[
+        TextArg: StringValue
+    ](self, needle: TextArg) -> Position[Self, TextArg]:
+        """SQL `position(needle IN self)` — the 1-based character index, and
+        **0** when absent. Zero rather than null is what makes the answer an
+        index into a 1-based world; a *null* needle answers null, which is a
+        different fact and the one `is_valid` records."""
+        return Position[Self, TextArg](self.copy(), needle.copy())
+
+    def position(self, var needle: String) -> Position[Self, UnusedText]:
+        """SQL `position(needle IN self)` with a constant needle."""
+        return self.position(UnusedText(needle^))
+
+    def ascii(self) -> Ascii[Self]:
+        """SQL `ascii(self)` — the first character's code point, 0 for the
+        empty string. Decodes UTF-8: a leading `é` answers 233, not 0xC3."""
+        return Ascii[Self](self.copy(), UnusedText(String()))
+
+    def repeat[Rhs: NumericValue](self, n: Rhs) -> StringRepeat[Self, Rhs]:
+        """SQL `repeat(self, n)`, with `n` read from a column. Zero and
+        negative counts both give the empty string."""
+        return StringRepeat[Self, Rhs](self.copy(), n.copy())
+
+    def __add__[Rhs: StringValue](self, o: Rhs) -> StringConcat[Self, Rhs]:
+        """SQL `||` — concatenation that **propagates null**, so a null
+        operand makes the whole result null. That is what separates it from
+        `concat()`, which skips its null arguments."""
+        return StringConcat[Self, Rhs](self.copy(), o.copy())
+
     # -- predicates ---------------------------------------------------------
 
     def startswith[Rhs: StringValue](self, o: Rhs) -> StartsWith[Self, Rhs]:
@@ -969,6 +1201,44 @@ trait TemporalValue(PrimitiveValue):
     def day_of_year(self) -> DayOfYear[Self]:
         """Day of year, 1-366."""
         return DayOfYear[Self](self.copy())
+
+    # -- the SQL function surface -------------------------------------------
+    #
+    # `week`, `iso_year` and `epoch` answer `int64` where the nine above answer
+    # `int32`: those are Arrow's spellings and these are SQL's, whose `week` /
+    # `isoyear` / `epoch` are all `BIGINT`.
+
+    def week(self) -> Week[Self]:
+        """ISO-8601 week number, 1-53, as `int64`.
+
+        ISO week 1 is the week containing the first Thursday of January, so
+        this does **not** agree with `year`: `2021-01-01` is week 53 of ISO
+        year 2020."""
+        return Week[Self](self.copy())
+
+    def iso_year(self) -> IsoYear[Self]:
+        """The ISO-8601 week-numbering year, as `int64` — the calendar year of
+        this week's Thursday, which is not always `year`."""
+        return IsoYear[Self](self.copy())
+
+    def epoch(self) -> Epoch[Self]:
+        """Whole seconds since 1970-01-01, **floored**, as `int64`. A
+        sub-second remainder is dropped downward, so a pre-1970 instant
+        answers the second it falls in."""
+        return Epoch[Self](self.copy())
+
+    def last_day(self) -> LastDay[Self]:
+        """The last day of this value's month, as `date32`. Leap years come
+        from the calendar algorithm, not a table: 2020-02 answers the 29th."""
+        return LastDay[Self](self.copy())
+
+    def day_name(self) -> DayName[Self]:
+        """The full English weekday name — `Monday` … `Sunday`."""
+        return DayName[Self](self.copy())
+
+    def month_name(self) -> MonthName[Self]:
+        """The full English month name — `January` … `December`."""
+        return MonthName[Self](self.copy())
 
     # -- truncation ---------------------------------------------------------
 

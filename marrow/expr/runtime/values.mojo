@@ -36,7 +36,13 @@ design, in the present tense, long after it was gone.
 from std.memory import ArcPointer
 from std.utils import Variant
 
-from ...arrays import StructArray, BoolArray, DynArray
+from ...arrays import (
+    BoolArray,
+    DynArray,
+    Int64Array,
+    StringArray,
+    StructArray,
+)
 from ...kernels.aggregate import (
     APPROX_COUNT_DISTINCT,
     COUNT,
@@ -97,20 +103,32 @@ from ...kernels.numeric import (
     NeKernel,
 )
 from ...kernels.string import (
+    AsciiKernel,
     CapitalizeKernel,
+    CharLengthKernel,
     ConcatKernel,
     ContainsKernel,
     EndsWithKernel,
     ILikeKernel,
+    LPadKernel,
     LStripKernel,
+    LeftKernel,
     LengthKernel,
     LikeKernel,
     LowerKernel,
+    PositionKernel,
+    RPadKernel,
     RStripKernel,
+    ReplaceKernel,
     ReverseKernel,
+    RightKernel,
+    SplitPartKernel,
     StartsWithKernel,
+    StringOperands,
     StringPredicateKernel,
     StripKernel,
+    SubstrKernel,
+    TrimCharsKernel,
     UpperKernel,
     StringEqKernel,
     StringGeKernel,
@@ -123,16 +141,22 @@ from ...kernels.temporal import (
     CalendarUnit,
     DateTruncKernel,
     DayKernel,
+    DayNameKernel,
     DayOfWeekKernel,
     DayOfYearKernel,
+    EpochKernel,
     HourKernel,
+    IsoYearKernel,
+    LastDayKernel,
     MinuteKernel,
     MonthKernel,
+    MonthNameKernel,
     QuarterKernel,
     SecondKernel,
+    WeekKernel,
     YearKernel,
 )
-from ...dtypes import DynType, bool_, float64
+from ...dtypes import DynType, bool_, float64, int64, string
 from ...scalars import BoolScalar, DynScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
@@ -444,6 +468,13 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             if d:
                 return Datum(d.take())
 
+        # The SQL string functions, whose arity is two *or* three -- so they
+        # fit neither `_binary` nor `_unary` and get their own ladder.
+        if len(kids) == 2 or len(kids) == 3:
+            var d = self._string_fn(kids)
+            if d:
+                return Datum(d.take())
+
         if self._tag == "coalesce":
             return Datum(coalesce_kernel(Self._unified(kids^)))
         if self._tag == "case_when":
@@ -606,6 +637,35 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         if self._tag == "array_length":
             return ArrayLengthKernel.dispatch(a^)
 
+        # The SQL function surface's *nullary* half — the functions whose only
+        # operand is the column, so their `StringOperands` is empty.
+        #
+        # Their argument-carrying siblings used to be absent from this lane
+        # entirely, because reaching them would have needed a `StringArgs`
+        # member in `Payload` — and `Payload` already holds `DynScalar`, which
+        # makes it the `Variant` shape that loses every other element of a
+        # `List` when it grows (CLAUDE.md, "Mojo Gotchas"). That argument
+        # dissolved with the constants: an argument is a **child node** now,
+        # and this lane has carried children since it was written. See
+        # `_string_fn` below.
+        if self._tag == "char_length":
+            return CharLengthKernel.dispatch(a^, StringOperands())
+        if self._tag == "ascii":
+            return AsciiKernel.dispatch(a^, StringOperands())
+
+        if self._tag == "week":
+            return WeekKernel.dispatch(a^)
+        if self._tag == "iso_year":
+            return IsoYearKernel.dispatch(a^)
+        if self._tag == "epoch":
+            return EpochKernel.dispatch(a^)
+        if self._tag == "last_day":
+            return LastDayKernel.dispatch(a^)
+        if self._tag == "day_name":
+            return DayNameKernel.dispatch(a^)
+        if self._tag == "month_name":
+            return MonthNameKernel.dispatch(a^)
+
         if self._tag == "year":
             return YearKernel.dispatch(a^)
         if self._tag == "month":
@@ -686,6 +746,79 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             var pair = Self._unified([l^, r^])
             return fill_null_kernel(pair[0], pair[1])
         return None
+
+    def _string_fn(self, kids: List[DynArray]) raises -> Optional[DynArray]:
+        """The SQL string functions whose arguments are operands.
+
+        Two children or three, so they fit neither `_unary` nor `_binary`.
+        Every one of them was **absent from this lane** while its arguments
+        were constants on the node: a `RuntimeValue` has no way to spell a
+        constant a kernel takes directly except through `Payload`, and
+        widening that `Variant` is the change the tree works around rather
+        than makes. An argument is a child now, and children are the one thing
+        this struct has always carried.
+
+        The operands are normalised to `utf8` and `int64` — the widths
+        `StringOperands`' defaults name — so this file instantiates the carrier
+        **once**. The comptime lane fills the same four slots with its own
+        types and casts nothing; paying a cast here is the same trade
+        `_arith` and `_compare` already make, and it keeps a
+        stringlike-by-integer dispatch cross product out of the interpreter.
+        """
+        if self._tag == "left":
+            var ops = StringOperands()
+            ops.count = Self._as_int64(kids[1])
+            return LeftKernel.dispatch(kids[0], ops)
+        if self._tag == "right":
+            var ops = StringOperands()
+            ops.count = Self._as_int64(kids[1])
+            return RightKernel.dispatch(kids[0], ops)
+        if self._tag == "trim_chars":
+            var ops = StringOperands()
+            ops.text = Self._as_text(kids[1])
+            return TrimCharsKernel.dispatch(kids[0], ops)
+        if self._tag == "position":
+            var ops = StringOperands()
+            ops.text = Self._as_text(kids[1])
+            return PositionKernel.dispatch(kids[0], ops)
+        if len(kids) == 3:
+            if self._tag == "substr":
+                var ops = StringOperands()
+                ops.start = Self._as_int64(kids[1])
+                ops.count = Self._as_int64(kids[2])
+                return SubstrKernel.dispatch(kids[0], ops)
+            if self._tag == "lpad":
+                var ops = StringOperands()
+                ops.count = Self._as_int64(kids[1])
+                ops.text = Self._as_text(kids[2])
+                return LPadKernel.dispatch(kids[0], ops)
+            if self._tag == "rpad":
+                var ops = StringOperands()
+                ops.count = Self._as_int64(kids[1])
+                ops.text = Self._as_text(kids[2])
+                return RPadKernel.dispatch(kids[0], ops)
+            if self._tag == "replace":
+                var ops = StringOperands()
+                ops.text = Self._as_text(kids[1])
+                ops.alt = Self._as_text(kids[2])
+                return ReplaceKernel.dispatch(kids[0], ops)
+            if self._tag == "split_part":
+                var ops = StringOperands()
+                ops.text = Self._as_text(kids[1])
+                ops.count = Self._as_int64(kids[2])
+                return SplitPartKernel.dispatch(kids[0], ops)
+        return None
+
+    @staticmethod
+    def _as_text(a: DynArray) raises -> StringArray:
+        """An argument operand as `utf8`. Identity for a `utf8` column —
+        `cast` returns the input when the dtypes already agree."""
+        return cast_array(a, DynType(string)).as_string().copy()
+
+    @staticmethod
+    def _as_int64(a: DynArray) raises -> Int64Array:
+        """An argument operand as `int64`, the width `lit(2)` already infers."""
+        return cast_array(a, DynType(int64)).as_int64().copy()
 
     @staticmethod
     def _unified(var arrays: List[DynArray]) raises -> List[DynArray]:
@@ -1228,6 +1361,83 @@ def ilike(var a: RuntimeValue, var pattern: String) -> RuntimeValue:
     return RuntimeValue("ilike", a, Payload(pattern^))
 
 
+# --- the SQL function surface ----------------------------------------------
+#
+# Nine verbs this lane could not spell at all until the arguments stopped being
+# constants: their arguments are children, so `RuntimeValue` already had
+# everywhere to put them. `char_length` and `ascii` are below with the rest of
+# the nullary surface — they take no argument and never needed this.
+#
+# Every one of them is null-propagating in **every** argument position, which
+# is DuckDB's behaviour and the kernels' — see `StringOperands.is_valid`.
+
+
+def substr(
+    var a: RuntimeValue, var start: RuntimeValue, var count: RuntimeValue
+) -> RuntimeValue:
+    """SQL `substr(a, start, count)` — 1-based, counting characters."""
+    return RuntimeValue("substr", [a^, start^, count^])
+
+
+def left(var a: RuntimeValue, var count: RuntimeValue) -> RuntimeValue:
+    """SQL `left(a, count)` — the first `count` characters, or all but the last
+    `|count|` when it is negative."""
+    return RuntimeValue("left", a, count)
+
+
+def right(var a: RuntimeValue, var count: RuntimeValue) -> RuntimeValue:
+    """SQL `right(a, count)` — `left` from the other end."""
+    return RuntimeValue("right", a, count)
+
+
+def lpad(
+    var a: RuntimeValue, var width: RuntimeValue, var fill: RuntimeValue
+) -> RuntimeValue:
+    """SQL `lpad(a, width, fill)` — pad on the left, **truncating** when the
+    input is already longer."""
+    return RuntimeValue("lpad", [a^, width^, fill^])
+
+
+def rpad(
+    var a: RuntimeValue, var width: RuntimeValue, var fill: RuntimeValue
+) -> RuntimeValue:
+    """SQL `rpad(a, width, fill)` — `lpad` from the other end."""
+    return RuntimeValue("rpad", [a^, width^, fill^])
+
+
+def replace(
+    var a: RuntimeValue,
+    var pattern: RuntimeValue,
+    var replacement: RuntimeValue,
+) -> RuntimeValue:
+    """SQL `replace(a, pattern, replacement)` — **every** occurrence,
+    literally. An empty pattern returns the input unchanged."""
+    return RuntimeValue("replace", [a^, pattern^, replacement^])
+
+
+def split_part(
+    var a: RuntimeValue, var sep: RuntimeValue, var index: RuntimeValue
+) -> RuntimeValue:
+    """SQL `split_part(a, sep, index)` — the `index`-th field, 1-based. An
+    index past the last field answers the empty string, not null."""
+    return RuntimeValue("split_part", [a^, sep^, index^])
+
+
+def trim_chars(
+    var a: RuntimeValue, var characters: RuntimeValue
+) -> RuntimeValue:
+    """SQL `trim(a, characters)` — strip any leading or trailing character that
+    is a **member of the set**, not the literal substring."""
+    return RuntimeValue("trim_chars", a, characters)
+
+
+def position(var a: RuntimeValue, var needle: RuntimeValue) -> RuntimeValue:
+    """SQL `position(needle IN a)` — the 1-based character index as `int64`,
+    and **0** when absent. A *null* needle answers null, which is a different
+    fact."""
+    return RuntimeValue("position", a, needle)
+
+
 # ---------------------------------------------------------------------------
 # Temporal
 # ---------------------------------------------------------------------------
@@ -1333,3 +1543,45 @@ def array_length(var a: RuntimeValue) -> RuntimeValue:
     verb.
     """
     return RuntimeValue("array_length", a)
+
+
+def char_length(var a: RuntimeValue) -> RuntimeValue:
+    """SQL `length` — the **character** count, as `int64`, where `length`
+    above is the byte count `octet_length` asks for."""
+    return RuntimeValue("char_length", a)
+
+
+def ascii(var a: RuntimeValue) -> RuntimeValue:
+    """SQL `ascii` — the first character's code point, 0 for the empty
+    string."""
+    return RuntimeValue("ascii", a)
+
+
+def week(var a: RuntimeValue) -> RuntimeValue:
+    """The ISO-8601 week number, 1-53, as `int64`."""
+    return RuntimeValue("week", a)
+
+
+def iso_year(var a: RuntimeValue) -> RuntimeValue:
+    """The ISO-8601 week-numbering year, as `int64` — not always `year`."""
+    return RuntimeValue("iso_year", a)
+
+
+def epoch(var a: RuntimeValue) -> RuntimeValue:
+    """Whole seconds since 1970-01-01, floored, as `int64`."""
+    return RuntimeValue("epoch", a)
+
+
+def last_day(var a: RuntimeValue) -> RuntimeValue:
+    """The last day of this value's month, as `date32`."""
+    return RuntimeValue("last_day", a)
+
+
+def day_name(var a: RuntimeValue) -> RuntimeValue:
+    """The full English weekday name."""
+    return RuntimeValue("day_name", a)
+
+
+def month_name(var a: RuntimeValue) -> RuntimeValue:
+    """The full English month name."""
+    return RuntimeValue("month_name", a)

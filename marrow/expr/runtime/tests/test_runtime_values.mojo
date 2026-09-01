@@ -57,12 +57,20 @@ from ..values import (
     neg,
     not_,
     nullif,
+    lpad,
+    left,
     or_,
+    position,
     quarter,
+    replace,
+    right,
+    split_part,
     sqrt,
     startswith,
     strip,
     sub,
+    substr,
+    trim_chars,
     truediv,
     upper,
     xor,
@@ -539,3 +547,112 @@ def test_runtime_conditionals_leave_a_hopeless_mix_to_the_kernel() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def _text() raises -> RecordBatch:
+    """The SQL string surface's fixture: a comma, no comma, and a null."""
+    var sb = StringBuilder(3)
+    sb.append("alpha,beta")
+    sb.append("gamma")
+    sb.append_null()
+    return record_batch(
+        [sb.finish().to_dyn(), array([2, 1, 1], int64).copy()],
+        names=["s", "n"],
+    )
+
+
+def test_runtime_sql_string_functions_are_reachable() raises:
+    """All nine argument-taking string functions, in the lane that could not
+    spell one of them while their arguments were constants on the node.
+
+    This is the whole point of the operand carrier: a `RuntimeValue` has
+    nowhere to put a constant a kernel takes directly, and it has always had
+    somewhere to put a child.
+    """
+    var b = _text()
+
+    var sub_ = (
+        _over(b, substr(column("s"), _lit(1), _lit(5))).as_string().copy()
+    )
+    assert_equal(sub_[0].value(), "alpha")
+    assert_true(sub_.is_null(2))
+
+    var l = _over(b, left(column("s"), _lit(5))).as_string().copy()
+    assert_equal(l[0].value(), "alpha")
+
+    var r = _over(b, right(column("s"), _lit(4))).as_string().copy()
+    assert_equal(r[0].value(), "beta")
+
+    var lp = _over(b, lpad(column("s"), _lit(12), _str("*"))).as_string().copy()
+    assert_equal(lp[0].value(), "**alpha,beta")
+
+    var rep = (
+        _over(b, replace(column("s"), _str(","), _str("-"))).as_string().copy()
+    )
+    assert_equal(rep[0].value(), "alpha-beta")
+
+    var sp = (
+        _over(b, split_part(column("s"), _str(","), _lit(2))).as_string().copy()
+    )
+    assert_equal(sp[0].value(), "beta")
+
+    # Both ends: the trailing "a" of "beta" is a set member too.
+    var tr = _over(b, trim_chars(column("s"), _str("aplh"))).as_string().copy()
+    assert_equal(tr[0].value(), ",bet")
+
+    var pos = _over(b, position(column("s"), _str(","))).as_int64().copy()
+    assert_equal(Int(pos[0].value()), 6)
+    assert_equal(Int(pos[1].value()), 0)
+    assert_true(pos.is_null(2))
+
+
+def test_runtime_sql_string_arguments_can_be_columns() raises:
+    """`substr(s, 1, n)` with `n` a column — the expression the constants
+    version had no way to build in either lane."""
+    var b = _text()
+    var got = (
+        _over(b, substr(column("s"), _lit(1), column("n"))).as_string().copy()
+    )
+    assert_equal(got[0].value(), "al")
+    assert_equal(got[1].value(), "g")
+    assert_true(got.is_null(2))
+
+
+def test_runtime_sql_string_null_argument_nulls_the_row() raises:
+    """A null argument makes the row null, as DuckDB does — and only its own
+    row, which is what separates it from a null constant."""
+    var nb = Int64Builder(capacity=3)
+    nb.append(Int64(2))
+    nb.append_null()
+    nb.append(Int64(2))
+    var b = record_batch(
+        [
+            array(["abc", "abc", "abc"]).to_dyn(),
+            nb.finish().to_dyn(),
+        ],
+        names=["s", "n"],
+    )
+    var got = _over(b, left(column("s"), column("n"))).as_string().copy()
+    assert_equal(got[0].value(), "ab")
+    assert_true(got.is_null(1))
+    assert_equal(got[2].value(), "ab")
+
+
+def test_runtime_sql_string_arguments_promote_their_width() raises:
+    """An `int32` count reaches an `int64` slot: this lane normalises operands
+    with `cast`, as `_arith` and `_compare` already do, so the carrier is
+    instantiated once rather than per integer width."""
+    var b = record_batch(
+        [
+            array(["abcde"]).to_dyn(),
+            array([3], int32).to_dyn(),
+        ],
+        names=["s", "n"],
+    )
+    var got = _over(b, left(column("s"), column("n"))).as_string().copy()
+    assert_equal(got[0].value(), "abc")
+
+
+def _str(var v: String) -> RuntimeValue:
+    """A string literal operand — `lit` for the string half."""
+    return literal(DynScalar(StringScalar(v^)))

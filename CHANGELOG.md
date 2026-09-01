@@ -56,6 +56,59 @@
   one since the operator was written and **never read it**, so key hashing ran
   on the calling thread no matter what the caller asked for; that alone
   stripes now, on both paths.
+- **The SQL string functions take their arguments as expressions**
+  (`marrow/kernels/string.mojo`, `marrow/expr/comptime/strings.mojo`,
+  `marrow/expr/runtime/values.mojo`). `substr(s, col("from"), col("len"))`,
+  `lpad(s, width_col, fill_col)`, `replace(s, pat_col, repl_col)` and the rest
+  now work, and all nine reach the **runtime lane** for the first time — so a
+  Python frontend can call them.
+
+  `StringArgs` stopped being the function's *configuration* — four constants
+  the caller filled in once — and became **one row's arguments**. Every
+  `transform` body is byte-for-byte unchanged; what replaced the constants is
+  `StringOperands`, the same four slots holding the columns each argument
+  evaluated to, with `args(i)` cutting a row out and `is_valid(i)` answering
+  whether that row has one. The node families follow: `StringArgUnary` was not
+  unary and is now `StringFunction[K, A, T, U, S, C]`, four typed operand slots
+  with the kernel declaring which it reads (`uses_text` … `uses_count`), so an
+  unused slot is never bound, never materialised and never printed;
+  `StringMeasure` gains the one needle slot its kernels read.
+
+  **Null propagation is new, and is a correctness fix.** A null in *any*
+  argument position makes the row null — `substring('abc', NULL, 2)`,
+  `lpad('x', 5, NULL)`, `position(NULL IN 'abc')` — matching DuckDB, checked
+  against it directly. Constants could never be null, so the case did not
+  previously exist.
+
+  The literal spellings are unchanged: `substr(s, 2, 3)` still compiles to one
+  node, because a literal operand stays `Shape.scalar` and broadcasts once per
+  batch, which the breaker's `bind` was already doing for its subject.
+
+- **The SQL string and temporal function surface** (`marrow/kernels/string.mojo`,
+  `marrow/kernels/temporal.mojo`, `marrow/expr/comptime/{strings,temporal}.mojo`).
+  Thirteen string verbs — `substr`, `left`, `right`, `lpad`, `rpad`, `replace`,
+  `split_part`, `strip(chars)`, `char_length`, `position`, `ascii`, `repeat`
+  over a count column, and `||` — plus five temporal ones: `week`, `iso_year`,
+  `last_day`, `day_name`, `month_name`. Every string function counts
+  **characters**, where `LengthKernel` counts bytes: SQL's `length` and
+  `octet_length` are different questions and marrow could only answer the
+  second. Scalar loops throughout, over one `_char_bounds` helper — this is
+  coverage, not throughput.
+
+  Two node shapes carry the lot: `StringFunction` (`string -> string`) and
+  `StringMeasure` (`string -> int64`). Both took their arguments as a
+  `StringArgs` **field of constants** when they landed; see the entry above for
+  why that was the wrong shape and what replaced it.
+
+  The edge cases are the point, and several are ones a natural implementation
+  gets wrong: `substr` with a start below 1 lets the count absorb the clipped
+  characters (`substr('abc', 0, 2)` is `'a'`); `position` of an **empty needle**
+  is 1, not 0; `replace` with an empty pattern is the identity rather than an
+  infinite loop (which is what Arrow C++'s `replace_substring` still does);
+  `lpad` **truncates** when the input is already longer, and cannot pad at all
+  with an empty fill; `left`/`right` with a negative count trim the other end;
+  and ISO week numbering disagrees with `year` at the boundary — `2021-01-01`
+  is week 53 of ISO year **2020**.
 
 - **A plan optimizer: twelve rules and a column-pruning pass**
   (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
@@ -78,6 +131,22 @@
   `TopN` finally passes the `limit=` that `sort_indices` has always accepted
   and `SortOperator` never sent — on the primary-key pass only, since the
   multi-key decomposition needs full permutations to compose.
+
+### Refactors
+
+- **`marrow/kernels/string.mojo`: the last behaviour flag and the loose UTF-8
+  primitives.** `_pad(s, args, left: Bool)` tested a runtime flag per row to
+  pick between two concatenation orders it cannot vary within a call; it is now
+  `Pad[left: Bool]` with `LPadKernel = Pad[True]` / `RPadKernel = Pad[False]`,
+  the shape `_match_pattern[T, ignore_case]` already used for LIKE and ILIKE.
+  No call site outside the file changed. It was the file's **only** runtime
+  `Bool` behaviour flag.
+
+  The six character-vs-byte primitives — `_utf8_width`, `_char_bounds`,
+  `_char_count`, `_byte_slice`, `_find_bytes`, `_charset_has`, about thirty
+  call sites between them — are now `Utf8.width` / `.bounds` / `.count` /
+  `.slice` / `.find` / `.charset_has`. Same signatures, same bodies; the layer
+  that made `length` and `char_length` different functions now has a name.
 
 ### Fixes
 
