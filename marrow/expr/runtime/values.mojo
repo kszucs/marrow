@@ -119,6 +119,7 @@ from ...kernels.string import (
     PositionKernel,
     RPadKernel,
     RStripKernel,
+    RepeatKernel,
     ReplaceKernel,
     ReverseKernel,
     RightKernel,
@@ -773,6 +774,10 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             var ops = StringOperands()
             ops.count = Self._as_int64(kids[1])
             return RightKernel.dispatch(kids[0], ops)
+        if self._tag == "repeat":
+            var ops = StringOperands()
+            ops.count = Self._as_int64(kids[1])
+            return RepeatKernel.dispatch(kids[0], ops)
         if self._tag == "trim_chars":
             var ops = StringOperands()
             ops.text = Self._as_text(kids[1])
@@ -1388,6 +1393,12 @@ def left(var a: RuntimeValue, var count: RuntimeValue) -> RuntimeValue:
 def right(var a: RuntimeValue, var count: RuntimeValue) -> RuntimeValue:
     """SQL `right(a, count)` — `left` from the other end."""
     return RuntimeValue("right", a, count)
+
+
+def repeat(var a: RuntimeValue, var count: RuntimeValue) -> RuntimeValue:
+    """SQL `repeat(a, count)` — `a` concatenated `count` times. Zero and
+    negative counts both give the empty string."""
+    return RuntimeValue("repeat", a, count)
 
 
 def lpad(

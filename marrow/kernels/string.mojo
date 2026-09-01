@@ -1014,23 +1014,30 @@ struct ILikeKernel(StringPredicateKernel):
 # ---------------------------------------------------------------------------
 #
 # `substr`, `left`, `right`, `lpad`, `rpad`, `replace`, `split_part`,
-# `trim(chars)`, `position`, `char_length`, `ascii`. Two shapes — `string ->
-# string` and `string -> int64` — each reading one `StringArgs` **per row**.
+# `trim(chars)`, `repeat`, `position`, `char_length`, `ascii`.
 #
-# `StringArgs` used to be the function's *configuration*: four constants the
-# caller filled in once. That made `substr(s, 2, 3)` writable and
-# `substr(s, start_col, len_col)` unrepresentable, which is the wrong shape —
-# these are binary and ternary SQL functions over expressions that merely
-# happen to be literals at most call sites. It is also what kept every one of
-# them out of the runtime lane, since a constant has nowhere to come from
-# there.
+# **Each of these states its own signature.** `substr(s, start: Int, count:
+# Int)`, `replace(s, needle: StringSlice, repl: StringSlice)`,
+# `lpad(s, width: Int, fill: StringSlice)` — nine kernels across eight
+# signatures, so eight traits, several with a single conformer. That is the
+# honest arrangement and it was arrived at twice from the wrong end.
 #
-# `StringOperands` is the fix: the same four slots holding the *columns* each
-# argument evaluated to, `args(i)` cutting the row out of them and `is_valid(i)`
-# answering whether that row has one. A literal argument broadcasts into a
-# column exactly as `Datum.to_array` already broadcasts one, and the kernels
-# below are untouched — `transform` still reads a `StringArgs` and knows
-# nothing about where it came from.
+# The first version made the arguments *constants* on a four-field `StringArgs`
+# the caller filled in once. `substr(s, 2, 3)` was writable and
+# `substr(s, start_col, len_col)` was not, and none of the family could reach
+# the runtime lane at all, because a constant has nowhere to come from there.
+#
+# The second kept `StringArgs` but rebuilt it per row out of operand columns.
+# That fixed representability and cost a `String` heap copy per row per string
+# argument — usually one literal, copied once for every row in the batch — and
+# it left six different signatures sharing one `transform(s, args)` with a
+# docstring explaining which fields each of them ignored.
+#
+# What survives is `StringOperands`: the *node's* carrier of the operand
+# columns, filled once per batch. It never reaches `transform`. Each `apply`
+# reads the slots its own signature names and passes them positionally, and a
+# string argument goes in as a `StringSlice` borrowed straight out of its
+# column — no copy.
 #
 # **Every one of these counts characters, not bytes**, which is the whole
 # reason they are here: `LengthKernel` already answers the byte question and
@@ -1041,63 +1048,26 @@ struct ILikeKernel(StringPredicateKernel):
 # that nearly does.
 
 
-struct StringArgs(Copyable, ImplicitlyCopyable, Movable, Writable):
-    """One row's arguments to a parameterised string kernel.
-
-    One struct for the whole family rather than one per kernel: the alternative
-    is eleven near-identical two-field structs and eleven node types to carry
-    them, and no kernel here needs a field the others cannot spare. Each kernel
-    declares which fields it reads — see `StringArgKernel.uses_text` and its
-    three siblings — and ignores the rest.
-    """
-
-    var text: String
-    """The needle, pattern, fill, separator or character set."""
-    var alt: String
-    """The replacement — `replace` alone reads it."""
-    var start: Int
-    """`substr`'s 1-based start position."""
-    var count: Int
-    """A length, width, repeat count or field index."""
-
-    def __init__(
-        out self,
-        var text: String = String(),
-        var alt: String = String(),
-        start: Int = 0,
-        count: Int = 0,
-    ):
-        self.text = text^
-        self.alt = alt^
-        self.start = start
-        self.count = count
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(
-            "StringArgs('",
-            self.text,
-            "', '",
-            self.alt,
-            "', ",
-            self.start,
-            ", ",
-            self.count,
-            ")",
-        )
-
-
 struct StringOperands[
     T: StringLikeType = StringType,
     A: StringLikeType = StringType,
     S: PrimitiveType = Int64Type,
     C: PrimitiveType = Int64Type,
 ](Copyable, Movable, Writable):
-    """`StringArgs`' four slots, each holding the **column** its argument
-    evaluated to rather than a constant.
+    """The **columns** each argument of a SQL string function evaluated to.
 
-    An absent slot is `None` and reads as `StringArgs`' own default — that is
-    what lets one carrier serve `substr` (two numeric slots), `replace` (two
-    string slots), `lpad` (one of each) and `char_length` (none at all).
+    Four slots because that is how many distinct arguments the family has
+    between them, not because any one kernel reads four: `substr` reads
+    `start` and `count`, `replace` reads `text` and `alt`, `lpad` one of each,
+    `char_length` none. An absent slot is `None`.
+
+    This is the *node's* carrier — the thing a breaker's `bind` fills once per
+    batch. It is not a per-row argument bundle: each kernel's `apply` reaches
+    into exactly the slots its own signature names and hands them positionally
+    to a `transform` that never sees this struct. The bundle that used to sit
+    between them (`StringArgs`, four constants) is gone; it forced a
+    `String(...)` heap copy per row for a `text` operand that is usually one
+    literal repeated, and it let six different signatures pretend to be one.
 
     **Four type parameters, all defaulted, so no operand is ever cast.** The
     comptime lane knows each operand's type at compile time and fills the
@@ -1123,23 +1093,6 @@ struct StringOperands[
         self.start = None
         self.count = None
 
-    def args(self, i: Int) -> StringArgs:
-        """Row `i` of every present slot, as the kernels' per-row arguments.
-
-        A slot the caller left empty keeps `StringArgs`' default, so a kernel
-        that never reads it cannot tell the difference.
-        """
-        var out = StringArgs()
-        if self.text:
-            out.text = String(self.text.value().unsafe_get(UInt(i)))
-        if self.alt:
-            out.alt = String(self.alt.value().unsafe_get(UInt(i)))
-        if self.start:
-            out.start = Int(self.start.value().values().unsafe_get(i))
-        if self.count:
-            out.count = Int(self.count.value().values().unsafe_get(i))
-        return out^
-
     def is_valid(self, i: Int) -> Bool:
         """Whether every present slot has a value at row `i`.
 
@@ -1149,6 +1102,10 @@ struct StringOperands[
         never be null, so the case did not exist before and no kernel body has
         to learn about it: `apply` skips the row exactly as it skips a null
         input string.
+
+        Every *present* slot, not every slot the kernel reads: a caller that
+        fills one the kernel ignores gets it counted here too, which is
+        harmless because the node fills exactly the slots `uses_*` names.
         """
         var ok = True
         if self.text:
@@ -1175,36 +1132,134 @@ struct StringOperands[
         )
 
 
-# -- string -> string, configured ------------------------------------------
+# -- string -> string: one trait per signature ------------------------------
+#
+# Six shapes for nine kernels, several with a single conformer. That is the
+# accepted cost of deleting `StringArgs`: `(str,int)`, `(str,str)`,
+# `(str,int,int)`, `(str,int,str)`, `(str,str,str)` and `(str,str,int)` really
+# are six different functions, and one `transform(s, args)` was six signatures
+# pretending to be one.
+#
+# **The shape traits declare `transform` and nothing else.** They do not extend
+# `StringArgKernel`, and they supply no defaults. That is not a style choice —
+# **a trait method whose default lives in a sub-trait crashes the compiler when
+# it is called through the base.** Both callers hit it: a base-trait `dispatch`
+# default whose closure calls `Self.apply`, and `StringFunction[K:
+# StringArgKernel]` calling `Self.K.apply`. Exit 139, no source location, no
+# note. `mojo precompile marrow` reports 0 errors / 0 warnings throughout,
+# because the crash needs the instantiation; `pytest golden` reports it as
+# `exit code 0`, because `conftest`'s `libmarrow.so` build raises
+# `_pytest.outcomes.Exit` before a single case runs. Bisected twice.
+#
+# So the arrangement is the one that was already proved safe: the loop lives in
+# a free generic function per shape, and each concrete kernel supplies its own
+# three-line `apply` calling it. Every default a kernel inherits comes from
+# `StringArgKernel` itself, never from a layer above it.
+#
+# A string argument arrives as a `StringSlice` borrowed straight out of its
+# column: a bare `StringSlice` parameter takes its own inferred origin, so
+# nothing is cast and nothing is copied. Naming the argument type on the trait
+# instead — `comptime Arg: AnyType` — compiles, and then rejects every real
+# call site; see the note on `StringIntKernel`.
+
+
+trait StringIntKernel:
+    """`string x int -> string` — `left`, `right`, `repeat`.
+
+    Three conformers, which is why this shape earns a trait of its own rather
+    than three near-identical ones.
+
+    **On why the argument is a written-out parameter and not an associated
+    type.** One trait carrying `comptime Arg: AnyType` would have collapsed
+    this shape and `StringStrKernel` into one. It declares fine and even
+    resolves through a generic — and then rejects every real call, because the
+    argument always borrows from a column the caller owns:
+
+        error: invalid call to 'drive': value passed to 'a' cannot be converted
+        from 'StringSpan[origin_of(owned)]' to 'TakesSlice.Arg'
+
+    A concrete origin does not widen to `ImmutAnyOrigin`, and closing that gap
+    needs `unsafe_origin_cast`, which this codebase does not use. A written-out
+    parameter takes its own inferred origin and costs nothing.
+    """
+
+    @staticmethod
+    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
+        ...
+
+
+trait StringStrKernel:
+    """`string x string -> string` — `trim(chars)`."""
+
+    @staticmethod
+    def transform[o: Origin](s: StringSlice[o], text: StringSlice) -> String:
+        ...
+
+
+trait StringIntIntKernel:
+    """`string x int x int -> string` — `substr`."""
+
+    @staticmethod
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], start: Int, count: Int) -> String:
+        ...
+
+
+trait StringIntStrKernel:
+    """`string x int x string -> string` — `lpad`, `rpad`.
+
+    The width comes before the fill because SQL writes `lpad(s, width, fill)`.
+    """
+
+    @staticmethod
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], width: Int, fill: StringSlice) -> String:
+        ...
+
+
+trait StringStrStrKernel:
+    """`string x string x string -> string` — `replace`."""
+
+    @staticmethod
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], needle: StringSlice, repl: StringSlice) -> String:
+        ...
+
+
+trait StringStrIntKernel:
+    """`string x string x int -> string` — `split_part`."""
+
+    @staticmethod
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], sep: StringSlice, index: Int) -> String:
+        ...
 
 
 trait StringArgKernel(Kernel):
-    """Element-wise `string -> string` over a `StringOperands`.
+    """What `StringFunction` needs of a kernel: columns in, a column out.
 
-    The argument-taking counterpart of `StringMapKernel`: concrete kernels
-    define `transform` plus the four `uses_*` constants, and the
-    null-propagating `apply` and the type-erased `dispatch` are defaulted here
-    exactly as they are there.
+    Deliberately says nothing about arity — that is the shape traits' job. What
+    it does carry is which operand slots the kernel reads, because the *node*
+    needs that before it evaluates anything: `comptime if Self.K.uses_text`
+    keeps an unused operand from being bound, materialised or printed.
 
-    **The `uses_*` constants are read by the expression node, not by `apply`.**
-    A node carries an operand per slot and only the ones its kernel names are
-    evaluated, so `left(s, n)` never materialises the string slot it does not
-    have. Stating it on the kernel is what keeps that knowledge in the one
-    place that has it — `transform` is the code that reads the fields.
+    Every conformer implements `apply` itself, in three lines, by calling the
+    free `_map_*` for its shape. See the note above for why that cannot be a
+    sub-trait default.
     """
 
     comptime uses_text: Bool
-    """Whether `transform` reads `args.text`."""
+    """Whether `apply` reads `ops.text`."""
     comptime uses_alt: Bool
-    """Whether `transform` reads `args.alt`."""
+    """Whether `apply` reads `ops.alt`."""
     comptime uses_start: Bool
-    """Whether `transform` reads `args.start`."""
+    """Whether `apply` reads `ops.start`."""
     comptime uses_count: Bool
-    """Whether `transform` reads `args.count`."""
-
-    @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
-        ...
+    """Whether `apply` reads `ops.count`."""
 
     @staticmethod
     def apply[
@@ -1217,16 +1272,8 @@ trait StringArgKernel(Kernel):
     ](
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> BinaryLikeArray[T]:
-        var n = len(array)
-        var builder = BinaryLikeBuilder[T](capacity=n)
-        for i in range(n):
-            if array.is_valid(i) and ops.is_valid(i):
-                builder.append(
-                    Self.transform(array.unsafe_get(UInt(i)), ops.args(i))
-                )
-            else:
-                builder.append_null()
-        return builder.finish()
+        """Null-propagating map over `array` and the slots this kernel reads."""
+        ...
 
     @staticmethod
     def dispatch[
@@ -1245,7 +1292,196 @@ trait StringArgKernel(Kernel):
         return dt.dispatch_stringlike(leaf)
 
 
-struct SubstrKernel(StringArgKernel):
+# -- the loops, one per shape -----------------------------------------------
+#
+# Each reads exactly the slots its shape names, raising rather than aborting if
+# the node failed to fill one, and skips a row whose input string or whose
+# arguments are null. That null rule is the whole of `StringOperands.is_valid`
+# and no `transform` body has to know about it.
+
+
+def _map_int[
+    K: StringIntKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> BinaryLikeArray[T]:
+    if not ops.count:
+        raise Error("missing operand: count")
+    ref counts = ops.count.value()
+    var n = len(array)
+    var builder = BinaryLikeBuilder[T](capacity=n)
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            builder.append(
+                K.transform(
+                    array.unsafe_get(UInt(i)),
+                    Int(counts.values().unsafe_get(i)),
+                )
+            )
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+def _map_str[
+    K: StringStrKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> BinaryLikeArray[T]:
+    if not ops.text:
+        raise Error("missing operand: text")
+    ref text = ops.text.value()
+    var n = len(array)
+    var builder = BinaryLikeBuilder[T](capacity=n)
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            builder.append(
+                K.transform(array.unsafe_get(UInt(i)), text.unsafe_get(UInt(i)))
+            )
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+def _map_int_int[
+    K: StringIntIntKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> BinaryLikeArray[T]:
+    if not ops.start:
+        raise Error("missing operand: start")
+    if not ops.count:
+        raise Error("missing operand: count")
+    ref starts = ops.start.value()
+    ref counts = ops.count.value()
+    var n = len(array)
+    var builder = BinaryLikeBuilder[T](capacity=n)
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            builder.append(
+                K.transform(
+                    array.unsafe_get(UInt(i)),
+                    Int(starts.values().unsafe_get(i)),
+                    Int(counts.values().unsafe_get(i)),
+                )
+            )
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+def _map_int_str[
+    K: StringIntStrKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> BinaryLikeArray[T]:
+    if not ops.count:
+        raise Error("missing operand: count")
+    if not ops.text:
+        raise Error("missing operand: text")
+    ref widths = ops.count.value()
+    ref fills = ops.text.value()
+    var n = len(array)
+    var builder = BinaryLikeBuilder[T](capacity=n)
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            builder.append(
+                K.transform(
+                    array.unsafe_get(UInt(i)),
+                    Int(widths.values().unsafe_get(i)),
+                    fills.unsafe_get(UInt(i)),
+                )
+            )
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+def _map_str_str[
+    K: StringStrStrKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> BinaryLikeArray[T]:
+    if not ops.text:
+        raise Error("missing operand: text")
+    if not ops.alt:
+        raise Error("missing operand: alt")
+    ref needles = ops.text.value()
+    ref repls = ops.alt.value()
+    var n = len(array)
+    var builder = BinaryLikeBuilder[T](capacity=n)
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            builder.append(
+                K.transform(
+                    array.unsafe_get(UInt(i)),
+                    needles.unsafe_get(UInt(i)),
+                    repls.unsafe_get(UInt(i)),
+                )
+            )
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+def _map_str_int[
+    K: StringStrIntKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> BinaryLikeArray[T]:
+    if not ops.text:
+        raise Error("missing operand: text")
+    if not ops.count:
+        raise Error("missing operand: count")
+    ref seps = ops.text.value()
+    ref indices = ops.count.value()
+    var n = len(array)
+    var builder = BinaryLikeBuilder[T](capacity=n)
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            builder.append(
+                K.transform(
+                    array.unsafe_get(UInt(i)),
+                    seps.unsafe_get(UInt(i)),
+                    Int(indices.values().unsafe_get(i)),
+                )
+            )
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+struct SubstrKernel(StringArgKernel, StringIntIntKernel):
     """SQL `substr(s, start, count)` — **1-based**, counting characters.
 
     `start` below 1 is not clamped to 1: the window still ends at
@@ -1262,11 +1498,13 @@ struct SubstrKernel(StringArgKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], start: Int, count: Int) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
-        var first = args.start - 1  # 0-based, may be negative
-        var last = first + args.count  # exclusive
+        var first = start - 1  # 0-based, may be negative
+        var last = first + count  # exclusive
         if first < 0:
             first = 0
         if last < 0:
@@ -1277,8 +1515,21 @@ struct SubstrKernel(StringArgKernel):
             last = chars
         return Utf8.slice(s, bounds[first], bounds[last])
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_int_int[Self](array, ops)
 
-struct LeftKernel(StringArgKernel):
+
+struct LeftKernel(StringArgKernel, StringIntKernel):
     """SQL `left(s, count)` — the first `count` characters.
 
     A negative `count` means "all but the last `|count|`", which is DuckDB's
@@ -1292,18 +1543,31 @@ struct LeftKernel(StringArgKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
+    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
-        var take = args.count if args.count >= 0 else chars + args.count
+        var take = count if count >= 0 else chars + count
         if take < 0:
             take = 0
         if take > chars:
             take = chars
         return Utf8.slice(s, bounds[0], bounds[take])
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_int[Self](array, ops)
 
-struct RightKernel(StringArgKernel):
+
+struct RightKernel(StringArgKernel, StringIntKernel):
     """SQL `right(s, count)` — the last `count` characters.
 
     A negative `count` means "all but the first `|count|`", the mirror of
@@ -1317,19 +1581,72 @@ struct RightKernel(StringArgKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
+    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
-        var skip = chars - args.count if args.count >= 0 else -args.count
+        var skip = chars - count if count >= 0 else -count
         if skip < 0:
             skip = 0
         if skip > chars:
             skip = chars
         return Utf8.slice(s, bounds[skip], bounds[chars])
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_int[Self](array, ops)
 
-struct Pad[left: Bool](StringArgKernel):
-    """SQL `lpad`/`rpad(s, count, text)` — pad to `count` characters.
+
+struct RepeatKernel(StringArgKernel, StringIntKernel):
+    """SQL `repeat(s, n)` — `s` concatenated `n` times.
+
+    Zero and negative counts both answer the empty string — DuckDB's reading;
+    several engines raise on a negative instead.
+
+    It shares `StringIntKernel` with `left` and `right` because it *is* that
+    signature. It used to stand apart with its own `apply(array, counts)`,
+    which was the only way to say "this argument is a column" while the rest of
+    the family carried constants. Now that every argument is a column, the
+    exception has nothing to be an exception to.
+    """
+
+    comptime name = "repeat"
+    comptime uses_text = False
+    comptime uses_alt = False
+    comptime uses_start = False
+    comptime uses_count = True
+
+    @staticmethod
+    def transform[o: Origin](s: StringSlice[o], count: Int) -> String:
+        var out = String()
+        for _ in range(count):
+            out += s
+        return out^
+
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_int[Self](array, ops)
+
+
+struct Pad[left: Bool](StringArgKernel, StringIntStrKernel):
+    """SQL `lpad`/`rpad(s, width, fill)` — pad to `width` characters.
 
     **The side is a comptime parameter, not a flag.** `_pad(s, args, left)`
     tested a `Bool` argument on every row to choose between two concatenation
@@ -1351,25 +1668,26 @@ struct Pad[left: Bool](StringArgKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], width: Int, fill: StringSlice) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
-        var width = args.count
-        if width < 0:
-            width = 0
-        if chars >= width:
+        var w = width
+        if w < 0:
+            w = 0
+        if chars >= w:
             # Truncation keeps the *first* `width` characters whichever end the
             # padding would have gone on — `rpad` does not truncate from the
             # left.
-            return Utf8.slice(s, bounds[0], bounds[width])
-        var fill = StringSlice(args.text)
+            return Utf8.slice(s, bounds[0], bounds[w])
         var fb = Utf8.bounds(fill)
         var fchars = len(fb) - 1
         if fchars == 0:
             return String(s)  # nothing to pad with
         var pad = String()
         var k = 0
-        while k < width - chars:
+        while k < w - chars:
             pad += Utf8.slice(fill, fb[k % fchars], fb[k % fchars + 1])
             k += 1
         comptime if Self.left:
@@ -1377,15 +1695,28 @@ struct Pad[left: Bool](StringArgKernel):
         else:
             return String(s) + pad
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_int_str[Self](array, ops)
+
 
 comptime LPadKernel = Pad[True]
 comptime RPadKernel = Pad[False]
 
 
-struct ReplaceKernel(StringArgKernel):
-    """SQL `replace(s, text, alt)` — **every** occurrence, literally.
+struct ReplaceKernel(StringArgKernel, StringStrStrKernel):
+    """SQL `replace(s, needle, repl)` — **every** occurrence, literally.
 
-    An empty `text` returns the input unchanged rather than interleaving the
+    An empty `needle` returns the input unchanged rather than interleaving the
     replacement between every character, which is both what DuckDB does and the
     only reading that terminates.
     """
@@ -1397,9 +1728,11 @@ struct ReplaceKernel(StringArgKernel):
     comptime uses_count = False
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
-        var needle = StringSlice(args.text)
-        if len(needle.as_bytes()) == 0:
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], needle: StringSlice, repl: StringSlice) -> String:
+        var m = len(needle.as_bytes())
+        if m == 0:
             return String(s)
         var out = String()
         var n = len(s.as_bytes())
@@ -1409,14 +1742,27 @@ struct ReplaceKernel(StringArgKernel):
             if j < 0:
                 break
             out += Utf8.slice(s, i, j)
-            out += args.alt
-            i = j + len(needle.as_bytes())
+            out += repl
+            i = j + m
         out += Utf8.slice(s, i, n)
         return out^
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_str_str[Self](array, ops)
 
-struct SplitPartKernel(StringArgKernel):
-    """SQL `split_part(s, text, count)` — the `count`-th field, **1-based**.
+
+struct SplitPartKernel(StringArgKernel, StringStrIntKernel):
+    """SQL `split_part(s, sep, index)` — the `index`-th field, **1-based**.
 
     An index past the last field answers the **empty string**, not null: that
     is DuckDB's choice and the one this kernel is written against. An index
@@ -1432,18 +1778,19 @@ struct SplitPartKernel(StringArgKernel):
     comptime uses_count = True
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
-        if args.count < 1:
+    def transform[
+        o: Origin
+    ](s: StringSlice[o], sep: StringSlice, index: Int) -> String:
+        if index < 1:
             return String()
-        var sep = StringSlice(args.text)
         var m = len(sep.as_bytes())
         var n = len(s.as_bytes())
         if m == 0:
             # No separator, so the whole string is the one and only field.
-            return String(s) if args.count == 1 else String()
+            return String(s) if index == 1 else String()
         var start = 0
         var part = 1
-        while part < args.count:
+        while part < index:
             var j = Utf8.find(s, sep, start)
             if j < 0:
                 return String()  # fewer fields than asked for
@@ -1452,10 +1799,23 @@ struct SplitPartKernel(StringArgKernel):
         var j = Utf8.find(s, sep, start)
         return Utf8.slice(s, start, j if j >= 0 else n)
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_str_int[Self](array, ops)
 
-struct TrimCharsKernel(StringArgKernel):
-    """SQL `trim(s, text)` — strip any leading or trailing character that is a
-    **member of the set** `text`, not the literal substring `text`.
+
+struct TrimCharsKernel(StringArgKernel, StringStrKernel):
+    """SQL `trim(s, chars)` — strip any leading or trailing character that is a
+    **member of the set** `chars`, not the literal substring `chars`.
 
     The set is compared code point by code point, so a multi-byte member never
     matches part of a multi-byte character. An empty set strips nothing.
@@ -1468,41 +1828,68 @@ struct TrimCharsKernel(StringArgKernel):
     comptime uses_count = False
 
     @staticmethod
-    def transform[o: Origin](s: StringSlice[o], args: StringArgs) -> String:
+    def transform[o: Origin](s: StringSlice[o], text: StringSlice) -> String:
         var bounds = Utf8.bounds(s)
         var chars = len(bounds) - 1
-        var set = StringSlice(args.text)
         var lo = 0
         while lo < chars and Utf8.charset_has(
-            set, s, bounds[lo], bounds[lo + 1]
+            text, s, bounds[lo], bounds[lo + 1]
         ):
             lo += 1
         var hi = chars
-        while hi > lo and Utf8.charset_has(set, s, bounds[hi - 1], bounds[hi]):
+        while hi > lo and Utf8.charset_has(text, s, bounds[hi - 1], bounds[hi]):
             hi -= 1
         return Utf8.slice(s, bounds[lo], bounds[hi])
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> BinaryLikeArray[T]:
+        return _map_str[Self](array, ops)
 
-# -- string -> int64, configured -------------------------------------------
+
+# -- string -> int64: one trait per signature -------------------------------
+#
+# The same split at the other return type, and the same rule about defaults:
+# the shape traits declare `measure` only, the loops are free functions, and
+# each kernel writes its own `apply`.
+#
+# `int64` rather than the `int32` `LengthKernel` answers with, because these
+# are the SQL spellings and SQL's `length` / `position` / `ascii` are `BIGINT`.
+# A null input measures null — never 0, which is the answer for the *empty*
+# string and a different fact. A null **argument** measures null too:
+# `position(NULL IN 'abc')` is NULL in DuckDB, not 0.
+
+
+trait StringToIntKernel:
+    """`string -> int64` — `char_length`, `ascii`."""
+
+    @staticmethod
+    def measure[o: Origin](s: StringSlice[o]) -> Int64:
+        ...
+
+
+trait StringStrToIntKernel:
+    """`string x string -> int64` — `position`."""
+
+    @staticmethod
+    def measure[o: Origin](s: StringSlice[o], needle: StringSlice) -> Int64:
+        ...
 
 
 trait StringMeasureKernel(Kernel):
-    """Element-wise `string -> int64` over a `StringOperands`.
-
-    `int64` rather than the `int32` `LengthKernel` answers with, because these
-    are the SQL spellings and SQL's `length` / `position` / `ascii` are
-    `BIGINT`. A null input measures null — never 0, which is the answer for the
-    *empty* string and a different fact. A null **argument** measures null too,
-    for the same reason and by the same rule: `position(NULL IN 'abc')` is NULL
-    in DuckDB, not 0.
-    """
+    """What `StringMeasure` needs of a kernel: columns in, an `int64` column
+    out. `StringArgKernel`, one return type over."""
 
     comptime uses_text: Bool
-    """Whether `measure` reads `args.text`."""
-
-    @staticmethod
-    def measure[o: Origin](s: StringSlice[o], args: StringArgs) -> Int64:
-        ...
+    """Whether `apply` reads `ops.text`."""
 
     @staticmethod
     def apply[
@@ -1515,36 +1902,7 @@ trait StringMeasureKernel(Kernel):
     ](
         array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
     ) raises -> Int64Array:
-        var n = len(array)
-        var out = Buffer.alloc_uninit[DType.int64](n)
-        var dst = out.view[DType.int64](0, n)
-        # A null *argument* now makes the row null too, so the input's own
-        # bitmap is no longer the answer and `_passthrough_validity` no longer
-        # applies -- the two have to meet, which the same loop does for free.
-        var valid = Bitmap.alloc_zeroed(n)
-        var nulls = 0
-        for i in range(n):
-            if array.is_valid(i) and ops.is_valid(i):
-                dst.unsafe_set(
-                    i, Self.measure(array.unsafe_get(UInt(i)), ops.args(i))
-                )
-                valid.unsafe_set(i)
-            else:
-                dst.unsafe_set(i, Int64(0))
-                nulls += 1
-        # No bitmap at all when nothing is null: an all-ones bitmap is the same
-        # information, but `PrimitiveArray.__eq__` compares validity views and
-        # would read it as different from a column that never had one.
-        var bitmap = Optional[Bitmap[mut=False]](None)
-        if nulls > 0:
-            bitmap = valid^.to_immutable()
-        return Int64Array(
-            length=n,
-            nulls=nulls,
-            offset=0,
-            bitmap=bitmap^,
-            buffer=out.to_immutable(),
-        )
+        ...
 
     @staticmethod
     def dispatch[
@@ -1563,7 +1921,89 @@ trait StringMeasureKernel(Kernel):
         return dt.dispatch_stringlike(leaf)
 
 
-struct CharLengthKernel(StringMeasureKernel):
+def _measured(
+    var values: Buffer[mut=True],
+    var valid: Bitmap[mut=True],
+    n: Int,
+    nulls: Int,
+) -> Int64Array:
+    """The column both measure shapes finish with.
+
+    No bitmap at all when nothing is null: an all-ones bitmap is the same
+    information, but `PrimitiveArray.__eq__` compares validity views and would
+    read it as different from a column that never had one.
+    """
+    var bitmap = Optional[Bitmap[mut=False]](None)
+    if nulls > 0:
+        bitmap = valid^.to_immutable()
+    return Int64Array(
+        length=n,
+        nulls=nulls,
+        offset=0,
+        bitmap=bitmap^,
+        buffer=values^.to_immutable(),
+    )
+
+
+def _measure_plain[
+    K: StringToIntKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> Int64Array:
+    var n = len(array)
+    var out = Buffer.alloc_uninit[DType.int64](n)
+    var dst = out.view[DType.int64](0, n)
+    var valid = Bitmap.alloc_zeroed(n)
+    var nulls = 0
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            dst.unsafe_set(i, K.measure(array.unsafe_get(UInt(i))))
+            valid.unsafe_set(i)
+        else:
+            dst.unsafe_set(i, Int64(0))
+            nulls += 1
+    return _measured(out^, valid^, n, nulls)
+
+
+def _measure_str[
+    K: StringStrToIntKernel,
+    T: StringLikeType,
+    OT: StringLikeType,
+    OA: StringLikeType,
+    OS: PrimitiveType,
+    OC: PrimitiveType,
+](
+    array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+) raises -> Int64Array:
+    if not ops.text:
+        raise Error("missing operand: text")
+    ref needles = ops.text.value()
+    var n = len(array)
+    var out = Buffer.alloc_uninit[DType.int64](n)
+    var dst = out.view[DType.int64](0, n)
+    var valid = Bitmap.alloc_zeroed(n)
+    var nulls = 0
+    for i in range(n):
+        if array.is_valid(i) and ops.is_valid(i):
+            dst.unsafe_set(
+                i,
+                K.measure(
+                    array.unsafe_get(UInt(i)), needles.unsafe_get(UInt(i))
+                ),
+            )
+            valid.unsafe_set(i)
+        else:
+            dst.unsafe_set(i, Int64(0))
+            nulls += 1
+    return _measured(out^, valid^, n, nulls)
+
+
+struct CharLengthKernel(StringMeasureKernel, StringToIntKernel):
     """SQL `length(s)` — **characters**, where `LengthKernel` counts bytes.
 
     Two different functions, not one with a bug: `héllo wörld` is 11 here and
@@ -1574,37 +2014,24 @@ struct CharLengthKernel(StringMeasureKernel):
     comptime uses_text = False
 
     @staticmethod
-    def measure[o: Origin](s: StringSlice[o], args: StringArgs) -> Int64:
+    def measure[o: Origin](s: StringSlice[o]) -> Int64:
         return Int64(Utf8.count(s))
 
-
-struct PositionKernel(StringMeasureKernel):
-    """SQL `position(text IN s)` — the 1-based **character** index of the first
-    occurrence, and **0** when there is none.
-
-    Zero rather than null is what makes the result an index into a 1-based
-    world; a 0-based engine cannot reuse the convention. An empty needle is
-    found at position 1, which follows from `Utf8.find` matching it at the
-    cursor.
-    """
-
-    comptime name = "position"
-    comptime uses_text = True
-
     @staticmethod
-    def measure[o: Origin](s: StringSlice[o], args: StringArgs) -> Int64:
-        var at = Utf8.find(s, StringSlice(args.text), 0)
-        if at < 0:
-            return Int64(0)
-        # Byte offset -> 1-based character index.
-        var bounds = Utf8.bounds(s)
-        for k in range(len(bounds) - 1):
-            if bounds[k] == at:
-                return Int64(k + 1)
-        return Int64(len(bounds))
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> Int64Array:
+        return _measure_plain[Self](array, ops)
 
 
-struct AsciiKernel(StringMeasureKernel):
+struct AsciiKernel(StringMeasureKernel, StringToIntKernel):
     """SQL `ascii(s)` — the first character's code point, **0** for the empty
     string.
 
@@ -1617,7 +2044,7 @@ struct AsciiKernel(StringMeasureKernel):
     comptime uses_text = False
 
     @staticmethod
-    def measure[o: Origin](s: StringSlice[o], args: StringArgs) -> Int64:
+    def measure[o: Origin](s: StringSlice[o]) -> Int64:
         var bytes = s.as_bytes()
         var n = len(bytes)
         if n == 0:
@@ -1641,41 +2068,55 @@ struct AsciiKernel(StringMeasureKernel):
                 | (Int(bytes[3]) & 0x3F)
             )
 
+    @staticmethod
+    def apply[
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
+    ](
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> Int64Array:
+        return _measure_plain[Self](array, ops)
 
-# -- string x int -> string -------------------------------------------------
 
+struct PositionKernel(StringMeasureKernel, StringStrToIntKernel):
+    """SQL `position(needle IN s)` — the 1-based **character** index of the
+    first occurrence, and **0** when there is none.
 
-struct RepeatKernel(Kernel):
-    """SQL `repeat(s, n)` with the count taken from a **column**.
-
-    Zero and negative counts both answer the empty string — DuckDB's reading;
-    several engines raise on a negative instead. Null on either side gives
-    null, which is why this cannot be a `StringArgKernel`: the count is per row
-    and carries its own validity.
+    Zero rather than null is what makes the result an index into a 1-based
+    world; a 0-based engine cannot reuse the convention. An empty needle is
+    found at position 1, which follows from `Utf8.find` matching it at the
+    cursor. A *null* needle is a different matter and answers null — see
+    `StringOperands.is_valid`.
     """
 
-    comptime name = "repeat"
+    comptime name = "position"
+    comptime uses_text = True
+
+    @staticmethod
+    def measure[o: Origin](s: StringSlice[o], needle: StringSlice) -> Int64:
+        var at = Utf8.find(s, needle, 0)
+        if at < 0:
+            return Int64(0)
+        # Byte offset -> 1-based character index.
+        var bounds = Utf8.bounds(s)
+        for k in range(len(bounds) - 1):
+            if bounds[k] == at:
+                return Int64(k + 1)
+        return Int64(len(bounds))
 
     @staticmethod
     def apply[
-        T: StringLikeType, N: PrimitiveType
+        T: StringLikeType,
+        //,
+        OT: StringLikeType,
+        OA: StringLikeType,
+        OS: PrimitiveType,
+        OC: PrimitiveType,
     ](
-        array: BinaryLikeArray[T], counts: PrimitiveArray[N]
-    ) raises -> BinaryLikeArray[T]:
-        # `PrimitiveType`, not `NumericType`: `NumericValue` is a *marker* over
-        # `PrimitiveValue`, so its `Type` is only ever bounded by
-        # `PrimitiveType` and a narrower bound here could not be satisfied by
-        # the node that calls this.
-        Self.expect_same_length(len(array), len(counts))
-        var n = len(array)
-        var builder = BinaryLikeBuilder[T](capacity=n)
-        for i in range(n):
-            if array.is_valid(i) and counts.is_valid(i):
-                var times = Int(counts.values().unsafe_get(i))
-                var out = String()
-                for _ in range(times):
-                    out += array.unsafe_get(UInt(i))
-                builder.append(out)
-            else:
-                builder.append_null()
-        return builder.finish()
+        array: BinaryLikeArray[T], ops: StringOperands[OT, OA, OS, OC]
+    ) raises -> Int64Array:
+        return _measure_str[Self](array, ops)

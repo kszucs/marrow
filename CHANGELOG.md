@@ -15,47 +15,6 @@
 
 ### Features
 
-- **Parallel group-by: radix-partitioned placement** (`marrow/kernels/groupby.mojo`).
-  `HashGrouper` gained a second placement path. Above 60,000 rows on a context
-  that resolves to more than one worker, rows are split by the top 6 bits of the
-  key hash into 64 partitions, and one worker per partition inserts into its own
-  persistent `SwissHashTable` through the existing
-  `RadixPartitioner.map_partitions`. Below that, or on a serial or GPU context,
-  the single-table path runs exactly as before; the choice is latched on the
-  first non-empty batch, because the two paths keep different state.
-
-  **No aggregate merges, and that is the point.** Partitioning on the *key hash*
-  puts every row of a group in one partition and therefore one table, so no
-  group is ever split across workers and no accumulator is ever combined.
-  `mean` (which keeps `(sum, count)`), the `Dispersion` Welford `(n, mean, M2)`
-  triple and exact `count_distinct` need nothing — they never learn placement
-  was parallel. Thread-local partial aggregation was the alternative and was
-  rejected: it needs a `merge` on all five `AggKernel` conformers, the Chan
-  formula for variance, and it has **no correct merge at all** for exact
-  `count_distinct`, whose state is one table over `(group, value)` pairs.
-
-  **Two thresholds, because row count alone is the wrong question.** Radix
-  reads the rows three extra times (histogram, partition-major scatter, id
-  write-back) where the serial path probes once, so at low cardinality it
-  cannot pay that back however many workers run it: 1M rows over 1,000 groups
-  measured 2.7 ms serial against 6.4 ms on 8 workers. A 4,096-row sample now
-  gates it on distinctness as well, and radix engages only when the sample
-  comes back >=90% distinct. Low-cardinality group-bys keep the single-table
-  path and still gain the striped key hashing.
-
-  Ids come out partition-major, so the radix path renumbers relative to the
-  serial one. `GROUP BY` has no defined row order, every golden aggregate case
-  either sorts or returns a single row, and the serial path is untouched. The
-  tests assert the stronger property that actually matters — that both paths
-  induce the *same partition of rows into groups*, via a bijection between the
-  two numberings (`marrow/kernels/tests/test_groupby.mojo`). An earlier version
-  did assign ids in row order to match serial exactly, and that O(rows) serial
-  pass cost more than the parallel insert saved.
-
-  `GroupByOperator` now passes its `ExecContext` to the grouping. It had held
-  one since the operator was written and **never read it**, so key hashing ran
-  on the calling thread no matter what the caller asked for; that alone
-  stripes now, on both paths.
 - **The SQL string functions take their arguments as expressions**
   (`marrow/kernels/string.mojo`, `marrow/expr/comptime/strings.mojo`,
   `marrow/expr/runtime/values.mojo`). `substr(s, col("from"), col("len"))`,
@@ -133,6 +92,33 @@
   multi-key decomposition needs full permutations to compose.
 
 ### Refactors
+
+- **`StringArgs` is gone; every string kernel states its real signature**
+  (`marrow/kernels/string.mojo`). `substr(s, start: Int, count: Int)`,
+  `replace(s, needle: StringSlice, repl: StringSlice)`,
+  `lpad(s, width: Int, fill: StringSlice)`, `split_part(s, sep, index)`,
+  `trim(s, chars)`, `left`/`right`/`repeat(s, count)`, `position(s, needle)` —
+  nine kernels across eight signatures, so **eight traits**, several with one
+  conformer. One `transform(s, args)` reading a four-field bundle was six
+  signatures pretending to be one, with a docstring explaining which fields
+  each of them ignored.
+
+  **It also removes a per-row heap allocation.** The bundle had to be rebuilt
+  for every row, copying each string argument into a fresh `String` — usually
+  one literal, copied once per row in the batch. A string argument is now a
+  `StringSlice` borrowed straight out of its column.
+
+  `StringOperands` stays: it is the *node's* carrier of the operand columns,
+  filled once per batch, and it never reaches `transform`. `is_valid(i)` and
+  the null-propagation semantics are untouched.
+
+  `RepeatKernel` folds in. It had stood alone with its own
+  `apply(array, counts)` — the only member of the family whose argument was a
+  column while the rest carried constants — and it is `(str, int) -> str`, so
+  it now conforms to `StringIntKernel` beside `left` and `right`. The
+  `StringRepeat` expression node is deleted in favour of
+  `StringFunction[RepeatKernel, ...]`, and `repeat` reaches the runtime lane
+  for the first time.
 
 - **`marrow/kernels/string.mojo`: the last behaviour flag and the loose UTF-8
   primitives.** `_pad(s, args, left: Bool)` tested a runtime flag per row to

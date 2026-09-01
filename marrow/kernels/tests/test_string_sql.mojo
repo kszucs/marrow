@@ -73,6 +73,13 @@ def _ops(
     return ops^
 
 
+def _counts(var counts: Int64Array) raises -> StringOperands[]:
+    """Only the `count` slot — the one `left`, `right` and `repeat` read."""
+    var ops = StringOperands()
+    ops.count = counts^
+    return ops^
+
+
 def _nulls(n: Int) raises -> Int64Array:
     """`n` null int64s — one argument column that is null everywhere."""
     var b = Int64Builder(capacity=n)
@@ -369,7 +376,9 @@ def test_ascii_of_a_null_is_null() raises:
 
 def test_repeat_zero_and_negative_both_give_the_empty_string() raises:
     assert_true(
-        RepeatKernel.apply(array(["ab", "ab", "ab"]), array([2, 0, -3], int64))
+        RepeatKernel.apply(
+            array(["ab", "ab", "ab"]), _counts(array([2, 0, -3], int64))
+        )
         == array(["abab", "", ""])
     )
 
@@ -380,15 +389,15 @@ def test_repeat_propagates_a_null_string() raises:
     var b = StringBuilder(capacity=2)
     b.append_null()
     b.append("ab")
-    var got = RepeatKernel.apply(b.finish(), array([2, 2], int64))
+    var got = RepeatKernel.apply(b.finish(), _counts(array([2, 2], int64)))
     assert_true(got.is_null(0))
     assert_equal(String(got[1].value()), "abab")
 
 
 # --- column arguments ------------------------------------------------------
 #
-# The half of the surface `StringArgs`-as-configuration made unrepresentable.
-# An argument is a column now, so it can differ per row and it can be null.
+# The half of the surface the constants made unrepresentable. An argument is a
+# column now, so it can differ per row and it can be null.
 
 
 def test_substr_reads_a_different_window_per_row() raises:

@@ -658,10 +658,7 @@ struct GroupByOperator(Operator):
         self._keys = keys^
         self._folds = folds^
         self._schema = schema^
-        # The grouping gets the caller's context, not a fresh serial one: it is
-        # what selects radix placement over the single-table path, and what
-        # stripes the key hashing. `_ctx` was stored and never read before that.
-        self._grouping = HashGrouping(ctx.copy())
+        self._grouping = HashGrouping()
         self._ctx = ctx^
         # One implicit group when there are no keys — including over an input
         # that yields nothing, where `sum` must still answer one null rather

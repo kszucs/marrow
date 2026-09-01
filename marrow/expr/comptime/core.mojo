@@ -140,7 +140,7 @@ from .strings import (
     StrNe,
     StringConcat,
     StringLength,
-    StringRepeat,
+    Repeat,
     Strip,
     Substr,
     TrimChars,
@@ -825,10 +825,22 @@ trait StringValue(ComptimeValue):
         empty string. Decodes UTF-8: a leading `é` answers 233, not 0xC3."""
         return Ascii[Self](self.copy(), UnusedText(String()))
 
-    def repeat[Rhs: NumericValue](self, n: Rhs) -> StringRepeat[Self, Rhs]:
-        """SQL `repeat(self, n)`, with `n` read from a column. Zero and
+    def repeat[
+        CountArg: NumericValue
+    ](self, n: CountArg) -> Repeat[Self, CountArg]:
+        """SQL `repeat(self, n)` — `self` concatenated `n` times. Zero and
         negative counts both give the empty string."""
-        return StringRepeat[Self, Rhs](self.copy(), n.copy())
+        return Repeat[Self, CountArg](
+            self.copy(),
+            UnusedText(String()),
+            UnusedText(String()),
+            UnusedNumber(Int64(0)),
+            n.copy(),
+        )
+
+    def repeat(self, n: Int) -> Repeat[Self, UnusedNumber]:
+        """SQL `repeat(self, n)` with a constant count."""
+        return self.repeat(UnusedNumber(Int64(n)))
 
     def __add__[Rhs: StringValue](self, o: Rhs) -> StringConcat[Self, Rhs]:
         """SQL `||` — concatenation that **propagates null**, so a null

@@ -546,6 +546,16 @@ comptime SplitPart = StringFunction[
 comptime TrimChars = StringFunction[
     TrimCharsKernel, _, _, UnusedText, UnusedNumber, UnusedNumber
 ]
+comptime Repeat = StringFunction[
+    RepeatKernel, _, UnusedText, UnusedText, UnusedNumber, _
+]
+"""`repeat(s, n)` is `left`/`right`'s signature, so it is `left`/`right`'s
+node.
+
+It had one of its own, `StringRepeat`, for exactly one reason: it was the only
+member of this family whose argument was a *column*, back when the rest carried
+constants. Now that every argument is a column that is not a distinction, and
+`RepeatKernel` conforms to `StringIntKernel` alongside the other two."""
 
 
 # ---------------------------------------------------------------------------
@@ -678,59 +688,3 @@ struct StringConcat[L: StringValue, R: StringValue](StringValue, Unnamed):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("concat(", self.l, ", ", self.r, ")")
-
-
-# ---------------------------------------------------------------------------
-# StringRepeat — string x numeric -> string, a breaker
-# ---------------------------------------------------------------------------
-struct StringRepeat[A: StringValue, N: NumericValue](StringValue, Unnamed):
-    """SQL `repeat(s, n)` with the count read from a **column**.
-
-    The only node here whose configuration is per row, which is why it takes a
-    second operand instead of a `StringArgs`: the count carries its own
-    validity, and a null count gives a null result just as a null string does.
-    """
-
-    comptime Type = Self.A.Type
-    comptime shape = Shape.columnar
-    comptime Bound = BinaryLikeArray[Self.Type]
-
-    var a: Self.A
-    var n: Self.N
-
-    def __init__(out self, var a: Self.A, var n: Self.N):
-        self.a = a^
-        self.n = n^
-
-    # -- Value --------------------------------------------------------------
-
-    def columns(self) -> List[String]:
-        return merged(self.a.columns(), self.n.columns())
-
-    def dtype(self, schema: Schema) raises -> DynType:
-        return self.a.dtype(schema)
-
-    # -- StringValue --------------------------------------------------------
-
-    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        var rows = len(batch)
-        var s = self.a.evaluate(batch, bindings).to_array(rows)
-        var c = self.n.evaluate(batch, bindings).to_array(rows)
-        return RepeatKernel.apply(
-            s.as_type[BinaryLikeArray[Self.A.Type]](),
-            c.as_type[PrimitiveArray[Self.N.Type]](),
-        )
-
-    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
-        return bound.bitmap
-
-    @always_inline
-    def lane(
-        self, ref bound: Self.Bound, idx: Int
-    ) -> StringSlice[origin_of(bound)]:
-        return rebind[StringSlice[origin_of(bound)]](
-            bound.unsafe_get(UInt(idx))
-        )
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("repeat(", self.a, ", ", self.n, ")")
