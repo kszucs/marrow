@@ -15,6 +15,48 @@
 
 ### Features
 
+- **Parallel group-by: radix-partitioned placement** (`marrow/kernels/groupby.mojo`).
+  `HashGrouper` gained a second placement path. Above 60,000 rows on a context
+  that resolves to more than one worker, rows are split by the top 6 bits of the
+  key hash into 64 partitions, and one worker per partition inserts into its own
+  persistent `SwissHashTable` through the existing
+  `RadixPartitioner.map_partitions`. Below that, or on a serial or GPU context,
+  the single-table path runs exactly as before; the choice is latched on the
+  first non-empty batch, because the two paths keep different state.
+
+  **No aggregate merges, and that is the point.** Partitioning on the *key hash*
+  puts every row of a group in one partition and therefore one table, so no
+  group is ever split across workers and no accumulator is ever combined.
+  `mean` (which keeps `(sum, count)`), the `Dispersion` Welford `(n, mean, M2)`
+  triple and exact `count_distinct` need nothing — they never learn placement
+  was parallel. Thread-local partial aggregation was the alternative and was
+  rejected: it needs a `merge` on all five `AggKernel` conformers, the Chan
+  formula for variance, and it has **no correct merge at all** for exact
+  `count_distinct`, whose state is one table over `(group, value)` pairs.
+
+  **Two thresholds, because row count alone is the wrong question.** Radix
+  reads the rows three extra times (histogram, partition-major scatter, id
+  write-back) where the serial path probes once, so at low cardinality it
+  cannot pay that back however many workers run it: 1M rows over 1,000 groups
+  measured 2.7 ms serial against 6.4 ms on 8 workers. A 4,096-row sample now
+  gates it on distinctness as well, and radix engages only when the sample
+  comes back >=90% distinct. Low-cardinality group-bys keep the single-table
+  path and still gain the striped key hashing.
+
+  Ids come out partition-major, so the radix path renumbers relative to the
+  serial one. `GROUP BY` has no defined row order, every golden aggregate case
+  either sorts or returns a single row, and the serial path is untouched. The
+  tests assert the stronger property that actually matters — that both paths
+  induce the *same partition of rows into groups*, via a bijection between the
+  two numberings (`marrow/kernels/tests/test_groupby.mojo`). An earlier version
+  did assign ids in row order to match serial exactly, and that O(rows) serial
+  pass cost more than the parallel insert saved.
+
+  `GroupByOperator` now passes its `ExecContext` to the grouping. It had held
+  one since the operator was written and **never read it**, so key hashing ran
+  on the calling thread no matter what the caller asked for; that alone
+  stripes now, on both paths.
+
 - **A plan optimizer: twelve rules and a column-pruning pass**
   (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
   `DynRelation` you can print, diff and execute — `Limit(Sort(Filter(scan)))`
