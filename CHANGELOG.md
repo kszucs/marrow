@@ -15,6 +15,34 @@
 
 ### Features
 
+- **Four more window functions: `percent_rank`, `cume_dist`, `ntile`,
+  `nth_value`** (`marrow/kernels/window.mojo`, `marrow/expr/builders.mojo`).
+  Marrow now has eleven of SQL's twelve; only `ROWS UNBOUNDED PRECEDING`
+  remains inexpressible, since `WindowFrame` carries plain `Int` bounds.
+
+  `percent_rank` is `(rank - 1) / (rows - 1)` and answers **0** for a one-row
+  partition rather than dividing by zero. `cume_dist` counts through the
+  current row's *peer group* rather than to the row, so tied rows share a
+  value and the last group is exactly 1 — which is what makes it not `rank/n`.
+  `ntile` gives the remainder to the earliest buckets (10 rows in 3 buckets is
+  4, 3, 3) and takes its count as a plain `Int`, because a bucket count is a
+  constant of the window like `lag`'s distance, not a column. `nth_value` is
+  null where the frame holds fewer than `n` rows, reaching the output through
+  a null index exactly as `lag` does past a partition edge.
+
+  **Adding them made a `row_number()`-only binary smaller** — 1,755,032 to
+  1,751,896 bytes of `__text`, with `Rank`, `DenseRank`, `PercentRank`,
+  `CumeDist`, `NTile`, `Offset`, `Edge` and `NthValue` all absent from the
+  symbol table. Under the tag-and-switch this replaced, four new functions
+  would have grown every binary that used any window.
+
+  The trait needed one change: `ranks()` meant both "takes no argument" and
+  "answers `int64`", and `percent_rank` reads no column yet answers `float64`.
+  It is now `fixed_dtype() -> Optional[DynType]`, which carries both facts —
+  a function answering from position alone has no operand to take a type from,
+  so the two are the same question, and all nine functions agree.
+
+
 - **The SQL string functions take their arguments as expressions**
   (`marrow/kernels/string.mojo`, `marrow/expr/comptime/strings.mojo`,
   `marrow/expr/runtime/values.mojo`). `substr(s, col("from"), col("len"))`,
@@ -181,6 +209,14 @@
   multi-key decomposition needs full permutations to compose.
 
 ### Refactors
+
+- **`WindowKernel` is gone** (`marrow/kernels/window.mojo`, 231 lines). Each of
+  its nine static methods had exactly one caller — the `WindowFunction` type
+  that immediately forwarded to it — so the struct was a layer of indirection
+  between an algorithm and its only user. Each algorithm now lives in the type
+  that *is* that function. `physical.mojo` was still importing it after the
+  slot redesign had removed its last use.
+
 
 - **`WindowFn` and `WindowExpr` are one type** (`marrow/expr/logical.mojo`).
   They were split so `row_number()` could name a function and `.over(...)` the

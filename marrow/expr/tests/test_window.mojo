@@ -15,12 +15,23 @@ where an off-by-one produces a plausible number rather than a crash.
 
 from std.os import remove
 from std.python import Python
-from std.testing import assert_true
+from std.testing import assert_almost_equal, assert_true
 
 from ...builders import array, nulls
 from ...dtypes import int64, string
 from ...tabular import record_batch
-from ..builders import col, dense_rank, lit, rank, row_number, scan, table
+from ..builders import (
+    col,
+    cume_dist,
+    dense_rank,
+    lit,
+    ntile,
+    percent_rank,
+    rank,
+    row_number,
+    scan,
+    table,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -437,3 +448,86 @@ def test_an_empty_frame_takes_the_aggregate_s_identity_not_null() raises:
     assert_true(
         m == array(expected_min, int64), "min of an empty frame is null"
     )
+
+
+# ---------------------------------------------------------------------------
+# The distribution functions
+# ---------------------------------------------------------------------------
+def test_percent_rank_and_cume_dist_over_a_tie() raises:
+    """Both are built on peer groups, and the tie is where they differ.
+
+    `v = [10, 20, 20, 40]`. `rank` is 1, 2, 2, 4 so `percent_rank` is
+    `(rank-1)/3` = 0, 1/3, 1/3, 1. `cume_dist` counts through the peer group
+    over 4 rows: 1/4, 3/4, 3/4, 1 — the tied pair reaches 3/4 because both
+    rows are at or before the group's end, which is what makes it *not*
+    `rank/n`.
+    """
+    var b = record_batch([array([10, 20, 20, 40], int64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["p", "c"],
+        [
+            percent_rank().over(order_by=[col("v", int64)]),
+            cume_dist().over(order_by=[col("v", int64)]),
+        ],
+    )
+    var out = plan.execute()
+    ref p = out.column("p").as_float64()
+    assert_almost_equal(Float64(p[0].value()), 0.0)
+    assert_almost_equal(Float64(p[1].value()), 1.0 / 3.0)
+    assert_almost_equal(Float64(p[2].value()), 1.0 / 3.0)
+    assert_almost_equal(Float64(p[3].value()), 1.0)
+
+    ref c = out.column("c").as_float64()
+    assert_almost_equal(Float64(c[0].value()), 0.25)
+    assert_almost_equal(Float64(c[1].value()), 0.75)
+    assert_almost_equal(Float64(c[2].value()), 0.75)
+    assert_almost_equal(Float64(c[3].value()), 1.0)
+
+
+def test_percent_rank_of_a_one_row_partition_is_zero() raises:
+    """The degenerate case: `(rank-1)/(rows-1)` divides by zero unless the
+    definition names it, and SQL names it 0."""
+    var b = record_batch([array([7], int64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["p"], [percent_rank().over(order_by=[col("v", int64)])]
+    )
+    ref p = plan.execute().column("p").as_float64()
+    assert_almost_equal(Float64(p[0].value()), 0.0)
+
+
+def test_ntile_gives_the_remainder_to_the_earliest_buckets() raises:
+    """5 rows in 2 buckets is 3 then 2, not 2 then 3.
+
+    Every SQL engine front-loads the remainder, and getting it backwards is a
+    plausible-looking answer rather than a failure — so the sizes are asserted,
+    not just the range.
+    """
+    var b = record_batch([array([1, 2, 3, 4, 5], int64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["t"], [ntile(2).over(order_by=[col("v", int64)])]
+    )
+    ref t = plan.execute().column("t").as_int64()
+    assert_true(t == array([1, 1, 1, 2, 2], int64))
+
+
+def test_ntile_with_more_buckets_than_rows() raises:
+    """Each row is its own bucket and the surplus buckets stay empty."""
+    var b = record_batch([array([1, 2], int64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["t"], [ntile(5).over(order_by=[col("v", int64)])]
+    )
+    ref t = plan.execute().column("t").as_int64()
+    assert_true(t == array([1, 2], int64))
+
+
+def test_nth_value_is_null_past_the_end_of_the_frame() raises:
+    """The default frame runs to the peer group, so `n` reaches only as far as
+    the frame has rows — row 0's frame holds one row, so `nth_value(v, 2)` is
+    null there and 20 from row 1 on."""
+    var b = record_batch([array([10, 20, 30], int64).copy()], names=["v"])
+    var plan = table(b^).with_columns(
+        ["n2"], [col("v", int64).nth_value(2).over(order_by=[col("v", int64)])]
+    )
+    ref n2 = plan.execute().column("n2").as_int64()
+    var expected: List[Optional[Int]] = [None, 20, 20]
+    assert_true(n2 == array(expected, int64))

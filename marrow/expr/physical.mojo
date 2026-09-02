@@ -59,7 +59,7 @@ from .bindings import Bindings
 from .logical import DynValue, WindowExpr
 from .pushdown import Pushdown, read_plan, row_group_stats
 from ..kernels.sort import SortIndices, sort_indices
-from ..kernels.window import WindowExtents, WindowKernel, mark_changes
+from ..kernels.window import WindowExtents, mark_changes
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
 
@@ -1079,7 +1079,7 @@ struct WindowOperator(Operator):
 
         # The ranking functions read no column; the rest gather one.
         var argument: Optional[DynArray] = None
-        if not expr.ranks:
+        if not expr.fixed_dtype:
             argument = self._eval(expr.argument.value(), sorted_batch)
         return expr.compute.value()(
             extents,

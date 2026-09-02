@@ -50,6 +50,7 @@ from ..kernels.window import (
     Lag,
     LastValue,
     Lead,
+    NthValue,
     Offset,
     Rank,
     RowNumber,
@@ -232,6 +233,17 @@ trait Value(Copyable, Deinitable, Writable):
         """`FIRST_VALUE(self)` — this column at the frame's first row."""
         var boxed: Optional[DynValue] = DynValue(self.copy())
         return WindowExpr.of[FirstValue](boxed^)
+
+    def nth_value(self, n: Int) raises -> WindowExpr:
+        """`NTH_VALUE(self, n)` — this column at the frame's `n`-th row,
+        1-based.
+
+        Null where the frame holds fewer than `n` rows — the same answer `lag`
+        gives past a partition edge, reaching the output the same way, through
+        a null index.
+        """
+        var boxed: Optional[DynValue] = DynValue(self.copy())
+        return WindowExpr.of[NthValue](boxed^, n)
 
     def last_value(self) raises -> WindowExpr:
         """`LAST_VALUE(self)` — this column at the frame's last row.
@@ -610,9 +622,13 @@ struct WindowExpr(Copyable, Movable, Writable):
     """How the function renders. A stored string, because with the kinds behind
     a pointer there is no tag left to switch on."""
 
-    var ranks: Bool
-    """Whether this reads only the ordering, so it takes no argument and always
-    answers `int64` and never null. True for the three ranking functions."""
+    var fixed_dtype: Optional[DynType]
+    """This function's output type when it does not depend on its operand.
+
+    `None` means "whatever the argument produces". **Two facts, not one**:
+    `percent_rank` and `cume_dist` read no column yet answer `float64`, so a
+    single "ranks" flag standing for both "takes no argument" and "answers
+    `int64`" could not describe them."""
 
     var argument: Optional[DynValue]
     """What the function reads: the shifted column for `lag`/`lead`, the framed
@@ -661,11 +677,18 @@ struct WindowExpr(Copyable, Movable, Writable):
         rejects `WindowExpr[F](...)` on a struct that is not itself
         parameterised — "unexpected parameter" — so the factory stays.
         """
-        if F.ranks() and argument:
+        # `fixed_dtype` doubles as "takes no argument" — see the trait.
+        if F.fixed_dtype() and argument:
             raise Error("window: '", F.name(), "' takes no argument")
-        if not F.ranks() and not argument:
+        if not F.fixed_dtype() and not argument:
             raise Error("window: '", F.name(), "' needs an argument")
-        return Self(Self._tramp[F], F.name(), F.ranks(), argument^, offset)
+        return Self(
+            Self._tramp[F],
+            F.name(),
+            F.fixed_dtype(),
+            argument^,
+            offset,
+        )
 
     @staticmethod
     def aggregating(var argument: DynValue) raises -> Self:
@@ -682,7 +705,7 @@ struct WindowExpr(Copyable, Movable, Writable):
                 "' is not an aggregate; only an aggregate takes a frame",
             )
         var boxed: Optional[DynValue] = argument^
-        return Self(None, String("agg"), False, boxed^, 0)
+        return Self(None, String("agg"), None, boxed^, 0)
 
     def __init__(
         out self,
@@ -698,7 +721,7 @@ struct WindowExpr(Copyable, Movable, Writable):
             ) thin raises -> DynArray
         ],
         var name: String,
-        ranks: Bool,
+        var fixed_dtype: Optional[DynType],
         var argument: Optional[DynValue],
         offset: Int,
         var partition_by: List[DynValue] = List[DynValue](),
@@ -712,7 +735,7 @@ struct WindowExpr(Copyable, Movable, Writable):
         commonest window for free, and `over` replaces it."""
         self.compute = compute^
         self.name = name^
-        self.ranks = ranks
+        self.fixed_dtype = fixed_dtype^
         self.argument = argument^
         self.offset = offset
         self.partition_by = partition_by^
@@ -772,7 +795,7 @@ struct WindowExpr(Copyable, Movable, Writable):
         return Self(
             self.compute,
             self.name.copy(),
-            self.ranks,
+            self.fixed_dtype.copy(),
             self.argument.copy(),
             self.offset,
             partition_by^,
@@ -801,8 +824,8 @@ struct WindowExpr(Copyable, Movable, Writable):
         argument's type, which for the aggregate kind is the aggregate's own
         output type rather than its input's.
         """
-        if self.ranks:
-            return int64
+        if self.fixed_dtype:
+            return self.fixed_dtype.value().copy()
         return self.argument.value().dtype(schema)
 
     def spec(self) -> String:

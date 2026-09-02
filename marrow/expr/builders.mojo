@@ -57,7 +57,14 @@ from ..dtypes import (
     int64,
 )
 from ..kernels.aggregate import CountFold, Fold
-from ..kernels.window import DenseRank, Rank, RowNumber
+from ..kernels.window import (
+    CumeDist,
+    DenseRank,
+    NTile,
+    PercentRank,
+    Rank,
+    RowNumber,
+)
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -392,3 +399,33 @@ def dense_rank() raises -> WindowExpr:
     """`DENSE_RANK()` — tied rows share a position and nothing is skipped:
     `1, 2, 2, 2, 3`. The only difference from `rank` is the gap."""
     return WindowExpr.of[DenseRank](None)
+
+
+def percent_rank() raises -> WindowExpr:
+    """`PERCENT_RANK()` — `(rank - 1) / (rows - 1)`, from 0 to 1 inclusive.
+
+    Built on `rank`, so tied rows share a value and gaps carry through. A
+    one-row partition answers 0 rather than dividing by zero.
+    """
+    return WindowExpr.of[PercentRank](None)
+
+
+def cume_dist() raises -> WindowExpr:
+    """`CUME_DIST()` — the fraction of the partition at or before this row's
+    *peer group*, from just above 0 to 1.
+
+    Counts through the whole peer group, not to this row, so tied rows share a
+    value and the final group is always exactly 1.
+    """
+    return WindowExpr.of[CumeDist](None)
+
+
+def ntile(buckets: Int) raises -> WindowExpr:
+    """`NTILE(n)` — the partition split into `buckets` as evenly as it divides.
+
+    A plain `Int` and not an expression: the bucket count is a constant of the
+    window, the same as `lag`'s distance, and there is nothing per-row for a
+    column to hold. The remainder goes to the earliest buckets, so 10 rows in
+    3 buckets is 4, 3, 3.
+    """
+    return WindowExpr.of[NTile](None, buckets)

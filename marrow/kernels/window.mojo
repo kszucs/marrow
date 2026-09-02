@@ -25,8 +25,15 @@ index to a null element. That is why this module needs no per-dtype arm at
 all: `take` already has one.
 """
 
-from ..arrays import BoolArray, DynArray, Int32Array, Int64Array
-from ..builders import Int32Builder, Int64Builder
+from ..arrays import (
+    BoolArray,
+    DynArray,
+    Float64Array,
+    Int32Array,
+    Int64Array,
+)
+from ..builders import Float64Builder, Int32Builder, Int64Builder
+from ..dtypes import DynType, float64, int64
 from ..execution import ExecContext
 from .core import Kernel
 from .filter import TakeKernel
@@ -155,146 +162,6 @@ def mark_changes(key: DynArray, mut flags: List[Bool], ctx: ExecContext) raises:
         # Both null: not distinct. Leave the flag as it was.
 
 
-struct WindowKernel(Kernel):
-    """Ranking and frame-index kernels over a `WindowExtents`.
-
-    Every entry point is O(rows) and allocates one output array. None of them
-    look at the *values* being ranked — a window function's answer is a
-    function of the ordering alone, which is exactly what makes sorting once
-    and reading boundaries the whole implementation.
-    """
-
-    comptime name = "window"
-
-    @staticmethod
-    def row_number(extents: WindowExtents) raises -> Int64Array:
-        """`ROW_NUMBER()` — position within the partition, 1-based.
-
-        Insensitive to ties by definition: two peers get different numbers,
-        decided by the sort's stability rather than by the ordering. That is
-        what makes it the one ranking function a non-total `ORDER BY` leaves
-        non-deterministic.
-        """
-        var out = Int64Builder(len(extents))
-        for j in range(len(extents)):
-            out.append(Int64(j - extents.partition_start[j] + 1))
-        return out.finish()
-
-    @staticmethod
-    def rank(extents: WindowExtents) raises -> Int64Array:
-        """`RANK()` — the peer group's first position, 1-based.
-
-        Leaves gaps: three rows tied at rank 2 are all 2, and the next row is
-        5. That falls out of naming the group by its *first* position rather
-        than by its ordinal — no gap logic is written anywhere.
-        """
-        var out = Int64Builder(len(extents))
-        for j in range(len(extents)):
-            out.append(
-                Int64(extents.peer_start[j] - extents.partition_start[j] + 1)
-            )
-        return out.finish()
-
-    @staticmethod
-    def dense_rank(extents: WindowExtents) raises -> Int64Array:
-        """`DENSE_RANK()` — the peer group's ordinal, 1-based.
-
-        The same three tied rows are 2 and the next row is 3. `RANK` and this
-        differ in one term, and that term is the entire semantic difference
-        between them.
-        """
-        var out = Int64Builder(len(extents))
-        for j in range(len(extents)):
-            out.append(Int64(extents.peer_ordinal[j] + 1))
-        return out.finish()
-
-    @staticmethod
-    def offset_indices(extents: WindowExtents, delta: Int) raises -> Int32Array:
-        """Source rows for `LAG(delta<0)` / `LEAD(delta>0)`, null off the edge.
-
-        The null this produces at a partition's edge means "there is no such
-        row", which is a *different* fact from "the row there holds null" —
-        and both reach the output as null, because SQL gives them the same
-        spelling. Nothing downstream can tell them apart and nothing needs to.
-        """
-        var out = Int32Builder(len(extents))
-        for j in range(len(extents)):
-            var src = j + delta
-            if (
-                src < extents.partition_start[j]
-                or src >= extents.partition_end[j]
-            ):
-                out.append_null()
-            else:
-                out.append(Int32(src))
-        return out.finish()
-
-    @staticmethod
-    def frame_edge_indices(
-        extents: WindowExtents,
-        first: Bool,
-        is_rows: Bool = False,
-        preceding: Int = 0,
-        following: Int = 0,
-    ) raises -> Int32Array:
-        """Source rows for `FIRST_VALUE` / `LAST_VALUE` — the frame's two ends.
-
-        Under the **default** frame (`RANGE BETWEEN UNBOUNDED PRECEDING AND
-        CURRENT ROW`) the start is the partition's first row and the end is the
-        current row's *peer group* — not the current row and not the
-        partition's last row. So `FIRST_VALUE` is constant across a partition
-        and `LAST_VALUE` tracks the current row, which is the single most
-        surprising thing about window frames and is
-        `window_first_and_last_value`'s whole subject.
-
-        Under an explicit `ROWS` frame both ends move with the row and are
-        clamped to the partition. **Taking the default edges regardless of the
-        frame would be a silent wrong answer** rather than an unsupported one,
-        which is why this takes the frame rather than assuming it.
-
-        Null only where the frame is empty — which `ROWS` can express (a frame
-        entirely before or after the partition) and the default frame cannot.
-        """
-        var out = Int32Builder(len(extents))
-        for j in range(len(extents)):
-            var start: Int
-            var stop: Int
-            if is_rows:
-                start = max(extents.partition_start[j], j + preceding)
-                stop = min(extents.partition_end[j], j + following + 1)
-            else:
-                start = extents.partition_start[j]
-                stop = extents.peer_end[j]
-            if stop <= start:
-                out.append_null()
-            elif first:
-                out.append(Int32(start))
-            else:
-                out.append(Int32(stop - 1))
-        return out.finish()
-
-
-# ---------------------------------------------------------------------------
-# The window functions, one type each
-# ---------------------------------------------------------------------------
-#
-# **A type per function rather than a tag plus a switch.** `WindowExpr` stores a
-# thin pointer to one of these, instantiated where the verb names it, so a
-# binary that writes `row_number()` links `RowNumber.compute` and nothing else.
-# A runtime tag read by one `if/elif` chain would link all seven bodies into
-# every binary that used any window at all — measured at 57,536 bytes of
-# `__text`, which is small but is not the shape the comptime lane promises,
-# and which grows with every function added.
-#
-# The signature is one shape for all seven: whatever a function does not read
-# it ignores. That costs a few dead arguments and buys a single `thin` type,
-# which is what lets the slot live on a struct the plan can copy.
-#
-# It takes plain `Bool`/`Int` frame fields rather than `WindowFrame` because
-# that type lives in `marrow/expr/`, and a kernel does not depend on the
-# expression layer.
-
-
 trait WindowFunction:
     """One window function, as a type.
 
@@ -313,9 +180,19 @@ trait WindowFunction:
         ...
 
     @staticmethod
-    def ranks() -> Bool:
-        """Whether this reads only the ordering, so it takes no argument and
-        always answers `int64`, never null."""
+    def fixed_dtype() -> Optional[DynType]:
+        """This function's output type, or `None` for "the argument's".
+
+        **Also says whether the function takes an argument**, because the two
+        are the same fact: a function answering from position alone has no
+        operand to take a type from, so it must state one; a function reading a
+        column answers in that column's type. All nine agree, and a separate
+        flag would be a second place to get it wrong.
+
+        It does have to be a type and not a flag: `percent_rank` and
+        `cume_dist` read no column, like `row_number`, but answer `float64`
+        rather than `int64`.
+        """
         ...
 
     @staticmethod
@@ -339,8 +216,8 @@ struct RowNumber(WindowFunction):
         return String("row_number")
 
     @staticmethod
-    def ranks() -> Bool:
-        return True
+    def fixed_dtype() -> Optional[DynType]:
+        return int64.to_dyn()
 
     @staticmethod
     def compute(
@@ -352,7 +229,10 @@ struct RowNumber(WindowFunction):
         following: Int,
         ctx: ExecContext,
     ) raises -> DynArray:
-        return WindowKernel.row_number(extents).to_dyn()
+        var out = Int64Builder(len(extents))
+        for j in range(len(extents)):
+            out.append(Int64(j - extents.partition_start[j] + 1))
+        return out.finish().to_dyn()
 
 
 struct Rank(WindowFunction):
@@ -363,8 +243,8 @@ struct Rank(WindowFunction):
         return String("rank")
 
     @staticmethod
-    def ranks() -> Bool:
-        return True
+    def fixed_dtype() -> Optional[DynType]:
+        return int64.to_dyn()
 
     @staticmethod
     def compute(
@@ -376,7 +256,12 @@ struct Rank(WindowFunction):
         following: Int,
         ctx: ExecContext,
     ) raises -> DynArray:
-        return WindowKernel.rank(extents).to_dyn()
+        var out = Int64Builder(len(extents))
+        for j in range(len(extents)):
+            out.append(
+                Int64(extents.peer_start[j] - extents.partition_start[j] + 1)
+            )
+        return out.finish().to_dyn()
 
 
 struct DenseRank(WindowFunction):
@@ -387,8 +272,8 @@ struct DenseRank(WindowFunction):
         return String("dense_rank")
 
     @staticmethod
-    def ranks() -> Bool:
-        return True
+    def fixed_dtype() -> Optional[DynType]:
+        return int64.to_dyn()
 
     @staticmethod
     def compute(
@@ -400,7 +285,10 @@ struct DenseRank(WindowFunction):
         following: Int,
         ctx: ExecContext,
     ) raises -> DynArray:
-        return WindowKernel.dense_rank(extents).to_dyn()
+        var out = Int64Builder(len(extents))
+        for j in range(len(extents)):
+            out.append(Int64(extents.peer_ordinal[j] + 1))
+        return out.finish().to_dyn()
 
 
 struct Offset[lead: Bool](WindowFunction):
@@ -416,8 +304,8 @@ struct Offset[lead: Bool](WindowFunction):
         return String("lead") if Self.lead else String("lag")
 
     @staticmethod
-    def ranks() -> Bool:
-        return False
+    def fixed_dtype() -> Optional[DynType]:
+        return None
 
     @staticmethod
     def compute(
@@ -429,11 +317,17 @@ struct Offset[lead: Bool](WindowFunction):
         following: Int,
         ctx: ExecContext,
     ) raises -> DynArray:
-        return TakeKernel.dispatch(
-            argument.value().copy(),
-            WindowKernel.offset_indices(extents, offset),
-            ctx,
-        )
+        var idx = Int32Builder(len(extents))
+        for j in range(len(extents)):
+            var src = j + offset
+            if (
+                src < extents.partition_start[j]
+                or src >= extents.partition_end[j]
+            ):
+                idx.append_null()
+            else:
+                idx.append(Int32(src))
+        return TakeKernel.dispatch(argument.value().copy(), idx.finish(), ctx)
 
 
 struct Edge[first: Bool](WindowFunction):
@@ -450,8 +344,8 @@ struct Edge[first: Bool](WindowFunction):
         return String("first_value") if Self.first else String("last_value")
 
     @staticmethod
-    def ranks() -> Bool:
-        return False
+    def fixed_dtype() -> Optional[DynType]:
+        return None
 
     @staticmethod
     def compute(
@@ -463,16 +357,178 @@ struct Edge[first: Bool](WindowFunction):
         following: Int,
         ctx: ExecContext,
     ) raises -> DynArray:
-        return TakeKernel.dispatch(
-            argument.value().copy(),
-            WindowKernel.frame_edge_indices(
-                extents, Self.first, is_rows, preceding, following
-            ),
-            ctx,
-        )
+        var idx = Int32Builder(len(extents))
+        for j in range(len(extents)):
+            var start: Int
+            var stop: Int
+            if is_rows:
+                start = max(extents.partition_start[j], j + preceding)
+                stop = min(extents.partition_end[j], j + following + 1)
+            else:
+                start = extents.partition_start[j]
+                stop = extents.peer_end[j]
+            if stop <= start:
+                idx.append_null()
+            elif Self.first:
+                idx.append(Int32(start))
+            else:
+                idx.append(Int32(stop - 1))
+        return TakeKernel.dispatch(argument.value().copy(), idx.finish(), ctx)
 
 
 comptime Lag = Offset[False]
 comptime Lead = Offset[True]
 comptime FirstValue = Edge[True]
 comptime LastValue = Edge[False]
+
+
+struct PercentRank(WindowFunction):
+    """`PERCENT_RANK()` — `(rank - 1) / (rows - 1)`, `float64`."""
+
+    @staticmethod
+    def name() -> String:
+        return String("percent_rank")
+
+    @staticmethod
+    def fixed_dtype() -> Optional[DynType]:
+        return float64.to_dyn()
+
+    @staticmethod
+    def compute(
+        extents: WindowExtents,
+        argument: Optional[DynArray],
+        offset: Int,
+        is_rows: Bool,
+        preceding: Int,
+        following: Int,
+        ctx: ExecContext,
+    ) raises -> DynArray:
+        var out = Float64Builder(len(extents))
+        for j in range(len(extents)):
+            var lo = extents.partition_start[j]
+            var rows = extents.partition_end[j] - lo
+            var rank = extents.peer_start[j] - lo
+            out.append(0.0 if rows <= 1 else Float64(rank) / Float64(rows - 1))
+        return out.finish().to_dyn()
+
+
+struct CumeDist(WindowFunction):
+    """`CUME_DIST()` — rows through this peer group over partition rows."""
+
+    @staticmethod
+    def name() -> String:
+        return String("cume_dist")
+
+    @staticmethod
+    def fixed_dtype() -> Optional[DynType]:
+        return float64.to_dyn()
+
+    @staticmethod
+    def compute(
+        extents: WindowExtents,
+        argument: Optional[DynArray],
+        offset: Int,
+        is_rows: Bool,
+        preceding: Int,
+        following: Int,
+        ctx: ExecContext,
+    ) raises -> DynArray:
+        var out = Float64Builder(len(extents))
+        for j in range(len(extents)):
+            var lo = extents.partition_start[j]
+            var rows = extents.partition_end[j] - lo
+            out.append(Float64(extents.peer_end[j] - lo) / Float64(rows))
+        return out.finish().to_dyn()
+
+
+struct NTile(WindowFunction):
+    """`NTILE(n)` — the partition in `n` buckets, the count carried in
+    `offset`.
+
+    The bucket count rides the `offset` slot rather than being an operand: it
+    is a constant of the *window*, not a column, so there is nothing per-row
+    for an argument to hold. `lag`'s distance uses that slot for the same
+    reason.
+    """
+
+    @staticmethod
+    def name() -> String:
+        return String("ntile")
+
+    @staticmethod
+    def fixed_dtype() -> Optional[DynType]:
+        return int64.to_dyn()
+
+    @staticmethod
+    def compute(
+        extents: WindowExtents,
+        argument: Optional[DynArray],
+        offset: Int,
+        is_rows: Bool,
+        preceding: Int,
+        following: Int,
+        ctx: ExecContext,
+    ) raises -> DynArray:
+        if offset < 1:
+            raise Error("ntile: bucket count must be positive, got ", offset)
+        var out = Int64Builder(len(extents))
+        for j in range(len(extents)):
+            var lo = extents.partition_start[j]
+            var rows = extents.partition_end[j] - lo
+            var i = j - lo
+            var small = rows // offset
+            var extra = rows % offset
+            if small == 0:
+                out.append(Int64(i + 1))
+            elif i < extra * (small + 1):
+                out.append(Int64(i // (small + 1) + 1))
+            else:
+                var rest = i - extra * (small + 1)
+                out.append(Int64(extra + rest // small + 1))
+        return out.finish().to_dyn()
+
+
+struct NthValue(WindowFunction):
+    """`NTH_VALUE(v, n)` — the `n`-th row of the frame, `n` in `offset`.
+
+    `FIRST_VALUE` is `NTH_VALUE(v, 1)` and answers through `Edge` instead,
+    because a frame's first row is an edge the extents already name; an
+    arbitrary `n` has to be counted from that edge.
+    """
+
+    @staticmethod
+    def name() -> String:
+        return String("nth_value")
+
+    @staticmethod
+    def fixed_dtype() -> Optional[DynType]:
+        return None
+
+    @staticmethod
+    def compute(
+        extents: WindowExtents,
+        argument: Optional[DynArray],
+        offset: Int,
+        is_rows: Bool,
+        preceding: Int,
+        following: Int,
+        ctx: ExecContext,
+    ) raises -> DynArray:
+        if offset < 1:
+            raise Error("nth_value: n must be positive, got ", offset)
+        var idx = Int32Builder(len(extents))
+        for j in range(len(extents)):
+            var lo: Int
+            var hi: Int
+            if is_rows:
+                lo = max(extents.partition_start[j], j + preceding)
+                hi = min(extents.partition_end[j], j + following + 1)
+            else:
+                lo = extents.partition_start[j]
+                hi = extents.peer_end[j]
+            var at = lo + offset - 1
+            if at < hi:
+                idx.append(Int32(at))
+            else:
+                idx.append_null()
+        return TakeKernel.dispatch(argument.value().copy(), idx.finish(), ctx)
