@@ -19,7 +19,7 @@ imports. That is the same failure the wildcard-import ban exists to prevent.
 
 from .`comptime`.aggregates import Aggregate
 from .`comptime`.boolean import IsIn
-from .`comptime`.numeric import CaseWhen, MaxElementWise, MinElementWise
+from .`comptime`.numeric import CaseWhen, Maximum, Minimum
 from .`comptime`.core import BoolValue, ComptimeValue, ListValue, NumericValue
 from .`comptime`.nested import ArrayContains, ListLength
 from .`comptime`.leaves import (
@@ -38,8 +38,8 @@ from .runtime.values import RuntimeValue, column, literal
 from .runtime.values import array_contains as _rt_array_contains
 from .runtime.values import array_length as _rt_array_length
 from .runtime.values import isin as _rt_isin
-from .runtime.values import max_element_wise as _rt_max_element_wise
-from .runtime.values import min_element_wise as _rt_min_element_wise
+from .runtime.values import maximum as _rt_maximum
+from .runtime.values import minimum as _rt_minimum
 from ..arrays import DynArray
 from ..dtypes import (
     BoolType,
@@ -247,47 +247,48 @@ def is_in(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
 # ---------------------------------------------------------------------------
 # the row-wise extrema
 # ---------------------------------------------------------------------------
-# Free verbs rather than methods, because `.min()` and `.max()` are already the
-# *aggregates* on both lanes' value surfaces — that collision is why the name
-# is not simply `min`.
+# Free verbs rather than methods, and `minimum`/`maximum` rather than
+# `min`/`max`, because `.min()` and `.max()` are already the *aggregates* on
+# both lanes' value surfaces. NumPy draws the same line for the same reason:
+# `np.minimum(a, b)` is element-wise, `np.min(a)` folds.
 #
-# **Every established name for this operation skips nulls, and this one does
-# not.** SQL's `LEAST`/`GREATEST` skip, Ibis spells those the same way, and
+# **Every SQL-flavoured name for this operation skips nulls, and this one does
+# not.** `LEAST`/`GREATEST` skip, Ibis spells them the same way, and
 # `pc.min_element_wise` skips too — `ElementWiseAggregateOptions` defaults
 # `skip_nulls=True`. `MinKernel` intersects validity like every other
-# `BinaryNumericKernel`, so this is exactly `pc.min_element_wise` at
-# `skip_nulls=False`. The PyArrow name is kept because that non-default form
-# *is* this behaviour; `least`/`greatest` would claim the skipping one. See
-# `MinElementWise`, and `docs/backlog.md` for the skip-null verb.
+# `BinaryNumericKernel`, so this is the propagating form and only that, which
+# is what NumPy's name means as well: `minimum` propagates NaN where `fmin`
+# skips it. `least`/`greatest` stay free for the skipping verbs — see
+# `Minimum` and `docs/backlog.md`.
 
 
-def min_element_wise[
+def minimum[
     L: NumericValue, Rhs: NumericValue
-](var l: L, var r: Rhs) -> MinElementWise[L, Rhs]:
+](var l: L, var r: Rhs) -> Minimum[L, Rhs]:
     """The smaller of the two, per row, fused.
 
     The wider operand type wins and a null on either side makes the row null —
     `NumericBinary`'s rules. That null rule is what stops this being called
     `least`: SQL's `LEAST(NULL, 3)` is 3.
     """
-    return MinElementWise[L, Rhs](l^, r^)
+    return Minimum[L, Rhs](l^, r^)
 
 
-def min_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
-    """The runtime lane's `min_element_wise`."""
-    return _rt_min_element_wise(l^, r^)
+def minimum(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The runtime lane's `minimum`."""
+    return _rt_minimum(l^, r^)
 
 
-def max_element_wise[
+def maximum[
     L: NumericValue, Rhs: NumericValue
-](var l: L, var r: Rhs) -> MaxElementWise[L, Rhs]:
+](var l: L, var r: Rhs) -> Maximum[L, Rhs]:
     """The larger of the two, per row, fused."""
-    return MaxElementWise[L, Rhs](l^, r^)
+    return Maximum[L, Rhs](l^, r^)
 
 
-def max_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
-    """The runtime lane's `max_element_wise`."""
-    return _rt_max_element_wise(l^, r^)
+def maximum(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The runtime lane's `maximum`."""
+    return _rt_maximum(l^, r^)
 
 
 # ---------------------------------------------------------------------------

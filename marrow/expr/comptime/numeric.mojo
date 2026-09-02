@@ -153,24 +153,28 @@ toward zero and answer -1. That divergence is deliberate and recorded in
 `((n % 3) + 3) % 3` rather than asserting SQL's convention against marrow's.
 """
 
-comptime MinElementWise = NumericBinary[MinKernel, _, _]
-comptime MaxElementWise = NumericBinary[MaxKernel, _, _]
-"""The row-wise extrema — `pc.min_element_wise` / `pc.max_element_wise`.
+comptime Minimum = NumericBinary[MinKernel, _, _]
+comptime Maximum = NumericBinary[MaxKernel, _, _]
+"""The row-wise extrema, spelled as NumPy spells them.
 
 `NumericBinary` and not a family of their own because they follow exactly its
 rules: the wider operand wins, and a null on either side makes the row null.
 
-**Deliberately not named `least` / `greatest`.** Those are SQL's spelling and
-SQL *skips* nulls — `LEAST(NULL, 3)` is 3, not NULL — which is also PyArrow's
-`skip_nulls=True` default. `MinKernel` intersects validity like every other
-`BinaryNumericKernel` (`kernels/tests/test_arithmetic.mojo::test_min_with_nulls`),
-so these are the `skip_nulls=False` form and only that. Giving them SQL's name
-would put a known-wrong answer behind it;
-`golden/cases/math_greatest_and_least.mojo` pins the skipping semantics and
-stays skipped until a kernel provides them.
+**Why `minimum` and not `min`.** `min` is taken: `col("a", int64).min()` is
+the aggregate that folds a whole column. NumPy draws exactly this line —
+`np.minimum(a, b)` is the element-wise binary, `np.min(a)` the reduction — so
+the name is borrowed rather than invented.
 
-They are still distinct from `MIN(x)` / `MAX(x)`, which fold a whole column —
-`col("a", int64).min()` is the aggregate and is already taken.
+**Why not `least` / `greatest`.** That is SQL's spelling, and SQL *skips*
+nulls: `LEAST(NULL, 3)` is 3, not NULL. So does PyArrow's
+`pc.min_element_wise`, whose `ElementWiseAggregateOptions` defaults
+`skip_nulls=True`. `MinKernel` intersects validity like every other
+`BinaryNumericKernel`
+(`kernels/tests/test_arithmetic.mojo::test_min_with_nulls`), so these are the
+propagating form and only that — and the NumPy parallel holds there too, where
+`minimum` propagates NaN and `fmin` skips it. `least` / `greatest` stay free
+for the skipping verbs; `golden/cases/math_greatest_and_least.mojo` pins those
+semantics and stays skipped until a kernel provides them.
 """
 
 

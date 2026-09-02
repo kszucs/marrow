@@ -25,7 +25,7 @@ from std.testing import (
     assert_true,
 )
 
-from ...builders import col, lit, max_element_wise, min_element_wise
+from ...builders import col, lit, maximum, minimum
 from ...bindings import Bindings
 from ....arrays import BoolArray, Float64Array, Int64Array
 from ....builders import array
@@ -310,7 +310,7 @@ def test_the_new_float_unaries_propagate_a_null() raises:
     assert_true(_as_f64(col("x", float64).exp2(), b).is_null(3))
 
 
-def test_element_wise_extrema_choose_between_two_operands() raises:
+def test_minimum_and_maximum_choose_between_two_operands() raises:
     """The row-wise extrema, not the aggregates: these pick between two
     operands on each row where `MIN(x)` folds a whole column.
 
@@ -320,17 +320,17 @@ def test_element_wise_extrema_choose_between_two_operands() raises:
     var b = _ints()
     var smaller: List[Optional[Int]] = [-9, 0, 3, None]
     assert_true(
-        _as_i64(min_element_wise(col("n", int64), col("d", int64)), b)
+        _as_i64(minimum(col("n", int64), col("d", int64)), b)
         == array(smaller, int64)
     )
     var larger: List[Optional[Int]] = [3, 3, 4, None]
     assert_true(
-        _as_i64(max_element_wise(col("n", int64), col("d", int64)), b)
+        _as_i64(maximum(col("n", int64), col("d", int64)), b)
         == array(larger, int64)
     )
 
 
-def test_element_wise_extrema_are_null_in_null_out_not_sql_least() raises:
+def test_minimum_and_maximum_are_null_in_null_out_not_sql_least() raises:
     """The reason the verbs are not called `least` / `greatest`.
 
     `n` is null on row 3 and `d` is 3 there. SQL's `LEAST(NULL, 3)` is **3**
@@ -342,18 +342,16 @@ def test_element_wise_extrema_are_null_in_null_out_not_sql_least() raises:
     """
     var b = _ints()
     assert_true(
-        _as_i64(min_element_wise(col("n", int64), col("d", int64)), b).is_null(
-            3
-        )
+        _as_i64(minimum(col("n", int64), col("d", int64)), b).is_null(3)
     )
 
 
-def test_element_wise_extrema_promote_a_narrower_operand() raises:
+def test_minimum_and_maximum_promote_a_narrower_operand() raises:
     """`promote` is `NumericBinary`'s, unchanged: an `int32` literal against
     an `int64` column gives an `int64` result, so `_as_i64` can read it."""
     var b = _ints()
     var capped: List[Optional[Int]] = [-9, 0, 2, None]
     assert_true(
-        _as_i64(min_element_wise(col("n", int64), lit(2, int32)), b)
+        _as_i64(minimum(col("n", int64), lit(2, int32)), b)
         == array(capped, int64)
     )

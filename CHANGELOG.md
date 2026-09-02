@@ -86,12 +86,25 @@
     binds directly instead of opening its listlike x numeric ladder. Plus an
     `array_contains` tag in the runtime lane — a *binary* tag, not a payload
     one, because the search value varies per row.
-  - `min_element_wise` / `max_element_wise` — `MinKernel` / `MaxKernel` were
-    dead in both lanes. **Not** named `least` / `greatest`: SQL's pair *skips*
-    nulls (`LEAST(NULL, 3)` is 3) and these intersect validity like every
-    other `BinaryNumericKernel`, so the SQL name would have shipped a wrong
-    answer. `golden/cases/math_greatest_and_least.mojo` pins the skipping
-    semantics and stays skipped until a kernel provides them.
+  - `minimum` / `maximum` — `MinKernel` / `MaxKernel` were dead in both lanes.
+    The name is NumPy's, and restores the one the previous expression layer
+    used: `np.minimum(a, b)` is the element-wise binary and `np.min(a)` the
+    reduction, which is exactly the collision here, since
+    `col("a", int64).min()` is already the aggregate. They landed as
+    `min_element_wise` / `max_element_wise` after PyArrow, and that was both
+    ugly and inaccurate — `pc.min_element_wise` defaults to
+    `skip_nulls=True`, so the borrowed name described a function that does
+    something else.
+
+    **Not** `least` / `greatest` either: SQL's pair *skips* nulls
+    (`LEAST(NULL, 3)` is 3) and these intersect validity like every other
+    `BinaryNumericKernel`. The NumPy parallel covers that too — `minimum`
+    propagates NaN where `fmin` skips it — so `least` / `greatest` stay free
+    for the skipping verbs. `golden/cases/math_greatest_and_least.mojo` pins
+    those semantics and stays skipped until a kernel provides them.
+
+    `MinKernel.name` moves with them, so an error names the verb the caller
+    wrote rather than a PyArrow function they cannot spell.
   - `exp2`, `log2`, `log10`, `log1p`, `sin`, `cos` — six `UnaryFloatKernel`s
     where `NumericValue` named three.
 
@@ -5137,7 +5150,7 @@
   wire the previously-unexposed `FloordivKernel` and the binary element-wise
   `arithmetic.MinKernel`/`MaxKernel` into the numeric lane — `a // b`
   (`__floordiv__`, integer floor keeping the wider operand dtype) and
-  `a.min_element_wise(b)` / `a.max_element_wise(b)` (PyArrow naming; distinct
+  `a.minimum(b)` / `a.maximum(b)` (PyArrow naming; distinct
   from the whole-column `min()`/`max()` reductions). All three fuse as
   `NumericBinary` nodes (single vectorized pass).
 

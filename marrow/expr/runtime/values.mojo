@@ -753,9 +753,9 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         # `_arith`, not `_float_binary`: the row-wise extrema pick one of
         # their operands rather than computing a new value, so the result
         # keeps the promoted operand type instead of widening to float64.
-        if self._tag == "min_element_wise":
+        if self._tag == "minimum":
             return Self._arith[MinKernel](l^, r^)
-        if self._tag == "max_element_wise":
+        if self._tag == "maximum":
             return Self._arith[MaxKernel](l^, r^)
 
         if self._tag == "startswith":
@@ -1230,20 +1230,20 @@ def pow(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
     return RuntimeValue("pow", l, r)
 
 
-def min_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+def minimum(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
     """The smaller of the two, per row — `pc.min_element_wise(skip_nulls=False)`.
 
     Not `min`, which on `RuntimeValue` is the aggregate that folds a column.
     This is null-in-null-out, where SQL's `LEAST` *and* `pc`'s own default
     both skip nulls — see the note in `builders.mojo`.
     """
-    return RuntimeValue("min_element_wise", l, r)
+    return RuntimeValue("minimum", l, r)
 
 
-def max_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
-    """The larger of the two, per row — the mirror of `min_element_wise`,
+def maximum(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The larger of the two, per row — the mirror of `minimum`,
     including its null rule."""
-    return RuntimeValue("max_element_wise", l, r)
+    return RuntimeValue("maximum", l, r)
 
 
 def neg(var a: RuntimeValue) -> RuntimeValue:

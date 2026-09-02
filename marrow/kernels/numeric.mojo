@@ -289,7 +289,7 @@ struct ModKernel(BinaryNumericKernel):
 
 
 struct MinKernel(BinaryNumericKernel):
-    comptime name = "min_element_wise"
+    comptime name = "minimum"
 
     @always_inline
     @staticmethod
@@ -298,7 +298,7 @@ struct MinKernel(BinaryNumericKernel):
 
 
 struct MaxKernel(BinaryNumericKernel):
-    comptime name = "max_element_wise"
+    comptime name = "maximum"
 
     @always_inline
     @staticmethod

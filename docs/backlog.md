@@ -42,7 +42,7 @@ all of them.
 | 6 | **Parallel group-by** — thread-local partials plus a radix merge | Group-by is where analytical queries spend their time; single-threaded loses every benchmark. `groupby.mojo` is 224 lines with no parallelism | **M** | — |
 | 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
 | 8 | **String and temporal surface** — 16 + 13 skipped golden cases | The long tail a dataframe user hits immediately after the basics work | **M** | — |
-| 9 | ~~**Cheap expression nodes over kernels that already exist**~~ — done 2026-08-31 | Nine kernels had no node. `is_in`, `array_contains`, `min`/`max_element_wise` and six float unaries now reach both lanes; see §1.5 for what is left and why it is not cheap | **S** | — |
+| 9 | ~~**Cheap expression nodes over kernels that already exist**~~ — done 2026-08-31 | Nine kernels had no node. `is_in`, `array_contains`, `minimum`/`maximum` and six float unaries now reach both lanes; see §1.5 for what is left and why it is not cheap | **S** | — |
 | 10 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
 | 11 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 10, 12 |
 | 12 | **Statistics propagation and a cost model** | Feeds 11. Note two of three incumbents ship without one — DataFusion and polars both have none | **L** | — |
@@ -152,8 +152,8 @@ have a node and a verb in both lanes:
 - `IsInKernel` — it had a runtime `isin` tag but no comptime node and no verb,
   so `IN (...)` could not be written from the one surface that spans both
   lanes. Now `IsIn` (`comptime/boolean.mojo`) and `builders.is_in`.
-- `MinKernel` / `MaxKernel` — dead in both lanes. Now `MinElementWise` /
-  `MaxElementWise` and `builders.min_element_wise` / `.max_element_wise`.
+- `MinKernel` / `MaxKernel` — dead in both lanes. Now `Minimum` /
+  `Maximum` and `builders.minimum` / `.maximum`.
   **Deliberately not spelled `least` / `greatest`**: those are SQL's names and
   SQL *skips* nulls (`LEAST(NULL, 3)` is 3), while `MinKernel` intersects
   validity like every other `BinaryNumericKernel`. Naming them for SQL would
