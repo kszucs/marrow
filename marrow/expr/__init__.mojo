@@ -24,11 +24,15 @@ binary that never sorts applies here too.
 
 from .bindings import Bindings
 from .builders import (
+    array_contains,
     array_length,
     col,
     count_star,
     if_else,
+    is_in,
     lit,
+    maximum,
+    minimum,
     param,
     scan,
     table,
@@ -65,7 +69,7 @@ from .`comptime`.aggregates import (
     Sum,
     Variance,
 )
-from .`comptime`.boolean import BoolBinary, IsNull, Not, NotNull
+from .`comptime`.boolean import BoolBinary, IsIn, IsNull, Not, NotNull
 from .`comptime`.casts import (
     BoolToNum,
     NumToBool,
@@ -81,11 +85,11 @@ from .`comptime`.core import (
     StringValue,
     TemporalValue,
 )
+from .`comptime`.nested import ArrayContains, ListLength
 from .`comptime`.leaves import (
     BoolColumn,
     Column,
     ListColumn,
-    ListLength,
     Literal,
     Param,
     StringColumn,

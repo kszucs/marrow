@@ -43,7 +43,7 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - `DynBuilder` — type-erased builder, constructible from a runtime `DataType`; `finish()` returns a `DynArray` (O(1) copy via `ArcPointer`)
 
 **Compute kernels** (SIMD-vectorized, null-aware; names mirror `pyarrow.compute`)
-- Arithmetic: `add`, `subtract`, `multiply`, `divide`, `floordiv`, `mod`, `neg`, `abs_`, `min_element_wise`, `max_element_wise`
+- Arithmetic: `add`, `subtract`, `multiply`, `divide`, `floordiv`, `mod`, `neg`, `abs_`, `minimum`, `maximum`
 - Math (unary): `sign`, `sqrt`, `exp`, `exp2`, `log`, `log2`, `log10`, `log1p`, `floor`, `ceil`, `trunc`, `round`, `sin`, `cos`
 - Math (binary): `pow_`
 - Comparisons: `equal`, `not_equal`, `less`, `less_equal`, `greater`, `greater_equal` → `BoolArray` (CPU + GPU)

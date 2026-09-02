@@ -70,6 +70,9 @@
 - Every parallel loop runs through one striped driver on the execution
   context, which owns the thread count.
 - Variance and standard deviation, sample and population.
+- Eleven SQL string functions and three temporal ones whose arguments are
+  expressions rather than configuration, so `substr(s, col("from"),
+  col("len"))` works.
 
 ### Expressions and the query engine
 
@@ -166,6 +169,8 @@
 - A lazy query frontend: the plan layer is bound as `Plan`, the
   expression lane as `Expr`/`Agg`, and `LazyTable` builds and collects
   queries, with `num_threads` exposed on the collect path.
+- The string and temporal function families reach Python through the
+  runtime lane.
 
 ### Ahead-of-time compilation
 

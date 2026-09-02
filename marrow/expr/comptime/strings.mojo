@@ -25,14 +25,38 @@ from ...arrays import (
     BinaryLikeArray,
     BoolArray,
     Int32Array,
+    Int64Array,
+    PrimitiveArray,
     StructArray,
 )
 from ...buffers import Bitmap
-from ...dtypes import DynType, Int32Type, StringLikeType
+from ...dtypes import (
+    DynType,
+    Int32Type,
+    Int64Type,
+    StringLikeType,
+    StringType,
+)
 from ...kernels.string import (
+    AsciiKernel,
     CapitalizeKernel,
+    CharLengthKernel,
+    ConcatKernel,
     ContainsKernel,
     EndsWithKernel,
+    LPadKernel,
+    LeftKernel,
+    PositionKernel,
+    RPadKernel,
+    RepeatKernel,
+    ReplaceKernel,
+    RightKernel,
+    SplitPartKernel,
+    StringArgKernel,
+    StringOperands,
+    StringMeasureKernel,
+    SubstrKernel,
+    TrimCharsKernel,
     ILikeKernel,
     LStripKernel,
     LengthKernel,
@@ -60,6 +84,7 @@ from ..physical import Datum
 
 from .rules import widest_shape
 from .core import BoolValue, ColumnBound, NumericValue, StringValue, Unnamed
+from .leaves import Literal, StringLiteral
 
 
 struct StringCompare[K: StringPredicateKernel, L: StringValue, R: StringValue](
@@ -339,3 +364,327 @@ struct StringLength[A: StringValue](ColumnBound, NumericValue, Unnamed):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("length(", self.a, ")")
+
+
+# ---------------------------------------------------------------------------
+# StringFunction — string x args -> string, a breaker
+# ---------------------------------------------------------------------------
+#
+# `Unused*` are the operands a signature does not have. Every node below
+# carries all four argument slots and its kernel says which of them it reads,
+# so `left(s, n)` still binds `T` and `U` to *something*. Reusing the two
+# literal leaves rather than inventing placeholder node types is deliberate:
+# they already exist in any binary that mentions a constant, so an unused slot
+# instantiates nothing new, and `comptime if` keeps their `bind` off every
+# path. `String()` and `0` are never read.
+comptime UnusedText = StringLiteral[StringType]
+comptime UnusedNumber = Literal[Int64Type]
+
+
+struct StringFunction[
+    K: StringArgKernel,
+    A: StringValue,
+    T: StringValue,
+    U: StringValue,
+    S: NumericValue,
+    C: NumericValue,
+](StringValue, Unnamed):
+    """`substr`, `left`, `right`, `lpad`, `rpad`, `replace`, `split_part` and
+    `trim(chars)` — a string subject plus up to two argument **expressions**.
+
+    **The arguments are operands, not constants.** A constant field would make
+    `substr(s, 2, 3)` writable and `substr(s, col("start"), col("len"))`
+    unrepresentable, and would keep the whole family out of the runtime lane,
+    where a constant has nowhere to come from.
+    These are binary and ternary SQL functions that merely happen to be called
+    with literals most of the time; a literal operand stays `Shape.scalar` and
+    costs one broadcast in `bind`, which this node was paying for its subject
+    already.
+
+    **Four slots, two of each kind, and the kernel names the ones it reads.**
+    That is what lets one node cover `(str, int, int)`, `(str, str, str)`,
+    `(str, int, str)`, `(str, str, int)`, `(str, int)` and `(str, str)`
+    instead of six near-identical structs. `comptime if Self.K.uses_*` means an
+    unused slot is never bound, never materialised and never printed.
+
+    A breaker for the same reason `StringUnary` is: the transform produces new
+    bytes, and `StringValue.lane` borrows from `Bound`, so `bind` runs the
+    kernel's null-propagating `apply` once per batch and `lane` borrows out of
+    the result. Being a breaker is also why boxing the operands would have been
+    defensible and typing them is still better: the node never fuses into a
+    parent either way, but typed operands keep each one's own subtree fused and
+    keep the kernel off any runtime dispatch.
+    """
+
+    comptime Type = Self.A.Type
+    comptime shape = Shape.columnar
+    """Columnar even over scalar operands: the kernel runs over a column
+    regardless, so this reports what it does rather than what its operands are
+    — as `StringPredicate` and `StringConcat` do. It was `A.shape` while the
+    arguments were constants, which was only ever right because they could not
+    contribute a column of their own."""
+    comptime Bound = BinaryLikeArray[Self.Type]
+
+    var a: Self.A
+    var text: Self.T
+    var alt: Self.U
+    var start: Self.S
+    var count: Self.C
+
+    def __init__(
+        out self,
+        var a: Self.A,
+        var text: Self.T,
+        var alt: Self.U,
+        var start: Self.S,
+        var count: Self.C,
+    ):
+        self.a = a^
+        self.text = text^
+        self.alt = alt^
+        self.start = start^
+        self.count = count^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        var out = self.a.columns()
+        comptime if Self.K.uses_text:
+            out = merged(out^, self.text.columns())
+        comptime if Self.K.uses_alt:
+            out = merged(out^, self.alt.columns())
+        comptime if Self.K.uses_start:
+            out = merged(out^, self.start.columns())
+        comptime if Self.K.uses_count:
+            out = merged(out^, self.count.columns())
+        return out^
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.a.dtype(schema)
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var n = len(batch)
+        var arr = self.a.evaluate(batch, bindings).to_array(n)
+        var ops = StringOperands[
+            Self.T.Type, Self.U.Type, Self.S.Type, Self.C.Type
+        ]()
+        comptime if Self.K.uses_text:
+            ops.text = (
+                self.text.evaluate(batch, bindings)
+                .to_array(n)
+                .as_type[BinaryLikeArray[Self.T.Type]]()
+                .copy()
+            )
+        comptime if Self.K.uses_alt:
+            ops.alt = (
+                self.alt.evaluate(batch, bindings)
+                .to_array(n)
+                .as_type[BinaryLikeArray[Self.U.Type]]()
+                .copy()
+            )
+        comptime if Self.K.uses_start:
+            ops.start = (
+                self.start.evaluate(batch, bindings)
+                .to_array(n)
+                .as_type[PrimitiveArray[Self.S.Type]]()
+                .copy()
+            )
+        comptime if Self.K.uses_count:
+            ops.count = (
+                self.count.evaluate(batch, bindings)
+                .to_array(n)
+                .as_type[PrimitiveArray[Self.C.Type]]()
+                .copy()
+            )
+        return Self.K.apply(arr.as_type[Self.Bound](), ops)
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # `K.apply` already intersected the subject's validity with every
+        # argument's, so the bound column is the whole answer — the same
+        # reading `ColumnBound` gives the nodes that can use it.
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        # Widening a field borrow to the struct's origin, as `StringUnary` does.
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a)
+        comptime if Self.K.uses_start:
+            writer.write(", ", self.start)
+        comptime if Self.K.uses_text:
+            writer.write(", ", self.text)
+        comptime if Self.K.uses_alt:
+            writer.write(", ", self.alt)
+        comptime if Self.K.uses_count:
+            writer.write(", ", self.count)
+        writer.write(")")
+
+
+comptime Substr = StringFunction[SubstrKernel, _, UnusedText, UnusedText, _, _]
+comptime Left = StringFunction[
+    LeftKernel, _, UnusedText, UnusedText, UnusedNumber, _
+]
+comptime Right = StringFunction[
+    RightKernel, _, UnusedText, UnusedText, UnusedNumber, _
+]
+comptime LPad = StringFunction[LPadKernel, _, _, UnusedText, UnusedNumber, _]
+comptime RPad = StringFunction[RPadKernel, _, _, UnusedText, UnusedNumber, _]
+comptime Replace = StringFunction[
+    ReplaceKernel, _, _, _, UnusedNumber, UnusedNumber
+]
+comptime SplitPart = StringFunction[
+    SplitPartKernel, _, _, UnusedText, UnusedNumber, _
+]
+comptime TrimChars = StringFunction[
+    TrimCharsKernel, _, _, UnusedText, UnusedNumber, UnusedNumber
+]
+comptime Repeat = StringFunction[
+    RepeatKernel, _, UnusedText, UnusedText, UnusedNumber, _
+]
+"""`repeat(s, n)` is `left`/`right`'s signature, so it is `left`/`right`'s
+node.
+
+It had one of its own, `StringRepeat`, for exactly one reason: it was the only
+member of this family whose argument was a *column*, back when the rest carried
+constants. Now that every argument is a column that is not a distinction, and
+`RepeatKernel` conforms to `StringIntKernel` alongside the other two."""
+
+
+# ---------------------------------------------------------------------------
+# StringMeasure — string x args -> int64, a breaker
+# ---------------------------------------------------------------------------
+struct StringMeasure[K: StringMeasureKernel, A: StringValue, T: StringValue](
+    ColumnBound, NumericValue, Unnamed
+):
+    """`length` (characters), `position` and `ascii` — the string functions
+    that answer a number.
+
+    One argument slot rather than `StringFunction`'s four, because no measure
+    here reads more than a needle: `position(needle IN s)` uses it and
+    `char_length` and `ascii` bind `UnusedText` and never touch it. Adding
+    slots to match the other node would be symmetry for its own sake.
+
+    `int64`, where `StringLength` answers `int32`. That is not an
+    inconsistency: `StringLength` is Arrow's `utf8_length` and returns what
+    PyArrow returns, while these are the SQL spellings and SQL's `length` /
+    `position` / `ascii` are `BIGINT`. The two coexist because they are asked
+    by different vocabularies, and `char_length` and `length` are genuinely
+    different functions besides — bytes against characters.
+    """
+
+    comptime Type = Int64Type
+    comptime shape = Shape.columnar
+    comptime Bound = Int64Array
+
+    var a: Self.A
+    var text: Self.T
+
+    def __init__(out self, var a: Self.A, var text: Self.T):
+        self.a = a^
+        self.text = text^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        var out = self.a.columns()
+        comptime if Self.K.uses_text:
+            out = merged(out^, self.text.columns())
+        return out^
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var n = len(batch)
+        var s = self.a.evaluate(batch, bindings).to_array(n)
+        var ops = StringOperands[Self.T.Type]()
+        comptime if Self.K.uses_text:
+            ops.text = (
+                self.text.evaluate(batch, bindings)
+                .to_array(n)
+                .as_type[BinaryLikeArray[Self.T.Type]]()
+                .copy()
+            )
+        return Self.K.apply(s.as_type[BinaryLikeArray[Self.A.Type]](), ops)
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a)
+        comptime if Self.K.uses_text:
+            writer.write(", ", self.text)
+        writer.write(")")
+
+
+comptime CharLength = StringMeasure[CharLengthKernel, _, UnusedText]
+comptime Position = StringMeasure[PositionKernel, _, _]
+comptime Ascii = StringMeasure[AsciiKernel, _, UnusedText]
+
+
+# ---------------------------------------------------------------------------
+# StringConcat — string x string -> string, a breaker
+# ---------------------------------------------------------------------------
+struct StringConcat[L: StringValue, R: StringValue](StringValue, Unnamed):
+    """SQL `||` — concatenation that **propagates null**.
+
+    The half of the concat family that answers null when either operand is,
+    which is what separates `||` from `concat()`. `ConcatKernel.apply` already
+    had exactly this rule and, until now, no node that reached it.
+
+    A breaker: it produces new bytes, so `bind` materialises and `lane` borrows.
+    """
+
+    comptime Type = Self.L.Type
+    comptime shape = Shape.columnar
+    comptime Bound = BinaryLikeArray[Self.Type]
+
+    var l: Self.L
+    var r: Self.R
+
+    def __init__(out self, var l: Self.L, var r: Self.R):
+        self.l = l^
+        self.r = r^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return merged(self.l.columns(), self.r.columns())
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return self.l.dtype(schema)
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var n = len(batch)
+        var left = self.l.evaluate(batch, bindings).to_array(n)
+        var right = self.r.evaluate(batch, bindings).to_array(n)
+        return ConcatKernel.apply(
+            left.as_type[BinaryLikeArray[Self.L.Type]](),
+            right.as_type[BinaryLikeArray[Self.R.Type]](),
+        )
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("concat(", self.l, ", ", self.r, ")")

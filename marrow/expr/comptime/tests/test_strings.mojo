@@ -11,7 +11,7 @@ from std.testing import assert_equal, assert_true
 
 from ...builders import col, lit, table
 from ...bindings import Bindings
-from ....builders import array, Int64Builder
+from ....builders import array, Int64Builder, StringBuilder
 from ....arrays import BoolArray, StringArray
 from ....dtypes import (
     DynType,
@@ -523,3 +523,123 @@ def test_string_ordering_has_all_six_comparisons() raises:
 
     var le = _bits(col("name", string) <= lit("pear", string), b)
     assert_true(le[0].value() and not le[1].value() and le[3].value())
+
+
+# --- the SQL function surface, with operands --------------------------------
+#
+# `substr`, `lpad`, `split_part` and the rest take their arguments as
+# expressions, so these cover what a constant could not express: a column
+# argument, and a null argument.
+
+
+def _sql_batch() raises -> RecordBatch:
+    """'alpha,beta' / 'gamma' / null, with a per-row count and a null in it."""
+    var sb = StringBuilder(3)
+    sb.append("alpha,beta")
+    sb.append("gamma")
+    sb.append_null()
+    var nb = Int64Builder(capacity=3)
+    nb.append(Int64(2))
+    nb.append_null()
+    nb.append(Int64(4))
+    return record_batch(
+        [sb.finish().to_dyn(), nb.finish().to_dyn()], names=["s", "n"]
+    )
+
+
+def test_string_function_arguments_can_be_columns() raises:
+    """`substr(s, 1, n)` with `n` read per row — the expression the constants
+    version had no way to spell."""
+    var b = _sql_batch()
+    var got = _strings(
+        col("s", string).substr(lit(1, int64), col("n", int64)), b
+    )
+    assert_equal(got[0].value(), "al")
+
+
+def test_a_null_string_function_argument_nulls_its_row() raises:
+    """DuckDB answers NULL for `substring('gamma', 1, NULL)`; the null count
+    column here makes row 1 null while row 0 keeps its answer.
+
+    Row 2's *string* is null, so it was already null — the two sources of
+    nullity meet in `StringOperands.is_valid`."""
+    var b = _sql_batch()
+    var got = _strings(col("s", string).left(col("n", int64)), b)
+    assert_equal(got[0].value(), "al")
+    assert_true(got.is_null(1))
+    assert_true(got.is_null(2))
+    assert_equal(got.null_count(), 2)
+
+
+def test_string_function_constant_arguments_still_read_as_constants() raises:
+    """The literal spelling is unchanged and produces the same answers it did
+    when the arguments were fields — `substr(s, 2, 3)` is still one call."""
+    var b = _sql_batch()
+    assert_equal(_strings(col("s", string).substr(2, 3), b)[0].value(), "lph")
+    assert_equal(_strings(col("s", string).left(5), b)[0].value(), "alpha")
+    assert_equal(_strings(col("s", string).right(4), b)[0].value(), "beta")
+    assert_equal(
+        _strings(col("s", string).lpad(12, "*"), b)[0].value(), "**alpha,beta"
+    )
+    assert_equal(
+        _strings(col("s", string).rpad(12, "*"), b)[0].value(), "alpha,beta**"
+    )
+    assert_equal(
+        _strings(col("s", string).replace(",", "-"), b)[0].value(),
+        "alpha-beta",
+    )
+    assert_equal(
+        _strings(col("s", string).split_part(",", 2), b)[0].value(), "beta"
+    )
+    # Both ends: the leading "alpha" *and* the trailing "a" of "beta" are set
+    # members, so `trim` eats them and leaves ",bet".
+    assert_equal(_strings(col("s", string).strip("aplh"), b)[0].value(), ",bet")
+
+
+def test_a_string_function_operand_is_itself_an_expression() raises:
+    """The argument is a `StringValue`, so it can be a fused subtree rather
+    than a leaf: the separator here is `Lower[StringLiteral]`, bound and
+    materialised per batch like any other operand."""
+    var b = _sql_batch()
+    var got = _strings(
+        col("s", string).split_part(Lower(lit(",", string)), lit(2, int64)), b
+    )
+    assert_equal(got[0].value(), "beta")
+
+
+def test_string_measures_take_an_operand_too() raises:
+    """`position(needle IN s)` — the needle is an operand now, and the three
+    answers are 6 (found), 0 (absent) and null (the *string* is null).
+
+    0 and null are different facts, which is why the measure builds its own
+    bitmap rather than passing the input's through."""
+    var b = _sql_batch()
+    var found = (
+        col("s", string)
+        .position(lit(",", string))
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .as_int64()
+        .copy()
+    )
+    assert_equal(Int(found[0].value()), 6)
+    assert_equal(Int(found[1].value()), 0)
+    assert_true(found.is_null(2))
+
+
+def test_string_function_columns_include_its_arguments() raises:
+    """Projection pushdown reads `columns()`; an argument column missing from
+    it would narrow the batch to something the node then cannot bind."""
+    var cols = col("s", string).substr(lit(1, int64), col("n", int64)).columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "s")
+    assert_equal(cols[1], "n")
+
+
+def test_an_unused_string_function_slot_contributes_no_column() raises:
+    """`left` reads only `count`, so its two string slots and its `start` slot
+    are never evaluated — and never appear in `columns()` either."""
+    var cols = col("s", string).left(col("n", int64)).columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "s")
+    assert_equal(cols[1], "n")

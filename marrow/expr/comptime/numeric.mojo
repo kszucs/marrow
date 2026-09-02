@@ -31,10 +31,18 @@ from ...kernels.numeric import (
     NegKernel,
     NumericCompareKernel,
     BinaryNumericKernel,
+    CosKernel,
+    Exp2Kernel,
+    Log2Kernel,
+    Log10Kernel,
+    Log1pKernel,
+    MaxKernel,
+    MinKernel,
     MulKernel,
     PowKernel,
     RoundKernel,
     SignKernel,
+    SinKernel,
     SqrtKernel,
     SubKernel,
     TruncKernel,
@@ -143,6 +151,30 @@ comptime Floordiv = NumericBinary[FloordivKernel, _, _]
 toward zero and answer -1. That divergence is deliberate and recorded in
 `golden/cases/math_mod_int64.mojo`, whose SQL twin spells floored modulo as
 `((n % 3) + 3) % 3` rather than asserting SQL's convention against marrow's.
+"""
+
+comptime Minimum = NumericBinary[MinKernel, _, _]
+comptime Maximum = NumericBinary[MaxKernel, _, _]
+"""The row-wise extrema, spelled as NumPy spells them.
+
+`NumericBinary` and not a family of their own because they follow exactly its
+rules: the wider operand wins, and a null on either side makes the row null.
+
+**Why `minimum` and not `min`.** `min` is taken: `col("a", int64).min()` is
+the aggregate that folds a whole column. NumPy draws exactly this line —
+`np.minimum(a, b)` is the element-wise binary, `np.min(a)` the reduction — so
+the name is borrowed rather than invented.
+
+**Why not `least` / `greatest`.** That is SQL's spelling, and SQL *skips*
+nulls: `LEAST(NULL, 3)` is 3, not NULL. So does PyArrow's
+`pc.min_element_wise`, whose `ElementWiseAggregateOptions` defaults
+`skip_nulls=True`. `MinKernel` intersects validity like every other
+`BinaryNumericKernel`
+(`kernels/tests/test_arithmetic.mojo::test_min_with_nulls`), so these are the
+propagating form and only that — and the NumPy parallel holds there too, where
+`minimum` propagates NaN and `fmin` skips it. `least` / `greatest` stay free
+for the skipping verbs; `golden/cases/math_greatest_and_least.mojo` pins those
+semantics and stays skipped until a kernel provides them.
 """
 
 
@@ -336,6 +368,20 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue, Unnamed):
 comptime Sqrt = FloatUnary[SqrtKernel, _]
 comptime Exp = FloatUnary[ExpKernel, _]
 comptime Ln = FloatUnary[LogKernel, _]
+comptime Exp2 = FloatUnary[Exp2Kernel, _]
+comptime Log2 = FloatUnary[Log2Kernel, _]
+comptime Log10 = FloatUnary[Log10Kernel, _]
+comptime Log1p = FloatUnary[Log1pKernel, _]
+comptime Sin = FloatUnary[SinKernel, _]
+comptime Cos = FloatUnary[CosKernel, _]
+"""The rest of `UnaryFloatKernel`, which the lane named three of.
+
+Nothing here is new machinery: each is the same partial specialisation as
+`Sqrt`, over a kernel that has been in `kernels/numeric.mojo` and tested since
+before this lane existed. `log1p` computes `log(1 + a)` rather than calling
+`math.log1p`, which recent nightlies upcast to `float64` -- the kernel says so
+and the node inherits it.
+"""
 
 
 struct NumericCompare[

@@ -25,11 +25,11 @@ from std.testing import (
     assert_true,
 )
 
-from ...builders import col, lit
+from ...builders import col, lit, maximum, minimum
 from ...bindings import Bindings
 from ....arrays import BoolArray, Float64Array, Int64Array
 from ....builders import array
-from ....dtypes import float64, int64
+from ....dtypes import float64, int32, int64
 from ....tabular import RecordBatch, record_batch
 from ..core import BoolValue, NumericValue
 
@@ -270,3 +270,88 @@ def test_arithmetic_nodes_still_fuse_into_one_pass() raises:
     )
     var expected: List[Optional[Int]] = [24, 6, 2, None]
     assert_true(got == array(expected, int64))
+
+
+# ---------------------------------------------------------------------------
+# The rest of the two families — kernels that had no verb until 2026-08-31
+# ---------------------------------------------------------------------------
+
+
+def test_the_rest_of_the_float_unary_family_is_reachable() raises:
+    """Six `UnaryFloatKernel`s that `NumericValue` named none of.
+
+    Exactness is chosen the way the `sqrt`/`exp`/`ln` case above chooses it.
+    `y` is [2, 4, 1, 2], so `exp2` and `log2` land on powers of two and are
+    exact; `y - y` is zero, the one input at which `log1p`, `sin` and `cos`
+    are.
+    """
+    var b = _floats()
+    var powers: List[Optional[Float64]] = [4.0, 16.0, 2.0, 4.0]
+    assert_true(_as_f64(col("y", float64).exp2(), b) == array(powers, float64))
+    var logs: List[Optional[Float64]] = [1.0, 2.0, 0.0, 1.0]
+    assert_true(_as_f64(col("y", float64).log2(), b) == array(logs, float64))
+    # At `y[1] == 4.0`, not at `y[2] == 1.0`: every logarithm is 0 at 1, so a
+    # `Log10 = FloatUnary[Log2Kernel]` mis-wiring survives an assertion there.
+    assert_almost_equal(
+        _as_f64(col("y", float64).log10(), b)[1].value(),
+        Float64(0.6020599913279624),
+    )
+    var zero = col("y", float64) - col("y", float64)
+    assert_almost_equal(_as_f64(zero.log1p(), b)[0].value(), Float64(0.0))
+    assert_almost_equal(_as_f64(zero.sin(), b)[0].value(), Float64(0.0))
+    assert_almost_equal(_as_f64(zero.cos(), b)[0].value(), Float64(1.0))
+
+
+def test_the_new_float_unaries_propagate_a_null() raises:
+    """`FloatUnary` forwards its operand's validity, so a null stays a null
+    rather than turning into a NaN — the rule `sqrt` already followed."""
+    var b = _floats()
+    assert_true(_as_f64(col("x", float64).sin(), b).is_null(3))
+    assert_true(_as_f64(col("x", float64).exp2(), b).is_null(3))
+
+
+def test_minimum_and_maximum_choose_between_two_operands() raises:
+    """The row-wise extrema, not the aggregates: these pick between two
+    operands on each row where `MIN(x)` folds a whole column.
+
+    `NumericBinary` nodes, so they inherit its rules rather than restating
+    them — including the null rule the case below is about.
+    """
+    var b = _ints()
+    var smaller: List[Optional[Int]] = [-9, 0, 3, None]
+    assert_true(
+        _as_i64(minimum(col("n", int64), col("d", int64)), b)
+        == array(smaller, int64)
+    )
+    var larger: List[Optional[Int]] = [3, 3, 4, None]
+    assert_true(
+        _as_i64(maximum(col("n", int64), col("d", int64)), b)
+        == array(larger, int64)
+    )
+
+
+def test_minimum_and_maximum_are_null_in_null_out_not_sql_least() raises:
+    """The reason the verbs are not called `least` / `greatest`.
+
+    `n` is null on row 3 and `d` is 3 there. SQL's `LEAST(NULL, 3)` is **3**
+    — it skips nulls — and so does `pc.min_element_wise` at its
+    `skip_nulls=True` default. `MinKernel` intersects validity like every
+    other `BinaryNumericKernel`, so this answers NULL. That is a legitimate
+    operation under PyArrow's `skip_nulls=False`, and a wrong answer under
+    SQL's name, which is why the SQL name is withheld until a kernel skips.
+    """
+    var b = _ints()
+    assert_true(
+        _as_i64(minimum(col("n", int64), col("d", int64)), b).is_null(3)
+    )
+
+
+def test_minimum_and_maximum_promote_a_narrower_operand() raises:
+    """`promote` is `NumericBinary`'s, unchanged: an `int32` literal against
+    an `int64` column gives an `int64` result, so `_as_i64` can read it."""
+    var b = _ints()
+    var capped: List[Optional[Int]] = [-9, 0, 2, None]
+    assert_true(
+        _as_i64(minimum(col("n", int64), lit(2, int32)), b)
+        == array(capped, int64)
+    )

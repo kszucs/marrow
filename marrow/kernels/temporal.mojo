@@ -46,11 +46,15 @@ fields — hour/minute/second — via ``views.apply``).
 from ..arrays import (
     DynArray,
     ArrayData,
+    Date32Array,
     Int32Array,
+    Int64Array,
     PrimitiveArray,
+    StringArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..dtypes import DynType, DType, TemporalType, TimeUnit
+from ..builders import StringBuilder
+from ..dtypes import Date32Type, DynType, DType, TemporalType, TimeUnit
 from .core import Kernel
 from ..utils import CivilDate, floor_div
 
@@ -516,3 +520,351 @@ struct DateTruncKernel(Kernel):
             # into the int64 branch because a wider temporal type would
             # otherwise be read through the wrong lane width, silently.
             raise Self.error(t"{dt} is {width} bytes wide; expected 4 or 8")
+
+
+# ---------------------------------------------------------------------------
+# int64 extraction — the SQL-shaped temporal fields
+# ---------------------------------------------------------------------------
+#
+# `week`, `iso_year` and `epoch` answer `int64` where the nine kernels above
+# answer `int32`. Same reason `CharLengthKernel` does: those nine are Arrow's
+# `year`/`month`/`day` and return what PyArrow returns, while these are the SQL
+# spellings and SQL's `week`/`isoyear`/`epoch` are `BIGINT`. `epoch` needs the
+# width for its own sake — seconds since 1970 leave `int32` in 2038.
+#
+# `_extract64` is `_extract` with a wider destination. The two are not merged
+# behind an `OutType: PrimitiveType` parameter because the component's return
+# type would have to be written `Scalar[OutType.native]`, and a `comptime
+# native: DType` requirement does not resolve reliably off an externally-bound
+# generic parameter (CLAUDE.md, "Associated types, traits, reflection").
+
+
+def _extract64[
+    T: TemporalType,
+    component: def(days: Int, tod: Int) thin -> Scalar[DType.int64],
+](array: PrimitiveArray[T], calendar: Bool, name: String) raises -> Int64Array:
+    """`_extract`, writing `int64`. See that function for the normalisation."""
+    var dt = array.type()
+    var is_date = dt.is_date32() or dt.is_date64()
+    var is_ts = dt.is_timestamp()
+    var is_time = dt.is_time32() or dt.is_time64()
+    if calendar and not (is_date or is_ts):
+        raise Error(t"{name}: requires a date or timestamp array, got {dt}")
+    if not calendar and not (is_ts or is_time):
+        raise Error(t"{name}: requires a timestamp or time array, got {dt}")
+
+    var mul = 86400 if dt.is_date32() else 1
+    var div = 1 if dt.is_date32() else ticks_per_second(dt)
+
+    var n = len(array)
+    var out = Buffer.alloc_uninit[DType.int64](n)
+    var dst = out.view[DType.int64](0, n)
+    var src = array.values()
+    for i in range(n):
+        var raw = Int(src.unsafe_get(i))
+        var total = floor_div(raw * mul, div)
+        var days = floor_div(total, 86400)
+        var tod = total - days * 86400  # [0, 86400)
+        dst.unsafe_set(i, component(days, tod))
+
+    var vbm: Optional[Bitmap[mut=False]] = None
+    if array.bitmap:
+        var v = array.bitmap.value().view(array.offset, n)
+        vbm = v.union(v).to_immutable()
+    return Int64Array(
+        length=n,
+        nulls=array.nulls,
+        offset=0,
+        bitmap=vbm^,
+        buffer=out.to_immutable(),
+    )
+
+
+trait TemporalExtract64Kernel(Kernel):
+    """A temporal-field extraction kernel answering `int64`. The `int32`
+    family's shape exactly — concrete kernels define `component` and
+    `calendar`; `apply` and `dispatch` are defaulted."""
+
+    comptime calendar: Bool
+
+    @staticmethod
+    def component(days: Int, tod: Int) -> Scalar[DType.int64]:
+        ...
+
+    @staticmethod
+    def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> Int64Array:
+        return _extract64[T, Self.component](array, Self.calendar, Self.name)
+
+    @staticmethod
+    def dispatch(array: DynArray) raises -> DynArray:
+        var dt = array.dtype()
+        if not dt.is_temporal():
+            raise Self.error(t"expected a temporal array, got {dt}")
+
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T]()).to_dyn()
+
+        return dt.dispatch_temporal(leaf)
+
+
+# -- ISO-8601 week numbering ------------------------------------------------
+#
+# The rule, and the one place the calendar stops agreeing with itself: ISO week
+# 1 is the week containing the first Thursday of January, so a date in early
+# January can belong to the previous ISO year and a date in late December to
+# the next one. `2021-01-01` is ISO week **53 of 2020**.
+#
+# The implementation takes the Thursday of the date's own ISO week and reads
+# its calendar year: by construction that Thursday lies in the ISO year, which
+# removes the "is it week 1 or week 53" case analysis entirely. Verified
+# against Arrow C++'s own disagreement table (`scalar_temporal_test.cc`):
+# 1899-01-01 -> 1898-W52, 2019-12-30 -> 2020-W1, 2010-01-01 -> 2009-W53.
+
+
+@always_inline
+def _iso_weekday(days: Int) -> Int:
+    """ISO weekday of a days-since-epoch value: Monday = 1 ... Sunday = 7."""
+    # 1970-01-01 was a Thursday, so `days % 7 == 0` is a Thursday.
+    var dow = days - floor_div(days, 7) * 7  # [0, 6], 0 == Thursday
+    return dow + 4 if dow <= 3 else dow - 3
+
+
+@always_inline
+def _iso_thursday(days: Int) -> Int:
+    """Days-since-epoch of the Thursday in the same ISO week as `days`."""
+    return days - (_iso_weekday(days) - 4)
+
+
+struct IsoYearKernel(TemporalExtract64Kernel):
+    """SQL `isoyear` — the calendar year of this ISO week's Thursday, which is
+    not always the calendar year of the date itself."""
+
+    comptime name = "iso_year"
+    comptime calendar = True
+
+    @staticmethod
+    def component(days: Int, tod: Int) -> Scalar[DType.int64]:
+        return Int64(CivilDate.from_days(_iso_thursday(days)).year)
+
+
+struct WeekKernel(TemporalExtract64Kernel):
+    """SQL `week` — the ISO-8601 week number, 1 to 53."""
+
+    comptime name = "week"
+    comptime calendar = True
+
+    @staticmethod
+    def component(days: Int, tod: Int) -> Scalar[DType.int64]:
+        var thu = _iso_thursday(days)
+        # January 1st of the ISO year is always inside ISO week 1, and the
+        # Thursday of week 1 is within three days of it, so counting whole
+        # weeks from January 1st to this week's Thursday gives the week index.
+        var jan1 = CivilDate.days_from(CivilDate.from_days(thu).year, 1, 1)
+        return Int64(floor_div(thu - jan1, 7) + 1)
+
+
+struct EpochKernel(TemporalExtract64Kernel):
+    """SQL `epoch` — whole seconds since 1970-01-01, **floored**.
+
+    Floor, not truncation toward zero, so a pre-1970 instant answers the second
+    it falls *in* rather than the one after it. Arrow is internally inconsistent
+    here — its temporal extraction kernels floor while its timestamp cast
+    divides toward zero — and flooring is the half that agrees with DuckDB.
+    """
+
+    comptime name = "epoch"
+    comptime calendar = True
+
+    @staticmethod
+    def component(days: Int, tod: Int) -> Scalar[DType.int64]:
+        # `days` and `tod` are already the floored split, so re-joining them
+        # cannot round the wrong way.
+        return Int64(days * 86400 + tod)
+
+
+# ---------------------------------------------------------------------------
+# last_day — the last day of the month, as date32
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _last_day_component(days: Int, tod: Int) -> Scalar[DType.int32]:
+    """Days-since-epoch of the last day of this date's month.
+
+    The first of the *next* month minus one day, which gets February right from
+    the calendar algorithm rather than from a table of month lengths: 2020-02
+    answers the 29th and 2100-02 the 28th without either being written down.
+    """
+    var c = CivilDate.from_days(days)
+    var y = c.year + 1 if c.month == 12 else c.year
+    var m = 1 if c.month == 12 else c.month + 1
+    return Int32(CivilDate.days_from(y, m, 1) - 1)
+
+
+struct LastDayKernel(Kernel):
+    """SQL `last_day(d)` -> `date32`.
+
+    A plain `Kernel` rather than a `TemporalExtractKernel` conformer, because
+    the answer is a *date* and the trait's `apply` returns `Int32Array`. A
+    conformer cannot change a trait default's return type — the two become
+    competing overloads and every call reports `ambiguous call` — so this
+    reuses the shared `_extract` engine by calling it directly and re-wraps the
+    result, which is O(1): both arrays are int32-backed, so only the dtype
+    differs.
+    """
+
+    comptime name = "last_day"
+
+    @staticmethod
+    def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> Date32Array:
+        var d = _extract[T, _last_day_component](array, True, Self.name)
+        return Date32Array(
+            Date32Type(),
+            length=len(d),
+            nulls=d.nulls,
+            offset=d.offset,
+            bitmap=d.bitmap,
+            buffer=d.buffer,
+        )
+
+    @staticmethod
+    def dispatch(array: DynArray) raises -> DynArray:
+        var dt = array.dtype()
+        if not dt.is_temporal():
+            raise Self.error(t"expected a temporal array, got {dt}")
+
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T]()).to_dyn()
+
+        return dt.dispatch_temporal(leaf)
+
+
+# ---------------------------------------------------------------------------
+# day_name / month_name — temporal -> string
+# ---------------------------------------------------------------------------
+#
+# The English tables are written out here rather than taken from a locale.
+# Arrow has no `day_name`/`month_name` kernel at all; its only route to a name
+# is `strftime`'s `%A`/`%B`, whose answer depends on a `std::locale` and so is
+# not a specification. DuckDB's `dayname`/`monthname` are the full, capitalized
+# English names, and that is what these return.
+
+
+def _day_name_of(days: Int) -> String:
+    """Full English weekday name of a days-since-epoch value."""
+    var dow = days - floor_div(days, 7) * 7  # [0, 6], 0 == Thursday
+    var mon0 = dow + 3  # 0 == Monday, matching `DayOfWeekKernel`
+    if mon0 >= 7:
+        mon0 -= 7
+    if mon0 == 0:
+        return "Monday"
+    elif mon0 == 1:
+        return "Tuesday"
+    elif mon0 == 2:
+        return "Wednesday"
+    elif mon0 == 3:
+        return "Thursday"
+    elif mon0 == 4:
+        return "Friday"
+    elif mon0 == 5:
+        return "Saturday"
+    else:
+        return "Sunday"
+
+
+def _month_name_of(days: Int) -> String:
+    """Full English month name of a days-since-epoch value."""
+    var m = CivilDate.from_days(days).month
+    if m == 1:
+        return "January"
+    elif m == 2:
+        return "February"
+    elif m == 3:
+        return "March"
+    elif m == 4:
+        return "April"
+    elif m == 5:
+        return "May"
+    elif m == 6:
+        return "June"
+    elif m == 7:
+        return "July"
+    elif m == 8:
+        return "August"
+    elif m == 9:
+        return "September"
+    elif m == 10:
+        return "October"
+    elif m == 11:
+        return "November"
+    else:
+        return "December"
+
+
+def _extract_name[
+    T: TemporalType,
+    component: def(days: Int) thin -> String,
+](array: PrimitiveArray[T], name: String) raises -> StringArray:
+    """`_extract`'s shape with a variable-width destination, so a
+    `StringBuilder` replaces the preallocated buffer and a null input appends a
+    null rather than writing a placeholder."""
+    var dt = array.type()
+    if not (dt.is_date32() or dt.is_date64() or dt.is_timestamp()):
+        raise Error(t"{name}: requires a date or timestamp array, got {dt}")
+
+    var mul = 86400 if dt.is_date32() else 1
+    var div = 1 if dt.is_date32() else ticks_per_second(dt)
+
+    var n = len(array)
+    var builder = StringBuilder(capacity=n)
+    var src = array.values()
+    for i in range(n):
+        if array.is_valid(i):
+            var total = floor_div(Int(src.unsafe_get(i)) * mul, div)
+            builder.append(component(floor_div(total, 86400)))
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+trait TemporalNameKernel(Kernel):
+    """A temporal-field kernel answering a *name* rather than a number."""
+
+    @staticmethod
+    def component(days: Int) -> String:
+        ...
+
+    @staticmethod
+    def apply[T: TemporalType](array: PrimitiveArray[T]) raises -> StringArray:
+        return _extract_name[T, Self.component](array, Self.name)
+
+    @staticmethod
+    def dispatch(array: DynArray) raises -> DynArray:
+        var dt = array.dtype()
+        if not dt.is_temporal():
+            raise Self.error(t"expected a temporal array, got {dt}")
+
+        def leaf[T: TemporalType](d: T) raises {imm} -> DynArray:
+            return Self.apply(array.as_primitive[T]()).to_dyn()
+
+        return dt.dispatch_temporal(leaf)
+
+
+struct DayNameKernel(TemporalNameKernel):
+    """SQL `dayname` — `Monday` … `Sunday`."""
+
+    comptime name = "day_name"
+
+    @staticmethod
+    def component(days: Int) -> String:
+        return _day_name_of(days)
+
+
+struct MonthNameKernel(TemporalNameKernel):
+    """SQL `monthname` — `January` … `December`."""
+
+    comptime name = "month_name"
+
+    @staticmethod
+    def component(days: Int) -> String:
+        return _month_name_of(days)

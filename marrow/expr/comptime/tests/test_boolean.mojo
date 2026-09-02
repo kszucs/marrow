@@ -8,14 +8,14 @@ the whole point: `FALSE AND NULL` is `FALSE`, not `NULL`.
 
 from std.testing import assert_equal, assert_true
 
-from ...builders import col, lit
+from ...builders import col, is_in, lit
 from ....arrays import BoolArray
 from ...bindings import Bindings
-from ....builders import BoolBuilder, array
-from ....dtypes import Int64Type, int64
+from ....builders import BoolBuilder, StringBuilder, array
+from ....dtypes import Int64Type, int32, int64, string
 from ....tabular import RecordBatch, record_batch
 from ..core import ComptimeValue
-from ..boolean import And, Not, Or, Xor
+from ..boolean import And, IsIn, Not, Or, Xor
 
 from ..leaves import BoolColumn, Column, Literal
 from ..numeric import Gt, Lt
@@ -121,3 +121,93 @@ def test_a_non_boolean_operand_is_rejected_by_name() raises:
         raised = True
         assert_true("expected bool operand" in String(e))
     assert_true(raised)
+
+
+# ---------------------------------------------------------------------------
+# IsIn — membership against a constant set
+# ---------------------------------------------------------------------------
+def test_is_in_marks_the_members_and_never_answers_null() raises:
+    """`IsInKernel`'s null rule, read through the node.
+
+    The output is always valid — a null probes as TRUE only when the set holds
+    a null, and FALSE otherwise — so a null row here answers FALSE rather than
+    NULL. `ColumnBound` reports the kernel's bitmap, which is why the rule is
+    stated once and not restated on the node.
+    """
+    var b = record_batch([array([1, 2, None, 4], int64).copy()], names=["a"])
+    var got = _eval(is_in(col("a", int64), array([2, 4], int64).to_dyn()), b)
+    assert_equal(got.null_count(), 0)
+    assert_true(got == _bools([0, 1, 0, 1]))
+
+
+def test_is_in_takes_a_null_in_the_set_as_a_match() raises:
+    """The other half of `null_matching_behavior="match"`: with a null in the
+    set, a null value *is* a member."""
+    var b = record_batch([array([1, 2, None, 4], int64).copy()], names=["a"])
+    var got = _eval(is_in(col("a", int64), array([2, None], int64).to_dyn()), b)
+    assert_true(got == _bools([0, 1, 1, 0]))
+
+
+def test_is_in_accepts_a_string_operand() raises:
+    """The operand is bound on `ComptimeValue`, not on a family — membership
+    is decided on the 64-bit hash, so one node serves every type
+    `RapidHashKernel` supports."""
+    var sb = StringBuilder(3)
+    sb.append("apple")
+    sb.append("pear")
+    sb.append("plum")
+    var b = record_batch([sb.finish().to_dyn()], names=["s"])
+    var wanted = StringBuilder(2)
+    wanted.append("plum")
+    wanted.append("apple")
+    var got = _eval(is_in(col("s", string), wanted.finish().to_dyn()), b)
+    assert_true(got == _bools([1, 0, 1]))
+
+
+def test_is_in_is_a_breaker_whose_operand_still_fuses() raises:
+    """`is_in(a + 1, {3, 5})` — the membership test runs over a materialised
+    column, but `a + 1` under it is still one fused loop. That is what a
+    breaker costs and all it costs."""
+    var b = record_batch([array([1, 2, 3, 4], int64).copy()], names=["a"])
+    var v = is_in(
+        col("a", int64) + lit(1, int64), array([3, 5], int64).to_dyn()
+    )
+    assert_true(_eval(v, b) == _bools([0, 1, 0, 1]))
+
+
+def test_is_in_composes_with_the_kleene_connectives() raises:
+    """A `BoolValue` is an ordinary operand of `AND`, so `IsIn` needed no
+    special case to appear in a predicate."""
+    var b = record_batch(
+        [
+            array([1, 2, 3, 4], int64).copy(),
+            array([10, 20, 30, 40], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+    var v = is_in(col("a", int64), array([2, 3, 4], int64).to_dyn()) & (
+        col("b", int64) < lit(40, int64)
+    )
+    assert_true(_eval(v, b) == _bools([0, 1, 1, 0]))
+
+
+def test_is_in_rejects_a_set_of_another_dtype() raises:
+    """`bind` goes through `IsInKernel.dispatch`, so the same-dtype check the
+    kernel owns is the one the node reports."""
+    var b = record_batch([array([1, 2], int64).copy()], names=["a"])
+    var raised = False
+    try:
+        _ = _eval(is_in(col("a", int64), array([1, 2], int32).to_dyn()), b)
+    except e:
+        raised = True
+        assert_true("int32" in String(e))
+    assert_true(raised)
+
+
+def test_is_in_prints_its_operand_and_its_set() raises:
+    """`Unnamed`, so it has no name of its own — what it can say is what it
+    computes over."""
+    var v = is_in(col("a", int64), array([2, 4], int64).to_dyn())
+    assert_equal(v.name(), "")
+    assert_equal(v.columns()[0], "a")
+    assert_true("is_in(col(a)" in String(v))

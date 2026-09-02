@@ -6,10 +6,20 @@ itself before anything evaluates it. Those answers are what the optimizer reads,
 and a wrong one is silent — a plan that narrows the wrong columns still runs.
 """
 
-from std.testing import assert_equal, assert_true
+from std.testing import (
+    assert_almost_equal,
+    assert_equal,
+    assert_true,
+)
 
 from ....arrays import StructArray, DynArray
 from ...bindings import Bindings
+from ...builders import array_contains as build_array_contains
+from ...builders import array_length as build_array_length
+from ...builders import col as build_col
+from ...builders import maximum as build_maximum
+from ...builders import minimum as build_minimum
+from ...builders import is_in as build_is_in
 from ....builders import array
 from ....dtypes import Date32Type, DynType, date32, float64, int32, int64
 from ....scalars import DynScalar, Int32Scalar, Int64Scalar, StringScalar
@@ -28,13 +38,16 @@ from ..values import (
     abs,
     add,
     and_,
+    array_contains,
     array_length,
     cast,
     ceil,
     coalesce,
     column,
+    cos,
     date_trunc,
     eq,
+    exp2,
     fill_null,
     floor,
     floordiv,
@@ -49,7 +62,12 @@ from ..values import (
     length,
     like,
     literal,
+    log10,
+    log1p,
+    log2,
     lt,
+    maximum,
+    minimum,
     mod,
     month,
     mul,
@@ -57,12 +75,21 @@ from ..values import (
     neg,
     not_,
     nullif,
+    lpad,
+    left,
     or_,
+    position,
     quarter,
+    replace,
+    right,
+    sin,
+    split_part,
     sqrt,
     startswith,
     strip,
     sub,
+    substr,
+    trim_chars,
     truediv,
     upper,
     xor,
@@ -539,3 +566,238 @@ def test_runtime_conditionals_leave_a_hopeless_mix_to_the_kernel() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def _text() raises -> RecordBatch:
+    """The SQL string surface's fixture: a comma, no comma, and a null."""
+    var sb = StringBuilder(3)
+    sb.append("alpha,beta")
+    sb.append("gamma")
+    sb.append_null()
+    return record_batch(
+        [sb.finish().to_dyn(), array([2, 1, 1], int64).copy()],
+        names=["s", "n"],
+    )
+
+
+def test_runtime_sql_string_functions_are_reachable() raises:
+    """All nine argument-taking string functions, in the lane that could not
+    spell one of them while their arguments were constants on the node.
+
+    This is the whole point of the operand carrier: a `RuntimeValue` has
+    nowhere to put a constant a kernel takes directly, and it has always had
+    somewhere to put a child.
+    """
+    var b = _text()
+
+    var sub_ = (
+        _over(b, substr(column("s"), _lit(1), _lit(5))).as_string().copy()
+    )
+    assert_equal(sub_[0].value(), "alpha")
+    assert_true(sub_.is_null(2))
+
+    var l = _over(b, left(column("s"), _lit(5))).as_string().copy()
+    assert_equal(l[0].value(), "alpha")
+
+    var r = _over(b, right(column("s"), _lit(4))).as_string().copy()
+    assert_equal(r[0].value(), "beta")
+
+    var lp = _over(b, lpad(column("s"), _lit(12), _str("*"))).as_string().copy()
+    assert_equal(lp[0].value(), "**alpha,beta")
+
+    var rep = (
+        _over(b, replace(column("s"), _str(","), _str("-"))).as_string().copy()
+    )
+    assert_equal(rep[0].value(), "alpha-beta")
+
+    var sp = (
+        _over(b, split_part(column("s"), _str(","), _lit(2))).as_string().copy()
+    )
+    assert_equal(sp[0].value(), "beta")
+
+    # Both ends: the trailing "a" of "beta" is a set member too.
+    var tr = _over(b, trim_chars(column("s"), _str("aplh"))).as_string().copy()
+    assert_equal(tr[0].value(), ",bet")
+
+    var pos = _over(b, position(column("s"), _str(","))).as_int64().copy()
+    assert_equal(Int(pos[0].value()), 6)
+    assert_equal(Int(pos[1].value()), 0)
+    assert_true(pos.is_null(2))
+
+
+def test_runtime_sql_string_arguments_can_be_columns() raises:
+    """`substr(s, 1, n)` with `n` a column — the expression the constants
+    version had no way to build in either lane."""
+    var b = _text()
+    var got = (
+        _over(b, substr(column("s"), _lit(1), column("n"))).as_string().copy()
+    )
+    assert_equal(got[0].value(), "al")
+    assert_equal(got[1].value(), "g")
+    assert_true(got.is_null(2))
+
+
+def test_runtime_sql_string_null_argument_nulls_the_row() raises:
+    """A null argument makes the row null, as DuckDB does — and only its own
+    row, which is what separates it from a null constant."""
+    var nb = Int64Builder(capacity=3)
+    nb.append(Int64(2))
+    nb.append_null()
+    nb.append(Int64(2))
+    var b = record_batch(
+        [
+            array(["abc", "abc", "abc"]).to_dyn(),
+            nb.finish().to_dyn(),
+        ],
+        names=["s", "n"],
+    )
+    var got = _over(b, left(column("s"), column("n"))).as_string().copy()
+    assert_equal(got[0].value(), "ab")
+    assert_true(got.is_null(1))
+    assert_equal(got[2].value(), "ab")
+
+
+def test_runtime_sql_string_arguments_promote_their_width() raises:
+    """An `int32` count reaches an `int64` slot: this lane normalises operands
+    with `cast`, as `_arith` and `_compare` already do, so the carrier is
+    instantiated once rather than per integer width."""
+    var b = record_batch(
+        [
+            array(["abcde"]).to_dyn(),
+            array([3], int32).to_dyn(),
+        ],
+        names=["s", "n"],
+    )
+    var got = _over(b, left(column("s"), column("n"))).as_string().copy()
+    assert_equal(got[0].value(), "abc")
+
+
+def _str(var v: String) -> RuntimeValue:
+    """A string literal operand — `lit` for the string half."""
+    return literal(DynScalar(StringScalar(v^)))
+
+
+def _runtime_lists() raises -> RecordBatch:
+    """`xs` = [[1, 2, 3], [4], [], null], `needle` = [2, 4, 1, 1]."""
+    var ints = Int64Builder()
+    var lists = ListBuilder(ints^)
+    var child_any = lists.values()
+    ref child = child_any.as_int64()
+    child.append(1)
+    child.append(2)
+    child.append(3)
+    lists.append_valid()
+    child.append(4)
+    lists.append_valid()
+    lists.append_valid()
+    lists.append_null()
+    return record_batch(
+        [lists.finish().to_dyn(), array([2, 4, 1, 1], int64).to_dyn()],
+        names=["xs", "needle"],
+    )
+
+
+def test_runtime_array_contains_over_a_list_column() raises:
+    """Two children rather than a payload, unlike `isin`: the search value is
+    one per row, so there is nothing constant to hoist out of the morsel."""
+    var b = _runtime_lists()
+    var got = (
+        array_contains(column("xs"), column("needle"))
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(4)
+        .as_bool()
+        .copy()
+    )
+    assert_true(got[0].value())
+    assert_true(got[1].value())
+    assert_true(not got[2].value())
+    assert_true(got.is_null(3))  # a null list has no members
+
+
+def test_builder_verbs_select_the_runtime_overload() raises:
+    """The point of the annotations: each `var v: RuntimeValue` is a
+    compile-time proof that the erased overload was chosen.
+
+    A concrete overload does not always beat a trait-bound generic one in Mojo
+    — a `filter` overload on a concrete predicate type compiled clean and was
+    silently never called. Here the generic sibling binds `ComptimeValue` /
+    `ListValue`, which `RuntimeValue` deliberately does not satisfy, and these
+    assignments are what says so rather than assuming it.
+    """
+    var b = _runtime_lists()
+    var n: RuntimeValue = build_array_length(build_col("xs"))
+    var c: RuntimeValue = build_array_contains(
+        build_col("xs"), build_col("needle")
+    )
+    var m: RuntimeValue = build_is_in(
+        build_col("needle"), array([1, 2], int64).to_dyn()
+    )
+
+    var sa = b.to_struct_array()
+    var lengths = n.evaluate(sa, Bindings()).to_array(4).as_int32().copy()
+    assert_equal(Int(lengths[0].value()), 3)
+    assert_true(c.evaluate(sa, Bindings()).to_array(4).as_bool()[0].value())
+    var member = m.evaluate(sa, Bindings()).to_array(4).as_bool().copy()
+    assert_true(member[0].value())  # needle 2 is in {1, 2}
+    assert_true(not member[1].value())  # needle 4 is not
+
+
+def test_runtime_the_rest_of_the_float_unary_family() raises:
+    """Six `_unary` tags the lane had no arm for. `f` is [4, 8, 1, 2], so
+    `exp2` and `log2` are exact on it, and `f - f` is the zero at which
+    `log1p`, `sin` and `cos` are."""
+    var b = record_batch(
+        [array([4.0, 8.0, 1.0, 2.0], float64).to_dyn()], names=["f"]
+    )
+    assert_true(
+        _over(b, exp2(column("f"))) == array([16.0, 256.0, 2.0, 4.0], float64)
+    )
+    assert_true(
+        _over(b, log2(column("f"))) == array([2.0, 3.0, 0.0, 1.0], float64)
+    )
+    # At `f[0] == 4.0`, not at `f[2] == 1.0`: every logarithm is 0 at 1, so a
+    # mis-wiring to `Log2Kernel` survives an assertion there.
+    var decimal_log = _over(b, log10(column("f"))).as_float64().copy()
+    assert_almost_equal(decimal_log[0].value(), Float64(0.6020599913279624))
+
+    var zeros = sub(column("f"), column("f"))
+    var shifted = _over(b, log1p(zeros.copy())).as_float64().copy()
+    assert_almost_equal(shifted[0].value(), Float64(0.0))
+    var sines = _over(b, sin(zeros.copy())).as_float64().copy()
+    assert_almost_equal(sines[0].value(), Float64(0.0))
+    var cosines = _over(b, cos(zeros^)).as_float64().copy()
+    assert_almost_equal(cosines[0].value(), Float64(1.0))
+
+
+def test_runtime_minimum_and_maximum_pick_per_row() raises:
+    """Two `_binary` tags routed through `_arith`, not `_float_binary`: they
+    select an operand rather than computing a new value, so the result keeps
+    the promoted operand type instead of widening to float64.
+
+    **Narrowed to `Int64Array` before comparing, and that is load-bearing.**
+    `DynArray.__eq__` compares whole buffers, and a binary kernel computes
+    every lane before masking, so the byte under `a`'s null holds `max(0, 30)`
+    where a builder writes 0. Erased `==` fails on the max and *passes* on the
+    min purely because `min(0, 30)` happens to be 0 — the trap
+    `docs/backlog.md` §1.9 records, caught here.
+    """
+    var smaller = _ints(minimum(column("a"), column("b"))).as_int64().copy()
+    assert_true(smaller == array([1, 2, None, 4], int64))
+    var larger = _ints(maximum(column("a"), column("b"))).as_int64().copy()
+    assert_true(larger == array([10, 20, None, 40], int64))
+    # Null-in-null-out — SQL's `GREATEST` would answer 30 on this row, which
+    # is why these verbs do not carry that name. The type is the promoted
+    # operand's, not float64.
+    assert_true(larger.is_null(2))
+    assert_true(
+        _ints(minimum(column("a"), column("b"))).dtype() == DynType(int64)
+    )
+
+
+def test_builder_minimum_and_maximum_select_the_runtime_overload() raises:
+    """As `test_builder_verbs_select_the_runtime_overload`: the annotation is
+    the proof, since the generic sibling binds `NumericValue`."""
+    var l: RuntimeValue = build_minimum(build_col("a"), build_col("b"))
+    var g: RuntimeValue = build_maximum(build_col("a"), build_col("b"))
+    assert_true(_ints(l).as_int64().copy() == array([1, 2, None, 4], int64))
+    assert_true(_ints(g).as_int64().copy() == array([10, 20, None, 40], int64))

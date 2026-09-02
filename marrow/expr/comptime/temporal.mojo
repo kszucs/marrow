@@ -21,12 +21,35 @@ by family instead would put `TemporalExtract` next to `NumericBinary`, whose
 operands are numeric, and `DateTrunc` next to nothing at all.
 """
 
-from ...arrays import Int32Array, PrimitiveArray, StructArray
-from ...dtypes import DynType, Int32Type, TemporalType
+from ...arrays import (
+    Date32Array,
+    Int32Array,
+    Int64Array,
+    PrimitiveArray,
+    StringArray,
+    StructArray,
+)
+from ...buffers import Bitmap
+from ...dtypes import (
+    Date32Type,
+    DynType,
+    Int32Type,
+    Int64Type,
+    StringType,
+    TemporalType,
+)
 from ...kernels.temporal import (
     CalendarUnit,
     DateTruncKernel,
     DayKernel,
+    DayNameKernel,
+    EpochKernel,
+    IsoYearKernel,
+    LastDayKernel,
+    MonthNameKernel,
+    TemporalExtract64Kernel,
+    TemporalNameKernel,
+    WeekKernel,
     DayOfWeekKernel,
     DayOfYearKernel,
     HourKernel,
@@ -40,7 +63,13 @@ from ...kernels.temporal import (
 from ...schema import Schema
 from ..logical import Shape
 from ..bindings import Bindings
-from .core import ColumnBound, NumericValue, TemporalValue, Unnamed
+from .core import (
+    ColumnBound,
+    NumericValue,
+    StringValue,
+    TemporalValue,
+    Unnamed,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +209,154 @@ struct DateTrunc[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date_trunc(", self.a, ", ", self._unit, ")")
+
+
+# ---------------------------------------------------------------------------
+# TemporalExtract64 — temporal -> int64
+# ---------------------------------------------------------------------------
+struct TemporalExtract64[K: TemporalExtract64Kernel, A: TemporalValue](
+    ColumnBound, NumericValue, Unnamed
+):
+    """`week`, `iso_year` and `epoch` — the temporal fields SQL types as
+    `BIGINT`.
+
+    A separate node from `TemporalExtract` only because the width differs.
+    Those nine are Arrow's `year`/`month`/`day` and answer `int32`, which is
+    what PyArrow answers; these are the SQL spellings, and `epoch` needs the
+    width for its own sake — seconds since 1970 leave `int32` in 2038.
+    """
+
+    comptime Type = Int64Type
+    comptime shape = Shape.columnar
+    comptime Bound = Int64Array
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ")")
+
+
+comptime Week = TemporalExtract64[WeekKernel, _]
+comptime IsoYear = TemporalExtract64[IsoYearKernel, _]
+comptime Epoch = TemporalExtract64[EpochKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# LastDay — temporal -> date32
+# ---------------------------------------------------------------------------
+struct LastDay[A: TemporalValue](ColumnBound, TemporalValue, Unnamed):
+    """SQL `last_day(d)` — the last day of the operand's month, as `date32`.
+
+    The one node here whose output type is *fixed* rather than forwarded:
+    `DateTrunc` keeps its operand's dtype because flooring a timestamp yields a
+    timestamp, but the last day of a month is a date whatever the operand was.
+    `Date32Type` is default-constructible, so `dtype` can answer from the type
+    rather than from the value — which is exactly what `DateTrunc` cannot do.
+    """
+
+    comptime Type = Date32Type
+    comptime shape = Shape.columnar
+    comptime Bound = Date32Array
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(Date32Type())
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return LastDayKernel.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return bound.values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("last_day(", self.a, ")")
+
+
+# ---------------------------------------------------------------------------
+# TemporalName — temporal -> string
+# ---------------------------------------------------------------------------
+struct TemporalName[K: TemporalNameKernel, A: TemporalValue](
+    StringValue, Unnamed
+):
+    """`dayname` and `monthname` — extraction that answers a *name*.
+
+    The only temporal node that crosses into the string family, so it is the
+    only one whose `lane` borrows rather than loading a SIMD vector. `bind`
+    runs the kernel once per batch and `lane` borrows out of the result, the
+    same shape `StringUnary` uses.
+    """
+
+    comptime Type = StringType
+    comptime shape = Shape.columnar
+    comptime Bound = StringArray
+
+    var a: Self.A
+
+    def __init__(out self, var a: Self.A):
+        self.a = a^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return self.a.columns()
+
+    # -- StringValue --------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        var t = self.a.evaluate(batch, bindings).to_array(len(batch))
+        return Self.K.apply(t.as_type[PrimitiveArray[Self.A.Type]]())
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        # `_extract_name` appends a null for a null input, so the bound column
+        # already carries the rule.
+        return bound.bitmap
+
+    @always_inline
+    def lane(
+        self, ref bound: Self.Bound, idx: Int
+    ) -> StringSlice[origin_of(bound)]:
+        return rebind[StringSlice[origin_of(bound)]](
+            bound.unsafe_get(UInt(idx))
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.a, ")")
+
+
+comptime DayName = TemporalName[DayNameKernel, _]
+comptime MonthName = TemporalName[MonthNameKernel, _]

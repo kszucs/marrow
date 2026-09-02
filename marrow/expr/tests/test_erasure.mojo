@@ -165,9 +165,7 @@ def test_dyn_relation_owns_its_node_by_construction() raises:
     the eight members are the whole set, so nothing outside `logical.mojo` can
     be a relation node.
     """
-    var batch = record_batch(
-        [array([1, 2, 3], int64).copy()], names=["a"]
-    )
+    var batch = record_batch([array([1, 2, 3], int64).copy()], names=["a"])
     var boxed: DynRelation = InMemoryTable(batch^)
     assert_equal(len(boxed.schema()), 1)
 

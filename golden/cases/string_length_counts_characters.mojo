@@ -15,7 +15,6 @@ def plan() raises -> DynRelation:
     two are genuinely different functions, and marrow's answer to the one it
     has is correct.
 
-    -- skip mojo
     -- skip python
 
     -- expected

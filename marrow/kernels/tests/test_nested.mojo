@@ -9,7 +9,7 @@ from ...arrays import ListArray, Int32Array, MapArray
 from ...builders import ListBuilder, Int64Builder, MapBuilder, array
 from ...dtypes import int32, int64, string, map_, DynType
 
-from ...kernels.nested import ArrayLengthKernel
+from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 
 
 def _lists_with_null() raises -> ListArray:
@@ -112,3 +112,34 @@ def test_array_length_of_map() raises:
     assert_equal(r[0].value(), 1)
     assert_equal(r[1].value(), 0)
     assert_equal(r[2].value(), 2)
+
+
+def test_array_contains_finds_the_row_value() raises:
+    # [[10], [], [20, 30]] searched for 10 / 99 / 30.
+    var r = ArrayContainsKernel.apply(
+        _lists_no_null(), array([10, 99, 30], int64)
+    )
+    assert_equal(r.null_count(), 0)
+    assert_true(r[0].value())
+    assert_false(r[1].value())
+    assert_true(r[2].value())
+
+
+def test_array_contains_rejects_a_mismatched_element_type() raises:
+    """A search value of a different type than the list's child **raises**.
+
+    `dispatch` reads `V` off the element array and `T` off the list's offset
+    width; neither looks at the child. Without the guard in `apply` this is
+    `as_primitive[Int32Type]()` on an `int64` child -- a bad variant access,
+    which aborts the process instead of raising, taking the whole test binary
+    with it rather than failing one case.
+    """
+    var raised = False
+    try:
+        _ = ArrayContainsKernel.apply(
+            _lists_no_null(), array([10, 99, 30], int32)
+        )
+    except e:
+        raised = True
+        assert_true("does not match" in String(e), String(e))
+    assert_true(raised, "a mismatched element type must raise")

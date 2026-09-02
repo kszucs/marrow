@@ -107,9 +107,7 @@ def _check(plan: DynRelation, expected: List[List[Int]]) raises:
         after.num_columns(), len(expected), "OPTIMIZED: wrong column count"
     )
     for i in range(len(expected)):
-        assert_equal(
-            _col(before, i), expected[i], "unoptimized plan is wrong"
-        )
+        assert_equal(_col(before, i), expected[i], "unoptimized plan is wrong")
         assert_equal(_col(after, i), expected[i], "OPTIMIZED plan is wrong")
 
 
@@ -159,8 +157,10 @@ def test_executing_one_plan_twice_agrees() raises:
     assert_equal(_col(first, 1), _col(second, 1), "values differ across runs")
     assert_true(
         first == second,
-        "values agree but RecordBatch.__eq__ does not — the equality is at"
-        " fault, not the engine",
+        (
+            "values agree but RecordBatch.__eq__ does not — the equality is at"
+            " fault, not the engine"
+        ),
     )
 
 
@@ -270,8 +270,7 @@ def test_optimizer_merged_limit_composes_offsets() raises:
 
 
 def test_optimizer_merged_limit_clamps_to_the_inner_window() raises:
-    """An outer limit asking for more than the inner left gets what is there.
-    """
+    """An outer limit asking for more than the inner left gets what is there."""
     var plan = table(_batch()).limit(2).limit(5)
     _fires(plan)
     _check(plan, [[3, 1], [10, 20]])
@@ -288,11 +287,7 @@ def test_optimizer_zero_length_limit_becomes_empty() raises:
 
 def test_optimizer_empty_propagates_through_a_filter() raises:
     """Emptiness travels upward, so no operator is built above it."""
-    var plan = (
-        table(_batch())
-        .limit(0)
-        .filter(col("b", int64) > lit(20, int64))
-    )
+    var plan = table(_batch()).limit(0).filter(col("b", int64) > lit(20, int64))
     _fires(plan)
     var out = String(plan.optimize[AllRules]())
     assert_equal(_occurrences(out, "Filter("), 0)
@@ -369,8 +364,8 @@ def test_optimizer_merges_stacked_projections() raises:
 
 def test_optimizer_pushes_a_filter_below_a_projection() raises:
     """A predicate on a pass-through column moves under the projection."""
-    var plan = table(_batch()).select("a", "b").filter(
-        col("a", int64) > lit(3, int64)
+    var plan = (
+        table(_batch()).select("a", "b").filter(col("a", int64) > lit(3, int64))
     )
     _fires(plan)
     _check(plan, [[4, 5, 9], [30, 50, 60]])
@@ -436,8 +431,10 @@ def test_an_aggregate_above_a_limit_emits_one_row() raises:
     aggregate has nothing to push and answers only from `drain`.
     """
     var ctx = ExecContext()
-    var plan = table(_batch()).limit(3).aggregate(
-        [col("a", int64).sum().alias("total")]
+    var plan = (
+        table(_batch())
+        .limit(3)
+        .aggregate([col("a", int64).sum().alias("total")])
     )
     var out = plan.optimize[NoRules]().execute(ctx)
     assert_equal(out.num_rows(), 1, "an ungrouped aggregate must emit one row")
@@ -464,8 +461,7 @@ def _wide() raises -> RecordBatch:
 def test_pruning_narrows_a_source_to_the_projected_columns() raises:
     """`select("a")` over four columns reads one."""
     var plan = table(_wide()).select("a")
-    var out = String(plan.optimize[AllRules]())
-    assert_true("1 cols" in out or "InMemoryTable" in out, out)
+    _fires(plan)
     _check(plan, [[3, 1, 4]])
 
 
@@ -473,8 +469,8 @@ def test_pruning_keeps_columns_a_filter_reads() raises:
     """A predicate's columns are needed below even though the output drops
     them — this is the case a naive "keep what the output names" gets wrong,
     and it fails as a missing column rather than as wrong rows."""
-    var plan = table(_wide()).filter(col("b", int64) > lit(15, int64)).select(
-        "a"
+    var plan = (
+        table(_wide()).filter(col("b", int64) > lit(15, int64)).select("a")
     )
     _check(plan, [[1, 4]])
 
@@ -543,9 +539,11 @@ def _right_table() raises -> RecordBatch:
 
 def test_optimizer_pushes_a_filter_into_the_left_side_of_a_join() raises:
     """A predicate reading only left columns shrinks the left input first."""
-    var plan = table(_left_table()).join(
-        table(_right_table()), [0], [0], JOIN_INNER
-    ).filter(col("lval", int64) > lit(15, int64))
+    var plan = (
+        table(_left_table())
+        .join(table(_right_table()), [0], [0], JOIN_INNER)
+        .filter(col("lval", int64) > lit(15, int64))
+    )
     _fires(plan)
     var out = String(plan.optimize[AllRules]())
     assert_true(out.find("Join(") < out.find("Filter("), out)
@@ -553,9 +551,11 @@ def test_optimizer_pushes_a_filter_into_the_left_side_of_a_join() raises:
 
 
 def test_optimizer_pushes_a_filter_into_the_right_side_of_a_join() raises:
-    var plan = table(_left_table()).join(
-        table(_right_table()), [0], [0], JOIN_INNER
-    ).filter(col("rval", int64) > lit(150, int64))
+    var plan = (
+        table(_left_table())
+        .join(table(_right_table()), [0], [0], JOIN_INNER)
+        .filter(col("rval", int64) > lit(150, int64))
+    )
     _fires(plan)
     _check(plan, [[2, 3], [20, 30], [2, 3], [200, 300]])
 
@@ -569,9 +569,11 @@ def test_optimizer_does_not_push_a_filter_below_an_outer_join() raises:
     empty. Asserted as *inert* rather than only on rows, because a wrong answer
     here depends on the data happening to contain a non-match.
     """
-    var plan = table(_left_table()).join(
-        table(_right_table()), [0], [0], JOIN_LEFT
-    ).filter(col("rval", int64) > lit(150, int64))
+    var plan = (
+        table(_left_table())
+        .join(table(_right_table()), [0], [0], JOIN_LEFT)
+        .filter(col("rval", int64) > lit(150, int64))
+    )
     _inert(plan)
 
 
@@ -582,9 +584,11 @@ def test_optimizer_leaves_an_ambiguous_join_predicate_alone() raises:
         [array([1, 2, 3], int64).copy(), array([9, 9, 9], int64).copy()],
         names=["id", "lval"],
     )
-    var plan = table(both^).join(
-        table(_left_table()), [0], [0], JOIN_INNER
-    ).filter(col("lval", int64) > lit(5, int64))
+    var plan = (
+        table(both^)
+        .join(table(_left_table()), [0], [0], JOIN_INNER)
+        .filter(col("lval", int64) > lit(5, int64))
+    )
     _inert(plan)
 
 
@@ -625,10 +629,7 @@ def test_optimizer_empty_propagates_through_sort_and_project() raises:
     the wrong columns.
     """
     var plan = (
-        table(_batch())
-        .limit(0)
-        .sort_by([col("a", int64)], [True])
-        .select("b")
+        table(_batch()).limit(0).sort_by([col("a", int64)], [True]).select("b")
     )
     var out = String(plan.optimize[AllRules]())
     assert_equal(_occurrences(out, "Sort("), 0)
@@ -641,13 +642,21 @@ def test_optimizer_empty_propagates_through_sort_and_project() raises:
 # ---------------------------------------------------------------------------
 def test_folding_collapses_a_conjunction_with_true() raises:
     """`x AND TRUE` is `x`, folded where the operands are still concrete."""
-    var p = and_(gt(column("a"), literal(Int64Scalar(1).to_dyn())), literal(BoolScalar(True).to_dyn()))
-    assert_equal(String(p), String(gt(column("a"), literal(Int64Scalar(1).to_dyn()))))
+    var p = and_(
+        gt(column("a"), literal(Int64Scalar(1).to_dyn())),
+        literal(BoolScalar(True).to_dyn()),
+    )
+    assert_equal(
+        String(p), String(gt(column("a"), literal(Int64Scalar(1).to_dyn())))
+    )
 
 
 def test_folding_annihilates_a_conjunction_with_false() raises:
     """`x AND FALSE` is `FALSE` — true in Kleene logic even against a null."""
-    var p = and_(gt(column("a"), literal(Int64Scalar(1).to_dyn())), literal(BoolScalar(False).to_dyn()))
+    var p = and_(
+        gt(column("a"), literal(Int64Scalar(1).to_dyn())),
+        literal(BoolScalar(False).to_dyn()),
+    )
     assert_equal(String(p), String(literal(BoolScalar(False).to_dyn())))
 
 
@@ -673,7 +682,10 @@ def test_a_folded_false_filter_collapses_the_plan() raises:
     query. Nobody writes `LIMIT 0`, but predicates fold to `FALSE` often.
     """
     var plan = table(_batch()).filter(
-        and_(gt(column("a"), literal(Int64Scalar(1).to_dyn())), literal(BoolScalar(False).to_dyn()))
+        and_(
+            gt(column("a"), literal(Int64Scalar(1).to_dyn())),
+            literal(BoolScalar(False).to_dyn()),
+        )
     )
     assert_true("Empty(" in String(plan.optimize[AllRules]()), String(plan))
 
@@ -683,9 +695,11 @@ def test_a_folded_false_filter_collapses_the_plan() raises:
 # ---------------------------------------------------------------------------
 def test_optimizer_pushes_a_filter_below_a_group_key() raises:
     """A predicate on a group key filters before grouping, not after."""
-    var plan = table(_batch()).aggregate(
-        [col("b", int64).sum().alias("total")], [col("a", int64)]
-    ).filter(col("a", int64) > lit(3, int64))
+    var plan = (
+        table(_batch())
+        .aggregate([col("b", int64).sum().alias("total")], [col("a", int64)])
+        .filter(col("a", int64) > lit(3, int64))
+    )
     _fires(plan)
     var out = String(plan.optimize[AllRules]())
     assert_true(out.find("Aggregate(") < out.find("Filter("), out)
@@ -694,18 +708,22 @@ def test_optimizer_pushes_a_filter_below_a_group_key() raises:
 def test_optimizer_does_not_push_a_filter_on_an_aggregate_output() raises:
     """`HAVING sum(...) > n` names a column the aggregate computes, so it
     cannot move below the node that computes it."""
-    var plan = table(_batch()).aggregate(
-        [col("b", int64).sum().alias("total")], [col("a", int64)]
-    ).filter(col("total", int64) > lit(30, int64))
+    var plan = (
+        table(_batch())
+        .aggregate([col("b", int64).sum().alias("total")], [col("a", int64)])
+        .filter(col("total", int64) > lit(30, int64))
+    )
     _inert(plan)
 
 
 def test_optimizer_does_not_push_a_filter_below_a_keyless_aggregate() raises:
     """A keyless aggregate emits one row; a filter above it asks a different
     question than one below."""
-    var plan = table(_batch()).aggregate(
-        [col("a", int64).sum().alias("total")]
-    ).filter(col("total", int64) > lit(1, int64))
+    var plan = (
+        table(_batch())
+        .aggregate([col("a", int64).sum().alias("total")])
+        .filter(col("total", int64) > lit(1, int64))
+    )
     _inert(plan)
 
 
@@ -713,8 +731,10 @@ def test_optimizer_does_not_push_a_filter_below_a_keyless_aggregate() raises:
 # Empty through a join, per kind
 # ---------------------------------------------------------------------------
 def test_optimizer_inner_join_with_an_empty_side_is_empty() raises:
-    var plan = table(_left_table()).limit(0).join(
-        table(_right_table()), [0], [0], JOIN_INNER
+    var plan = (
+        table(_left_table())
+        .limit(0)
+        .join(table(_right_table()), [0], [0], JOIN_INNER)
     )
     _fires(plan)
     assert_true("Empty(" in String(plan.optimize[AllRules]()))
@@ -794,11 +814,13 @@ def test_optimizer_split_conjuncts_reach_both_sides_of_a_join() raises:
     Split, each half lands in the side it names — which is why splitting runs
     before the pushdown rules rather than after.
     """
-    var plan = table(_left_table()).join(
-        table(_right_table()), [0], [0], JOIN_INNER
-    ).filter(
-        (col("lval", int64) > lit(15, int64))
-        & (col("rval", int64) > lit(150, int64))
+    var plan = (
+        table(_left_table())
+        .join(table(_right_table()), [0], [0], JOIN_INNER)
+        .filter(
+            (col("lval", int64) > lit(15, int64))
+            & (col("rval", int64) > lit(150, int64))
+        )
     )
     var out = String(plan.optimize[AllRules]())
     assert_true(out.find("Join(") < out.find("Filter("), out)
@@ -813,11 +835,13 @@ def test_optimizer_reaches_a_fixpoint_with_splitting_and_pushdown() raises:
     rather than hanging. This asserts they converge on the shape most likely to
     expose it: multiple conjuncts over a join.
     """
-    var plan = table(_left_table()).join(
-        table(_right_table()), [0], [0], JOIN_INNER
-    ).filter(
-        (col("lval", int64) > lit(15, int64))
-        & (col("rval", int64) > lit(150, int64))
+    var plan = (
+        table(_left_table())
+        .join(table(_right_table()), [0], [0], JOIN_INNER)
+        .filter(
+            (col("lval", int64) > lit(15, int64))
+            & (col("rval", int64) > lit(150, int64))
+        )
     )
     var once = plan.optimize[AllRules]()
     assert_equal(String(once), String(once.optimize[AllRules]()))

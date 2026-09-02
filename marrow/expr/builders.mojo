@@ -18,13 +18,14 @@ imports. That is the same failure the wildcard-import ban exists to prevent.
 """
 
 from .`comptime`.aggregates import Aggregate
-from .`comptime`.numeric import CaseWhen
-from .`comptime`.core import BoolValue, ListValue, NumericValue
+from .`comptime`.boolean import IsIn
+from .`comptime`.numeric import CaseWhen, Maximum, Minimum
+from .`comptime`.core import BoolValue, ComptimeValue, ListValue, NumericValue
+from .`comptime`.nested import ArrayContains, ListLength
 from .`comptime`.leaves import (
     BoolColumn,
     Column,
     ListColumn,
-    ListLength,
     Param,
     TemporalColumn,
     Literal,
@@ -34,6 +35,12 @@ from .`comptime`.leaves import (
 from .logical import DynRelation, InMemoryTable, ParquetScan
 
 from .runtime.values import RuntimeValue, column, literal
+from .runtime.values import array_contains as _rt_array_contains
+from .runtime.values import array_length as _rt_array_length
+from .runtime.values import isin as _rt_isin
+from .runtime.values import maximum as _rt_maximum
+from .runtime.values import minimum as _rt_minimum
+from ..arrays import DynArray
 from ..dtypes import (
     BoolType,
     Int64Type,
@@ -164,11 +171,124 @@ def if_else[
     return CaseWhen[C, T, E](cond^, then^, otherwise^)
 
 
+# ---------------------------------------------------------------------------
+# nested — the verbs that read a list column
+# ---------------------------------------------------------------------------
+# A list is only ever *consumed*: `ListValue` declares no lane because a list
+# element is a whole sub-array, so every verb here binds a list and hands back
+# a fixed-width result. Both spellings live in this file rather than one per
+# lane, for the reason `col`'s docstring gives — a split overload set shadows
+# rather than overloads, and which one a call site got would depend on its
+# imports.
+
+
 def array_length[A: ListValue](var a: A) -> ListLength[A]:
     """The number of elements in each list. A list consumed into a numeric
     column — which is the only way a list is read, since a list element is a
     whole sub-array rather than a value a lane can hold."""
     return ListLength[A](a^)
+
+
+def array_length(var a: RuntimeValue) -> RuntimeValue:
+    """The runtime lane's `array_length`, so one name serves both.
+
+    The overload existed in `runtime/values.mojo` and only there, which made
+    `from marrow.expr import array_length` a comptime-only verb: a caller who
+    wrote `col("xs")` had to reach past this module to measure it.
+    """
+    return _rt_array_length(a^)
+
+
+def array_contains[
+    L: ListValue, E: NumericValue
+](var list: L, var elem: E) -> ArrayContains[L, E]:
+    """True where `list[i]` contains the value `elem[i]` — SQL's
+    `array_contains`, PyArrow has no direct equivalent.
+
+    The search value is a *column*, one value per row, so a constant is
+    `lit(3, int64)` and stays `Shape.scalar` until it is broadcast. Numeric
+    element types only, which is `ArrayContainsKernel`'s limit rather than the
+    node's.
+    """
+    return ArrayContains[L, E](list^, elem^)
+
+
+def array_contains(
+    var list: RuntimeValue, var elem: RuntimeValue
+) -> RuntimeValue:
+    """The runtime lane's `array_contains`."""
+    return _rt_array_contains(list^, elem^)
+
+
+# ---------------------------------------------------------------------------
+# is_in — set membership
+# ---------------------------------------------------------------------------
+def is_in[A: ComptimeValue](var a: A, var value_set: DynArray) -> IsIn[A]:
+    """`a IN (...)` — is each of `a`'s values one of `value_set`'s?
+
+    The set is a `DynArray` fixed when the plan is built, not an operand: it is
+    the same set on every row, so hashing it belongs to the node. `a` and the
+    set must share a dtype, which `IsInKernel` checks and reports.
+
+    The operand is bound on `ComptimeValue` and not on a family because
+    membership is decided on the 64-bit hash alone — numeric, string, bool and
+    temporal all funnel through one kernel. That also makes this a breaker:
+    the subtree *under* `a` still fuses, and only the membership test runs over
+    a materialised column.
+    """
+    return IsIn[A](a^, value_set^)
+
+
+def is_in(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
+    """The runtime lane's `is_in`, spelled `isin` inside that lane."""
+    return _rt_isin(a^, value_set^)
+
+
+# ---------------------------------------------------------------------------
+# the row-wise extrema
+# ---------------------------------------------------------------------------
+# Free verbs rather than methods, and `minimum`/`maximum` rather than
+# `min`/`max`, because `.min()` and `.max()` are already the *aggregates* on
+# both lanes' value surfaces. NumPy draws the same line for the same reason:
+# `np.minimum(a, b)` is element-wise, `np.min(a)` folds.
+#
+# **Every SQL-flavoured name for this operation skips nulls, and this one does
+# not.** `LEAST`/`GREATEST` skip, Ibis spells them the same way, and
+# `pc.min_element_wise` skips too — `ElementWiseAggregateOptions` defaults
+# `skip_nulls=True`. `MinKernel` intersects validity like every other
+# `BinaryNumericKernel`, so this is the propagating form and only that, which
+# is what NumPy's name means as well: `minimum` propagates NaN where `fmin`
+# skips it. `least`/`greatest` stay free for the skipping verbs — see
+# `Minimum` and `docs/backlog.md`.
+
+
+def minimum[
+    L: NumericValue, Rhs: NumericValue
+](var l: L, var r: Rhs) -> Minimum[L, Rhs]:
+    """The smaller of the two, per row, fused.
+
+    The wider operand type wins and a null on either side makes the row null —
+    `NumericBinary`'s rules. That null rule is what stops this being called
+    `least`: SQL's `LEAST(NULL, 3)` is 3.
+    """
+    return Minimum[L, Rhs](l^, r^)
+
+
+def minimum(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The runtime lane's `minimum`."""
+    return _rt_minimum(l^, r^)
+
+
+def maximum[
+    L: NumericValue, Rhs: NumericValue
+](var l: L, var r: Rhs) -> Maximum[L, Rhs]:
+    """The larger of the two, per row, fused."""
+    return Maximum[L, Rhs](l^, r^)
+
+
+def maximum(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The runtime lane's `maximum`."""
+    return _rt_maximum(l^, r^)
 
 
 # ---------------------------------------------------------------------------

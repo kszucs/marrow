@@ -89,6 +89,17 @@ function`). Run it through `pytest`, which generates a driver for the selection.
 errors and 0 warnings rather than letting output accumulate until it is
 unreadable. Building is not passing: switch back to `pytest` once it compiles.
 
+**`pixi run precompile` exits 0 when the compile fails.** Verified 2026-09-02:
+a `use of unknown declaration` failure ends with `mojo: error: failed to parse
+the provided Mojo source module` and the task still reports `[exited with code
+0]` — the same "exit code 0 reads like a pass" trap `pytest golden` has. Judge
+it by its *output*, never by `$?`:
+
+```bash
+pixi run -e dev precompile > /tmp/pc.log 2>&1
+grep -c 'error:' /tmp/pc.log      # this is the check
+```
+
 ### Running tests
 
 Always go through `pytest` — never `mojo test`, `mojo run`, or a hand-written
@@ -435,9 +446,16 @@ share no node types**:
   and an optional payload; `RuntimeAggregate` is an aggregate named at run time
   and resolved against the input schema at plan-build time. What stays runtime
   is the *dtype* of the operands, not the operation.
-- **`builders.mojo`** — `col`, `lit`, `if_else`, `param`, `count_star`,
-  `table()`, `scan()`: the one surface spanning both lanes. `col("a", int64)`
-  gives a comptime `Column[Int64Type]`, `col("a")` a `RuntimeValue`.
+- **`builders.mojo`** — `col`, `lit`, `if_else`, `is_in`, `minimum`,
+  `maximum`, `array_length`, `array_contains`, `param`,
+  `count_star`, `table()`, `scan()`: the one surface spanning both lanes. `col("a", int64)` gives a
+  comptime `Column[Int64Type]`, `col("a")` a `RuntimeValue`. **A verb with a
+  counterpart in both lanes carries one overload per lane**, and both must stay
+  in this file: a split overload set shadows rather than overloads, so which
+  one a call site got would depend on its imports. Not every verb is
+  two-lane — `param` and `count_star` are comptime-only by nature, and
+  `if_else` is comptime-only by omission, its runtime twin sitting unexposed at
+  `runtime/values.mojo`.
 - **`params.mojo`** — `Param[T]` and `Bindings`: a literal whose value arrives at
   execution time, carried *through* an execution rather than substituted into a
   copy of the plan, so two executions of one plan cannot interfere.
@@ -542,10 +560,12 @@ marrow/
 ├── expr/
 │   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
 │   ├── physical.mojo     # Operator / DynOperator push engine
-│   ├── builders.mojo     # col, lit, if_else, param, count_star, table, scan
+│   ├── builders.mojo     # col, lit, if_else, is_in, minimum/maximum,
+│                         #   array_length/array_contains, param, count_star,
+│                         #   table, scan
 │   ├── params.mojo       # Param[T], Bindings
 │   ├── comptime/         # AOT lane: core, leaves, numeric, boolean, strings,
-│   │   └── tests/        #   casts, aggregates, rules
+│   │   └── tests/        #   temporal, nested, casts, aggregates, rules
 │   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
 │   │   └── tests/
 │   └── tests/
@@ -747,6 +767,12 @@ In addition:
 
 - Use `var ^` for move semantics and `deinit` for consuming parameters. Many
   methods `raises`.
+- **`mojo format` cannot parse an `in` expression as the *left* operand of
+  `and`/`or`.** `assert_true("a" in s or "b" in s)` fails the whole file with
+  `Cannot parse: <line>:<col>`, so `pixi run -e dev fmt` reports the file as
+  unformattable while `mojo` itself compiles and runs it happily. Verified
+  2026-09-01: the right operand is fine (`1 < 2 or "b" in s` parses), and
+  parenthesising the left one (`("a" in s) or ...`) fixes it.
 - `ArcPointer` provides shared ownership of buffers and bitmaps.
 - **Mojo resolves circular imports between modules in the same package** — do not
   reorganize code or move types between files to avoid them. **But import
@@ -915,6 +941,21 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
 - **Re-defaulting a base trait's abstract method in a sub-trait recurses** when
   it returns `Self.ArrayType`. Keep the base abstract and override under a new
   name (`NumericValue.execute` -> `_fused`).
+- **A trait method whose *default* lives in a sub-trait crashes the compiler
+  when it is called through the base.** Verified 2026-09-01 (`kernels/
+  string.mojo`, bisected twice). Two call shapes hit it: a base-trait
+  `dispatch` default whose closure calls `Self.apply`, and a node
+  parameterised on the base (`StringFunction[K: StringArgKernel]`) calling
+  `Self.K.apply`. **Exit 139, no source location, no note.** This is
+  distinct from the sub-trait *recursion* above — that diagnoses, this
+  segfaults. Worse, it is invisible to the usual checks: the crash needs the
+  instantiation, so `mojo precompile marrow` reports 0 errors / 0 warnings,
+  and `pytest golden` reports **`exit code 0`** because `conftest`'s
+  `libmarrow.so` build raises `_pytest.outcomes.Exit` before a case runs —
+  which reads like a pass. The safe arrangement: the shared loop is a free
+  generic function per shape, and each concrete conformer supplies its own
+  three-line method calling it. Every default a conformer inherits must come
+  from the trait it names, never from a layer above it.
 - **A trait-level default method cannot return `Self.AssocType`** unless that
   type is `ImplicitlyCopyable` — and marrow's array types deliberately are not.
   So a protocol carrying non-implicitly-copyable state cannot be rolled out

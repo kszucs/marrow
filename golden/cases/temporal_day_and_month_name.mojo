@@ -11,7 +11,6 @@ def plan() raises -> DynRelation:
 
     `marrow/kernels/temporal.mojo` has no such kernel.
 
-    -- skip mojo
     -- skip python
 
     -- expected
@@ -26,5 +25,5 @@ def plan() raises -> DynRelation:
     var t = table("events")
     return t.project(
         ["dn", "mn"],
-        [col("d", date32).day_name(), col("d", date32).month_name()],
+        [col("d", date32()).day_name(), col("d", date32()).month_name()],
     )
