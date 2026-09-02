@@ -32,7 +32,12 @@ from .`comptime`.leaves import (
     StringColumn,
     StringLiteral,
 )
-from .logical import DynRelation, InMemoryTable, ParquetScan
+from .logical import (
+    DynRelation,
+    InMemoryTable,
+    ParquetScan,
+    WindowFn,
+)
 
 from .runtime.values import RuntimeValue, column, literal
 from .runtime.values import array_contains as _rt_array_contains
@@ -52,6 +57,7 @@ from ..dtypes import (
     int64,
 )
 from ..kernels.aggregate import CountFold, Fold
+from ..kernels.window import DenseRank, Rank, RowNumber
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -353,3 +359,36 @@ def count_star() -> Aggregate[Fold[CountFold, Int64Type], Literal[Int64Type]]:
     gives it, so callers stop rediscovering the trick.
     """
     return lit(1, int64).count().alias("count_star")
+
+
+# ---------------------------------------------------------------------------
+# Window functions with no argument
+# ---------------------------------------------------------------------------
+#
+# Free functions rather than methods, because they read no column: `RANK()`
+# answers from the ordering alone, so there is no receiver to hang them on.
+# The four that *do* read a column — `lag`, `lead`, `first_value`,
+# `last_value` — are `Value` trait defaults instead, and an aggregate reaches
+# a frame through `Value.over`.
+
+
+def row_number() -> WindowFn:
+    """`ROW_NUMBER()` — a distinct position per row within the partition.
+
+    Insensitive to ties, so a non-total `ORDER BY` leaves it deterministic
+    only up to the sort's stability. `rank` and `dense_rank` are the two that
+    answer equally for tied rows.
+    """
+    return WindowFn.of[RowNumber](None)
+
+
+def rank() -> WindowFn:
+    """`RANK()` — tied rows share the first position of their tie, and the
+    next distinct row skips the gap: `1, 2, 2, 2, 5`."""
+    return WindowFn.of[Rank](None)
+
+
+def dense_rank() -> WindowFn:
+    """`DENSE_RANK()` — tied rows share a position and nothing is skipped:
+    `1, 2, 2, 2, 3`. The only difference from `rank` is the gap."""
+    return WindowFn.of[DenseRank](None)

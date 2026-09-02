@@ -119,6 +119,45 @@
   overload was chosen — a concrete overload does not always beat a
   trait-bound generic one in Mojo, and the losing case compiles clean.
 
+- **Window functions: `OVER (PARTITION BY ... ORDER BY ...)`**
+  (`marrow/kernels/window.mojo`, a `Window` node in `marrow/expr/logical.mojo`,
+  `WindowOperator` in `physical.mojo`). Seven functions —
+  `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`,
+  `last_value` — plus any aggregate over a frame, reached through
+  `t.with_columns(["rn"], [row_number().over(order_by=[col("v", int64)])])`.
+  The seven `window_*` golden cases lose their `-- skip mojo`.
+
+  **`PARTITION BY` is a prefix of the sort key, not a second mechanism.**
+  `PARTITION BY k ORDER BY v` is the ordering `[k, v]`, so one
+  `SortIndices.multi` answers both questions and the kernel reads partition
+  and peer boundaries straight off the result. Hash-partitioning first would
+  have needed `HashGrouping`, a gather per bucket, and a second null
+  convention to keep consistent with `GROUP BY`'s.
+
+  Tie handling is the whole of the ranking difference and falls out of the two
+  boundaries: `row_number` counts rows, `rank` names a peer group by its first
+  position (so it gaps), `dense_rank` by its ordinal (so it does not).
+  Boundaries compare with `IS NOT DISTINCT FROM` — nulls are peers and null
+  partition keys are one partition, matching `GROUP BY` — which `equal` alone
+  cannot express, since `equal(null, null)` is null.
+
+  `lag`/`lead`/`first_value`/`last_value` answer with an `Int32Array` of source
+  rows and let `take` gather, so they need no per-dtype arm: `take` already
+  maps a null index to a null element. A framed aggregate runs through **its
+  own operator** on a zero-copy slice of the sorted batch, so every aggregate
+  is a window aggregate at once and `SUM` over an all-null frame is null
+  because `SumFold` says so. The cost is one operator construction per row.
+
+  `WindowExpr` deliberately **does not conform to `Value`** — a window
+  function has no per-row answer, so there is no honest `to_operator` for one —
+  which is also what makes the second `with_columns` overload unambiguous.
+  Rows come out in **input order**: the sort is internal, and the computed
+  columns are scattered back through the inverse permutation.
+
+  Not implemented: `RANGE` frames with explicit numeric bounds, `EXCLUDE`,
+  `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`, and window functions in the
+  Python frontend (the golden cases keep `-- skip python`).
+
 - **A plan optimizer: twelve rules and a column-pruning pass**
   (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
   `DynRelation` you can print, diff and execute — `Limit(Sort(Filter(scan)))`
@@ -142,6 +181,33 @@
   multi-key decomposition needs full permutations to compose.
 
 ### Refactors
+
+- **Window functions dispatch on a type, not a tag** (`marrow/kernels/window.mojo`,
+  `marrow/expr/logical.mojo`). `WindowKind` was an eight-code enum read by one
+  `if/elif` chain in `WindowOperator`, which is the *runtime* lane's idiom:
+  every window body linked into any binary that used any window, where the
+  comptime lane's promise is that a program pays for what it names.
+
+  Now a `WindowFunction` trait with five types covering seven functions --
+  `Offset[lead]` for `lag`/`lead`, which are one gather at opposite signs, and
+  `Edge[first]` for `first_value`/`last_value`, the `Pad[left]` shape from
+  `kernels/string.mojo`. `WindowFn` holds a thin pointer to one of them,
+  instantiated where the verb names it, so a `row_number()` binary links
+  `RowNumber` and nothing else -- verified by symbol table: `Rank`,
+  `DenseRank`, `Offset`, `Edge` and `_framed_aggregate` are all absent.
+  `_compute` goes from eight branches to two, and `WindowKind` is deleted.
+
+  `name` and `ranks` live on the trait rather than being passed at each verb,
+  as methods rather than `comptime` members because a `comptime name:`
+  requirement does not resolve reliably off an externally-bound parameter.
+
+  **The measured saving is 17,408 bytes, and that is the honest number** --
+  the kernel bodies are small, and the 331,520 bytes a window costs over a
+  sort are mostly `WindowExtents`, `mark_changes` and the operator's
+  buffering, which every window needs. The reason to do it anyway is that the
+  switch grew with every function added and four are still missing
+  (`percent_rank`, `cume_dist`, `ntile`, `nth_value`).
+
 
 - **`marrow/expr/comptime/nested.mojo`: the list-consuming nodes get their own
   module.** `ListLength` and `ArrayContains` share a `ListValue` operand bound
@@ -232,6 +298,59 @@
   in unrelated areas, so it belongs to neither.
 
 ### Fixes
+
+- **Every AOT binary that sorted paid 3 MB for a dictionary path it never
+  took.** `sort_indices`' dictionary arm decoded its keys by calling the
+  type-erased `cast`, and that function is one non-generic body chaining
+  `elif` over every type family — so naming it linked the whole ladder, 694
+  symbols, into any program that sorted anything at all. Decoding directly
+  instead (`take(values, indices)`, which is all `cast` does when the target
+  is the value type) and converting the index with an integer-source,
+  `int32`-target ladder rather than `NumericCastKernel.dispatch`'s N x N walk
+  takes a sorting binary's `__text` from **4,510,744 to 1,441,112** — a
+  **68% cut**, with cast symbols going 694 -> 32. Sorting now costs 12,440
+  bytes over a plan that does not sort; it cost 3,082,072.
+
+  This is the shape already recorded for the +348% regression that produced
+  `DynRelation`'s hybrid lowering — `ParquetScan.to_operator` reaching
+  `kernels::cast` in a plan with no Parquet in it. Same 694 symbols, a
+  different door, and it survived because **nothing in
+  `benchmarks/binary_size/` sorts**, so no gate could see it.
+
+
+- **A window computed over a pruned population.** `Window.to_operator` forwarded
+  its `Pushdown` to its input, so a `Filter` above a window pushed its
+  row-group pruner all the way to a `ParquetScan` and the window then counted
+  fewer rows than the query selects. Every `ROW_NUMBER`, `RANK` and running
+  total came back wrong, with no error. Every node that decides *which rows
+  exist* clears the pushdown — `Aggregate`, `Limit`, `Project`, `Join` already
+  did; `Sort` forwards because reordering removes nothing, and the window node
+  was written in that mould. `pushdown.mojo`'s per-node table now lists it.
+
+  No existing test could see it: all seven golden window cases and all
+  fourteen unit cases use in-memory tables, and the bug needs a Parquet scan
+  under a window under a filter. The regression test builds exactly that and
+  asserts the *values* — 76..100, not 1..25 — since the row count is right
+  either way. Verified by reinstating the bug and watching it fail.
+
+- **`COUNT` over an empty window frame answered NULL instead of 0.**
+  `_framed_aggregate` short-circuited an empty frame to null rather than
+  running the aggregate, so `COUNT(*) OVER (... ROWS BETWEEN 30 PRECEDING AND
+  1 PRECEDING)` reported NULL for each partition's first row where DuckDB
+  reports 0. The correct answers already existed one layer down — an
+  aggregate operator handed no rows emits its identity, 0 for `COUNT` and
+  NULL for `MIN` — so the fix deletes the special case and runs the aggregate
+  on a zero-row slice, clamping the bounds first because a frame lying wholly
+  past the end would otherwise slice out of range.
+
+- **`with_columns` could append the same column name twice.** Both overloads
+  checked each name against the input schema and none against each other, so
+  `["x", "x"]` produced two `x` fields with the second unreachable by name.
+  The window overload had a second route: two expressions with different specs
+  become two stacked `Window` nodes, each built past the verb's one-time
+  check. The `DynValue` overload additionally kept the *last* match when
+  replacing, silently discarding the first value. Both now raise.
+
 
 - **An aggregate above a `Limit` returned zero rows.** `Pipeline.drain`'s early
   termination skipped every stage above a finished one, so anything answering

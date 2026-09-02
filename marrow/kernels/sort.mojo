@@ -44,11 +44,12 @@ from ..arrays import (
 from ..buffers import Buffer
 from ..dtypes import (
     BinaryLikeType,
+    IntegerType,
     PrimitiveType,
     bool_ as bool_dt,
     Int32Type,
 )
-from .cast import cast
+from .cast import NumericCastKernel
 from .core import Kernel
 from ..execution import ExecContext
 from .filter import TakeKernel
@@ -434,9 +435,32 @@ struct SortIndices(Kernel):
             result = dt.dispatch_binarylike(binarylike)
         elif dt.is_dictionary():
             # Order by the *decoded* values: dictionary index order is an
-            # encoding artefact (`ordered=False` is the norm), not a value order.
+            # encoding artefact (`ordered=False` is the norm), not a value
+            # order.
+            #
+            # **Decoded here rather than through `cast`.** The top-level
+            # `cast` is one non-generic function chaining `elif` over every
+            # family, so naming it links the whole ladder -- 694 symbols and
+            # ~3.1 MB of `__text` -- into any binary that sorts *anything*,
+            # for a dictionary path most plans never take. The decode is
+            # `take(values, indices)`, which is all `DictionaryCastKernel`
+            # does when the target is the value type, and the index
+            # conversion needs only the numeric ladder.
+            ref d = array.as_dictionary()
+            ref index_array = d.indices()
+
+            # Narrowed twice over `NumericCastKernel.dispatch`, which walks
+            # `dispatch_numeric` on the source *and* the target and so
+            # instantiates the N x N cross product. An index is an integer and
+            # the target is always `int32`, so this is one integer-wide ladder.
+            def to_i32[T: IntegerType](d: T) raises {imm} -> Int32Array:
+                return NumericCastKernel.apply[T, Int32Type, False](
+                    index_array.as_primitive[T](), ctx
+                )
+
+            var idx = index_array.dtype().dispatch_integer(to_i32)
             result = SortIndices.dispatch(
-                cast(array, dt.as_dictionary().value_type().copy(), False, ctx),
+                TakeKernel.dispatch(d.dictionary().copy(), idx, ctx),
                 ascending,
                 nulls_first,
                 stable,

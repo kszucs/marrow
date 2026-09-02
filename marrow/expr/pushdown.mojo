@@ -36,6 +36,7 @@ the predicate rides the lowering all the way down.
 |---|---|
 | `Filter` | **conjoin** its own and forward |
 | `Sort` | forward unchanged |
+| `Window` | **clear** — it reads its whole partition |
 | `Limit` | **clear** — see below |
 | `Project` | clear (a predicate names output columns, which may be computed) |
 | `Aggregate` | clear (a `Filter` above it is `HAVING`) |

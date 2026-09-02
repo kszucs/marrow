@@ -47,7 +47,7 @@ all of them.
 | 11 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 10, 12 |
 | 12 | **Statistics propagation and a cost model** | Feeds 11. Note two of three incumbents ship without one — DataFusion and polars both have none | **L** | — |
 | 13 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
-| 14 | **Window functions** — no node, no operator, no ranking kernel | Seven golden cases recorded unsupported. A whole subsystem, not an increment | **L** | — |
+| 14 | ~~**Window functions**~~ — **done**: `Window` node, `WindowOperator`, `kernels/window.mojo` | All seven golden cases pass. Remaining: bounded `RANGE`, `EXCLUDE`, `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`, Python frontend | **S** | — |
 | 15 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
 | 16 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
 | 17 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
@@ -123,10 +123,10 @@ diagnostic. Modular should have it.
 ### 1.4 Engine capability the golden corpus measures as missing
 
 `golden/COVERAGE.md` is authoritative and machine-checked: 278 cases, of which
-**85 carry `-- skip mojo`** because marrow has no API for them. Their bodies are
+**78 carry `-- skip mojo`** because marrow has no API for them. Their bodies are
 never compiled, so they are proposals rather than verified spellings. In rough
 order of how often a real query wants them: set operations (UNION/EXCEPT/
-INTERSECT), window functions (7 cases), 13 aggregates (median, quantile,
+INTERSECT), 13 aggregates (median, quantile,
 first/last, arg_min/arg_max, string_agg, bool_and/or, corr/covar, mode,
 skewness), 16 string functions (substr, replace, regexp, lpad, position,
 split_part, concat), 13 temporal (date_diff, age, strftime/strptime, last_day,
@@ -617,13 +617,34 @@ column when the demand is empty, because a `RecordBatch` carries its row count
 in its columns. The underlying desugaring (`lit(1, int64).count()` with empty
 `columns()`) is unchanged.
 
-#### 1.5 Window functions
+#### 1.5 Window functions — **implemented**
 
-**What exists.** Nothing — no window node in `logical.mojo`, no windowed
-operator in `physical.mojo`, no ranking or offset kernel. Seven golden cases are
-recorded unsupported: `window_row_number`, `window_rank_and_dense_rank`,
-`window_lag_and_lead`, `window_partitioned_running_sum`,
-`window_explicit_rows_frame`, `window_first_and_last_value`, `window_qualify`.
+**What exists.** A `Window` node in `logical.mojo`, a blocking `WindowOperator`
+in `physical.mojo`, and `marrow/kernels/window.mojo`. All seven golden cases
+pass: `window_row_number`, `window_rank_and_dense_rank`, `window_lag_and_lead`,
+`window_partitioned_running_sum`, `window_explicit_rows_frame`,
+`window_first_and_last_value`, `window_qualify`.
+
+**`PARTITION BY` is a prefix of the sort key.** `PARTITION BY k ORDER BY v` is
+the ordering `[k, v]`, so one `SortIndices.multi` answers both questions and the
+kernel reads partition and peer boundaries off the result — no `HashGrouping`,
+no per-bucket gather, and no second null convention to keep consistent with
+`GROUP BY`'s. The prediction below that "marrow gets running sums for free once
+frames exist" held exactly: `WindowKind.aggregate` runs *any* aggregate through
+its own operator over a frame slice, so `SUM`, `MIN`, `AVG` and everything added
+later are window aggregates without a line each.
+
+**Still absent.** `RANGE` frames with explicit numeric bounds (only the default
+`UNBOUNDED PRECEDING TO CURRENT ROW` and explicit `ROWS` are implemented),
+`EXCLUDE`, `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`, and the Python
+frontend — the golden cases keep `-- skip python`. The framed aggregate builds
+**one operator per row**, which is the honest price of reusing the aggregate
+kernels rather than writing a running accumulator per aggregate per dtype; that
+is the thing to change when it shows up in a profile.
+
+Column pruning does not descend below a `Window` node — `ColumnPruning.apply`
+falls through to `return node.copy()`, which forgoes the optimization and is
+sound, not wrong.
 
 **What the incumbents do.** ibis's `analytic.py` is the canonical minimum:
 `MinRank`, `DenseRank`, `RowNumber`, `PercentRank`, `CumeDist`, `NTile`, `Lag`,

@@ -10,10 +10,6 @@ def plan() raises -> DynRelation:
     chosen by an order" — the same answer `DISTINCT ON` gives, reached the
     other way.
 
-    There is no window node in `marrow/expr/logical.mojo` and no windowed
-    operator in `physical.mojo`.
-
-    -- skip mojo
     -- skip python
 
     -- expected
