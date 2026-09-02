@@ -186,6 +186,9 @@
   dylib closure with a relocatable rpath, staging the dlopen'd codec
   libraries alongside it. Marrow's Mojo source ships in the wheel, so it
   works from an installed package.
+- `QueryCli` turns a compiled plan into a command-line program with
+  declared parameters, `--help`, `--describe` and output writers. The
+  writers are opt-in, so a binary pays for the formats it names.
 
 ### Tooling
 

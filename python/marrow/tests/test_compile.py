@@ -78,7 +78,6 @@ def test_compile_subcommand_help_lists_every_flag(capsys):
         "--output",
         "--marrow-path",
         "--bundle",
-        "--no-writers",
         "--fast",
         "--no-strip",
         "-v",
@@ -142,30 +141,16 @@ def test_resolve_marrow_path_reports_every_location(tmp_path, monkeypatch):
     assert "MARROW_MOJO_PATH" in str(exc.value)
 
 
-# --- CLI_WRITERS define -----------------------------------------------------
+# --- output writers ---------------------------------------------------------
 #
-# The Parquet/IPC output writers are gated behind
-# `-D MARROW_CLI_WRITERS=true`. Their Mojo-side implementation went away with
-# the previous expression package, so the define currently gates nothing — but
-# `marrow compile` still passes it by default (linking the writers cost 572,288
-# bytes of `__text`, which is why it is a define and not unconditional), and
-# `--no-writers` (exercised through `build_command`'s `writers=False`) is the
-# opt-out. Note the *compiler* define is `MARROW_CLI_WRITERS`, not the internal
-# Mojo comptime name `CLI_WRITERS_ENABLED`.
-
-
-def test_build_command_default_includes_writers_define(tmp_path):
-    cmd = build_command(tmp_path / "q.mojo", tmp_path / "q", tmp_path / "src")
-    assert "-D" in cmd
-    assert cmd[cmd.index("-D") + 1] == "MARROW_CLI_WRITERS=true"
-
-
-def test_build_command_no_writers_omits_define(tmp_path):
-    cmd = build_command(
-        tmp_path / "q.mojo", tmp_path / "q", tmp_path / "src", writers=False
-    )
-    assert "-D" not in cmd
-    assert "MARROW_CLI_WRITERS=true" not in cmd
+# The Parquet/IPC writers were once gated by a `-D MARROW_CLI_WRITERS=true`
+# build define, which `marrow compile` passed by default and `--no-writers`
+# opted out of. That flag is gone: `QueryCli.run[parquet=True, ipc=True]` puts
+# the choice in the query source instead, so the file states which formats its
+# binary supports and no build invocation can disagree with it. There is
+# nothing left for `build_command` to pass, and the three tests that asserted
+# it did are removed rather than rewritten -- they pinned the mechanism, and
+# the mechanism is what changed.
 
 
 # --- check_mojo_version ------------------------------------------------------
