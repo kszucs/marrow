@@ -22,16 +22,14 @@
   now work, and all nine reach the **runtime lane** for the first time — so a
   Python frontend can call them.
 
-  `StringArgs` stopped being the function's *configuration* — four constants
-  the caller filled in once — and became **one row's arguments**. Every
-  `transform` body is byte-for-byte unchanged; what replaced the constants is
-  `StringOperands`, the same four slots holding the columns each argument
-  evaluated to, with `args(i)` cutting a row out and `is_valid(i)` answering
-  whether that row has one. The node families follow: `StringArgUnary` was not
-  unary and is now `StringFunction[K, A, T, U, S, C]`, four typed operand slots
-  with the kernel declaring which it reads (`uses_text` … `uses_count`), so an
-  unused slot is never bound, never materialised and never printed;
-  `StringMeasure` gains the one needle slot its kernels read.
+  An argument is an **operand column**, not the function's configuration.
+  `StringOperands` holds the four slots each argument evaluated to, with
+  `args(i)` cutting a row out and `is_valid(i)` answering whether that row
+  has one. The node families follow: `StringArgUnary` was not unary and is
+  now `StringFunction[K, A, T, U, S, C]`, four typed operand slots with the
+  kernel declaring which it reads (`uses_text` … `uses_count`), so an unused
+  slot is never bound, never materialised and never printed; `StringMeasure`
+  gains the one needle slot its kernels read.
 
   **Null propagation is new, and is a correctness fix.** A null in *any*
   argument position makes the row null — `substring('abc', NULL, 2)`,
@@ -51,13 +49,12 @@
   `last_day`, `day_name`, `month_name`. Every string function counts
   **characters**, where `LengthKernel` counts bytes: SQL's `length` and
   `octet_length` are different questions and marrow could only answer the
-  second. Scalar loops throughout, over one `_char_bounds` helper — this is
+  second. Scalar loops throughout, over one `Utf8.bounds` helper — this is
   coverage, not throughput.
 
   Two node shapes carry the lot: `StringFunction` (`string -> string`) and
-  `StringMeasure` (`string -> int64`). Both took their arguments as a
-  `StringArgs` **field of constants** when they landed; see the entry above for
-  why that was the wrong shape and what replaced it.
+  `StringMeasure` (`string -> int64`), both taking their arguments as
+  expressions — see the entry above.
 
   The edge cases are the point, and several are ones a natural implementation
   gets wrong: `substr` with a start below 1 lets the count absorb the clipped
@@ -93,24 +90,31 @@
 
 ### Refactors
 
-- **`StringArgs` is gone; every string kernel states its real signature**
+- **Every string kernel states its real signature**
   (`marrow/kernels/string.mojo`). `substr(s, start: Int, count: Int)`,
   `replace(s, needle: StringSlice, repl: StringSlice)`,
   `lpad(s, width: Int, fill: StringSlice)`, `split_part(s, sep, index)`,
   `trim(s, chars)`, `left`/`right`/`repeat(s, count)`, `position(s, needle)` —
-  nine kernels across eight signatures, so **eight traits**, several with one
-  conformer. One `transform(s, args)` reading a four-field bundle was six
-  signatures pretending to be one, with a docstring explaining which fields
-  each of them ignored.
+  twelve kernels across eight signatures. The alternative is one
+  `transform(s, args)` reading a four-field bundle: six signatures pretending
+  to be one, with a docstring explaining which fields each of them ignored.
 
-  **It also removes a per-row heap allocation.** The bundle had to be rebuilt
-  for every row, copying each string argument into a fresh `String` — usually
-  one literal, copied once per row in the batch. A string argument is now a
+  **A kernel owns its loop.** `apply` reads the slots its signature names and
+  walks the array itself, so only a shape with *several* kernels factors the
+  loop out — `StringIntKernel`/`_map_int` for `left`/`right`/`repeat`, and
+  `StringToIntKernel`/`_measure_plain` for `char_length`/`ascii`. The six
+  single-kernel shapes carry no trait: a bound with one conformer, used by a
+  generic function with one call site, is three constructs serving one kernel.
+  Two shape traits and one shared loop, down from eight and six.
+
+  **It also keeps a per-row heap allocation out.** A rebuilt-per-row bundle
+  copies each string argument into a fresh `String` — usually one literal,
+  copied once per row in the batch. A string argument is instead a
   `StringSlice` borrowed straight out of its column.
 
-  `StringOperands` stays: it is the *node's* carrier of the operand columns,
-  filled once per batch, and it never reaches `transform`. `is_valid(i)` and
-  the null-propagation semantics are untouched.
+  `StringOperands` is the *node's* carrier of the operand columns, filled
+  once per batch, and it never reaches `transform`. `is_valid(i)` and the
+  null-propagation semantics are untouched.
 
   `RepeatKernel` folds in. It had stood alone with its own
   `apply(array, counts)` — the only member of the family whose argument was a
@@ -124,7 +128,7 @@
   primitives.** `_pad(s, args, left: Bool)` tested a runtime flag per row to
   pick between two concatenation orders it cannot vary within a call; it is now
   `Pad[left: Bool]` with `LPadKernel = Pad[True]` / `RPadKernel = Pad[False]`,
-  the shape `_match_pattern[T, ignore_case]` already used for LIKE and ILIKE.
+  the shape `LikePattern[ignore_case]` already used for LIKE and ILIKE.
   No call site outside the file changed. It was the file's **only** runtime
   `Bool` behaviour flag.
 
@@ -133,6 +137,26 @@
   call sites between them — are now `Utf8.width` / `.bounds` / `.count` /
   `.slice` / `.find` / `.charset_has`. Same signatures, same bodies; the layer
   that made `length` and `char_length` different functions now has a name.
+
+- **`LikePattern` owns the whole LIKE story** (`marrow/kernels/string.mojo`).
+  Six free functions became its methods: `_fold_kind`, `_ascii_lower` and
+  `_match_tokens` were its own row-matching internals, reachable from nothing
+  else, and `_match_pattern`, `_match_arrays` and `_dispatch_pattern` were its
+  array-level surface. They are now `_fold_kind` / `_ascii_lower` /
+  `_match_tokens` / `match_array` / `match_arrays` / `dispatch`, so compiling a
+  pattern, matching a row, matching a column, matching column-against-column
+  and entering type-erased all read off one type.
+
+  `ignore_case` stops being an explicit parameter at every call site —
+  `_match_arrays[L, R, False](l, r)` is `LikePattern[False].match_arrays[L, R]`
+  — because the pattern already carries it.
+
+  Free functions in the file go from ten to four. The four that stay each have
+  a reason: `_map_int` and `_measure_plain` are the shared kernel loops and
+  **must** be free functions rather than trait defaults (a default living in a
+  sub-trait crashes the compiler — see the note in the file), `_measured` is
+  the shared `Int64Array` tail, and `_passthrough_validity`'s two callers sit
+  in unrelated areas, so it belongs to neither.
 
 ### Fixes
 

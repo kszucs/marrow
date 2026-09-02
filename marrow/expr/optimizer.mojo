@@ -209,9 +209,7 @@ struct RemoveEmptyLimit(Rule):
         ref limit = node.get[Limit]()
         if limit.length != 0:
             return node.copy()
-        var out: DynRelation = EmptyRelation(
-            RecordBatch.empty(node.schema())
-        )
+        var out: DynRelation = EmptyRelation(RecordBatch.empty(node.schema()))
         return out^
 
 
@@ -871,9 +869,7 @@ struct ColumnPruning(Copyable, Movable):
 
         if node.isa[Filter]():
             ref f = node.get[Filter]()
-            var below = Self._widened(
-                needed.copy(), f.predicate.columns()
-            )
+            var below = Self._widened(needed.copy(), f.predicate.columns())
             var out: DynRelation = f.with_input(Self.apply(f.input[], below))
             return out^
 
@@ -1083,7 +1079,6 @@ struct Optimizer[R: RuleSet](Copyable, Movable):
         var current = Self._rewritten_children(node)
         return Self.R.rewrite(current)
 
-
     @staticmethod
     def run(plan: DynRelation) raises -> DynRelation:
         """`plan` rewritten until it stops changing.
@@ -1107,7 +1102,6 @@ struct Optimizer[R: RuleSet](Copyable, Movable):
             current = next^
             rendered = next_rendered^
         return current^
-
 
 
 def optimize[R: RuleSet](plan: DynRelation) raises -> DynRelation:

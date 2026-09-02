@@ -527,9 +527,9 @@ def test_string_ordering_has_all_six_comparisons() raises:
 
 # --- the SQL function surface, with operands --------------------------------
 #
-# `substr`, `lpad`, `split_part` and the rest used to carry their arguments as
-# a `StringArgs` field of constants, so a column argument was unrepresentable
-# and a null argument could not occur. Both are now ordinary.
+# `substr`, `lpad`, `split_part` and the rest take their arguments as
+# expressions, so these cover what a constant could not express: a column
+# argument, and a null argument.
 
 
 def _sql_batch() raises -> RecordBatch:

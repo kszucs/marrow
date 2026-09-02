@@ -541,7 +541,7 @@ struct DateTruncKernel(Kernel):
 
 def _extract64[
     T: TemporalType,
-    component: def (days: Int, tod: Int) thin -> Scalar[DType.int64],
+    component: def(days: Int, tod: Int) thin -> Scalar[DType.int64],
 ](array: PrimitiveArray[T], calendar: Bool, name: String) raises -> Int64Array:
     """`_extract`, writing `int64`. See that function for the normalisation."""
     var dt = array.type()
@@ -803,7 +803,7 @@ def _month_name_of(days: Int) -> String:
 
 def _extract_name[
     T: TemporalType,
-    component: def (days: Int) thin -> String,
+    component: def(days: Int) thin -> String,
 ](array: PrimitiveArray[T], name: String) raises -> StringArray:
     """`_extract`'s shape with a variable-width destination, so a
     `StringBuilder` replaces the preallocated buffer and a null input appends a

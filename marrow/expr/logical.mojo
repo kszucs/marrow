@@ -438,7 +438,7 @@ trait Relation(Copyable, Deinitable, Movable, Writable):
     """An immutable description of a query."""
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         """This node with `f` applied to each of its children.
 
@@ -549,7 +549,7 @@ struct DynRelation(Copyable, Movable, Writable):
         """Is this node an `R`? The question every rule opens with."""
         return self._v.isa[R]()
 
-    def get[R: Relation](ref self) -> ref [self._v[R]] R:
+    def get[R: Relation](ref self) -> ref[self._v[R]] R:
         """This node as an `R`, borrowed. Undefined unless `isa[R]()`."""
         return self._v[R]
 
@@ -572,7 +572,7 @@ struct DynRelation(Copyable, Movable, Writable):
         abort("DynRelation._dispatch: no arm matched")
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         """`traverse` on whichever node this is."""
 
@@ -606,8 +606,6 @@ struct DynRelation(Copyable, Movable, Writable):
             writer.write(self._dispatch(job))
         except:
             writer.write("<relation>")
-
-
 
     # -- the plan-building API ----------------------------------------------
     #
@@ -975,7 +973,7 @@ struct Filter(Relation, Writable):
         self.conjuncts = conjuncts^
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         return self.with_input(f(self.input[]))
 
@@ -1012,12 +1010,7 @@ struct Filter(Relation, Writable):
         var pipe = self.input[].to_operator(
             ctx,
             bindings,
-            (
-                pushed.conjoined(
-                    self.pruner.value()
-                ) if self.pruner else pushed
-                ^
-            ),
+            (pushed.conjoined(self.pruner.value()) if self.pruner else pushed^),
         )
         pipe.append(
             FilterOperator(
@@ -1120,9 +1113,7 @@ struct Project(Relation, Writable):
                 if v.aggregates():
                     return False
                 var cols = v.columns()
-                return (
-                    len(cols) == 1 and cols[0] == name and v.name() == name
-                )
+                return len(cols) == 1 and cols[0] == name and v.name() == name
         return False
 
     def passes_through_all(self, names: List[String]) -> Bool:
@@ -1146,11 +1137,9 @@ struct Project(Relation, Writable):
         return False
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
-        return Project(
-            f(self.input[]), self.names.copy(), self.values.copy()
-        )
+        return Project(f(self.input[]), self.names.copy(), self.values.copy())
 
     def schema(self) -> Schema:
         return self._schema.copy()
@@ -1241,11 +1230,9 @@ struct Aggregate(Relation, Writable):
         return schema(fields^)
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
-        return Aggregate(
-            f(self.input[]), self.keys.copy(), self.aggs.copy()
-        )
+        return Aggregate(f(self.input[]), self.keys.copy(), self.aggs.copy())
 
     def schema(self) -> Schema:
         return self._schema.copy()
@@ -1259,7 +1246,9 @@ struct Aggregate(Relation, Writable):
         var grouped = len(self.keys) > 0
         var folds = List[DynOperator](capacity=len(self.aggs))
         for ref a in self.aggs:
-            folds.append(a.to_operator(self.input[].schema(), grouped, bindings))
+            folds.append(
+                a.to_operator(self.input[].schema(), grouped, bindings)
+            )
         var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
         var keys = List[DynOperator](capacity=len(self.keys))
         for ref k in self.keys:
@@ -1296,7 +1285,7 @@ struct Limit(Relation, Writable):
         self.length = length
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         return Limit(f(self.input[]), self.offset, self.length)
 
@@ -1382,7 +1371,7 @@ struct Sort(Relation, Writable):
         self.limit = limit
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         return Sort(
             f(self.input[]),
@@ -1593,7 +1582,7 @@ struct Join(Relation, Writable):
         return schema(fields^)
 
     def traverse[
-        F: def (DynRelation) raises -> DynRelation
+        F: def(DynRelation) raises -> DynRelation
     ](self, f: F) raises -> DynRelation:
         """Both sides, which is why this takes a function rather than a single
         child: a join is the one node with two inputs."""
@@ -1620,9 +1609,7 @@ struct Join(Relation, Writable):
         probe.append(
             JoinOperator(
                 self.left[].to_operator(ctx, bindings, Pushdown()),
-                Self._indices_for(
-                    self.left[].schema(), self.left_keys, "left"
-                ),
+                Self._indices_for(self.left[].schema(), self.left_keys, "left"),
                 Self._indices_for(
                     self.right[].schema(), self.right_keys, "right"
                 ),

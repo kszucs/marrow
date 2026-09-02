@@ -392,10 +392,10 @@ struct StringFunction[
     """`substr`, `left`, `right`, `lpad`, `rpad`, `replace`, `split_part` and
     `trim(chars)` — a string subject plus up to two argument **expressions**.
 
-    **The arguments are operands, not constants.** They were a `StringArgs`
-    field until now, which made `substr(s, 2, 3)` writable and
-    `substr(s, col("start"), col("len"))` unrepresentable, and kept the whole
-    family out of the runtime lane, where a constant has nowhere to come from.
+    **The arguments are operands, not constants.** A constant field would make
+    `substr(s, 2, 3)` writable and `substr(s, col("start"), col("len"))`
+    unrepresentable, and would keep the whole family out of the runtime lane,
+    where a constant has nowhere to come from.
     These are binary and ternary SQL functions that merely happen to be called
     with literals most of the time; a literal operand stays `Shape.scalar` and
     costs one broadcast in `bind`, which this node was paying for its subject

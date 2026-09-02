@@ -641,13 +641,13 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         # The SQL function surface's *nullary* half — the functions whose only
         # operand is the column, so their `StringOperands` is empty.
         #
-        # Their argument-carrying siblings used to be absent from this lane
-        # entirely, because reaching them would have needed a `StringArgs`
-        # member in `Payload` — and `Payload` already holds `DynScalar`, which
+        # Their argument-carrying siblings reach this lane too, and the way
+        # they do is load-bearing: **an argument is a child node, never a
+        # `Payload` member.** `Payload` already holds a `DynScalar`, which
         # makes it the `Variant` shape that loses every other element of a
-        # `List` when it grows (CLAUDE.md, "Mojo Gotchas"). That argument
-        # dissolved with the constants: an argument is a **child node** now,
-        # and this lane has carried children since it was written. See
+        # `List` when it grows (CLAUDE.md, "Mojo Gotchas"), so an argument
+        # slot there would walk straight into it. A child costs nothing
+        # extra — this lane has carried children since it was written. See
         # `_string_fn` below.
         if self._tag == "char_length":
             return CharLengthKernel.dispatch(a^, StringOperands())

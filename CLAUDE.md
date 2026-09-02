@@ -750,6 +750,12 @@ In addition:
 
 - Use `var ^` for move semantics and `deinit` for consuming parameters. Many
   methods `raises`.
+- **`mojo format` cannot parse an `in` expression as the *left* operand of
+  `and`/`or`.** `assert_true("a" in s or "b" in s)` fails the whole file with
+  `Cannot parse: <line>:<col>`, so `pixi run -e dev fmt` reports the file as
+  unformattable while `mojo` itself compiles and runs it happily. Verified
+  2026-09-01: the right operand is fine (`1 < 2 or "b" in s` parses), and
+  parenthesising the left one (`("a" in s) or ...`) fixes it.
 - `ArcPointer` provides shared ownership of buffers and bitmaps.
 - **Mojo resolves circular imports between modules in the same package** — do not
   reorganize code or move types between files to avoid them. **But import
@@ -918,6 +924,21 @@ that looks obvious. Terse on purpose — the reproductions are in git history.
 - **Re-defaulting a base trait's abstract method in a sub-trait recurses** when
   it returns `Self.ArrayType`. Keep the base abstract and override under a new
   name (`NumericValue.execute` -> `_fused`).
+- **A trait method whose *default* lives in a sub-trait crashes the compiler
+  when it is called through the base.** Verified 2026-09-01 (`kernels/
+  string.mojo`, bisected twice). Two call shapes hit it: a base-trait
+  `dispatch` default whose closure calls `Self.apply`, and a node
+  parameterised on the base (`StringFunction[K: StringArgKernel]`) calling
+  `Self.K.apply`. **Exit 139, no source location, no note.** This is
+  distinct from the sub-trait *recursion* above — that diagnoses, this
+  segfaults. Worse, it is invisible to the usual checks: the crash needs the
+  instantiation, so `mojo precompile marrow` reports 0 errors / 0 warnings,
+  and `pytest golden` reports **`exit code 0`** because `conftest`'s
+  `libmarrow.so` build raises `_pytest.outcomes.Exit` before a case runs —
+  which reads like a pass. The safe arrangement: the shared loop is a free
+  generic function per shape, and each concrete conformer supplies its own
+  three-line method calling it. Every default a conformer inherits must come
+  from the trait it names, never from a layer above it.
 - **A trait-level default method cannot return `Self.AssocType`** unless that
   type is `ImplicitlyCopyable` — and marrow's array types deliberately are not.
   So a protocol carrying non-implicitly-copyable state cannot be rolled out
