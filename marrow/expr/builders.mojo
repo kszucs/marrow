@@ -32,7 +32,12 @@ from .`comptime`.leaves import (
     StringColumn,
     StringLiteral,
 )
-from .logical import DynRelation, InMemoryTable, ParquetScan
+from .logical import (
+    DynRelation,
+    InMemoryTable,
+    ParquetScan,
+    WindowExpr,
+)
 
 from .runtime.values import RuntimeValue, column, literal
 from .runtime.values import array_contains as _rt_array_contains
@@ -52,6 +57,14 @@ from ..dtypes import (
     int64,
 )
 from ..kernels.aggregate import CountFold, Fold
+from ..kernels.window import (
+    CumeDist,
+    DenseRank,
+    NTile,
+    PercentRank,
+    Rank,
+    RowNumber,
+)
 from ..scalars import DynScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -353,3 +366,66 @@ def count_star() -> Aggregate[Fold[CountFold, Int64Type], Literal[Int64Type]]:
     gives it, so callers stop rediscovering the trick.
     """
     return lit(1, int64).count().alias("count_star")
+
+
+# ---------------------------------------------------------------------------
+# Window functions with no argument
+# ---------------------------------------------------------------------------
+#
+# Free functions rather than methods, because they read no column: `RANK()`
+# answers from the ordering alone, so there is no receiver to hang them on.
+# The four that *do* read a column — `lag`, `lead`, `first_value`,
+# `last_value` — are `Value` trait defaults instead, and an aggregate reaches
+# a frame through `Value.over`.
+
+
+def row_number() raises -> WindowExpr:
+    """`ROW_NUMBER()` — a distinct position per row within the partition.
+
+    Insensitive to ties, so a non-total `ORDER BY` leaves it deterministic
+    only up to the sort's stability. `rank` and `dense_rank` are the two that
+    answer equally for tied rows.
+    """
+    return WindowExpr.of[RowNumber](None)
+
+
+def rank() raises -> WindowExpr:
+    """`RANK()` — tied rows share the first position of their tie, and the
+    next distinct row skips the gap: `1, 2, 2, 2, 5`."""
+    return WindowExpr.of[Rank](None)
+
+
+def dense_rank() raises -> WindowExpr:
+    """`DENSE_RANK()` — tied rows share a position and nothing is skipped:
+    `1, 2, 2, 2, 3`. The only difference from `rank` is the gap."""
+    return WindowExpr.of[DenseRank](None)
+
+
+def percent_rank() raises -> WindowExpr:
+    """`PERCENT_RANK()` — `(rank - 1) / (rows - 1)`, from 0 to 1 inclusive.
+
+    Built on `rank`, so tied rows share a value and gaps carry through. A
+    one-row partition answers 0 rather than dividing by zero.
+    """
+    return WindowExpr.of[PercentRank](None)
+
+
+def cume_dist() raises -> WindowExpr:
+    """`CUME_DIST()` — the fraction of the partition at or before this row's
+    *peer group*, from just above 0 to 1.
+
+    Counts through the whole peer group, not to this row, so tied rows share a
+    value and the final group is always exactly 1.
+    """
+    return WindowExpr.of[CumeDist](None)
+
+
+def ntile(buckets: Int) raises -> WindowExpr:
+    """`NTILE(n)` — the partition split into `buckets` as evenly as it divides.
+
+    A plain `Int` and not an expression: the bucket count is a constant of the
+    window, the same as `lag`'s distance, and there is nothing per-row for a
+    column to hold. The remainder goes to the earliest buckets, so 10 rows in
+    3 buckets is 4, 3, 3.
+    """
+    return WindowExpr.of[NTile](None, buckets)

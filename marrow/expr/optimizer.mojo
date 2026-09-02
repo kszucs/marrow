@@ -62,9 +62,23 @@ Soundness is by construction, not by review:
 - No rule inspects a `DynValue`'s internals, so **no rule can lower a comptime
   expression into the runtime lane**. A fused predicate stays fused through
   every rewrite here; rules move the box, never its contents.
-- Row *order* is only meaningful below a `Limit` or out of a `Sort`, and the
-  two rules that exploit ordering (`TopN`, `PushLimitBelowProject`) each state
-  the argument at their definition.
+- Row *order* is meaningful below a `Limit`, out of a `Sort`, and — since the
+  window node landed — into a `Window` that names no `ORDER BY`. The two rules
+  that exploit ordering (`TopN`, `PushLimitBelowProject`) each state the
+  argument at their definition.
+
+  **The third case is why `Window` is deliberately absent from this file.**
+  `WindowOperator._permutation` returns the identity when a window names no
+  keys, so `ROW_NUMBER() OVER ()` reads its answer off input row order — and
+  an ordered window is **not** safe either, because that permutation is
+  `stable=True`, so input order still decides ties. `row_number`, `lag`,
+  `lead`, `first_value` and `last_value` all change answer if tie order
+  changes, and `RemoveRedundantSort` trades tie order away by design. No rule can reach a
+  `Window` today — the node is not imported here, so no `isa[Window]()`
+  exists — and `test_optimizer.mojo::test_no_rule_rewrites_a_plan_containing_a_window`
+  pins that. Adding one means proving the rule preserves the order a window
+  below it may be reading. SQL calls `ROW_NUMBER() OVER ()` nondeterministic,
+  so this is an invariant to keep rather than a wrong answer to fix.
 """
 
 from ..kernels.join import (
@@ -470,8 +484,9 @@ struct PushFilterBelowSort(Rule):
             return node.copy()
         ref sort = input.get[Sort]()
         if sort.limit:
-            # A TopN sort drops rows, so filtering below changes which rows the
-            # bound keeps — the same hazard as `Limit`.
+            # A `TopN` sort drops rows, so filtering below changes which rows
+            # the bound keeps — the same hazard as `Limit`. `Sort.to_operator`
+            # refuses to forward a pushdown for the same reason.
             return node.copy()
         var built: DynRelation = Sort(
             filter.with_input(sort.input[].copy()),

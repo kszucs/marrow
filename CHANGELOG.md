@@ -70,6 +70,7 @@
 - Every parallel loop runs through one striped driver on the execution
   context, which owns the thread count.
 - Variance and standard deviation, sample and population.
+- Window kernels: extents, ranking and frame gather.
 - Eleven SQL string functions and three temporal ones whose arguments are
   expressions rather than configuration, so `substr(s, col("from"),
   col("len"))` works.
@@ -100,6 +101,10 @@
   the plan, so two executions of one plan cannot interfere -- and the
   fused inner loop is unchanged, so a parameter costs nothing per row.
 - `with_columns`, `drop` and `rename` on the plan layer.
+- Window functions with an `OVER` surface: `row_number`, `rank`,
+  `dense_rank`, `percent_rank`, `cume_dist`, `ntile`, `nth_value`, `lag`,
+  `lead`, `first_value`, `last_value` -- eleven of SQL's twelve. Each is
+  a comptime type, so a binary links only the ones it names.
 
 ### Query optimizer
 

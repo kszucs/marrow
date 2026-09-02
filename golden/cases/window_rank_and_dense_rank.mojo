@@ -9,10 +9,6 @@ def plan() raises -> DynRelation:
     `rank` leaves gaps after a tied run and `dense_rank` does not. `basic.k`
     has three `a`s and two `b`s, so the two columns separate immediately.
 
-    There is no window node in `marrow/expr/logical.mojo` and no windowed
-    operator in `physical.mojo`.
-
-    -- skip mojo
     -- skip python
 
     -- expected

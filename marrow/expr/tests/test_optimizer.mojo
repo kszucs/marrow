@@ -19,7 +19,7 @@ from ...dtypes import int64, string
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
 from ...scalars import BoolScalar, Int64Scalar
-from ..builders import col, count_star, lit, table
+from ..builders import col, count_star, lit, row_number, table
 from ..runtime.values import and_, column, gt, literal, not_
 from ...kernels.join import JOIN_INNER, JOIN_LEFT
 from ..logical import DynRelation, DynValue
@@ -845,3 +845,55 @@ def test_optimizer_reaches_a_fixpoint_with_splitting_and_pushdown() raises:
     )
     var once = plan.optimize[AllRules]()
     assert_equal(String(once), String(once.optimize[AllRules]()))
+
+
+# ---------------------------------------------------------------------------
+# Window — the node no rule knows about
+# ---------------------------------------------------------------------------
+def test_no_rule_rewrites_a_plan_containing_a_window() raises:
+    """A `Window` is inert to every rule, and that must stay true by test.
+
+    Today it holds for a reason that is invisible from here: `Window` is not
+    in `optimizer.mojo`'s import list, so no `isa[Window]()` exists and no
+    rule can *match* one. Rules still fire *inside* a window's subtree —
+    `Optimizer._rewritten_children` walks through `Window.traverse` — and
+    `ColumnPruning` is the pass that actually stops, by falling through every
+    `isa` to `return node.copy()`. That is a real guarantee and a fragile one — a
+    future rule that imports the node and pattern-matches a `Filter` above it
+    would push a predicate below a window, which computes over its whole
+    partition and would then compute over a pruned one. Wrong numbers, no
+    error, and `precompile` cannot see it because nothing fails to compile.
+
+    Both shapes are asserted: a filter above a window, which is the `QUALIFY`
+    plan the golden corpus exercises, and a limit above one, which `TopN` and
+    `MergeLimits` would otherwise be candidates to move.
+    """
+    var b = record_batch(
+        [array([3, 1, 4], int64).copy(), array([10, 20, 30], int64).copy()],
+        names=["a", "b"],
+    )
+    var windowed = table(b^).with_columns(
+        ["rn"], [row_number().over(order_by=[col("a", int64)])]
+    )
+    _inert(windowed.filter(col("a", int64) > lit(1, int64)))
+    _inert(windowed.limit(2))
+
+    # A `Sort` *above* the window is a different matter: `TopN` rewrites
+    # `Limit(Sort(x))` to a bounded sort whatever `x` is, and that is sound
+    # here because the window has already run below it. What must hold is
+    # not that nothing fires but that nothing reaches *into* the window, so
+    # the assertion is on the subtree rather than on the whole plan.
+    var stacked = windowed.sort_by([col("a", int64)], [True]).limit(2)
+    var optimized = String(stacked.optimize[AllRules]())
+    # Counted with `_occurrences`, not `in`: see that helper's own note about
+    # a search loop in this file that spun for an hour. The window must render
+    # exactly once and still sit directly on its source, wherever `TopN` moved
+    # the bound above it.
+    # One substring spanning the boundary, not two counted separately:
+    # `Window(...)` and `InMemoryTable(...)` each appearing once is also true
+    # of `Window(Limit(InMemoryTable(...)))`, which is exactly the rewrite
+    # this is meant to forbid. `Window.write_to` emits its input immediately
+    # after the paren, so adjacency is expressible.
+    assert_equal(
+        _occurrences(optimized, "Window(InMemoryTable(3 rows)"), 1, optimized
+    )

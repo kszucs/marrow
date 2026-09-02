@@ -10,10 +10,6 @@ def plan() raises -> DynRelation:
     "the value there was null" — which the null `v` in the middle of the
     ordering does.
 
-    There is no window node in `marrow/expr/logical.mojo` and no windowed
-    operator in `physical.mojo`.
-
-    -- skip mojo
     -- skip python
 
     -- expected

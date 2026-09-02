@@ -8,14 +8,14 @@ freely copyable, shareable, inspectable and rewritable. `to_operator(ctx)` turns
 it into the physical operator that owns the running state.
 
 **A variant for inspection, a trampoline for lowering.** `DynRelation` erases
-the nine node types behind a `Variant`, so `isa[R]()`/`get[R]()` let an
+the ten node types behind a `Variant`, so `isa[R]()`/`get[R]()` let an
 optimizer rule read a real typed node and construct one — the capability the
 previous trampoline-only box lacked, which left its "rules" as four comptime
 flags and eight scattered calls inside `to_operator` with no file to read.
 
 Lowering is the exception, and the reason is measured. `_dispatch` resolves the
 active member with a `comptime for` over every member, so anything routed
-through it is instantiated nine times; for `to_operator` that makes
+through it is instantiated ten times; for `to_operator` that makes
 `Sort.to_operator` reach `kernels::sort` and `ParquetScan.to_operator` reach the
 Parquet reader and `kernels::cast`, in plans containing neither. It cost
 **+348%** of `__text` on `query_streaming`, with `kernels::cast` going from 0 to
@@ -40,11 +40,26 @@ from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant
 
+from ..arrays import DynArray
 from ..execution import ExecContext
 from ..kernels.join import JoinKind, JOIN_INNER
+from ..kernels.window import (
+    DenseRank,
+    Edge,
+    FirstValue,
+    Lag,
+    LastValue,
+    Lead,
+    NthValue,
+    Offset,
+    Rank,
+    RowNumber,
+    WindowExtents,
+    WindowFunction,
+)
 from ..schema import Schema, schema
 from ..tabular import RecordBatch
-from ..dtypes import DynType, Field, field
+from ..dtypes import DynType, Field, field, int64
 from .bindings import Bindings
 from .pruning import PrunePredicate, Prunable
 from .pushdown import Pushdown
@@ -62,6 +77,7 @@ from .physical import (
     ParquetScanOperator,
     ProjectOperator,
     SortOperator,
+    WindowOperator,
 )
 
 
@@ -188,6 +204,73 @@ trait Value(Copyable, Deinitable, Writable):
         predicate that is constant is a program someone wrote by hand.
         """
         return None
+
+    # -- the window surface -------------------------------------------------
+    #
+    # Five trait **defaults**, so both lanes get them from one definition and
+    # neither pays for a window function it never names. They return
+    # `WindowExpr` — a concrete type no conformer overrides, which
+    # is what keeps them out of the "trait default whose return type a
+    # conformer must change" trap: the hazard is a conformer needing a
+    # *different* return type, and here nobody does.
+    #
+    # `over` is the aggregate entry point and the other four are the
+    # non-aggregate ones, which is why `over` is not simply a fifth verb here:
+    # `col("v", int64).sum()` is already a `Value`, so it needs a way to say
+    # "and evaluate that over a frame", while `lag` has no aggregate to name.
+
+    def lag(self, offset: Int = 1) raises -> WindowExpr:
+        """`LAG(self, offset)` — this column read `offset` rows earlier."""
+        var boxed: Optional[DynValue] = DynValue(self.copy())
+        return WindowExpr.of[Lag](boxed^, -offset)
+
+    def lead(self, offset: Int = 1) raises -> WindowExpr:
+        """`LEAD(self, offset)` — this column read `offset` rows later."""
+        var boxed: Optional[DynValue] = DynValue(self.copy())
+        return WindowExpr.of[Lead](boxed^, offset)
+
+    def first_value(self) raises -> WindowExpr:
+        """`FIRST_VALUE(self)` — this column at the frame's first row."""
+        var boxed: Optional[DynValue] = DynValue(self.copy())
+        return WindowExpr.of[FirstValue](boxed^)
+
+    def nth_value(self, n: Int) raises -> WindowExpr:
+        """`NTH_VALUE(self, n)` — this column at the frame's `n`-th row,
+        1-based.
+
+        Null where the frame holds fewer than `n` rows — the same answer `lag`
+        gives past a partition edge, reaching the output the same way, through
+        a null index.
+        """
+        var boxed: Optional[DynValue] = DynValue(self.copy())
+        return WindowExpr.of[NthValue](boxed^, n)
+
+    def last_value(self) raises -> WindowExpr:
+        """`LAST_VALUE(self)` — this column at the frame's last row.
+
+        Under the default frame that is the *current* row, not the partition's
+        last. See `WindowFrame`.
+        """
+        var boxed: Optional[DynValue] = DynValue(self.copy())
+        return WindowExpr.of[LastValue](boxed^)
+
+    def over(
+        self,
+        var partition_by: List[DynValue] = List[DynValue](),
+        var order_by: List[DynValue] = List[DynValue](),
+        var ascending: List[Bool] = List[Bool](),
+        nulls_first: Bool = True,
+        var rows: Optional[Tuple[Int, Int]] = None,
+    ) raises -> WindowExpr:
+        """`self OVER (...)` — evaluate this aggregate over a frame.
+
+        Raises unless `self` is an aggregate: a per-row value has nothing to
+        do with a frame, and `col("v", int64).over(...)` is a mistake worth a
+        diagnostic rather than a silent column of copies.
+        """
+        return WindowExpr.aggregating(DynValue(self.copy())).over(
+            partition_by^, order_by^, ascending^, nulls_first, rows^
+        )
 
     def columns(self) -> List[String]:
         """Which columns this expression reads, deduplicated, first-seen
@@ -434,6 +517,352 @@ def reject_aggregate(
         )
 
 
+# ---------------------------------------------------------------------------
+# Window functions — the description
+# ---------------------------------------------------------------------------
+struct WindowFrame(Copyable, ImplicitlyCopyable, Movable, Writable):
+    """Which rows of the partition an aggregate window function sees.
+
+    Two forms, and the difference between them is the one thing about frames
+    that reliably surprises:
+
+    - the **default** — `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`,
+      which SQL applies whenever a window has an `ORDER BY` and no explicit
+      frame. `RANGE` counts *peers*, so "current row" means the end of the
+      current row's peer group, and tied rows all see the same frame.
+    - **`ROWS`**, which counts rows, so tied rows see different frames.
+
+    The two agree only when the `ORDER BY` key has no duplicates, which is why
+    `window_explicit_rows_frame` exists as a separate golden case from
+    `window_partitioned_running_sum`.
+
+    With no `ORDER BY` at all the default frame is the whole partition. That
+    falls out here rather than being special-cased: with no order key every row
+    is a peer of every other, so the peer group *is* the partition.
+    """
+
+    var is_rows: Bool
+    """`True` for `ROWS`, `False` for the default `RANGE`."""
+
+    var preceding: Int
+    """`ROWS` only: rows before the current one, as a non-positive offset."""
+
+    var following: Int
+    """`ROWS` only: rows after the current one, as a non-negative offset."""
+
+    def __init__(out self, is_rows: Bool, preceding: Int, following: Int):
+        self.is_rows = is_rows
+        self.preceding = preceding
+        self.following = following
+
+    @staticmethod
+    def default() -> WindowFrame:
+        """`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`."""
+        return WindowFrame(False, 0, 0)
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self.is_rows == other.is_rows
+            and self.preceding == other.preceding
+            and self.following == other.following
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self.is_rows:
+            writer.write("rows ", self.preceding, "..", self.following)
+        else:
+            writer.write("range unbounded..current")
+
+
+struct WindowExpr(Copyable, Movable, Writable):
+    """A window function together with the window it runs over.
+
+    **One type, not two.** `row_number()` and `col("v", int64).lag()` name the
+    function and `.over(...)` names the window, so these were split into a
+    a separate type that `.over` converted. The argument for splitting was that
+    merging leaves "a half-built expression with a meaningless window" — but a
+    window with no partition and no order is `OVER ()`, one partition over the
+    whole input, which is both meaningful and the commonest window there is.
+    Merging them makes it writable: `with_columns(["rn"], [row_number()])` now
+    means `OVER ()` instead of failing to typecheck.
+
+    **Deliberately not a `Value`.** A `Value` answers per row from the batch in
+    front of it; a window function's answer depends on rows that may sit in
+    another morsel entirely, so there is no honest `to_operator` for one.
+    `Value.aggregates` exists because the relations that cannot accept an
+    aggregate had no way to say so — a window function is *more* restricted
+    than an aggregate, not less, and making it a `Value` would put it in every
+    position that flag exists to keep it out of.
+
+    Not conforming is also what makes `with_columns` unambiguous: `List[
+    WindowExpr]` cannot convert to `List[DynValue]`, so the two overloads
+    cannot be confused for each other and no caller has to disambiguate.
+    """
+
+    # -- the function ------------------------------------------------------
+    var compute: Optional[
+        def(
+            WindowExtents, Optional[DynArray], Int, Bool, Int, Int, ExecContext
+        ) thin raises -> DynArray
+    ]
+    """The function itself, as a pointer instantiated where the verb names it.
+
+    **This is what keeps an unnamed window function out of the binary.** A tag
+    read by one `if/elif` chain in `WindowOperator` would link all seven bodies
+    into any binary using any window; a slot links only the one the caller
+    wrote. It is the shape `DynRelation._virt_to_operator` uses, and it is safe
+    here for the reason it is safe there: this type is not self-referential,
+    which is the condition the miscompile in `runtime/values.mojo` needed.
+
+    `None` means **the aggregate**, the one open kind — its argument is an
+    ordinary aggregate `Value` evaluated over each frame, so it runs through
+    that value's own operator rather than through a window kernel."""
+
+    var name: String
+    """How the function renders. A stored string, because with the kinds behind
+    a pointer there is no tag left to switch on."""
+
+    var fixed_dtype: Optional[DynType]
+    """This function's output type when it does not depend on its operand.
+
+    `None` means "whatever the argument produces". **Two facts, not one**:
+    `percent_rank` and `cume_dist` read no column yet answer `float64`, so a
+    single "ranks" flag standing for both "takes no argument" and "answers
+    `int64`" could not describe them."""
+
+    var argument: Optional[DynValue]
+    """What the function reads: the shifted column for `lag`/`lead`, the framed
+    column for `first_value`/`last_value`, the aggregate itself for the
+    aggregate kind. `None` **only** for the three ranking functions, which read
+    position alone — every other kind has one, and the constructors refuse to
+    build one without."""
+
+    var offset: Int
+    """`lag`/`lead` distance, signed: negative looks back, positive forward."""
+
+    # -- the window --------------------------------------------------------
+    var partition_by: List[DynValue]
+    var order_by: List[DynValue]
+    var ascending: List[Bool]
+    var nulls_first: Bool
+    var frame: WindowFrame
+
+    @staticmethod
+    def _tramp[
+        F: WindowFunction
+    ](
+        extents: WindowExtents,
+        argument: Optional[DynArray],
+        offset: Int,
+        is_rows: Bool,
+        preceding: Int,
+        following: Int,
+        ctx: ExecContext,
+    ) raises -> DynArray:
+        return F.compute(
+            extents, argument, offset, is_rows, preceding, following, ctx
+        )
+
+    @staticmethod
+    def of[
+        F: WindowFunction
+    ](var argument: Optional[DynValue], offset: Int = 0) raises -> Self:
+        """A window function backed by `F`, over the default window `OVER ()`.
+
+        Takes only what `F` cannot answer for itself: the operand and the
+        offset. Its name and whether it ranks are properties of the function,
+        so they come off `F` rather than being repeated at every verb.
+
+        A parametric `__init__` would read better at the call site, but Mojo
+        rejects `WindowExpr[F](...)` on a struct that is not itself
+        parameterised — "unexpected parameter" — so the factory stays.
+        """
+        # `fixed_dtype` doubles as "takes no argument" — see the trait.
+        if F.fixed_dtype() and argument:
+            raise Error("window: '", F.name(), "' takes no argument")
+        if not F.fixed_dtype() and not argument:
+            raise Error("window: '", F.name(), "' needs an argument")
+        return Self(
+            Self._tramp[F],
+            F.name(),
+            F.fixed_dtype(),
+            argument^,
+            offset,
+        )
+
+    @staticmethod
+    def aggregating(var argument: DynValue) raises -> Self:
+        """The open kind: an ordinary aggregate, evaluated over each frame.
+
+        The argument is **not** optional, unlike the field: an aggregate window
+        is built from the aggregate, so there is no state in which this has
+        none. Only the three ranking functions reach the `None` case.
+        """
+        if not argument.aggregates():
+            raise Error(
+                "window: '",
+                argument.name(),
+                "' is not an aggregate; only an aggregate takes a frame",
+            )
+        var boxed: Optional[DynValue] = argument^
+        return Self(None, String("agg"), None, boxed^, 0)
+
+    def __init__(
+        out self,
+        var compute: Optional[
+            def(
+                WindowExtents,
+                Optional[DynArray],
+                Int,
+                Bool,
+                Int,
+                Int,
+                ExecContext,
+            ) thin raises -> DynArray
+        ],
+        var name: String,
+        var fixed_dtype: Optional[DynType],
+        var argument: Optional[DynValue],
+        offset: Int,
+        var partition_by: List[DynValue] = List[DynValue](),
+        var order_by: List[DynValue] = List[DynValue](),
+        var ascending: List[Bool] = List[Bool](),
+        nulls_first: Bool = True,
+        frame: WindowFrame = WindowFrame.default(),
+    ):
+        """The window half defaults to `OVER ()` -- no partition, no order,
+        the default frame -- so a constructor naming only a function gets the
+        commonest window for free, and `over` replaces it."""
+        self.compute = compute^
+        self.name = name^
+        self.fixed_dtype = fixed_dtype^
+        self.argument = argument^
+        self.offset = offset
+        self.partition_by = partition_by^
+        self.order_by = order_by^
+        self.ascending = ascending^
+        self.nulls_first = nulls_first
+        self.frame = frame
+
+    def is_aggregate(self) -> Bool:
+        """Whether this is the open kind, run through its own operator."""
+        return not self.compute
+
+    def over(
+        self,
+        var partition_by: List[DynValue] = List[DynValue](),
+        var order_by: List[DynValue] = List[DynValue](),
+        var ascending: List[Bool] = List[Bool](),
+        nulls_first: Bool = True,
+        var rows: Optional[Tuple[Int, Int]] = None,
+    ) raises -> Self:
+        """`OVER (PARTITION BY ... ORDER BY ...)` — the window this runs in.
+
+        Returns a copy with the window replaced, so the function's own checks
+        ran once at construction and are not repeated here. What *is* checked
+        here is what only arrives now: the keys, and that they are not
+        aggregates.
+
+        `ascending` defaults to all-ascending, sized to `order_by`, so the
+        common case names only the keys. `rows` supplies an explicit `ROWS`
+        frame as `(preceding, following)`; without it the default `RANGE` frame
+        applies.
+        """
+        var dirs = ascending^
+        if len(dirs) == 0:
+            for _ in range(len(order_by)):
+                dirs.append(True)
+        if len(dirs) != len(order_by):
+            raise Error(
+                "over: ",
+                len(order_by),
+                " order keys but ",
+                len(dirs),
+                " directions",
+            )
+        for ref k in partition_by:
+            reject_aggregate(
+                k, "over", k.name(), "aggregate first, then window the result"
+            )
+        for ref k in order_by:
+            reject_aggregate(
+                k, "over", k.name(), "aggregate first, then window the result"
+            )
+        var frame = WindowFrame.default()
+        if rows:
+            ref bounds = rows.value()
+            frame = WindowFrame(True, bounds[0], bounds[1])
+        return Self(
+            self.compute,
+            self.name.copy(),
+            self.fixed_dtype.copy(),
+            self.argument.copy(),
+            self.offset,
+            partition_by^,
+            order_by^,
+            dirs^,
+            nulls_first,
+            frame,
+        )
+
+    def columns(self) -> List[String]:
+        """Every column this reads — function argument and both key lists."""
+        var out = List[String]()
+        if self.argument:
+            out = merged(out^, self.argument.value().columns())
+        for ref k in self.partition_by:
+            out = merged(out^, k.columns())
+        for ref k in self.order_by:
+            out = merged(out^, k.columns())
+        return out^
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        """The type this produces.
+
+        `int64` for the three ranking functions — they count rows, and nothing
+        about the input changes that. Everything else answers with its
+        argument's type, which for the aggregate kind is the aggregate's own
+        output type rather than its input's.
+        """
+        if self.fixed_dtype:
+            return self.fixed_dtype.value().copy()
+        return self.argument.value().dtype(schema)
+
+    def spec(self) -> String:
+        """This expression's *window*, rendered — its identity for grouping.
+
+        Two window expressions sharing a spec can be answered by one sort, and
+        `with_columns` stacks a separate `Window` node per distinct spec. A
+        rendered string rather than a structural comparison because `DynValue`
+        exposes `write` and not equality, and `write` is already the canonical
+        rendering of a plan.
+        """
+        var out = String("p=")
+        for ref k in self.partition_by:
+            out += String(k) + ","
+        out += "|o="
+        for i in range(len(self.order_by)):
+            out += String(self.order_by[i])
+            out += "a" if self.ascending[i] else "d"
+            out += ","
+        out += "|n=" + String(self.nulls_first)
+        return out^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.name, "(")
+        if self.argument:
+            writer.write(self.argument.value())
+        writer.write(") over(")
+        for i in range(len(self.partition_by)):
+            writer.write("partition " if i == 0 else ", ")
+            writer.write(self.partition_by[i])
+        for i in range(len(self.order_by)):
+            writer.write(" order " if i == 0 else ", ")
+            writer.write(self.order_by[i])
+            writer.write(" asc" if self.ascending[i] else " desc")
+        writer.write(" ", self.frame, ")")
+
+
 trait Relation(Copyable, Deinitable, Movable, Writable):
     """An immutable description of a query."""
 
@@ -495,7 +924,7 @@ struct DynRelation(Copyable, Movable, Writable):
     binary links only the operators its plans actually use.
 
     `schema` and `write_to` stay on the variant ladder deliberately: also
-    instantiated nine times, but one returns a stored field and the other
+    instantiated ten times, but one returns a stored field and the other
     formats a string. Neither reaches a kernel.
 
     Children sit behind `ArcPointer`: a variant containing a node containing
@@ -513,6 +942,7 @@ struct DynRelation(Copyable, Movable, Writable):
         Aggregate,
         Limit,
         Sort,
+        Window,
         Join,
         ParquetScan,
     ]
@@ -704,6 +1134,16 @@ struct DynRelation(Copyable, Movable, Writable):
                 len(values),
                 " values",
             )
+        # **A name may not appear twice in one call**, the same rule the
+        # window overload enforces. Replacing in place is this overload's
+        # documented behaviour, but replacing *twice* has no reading: the
+        # loop below keeps the last match, so `values[0]` would be silently
+        # discarded, and for a name not already present both copies would be
+        # appended and the second made unreachable by `get_field_index`.
+        for i in range(len(names)):
+            for j in range(i):
+                if names[j] == names[i]:
+                    raise Error("with_columns: '", names[i], "' is named twice")
         var input_schema = self.schema()
         var out_names = List[String]()
         var out_values = List[DynValue]()
@@ -722,6 +1162,71 @@ struct DynRelation(Copyable, Movable, Writable):
                 out_names.append(names[i].copy())
                 out_values.append(values[i].copy())
         return Project(self.copy(), out_names^, out_values^)
+
+    def with_columns(
+        self, var names: List[String], var exprs: List[WindowExpr]
+    ) raises -> DynRelation:
+        """`SELECT *, <window functions> AS <names>` — the windowed overload.
+
+        A separate overload rather than a wider element type, because a
+        `WindowExpr` deliberately is not a `Value` (see its docstring). That
+        makes `List[WindowExpr]` unable to convert to `List[DynValue]`, so the
+        two overloads cannot be confused and no caller disambiguates anything.
+
+        **Expressions are grouped by window and stacked.** Each distinct
+        `spec()` becomes its own `Window` node, so `rank()` and `dense_rank()`
+        over one ordering share a sort while two different orderings get one
+        each. Grouping preserves first-seen order, so the output columns come
+        out in the order the caller wrote them whenever they share a window —
+        which is every case that does not deliberately mix.
+
+        A name that already exists **raises** rather than replacing in place.
+        The `DynValue` overload can replace because a `Project` names every
+        output column anyway; here the replacement would need a second node
+        purely to re-order and rename, and a silently duplicated column name
+        is a worse outcome than a diagnostic.
+        """
+        if len(names) != len(exprs):
+            raise Error(
+                "with_columns: ",
+                len(names),
+                " names but ",
+                len(exprs),
+                " window expressions",
+            )
+        var input_schema = self.schema()
+        for i in range(len(names)):
+            ref n = names[i]
+            if input_schema.get_field_index(n) != -1:
+                raise Error(
+                    "with_columns: '",
+                    n,
+                    "' already exists; a window column cannot replace one",
+                )
+            # **And against each other**, which the schema check cannot see.
+            # Two expressions with different specs become two stacked `Window`
+            # nodes below, each built directly rather than through this verb,
+            # so the second one's input schema already carries the first one's
+            # name and nothing re-checks it. The result is a schema with the
+            # column twice, where `get_field_index` answers with the first and
+            # the second is unreachable by name -- exactly the silent
+            # duplication this overload raises to avoid.
+            for j in range(i):
+                if names[j] == n:
+                    raise Error("with_columns: '", n, "' is named twice")
+        var current = self.copy()
+        var placed = List[Bool](length=len(exprs), fill=False)
+        for i in range(len(exprs)):
+            if not placed[i]:
+                var group_names = List[String]()
+                var group_exprs = List[WindowExpr]()
+                for j in range(i, len(exprs)):
+                    if not placed[j] and exprs[j].spec() == exprs[i].spec():
+                        placed[j] = True
+                        group_names.append(names[j].copy())
+                        group_exprs.append(exprs[j].copy())
+                current = Window(current^, group_names^, group_exprs^)
+        return current^
 
     def drop(self, names: List[String]) raises -> DynRelation:
         """`SELECT <everything except names>` — say what goes, not what stays.
@@ -1390,10 +1895,27 @@ struct Sort(Relation, Writable):
         bindings: Bindings = Bindings(),
         var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(ctx, bindings, pushed^)
+        # **A bounded sort clears the pushdown.** Reordering removes no rows,
+        # so a plain sort forwards; a `TopN` sort keeps only `limit` of them,
+        # and pruning below it would change which rows survive the bound.
+        # Unreachable today only because `TopN` leaves the `Limit` above and
+        # `Limit` clears -- stated here so it stays true if that changes, and
+        # so this agrees with `PushFilterBelowSort`, which already refuses.
+        var pipe = self.input[].to_operator(
+            ctx, bindings, Pushdown() if self.limit else pushed^
+        )
+
+        # The key operators are built **once**, here, where the plan becomes
+        # physical -- not per batch. Anything a key needs to resolve or cache
+        # before the first row arrives has a place to live now.
+        var input_schema = self.input[].schema()
+        var keys = List[DynOperator](capacity=len(self.keys))
+        for ref k in self.keys:
+            keys.append(k.to_operator(input_schema, False, bindings))
+
         pipe.append(
             SortOperator(
-                _to_operators(self.keys, self.input[].schema(), bindings),
+                keys^,
                 self.ascending.copy(),
                 self.nulls_first,
                 self.limit,
@@ -1412,19 +1934,128 @@ struct Sort(Relation, Writable):
         writer.write(")")
 
 
-def _to_operators(
-    values: List[DynValue], schema: Schema, bindings: Bindings
-) raises -> List[DynOperator]:
-    """Turn a list of logical values into the operators that run them.
+struct Window(Relation, Writable):
+    """`OVER (...)` — window columns appended to the input's own rows.
 
-    Built **once**, when the plan becomes physical — not per batch. That is the
-    whole point of the split: anything a value needs to resolve or cache before
-    the first row arrives has a place to live now.
+    A tenth node rather than a shape `Project` could carry, because a window
+    function is not a per-row value: `Project` evaluates each of its values
+    against the batch in front of it, and a window function's answer depends
+    on rows that may never share a batch with it. `ProjectOperator` has
+    nowhere to put the buffering that needs, and `reject_aggregate` already
+    keeps the one other non-per-row thing out of that position.
+
+    **This node only appends.** The `with_columns` rule that a repeated name
+    replaces in place is a *verb's* rule; expressing it here would mean the
+    node deciding column order too. So the verb raises on a collision and this
+    node's schema is simply the input's fields followed by one per expression.
+
+    **Every expression on one node shares one window spec.** The verb groups
+    by `WindowExpr.spec()` and stacks a node per distinct spec, so this node
+    always sorts exactly once, and two window functions over different
+    orderings cost two sorts rather than one wrong answer.
     """
-    var out = List[DynOperator](capacity=len(values))
-    for ref v in values:
-        out.append(v.to_operator(schema, False, bindings))
-    return out^
+
+    var input: ArcPointer[DynRelation]
+    var names: List[String]
+    var exprs: List[WindowExpr]
+    var _schema: Schema
+
+    def __init__(
+        out self,
+        var input: DynRelation,
+        var names: List[String],
+        var exprs: List[WindowExpr],
+    ) raises:
+        if len(names) != len(exprs):
+            raise Error(
+                "window: ",
+                len(names),
+                " names but ",
+                len(exprs),
+                " expressions",
+            )
+        if len(exprs) == 0:
+            raise Error("window: needs at least one expression")
+        for ref e in exprs:
+            if e.spec() != exprs[0].spec():
+                raise Error(
+                    "window: '",
+                    e,
+                    "' and '",
+                    exprs[0],
+                    "' do not share a window; build one node per window",
+                )
+        self._schema = Self._output_schema(input.schema(), names, exprs)
+        self.input = ArcPointer(input^)
+        self.names = names^
+        self.exprs = exprs^
+
+    @staticmethod
+    def _output_schema(
+        input: Schema, names: List[String], exprs: List[WindowExpr]
+    ) raises -> Schema:
+        """The input's fields, then one per expression.
+
+        Every appended field is `nullable`, and that is a property of window
+        functions rather than of the argument: `LAG` is null at a partition's
+        first row and `LEAD` at its last however non-nullable the column it
+        reads. Only the three ranking functions are total, and giving them a
+        narrower field would make the schema depend on which function was
+        named for no gain a reader could use.
+        """
+        var fields = List[Field](capacity=len(input.fields) + len(exprs))
+        for ref f in input.fields:
+            fields.append(f.copy())
+        for i in range(len(exprs)):
+            fields.append(field(names[i].copy(), exprs[i].dtype(input)))
+        return schema(fields^)
+
+    def traverse[
+        F: def(DynRelation) raises -> DynRelation
+    ](self, f: F) raises -> DynRelation:
+        return Window(f(self.input[]), self.names.copy(), self.exprs.copy())
+
+    def schema(self) -> Schema:
+        return self._schema.copy()
+
+    def to_operator(
+        self,
+        ctx: ExecContext,
+        bindings: Bindings = Bindings(),
+        var pushed: Pushdown = Pushdown(),
+    ) raises -> Pipeline:
+        # **The pushdown stops here**, exactly as it does at `Aggregate` and
+        # `Limit`. A window function reads its whole partition, so a predicate
+        # that reached the scan would prune row groups *before* this operator
+        # counts them and every rank, row number and running total would be
+        # computed over the wrong population -- a wrong answer, not an error.
+        #
+        # `Sort` forwards `pushed`, which is safe *for a sort with no bound*:
+        # reordering rows never removes any. A `Sort` carrying `TopN`'s limit
+        # does drop rows, and the tree guards that case by case rather than in
+        # `Sort.to_operator` -- `PushFilterBelowSort` and `RemoveRedundantSort`
+        # both bail on `sort.limit`, and `TopN` keeps the `Limit` above, which
+        # clears. So the general law is narrower than "sorts may forward"; what
+        # matters here is that this node decides *which rows exist*, which puts
+        # it with `Aggregate` and `Limit`.
+        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        pipe.append(
+            WindowOperator(
+                self.names.copy(),
+                self.exprs.copy(),
+                self.input[].schema(),
+                self._schema.copy(),
+                bindings.copy(),
+                ctx.copy(),
+            )
+        )
+        return pipe^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Window(", self.input[])
+        for i in range(len(self.exprs)):
+            writer.write(", ", self.exprs[i], " as ", self.names[i])
+        writer.write(")")
 
 
 struct Join(Relation, Writable):
