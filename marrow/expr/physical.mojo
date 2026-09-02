@@ -1070,21 +1070,21 @@ struct WindowOperator(Operator):
     ) raises -> DynArray:
         """One window expression's column, in **sorted** order."""
         # **Two branches, not eight.** Which window function this is lives in
-        # `WindowFn`'s slot, instantiated where the verb named it, so the
+        # `WindowExpr`'s slot, instantiated where the verb named it, so the
         # bodies of the ones this binary never writes are not linked. The
         # aggregate is the one kind with no slot: its argument is an ordinary
         # aggregate `Value`, so it runs through that value's own operator.
-        if expr.func.is_aggregate():
+        if expr.is_aggregate():
             return self._framed_aggregate(expr, extents, sorted_batch)
 
         # The ranking functions read no column; the rest gather one.
         var argument: Optional[DynArray] = None
-        if not expr.func.ranks():
-            argument = self._eval(expr.func.argument.value(), sorted_batch)
-        return expr.func._compute.value()(
+        if not expr.ranks:
+            argument = self._eval(expr.argument.value(), sorted_batch)
+        return expr.compute.value()(
             extents,
             argument^,
-            expr.func.offset,
+            expr.offset,
             expr.frame.is_rows,
             expr.frame.preceding,
             expr.frame.following,
@@ -1163,7 +1163,7 @@ struct WindowOperator(Operator):
             var lo = max(0, min(start, limit))
             var hi = max(lo, min(stop, limit))
             var frame = sorted_batch.slice(lo, hi - lo)
-            var op = expr.func.argument.value().to_operator(
+            var op = expr.argument.value().to_operator(
                 self._input_schema, False, self._bindings
             )
             var produced = op.push(Morsel.ungrouped(frame^))

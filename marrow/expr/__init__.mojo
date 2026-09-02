@@ -56,7 +56,6 @@ from .logical import (
     Value,
     Window,
     WindowExpr,
-    WindowFn,
     WindowFrame,
 )
 from .physical import Datum, DynOperator, Morsel, Operator, Pipeline

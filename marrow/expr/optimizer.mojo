@@ -484,8 +484,9 @@ struct PushFilterBelowSort(Rule):
             return node.copy()
         ref sort = input.get[Sort]()
         if sort.limit:
-            # A TopN sort drops rows, so filtering below changes which rows the
-            # bound keeps — the same hazard as `Limit`.
+            # A `TopN` sort drops rows, so filtering below changes which rows
+            # the bound keeps — the same hazard as `Limit`. `Sort.to_operator`
+            # refuses to forward a pushdown for the same reason.
             return node.copy()
         var built: DynRelation = Sort(
             filter.with_input(sort.input[].copy()),

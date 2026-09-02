@@ -36,7 +36,7 @@ from .logical import (
     DynRelation,
     InMemoryTable,
     ParquetScan,
-    WindowFn,
+    WindowExpr,
 )
 
 from .runtime.values import RuntimeValue, column, literal
@@ -372,23 +372,23 @@ def count_star() -> Aggregate[Fold[CountFold, Int64Type], Literal[Int64Type]]:
 # a frame through `Value.over`.
 
 
-def row_number() -> WindowFn:
+def row_number() raises -> WindowExpr:
     """`ROW_NUMBER()` — a distinct position per row within the partition.
 
     Insensitive to ties, so a non-total `ORDER BY` leaves it deterministic
     only up to the sort's stability. `rank` and `dense_rank` are the two that
     answer equally for tied rows.
     """
-    return WindowFn.of[RowNumber](None)
+    return WindowExpr.of[RowNumber](None)
 
 
-def rank() -> WindowFn:
+def rank() raises -> WindowExpr:
     """`RANK()` — tied rows share the first position of their tie, and the
     next distinct row skips the gap: `1, 2, 2, 2, 5`."""
-    return WindowFn.of[Rank](None)
+    return WindowExpr.of[Rank](None)
 
 
-def dense_rank() -> WindowFn:
+def dense_rank() raises -> WindowExpr:
     """`DENSE_RANK()` — tied rows share a position and nothing is skipped:
     `1, 2, 2, 2, 3`. The only difference from `rank` is the gap."""
-    return WindowFn.of[DenseRank](None)
+    return WindowExpr.of[DenseRank](None)

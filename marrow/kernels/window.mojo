@@ -278,7 +278,7 @@ struct WindowKernel(Kernel):
 # The window functions, one type each
 # ---------------------------------------------------------------------------
 #
-# **A type per function rather than a tag plus a switch.** `WindowFn` stores a
+# **A type per function rather than a tag plus a switch.** `WindowExpr` stores a
 # thin pointer to one of these, instantiated where the verb names it, so a
 # binary that writes `row_number()` links `RowNumber.compute` and nothing else.
 # A runtime tag read by one `if/elif` chain would link all seven bodies into

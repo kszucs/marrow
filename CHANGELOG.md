@@ -182,6 +182,43 @@
 
 ### Refactors
 
+- **`WindowFn` and `WindowExpr` are one type** (`marrow/expr/logical.mojo`).
+  They were split so `row_number()` could name a function and `.over(...)` the
+  window, on the argument that merging leaves "a half-built expression with a
+  meaningless window". A window with no partition and no order is `OVER ()` --
+  one partition over the whole input, and the commonest window there is -- so
+  the default was never meaningless, only unwritable: `with_columns(["rn"],
+  [row_number()])` did not typecheck. It does now, and `.over` returns a copy
+  with the window replaced rather than converting between types, so all 34
+  call sites are unchanged.
+
+  Validation moved to where each check's data arrives. `of[F]` tests
+  ranks-against-argument, which is known at construction; `aggregating` tests
+  that its operand really is an aggregate; `over` tests the keys, which do not
+  exist until then. One constructor was checking all of it, including things
+  it could not yet see.
+
+  `aggregating` takes a plain `DynValue`, not an `Optional` -- an aggregate
+  window is built *from* the aggregate, so there was no state in which it had
+  none. The field stays optional for the three ranking functions, which is now
+  its only `None` case.
+
+  Five things went with it. `_to_operators` had one caller, `_unwindowed` was
+  thirty-three lines doing what default arguments do, `_blocks_row_removal`
+  had **none** -- added and then orphaned when a `git checkout` restored its
+  call site's file -- the `ranks()` accessor was a getter over a field, and one
+  comment pointed at a deleted helper. `compute`, `name` and `ranks` lose their
+  underscores: `physical.mojo` was already reading one of them through the
+  privacy.
+
+- **A bounded sort clears the pushdown** (`marrow/expr/logical.mojo`).
+  `Sort.to_operator` forwarded its row-group predicate unconditionally, but a
+  `Sort` carrying `TopN`'s `limit` drops rows, so pruning below it changes
+  which rows survive the bound. `PushFilterBelowSort` already refused for
+  exactly this reason, so the two mechanisms disagreed and only `TopN` leaving
+  the `Limit` above -- which clears -- kept it from being a wrong answer.
+
+
 - **Window functions dispatch on a type, not a tag** (`marrow/kernels/window.mojo`,
   `marrow/expr/logical.mojo`). `WindowKind` was an eight-code enum read by one
   `if/elif` chain in `WindowOperator`, which is the *runtime* lane's idiom:
