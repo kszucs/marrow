@@ -89,6 +89,17 @@ function`). Run it through `pytest`, which generates a driver for the selection.
 errors and 0 warnings rather than letting output accumulate until it is
 unreadable. Building is not passing: switch back to `pytest` once it compiles.
 
+**`pixi run precompile` exits 0 when the compile fails.** Verified 2026-09-02:
+a `use of unknown declaration` failure ends with `mojo: error: failed to parse
+the provided Mojo source module` and the task still reports `[exited with code
+0]` — the same "exit code 0 reads like a pass" trap `pytest golden` has. Judge
+it by its *output*, never by `$?`:
+
+```bash
+pixi run -e dev precompile > /tmp/pc.log 2>&1
+grep -c 'error:' /tmp/pc.log      # this is the check
+```
+
 ### Running tests
 
 Always go through `pytest` — never `mojo test`, `mojo run`, or a hand-written
@@ -436,9 +447,16 @@ share no node types**:
   and an optional payload; `RuntimeAggregate` is an aggregate named at run time
   and resolved against the input schema at plan-build time. What stays runtime
   is the *dtype* of the operands, not the operation.
-- **`builders.mojo`** — `col`, `lit`, `if_else`, `param`, `count_star`,
-  `table()`, `scan()`: the one surface spanning both lanes. `col("a", int64)`
-  gives a comptime `Column[Int64Type]`, `col("a")` a `RuntimeValue`.
+- **`builders.mojo`** — `col`, `lit`, `if_else`, `is_in`, `min_element_wise`,
+  `max_element_wise`, `array_length`, `array_contains`, `param`,
+  `count_star`, `table()`, `scan()`: the one surface spanning both lanes. `col("a", int64)` gives a
+  comptime `Column[Int64Type]`, `col("a")` a `RuntimeValue`. **A verb with a
+  counterpart in both lanes carries one overload per lane**, and both must stay
+  in this file: a split overload set shadows rather than overloads, so which
+  one a call site got would depend on its imports. Not every verb is
+  two-lane — `param` and `count_star` are comptime-only by nature, and
+  `if_else` is comptime-only by omission, its runtime twin sitting unexposed at
+  `runtime/values.mojo`.
 - **`params.mojo`** — `Param[T]` and `Bindings`: a literal whose value arrives at
   execution time, carried *through* an execution rather than substituted into a
   copy of the plan, so two executions of one plan cannot interfere.
@@ -543,10 +561,12 @@ marrow/
 ├── expr/
 │   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
 │   ├── physical.mojo     # Operator / DynOperator push engine
-│   ├── builders.mojo     # col, lit, if_else, param, count_star, table, scan
+│   ├── builders.mojo     # col, lit, if_else, is_in, min/max_element_wise,
+│                         #   array_length/array_contains, param, count_star,
+│                         #   table, scan
 │   ├── params.mojo       # Param[T], Bindings
 │   ├── comptime/         # AOT lane: core, leaves, numeric, boolean, strings,
-│   │   └── tests/        #   casts, aggregates, rules
+│   │   └── tests/        #   temporal, nested, casts, aggregates, rules
 │   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
 │   │   └── tests/
 │   └── tests/

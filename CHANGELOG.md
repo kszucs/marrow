@@ -66,6 +66,46 @@
   and ISO week numbering disagrees with `year` at the boundary — `2021-01-01`
   is week 53 of ISO year **2020**.
 
+- **Nine kernels that no expression could reach now have nodes and verbs**
+  (`docs/backlog.md` §1.5, closed). The kernels were written and tested; only
+  the node and the builder verb were missing, and every one lands in **both**
+  lanes:
+
+  - `is_in` — `IN (...)`. `IsIn[A: ComptimeValue]` in
+    `marrow/expr/comptime/boolean.mojo` is a `BoolValue` breaker in the mould
+    of `NullPredicate`: `bind` hashes the value set into the probe table and
+    runs the column through it, `lane` reads the bits back. The operand binds
+    the base trait because `IsInKernel` decides membership on the 64-bit hash
+    alone, so numeric, string, bool and temporal all funnel through one call.
+    The set is a field rather than an operand — it is the same set on every
+    row. `IsInKernel` had a runtime `isin` tag already but no verb, so `IN`
+    was unreachable from `marrow.expr`.
+  - `array_contains` — `ArrayContains[L: ListValue, E: NumericValue]` in
+    `comptime/nested.mojo`, `ListLength`'s sibling: bind a list, produce
+    another family's lane. Two type parameters so `ArrayContainsKernel.apply`
+    binds directly instead of opening its listlike x numeric ladder. Plus an
+    `array_contains` tag in the runtime lane — a *binary* tag, not a payload
+    one, because the search value varies per row.
+  - `min_element_wise` / `max_element_wise` — `MinKernel` / `MaxKernel` were
+    dead in both lanes. **Not** named `least` / `greatest`: SQL's pair *skips*
+    nulls (`LEAST(NULL, 3)` is 3) and these intersect validity like every
+    other `BinaryNumericKernel`, so the SQL name would have shipped a wrong
+    answer. `golden/cases/math_greatest_and_least.mojo` pins the skipping
+    semantics and stays skipped until a kernel provides them.
+  - `exp2`, `log2`, `log10`, `log1p`, `sin`, `cos` — six `UnaryFloatKernel`s
+    where `NumericValue` named three.
+
+  `array_length` was not on the backlog's list and should have been: it had a
+  verb in each lane, but the **overload set was split** across `builders.mojo`
+  and `runtime/values.mojo`, so `from marrow.expr import array_length` was
+  comptime-only. That is the exact failure `builders.mojo`'s docstring warns
+  about, and the runtime overload now sits beside the comptime one.
+
+  `test_builder_verbs_select_the_runtime_overload` annotates each result
+  `var v: RuntimeValue`, which is a *compile-time* proof that the erased
+  overload was chosen — a concrete overload does not always beat a
+  trait-bound generic one in Mojo, and the losing case compiles clean.
+
 - **A plan optimizer: twelve rules and a column-pruning pass**
   (`marrow/expr/optimizer.mojo`). `plan.optimize[AllRules]()` returns a new
   `DynRelation` you can print, diff and execute — `Limit(Sort(Filter(scan)))`
@@ -89,6 +129,26 @@
   multi-key decomposition needs full permutations to compose.
 
 ### Refactors
+
+- **`marrow/expr/comptime/nested.mojo`: the list-consuming nodes get their own
+  module.** `ListLength` and `ArrayContains` share a `ListValue` operand bound
+  and land in different families — numeric and boolean — which is word for word
+  the reason `temporal.mojo` is not part of `numeric.mojo`. They had been in
+  `leaves.mojo`, where every other node resolves a name or holds a constant and
+  takes **no operand at all**; they were the only two nodes in the package
+  sitting in a module whose defining property they did not have.
+
+  `ListLength` landed there back in `expr2`, before the package had a module
+  per operand family, and `ArrayContains` was added beside it. The docstring
+  that justified the pair — "beside the `ListColumn` they read" — is not what
+  the package does: `StringLength` is only ever read from a `StringColumn` too,
+  and it lives in `strings.mojo`.
+
+  `leaves.mojo` sheds four imports as a result, `marrow.kernels.nested` among
+  them: a leaf module no longer depends on a kernel in order to host two
+  non-leaves. `comptime/tests/test_nested.mojo` already existed and now maps to
+  a module, like every other test file in the package.
+
 
 - **Every string kernel states its real signature**
   (`marrow/kernels/string.mojo`). `substr(s, start: Int, count: Int)`,

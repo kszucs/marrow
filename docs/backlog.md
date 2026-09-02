@@ -42,7 +42,7 @@ all of them.
 | 6 | **Parallel group-by** — thread-local partials plus a radix merge | Group-by is where analytical queries spend their time; single-threaded loses every benchmark. `groupby.mojo` is 224 lines with no parallelism | **M** | — |
 | 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
 | 8 | **String and temporal surface** — 16 + 13 skipped golden cases | The long tail a dataframe user hits immediately after the basics work | **M** | — |
-| 9 | **Cheap expression nodes over kernels that already exist** (`IN`, `array_length`, …) | Kernels are written; only the node and a builder verb are missing. Highest ratio of coverage to work | **S** | — |
+| 9 | ~~**Cheap expression nodes over kernels that already exist**~~ — done 2026-08-31 | Nine kernels had no node. `is_in`, `array_contains`, `min`/`max_element_wise` and six float unaries now reach both lanes; see §1.5 for what is left and why it is not cheap | **S** | — |
 | 10 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
 | 11 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 10, 12 |
 | 12 | **Statistics propagation and a cost model** | Feeds 11. Note two of three incumbents ship without one — DataFusion and polars both have none | **L** | — |
@@ -134,21 +134,97 @@ make_date, epoch, iso_week), nested types (struct field, map lookup, list
 element/slice/contains, unnest), decimals, `DISTINCT ON`, GROUPING SETS/ROLLUP/
 CUBE, and cross/non-equi/asof joins.
 
-Three of these need only a node over a kernel marrow already has: `bool_and`/
-`bool_or` over `AnyKernel`/`AllKernel`, `list_contains` over
-`ArrayContainsKernel`, and `IN` over `is_in`.
+Two of these came off the list on 2026-08-31: `list_contains` and `IN` now
+have nodes and verbs in both lanes (§1.5). `bool_and`/`bool_or` over
+`AnyKernel`/`AllKernel` is the one that remains, and it is **not** the same
+size of job — those two are `BoolReduceKernel`s rather than `FoldKernel`s and
+have no grouped variant, so they need an aggregate node in both lanes plus a
+kernel change.
 
-### 1.5 One kernel reachable from no expression node
+### 1.5 ~~One kernel reachable from no expression node~~ — done 2026-08-31
 
-`ArrayContainsKernel` (`kernels/nested.mojo`) is correct and tested but wired
-to nothing. Either add the node or delete the kernel; do not leave a public
-kernel with no consumer.
+The entry named one kernel. Grepping every public kernel in `marrow/kernels/`
+against every import under `marrow/expr/` found **nine**, and all nine now
+have a node and a verb in both lanes:
+
+- `ArrayContainsKernel` — `ArrayContains` (`comptime/leaves.mojo`), the
+  `array_contains` tag, `builders.array_contains`.
+- `IsInKernel` — it had a runtime `isin` tag but no comptime node and no verb,
+  so `IN (...)` could not be written from the one surface that spans both
+  lanes. Now `IsIn` (`comptime/boolean.mojo`) and `builders.is_in`.
+- `MinKernel` / `MaxKernel` — dead in both lanes. Now `MinElementWise` /
+  `MaxElementWise` and `builders.min_element_wise` / `.max_element_wise`.
+  **Deliberately not spelled `least` / `greatest`**: those are SQL's names and
+  SQL *skips* nulls (`LEAST(NULL, 3)` is 3), while `MinKernel` intersects
+  validity like every other `BinaryNumericKernel`. Naming them for SQL would
+  have put a wrong answer behind the name;
+  `golden/cases/math_greatest_and_least.mojo` pins the skipping semantics and
+  stays skipped, since providing them is a kernel change. `.min()` / `.max()`
+  were unavailable anyway — those are the aggregates.
+- `Exp2Kernel`, `Log2Kernel`, `Log10Kernel`, `Log1pKernel`, `SinKernel`,
+  `CosKernel` — six `UnaryFloatKernel`s where `NumericValue` named three. Now
+  `.exp2()` … `.cos()` and the matching runtime tags.
+
+`array_length` was not on the list and should have been. It had a verb in each
+lane, but its **overload set was split** across `builders.mojo` and
+`runtime/values.mojo` — the failure `builders.mojo`'s own docstring warns
+about — so `from marrow.expr import array_length` was comptime-only. The
+runtime overload now sits beside the comptime one.
 
 `ConcatKernel` (`kernels/string.mojo`) came off this list on 2026-08-30: the
 runtime lane's `add` tag dispatches to it when the operands turn out to be
 strings, which is the call its own docstring already said it existed for. The
 comptime lane still has no `+` on `StringValue` -- a typed string column
 concatenates only by leaving the lane.
+
+**What is still unreachable, and why none of it is one alias away:**
+
+- `AnyKernel` / `AllKernel` (`kernels/aggregate.mojo`) are `BoolReduceKernel`s,
+  deliberately *not* `FoldKernel`s: they fold bit-packed masks and expose only
+  `reduce(BoolArray) -> Bool`. Reaching them needs an aggregate node in both
+  lanes **and** a grouped variant the kernel does not have — a subsystem, not a
+  node. This is the one genuine coverage gap left here.
+- `StringToBoolKernel` / `BoolToStringKernel` would be two more `casts.mojo`
+  breakers. Both are already reachable through the runtime `cast()` verb, so
+  what is missing is fusion, not coverage. The same holds for the nine
+  remaining `cast.mojo` kernels (temporal, binary-like, fixed-size-binary,
+  null, list, struct, dictionary) and all six of `cast_decimal.mojo` — with the
+  extra note that no decimal column can enter the comptime lane at all, since
+  `Column[T]` binds `T: NumericType` (§2.6).
+- `drop_null`, `sort`, `filter` and `take` are **relational**: each needs a
+  `Relation` node, not an expression one. `filter`/`take`/`sort_indices` are
+  already reached from `physical.mojo`.
+- `hashing.mojo`, `hashtable.mojo`, `partition.mojo` and `distinct.mojo`'s
+  public defs are building blocks other kernels consume, not user-facing
+  compute. `distinct` is reached through `aggregate.DistinctCount`.
+
+**Of six skipped golden cases, exactly one was unblocked.** Checked case by
+case, not by name:
+
+- `math_log_bases` — **unblocked and un-skipped.** It needs only `.log2()` and
+  `.log10()`, both of which are now methods on `NumericValue`.
+- `math_trigonometry` — **still blocked.** It uses `sin`, `cos` *and*
+  `atan2(y, n)`, and there is no `atan2` kernel. Two of three verbs is not
+  enough to run a case.
+- `nested_list_contains` — **still blocked.** It calls
+  `col("l", list_(int64)).contains(...)`, a *method* on `ListValue`. Only the
+  free `array_contains(list, elem)` was added; `.contains` exists solely on
+  `StringValue`.
+- `filter_in_literal_list` — **still blocked.** It calls
+  `col("v", int64).is_in([1, 3, 99])`, a method taking a Mojo list. Only the
+  free `is_in(a, DynArray)` exists.
+- `filter_not_in_list_with_null` — **blocked on semantics, a second exception
+  the previous version of this entry did not name.** It expects SQL's `NOT IN`
+  with a NULL in the list to match *nothing*; marrow's `is_in` follows
+  PyArrow's `MATCH`, so `~is_in(v, {1, NULL})` returns 5 rows where the case
+  expects 0.
+- `math_greatest_and_least` — **blocked on semantics.** Its expected rows
+  encode SQL's null-skipping, which `MinKernel` / `MaxKernel` do not do; it
+  needs a `skip_nulls=True` kernel first.
+
+So three of the six need *methods* rather than free verbs (`.contains`,
+`.is_in`) or a kernel that does not exist (`atan2`), and two need null
+semantics marrow does not implement.
 
 ### 1.6 ~~Top-K is a dead parameter~~ — done 2026-08-31
 
@@ -224,6 +300,15 @@ tests, and both cost time on 2026-08-30:
 
 CLAUDE.md's "prefer `assert_true(result == expected)`" is about
 `PrimitiveArray[T].__eq__` and holds there. It does not transfer to `DynArray`.
+
+**Hit again on 2026-08-31, and the interesting half is which case *passed*.**
+`least(a, b)` and `greatest(a, b)` over `a = [1, 2, null, 4]`,
+`b = [10, 20, 30, 40]` were both compared erased. `greatest` failed, because
+the byte under the null is `max(0, 30)` where the builder wrote 0. `least`
+**passed**, because `min(0, 30)` happens to be 0. So a green erased comparison
+is not evidence that erased comparison is safe here — it can be one operand
+value away from failing, and a suite can carry the defect silently. Narrow to
+the typed array.
 
 ### 1.10 Python binding limits, measured 2026-08-30
 
@@ -752,11 +837,13 @@ merely slow, which is a categorical improvement for a small amount of code.
 
 **Storage is complete; expressions cannot reach it.**
 
-- **Nested:** eight golden cases — list element access, `list_contains` (the
-  kernel `ArrayContainsKernel` exists and is wired to nothing,
-  `marrow/kernels/nested.mojo:93`), list slice, `unnest`, list sum, struct field
-  access, map lookup, map cardinality. The only nested verb in the expression
-  layer is `array_length`. ibis's minimum here is `ArrayIndex`, `ArraySlice`,
+- **Nested:** eight golden cases — list element access, `list_contains`, list
+  slice, `unnest`, list sum, struct field access, map lookup, map cardinality.
+  `list_contains` was closed on 2026-08-31 (§1.5): `ArrayContainsKernel` now
+  has `ArrayContains` in the comptime lane, an `array_contains` tag in the
+  runtime one, and a verb reaching both, so the nested verbs are
+  `array_length` and `array_contains`. Everything else needs a kernel that
+  does not exist. ibis's minimum here is `ArrayIndex`, `ArraySlice`,
   `ArrayContains`, `ArrayLength`, `Unnest`, `MapGet`/`MapContains`/`MapKeys`/
   `MapValues`/`MapLength`, and `StructField` — and struct is genuinely thin
   there too (`structs.py` defines exactly two nodes), so `StructField` alone

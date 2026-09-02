@@ -113,6 +113,18 @@ struct ArrayContainsKernel(Kernel):
                 t"array_contains: list and element arrays must have equal"
                 t" length, got {n} and {len(elem)}"
             )
+        var child_dt = list.values().dtype()
+        if child_dt != V().to_dyn():
+            # `dispatch` picks `V` from the *element* array and `T` from the
+            # list's offset width; neither reads the list's child type, so a
+            # `list<int32>` column with an `int64` search value arrives here
+            # with `V = Int64Type`. `as_primitive[V]` on a mismatched child is
+            # a bad variant access -- it aborts the process rather than
+            # raising, so the check has to be here and not at the call site.
+            raise Self.error(
+                t"list element type {child_dt} does not match the search"
+                t" value type {V().to_dyn()}"
+            )
         ref child = list.values().as_primitive[V]()
         var offs = list.offsets.view[off](list.offset)
         var data = Bitmap.alloc_zeroed(n)

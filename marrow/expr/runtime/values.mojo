@@ -73,17 +73,24 @@ from ...kernels.conditional import coalesce as coalesce_kernel
 from ...kernels.conditional import fill_null as fill_null_kernel
 from ...kernels.conditional import nullif as nullif_kernel
 from ...kernels.membership import IsInKernel
-from ...kernels.nested import ArrayLengthKernel
+from ...kernels.nested import ArrayContainsKernel, ArrayLengthKernel
 from ...kernels.numeric import (
     AbsKernel,
     AddKernel,
     BinaryKernel,
     CeilKernel,
+    CosKernel,
     DivKernel,
+    Exp2Kernel,
     ExpKernel,
     FloorKernel,
     FloordivKernel,
+    Log2Kernel,
+    Log10Kernel,
+    Log1pKernel,
     LogKernel,
+    MaxKernel,
+    MinKernel,
     ModKernel,
     MulKernel,
     NegKernel,
@@ -91,6 +98,7 @@ from ...kernels.numeric import (
     PowKernel,
     RoundKernel,
     SignKernel,
+    SinKernel,
     SqrtKernel,
     SubKernel,
     TruncKernel,
@@ -605,6 +613,18 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             return Self._float_unary[ExpKernel](a^)
         if self._tag == "ln":
             return Self._float_unary[LogKernel](a^)
+        if self._tag == "exp2":
+            return Self._float_unary[Exp2Kernel](a^)
+        if self._tag == "log2":
+            return Self._float_unary[Log2Kernel](a^)
+        if self._tag == "log10":
+            return Self._float_unary[Log10Kernel](a^)
+        if self._tag == "log1p":
+            return Self._float_unary[Log1pKernel](a^)
+        if self._tag == "sin":
+            return Self._float_unary[SinKernel](a^)
+        if self._tag == "cos":
+            return Self._float_unary[CosKernel](a^)
 
         # Null and value predicates. `is_null`/`is_valid` read the validity
         # bitmap and are never null themselves; `is_nan`/`is_inf` read the
@@ -730,12 +750,26 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         if self._tag == "pow":
             return Self._float_binary[PowKernel](l^, r^)
 
+        # `_arith`, not `_float_binary`: the row-wise extrema pick one of
+        # their operands rather than computing a new value, so the result
+        # keeps the promoted operand type instead of widening to float64.
+        if self._tag == "min_element_wise":
+            return Self._arith[MinKernel](l^, r^)
+        if self._tag == "max_element_wise":
+            return Self._arith[MaxKernel](l^, r^)
+
         if self._tag == "startswith":
             return StartsWithKernel.dispatch(l^, r^)
         if self._tag == "endswith":
             return EndsWithKernel.dispatch(l^, r^)
         if self._tag == "contains":
             return ContainsKernel.dispatch(l^, r^)
+
+        # Nested. A binary tag rather than a payload one, unlike `isin`: the
+        # search value varies per row, so it is a column the batch supplies and
+        # not a constant the plan carries.
+        if self._tag == "array_contains":
+            return ArrayContainsKernel.dispatch(l^, r^)
 
         # `NullifKernel` and `FillNullKernel` both call `expect_same_dtype`,
         # so a mixed pair has to meet before the kernel sees it -- otherwise
@@ -1196,6 +1230,22 @@ def pow(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
     return RuntimeValue("pow", l, r)
 
 
+def min_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The smaller of the two, per row — `pc.min_element_wise(skip_nulls=False)`.
+
+    Not `min`, which on `RuntimeValue` is the aggregate that folds a column.
+    This is null-in-null-out, where SQL's `LEAST` *and* `pc`'s own default
+    both skip nulls — see the note in `builders.mojo`.
+    """
+    return RuntimeValue("min_element_wise", l, r)
+
+
+def max_element_wise(var l: RuntimeValue, var r: RuntimeValue) -> RuntimeValue:
+    """The larger of the two, per row — the mirror of `min_element_wise`,
+    including its null rule."""
+    return RuntimeValue("max_element_wise", l, r)
+
+
 def neg(var a: RuntimeValue) -> RuntimeValue:
     """`-a`."""
     return RuntimeValue("neg", a)
@@ -1249,6 +1299,36 @@ def exp(var a: RuntimeValue) -> RuntimeValue:
 def ln(var a: RuntimeValue) -> RuntimeValue:
     """The natural logarithm, as `float64`."""
     return RuntimeValue("ln", a)
+
+
+def exp2(var a: RuntimeValue) -> RuntimeValue:
+    """`2 ** a`, as `float64`."""
+    return RuntimeValue("exp2", a)
+
+
+def log2(var a: RuntimeValue) -> RuntimeValue:
+    """The base-2 logarithm, as `float64`."""
+    return RuntimeValue("log2", a)
+
+
+def log10(var a: RuntimeValue) -> RuntimeValue:
+    """The base-10 logarithm, as `float64`."""
+    return RuntimeValue("log10", a)
+
+
+def log1p(var a: RuntimeValue) -> RuntimeValue:
+    """`ln(1 + a)`, as `float64`."""
+    return RuntimeValue("log1p", a)
+
+
+def sin(var a: RuntimeValue) -> RuntimeValue:
+    """The sine of an angle in radians, as `float64`."""
+    return RuntimeValue("sin", a)
+
+
+def cos(var a: RuntimeValue) -> RuntimeValue:
+    """The cosine of an angle in radians, as `float64`."""
+    return RuntimeValue("cos", a)
 
 
 # ---------------------------------------------------------------------------
@@ -1524,9 +1604,12 @@ def isin(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
 
     The set is a `DynArray` payload rather than a child: it is the same set on
     every row and every batch, so hashing it into the probe table is work that
-    belongs to the plan, not to the morsel. The comptime lane has no
-    counterpart -- `IsInKernel` decides membership on the 64-bit hash alone
-    and has no typed leaf to fuse into.
+    belongs to the plan, not to the morsel.
+
+    The comptime lane's counterpart is `IsIn`, and it is a **breaker** there
+    rather than a fusing node: `IsInKernel` decides membership on the 64-bit
+    hash alone, so it has no typed leaf to fuse into and the node runs it over
+    a whole column. `builders.is_in` reaches both.
     """
     return RuntimeValue("isin", a, Payload(value_set^))
 
@@ -1550,8 +1633,7 @@ def array_length(var a: RuntimeValue) -> RuntimeValue:
 
     A list column consumed into a numeric one, which is the only way a list is
     read: a list element is a whole sub-array rather than a value a lane can
-    hold. Same reason `builders.array_length` is the comptime lane's only list
-    verb.
+    hold.
     """
     return RuntimeValue("array_length", a)
 
@@ -1596,3 +1678,16 @@ def day_name(var a: RuntimeValue) -> RuntimeValue:
 def month_name(var a: RuntimeValue) -> RuntimeValue:
     """The full English month name."""
     return RuntimeValue("month_name", a)
+
+
+def array_contains(
+    var list: RuntimeValue, var elem: RuntimeValue
+) -> RuntimeValue:
+    """True where `list[i]` contains the value `elem[i]`.
+
+    Both operands are children, where `isin`'s value set is a payload: the
+    search value here is a *column*, one value per row, so there is nothing
+    constant to hoist out of the morsel. `ArrayContainsKernel` takes numeric
+    elements only and says so itself when it does not.
+    """
+    return RuntimeValue("array_contains", list, elem)
