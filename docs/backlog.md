@@ -378,7 +378,7 @@ feature".
 
 ---
 
-### 1.7 Found while landing items 6, 8, 9, 14 and 19 — 2026-09-03
+### 1.12 Found while landing items 6, 8, 9, 14 and 19 — 2026-09-03
 
 Five findings that were not on this list and are not covered by any row above.
 Ordered by what they cost.
@@ -426,7 +426,7 @@ and anything pairing those two kernels inherits it — `distinct` and `group_by`
 are the other candidates. Fixing it inside `mark_changes` would paper over
 that, so the first task is to establish whether the divergence is general.
 
-### 1.8 Framed window aggregates are O(n^2)
+### 1.13 Framed window aggregates are O(n^2)
 
 `WindowOperator._framed_aggregate` constructs **one aggregate operator per
 row** and rescans that row's frame. Under SQL's default frame the frame grows
