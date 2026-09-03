@@ -94,20 +94,22 @@ the next thing that reads `columns()` and believes the answer.
 
 ### 1.2 The published guides document APIs that do not exist
 
-The only user-visible item here. `docs/guide/expressions.qmd` documents
-`from marrow.expr import col, lit, parquet_scan` — there is no such Python
-module — and calls the engine "pull-based" when `physical.mojo` is push/drain.
-`docs/guide/compile.qmd` documents `plan.execute_cli()`, deleted with the CLI
-entry point. These are on the rendered site.
+The only user-visible item here, and now one guide rather than two.
+`docs/guide/expressions.qmd` documents `from marrow.expr import col, lit`
+(lines 26 and 56) — there is no such Python module; the names are
+`marrow.col` / `marrow.lit` / `marrow.read_parquet` — and line 5 calls the
+engine "pull-based" when `physical.mojo` is push/drain. This is on the
+rendered site.
+
+**`docs/guide/compile.qmd` came off this list on 2026-09-03** with item 19: it
+had documented `plan.execute_cli()`, deleted with the old CLI entry point, and
+the branch rewrote all 377 lines against the `QueryCli` that now exists.
 
 **`README.md` came off this list on 2026-08-30**, when the Python query API was
 restored: its lazy-query section had described `morsel_size` and `strictness`
 arguments that no longer exist, claimed `explain()` "renders one node, not the
 tree" when plans render recursively, cited two deleted docs, and carried a
-40/43 ClickBench claim whose harness went with them. The guides are still
-wrong, and `docs/guide/expressions.qmd`'s import line is now *nearly* right —
-the names are `marrow.col` / `marrow.lit` / `marrow.read_parquet`, not
-`marrow.expr.*`.
+40/43 ClickBench claim whose harness went with them.
 
 ### 1.3 Latent compiler hazards
 
@@ -123,130 +125,48 @@ diagnostic. Modular should have it.
 ### 1.4 Engine capability the golden corpus measures as missing
 
 `golden/COVERAGE.md` is authoritative and machine-checked: 278 cases, of which
-**78 carry `-- skip mojo`** because marrow has no API for them. Their bodies are
-never compiled, so they are proposals rather than verified spellings. In rough
-order of how often a real query wants them: set operations (UNION/EXCEPT/
-INTERSECT), 13 aggregates (median, quantile,
-first/last, arg_min/arg_max, string_agg, bool_and/or, corr/covar, mode,
-skewness), 16 string functions (substr, replace, regexp, lpad, position,
-split_part, concat), 13 temporal (date_diff, age, strftime/strptime, last_day,
-make_date, epoch, iso_week), nested types (struct field, map lookup, list
-element/slice/contains, unnest), decimals, `DISTINCT ON`, GROUPING SETS/ROLLUP/
-CUBE, and cross/non-equi/asof joins.
+**63 carry `-- skip mojo`** because marrow has no API for them. Their bodies
+are never compiled, so they are proposals rather than verified spellings.
 
-Two of these came off the list on 2026-08-31: `list_contains` and `IN` now
-have nodes and verbs in both lanes (§1.5). `bool_and`/`bool_or` over
-`AnyKernel`/`AllKernel` is the one that remains, and it is **not** the same
-size of job — those two are `BoolReduceKernel`s rather than `FoldKernel`s and
-have no grouped variant, so they need an aggregate node in both lanes plus a
+Counted 2026-09-03, by prefix:
+
+| skipped | area |
+|---|---|
+| 13 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness |
+| 10 | temporal — date_diff, age, strftime/strptime, make_date, iso_week |
+| 8 | nested — struct field, map lookup, list element/slice, unnest |
+| 7 | math — atan2 and the rest of the trigonometric family |
+| 5 | string — regexp, concat_ws |
+| 4 | set operations — UNION / EXCEPT / INTERSECT |
+| 4 | joins — cross, non-equi, asof |
+| 3 | GROUPING SETS / ROLLUP / CUBE |
+| 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |
+| 3 | decimals |
+| 2 | subqueries |
+| 1 | `DISTINCT ON` |
+
+**Fifteen came off between 2026-08-31 and 2026-09-03** — seven window cases
+(§14), `math_log_bases`, and the string and temporal surface of item 8, which
+landed `substr`, `replace`, `lpad`, `position`, `split_part`, `last_day` and
+`epoch`. `bool_and`/`bool_or` is still the odd one out among the aggregates:
+`AnyKernel`/`AllKernel` are `BoolReduceKernel`s rather than `FoldKernel`s and
+have no grouped variant, so they need an aggregate node in both lanes *plus* a
 kernel change.
 
-### 1.5 ~~One kernel reachable from no expression node~~ — done 2026-08-31
+Three of the remaining skips are **not** missing API. `math_greatest_and_least`
+and `filter_not_in_list_with_null` encode SQL null semantics marrow does not
+implement — skip-nulls extrema, and `NOT IN` with a NULL matching nothing —
+and `nested_list_contains` needs `.contains` as a method on `ListValue`, where
+only the free `array_contains` exists. Re-checking a case by name is not enough
+to un-skip it; §1.12 records four that were claimed unblocked and were not.
 
-The entry named one kernel. Grepping every public kernel in `marrow/kernels/`
-against every import under `marrow/expr/` found **nine**, and all nine now
-have a node and a verb in both lanes:
+### 1.5 — 1.6 (removed)
 
-- `ArrayContainsKernel` — `ArrayContains` (`comptime/leaves.mojo`), the
-  `array_contains` tag, `builders.array_contains`.
-- `IsInKernel` — it had a runtime `isin` tag but no comptime node and no verb,
-  so `IN (...)` could not be written from the one surface that spans both
-  lanes. Now `IsIn` (`comptime/boolean.mojo`) and `builders.is_in`.
-- `MinKernel` / `MaxKernel` — dead in both lanes. Now `Minimum` /
-  `Maximum` and `builders.minimum` / `.maximum`.
-  **Deliberately not spelled `least` / `greatest`**: those are SQL's names and
-  SQL *skips* nulls (`LEAST(NULL, 3)` is 3), while `MinKernel` intersects
-  validity like every other `BinaryNumericKernel`. Naming them for SQL would
-  have put a wrong answer behind the name;
-  `golden/cases/math_greatest_and_least.mojo` pins the skipping semantics and
-  stays skipped, since providing them is a kernel change. `.min()` / `.max()`
-  were unavailable anyway — those are the aggregates.
-- `Exp2Kernel`, `Log2Kernel`, `Log10Kernel`, `Log1pKernel`, `SinKernel`,
-  `CosKernel` — six `UnaryFloatKernel`s where `NumericValue` named three. Now
-  `.exp2()` … `.cos()` and the matching runtime tags.
-
-`array_length` was not on the list and should have been. It had a verb in each
-lane, but its **overload set was split** across `builders.mojo` and
-`runtime/values.mojo` — the failure `builders.mojo`'s own docstring warns
-about — so `from marrow.expr import array_length` was comptime-only. The
-runtime overload now sits beside the comptime one.
-
-`ConcatKernel` (`kernels/string.mojo`) came off this list on 2026-08-30: the
-runtime lane's `add` tag dispatches to it when the operands turn out to be
-strings, which is the call its own docstring already said it existed for. The
-comptime lane still has no `+` on `StringValue` -- a typed string column
-concatenates only by leaving the lane.
-
-**What is still unreachable, and why none of it is one alias away:**
-
-- `AnyKernel` / `AllKernel` (`kernels/aggregate.mojo`) are `BoolReduceKernel`s,
-  deliberately *not* `FoldKernel`s: they fold bit-packed masks and expose only
-  `reduce(BoolArray) -> Bool`. Reaching them needs an aggregate node in both
-  lanes **and** a grouped variant the kernel does not have — a subsystem, not a
-  node. This is the one genuine coverage gap left here.
-- `StringToBoolKernel` / `BoolToStringKernel` would be two more `casts.mojo`
-  breakers. Both are already reachable through the runtime `cast()` verb, so
-  what is missing is fusion, not coverage. The same holds for the nine
-  remaining `cast.mojo` kernels (temporal, binary-like, fixed-size-binary,
-  null, list, struct, dictionary) and all six of `cast_decimal.mojo` — with the
-  extra note that no decimal column can enter the comptime lane at all, since
-  `Column[T]` binds `T: NumericType` (§2.6).
-- `drop_null`, `sort`, `filter` and `take` are **relational**: each needs a
-  `Relation` node, not an expression one. `filter`/`take`/`sort_indices` are
-  already reached from `physical.mojo`.
-- `hashing.mojo`, `hashtable.mojo`, `partition.mojo` and `distinct.mojo`'s
-  public defs are building blocks other kernels consume, not user-facing
-  compute. `distinct` is reached through `aggregate.DistinctCount`.
-
-**Of six skipped golden cases, exactly one was unblocked.** Checked case by
-case, not by name:
-
-- `math_log_bases` — **unblocked and un-skipped.** It needs only `.log2()` and
-  `.log10()`, both of which are now methods on `NumericValue`.
-- `math_trigonometry` — **still blocked.** It uses `sin`, `cos` *and*
-  `atan2(y, n)`, and there is no `atan2` kernel. Two of three verbs is not
-  enough to run a case.
-- `nested_list_contains` — **still blocked.** It calls
-  `col("l", list_(int64)).contains(...)`, a *method* on `ListValue`. Only the
-  free `array_contains(list, elem)` was added; `.contains` exists solely on
-  `StringValue`.
-- `filter_in_literal_list` — **still blocked.** It calls
-  `col("v", int64).is_in([1, 3, 99])`, a method taking a Mojo list. Only the
-  free `is_in(a, DynArray)` exists.
-- `filter_not_in_list_with_null` — **blocked on semantics, a second exception
-  the previous version of this entry did not name.** It expects SQL's `NOT IN`
-  with a NULL in the list to match *nothing*; marrow's `is_in` follows
-  PyArrow's `MATCH`, so `~is_in(v, {1, NULL})` returns 5 rows where the case
-  expects 0.
-- `math_greatest_and_least` — **blocked on semantics.** Its expected rows
-  encode SQL's null-skipping, which `MinKernel` / `MaxKernel` do not do; it
-  needs a `skip_nulls=True` kernel first.
-
-So three of the six need *methods* rather than free verbs (`.contains`,
-`.is_in`) or a kernel that does not exist (`atan2`), and two need null
-semantics marrow does not implement.
-
-### 1.6 ~~Top-K is a dead parameter~~ — done 2026-08-31
-
-`TopN` in `marrow/expr/optimizer.mojo` rewrites `Limit(Sort(x))` to a bounded
-sort, and `SortOperator` now passes `sort_indices(limit=)`. Two details the
-original entry got right and one it did not:
-
-- The `Limit(Filter(Sort(x)))` hazard is real, and the rule requires the
-  `Limit` to be **directly** above the `Sort` — which makes it unrepresentable
-  rather than merely avoided. `PushFilterBelowSort` runs first and moves the
-  common offender out of the way, so adjacency is less restrictive than it
-  sounds.
-- The bound is `offset + length`, not `length`: the `Limit` still skips
-  `offset` rows of the ordered result.
-- The bound applies to the **primary-key pass only**. Multi-key sort composes
-  stable passes from least to most significant key, so truncating an earlier
-  pass drops rows the later keys still have to order. The original entry did
-  not mention this and it is the one way to get `TopN` silently wrong.
-
-It did **not** need "a `row_limit` channel through `Pushdown` and a per-node
-rule table" — that was the shape the demand-lattice design would have required.
-It is a field on `Sort` and one rule.
+Two sections recording work that is finished: the nine kernels with no
+expression node (item 9, `2962dbc0`) and `TopN`'s unused `limit` (landed with
+the optimizer). Both are closed rows in the table above and entries in
+`CHANGELOG.md`; keeping their working notes here made this file longer without
+making it more useful. `git log` has the detail.
 
 ### 1.7 Structure
 
