@@ -39,20 +39,20 @@ all of them.
 | 3 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
 | 4 | **Error taxonomy** — 269 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 269 sites. Already a retrofit | **M** | — |
 | 5 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 3 |
-| 6 | **Parallel group-by** — thread-local partials plus a radix merge | Group-by is where analytical queries spend their time; single-threaded loses every benchmark. `groupby.mojo` is 224 lines with no parallelism | **M** | — |
+| 6 | ~~**Parallel group-by**~~ — **done 2026-09-01**: radix-partitioned placement, `f17045a9` | 2.51x at 8 threads. Partitions are disjoint by hash, so workers never contend for a bucket | **M** | — |
 | 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 8 | **String and temporal surface** — 16 + 13 skipped golden cases | The long tail a dataframe user hits immediately after the basics work | **M** | — |
+| 8 | ~~**String and temporal surface**~~ — **done 2026-09-01**: 14 functions, `76257703` + `bcbbd32e` | Arguments are expressions, not constants, so `substr(s, col("from"), col("len"))` works and the family reaches the runtime lane. Every kernel states its real signature | **M** | — |
 | 9 | ~~**Cheap expression nodes over kernels that already exist**~~ — done 2026-08-31 | Nine kernels had no node. `is_in`, `array_contains`, `minimum`/`maximum` and six float unaries now reach both lanes; see §1.5 for what is left and why it is not cheap | **S** | — |
 | 10 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
 | 11 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 10, 12 |
 | 12 | **Statistics propagation and a cost model** | Feeds 11. Note two of three incumbents ship without one — DataFusion and polars both have none | **L** | — |
 | 13 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
-| 14 | ~~**Window functions**~~ — **done**: `Window` node, `WindowOperator`, `kernels/window.mojo` | All seven golden cases pass. Remaining: bounded `RANGE`, `EXCLUDE`, `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`, Python frontend | **S** | — |
+| 14 | ~~**Window functions**~~ — **done**: `Window` node, `WindowOperator`, `kernels/window.mojo` | All seven golden cases pass. `NTILE`, `PERCENT_RANK`, `CUME_DIST` and `NTH_VALUE` landed 2026-09-03 (`287a11d0`) — 11 of SQL's 12. Remaining: bounded `RANGE`, `EXCLUDE`, `ROWS UNBOUNDED PRECEDING`, Python frontend | — |
 | 15 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
 | 16 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
 | 17 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
 | 18 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
-| 19 | **AOT lane product** — no CLI, no entry point, no output writers | The one thing nobody else offers, with no way to use it. `execute_cli()` does not exist | **M** | — |
+| 19 | ~~**AOT lane product**~~ — **done 2026-09-03**: `QueryCli`, `73d7c299` | Flags and arguments declared beside the plan, `--describe`, `-o`/`--format`, parameters bound at run time. Writers are comptime parameters of `run()`, so the source declares which formats its binary links | **M** | — |
 | 20 | **Seven files over 1,000 lines** | `logical.mojo` at 1,672. Seams identified; deliberately deferred so churn does not swamp behaviour review | **M** | — |
 
 **Not on this list, deliberately.** Limit pushdown into the scan — early
@@ -377,6 +377,76 @@ erased box. Listed so that "there is no doc" is not mistaken for "there is no
 feature".
 
 ---
+
+### 1.7 Found while landing items 6, 8, 9, 14 and 19 — 2026-09-03
+
+Five findings that were not on this list and are not covered by any row above.
+Ordered by what they cost.
+
+**The binary-size gate cannot see a sort.** `sort_indices` decoded dictionary
+keys through the type-erased `cast`, whose single non-generic body chains
+`elif` over every type family — so **every AOT binary that sorted anything
+linked 694 cast symbols**, about 3 MB, for a path most plans never take. Fixed
+in `04d84cb8`: decode directly with `take` and convert the index through an
+integer-only ladder. A sorting binary went 4,510,744 -> 1,441,112 of `__text`,
+a 68% cut, and sorting now costs 12,440 bytes over a plan that does not sort.
+
+This is the third instance of the same shape — `kernels::cast` reachable from
+a plan that needs none — after the hashing fix (Q4.7) and `ParquetScan`. What
+let it survive is that **no gate program sorts**. Adding one is the actual
+task here; without it the next instance is equally invisible.
+
+**Windows read a pruned population.** `Window.to_operator` forwarded its
+`Pushdown`, so a `Filter` above a window pushed its row-group predicate to the
+scan and every rank and running total was computed over fewer rows than the
+query selects — wrong numbers, no error. Fixed in `04d84cb8`. Nothing could
+have caught it: all 21 window tests and 7 golden cases use in-memory tables,
+and the bug needs a Parquet scan under a window under a filter.
+
+**A bounded sort forwarded the same predicate.** `Sort.to_operator` forwarded
+unconditionally while `PushFilterBelowSort` refused when `sort.limit` was set,
+so the two mechanisms disagreed about a `TopN` sort. Unreachable only because
+`TopN` leaves the `Limit` above, which clears. Fixed in `a85bd62d`.
+
+**`COUNT` over an empty window frame answered NULL.** The identity of the empty
+set is the aggregate's to decide and the aggregate operator already decided it
+correctly; a short-circuit was discarding that. Fixed in `04d84cb8` by deleting
+the special case.
+
+**NaN ordering keys are never peers — still open.** `mark_changes` decides peer
+identity with `equal()`, which is IEEE, while the sort maps all NaNs to one
+key and places them adjacent. So they sort together and each gets its own peer
+group: `rank()` over `[NaN, NaN, 1.0]` gives `[2, 3, 1]` where DuckDB gives
+`[2, 2, 1]`, and `dense_rank` and the default `RANGE` frame diverge the same
+way. The docstring claims `IS NOT DISTINCT FROM` and delivers it for NULL but
+not NaN.
+
+**The root is not in the window path.** `sort` and `equal` disagree about NaN,
+and anything pairing those two kernels inherits it — `distinct` and `group_by`
+are the other candidates. Fixing it inside `mark_changes` would paper over
+that, so the first task is to establish whether the divergence is general.
+
+### 1.8 Framed window aggregates are O(n^2)
+
+`WindowOperator._framed_aggregate` constructs **one aggregate operator per
+row** and rescans that row's frame. Under SQL's default frame the frame grows
+to the whole partition, so `SUM(x) OVER (ORDER BY y)` over 100k rows is about
+5 billion element visits.
+
+The implementation says so itself — *"one operator per row ... the honest price
+of the reuse; a running accumulator would be a per-aggregate, per-dtype kernel
+and is what to write when this shows up in a profile"* — and the trade it buys
+is real: every aggregate is a window aggregate at once, with the kernel's own
+null semantics rather than a second implementation of them.
+
+**Nothing measures it.** The golden fixture is seven rows and there is no
+window benchmark, so the quadratic is invisible. A `bench_window.mojo` belongs
+with the fix, not after it.
+
+Note this is the *one* window cost a comptime lane cannot address. Fusion has
+nothing to fuse in a breaker, the per-row work is already typed kernels, and
+`lag`/`lead`/`first_value`/`last_value` reduce to one `take`. The accumulator
+is an algorithmic change that happens to want comptime as its mechanism.
 
 ## 2. Missing capabilities, in detail
 
