@@ -126,7 +126,7 @@ import the code you touched; the rest tells you nothing extra.
 
 ```bash
 pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests   # after editing expr + kernels
-pixi run -e dev pytest marrow/kernels/tests/test_groupby.mojo   # narrower still
+pixi run -e dev pytest marrow/kernels/tests/test_aggregate.mojo # narrower still
 ```
 
 `python/marrow/libmarrow.so` is rebuilt automatically by `conftest.py` before any
@@ -424,11 +424,14 @@ wider than a register.
 share no node types**:
 
 - **`logical.mojo`** — the plan IR. `Relation` nodes are pure, immutable
-  descriptions (`schema` / `to_operator` / `write`), erased by `DynRelation`
-  behind an `ArcPointer` so copying a plan is an O(1) share: `InMemoryTable`,
-  `ParquetScan`, `Filter`, `Project`, `Aggregate`, `Limit`, `Sort`, `Join`,
-  chained by `.filter()` / `.select()` / `.project()` / `.aggregate()` /
-  `.sort_by()` / `.limit()` / `.join()` and run by `.execute()`. It also holds
+  descriptions (`schema` / `to_operator` / `write`), erased by `DynRelation`:
+  a `Variant` for inspection, so `isa[R]()` is a discriminant compare and the
+  optimizer's rules read a real typed node, plus a trampoline for lowering.
+  The nodes are `EmptyRelation`, `InMemoryTable`, `ParquetScan`, `Filter`,
+  `Project`, `Aggregate`, `Limit`, `Sort`, `Window` and `Join`, chained by
+  `.filter()` / `.select()` / `.project()` / `.aggregate()` / `.sort_by()` /
+  `.limit()` / `.join()` and run by `.execute()`; a window is attached with
+  `.over(...)` on the aggregate. It also holds
   `Value` — the five-member trait every expression implements in either lane —
   and `DynValue`, the box the two lanes meet in.
 - **`physical.mojo`** — the executing counterpart. `Relation.to_operator(ctx)`
@@ -436,7 +439,8 @@ share no node types**:
   slots, child operators), erased by `DynOperator`. **The engine pushes**:
   `push(batch)` answers with what it produced, `drain()` with what is left, and
   `collect()` runs a plan down to one `StructArray`. One operator per plan node
-  — `FilterOperator`, `ProjectOperator`, `GroupByOperator`, `SortOperator`,
+  — `FilterOperator`, `ProjectOperator`, `GroupByOperator`,
+  `BufferedAggregateOperator`, `SortOperator`, `WindowOperator`,
   `JoinOperator`, `LimitOperator`, `ParquetScanOperator`, `BatchSourceOperator`
   — plus `Pipeline` and `EvalOperator`.
 - **The comptime lane** (`comptime/`: `core.mojo`, `leaves.mojo`, `numeric.mojo`,
@@ -459,24 +463,32 @@ share no node types**:
   two-lane — `param` and `count_star` are comptime-only by nature, and
   `if_else` is comptime-only by omission, its runtime twin sitting unexposed at
   `runtime/values.mojo`.
-- **`params.mojo`** — `Param[T]` and `Bindings`: a literal whose value arrives at
+- **`bindings.mojo`** — `Bindings`, the values for one execution. `Param[T]`
+  itself is a comptime-lane leaf and lives in `comptime/leaves.mojo`; the two
+  were split because sharing a file forced the alias to drag in `logical.Shape`
+  and `pruning.param_bounds`, both of which import it back. A parameter is
+  a literal whose value arrives at
   execution time, carried *through* an execution rather than substituted into a
   copy of the plan, so two executions of one plan cannot interfere.
 
 Tests live in `expr/tests/`, `expr/comptime/tests/` and `expr/runtime/tests/`.
 
 - **`optimizer.mojo`** — the plan rewriter. `plan.optimize[AllRules]()` returns
-  a new `DynRelation` you can print and diff. 16 rules in one file
-  (elimination, merging, `SplitConjunction`, four pushdowns, `TopN`) plus
-  `ColumnPruning`, a downward pass with a needed-column accumulator. The rule
+  a new `DynRelation` you can print and diff. 15 rules in one file
+  (elimination, merging, `SplitConjunction`, four pushdowns, `TopN`), run in a
+  chosen order so each sees the previous one's output, plus `ColumnPruning` —
+  a preparatory downward pass with a needed-column accumulator, seeded from the
+  plan's own output schema. The rule
   set is a comptime parameter, so a binary links exactly the rules it names and
   `execute()` alone optimizes nothing.
 
 **Statistics-based pruning is ported** (`pruning.mojo`, riding `to_operator`'s
-descent). **The CLI-output layer is not** — it lived in the previous expression
-package and has no replacement; do not describe it as available. **A cost model
-does not exist**, and join reordering and build-side selection are blocked by
-the join's positional output schema rather than by the optimizer.
+descent), and so is the CLI-output layer: `cli.mojo`'s `QueryCli` turns a
+compiled plan into a program with declared parameters, `--help`, `--describe`
+and output writers, the writers being comptime parameters so a binary links
+only the formats it names. **A cost model does not exist**, and join reordering
+and build-side selection are blocked by the join's positional output schema
+rather than by the optimizer.
 
 Two standing constraints:
 
@@ -558,7 +570,12 @@ marrow/
 │   ├── string.mojo       # string kernels incl. LIKE/ILIKE
 │   ├── temporal.mojo     # date/time field extraction, date_trunc
 │   ├── nested.mojo       # array_length, array_contains
+│   ├── window.mojo       # partition extents, ranking, frame gathers
 │   ├── concat.mojo       # concat
+│   ├── core.mojo         # the Kernel base trait
+│   ├── groups.mojo       # Groups — which slot each row contributes to
+│   ├── bounds.mojo       # comparisons over [lo, hi] intervals, for pruning
+│   ├── cast_decimal.mojo # decimal casts, one struct per conversion
 │   └── tests/            # test_*.mojo + bench_*.mojo
 ├── expr/
 │   ├── logical.mojo      # Value / DynValue, Relation / DynRelation plan IR
@@ -566,7 +583,11 @@ marrow/
 │   ├── builders.mojo     # col, lit, if_else, is_in, minimum/maximum,
 │                         #   array_length/array_contains, param, count_star,
 │                         #   table, scan
-│   ├── params.mojo       # Param[T], Bindings
+│   ├── bindings.mojo     # Bindings — parameter values for one execution
+│   ├── optimizer.mojo    # the plan rewriter: 15 rules + ColumnPruning
+│   ├── pruning.mojo      # statistics-based predicate pruning
+│   ├── pushdown.mojo     # projection pushdown into the scan
+│   ├── cli.mojo          # QueryCli — the AOT lane as a program
 │   ├── comptime/         # AOT lane: core, leaves, numeric, boolean, strings,
 │   │   └── tests/        #   temporal, nested, casts, aggregates, rules
 │   ├── runtime/          # runtime lane: values.mojo, aggregates.mojo
