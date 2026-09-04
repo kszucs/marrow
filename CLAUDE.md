@@ -565,10 +565,16 @@ benchmarks/               # standalone programs (they own a `main()`, so they
                           # cannot live inside the package) + binary_size gate
 golden/                   # cross-lane golden query corpus (see COVERAGE.md)
 docs/                     # Quarto site sources and reproducers
+backlog.md                # the open work: epics, tasks and known-wrong answers
 ```
 
 Tests and benchmarks sit **inside** the package, next to the code they cover.
 That works because they carry no `main()` — see "Writing Mojo tests".
+
+**`backlog.md` is the only place that says what is open.** It carries the
+epics, what is missing and why, and the known-wrong answers — not architecture,
+which is this file's job. Check a claim against the tree before acting on it:
+its item 6 was recorded as done and was not.
 
 ---
 
