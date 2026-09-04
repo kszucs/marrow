@@ -11,7 +11,7 @@ cell runs when the docs are built.
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 from marrow import compute as mc
 ```
@@ -40,30 +40,38 @@ print(departments)
 
 ## Step 1 — filter rows
 
-Marrow's compute kernels operate on columns, so filtering *rows* of a table is
-a two-part idea: build a boolean mask from the columns, then apply it to each
-column. Let's wrap that in a small helper — it's a pattern you'll reuse
-constantly.
+Filtering *rows* has two spellings, and it is worth seeing both.
+
+The **query layer** is the one you will reach for. `col(...)` names a column,
+comparison operators build a predicate, and the engine applies it to every
+column for you:
 
 ```{python}
-def filter_rows(batch, mask):
-    """Keep the rows of `batch` where boolean `mask` is True."""
-    cols = [mc.filter(batch.column(n), mask) for n in batch.column_names()]
-    return ma.record_batch(cols, names=batch.column_names())
+from marrow import col, lit
+
+top_earners = (
+    ma.memtable(employees)
+      .filter(col("salary") > lit(80_000))
+      .collect()
+)
+print(top_earners.to_pylist())
 ```
 
-Now keep only the employees earning more than 80,000. A comparison kernel
-produces the mask; both operands must share a dtype, so we compare against an
-array of the threshold:
+The **eager kernels** work a column at a time, so the same thing by hand is a
+mask plus a `filter` per column. Reach for this when you already hold a mask:
 
 ```{python}
 threshold = ma.array([80_000] * employees.num_rows())
 well_paid = mc.greater(employees.column("salary"), threshold)
 print("mask:", well_paid)
 
-top_earners = filter_rows(employees, well_paid)
-print(top_earners.to_pylist())
+kept = mc.filter(employees.column("name"), well_paid)
+print("names:", kept)
 ```
+
+Note the comparison needs both operands to share a dtype — hence the array of
+thresholds. The query layer handles that for you, which is most of why it is
+the shorter spelling.
 
 ## Step 2 — sort
 
@@ -107,46 +115,64 @@ sort, project.
 # 1. join employees to their departments
 joined = employees.join(departments, ["dept_id"], join_type="inner")
 
-# 2. keep the well-paid rows
-mask = mc.greater(joined.column("salary"), ma.array([80_000] * joined.num_rows()))
-filtered = filter_rows(joined, mask)
-
-# 3. sort by salary, highest first
-sorted_ = filtered.sort_by([("salary", "descending")])
-
-# 4. project the columns we care about
-report = sorted_.select(["name", "dept", "salary"])
+# 2-4. filter, sort and project as one plan
+report = (
+    ma.memtable(joined)
+      .filter(col("salary") > lit(80_000))
+      .order_by(("salary", "descending"))
+      .select("name", "dept", "salary")
+      .collect()
+)
 print(report.to_pylist())
 ```
 
+Only the join is eager here — it is a `RecordBatch` method. Everything after it
+is one plan, so the engine sees the filter, the sort and the projection
+together instead of materializing an intermediate batch per step.
+
 ## Step 5 — aggregate
 
-Reduce a single column to a scalar with an aggregate kernel — nulls are skipped
-automatically:
+Aggregation is not an eager kernel call — it happens inside a **query plan**.
+Wrap the batch with `ma.memtable()` to get a lazy table, describe what you
+want, and call `.collect()` to run it. Nulls are skipped:
 
 ```{python}
-salaries = report.column("salary")
-print("headcount:  ", report.num_rows())
-print("total spend:", mc.sum(salaries))
-print("top salary: ", mc.max(salaries))
+q = ma.memtable(joined)
+
+totals = q.aggregate(
+    headcount=("count", "salary"),
+    total_spend=("sum", "salary"),
+    top_salary=("max", "salary"),
+)
+print(totals.collect().to_pylist())
 ```
 
-Or aggregate the whole table at once, and group by a key to get per-group
-figures — the same `group_by(...).aggregate(...)` shape as PyArrow:
+The same call with a `by=` key groups instead of reducing to one row — one code
+path for both:
 
 ```{python}
-# whole-table: total headcount and payroll in one row
-print(joined.aggregate([("salary", "count"), ("salary", "sum")]).to_pylist())
+by_dept = (
+    q.aggregate(
+        by=["dept"],
+        headcount=("count", "salary"),
+        avg_salary=("mean", "salary"),
+    )
+    .order_by("dept")
+)
+print(by_dept.collect().to_pylist())
+```
 
-# per-department: average salary and headcount
-by_dept = joined.group_by("dept").aggregate([("salary", "mean"), ("salary", "count")])
-print(by_dept.to_pylist())
+Nothing has run until `.collect()`, so a plan is a reusable template — and
+`explain()` shows what will happen:
+
+```{python}
+print(by_dept.explain())
 ```
 
 ## Where to go next
 
 - **[Tables & joins](../guide/tables.qmd)** — the full `RecordBatch` / `Table` API.
 - **[Compute kernels](../guide/compute.qmd)** — every kernel and its null rules.
-- **[Expressions](../guide/expressions.qmd)** — build lazy query plans instead of
-  chaining eager calls.
+- **[Expressions](../guide/expressions.qmd)** — the query layer this tutorial
+  reached for in step 5, in full.
 - **[File I/O](../guide/io.qmd)** — read and write Parquet and Arrow IPC.

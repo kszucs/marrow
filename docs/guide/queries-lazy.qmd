@@ -1,0 +1,201 @@
+---
+title: "Lazy queries"
+subtitle: "Build a plan, run it once, in Python"
+---
+
+Alongside the eager PyArrow-shaped API, marrow has a **lazy** relational
+frontend: you describe a query, and nothing executes until `collect()`.
+
+The two worlds are told apart by the entry point — lazy is `memtable` /
+`read_parquet` (ibis spellings, which the frontend is modelled on); eager is
+`record_batch` / `table` (PyArrow spellings).
+
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")   # the built extension
+import marrow as ma
+from marrow import col, lit
+```
+
+```{python}
+batch = ma.record_batch({
+    "region": ma.array(["east", "west", "east", "west", "east"]),
+    "product": ma.array(["a", "b", "a", "c", "b"]),
+    "qty": ma.array([1, 2, None, 4, 5]),
+    "price": ma.array([10, 20, 30, 40, 50]),
+})
+
+t = ma.memtable(batch)          # lazy, over an in-memory batch
+t
+```
+
+Every verb returns a **new** plan. The underlying description is immutable and
+copying it is a refcount bump, so a plan is a reusable template rather than a
+builder you consume.
+
+## A first query
+
+```{python}
+top = (
+    t.filter(col("price") > lit(15))
+     .aggregate(by=["region"], total=("sum", "price"))
+     .order_by(("total", "descending"))
+)
+top.collect().to_pylist()
+```
+
+Nothing ran until `.collect()`. Before that, `explain()` shows the plan:
+
+```{python}
+print(top.explain())
+```
+
+## The verbs
+
+```{python}
+#| eval: false
+t.select("region", "price")            # project by name
+t.drop("qty")
+t.rename({"price": "amount"})
+t.with_columns(total=col("qty") * col("price"))   # add/replace, keep the rest
+t.project(only=col("price") + lit(1))  # replace the projection entirely
+t.filter(col("region") == lit("east"))
+t.aggregate(by=["region"], n=ma.count_star())
+t.order_by(("price", "descending")).limit(10, offset=100)
+t.head(5)
+t.join(other, on="region", how="inner")
+t.explain()                            # the plan as text
+t.collect()  /  t.to_pyarrow()
+```
+
+`collect(num_threads=)` controls execution: `0` auto, `1` serial, `N` forces N
+workers.
+
+## Column expressions
+
+`col(name)` reads a column, `lit(value)` is a constant, and the usual operators
+compose them:
+
+```{python}
+expr = (col("price") * lit(2) > lit(60)) & col("qty").is_valid()
+t.filter(expr).collect().to_pylist()
+```
+
+Boolean logic is **three-valued**, like SQL. `qty` carries a null, so
+`qty > 3` is null in that row — but `null AND false` is **false**, not null,
+because the second operand already decides the answer:
+
+```{python}
+t.with_columns(
+    big_qty=col("qty") > lit(3),          # null in the row where qty is null
+    both=(col("qty") > lit(3)) & (col("price") > lit(100)),
+).collect().to_pylist()
+```
+
+The surface covers arithmetic and comparison operators, `&`/`|`/`~`/`^`,
+`abs`/`sign`/`floor`/`ceil`/`round`/`trunc`/`sqrt`/`exp`/`ln`, the string verbs
+(`upper`, `lower`, `strip`, `length`, `startswith`, `contains`, `like`,
+`ilike`, …), the temporal extractors and `date_trunc`, plus `cast`, `isin`,
+`array_length`, `is_null`, `is_valid`, `is_nan`, `is_inf`, `fill_null`,
+`coalesce`, `nullif`, `if_else` and `case_when`.
+
+## Aggregation
+
+Keyword arguments name output columns; `by=` groups. An empty `by` is one
+implicit group:
+
+```{python}
+t.aggregate(
+    rows=ma.count_star(),
+    values=("count", "qty"),
+    total=("sum", "price"),
+    avg=("mean", "price"),
+).collect().to_pylist()
+```
+
+`count_star()` counts **rows** and `("count", col)` counts non-null values —
+they disagree on `qty`, which carries a null.
+
+Functions: `sum`, `mean`, `min`, `max`, `product`, `count`, `count_distinct`,
+`approx_count_distinct`, `variance`, `var_samp`, `stddev`, `stddev_samp`.
+
+`HAVING` needs no special support — filter the aggregate's output:
+
+```{python}
+(t.aggregate(by=["region"], total=("sum", "price"))
+  .filter(col("total") > lit(50))
+  .collect().to_pylist())
+```
+
+Group keys may be arbitrary expressions, and keys with **no** aggregates is
+`SELECT DISTINCT`:
+
+```{python}
+t.aggregate(by=["region"]).collect().to_pylist()
+```
+
+## Joins
+
+Keys are given by name and resolved against each side's schema:
+
+```{python}
+managers = ma.memtable(ma.record_batch({
+    "region": ma.array(["east", "west"]),
+    "manager": ma.array(["ann", "bo"]),
+}))
+
+t.join(managers, on="region").select("region", "manager", "price").collect().to_pylist()
+```
+
+`how=` takes `inner`, `left`, `right`, `outer`, `semi` and `anti`. Use
+`left_on=` / `right_on=` when the key names differ.
+
+## Reading Parquet
+
+`read_parquet` opens the file's footer metadata only — no column data is
+touched until `collect()`:
+
+```{python}
+#| eval: false
+t = ma.read_parquet("hits.parquet")
+(t.filter(col("AdvEngineID") != lit(0))
+  .aggregate(by=["RegionID"], users=("count_distinct", "UserID"))
+  .order_by(("users", "descending"))
+  .head(10)
+  .collect())
+```
+
+::: {.callout-warning}
+## Parquet `BYTE_ARRAY` columns arrive as `binary`
+
+A column with no logical type is `binary`, and `BinaryType` is not a
+`StringLikeType`, so the string verbs reject it. Cast first:
+
+```python
+col("url").cast(ma.string()).like("%google%")
+```
+:::
+
+## Getting results out
+
+```{python}
+result = t.filter(col("price") > lit(20))
+print(type(result.collect()))     # a RecordBatch
+print(result.to_pyarrow())        # zero-copy, over the C Data Interface
+```
+
+## Limits worth knowing
+
+- **Parquet and Arrow IPC are the only sources** — no CSV, no JSON, and
+  `read_parquet` takes one file: no globs, directories, hive partitions or
+  object storage.
+- **No window functions from Python.** They exist, in the Mojo lane only.
+- **Statistics pruning is unreachable from Python** — the boxed predicate has
+  lost the type the pruning overload needs, so a filtered scan reads every row
+  group.
+- **No `distinct`/`union`/`except`/`intersect` nodes**, and no regex.
+- **Float division by zero answers the dividend**, not `inf` — see
+  [Compute](compute.qmd).
+
+The full list is on [Status & limitations](../reference/status.qmd).

@@ -9,7 +9,7 @@ and **Parquet** for compact, columnar long-term storage.
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 ```
 
@@ -122,9 +122,10 @@ print(pq.read_table(pq_path).num_rows())
 | `compression` | `"snappy"`, `"zstd"`, `"lz4"`, `"none"` | `"snappy"` |
 | `data_page_version` | `"1.0"`, `"2.0"` | `"1.0"` |
 
-The writer also emits column statistics (min/max/null/distinct counts), a page
-index, and bloom filters, so readers on the other side can prune row groups and
-pages. `write_table` accepts any Arrow-C-stream object too, so a PyArrow table
+The writer also emits column statistics (min/max/null/distinct counts) and a
+page index, so readers on the other side can prune row groups and pages. Bloom
+filters are implemented but **off by default** and not currently reachable from
+Python. `write_table` accepts any Arrow-C-stream object too, so a PyArrow table
 can be written directly.
 
 ::: {.callout-note}

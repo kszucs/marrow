@@ -2,18 +2,23 @@
 title: "Compute"
 ---
 
-Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons, aggregation, selection, and strings. All kernels are null-aware: the exact null handling behaviour depends on the operation.
+Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons,
+selection and casting. All kernels are null-aware; the exact null handling
+depends on the operation.
+
+String, temporal, boolean and conditional kernels are implemented in Mojo but
+not yet bound to Python — they are reachable from a query plan instead.
 
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 from marrow import compute as mc
 ```
 
 The compute functions live in `marrow.compute`, whose names mirror
-`pyarrow.compute` — `mc.add`, `mc.subtract`, `mc.sum`, `mc.filter` behave like
+`pyarrow.compute` — `mc.add`, `mc.subtract`, `mc.cast`, `mc.filter` behave like
 their PyArrow counterparts (`import marrow.compute as mc; mc.add(a, b)`), for
 drop-in `pyarrow.compute` compatibility.
 
@@ -40,6 +45,24 @@ print("add:   ", mc.add(x, y))
 print("divide:", mc.divide(x, y))
 ```
 
+::: {.callout-warning}
+## Float division by zero answers the dividend
+
+`DivKernel` substitutes a `1` divisor so the SIMD lane cannot trap, so
+`10.0 / 0.0` is `10.0` rather than `inf`:
+
+| expression | DuckDB | marrow |
+|---|---|---|
+| `10.0 / 0.0` | `inf` | `10.0` |
+| `-10.0 / 0.0` | `-inf` | `-10.0` |
+| `0.0 / 0.0` | `nan` | `0.0` |
+
+Integer `//` and `%` by zero are **not** affected — they answer NULL, as SQL
+does. The two genuinely want different answers: division by zero has a value in
+the reals' completion and integer division by zero does not.
+:::
+
+
 ### Null propagation
 
 If **either** operand at a position is null, the result at that position is null. This mirrors SQL's three-valued logic.
@@ -63,64 +86,67 @@ print(mc.add(a, b))   # null at 0, 1, and 3
 
 ## Aggregates
 
-Aggregates reduce an array to a single scalar. They **skip null values** by default — an all-null or empty array returns the identity value.
-
-### Numeric aggregates
+Aggregates are **not** eager kernel calls. `sum`, `mean`, `min`, `max`,
+`product`, `count`, `count_distinct` and the rest reduce a column inside a
+**query plan**, so that a whole-table reduction and a `GROUP BY` are the same
+code path. Wrap a batch with `ma.memtable()`, describe the reduction, and
+`.collect()` runs it:
 
 ```{python}
-arr = ma.array([1, None, 3, None, 5])
+batch = ma.record_batch({"v": ma.array([1, None, 3, None, 5])})
+q = ma.memtable(batch)
 
-print("sum:    ", mc.sum(arr))       # 1+3+5 = 9
-print("product:", mc.product(arr))   # 1*3*5 = 15
-print("min:    ", mc.min(arr))
-print("max:    ", mc.max(arr))
-print("mean:   ", mc.mean(arr))      # always a float64 scalar → 3.0
+out = q.aggregate(
+    total=("sum", "v"),
+    smallest=("min", "v"),
+    largest=("max", "v"),
+    average=("mean", "v"),
+)
+print(out.collect().to_pylist())
 ```
 
-`sum`, `product`, `min` and `max` return a scalar that **preserves the input
-type** — an `int32` array sums to an `int32` scalar. `mean` always returns a
-`float64` scalar:
+Nulls are skipped, so `sum` above is `1 + 3 + 5`. Adding a `by=` key groups
+rather than reducing to one row — the only change is the argument:
 
 ```{python}
-ints   = ma.array([10, 20, 30], type=ma.int32())
-result = mc.sum(ints)
-print(result, "of type", result.type())
+sales = ma.record_batch({
+    "region": ma.array(["east", "west", "east", "west"]),
+    "amount": ma.array([10, 20, 30, 40]),
+})
+by_region = ma.memtable(sales).aggregate(
+    by=["region"], total=("sum", "amount"),
+).order_by("region")
+print(by_region.collect().to_pylist())
 ```
 
-### Counting distinct values
+### Accumulator types widen
 
-`count_distinct` counts unique non-null values exactly; `approx_count_distinct`
-estimates the count with a fixed-size HyperLogLog sketch (16 KiB, ~0.65 %
-standard error) — far cheaper in memory on high-cardinality columns:
+`sum` and `product` do **not** preserve the input type — integers accumulate in
+`int64` and floats in `float64`, so a long column cannot silently overflow its
+own width. `mean` is always `float64`:
 
 ```{python}
-ids = ma.array([1, 1, 2, 3, 3, 3, None, 4])
-
-print("distinct:       ", mc.count_distinct(ids))          # 4
-print("approx distinct:", mc.approx_count_distinct(ids))   # ~4
+ints = ma.record_batch({"v": ma.array([10, 20, 30], type=ma.int32())})
+res  = ma.memtable(ints).aggregate(total=("sum", "v"), avg=("mean", "v")).collect()
+print("sum of int32 ->", res.column("total").type())
+print("mean         ->", res.column("avg").type())
 ```
 
-### Identity values for empty / all-null input
+### Counting
 
-An empty or all-null array returns the operation's identity value: `0` for
-`sum`, `1` for `product`, and the extreme values of the type for `min` / `max`.
-
-```{python}
-empty    = ma.array([], type=ma.int64())
-all_null = ma.array([None, None], type=ma.int64())
-
-print("sum of empty:      ", mc.sum(empty))      # 0
-print("sum of all-null:   ", mc.sum(all_null))   # 0
-print("product of empty:  ", mc.product(empty))  # 1
-```
-
-For `min` / `max` the identity is the largest / smallest representable value of
-the type — using `float64` makes this readable:
+`count` counts non-null values; `ma.count_star()` counts **rows**, which
+differs on a nullable column. `count_distinct` is exact, while
+`approx_count_distinct` uses a fixed-size HyperLogLog sketch — far cheaper in
+memory on a high-cardinality column:
 
 ```{python}
-empty_f = ma.array([], type=ma.float64())
-print("min of empty:", mc.min(empty_f))   # +max float
-print("max of empty:", mc.max(empty_f))   # -max float
+ids = ma.record_batch({"id": ma.array([1, 1, 2, 3, 3, 3, None, 4])})
+print(ma.memtable(ids).aggregate(
+    rows=ma.count_star(),
+    values=("count", "id"),
+    distinct=("count_distinct", "id"),
+    approx=("approx_count_distinct", "id"),
+).collect().to_pylist())
 ```
 
 ### Boolean aggregates

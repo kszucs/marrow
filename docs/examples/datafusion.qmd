@@ -9,7 +9,7 @@ execute:
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 from marrow import compute as mc
 import pyarrow as pa
@@ -35,11 +35,14 @@ from datafusion import SessionContext, udf
 
 ## Register a Mojo kernel as a UDF
 
-Any Marrow compute function that accepts and returns Arrow arrays can be wrapped as a DataFusion UDF. Marrow kernels accept PyArrow arrays directly — the C Data Interface import happens inside the call — so the wrapper is a one-liner. The trailing `None` selects CPU execution.
+Any Marrow compute function can be wrapped as a DataFusion UDF. The two
+conversions — `ma.array(pa_arr)` in and `pa.array(ma_arr)` out — are zero-copy
+pointer exchanges over the Arrow C Data Interface, not serialization, so the
+wrapper costs nothing beyond the kernel itself.
 
 ```{python}
 def mojo_add(a: pa.Array, b: pa.Array) -> pa.Array:
-    return pa.array(mc.add(a, b))
+    return pa.array(mc.add(ma.array(a), ma.array(b)))
 
 add_udf = udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")
 ```

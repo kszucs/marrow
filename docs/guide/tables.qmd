@@ -10,7 +10,7 @@ contiguous block. Both mirror their PyArrow namesakes.
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 ```
 
@@ -146,9 +146,9 @@ matching PyArrow.
 
 ## Grouping & aggregation
 
-Reduce a whole batch to a single row with `aggregate`, passing a list of
-`(column, function)` pairs. Each result column is named `<column>_<function>`;
-counting a column with no nulls gives the row count (`COUNT(*)`):
+Aggregation lives in the **query layer**, not on `RecordBatch`. Wrap a batch
+with `ma.memtable()` to get a lazy table, describe the reduction, and
+`.collect()` runs it and hands back a `RecordBatch`:
 
 ```{python}
 sales = ma.record_batch({
@@ -156,26 +156,34 @@ sales = ma.record_batch({
     "amount": ma.array([10, 20, 30, 40, 50]),
 })
 
-print(sales.aggregate([("amount", "sum"), ("amount", "mean"), ("amount", "count")]).to_pylist())
+q = ma.memtable(sales)
+print(q.aggregate(
+    total=("sum", "amount"),
+    average=("mean", "amount"),
+    n=("count", "amount"),
+).collect().to_pylist())
 ```
 
-`group_by(keys)` first partitions the rows by one or more key columns, then
-`aggregate` produces one row per group — the same shape as
-`pyarrow.TableGroupBy`:
+A `by=` key turns the same call into a `GROUP BY` — one row per group. Keyword
+arguments name the output columns:
 
 ```{python}
-by_region = sales.group_by("region").aggregate([
-    ("amount", "sum"),
-    ("amount", "count_distinct"),
-])
-print(by_region.to_pylist())
+by_region = q.aggregate(
+    by=["region"],
+    total=("sum", "amount"),
+    distinct=("count_distinct", "amount"),
+).order_by("region")
+print(by_region.collect().to_pylist())
 ```
 
-The supported aggregate functions are `count`, `sum`, `product`, `mean`,
-`min`, `max`, `count_distinct` and `approx_count_distinct` (HyperLogLog). They
-operate on numeric value columns (the key columns may be any type).
-`group_by(keys, num_threads=0)` accepts the same threading control as `join`;
-`0` uses a radix-partitioned parallel path across all cores.
+Available functions: `count`, `sum`, `product`, `mean`, `min`, `max`,
+`count_distinct`, `approx_count_distinct` (HyperLogLog), `variance`,
+`var_samp`, `stddev` and `stddev_samp`. `ma.count_star()` is `COUNT(*)`, which
+differs from `("count", col)` on a nullable column. Group keys may be arbitrary
+expressions, not just names, and keys with no aggregates is `SELECT DISTINCT`.
+
+`HAVING` needs no special support — `.aggregate(...).filter(...)` evaluates
+against the aggregate's own output.
 
 ## Tables
 
@@ -205,8 +213,8 @@ appending data never re-copies the columns already present — the reason Arrow
 tables scale to streaming and out-of-core workloads.
 
 ::: {.callout-note}
-The `sort_by`, `join`, `group_by` and `aggregate` operations live on
-`RecordBatch`, not `Table`. To run them over a multi-chunk `Table`, work with
-its batches (`table.to_batches()`) — a single-chunk table exposes its one batch
-directly.
+`sort_by` and `join` live on `RecordBatch`, not `Table`. To run them over a
+multi-chunk `Table`, work with its batches (`table.to_batches()`) — a
+single-chunk table exposes its one batch directly. Aggregation is not on either
+type; it is a query-layer verb, as above.
 :::

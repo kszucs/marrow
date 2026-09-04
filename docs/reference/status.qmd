@@ -1,0 +1,108 @@
+---
+title: "Status & limitations"
+subtitle: "What works, what doesn't, and what is known to be wrong"
+execute:
+  enabled: false
+---
+
+marrow is **alpha**. Both Apache Arrow and Mojo are moving targets, and this
+page is the honest inventory — kept next to the machine-checked sources it is
+derived from, so it can be re-verified rather than believed.
+
+## How correctness is measured
+
+Two independent checks, neither of which grades marrow against itself:
+
+- **The golden corpus** — `golden/`, **278 query cases**. Each records a SQL
+  query, the answer **generated from DuckDB**, and the marrow spelling. The
+  expectations are *never* regenerated from marrow. The corpus currently
+  carries **zero `xfail`s**: every case that compiles, passes.
+- **Arrow archery integration** — the official cross-implementation suite, run
+  against the **C++, Rust and Go** implementations in both directions
+  (`pixi run -e integration integration`).
+
+## Known-wrong answers
+
+::: {.callout-warning}
+## Float division by zero answers the dividend
+
+`DivKernel` substitutes a `1` divisor so the SIMD lane cannot trap, so
+`10.0 / 0.0` is `10.0` where IEEE 754 and DuckDB both say `inf`; `-10.0 / 0.0`
+is `-10.0`, and `0.0 / 0.0` is `0.0`.
+
+**No golden case pins it**, which is how it survived — so it is the one
+known-wrong answer the corpus does not currently catch. Integer `//` and `%` by
+zero are unaffected and answer NULL, as SQL does.
+:::
+
+One latent trap is worth knowing too: `count(*)` desugars to `count(lit(1))`,
+whose referenced-column set is empty, so anything that prunes by "what does
+this read" would prune every column. Column pruning handles it by never
+narrowing a source to zero columns.
+
+## What the corpus measures as missing
+
+63 of the 278 cases carry `-- skip mojo`: marrow has no API for them, so the
+SQL and the DuckDB answer are recorded and the marrow body is a *proposal*
+rather than a verified spelling.
+
+| cases | area |
+|---:|---|
+| 13 | aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness, `bool_and`/`bool_or` |
+| 10 | temporal — date_diff, age, strftime/strptime, make_date, iso_week |
+| 8 | nested — struct field, map lookup, list element/slice, unnest |
+| 7 | math — atan2 and the rest of the trigonometric family |
+| 5 | string — regexp, concat_ws |
+| 4 | set operations — UNION / EXCEPT / INTERSECT |
+| 4 | joins — cross, non-equi, asof |
+| 3 | GROUPING SETS / ROLLUP / CUBE |
+| 3 | filters — SQL `NOT IN` null semantics, `.is_in` as a method |
+| 3 | decimals in expressions |
+| 2 | subqueries |
+| 1 | `DISTINCT ON` |
+
+`golden/COVERAGE.md` is the authoritative, machine-checked version of this
+table.
+
+## Capability by layer
+
+| | Status |
+|---|---|
+| **Layouts** | bool, numeric, string/large_string, binary/large_binary, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — **implemented**. Union, run-end-encoded and view layouts — **not** |
+| **Sources** | Parquet and Arrow IPC only. **No CSV, no JSON.** `scan`/`read_parquet` takes **one file** — no globs, directories, hive partitions or object storage |
+| **Parquet** | native reader and writer, snappy/zstd/lz4, data page v1 & v2, statistics, page index. Bloom filters are implemented but **off by default** and unreachable from Python. No modular encryption |
+| **Optimizer** | 15 rules plus column pruning. **No cost model**, so no join reordering and no build-side selection |
+| **Execution** | in-memory only — **no spilling anywhere**, so every aggregate and join is bounded by RAM |
+| **Joins** | equijoins only: inner, left, right, full, semi, anti. No nested-loop, range or asof joins |
+| **GPU** | element-wise kernels only (arithmetic, comparison, boolean, cast, hashing), and **off unless built with `-D MARROW_GPU=true`** |
+| **UDFs** | none |
+
+## Python-specific limits
+
+The Python bindings are narrower than the Mojo core, and some of the gaps are
+CPython-binding limits rather than missing features:
+
+- **Aggregates are not on the eager surface.** `marrow.compute` has no `sum` /
+  `min` / `max` / `mean`; reductions live in the query layer.
+- **String and temporal verbs are unbound.** All 17 (`substr`, `lpad`,
+  `replace`, `split_part`, `position`, `epoch`, `last_day`, `week`, …) exist and
+  evaluate in **both** Mojo lanes; none is reachable from Python.
+- **No window functions from Python.** They exist in the Mojo lane only.
+- **Statistics pruning is unreachable from Python** — a `PythonObject` has
+  already erased the type the pruning overload needs, so a filtered scan reads
+  every row group.
+- **`==` on a dtype or an array is identity comparison.** `tp_richcompare` is
+  not reachable through the binding API, so `ma.int32() == ma.int32()` is
+  `False`. Compare `str()` instead.
+- **Methods where PyArrow has properties** — `Array.type()`,
+  `RecordBatch.num_rows()`. The `tp_getset` slot is unexposed.
+
+## Errors
+
+There are 300+ `raise Error` sites and **zero typed exceptions**, so failures
+cannot yet be caught by kind.
+
+---
+
+The open work, with complexity estimates and what blocks what, is tracked in
+`backlog.md` at the repository root.

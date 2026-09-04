@@ -19,11 +19,15 @@ cd marrow
 pixi run build_python     # compiles the native extension (python/marrow/libmarrow.so)
 ```
 
-Then make it importable and bring it in under the customary `ma` alias:
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")   # the built extension
+```
+
+Then bring it in under the customary `ma` alias:
 
 ```{python}
-import sys
-sys.path.insert(0, "../../python")   # point at the built extension
 import marrow as ma
 from marrow import compute as mc
 ```
@@ -77,13 +81,12 @@ print("add:     ", mc.add(x, y))        # index 3 is null
 print("multiply:", mc.multiply(y, y))
 ```
 
-Aggregates reduce an array to a scalar and **skip** nulls:
-
-```{python}
-print("sum:", mc.sum(x))
-print("min:", mc.min(x))
-print("max:", mc.max(x))
-```
+::: {.callout-note}
+Aggregates are **not** on the eager surface. `sum`, `mean`, `min`, `max`,
+`count_distinct` and the rest reduce a column inside a query plan, built with
+`ma.memtable(...)` / `ma.read_parquet(...)`, so that a group-by and a
+whole-table aggregate are the same code path.
+:::
 
 Comparisons return a boolean array, which you can feed straight into `filter`:
 

@@ -1,0 +1,137 @@
+---
+title: "Architecture"
+subtitle: "How marrow is put together, and why"
+execute:
+  enabled: false
+---
+
+Mojo has no dynamic dispatch. That single constraint shapes everything below —
+and it turns out to be an advantage, because what replaces dispatch is a
+**closed world the compiler can delete from**.
+
+## Type erasure without virtual calls
+
+Every layer has a typed form and one erased box:
+
+| Trait | Erased box | Concrete types |
+|---|---|---|
+| `Array` | `DynArray` | `PrimitiveArray[T]`, `StringArray`, `ListArray`, `StructArray`, … |
+| `ArrowScalar` | `DynScalar` | `PrimitiveScalar[T]`, `StringScalar`, … |
+| `Builder` | `DynBuilder` | `PrimitiveBuilder[T]`, `ListBuilder`, … |
+| `DataType` | `DynType` | `Int64Type`, `StringType`, `ListType`, … |
+| `Value` | `DynValue` | the expression nodes of **both** lanes |
+
+A box is an inline `Variant`. Runtime dispatch iterates the variant's members at
+comptime and selects the active one with `isa[T]()` — a discriminant compare, no
+function-pointer trampoline. Erasure is cheap because every typed value already
+holds its data behind ref-counted `Buffer`/`Bitmap` handles, so a conversion is
+O(1) refcount bumps, and conversions are implicit both ways.
+
+**The erased containers deliberately do not conform to the traits they erase.**
+They expose the same surface as their own API, but they are not substitutable in
+generic code. A box may *hold* trait-bound values; it should not *be* one.
+
+Runtime → comptime dispatch is the `DynType.dispatch_*` family —
+`dispatch_primitive`, `dispatch_numeric`, `dispatch_integer`, `dispatch_floating`,
+`dispatch_temporal`, `dispatch_decimal`, `dispatch_stringlike`,
+`dispatch_binarylike`, `dispatch_listlike` — each resolving a runtime `DataType`
+to a comptime type parameter and running a job passed **as a value**.
+
+## Buffers and views
+
+`Buffer` is ref-counted and immutable by default (`Buffer[mut=True]` is the
+building form, frozen by `finish()`). An allocation is CPU, FOREIGN, MAPPED,
+HOST or DEVICE — data movement is a *kind change*, not a shadow copy.
+
+`BufferView` / `BitmapView` are borrowed, offset-applied spans, and they are
+what kernels actually compute over. Naked pointer arithmetic is confined to five
+files; everything else goes through the views.
+
+::: {.callout-note}
+Buffers are 64-byte aligned and their **size** is rounded up to a multiple of
+64 — the same rule as Arrow C++'s `PoolBuffer::RoundCapacity`. **That is not
+slack.** When the logical byte count is already a multiple of 64 the allocation
+ends at the last live byte, so nothing may read past a buffer's logical end
+"because Arrow buffers are padded". Imported (FOREIGN) buffers carry no padding
+guarantee at all.
+:::
+
+## Kernels: typed first, erased on top
+
+Each kernel is a struct with three tiers:
+
+1. **`core[T, W]`** — the raw SIMD functor. No allocation. This is what
+   expression fusion inlines.
+2. **`apply[T]`** — allocates the output, propagates null bitmaps, and picks
+   CPU or GPU.
+3. **`dispatch(DynArray)`** — the runtime-typed entry point, resolving the dtype
+   to the typed `apply`.
+
+One kernel serves CPU and GPU: every `apply` writes a **lane** —
+`def lane[W: Int](i: Int)` — and hands it to one of five drivers in
+`views.mojo`, which own striping, vectorization and device launch. Dispatch on
+the widest family a leaf accepts; two arms differing only by trait bound usually
+means the narrower bound is masking a defect.
+
+## The query engine: one plan IR, two lanes
+
+The logical side (`expr/logical.mojo`) is pure, immutable `Relation` nodes —
+`InMemoryTable`, `ParquetScan`, `Filter`, `Project`, `Aggregate`, `Limit`,
+`Sort`, `Window`, `Join` — erased by `DynRelation`.
+
+The physical side (`expr/physical.mojo`) is the executing counterpart.
+**The engine pushes**: `push(batch)` answers with what it produced, `drain()`
+with what is left. One operator per plan node.
+
+Underneath sit two expression lanes that share no node types:
+
+- **The comptime lane** (`expr/comptime/`) — every node's operands are bound on
+  a family trait, its output dtype is a comptime type, and a subtree **fuses
+  into one SIMD loop**. Nothing is erased.
+- **The runtime lane** (`expr/runtime/`) — one struct holding a tag, children
+  behind `ArcPointer`, and an optional payload. It interprets by switching on
+  the tag. What stays runtime is the *dtype* of the operands, not the operation.
+
+Both erase into `DynValue`, so each relational operator compiles exactly once. A
+plan mixes lanes **at the box, never inside a node** — a runtime operand inside
+a comptime node would discard the fusion the lane exists for.
+
+## Why the compiled binary is small
+
+This is the payoff for having no dynamic dispatch. The comptime lane is a
+**closed world**: no open dispatchers, no function-pointer tables, and value
+boxes that only ever hold fused nodes. So the linker can prove which kernels a
+program can reach, and delete the rest.
+
+Concretely, from the CI-gated `benchmarks/binary_size/` suite:
+
+`SELECT name, sum(a), min(b) FROM orders GROUP BY name`, built two ways:
+
+| binary | `__text` |
+|---|---:|
+| every value comptime — the plan holds a direct kernel | **1,478,768** |
+| the aggregate resolved from a function *name* at run time, as the Python frontend does | 12,024,976 |
+
+Same query, same answer, **8× the code** — because the second one cannot prove
+which kernels it will not call.
+
+The rule set is itself a comptime parameter — `plan.optimize[AllRules]()` — so a
+binary links exactly the rules it names, and `execute()` alone links none. Output
+writers are comptime parameters for the same reason: `cli.run[parquet=True]`
+costs 656,576 bytes that `cli.run` does not pay.
+
+`benchmarks/binary_size/` is the live gate, at a 0.5% threshold. Trust it over
+any ratio quoted in prose, including this one.
+
+## What this costs
+
+The design is not free, and two costs are worth naming:
+
+- **Compile time.** Monomorphization is the mechanism, so a `marrow compile`
+  build takes 1-2 minutes and elaborates the whole library at `-O3`. There is no
+  incremental build.
+- **Duplication on purpose.** Each erased box writes its own `isa` ladder rather
+  than sharing a generic dispatch helper. Factoring them together needs an
+  adapter closure that inlines into *every* arm of *every* instantiation — it
+  measured at **+662,740 bytes (+31.9% of `__text`)** on one gate. The
+  duplication is cheaper than the abstraction.

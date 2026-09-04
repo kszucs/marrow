@@ -7,7 +7,7 @@ Marrow's type system follows the [Apache Arrow specification](https://arrow.apac
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 ```
 

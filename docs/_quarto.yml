@@ -5,16 +5,17 @@ project:
     - index.qmd
     - tutorials/*.qmd
     - guide/*.qmd
+    - reference/*.qmd
     - examples/*.qmd
 
 website:
   title: "Marrow"
-  description: "Apache Arrow in Mojo — a columnar in-memory format with SIMD kernels, GPU acceleration, and zero-copy PyArrow interop."
+  description: "Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary."
   image: assets/logo.png
   favicon: assets/logo.png
   open-graph: true
   twitter-card: true
-  site-url: https://kszucs.github.io/marrow
+  site-url: https://marrow.kszucs.dev
   repo-url: https://github.com/kszucs/marrow
   page-navigation: true
   back-to-top-navigation: true
@@ -31,8 +32,8 @@ website:
         href: tutorials/quickstart.qmd
       - text: "Guide"
         href: guide/arrays.qmd
-      - text: "Examples"
-        href: examples/datafusion.qmd
+      - text: "Reference"
+        href: reference/architecture.qmd
     right:
       - text: "Benchmarks"
         href: /benchmarks/
@@ -44,13 +45,13 @@ website:
     style: floating
     collapse-level: 2
     contents:
-      - section: "Tutorials"
+      - section: "Start here"
         contents:
           - text: "10-minute quickstart"
             href: tutorials/quickstart.qmd
           - text: "Build a data pipeline"
             href: tutorials/data-pipeline.qmd
-      - section: "Guide"
+      - section: "Data"
         contents:
           - text: "Arrays"
             href: guide/arrays.qmd
@@ -58,28 +59,38 @@ website:
             href: guide/types.qmd
           - text: "Scalars"
             href: guide/scalars.qmd
-          - text: "Builders"
-            href: guide/builders.qmd
+          - text: "Tables & joins"
+            href: guide/tables.qmd
+      - section: "Compute"
+        contents:
           - text: "Compute kernels"
             href: guide/compute.qmd
           - text: "Sorting"
             href: guide/sorting.qmd
-          - text: "Tables & joins"
-            href: guide/tables.qmd
-          - text: "Expressions"
-            href: guide/expressions.qmd
-          - text: "Compiling queries"
-            href: guide/compile.qmd
-          - text: "File I/O"
-            href: guide/io.qmd
-          - text: "GPU acceleration"
+          - text: "GPU execution"
             href: guide/gpu.qmd
+      - section: "Queries"
+        contents:
+          - text: "Lazy queries (Python)"
+            href: guide/queries-lazy.qmd
+          - text: "Queries in Mojo"
+            href: guide/expressions.qmd
+          - text: "Compile a query"
+            href: guide/compile.qmd
+      - section: "I/O & interop"
+        contents:
+          - text: "Parquet & Arrow IPC"
+            href: guide/io.qmd
           - text: "PyArrow interop"
             href: guide/interop.qmd
-      - section: "Examples"
-        contents:
           - text: "DataFusion UDFs"
             href: examples/datafusion.qmd
+      - section: "Reference"
+        contents:
+          - text: "Architecture"
+            href: reference/architecture.qmd
+          - text: "Status & limitations"
+            href: reference/status.qmd
 
   page-footer:
     border: true

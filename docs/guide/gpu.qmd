@@ -1,86 +1,139 @@
 ---
 title: "GPU execution"
-subtitle: "Experimental device dispatch through ExecContext"
+subtitle: "Experimental device dispatch, from the same kernel source as the CPU"
 execute:
   enabled: false
 ---
 
-A handful of Marrow's kernels can run on the GPU — Metal on Apple Silicon, CUDA
-on NVIDIA — through Mojo's `DeviceContext`. This is **experimental**: the GPU
-and CPU paths share the same kernel source, and only a few kernels are wired up
-so far. Treat it as infrastructure to build on, not a turnkey speed-up.
+Some of marrow's kernels run on the GPU — Metal on Apple Silicon, CUDA on
+NVIDIA — through Mojo's `DeviceContext`. The GPU and CPU paths are **the same
+kernel source**: every `apply` overload writes one lane function and hands it to
+a dispatcher that picks the target. This is experimental infrastructure to build
+on, not a turnkey speed-up — read [When it is worth it](#when-it-is-and-isnt-worth-it)
+before reaching for it.
+
+::: {.callout-important}
+## GPU codegen is off unless you ask for it
+
+Every device path is compiled out by default. `marrow.execution.GPU_ENABLED` is
+`get_defined_bool["MARROW_GPU", False]()`, and it gates all of it:
+
+```bash
+mojo build -D MARROW_GPU=true ...     # opt in
+pixi run -e dev pytest --gpu          # the harness passes it for you
+```
+
+Without the flag, `has_accelerator_support` answers `False` and a GPU
+`ExecContext` **raises** at the dispatch site rather than silently taking a CPU
+path. This is also the single largest compile-time lever in the tree: a cold
+`cast` + `sort_indices` build is 43.7 s with GPU off versus 85.0 s with it on.
+:::
 
 ::: {.callout-note}
-The code on this page is Mojo. GPU dispatch is a native-level capability driven
-by an `ExecContext`; it is not exposed as a distinct mode in the Python
-bindings today.
+The code on this page is Mojo. GPU dispatch is a native-level capability; it is
+not exposed as a distinct mode in the Python bindings.
 :::
 
 ## What can run on the GPU
 
-Device dispatch is implemented for element-wise kernels only:
+Device dispatch is implemented for **element-wise** kernels — the ones whose
+work is one output element per input element:
 
-| Kernel group | GPU path | Notes |
-|--------------|:--------:|-------|
-| Arithmetic (`add`, `sub`, `mul`, `div`, …) | yes | via `elementwise[target="gpu"]` |
-| Comparisons (`equal`, `less`, `greater`, …) | yes | returns a `BoolArray` |
-| Hashing | yes | used by the hash-table kernels |
-| Sort, join, aggregate, filter | no | CPU only |
+| Kernel group | GPU path | Source |
+|---|:---:|---|
+| Arithmetic — `AddKernel`, `SubKernel`, … | yes | `kernels/numeric.mojo` |
+| Comparisons — `EqKernel`, `LtKernel`, … | yes | `kernels/numeric.mojo` |
+| Boolean — and/or/not/xor | yes | `kernels/boolean.mojo` |
+| Casts | yes | `kernels/cast.mojo` |
+| Hashing | yes | `kernels/hashing.mojo` |
+| Sort, join, group-by, filter | no | CPU only |
 
-## ExecContext
+Anything that reorders or reduces rows — sort, join, aggregate, filter — is CPU
+only.
 
-Every kernel that can use a device takes an `ExecContext` as its last
-argument. It bundles two independent choices — CPU worker count and an optional
-GPU device — behind three factory methods:
+## `ExecContext` and `DeviceContext`
+
+Two different types, and the distinction matters:
+
+- **`ExecContext`** is what *kernels* take. It bundles a CPU worker count and an
+  optional device.
+- **`DeviceContext`** is Mojo's handle on the device itself, and it is what
+  *transfers* take.
 
 ```mojo
 from marrow.execution import ExecContext
-from gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 
-var cpu       = ExecContext.serial()            # single-threaded CPU
+var cpu       = ExecContext.serial()                 # single-threaded CPU
 var threaded  = ExecContext.parallel(num_threads=0)  # 0 = all cores
+var automatic = ExecContext.auto()                   # the default
 var on_device = ExecContext.gpu(DeviceContext())     # run on the GPU
 ```
 
-The default constructor (`ExecContext()`) is serial CPU with no device.
+## A kernel on the device, end to end
+
+Data movement is explicit and is a *kind change*, not a shadow copy — a buffer
+is either host-resident or device-resident. Upload the inputs, run the kernel,
+download the result:
 
 ```mojo
-from marrow.kernels.arithmetic import add
-from marrow.arrays import array
-from marrow.dtypes import int64
+from max.gpu.host import DeviceContext
+from marrow.builders import array
+from marrow.dtypes import int32, Int32Type
+from marrow.kernels.numeric import AddKernel
 
-var a = array[int64]([1, 2, 3, 4])
-var b = array[int64]([10, 20, 30, 40])
+var ctx = DeviceContext()
+var a = array([1, 2, 3, 4], int32).to_device(ctx)
+var b = array([10, 20, 30, 40], int32).to_device(ctx)
 
-var cpu_result = add(a, b, ExecContext.serial())
-var gpu_result = add(a, b, ExecContext.gpu(DeviceContext()))
+var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)
 ```
 
-## Device transfer
-
-Transfers are explicit, so you always know when data crosses the bus:
-
 | Method | Effect |
-|--------|--------|
-| `PrimitiveArray[T].to_device(ctx)` | upload array data to the GPU |
-| `PrimitiveArray[T].to_host(ctx)` | download it back to the CPU |
-| `Buffer.to_device(ctx)` / `Bitmap.to_device(ctx)` | low-level transfers |
+|---|---|
+| `Array.to_device(ctx)` | upload — implemented for `BoolArray`, `PrimitiveArray[T]`, `FixedSizeListArray`, `DynArray` |
+| `Array.to_cpu(ctx)` | download it back |
+| `Buffer.to_device(ctx)` / `Bitmap.to_device(ctx)` | the low-level transfers |
 
-A kernel result produced on the device is device-resident (null host pointer,
-device buffer set); call `.to_host(ctx)` before reading it on the CPU.
+A kernel result produced on the device **stays** device-resident; call
+`.to_cpu(ctx)` before reading it on the CPU. The trait default raises for array
+types that have no device implementation.
+
+Null handling is not a caveat here: `apply` intersects the input validity
+bitmaps and attaches the result *before* choosing CPU or GPU for the values
+buffer, so a device result carries the same nulls a host result would.
 
 ## When it is (and isn't) worth it
 
-The kernels wired to the GPU today are all **low arithmetic intensity** — roughly
-one operation per element. For those, moving data to and from the device usually
-costs more than it saves, and CPU SIMD is competitive or faster. The GPU path
-becomes interesting only when the data is *already* resident on the device and
-several kernels run over it before the result is read back.
+**Transfer cost dominates.** The kernels wired to the GPU are all low arithmetic
+intensity — roughly one operation per element — so for most workloads CPU SIMD
+is competitive or faster.
+
+Measured on Apple Silicon (Metal, unified memory): uploading per call is **2-3×
+slower than the CPU** even for compute-heavy kernels, and the crossover was
+around 10K vectors at dimension ≥ 384.
+
+The rule that follows: **upload once, run several kernels device-resident, and
+download at the end.** Treat GPU dispatch as infrastructure for data that is
+already on the device, never as a per-call accelerator.
 
 ## Caveats
 
-- **Null bitmaps are not propagated on the device.** GPU binary kernels compute
-  values only; null-aware arithmetic is CPU-only for now. Use the CPU path when
-  either input has nulls.
-- Coverage is narrow — sorting, joins, aggregation and filtering have no GPU
-  path.
+- Coverage is narrow — sort, join, aggregation and filtering have no GPU path.
+- A GPU-off binary still links the `libmax`/AsyncRT runtime; the flag sheds
+  codegen and compile time, not the runtime dependency.
+
+::: {.callout-warning}
+## macOS needs the Metal toolchain installed separately
+
+Xcode 26 moved the Metal compiler out of the default install, so every GPU test
+dies at compile time with *"Metal Compiler failed to compile metallib"* — which
+reads like a Mojo bug and is not one. Fix it with:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
+To tell the two apart, compile a marrow-free three-line `elementwise` program;
+it fails identically when the toolchain is missing.
+:::

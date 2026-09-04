@@ -1,0 +1,19 @@
+::: {.callout-note}
+## Benchmark numbers pending
+
+The comparison harnesses are in the tree (`python/marrow/tests/bench_*.py`,
+covering marrow vs PyArrow vs Polars vs DuckDB) but **no results are recorded
+yet**, so no speed claim is published here rather than an unverified one.
+
+Reproduce them yourself:
+
+```bash
+pixi run -e bench pytest --benchmark --no-mojo \
+  python/marrow/tests/bench_compute.py --competition
+pixi run -e bench pytest --benchmark --no-mojo \
+  python/marrow/tests/bench_join.py --competition
+```
+
+The one performance number that *is* measured and CI-gated is binary size —
+see [Architecture](../reference/architecture.qmd#why-the-compiled-binary-is-small).
+:::

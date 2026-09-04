@@ -1,10 +1,9 @@
 ---
-title: "PyArrow Interop"
-execute:
-  enabled: false
+title: "PyArrow interop"
+subtitle: "The same memory, exchanged without copying"
 ---
 
-Marrow and [PyArrow](https://arrow.apache.org/docs/python/) implement the same Apache Arrow columnar format. This page covers how they relate, where Marrow is faster, and how to exchange data between them at the Mojo level via the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
+Marrow and [PyArrow](https://arrow.apache.org/docs/python/) implement the same Apache Arrow columnar format. This page covers how they relate and how to exchange data between them — in Python and in Mojo — over the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 
 ## Same data model
 
@@ -25,29 +24,9 @@ print("pyarrow:", pa_arr)
 print("type:   ", pa_arr.type)
 ```
 
-## Construction performance
+## Performance
 
-When converting Python data to Arrow arrays with an explicit type, Marrow's
-builder path is faster than PyArrow for numeric types and roughly on par for
-strings. The figures below are indicative — best of several runs on Apple
-M-series hardware, `n = 100,000`, explicit type provided:
-
-| Array type | marrow | PyArrow | ratio |
-|------------|-------:|--------:|-------|
-| `int64`   | ~0.28 ms | ~0.89 ms | **~3.1× faster** |
-| `float64` | ~0.28 ms | ~0.48 ms | **~1.7× faster** |
-| `string`  | ~1.1 ms  | ~1.0 ms  | ~parity |
-
-The pattern: **provide an explicit type when you know it**. Marrow's builder path
-is optimized for known types. When the type must instead be inferred from a scan
-of Python objects, that inference pass adds overhead and PyArrow is often faster —
-so pass `type=` on any hot path.
-
-Reproduce (numbers will vary by machine) with:
-
-```bash
-pixi run -e bench bench_python
-```
+{{< include ../_benchmarks.qmd >}}
 
 ## Zero-copy C Data Interface
 
@@ -55,20 +34,24 @@ Marrow arrays implement the Arrow C Data Interface protocol (`__arrow_c_array__`
 
 ### Python level
 
-```python
+```{python}
+import sys
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 import pyarrow as pa
 
-# PyArrow -> Marrow (via __arrow_c_array__ protocol)
+# PyArrow -> marrow, via the __arrow_c_array__ protocol
 pa_arr = pa.array([1, 2, 3, None, 5])
 ma_arr = ma.array(pa_arr)
 print(ma_arr)
 
-# Marrow -> PyArrow (via __arrow_c_array__ protocol)
-ma_arr = ma.array([1, 2, 3, None, 5])
-pa_arr = pa.array(ma_arr)
-print(pa_arr)
+# marrow -> PyArrow, the same way back
+round_trip = pa.array(ma_arr)
+print(round_trip, "|", round_trip.type)
 ```
+
+Neither direction copies the values — what crosses is a pointer, a length and a
+release callback.
 
 ### Mojo level
 
@@ -85,13 +68,12 @@ var pyarr = pa.array([1, 2, 3, 4, 5], mask=[False, False, False, False, True])
 var capsules = pyarr.__arrow_c_array__()
 var dtype = CArrowSchema.from_pycapsule(capsules[0]).to_dtype()  # int64
 var data  = CArrowArray.from_pycapsule(capsules[1])^.to_array(dtype)
-var typed = data.as_int64()
+ref typed = data.as_int64()
 
-print(typed.is_valid(0))    # True
-print(typed.is_valid(4))    # False — null
-print(typed.unsafe_get(0))  # 1
-print(typed.unsafe_get(3))  # 4
+print(typed.is_valid(0))     # True
+print(typed.is_valid(4))     # False — null
+print(typed[0].value())      # 1
 
 # Export from Mojo back to PyArrow — __arrow_c_array__ protocol is supported
-var pa_result = pa.array(data)
+var pa_result = pa.array(data.copy())
 ```

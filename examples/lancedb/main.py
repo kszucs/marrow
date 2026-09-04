@@ -38,7 +38,7 @@ def add_tables(table_a: lancedb.table.Table, table_b: lancedb.table.Table) -> la
             # Flatten ChunkedArrays to a single chunk so marrow sees one array.
             flat_a = col_a.combine_chunks() if isinstance(col_a, pa.ChunkedArray) else col_a
             flat_b = col_b.combine_chunks() if isinstance(col_b, pa.ChunkedArray) else col_b
-            summed = ma.add(flat_a, flat_b)
+            summed = ma.compute.add(ma.array(flat_a), ma.array(flat_b))
             result_columns[name] = summed
         else:
             # Non-numeric columns: carry over from table_a unchanged.

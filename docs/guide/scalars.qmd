@@ -10,7 +10,7 @@ distinct from a zero or an empty string.
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 from marrow import compute as mc
 ```
@@ -28,11 +28,12 @@ print(first.as_py())      # 10 — as a native Python value
 print(first.type())       # int64
 ```
 
-Aggregate kernels also return scalars:
+Slicing an array and taking an element gives a scalar the same way — the
+underlying buffer is shared, so neither step copies:
 
 ```{python}
-total = mc.sum(a)
-print(total, "|", total.as_py(), "|", total.type())
+tail = a.slice(2)
+print(tail[0], "|", tail[0].as_py(), "|", tail[0].type())
 ```
 
 ## Null scalars

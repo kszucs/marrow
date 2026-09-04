@@ -1,196 +1,136 @@
 ---
-title: "Expression Execution"
+title: "Queries in Mojo"
+subtitle: "One plan IR, two lanes — comptime-typed and runtime-typed"
+execute:
+  enabled: false
 ---
 
-The `marrow/expr` module provides a lazy expression system for building and executing query plans. Expressions compose into a plan tree of immutable `Relation` nodes; calling `.execute()` on a plan opens it into a pull-based processor tree that streams `RecordBatch` results. The plan itself is never mutated, so it is a reusable template.
+The Python frontends on the previous pages are drivers for an engine written in
+Mojo. This page is that engine's own API — and the thing that makes it unusual:
+**one relational plan IR with two expression lanes underneath it.**
+
+| | Comptime lane | Runtime lane |
+|---|---|---|
+| You write | `col("a", int64)` | `col("a")` |
+| Operand dtype resolved | at **compile** time | at **run** time |
+| A subtree becomes | one fused SIMD loop, no dispatch | an interpreted tree |
+| Costs you | compile time | a tag switch per node |
+| Lives in | `marrow/expr/comptime/` | `marrow/expr/runtime/` |
+
+Both erase into the same box — `DynValue` — so every relational operator is
+compiled exactly once, and a plan can mix lanes **at the box, never inside a
+node**. Picking a lane is the only decision; the verbs are identical.
+
+## The verbs
+
+A plan is a sentence, read left to right:
+
+```{.mojo .fragment}
+var out = (
+    table(orders)
+    .filter(col("amount", int64) > lit(5, int64))
+    .limit(2)
+    .execute()
+)
+```
+
+`.filter()`, `.select()`, `.project()`, `.with_columns()`, `.drop()`,
+`.rename()`, `.aggregate()`, `.sort_by()`, `.limit()` and `.join()` chain off
+any relation. `table(batch)` and `scan(path, schema)` are the two sources, and
+`.execute()` drains the plan into a single `RecordBatch`.
+
+## Aggregates are methods on the column
+
+Here is the whole thing as a complete, compiling program — filter, group,
+`HAVING`, order, limit:
+
+```{.mojo filename="docs/snippets/query_pipeline.mojo"}
+{{< include ../snippets/query_pipeline.mojo >}}
+```
 
 ::: {.callout-note}
-The examples on this page use the Mojo `marrow.expr` API. They illustrate the
-native expression layer rather than the Python bindings.
+That file is **compiled by CI**, not transcribed into the page — `pixi run
+docs_check` builds every snippet under `docs/snippets/`, so this listing cannot
+drift from an API that has moved.
 :::
 
-```{python}
-#| echo: false
-import sys
-sys.path.insert(0, "../../python")
-import marrow as ma
+Aggregates come first and keys second — `aggregate(aggs, keys)` — and an
+omitted key list is a whole-table reduction. `sum`, `product`, `mean`, `min`,
+`max`, `count`, `count_distinct`, `approx_count_distinct`, `variance` and
+`stddev` are all methods, named with `.alias(...)`. `count_star()` is
+`COUNT(*)`.
+
+::: {.callout-note}
+Never spell the comptime `Aggregate[Fold[SumKernel, Int64Type], ...]` node by
+hand. That form is for the kernel layer and the binary-size benches; the fluent
+method is the API.
+:::
+
+## Window functions
+
+Attach a window to any aggregate or ranking function with `.over(...)`:
+
+```{.mojo filename="docs/snippets/window_functions.mojo"}
+{{< include ../snippets/window_functions.mojo >}}
 ```
 
-## Building expressions
+`row_number`, `rank` and `dense_rank` are re-exported from `marrow.expr`;
+`percent_rank`, `cume_dist` and `ntile` come from `marrow.expr.builders`.
+`lag`, `lead`, `first_value`, `nth_value` and `last_value` are methods on a
+value. A window preserves **input order**, not sorted order.
 
-### Column references and literals
+## The optimizer
 
-`col(name)` references a column by name. `lit(value)` wraps a scalar constant.
+`execute()` alone optimizes nothing. The rewriter is a comptime parameter, so a
+binary links exactly the rules it names:
 
-```python
-from marrow.expr import col, lit
+```{.mojo .fragment}
+from marrow.expr import AllRules
 
-age  = col("age")
-name = col("name")
-threshold = lit(30)
+var optimized = plan.optimize[AllRules]()
+print(optimized)                 # the rewritten plan, as text
+var out = optimized.execute()
 ```
 
-### Operator overloads
+`AllRules` is fifteen rules — elimination, merging, conjunction splitting, four
+pushdowns and a Top-N rewrite — plus `ColumnPruning`, a preparatory downward
+pass. They run in a chosen order, so each sees the previous one's output.
+Because a plan renders as text, `optimize[NoRules]()` and `optimize[AllRules]()`
+can be printed and diffed.
 
-Expression nodes support the standard operators, which compose into larger nodes:
+## Late-bound parameters
 
-| Operator | Expression node |
-|----------|----------------|
-| `+`, `-`, `*`, `/` | `Binary(ADD / SUB / MUL / DIV)` |
-| `>`, `<`, `>=`, `<=`, `==`, `!=` | `Binary(GT / LT / GE / LE / EQ / NE)` |
-| `&`, `\|` | `Binary(AND / OR)` |
-| `-expr` | `Unary(NEG)` |
-| `~expr` | `Unary(NOT)` |
+`param()` sits beside `col()` and `lit()`: `col` reads from data, `lit` is a
+constant, `param` is a constant supplied **later**.
 
-```python
-adults    = col("age") > lit(30)
-cheap     = col("price") <= lit(100)
-qualified = adults & cheap
+```{.mojo filename="docs/snippets/late_bound_params.mojo"}
+{{< include ../snippets/late_bound_params.mojo >}}
 ```
 
-### `if_else`
+The value travels *through* the execution as a `Bindings` map rather than being
+substituted into a copy of the plan, so two executions of one plan cannot
+interfere — and the fused inner loop is unchanged, so a parameter costs nothing
+per row. Give it a `default=` to make it optional.
 
-Element-wise conditional: `if_else(condition, true_value, false_value)`.
+This is what [compiling a query](compile.qmd) is built on.
 
-```python
-from marrow.expr import if_else
+## The push engine
 
-label = if_else(col("score") >= lit(90), lit("pass"), lit("fail"))
-```
+`Relation.to_operator(ctx)` lowers a plan node into an `Operator` that owns all
+the mutable state. **The engine pushes**: `push(batch)` answers with what it
+produced, `drain()` with what is left, and `collect()` runs a plan down to one
+`StructArray`. There is one operator per plan node.
 
-### `is_null` and `cast`
+## Choosing a lane
 
-```python
-from marrow.expr import col
+Use the **comptime lane** (`col("a", int64)`) when the schema is known where the
+code is written and you want the fusion and the small binary — this is the lane
+[`marrow compile`](compile.qmd) exists for.
 
-missing = col("optional_field").is_null()
-as_f64  = col("price").cast(ma.float64())
-```
+Use the **runtime lane** (`col("a")`) when the query is assembled from strings
+at run time. It interprets by switching on a tag, which costs binary size only
+in programs that use it at all. That asymmetry is deliberate: a program that
+builds expressions at run time has already accepted an interpreter.
 
-## Relational plan nodes
-
-Plan nodes represent transformations on tabular data. They are composed via chaining.
-
-### InMemoryTable
-
-`in_memory_table(batch)` wraps a `RecordBatch` as a leaf node.
-
-```python
-from marrow.expr import in_memory_table
-
-batch = ma.record_batch(
-    [ma.array([25, 35, 45, 20]), ma.array(["Alice", "Bob", "Carol", "Dave"])],
-    names=["age", "name"],
-)
-source = in_memory_table(batch)
-```
-
-### ParquetScan
-
-`parquet_scan(path)` reads a Parquet file lazily — the file is read when the plan is executed, not when the node is constructed.
-
-```python
-from marrow.expr import parquet_scan
-
-source = parquet_scan("employees.parquet")
-```
-
-### Filter
-
-`.filter(predicate)` keeps rows where the boolean expression is `True`. Null rows are excluded.
-
-```python
-adults = source.filter(col("age") > lit(30))
-```
-
-### Project
-
-`.select(*names)` keeps a subset of columns by name (projection of computed
-expressions is not yet available through `select`):
-
-```python
-projected = adults.select("name", "age")
-```
-
-### Aggregate
-
-`.aggregate(keys, values, funcs)` groups by the key columns and applies the
-named aggregate functions to the value columns.
-
-```python
-totals = source.aggregate(["dept"], ["salary"], ["sum"])
-```
-
-## Executing a plan
-
-`plan.execute()` opens the plan into a fresh pull-based processor tree, drains
-it, and returns a single `RecordBatch`. It is a method on the plan, not a free
-function. A plan is a pure description, so it can be executed repeatedly and
-concurrently. An optional `ExecContext` selects the execution mode:
-
-```python
-from marrow.execution import ExecContext
-
-result = plan.execute()                  # serial by default
-result = plan.execute(ExecContext())     # explicit context
-```
-
-`ExecContext` comes from `marrow.execution` and offers
-`.serial()`, `.parallel()` and `.gpu(device)` constructors — see
-[GPU acceleration](gpu.qmd).
-
-## End-to-end example
-
-```python
-from marrow.expr import col, lit, in_memory_table
-
-# Source data
-batch = ma.record_batch(
-    [
-        ma.array([25, 35, 45, 20, 55]),
-        ma.array(["Alice", "Bob", "Carol", "Dave", "Eve"]),
-        ma.array([70_000, 90_000, 110_000, 50_000, 130_000]),
-    ],
-    names=["age", "name", "salary"],
-)
-
-# Build a plan: keep employees over 30 with salary > 80k, return name + salary
-plan = (
-    in_memory_table(batch)
-    .filter((col("age") > lit(30)) & (col("salary") > lit(80_000)))
-    .select("name", "salary")
-)
-
-# Execute — returns a single RecordBatch
-result = plan.execute()
-print(result)
-```
-
-## Reading from Parquet
-
-Plans that scan Parquet files work identically. The file is read on demand
-during execution, and a `.filter` above a `parquet_scan` pushes its predicate
-into the scan so row groups and pages can be pruned using the file's
-statistics.
-
-```python
-from marrow.expr import col, lit, parquet_scan
-
-plan = (
-    parquet_scan("employees.parquet")
-    .filter(col("age") > lit(30))
-    .select("name", "age")
-)
-
-result = plan.execute()
-```
-
-## Compiling a query ahead of time
-
-Everything on this page executes a plan in the same process that built it.
-The AOT (Mojo-native) lane can go further: `marrow compile` turns a `.mojo`
-file that builds a plan with late-bound `param()` values into a standalone
-binary, runnable from the command line with no marrow or Python install on
-the target machine. See [Compiling a query to a standalone
-binary](compile.qmd) — the query *shape* is fixed at compile time there, so
-it is a complement to this page's lazy frontend, not a replacement for it.
+See [Architecture](../reference/architecture.qmd) for why the closed comptime
+world is dead-code-eliminable, and what that buys.

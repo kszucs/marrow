@@ -10,7 +10,7 @@ sort to the front or the back.
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 from marrow import compute as mc
 ```
@@ -80,29 +80,29 @@ forces the serial path) for large batches.
 
 ## Under the hood — the Mojo sort kernel
 
-At the Mojo level, `sort_indices` returns the permutation for a single array;
-`Take.apply` applies it to get a sorted copy. The `sort` kernel itself is only
-defined for `StructArray`, where it supports **multi-column** keys directly.
+At the Mojo level, `sort_indices` returns the permutation for a single array and
+`take` applies it to get a sorted copy. Both take a type-erased `DynArray`; call
+`SortIndices.apply` / `TakeKernel.apply` when you already hold a typed array.
 
 ```mojo
 from marrow.kernels.sort import sort_indices
-from marrow.kernels.filter import Take
-from marrow.arrays import array
+from marrow.kernels.filter import take
+from marrow.builders import array
 from marrow.dtypes import int64
 
-var values = array[int64]([3, 1, 4, 1, 5, 9, 2, 6])
+var values = array([3, 1, 4, 1, 5, 9, 2, 6], int64)
 
 # Indices that would sort the array
-var idx = sort_indices(values, ascending=True, nulls_first=True)
+var idx = sort_indices(values.copy(), ascending=True, nulls_first=True)
 
 # A sorted copy
-var ordered = Take.apply(values, idx)
+var ordered = take(values.copy(), idx)
 ```
 
 Multi-column sort operates on a `StructArray`, ordering rows by a list of key
 column indices with a per-key ascending flag:
 
-```mojo
+```{.mojo .fragment}
 from marrow.kernels.sort import sort
 
 # rows sorted by column 0 ascending, ties broken by column 1 descending

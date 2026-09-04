@@ -25,6 +25,9 @@ jobs:
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         environments: docs
+    - name: Check the Mojo snippets the docs include
+      run: pixi run -e docs docs_check
+
     - name: Build docs
       run: pixi run -e docs docs
 

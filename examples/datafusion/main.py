@@ -4,7 +4,7 @@ Demonstrates registering Mojo compute functions as DataFusion UDFs and
 running SQL queries over Arrow arrays.
 
 Run with:
-    pixi run run
+    pixi run -e examples datafusion_udf
 """
 
 import pyarrow as pa
@@ -16,7 +16,9 @@ def make_session() -> SessionContext:
     ctx = SessionContext()
 
     def mojo_add(a: pa.Array, b: pa.Array) -> pa.Array:
-        return pa.array(ma.add(a, b, None))
+        # PyArrow arrays cross into marrow zero-copy over the C Data Interface,
+        # and back again the same way.
+        return pa.array(ma.compute.add(ma.array(a), ma.array(b)))
 
     ctx.register_udf(
         udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")

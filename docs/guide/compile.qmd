@@ -155,7 +155,7 @@ IPC, anything else CSV. `--format` overrides the guess.
 thing this layer can pull into a binary, and a query that prints or pipes its
 result should not carry them, so `run()` takes them as comptime parameters:
 
-```mojo
+```{.mojo .fragment}
 cli.run(plan)                  # text only — table and csv
 cli.run[parquet=True](plan)    # + the Parquet writer
 cli.run[ipc=True](plan)        # + the Arrow IPC writer

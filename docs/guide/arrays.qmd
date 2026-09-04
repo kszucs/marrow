@@ -2,14 +2,50 @@
 title: "Arrays"
 ---
 
-Arrays are the core data structure in Marrow. They are **immutable** and **columnar** — values are stored contiguously in memory with a separate validity bitmap that tracks null positions.
+Arrays are the core data structure in marrow. They are **immutable** and
+**columnar** — values sit contiguously in memory with a separate validity
+bitmap tracking null positions. Immutability is what makes a copy O(1): every
+array holds its data behind ref-counted buffers, so sharing one costs a
+refcount bump, never a memcpy.
 
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../../python")
+sys.path.insert(0, "../../python")   # the built extension
 import marrow as ma
 ```
+
+::: {.panel-tabset}
+
+## Python
+
+`ma.array()` turns a Python list into a columnar array, inferring the type in
+one pass. `None` marks a null.
+
+```python
+a = ma.array([1, 2, 3, None, 5])
+b = ma.array([1, 2, 3], type=ma.int32())
+```
+
+## Mojo
+
+`array()` takes the dtype as an **argument**, not a parameter, and lives in
+`marrow.builders`:
+
+```mojo
+from marrow.builders import array, arange, nulls
+from marrow.dtypes import int32, int64, Int32Type
+
+var a = array([1, 2, 3, None, 5], int64)   # nulls at index 3
+var b = array([True, False, True])          # BoolArray — no dtype needed
+var c = array(["hello", None, "world"])     # StringArray
+var d = arange[Int32Type](0, 10)
+```
+
+:::
+
+The rest of this page is the Python API; [Building arrays in
+Mojo](#building-arrays-in-mojo) at the end covers the native builder API.
 
 ## Primitive arrays
 
@@ -48,13 +84,13 @@ Pass `None` to mark a position as null. The validity bitmap tracks which positio
 arr = ma.array([1, None, 3, None, 5])
 print(arr)
 print("null count:", arr.null_count())
-print("is_valid:  ", arr.is_valid())     # elementwise BooleanArray
+print("is_valid:  ", arr.is_valid())     # elementwise BoolArray
 print("is_valid(0):", arr[0].is_valid())   # True
 print("is_valid(1):", arr[1].is_valid())   # False — null
 ```
 
 ::: {.callout-note}
-**Null is not zero.** `is_valid()` reports `False` at index 1 — the value there is absent entirely, not 0 or empty. `Array.is_valid()` returns an elementwise `BooleanArray` (like `pyarrow.compute.is_valid`); index into the array first (`arr[1]`) to check a single position.
+**Null is not zero.** `is_valid()` reports `False` at index 1 — the value there is absent entirely, not 0 or empty. `Array.is_valid()` returns an elementwise `BoolArray` (like `pyarrow.compute.is_valid`); index into the array first (`arr[1]`) to check a single position.
 :::
 
 ### Inspecting arrays
@@ -155,3 +191,88 @@ coords = ma.array(
 print(coords)
 print("type:", coords.type())   # fixed_size_list<item: float64>
 ```
+
+## Building arrays in Mojo
+
+`ma.array()` is a convenience over the native **builder** API — the mutable
+staging area you accumulate values in before freezing them with `finish()`.
+Reach for it in Mojo when values arrive one at a time.
+
+```mojo
+from marrow.builders import Int64Builder
+from marrow.arrays import Int64Array
+
+var b = Int64Builder(capacity=4)
+b.append(10)
+b.append(20)
+b.append_null()
+b.append(40)
+
+var arr: Int64Array = b.finish()
+print(arr)               # PrimitiveArray[int64]([10, 20, NULL, 40])
+```
+
+`capacity` pre-allocates the backing buffer; it is optional but avoids
+reallocation when the size is known.
+
+`StringBuilder` tracks offsets for you:
+
+```mojo
+from marrow.builders import StringBuilder
+from marrow.arrays import StringArray
+
+var sb = StringBuilder()
+sb.append("hello")
+sb.append_null()
+sb.append("world")
+var strs: StringArray = sb.finish()   # StringArray([hello, NULL, world])
+```
+
+### Nested builders
+
+A `ListBuilder` wraps a child builder. Append child values, then **commit** each
+list element with `append_valid()` — or `append_null()` for a null list:
+
+```mojo
+from marrow.builders import ListBuilder, Int64Builder
+
+var lists = ListBuilder(Int64Builder())
+var child_any = lists.values()      # a DynBuilder over the child
+ref child = child_any.as_int64()    # borrow it at its real type
+
+child.append(1)
+child.append(2)
+lists.append_valid()                # [1, 2]
+
+child.append(3)
+lists.append_valid()                # [3]
+
+lists.append_null()                 # a null list
+var arr = lists.finish()
+```
+
+`values()` hands back a **`DynBuilder`**, which has no `append` of its own —
+narrow it with `.as_int64()` / `.as_string()` / … first. `StructBuilder` and
+`FixedSizeListBuilder` follow the same build-children-then-commit shape.
+
+### Type-erased builders
+
+`DynBuilder` is the runtime-typed builder. Construct one from a `DataType` when
+the type is only known at run time; typed builders convert to it implicitly:
+
+```mojo
+from marrow.builders import DynBuilder, Int64Builder
+from marrow.dtypes import int64
+
+var dyn = DynBuilder(int64)      # int64 is already an instance — not int64()
+
+var typed = Int64Builder()
+var erased: DynBuilder = typed^  # move it in -- no explicit wrapper needed
+```
+
+The conversion is implicit, so no `DynBuilder(...)` wrapper is needed, but the
+typed builder is **moved** (`typed^`) rather than copied: builders are not
+`ImplicitlyCopyable`, which keeps ownership visible at the call site.
+
+`finish()` on a `DynBuilder` returns a `DynArray`, the type-erased array
+container.

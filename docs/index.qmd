@@ -11,21 +11,22 @@ format:
 ```{=html}
 <section class="mr-hero column-screen">
   <img class="mr-hero-logo" src="assets/logo.png" alt="marrow — Apache Arrow in Mojo">
-  <h1>The Arrow columnar format,<br><span class="mr-gradient">rebuilt in Mojo</span></h1>
+  <h1>One query engine.<br><span class="mr-gradient">Three ways to drive it.</span></h1>
   <p class="lead">
-    A columnar in-memory data library with null-aware SIMD compute kernels,
-    hash joins, adaptive sorting, and zero-copy interoperability with PyArrow —
-    fast enough to beat PyArrow at typed array construction.
+    Apache Arrow in Mojo — columnar arrays, null-aware SIMD kernels, native
+    Parquet, and a relational engine you can drive from Python eagerly, lazily,
+    or compile ahead of time into a standalone binary that carries no Python at
+    all.
   </p>
   <div class="mr-badges">
     <span class="mr-badge">Written in <strong>Mojo</strong></span>
     <span class="mr-badge">Zero-copy <strong>PyArrow</strong> interop</span>
-    <span class="mr-badge">Null-aware <strong>SIMD</strong> kernels</span>
-    <span class="mr-badge">Arrow <strong>C Data Interface</strong></span>
+    <span class="mr-badge">Native <strong>Parquet</strong></span>
+    <span class="mr-badge">Checked against <strong>DuckDB</strong></span>
   </div>
   <div class="mr-cta">
     <a class="mr-btn mr-btn-primary" href="tutorials/quickstart.html">Get started →</a>
-    <a class="mr-btn mr-btn-ghost" href="guide/arrays.html">Browse the guide</a>
+    <a class="mr-btn mr-btn-ghost" href="guide/queries-lazy.html">Browse the guide</a>
     <a class="mr-btn mr-btn-ghost" href="https://github.com/kszucs/marrow">View on GitHub</a>
   </div>
   <div class="mr-install">
@@ -37,86 +38,123 @@ format:
 
 <div class="mr-stats column-page">
   <div class="mr-stat">
-    <span class="mr-num mr-gradient">~3×</span>
-    <span class="mr-lbl">faster int64 typed array construction vs PyArrow</span>
+    <span class="mr-num mr-gradient">2.9 MB</span>
+    <span class="mr-lbl">a whole Parquet query, compiled — no Python, no interpreter</span>
   </div>
   <div class="mr-stat">
-    <span class="mr-num mr-gradient">6</span>
-    <span class="mr-lbl">hash-join types — inner, left, right, full, semi, anti</span>
+    <span class="mr-num mr-gradient">278</span>
+    <span class="mr-lbl">golden query cases, answers generated from DuckDB</span>
   </div>
   <div class="mr-stat">
     <span class="mr-num mr-gradient">0</span>
     <span class="mr-lbl">copies exchanging data with the Arrow ecosystem</span>
   </div>
 </div>
-
-<p class="mr-eyebrow">Why marrow</p>
-<h2 class="mr-section-title">What you get</h2>
-
-<div class="mr-grid column-page">
-  <div class="mr-card">
-    <span class="mr-ico">🧱</span>
-    <h3>Full columnar type system</h3>
-    <p>Primitive, string, binary, list, fixed-size list, struct, dictionary,
-    temporal and decimal arrays — laid out exactly to the Arrow spec, with a
-    separate validity bitmap for nulls.</p>
-  </div>
-  <div class="mr-card">
-    <span class="mr-ico">⚡</span>
-    <h3>SIMD compute kernels</h3>
-    <p>Arithmetic, comparisons, aggregates, group-by, sorting, filtering,
-    casting and hashing — vectorized and null-aware, with the same three-valued
-    logic as SQL.</p>
-  </div>
-  <div class="mr-card">
-    <span class="mr-ico">🎮</span>
-    <h3>GPU-capable kernels</h3>
-    <p>Element-wise arithmetic, comparison and hashing kernels can dispatch to
-    Metal or CUDA through an <code>ExecContext</code> — experimental, and
-    sharing the exact CPU code path.</p>
-  </div>
-  <div class="mr-card">
-    <span class="mr-ico">🔗</span>
-    <h3>Zero-copy interop</h3>
-    <p>The Arrow C Data Interface means marrow arrays cross into PyArrow,
-    DataFusion and Polars as pointer exchanges — no serialization, no copies.</p>
-  </div>
-  <div class="mr-card">
-    <span class="mr-ico">🧮</span>
-    <h3>Relational query layer</h3>
-    <p>Build lazy plans — filter, project, aggregate, join, Parquet scan — that a
-    planner compiles into a pull-based streaming executor over record batches.</p>
-  </div>
-  <div class="mr-card">
-    <span class="mr-ico">🐍</span>
-    <h3>A familiar Python API</h3>
-    <p><code>import marrow as ma</code> and reach for the PyArrow names you
-    already know — <code>array</code>, <code>record_batch</code>, <code>table</code>,
-    <code>sort</code>, <code>filter</code>, <code>join</code>.</p>
-  </div>
-  <div class="mr-card">
-    <span class="mr-ico">💾</span>
-    <h3>Native Parquet &amp; Arrow IPC</h3>
-    <p>A from-scratch Parquet reader and writer — snappy/zstd/lz4, statistics,
-    page index and bloom filters, no PyArrow at runtime — plus Arrow IPC file
-    and stream round-trips.</p>
-  </div>
-</div>
 ```
 
-<p class="mr-eyebrow">See it in action</p>
+<p class="mr-eyebrow">The same query, three ways</p>
+<h2 class="mr-section-title">Pick the frontend, not the engine</h2>
+
+Every tab below runs the same plan through the same operators. What changes is
+*when* the query is decided — and what that costs you.
+
+::: {.panel-tabset}
+
+## Eager Python
+
+The PyArrow API you already know. Kernels run the moment you call them.
+
+```python
+import marrow as ma
+
+batch = ma.record_batch({
+    "region": ma.array(["east", "west", "east"]),
+    "price":  ma.array([10, 20, 30]),
+})
+
+hot = ma.compute.greater(batch.column("price"), ma.array([15, 15, 15]))
+ma.compute.filter(batch.column("price"), hot)
+```
+
+## Lazy Python
+
+Describe the whole query first; nothing executes until `collect()`, so the
+optimizer sees all of it at once.
+
+```python
+import marrow as ma
+from marrow import col, lit
+
+ma.read_parquet("orders.parquet") \
+  .filter(col("price") > lit(15)) \
+  .aggregate(by=["region"], total=("sum", "price")) \
+  .order_by(("total", "descending")) \
+  .head(10) \
+  .collect()
+```
+
+## Compiled Mojo
+
+The dtypes are fixed at compile time, so the whole expression fuses into one
+SIMD loop and the linker deletes every kernel the query cannot reach.
+
+```mojo
+from marrow.dtypes import field, int64
+from marrow.expr import QueryCli, col, scan
+from marrow.schema import schema
+
+def main() raises:
+    var cli = QueryCli("orders")
+    var min_price = cli.param("min-price", int64, default=Int64(15))
+    cli.argument("src")
+    if cli.parse():
+        var sch = schema([field("region", int64), field("price", int64)])
+        cli.run(
+            scan(cli.get("src"), sch^).filter(col("price", int64) > min_price)
+        )
+```
+
+```bash
+$ marrow compile query.mojo -o orders
+$ ./orders orders.parquet --min-price 15    # 2.9 MB, no Python anywhere
+```
+
+:::
+
+<p class="mr-eyebrow">Where it fits</p>
+<h2 class="mr-section-title">How marrow relates to what you already use</h2>
+
+marrow is **alpha** and far less complete than any of these. It is worth your
+attention where the third column is.
+
+| | What it is | Why you'd reach for marrow instead |
+|---|---|---|
+| **PyArrow** | the reference Arrow implementation | Same data model, same method names, zero-copy both ways. marrow runs the compute in Mojo instead of through the interpreter |
+| **Polars / DuckDB** | mature engines, far more complete | They ship a runtime *alongside* your query. marrow can freeze the query itself into a binary you can drop on a machine with nothing installed |
+| **arrow-rs / DataFusion** | the closest architectural analogue | marrow is checked against them for conformance, and adds a compile-time-fused expression lane Rust monomorphization can't quite reach |
+| **Mojo / MAX** | the language and its AI runtime | marrow makes Arrow first-class in Mojo, and lets one kernel source serve both CPU SIMD and GPU |
+
+::: {.callout-note}
+**How correctness is checked.** 278 golden query cases whose expected answers
+are generated **from DuckDB, never from marrow**, plus the official Arrow
+archery suite run against the **C++, Rust and Go** implementations in both
+directions. See [Status & limitations](reference/status.qmd) for what is
+missing and what is known to be wrong.
+:::
+
+<p class="mr-eyebrow">See it run</p>
 <h2 class="mr-section-title">Sixty seconds with marrow</h2>
 
 ```{python}
 #| echo: false
 import sys
-sys.path.insert(0, "../python")
+sys.path.insert(0, "../python")   # the built extension
 import marrow as ma
-from marrow import compute as mc
+from marrow import col, lit
 ```
 
-Build arrays straight from Python data — the type is inferred in a single pass,
-and `None` marks a null:
+Build arrays straight from Python data — the type is inferred in one pass, and
+`None` marks a null:
 
 ```{python}
 ages   = ma.array([25, 35, 45, None, 55])
@@ -127,33 +165,33 @@ print(ages)
 print(names)
 ```
 
-Compute is vectorized and null-aware — a null in either operand propagates,
-and aggregates skip nulls:
+Compute is vectorized and null-aware — a null in either operand propagates:
 
 ```{python}
-next_year = mc.add(ages, ma.array([1, 1, 1, 1, 1]))
-print("age next year:", next_year)   # index 3 stays null
-print("total payroll:", mc.sum(salary))
+print("next year:", ma.compute.add(ages, ma.array([1] * 5)))
+print("over 40:  ", ma.compute.greater(ages, ma.array([40] * 5)))
 ```
 
-Assemble columns into a `RecordBatch`, then sort and reshape it with a
-PyArrow-shaped API:
+Assemble columns into a `RecordBatch`, then query it lazily:
 
 ```{python}
 people = ma.record_batch({"age": ages, "name": names, "salary": salary})
 
-senior = people.sort_by([("salary", "descending")])
-print(senior.to_pylist())
+(ma.memtable(people)
+   .filter(col("salary") > lit(60_000))
+   .aggregate(headcount=("count", "salary"), payroll=("sum", "salary"))
+   .collect()
+   .to_pylist())
 ```
 
-Every array speaks the Arrow C Data Interface, so it round-trips through the
-rest of the ecosystem with zero copies:
+Every array speaks the Arrow C Data Interface, so it crosses into the rest of
+the ecosystem as a pointer exchange:
 
 ```{python}
-#| eval: false
 import pyarrow as pa
-pa_table = pa.record_batch(people)     # marrow → PyArrow, no copy
-back     = ma.record_batch(pa_table)   # PyArrow → marrow, no copy
+pa_ages = pa.array(ages)          # marrow → PyArrow, no copy
+back    = ma.array(pa_ages)       # PyArrow → marrow, no copy
+print(pa_ages.type, "|", len(back))
 ```
 
 ```{=html}
@@ -166,20 +204,20 @@ back     = ma.record_batch(pa_table)   # PyArrow → marrow, no copy
     <h3>10-minute quickstart</h3>
     <p>Install marrow and tour arrays, compute and tables end to end.</p>
   </a>
-  <a class="mr-card" href="tutorials/data-pipeline.html">
-    <span class="mr-ico">🛠️</span>
-    <h3>Build a data pipeline</h3>
-    <p>Load, filter, sort and join a dataset in one worked example.</p>
+  <a class="mr-card" href="guide/queries-lazy.html">
+    <span class="mr-ico">🧮</span>
+    <h3>Lazy queries</h3>
+    <p>Build a plan in Python, optimize it, and run it once.</p>
   </a>
-  <a class="mr-card" href="guide/arrays.html">
-    <span class="mr-ico">📚</span>
-    <h3>The guide</h3>
-    <p>Deep dives on arrays, types, compute, tables, I/O and GPU.</p>
+  <a class="mr-card" href="guide/compile.html">
+    <span class="mr-ico">📦</span>
+    <h3>Compile a query</h3>
+    <p>Turn a Mojo query into a standalone binary with no Python in it.</p>
   </a>
-  <a class="mr-card" href="guide/interop.html">
-    <span class="mr-ico">🔌</span>
-    <h3>PyArrow interop</h3>
-    <p>Benchmarks and the zero-copy C Data Interface, up close.</p>
+  <a class="mr-card" href="reference/architecture.html">
+    <span class="mr-ico">🧠</span>
+    <h3>Architecture</h3>
+    <p>Two expression lanes, one plan IR, and why the binary is small.</p>
   </a>
 </div>
 ```

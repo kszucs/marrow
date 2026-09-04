@@ -35,6 +35,12 @@ publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://pre
 # symbol counts -- see benchmarks/binary_size/README.md.
 binary_size = { cmd = "python3 benchmarks/binary_size/compare.py" }
 
+# Compiles every Mojo snippet the docs include, so the guides cannot rot.
+# Quarto executes the docs' Python cells at render time, which keeps that half
+# honest; Mojo has no such engine, and this stands in for it. Judged by grep,
+# not by exit status -- `mojo build` reports a parse failure and still exits 0.
+docs_check = { cmd = "python3 scripts/check_docs_snippets.py" }
+
 # Dev — dependencies and tasks for development and testing.
 [feature.dev.dependencies]
 pytest = ">=9.0.2,<10"
@@ -182,6 +188,11 @@ ipython = ">=9.11.0,<10"
 jupyter = ">=1.1,<2"
 jupyter-cache = ">=1.0,<2"
 quarto = ">=1.6,<2"
+
+# The interop pages execute real PyArrow round-trips, so the docs environment
+# needs it too. Same PyPI-wheel reasoning as `feature.dev` above.
+[feature.docs.pypi-dependencies]
+pyarrow = ">=23.0.1,<24"
 
 [feature.docs.tasks]
 docs = { cmd = "quarto render docs/", depends-on = [
