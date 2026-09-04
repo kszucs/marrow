@@ -87,6 +87,12 @@ excludes nulls without mentioning them.
 arithmetic and comparison (int32 + float64 → double); a three-level fused
 expression; null propagation through every level.
 
+The two integer operators are asked in SQL's terms, and each divergence gets
+its own case rather than sharing one: `//` truncating toward zero, `%` taking
+the dividend's sign, and a zero divisor answering NULL. All three were
+`xfail`s until 2026-09-04 and all three had the same disguise — every operand
+pair whose signs agree answers identically under both conventions.
+
 ### Aggregates
 
 `sum` (int32 widening to int64, int64, float64), `product`, `mean`, `min`/`max`
@@ -138,13 +144,15 @@ neighbouring rows and both partition edges; `window_first_and_last_value` is
 the frame trap — `last_value` is the *current* row, not the partition's last;
 and `window_qualify` filters on a window function's output.
 
-Not covered here and not implemented: `RANGE` frames with explicit numeric
-bounds, `EXCLUDE`, and `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`. All
-seven keep `-- skip python` — the window surface is Mojo-only.
+`NTILE`, `PERCENT_RANK`, `CUME_DIST` and `NTH_VALUE` are implemented but have
+no case here — 11 of SQL's 12 window functions exist, and the corpus asks
+about seven of them. Not implemented: `RANGE` frames with explicit numeric
+bounds, and `EXCLUDE`. All seven cases keep `-- skip python` — the window
+surface is Mojo-only.
 
 ## Recorded as unsupported
 
-78 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
+63 cases carry `-- skip mojo`. Each names, in its prose, what is missing.
 
 **Set operations** (4) — `setop_union_all`, `setop_union_distinct`,
 `setop_except`, `setop_intersect`. There is no set-operation node in
@@ -171,20 +179,20 @@ missing *nodes* over kernels marrow already has (`bool_and`/`bool_or` over
 operand, so `arg_min`, `corr`, an ordered `first`, a `FILTER` clause and a
 `DISTINCT` modifier have nowhere to go.
 
-**String functions** (16) — `string_substr`,
-`string_concat_operator_propagates_null`, `string_concat_function_skips_null`,
-`string_concat_ws`, `string_replace`, `string_split_part`,
-`string_regexp_matches`, `string_regexp_replace`, `string_regexp_extract`,
-`string_lpad`, `string_position`, `string_repeat`, `string_left_and_right`,
-`string_trim_characters`, `string_length_counts_characters`,
-`string_ascii_code_point`. The three-way NULL split across `||`, `concat` and
-`concat_ws` is deliberate: they are one operation with three answers.
-`string_length_counts_characters` is recorded here rather than as an `xfail` on
-`string_length_counts_bytes` because character length and byte length are
-different functions and marrow's answer to the one it implements is correct.
+**String functions** (5) — `string_concat_function_skips_null`,
+`string_concat_ws`, `string_regexp_matches`, `string_regexp_replace`,
+`string_regexp_extract`. Regular expressions are the whole of what is left
+here besides `concat`: the three-way NULL split across `||`, `concat` and
+`concat_ws` is deliberate — one operation with three answers — and `||` is the
+one of the three marrow implements.
 
-**Math functions** (8) — `math_greatest_and_least`, `math_round_to_digits`,
-`math_round_half_to_even`, `math_log_bases`, `math_trigonometry`,
+Eleven came off this list when the string surface landed:
+`||`'s null propagation, `substr`, `replace`, `split_part`, `lpad`,
+`position`, `repeat`, `left`/`right`, `trim` with characters, character
+`length` and `ascii`.
+
+**Math functions** (7) — `math_greatest_and_least`, `math_round_to_digits`,
+`math_round_half_to_even`, `math_trigonometry`,
 `math_bitwise_operators`, `math_gcd_and_lcm`,
 `math_signbit_separates_negative_zero`. `greatest`/`least` *skip* nulls, the
 opposite of every arithmetic operator. `signbit` is the only function that can
@@ -192,11 +200,21 @@ tell `-0.0` from `0.0`, which is why the `floats` fixture carries both.
 The left shift in `math_bitwise_operators` takes `abs(n)` because DuckDB
 refuses to shift a negative at all — that one operation is not comparable.
 
-**Temporal** (13) — `temporal_literal_comparison`, `temporal_date_diff`,
+**Temporal** (10) — `temporal_literal_comparison`, `temporal_date_diff`,
 `temporal_add_month_interval`, `temporal_interval_between_timestamps`,
-`temporal_last_day`, `temporal_epoch_seconds`, `temporal_iso_week_and_year`,
-`temporal_strftime`, `temporal_strptime`, `temporal_make_date`,
-`temporal_day_and_month_name`, `temporal_age`, `temporal_timezone_attach`.
+`temporal_epoch_seconds`, `temporal_strftime`, `temporal_strptime`,
+`temporal_make_date`, `temporal_age`, `temporal_timezone_attach`. `last_day`,
+`iso_week`/`iso_year` and the weekday and month names came off this list with
+the temporal surface.
+
+`temporal_epoch_seconds` is the one whose skip outlived its reason and still
+belongs: `EpochKernel` exists, and un-skipping it was tried and reverted on
+2026-09-04. DuckDB's `epoch` answers a DOUBLE, so the case's
+`CAST(epoch(ts) AS BIGINT)` **rounds** `23:59:59.999999` up into the next
+year while marrow truncates — the expectation pins the twin's cast, not its
+`epoch`. The lesson: a case is unblocked when it
+compiles *and* agrees, and only a run can say which.
+
 `temporal_literal_comparison` is the smallest and most load-bearing: `lit` has
 numeric and string-like overloads only, so no date or timestamp constant can
 be written, which is why `temporal_filter_timestamp` compares against a
@@ -232,26 +250,38 @@ drops the row instead of widening it.
 
 ## Recorded as wrong — `xfail`
 
-Four cases, all strict, so fixing any of them turns the case red and forces
-the marker's removal.
+**None.** The corpus carries no `xfail` today, and the marker's meaning is
+unchanged: a case that compiles, runs, and answers *wrongly*, strict so that
+fixing it turns the case red and forces the marker's removal.
 
-| Case | marrow | DuckDB |
+Four cases carried it until 2026-09-04, and what they had in common is worth
+keeping. Two root causes, four faces:
+
+| Case | was | is |
 |---|---|---|
-| `group_by_float_key` | `-1.25` and `0.5` collapse into one group | three distinct float keys, three groups |
-| `math_floordiv_truncates_toward_zero` | `-1 // 3` is `-1` — `//` floors, Mojo/Python semantics | `0` — SQL's `//` truncates toward zero |
-| `math_modulo_sign_follows_dividend` | `-1 % 3` is `2` — the remainder takes the *divisor*'s sign | `-1` — SQL's takes the *dividend*'s |
-| `math_integer_division_by_zero` | `10 // 0` is `10` and `10 % 0` is `0`: the kernels substitute 1 for a zero divisor | `NULL` for both |
+| `group_by_float_key` | `-1.25` and `0.5` collapse into one group | three keys, three groups |
+| `math_floordiv_truncates_toward_zero` | `-1 // 3` is `-1` — `//` floored | `0`, truncated toward zero |
+| `math_modulo_sign_follows_dividend` | `-1 % 3` is `2` — the divisor's sign | `-1`, the dividend's |
+| `math_integer_division_by_zero` | `10 // 0` is `10`, `10 % 0` is `0` | `NULL` for both |
 
-The last three are one root cause with three faces. `FloordivKernel` and
-`ModKernel` are `a // b` and `a % b` with `b == 0` replaced by 1, evaluated
-inside a SIMD lane that can neither raise nor produce a null. Getting SQL
-semantics needs a sign correction on the result *and* a validity mask derived
-from the divisor — the same shape `NumericBinary.validity` already computes
-from its operands.
+The float keys were a *hash* bug, not a grouping one: `HashKernel` widened a
+lane with `cast[uint64]()`, a numeric conversion, so every float in (-1, 1)
+truncated to 0 — and the table buckets on the hash alone. It now hashes the
+bit pattern, with `-0.0` folded onto `0.0` and every NaN onto one pattern,
+because "same number" and "same bits" disagree about exactly those two.
 
-`math_mod_int64` deliberately asks the *agreeing* form of the same question,
-`((n % 3) + 3) % 3`, so the corpus records both the working case and the
-divergence.
+The last three were one root cause with three faces, and both halves of the
+fix were needed. `FloordivKernel` and `ModKernel` correct Mojo's Python
+rounding inside `core`, which serves both lanes; and because a SIMD lane can
+neither raise nor produce a null, the zero divisor is masked *outside* it —
+`BinaryKernel.domain` in the erased path, and `DivisionBinary`'s
+third `Bound` slot in the fused one, which keeps the lane fused and pays only
+one pass over the divisor.
+
+`math_mod_int64` used to ask the *agreeing* form, `((n % 3) + 3) % 3`, so that
+the corpus recorded both the working case and the divergence. Both sides now
+spell the same expression: it is a nested-arithmetic case, and
+`math_modulo_sign_follows_dividend` asks the bare form directly.
 
 ## Consciously omitted
 

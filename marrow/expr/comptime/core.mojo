@@ -1024,21 +1024,22 @@ trait NumericValue(PrimitiveValue):
     # The three operators whose answer is *not* the wider operand. `/` and
     # `**` produce `float64` whatever went in, so they route to `FloatBinary`
     # rather than `NumericBinary`; `%` and `//` stay in the operand type but
-    # take Python's sign convention rather than SQL's — see `Mod`.
+    # decide a null from their divisor, so they route to `DivisionBinary`.
 
     def __truediv__[Rhs: NumericValue](self, o: Rhs) -> Div[Self, Rhs]:
         """True division: `5 / 2` is 2.5, not 2. PyArrow's `divide` answers 2
-        on integer input; marrow follows Python so that `/`, `//` and `%`
-        agree with each other."""
+        on integer input; marrow widens so that `/` never silently truncates."""
         return Div(self.copy(), o.copy())
 
     def __floordiv__[Rhs: NumericValue](self, o: Rhs) -> Floordiv[Self, Rhs]:
-        """Floored division, the `//` that makes
-        `a == (a // b) * b + a % b` hold."""
+        """Division truncating toward zero, as SQL's is: `-1 // 3` is 0.
+
+        A zero divisor answers NULL rather than a number — see `Floordiv`."""
         return Floordiv(self.copy(), o.copy())
 
     def __mod__[Rhs: NumericValue](self, o: Rhs) -> Mod[Self, Rhs]:
-        """Remainder taking the sign of the **divisor**: `-1 % 3` is 2."""
+        """Remainder taking the sign of the **dividend**, as SQL's does:
+        `-1 % 3` is -1. A zero divisor answers NULL."""
         return Mod(self.copy(), o.copy())
 
     def __pow__[Rhs: NumericValue](self, o: Rhs) -> Pow[Self, Rhs]:

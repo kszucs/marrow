@@ -102,6 +102,41 @@ def test_hash__float64() raises:
 # ---------------------------------------------------------------------------
 
 
+def test_hash__float64_bit_pattern() raises:
+    """Floats hash by their **bit pattern**, not by their value.
+
+    `cast[uint64.native]()` is a numeric conversion, so every float in (-1, 1)
+    truncated to 0 and shared one hash — and the group-by buckets on the hash
+    alone, so `-1.25` and `0.5` landed in one group
+    (`golden/cases/group_by_float_key.mojo`).
+    """
+    var a = array([-1.25, 0.5, 1.5, 2.25], float64)
+    var h = RapidHashKernel.apply(a)
+    assert_true(h[0] != h[1])
+    assert_true(h[1] != h[2])
+    assert_true(h[2] != h[3])
+    assert_true(h[0] != h[2])
+
+
+def test_hash__float64_signed_zero() raises:
+    """`-0.0` and `0.0` are the same number, so they hash alike — the one place
+    the bit pattern has to be canonicalised before it is hashed."""
+    var a = array([0.0, -0.0], float64)
+    var h = RapidHashKernel.apply(a)
+    assert_equal(h[0], h[1])
+
+
+def test_groupby_float64_key() raises:
+    """Distinct float keys are distinct groups."""
+    var s = _summed(
+        array([-1.25, 0.5, -1.25, 1.5], float64), array([1, 2, 3, 4], int32)
+    )
+    assert_equal(len(s), 3)
+    assert_equal(s[0].value(), 4)  # 1 + 3
+    assert_equal(s[1].value(), 2)
+    assert_equal(s[2].value(), 4)
+
+
 def test_hash__string() raises:
     var b = StringBuilder(4)
     b.append("foo")

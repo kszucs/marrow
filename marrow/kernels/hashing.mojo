@@ -25,7 +25,9 @@ Rapidhash port follows the C reference at https://github.com/Nicoshev/rapidhash
 """
 
 
+from std.math import isnan
 from std.sys import size_of
+from std.utils.numerics import nan
 
 from ..arrays import (
     BoolArray,
@@ -145,10 +147,47 @@ struct HashKernel[H: Hasher](Kernel):
 
     @staticmethod
     @always_inline
-    def _primitive_lanes[
+    def _floating_lanes[
         T: PrimitiveType, W: Int
     ](vals: SIMD[T.native, W]) -> SIMD[uint64.native, W]:
-        """Widen a primitive lane to uint64 and hash it."""
+        """Hash a float lane by its **bit pattern**, not by its value.
+
+        `cast[uint64.native]()` is a numeric conversion: every float in
+        (-1, 1) truncates to 0, so `-1.25` and `0.5` produced one hash — and
+        grouping buckets on the hash alone, so they were one group
+        (`golden/cases/group_by_float_key.mojo`).
+
+        Two values are canonicalised first, because "same number" and "same
+        bits" disagree about them. `-0.0` equals `0.0` and must group with it;
+        `+ 0.0` says that in one instruction, since adding zero is exact for
+        every float and `-0.0 + 0.0` is `+0.0`. And NaN carries a payload
+        chosen by whatever arithmetic produced it, so every NaN folds onto one
+        pattern.
+
+        `to_bits` bitcasts to the same-width unsigned type and widens, so the
+        zero-extension `_integer_lanes` masks for is already done.
+        """
+        comptime byte_width = size_of[Scalar[T.native]]()
+        var zeroed = vals + SIMD[T.native, W](0)
+        var canonical = isnan(vals).select(
+            SIMD[T.native, W](nan[T.native]()), zeroed
+        )
+        return Self.H.hash_lanes[byte_width, W](
+            canonical.to_bits[uint64.native]()
+        )
+
+    @staticmethod
+    @always_inline
+    def _integer_lanes[
+        T: PrimitiveType, W: Int
+    ](vals: SIMD[T.native, W]) -> SIMD[uint64.native, W]:
+        """Widen an integral lane to uint64 and hash it.
+
+        Two widths, because one of them does not fit: decimal128/256 and the
+        month-day-nano interval are wider than a uint64 lane, so their 64-bit
+        limbs are folded instead. A truncating cast would collide every pair
+        differing only above bit 63 — and group-by buckets on the hash alone.
+        """
         comptime byte_width = size_of[Scalar[T.native]]()
 
         comptime if byte_width <= 8:
@@ -161,10 +200,6 @@ struct HashKernel[H: Hasher](Kernel):
                 vals.cast[uint64.native]() & SIMD[uint64.native, W](mask)
             )
         else:
-            # decimal128 / decimal256 and the month-day-nano interval do not fit
-            # a uint64 lane: fold their 64-bit limbs so the high bits
-            # participate. A truncating cast would collide every pair differing
-            # only above bit 63 — and group-by buckets on the hash alone.
             comptime limbs = byte_width // 8
             var h = SIMD[uint64.native, W](0)
             comptime for i in range(limbs):
@@ -173,6 +208,32 @@ struct HashKernel[H: Hasher](Kernel):
                 ]()
                 h = Self.H.combine_lanes[W](h, Self.H.hash_lanes[8, W](limb))
             return h
+
+    @staticmethod
+    @always_inline
+    def _primitive_lanes[
+        T: PrimitiveType, W: Int
+    ](vals: SIMD[T.native, W]) -> SIMD[uint64.native, W]:
+        """Whichever of the two above `T` calls for.
+
+        **A dispatcher rather than two overloads**, because both were written
+        and the pair does not compile. `where T.native.is_floating_point()`
+        parses, and then every call site reports *"ambiguous call ... cannot
+        prove constraint for candidate"* — the constraint solver will not
+        evaluate a non-builtin function, and `DType.is_floating_point` is a
+        stdlib method.
+
+        **And a dispatcher rather than branching at the call sites**, because
+        two of the three take this as a comptime function *reference*
+        (`Self._primitive_lanes[T, ...]`, handed to `apply`), and a reference
+        cannot name an overload set or be chosen by a branch without
+        duplicating the call it is passed to. The branch belongs in one place,
+        and it costs nothing: each instantiation keeps one arm.
+        """
+        comptime if T.native.is_floating_point():
+            return Self._floating_lanes[T, W](vals)
+        else:
+            return Self._integer_lanes[T, W](vals)
 
     @staticmethod
     @always_inline

@@ -1,7 +1,14 @@
 """Benchmarks for arithmetic kernel variants.
 
-CPU: AddKernel with no nulls and with 10% nulls, across sizes 1k–1M for int32
-and float64.
+CPU: AddKernel with no nulls and with 10% nulls, across sizes 1k-1M for int32
+and float64, plus `//` and `%`.
+
+`add` is the control: it shares every line of `BinaryKernel.apply` with the
+other two and none of their per-lane corrections, so a delta that moves all
+three is the harness or the machine, and a delta that moves only `//` and `%`
+is theirs. They are the expensive pair — a truncating quotient costs a
+multiply and two comparisons over the floored one, and `apply` walks the
+divisor once more to find the zeros SQL turns into NULL.
 
 Run with: pixi run pytest marrow/kernels/tests/bench_arithmetic.mojo --benchmark
 """
@@ -11,7 +18,7 @@ from std.benchmark import BenchMetric, keep
 from ...arrays import PrimitiveArray
 from ...builders import arange, PrimitiveBuilder
 from ...dtypes import Int32Type, Float64Type, NumericType
-from ...kernels.numeric import AddKernel
+from ...kernels.numeric import AddKernel, FloordivKernel, ModKernel
 from ...execution import ExecContext
 from ...utils.testing import Benchmark
 
@@ -282,3 +289,63 @@ def bench_add_int32_1m_parallel_8(mut b: Benchmark) raises:
 
 def bench_add_int32_1m_auto(mut b: Benchmark) raises:
     _bench_add_1m_ctx(b, ExecContext.auto())
+
+
+# ---------------------------------------------------------------------------
+# floordiv / mod — the two kernels whose lane corrects Mojo's rounding and
+# whose `apply` scans the divisor for zeros
+# ---------------------------------------------------------------------------
+
+
+def _bench_floordiv(mut b: Benchmark, n: Int) raises:
+    var lhs = arange[Int32Type](0, n)
+    # From 1, so no divisor is zero: that is the common case, and it is the one
+    # where `domain` must return `None` without allocating.
+    var rhs = arange[Int32Type](1, n + 1)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(FloordivKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
+
+    b.iter(call)
+    keep(lhs)
+    keep(rhs)
+
+
+def bench_floordiv_int32_10k(mut b: Benchmark) raises:
+    _bench_floordiv(b, 10_000)
+
+
+def bench_floordiv_int32_100k(mut b: Benchmark) raises:
+    _bench_floordiv(b, 100_000)
+
+
+def bench_floordiv_int32_1m(mut b: Benchmark) raises:
+    _bench_floordiv(b, 1_000_000)
+
+
+def _bench_mod(mut b: Benchmark, n: Int) raises:
+    var lhs = arange[Int32Type](0, n)
+    var rhs = arange[Int32Type](1, n + 1)
+    b.throughput(BenchMetric.elements, n)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(ModKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
+
+    b.iter(call)
+    keep(lhs)
+    keep(rhs)
+
+
+def bench_mod_int32_10k(mut b: Benchmark) raises:
+    _bench_mod(b, 10_000)
+
+
+def bench_mod_int32_100k(mut b: Benchmark) raises:
+    _bench_mod(b, 100_000)
+
+
+def bench_mod_int32_1m(mut b: Benchmark) raises:
+    _bench_mod(b, 1_000_000)

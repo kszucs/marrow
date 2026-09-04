@@ -9,6 +9,7 @@ and a wrong one is silent — a plan that narrows the wrong columns still runs.
 from std.testing import (
     assert_almost_equal,
     assert_equal,
+    assert_false,
     assert_true,
 )
 
@@ -296,6 +297,52 @@ def test_runtime_arithmetic_over_two_columns() raises:
         _ints(floordiv(column("b"), _lit(3))) == array([3, 6, 10, 13], int64)
     )
     assert_true(_ints(mod(column("b"), _lit(3))) == array([1, 2, 0, 1], int64))
+
+
+def test_runtime_division_by_zero_on_a_sliced_batch() raises:
+    """A *sliced* divisor puts its nulls at the right rows.
+
+    This is the case a hand-written mask got wrong: it built a bitmap indexed
+    from 0 while keeping the column's `offset`, so every null landed `offset`
+    rows away from the zero that caused it. Answering it with `nullif` — which
+    already knows about offsets — is what fixed it, and this pins that rather
+    than the implementation.
+
+    `b` is [10, 20, 30, 40] and the slice drops the first row, so the divisor
+    [0, 30, 40] has its zero at slice-relative row 0 and the batch it came
+    from has none there at all.
+    """
+    var full = record_batch(
+        [
+            array([100, 100, 100, 100], int64).copy(),
+            array([5, 0, 30, 40], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+    var sliced = full.slice(1, 3)
+    var out = (
+        floordiv(column("a"), column("b"))
+        .evaluate(sliced.to_struct_array(), Bindings())
+        .to_array(3)
+    )
+    assert_equal(out.null_count(), 1)
+    assert_false(out.is_valid(0))
+    assert_equal(out.as_int64()[1].value(), 3)
+    assert_equal(out.as_int64()[2].value(), 2)
+
+
+def test_runtime_division_follows_sql_like_the_fused_lane() raises:
+    """`//` truncates toward zero, `%` takes the dividend's sign, and a zero
+    divisor is NULL — the same three answers `DivisionBinary` gives, reached
+    here through `FloordivKernel.apply` instead of through a fused lane. Two
+    implementations of one rule is exactly how the lanes drift."""
+    assert_true(
+        _ints(floordiv(_lit(-1), _lit(3))) == array([0, 0, 0, 0], int64)
+    )
+    assert_true(_ints(mod(_lit(-1), _lit(3))) == array([-1, -1, -1, -1], int64))
+    var by_zero = _ints(floordiv(column("b"), _lit(0)))
+    assert_equal(by_zero.null_count(), 4)
+    assert_equal(_ints(mod(column("b"), _lit(0))).null_count(), 4)
 
 
 def test_runtime_arithmetic_propagates_nulls() raises:

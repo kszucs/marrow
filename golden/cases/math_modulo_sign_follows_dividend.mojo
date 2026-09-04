@@ -5,16 +5,11 @@ def plan() raises -> DynRelation:
     """
     SELECT n % 3 AS r FROM floats
 
-    The companion to `math_floordiv_truncates_toward_zero`, and the same root
-    cause: `%` and `//` are one rule. Python's remainder has the sign of the
+    The companion to `math_floordiv_truncates_toward_zero`, and the same rule:
+    `%` and `//` are one convention. Python's remainder has the sign of the
     *divisor*, C's and SQL's the sign of the *dividend*, so `-1 % 3` is 2 under
-    one and -1 under the other.
-
-    `math_mod_int64` asks the same kernel the question in the form that agrees
-    — `((n % 3) + 3) % 3` is the non-negative residue under either rule — so
-    the corpus states both the working case and the divergence.
-
-    -- xfail marrow's % takes the sign of the divisor (Mojo/Python), SQL's takes the sign of the dividend: -1 % 3 is -1 in SQL and 2 here
+    one and -1 under the other. `ModKernel` corrects Mojo's operator to SQL's,
+    and `a == (a // b) * b + a % b` holds under both.
 
     -- expected
     r:int64

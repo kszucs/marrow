@@ -36,6 +36,7 @@ every child column agreeing, which is how the hash table verifies key rows.
 """
 
 import std.math as math
+from std.sys.info import simd_width_of
 
 from ..arrays import (
     PrimitiveArray,
@@ -266,7 +267,29 @@ struct DivKernel(BinaryNumericKernel):
     @always_inline
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        # Replace zeros with 1 to avoid SIGFPE; null positions are masked by bitmap.
+        """True division, with a substituted divisor so the lane cannot trap.
+
+        **`10.0 / 0.0` therefore answers `10.0` — the dividend — and that is
+        wrong by every reference.** Measured against DuckDB 1.5.5 on
+        2026-09-04: `10.0/0.0` and `10/0` both answer `inf`, which is also
+        what IEEE 754 says and what this lane would produce on its own if the
+        divisor were left alone. Postgres is the outlier and raises. Nothing
+        pins it — no golden case asks about `/ 0`, which is how the dividend
+        survived as an answer.
+
+        Note this is *not* the rule `//` and `%` follow: those answer NULL,
+        verified against the same DuckDB. So `/` is not merely un-migrated, it
+        is a different question — division by zero has a value in the reals'
+        completion and integer division by zero does not.
+
+        The fix is a one-line deletion for the floating case: stop substituting,
+        and IEEE semantics fall out of the hardware. Note it must be a deletion
+        and not a special case — `0.0 / 0.0` is `nan`, not `inf`, so anything
+        that maps a zero divisor to a single value gets that one wrong.
+
+        It is left alone because it changes an answer no test pins, and that
+        deserves a case first. `backlog.md` carries it.
+        """
         return a / b.eq(0).select(SIMD[T, W](1), b)
 
 
@@ -276,7 +299,34 @@ struct FloordivKernel(BinaryNumericKernel):
     @always_inline
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return a // b.eq(0).select(SIMD[T, W](1), b)
+        """`//`: SQL's truncating quotient on integers, Python's floor on floats.
+
+        Two things happen here, and only one of them is conditional.
+
+        - **The zero divisor**, always. A lane can neither raise nor produce
+          a null, so it divides by 1 — a value, not an answer. Turning that
+          row into SQL's NULL is the expression layer's job, not this one's:
+          `pyarrow.compute`, whose names these mirror, does not null either.
+          Both lanes do it, `DivisionBinary` and `RuntimeValue._null_zeros`.
+        - **The rounding, integers only.** Floored and truncated division
+          differ by one quotient step, and only where the signs differ and the
+          division is inexact; `a - q * d` is that remainder, a multiply rather
+          than a second division.
+
+        **Floats keep Python's floor deliberately.** Neither convention is
+        SQL's: DuckDB's `//` on DOUBLE is plain division — `-1.5 // 3.0` is
+        `-0.5`, `-7.5 // 2.0` is `-3.75` (measured 2026-09-04) — so truncating
+        would trade one divergence for another while breaking `//`'s meaning.
+        No golden case asks, and `//` reads as floor division everywhere else
+        in the language.
+        """
+        var d = b.eq(0).select(SIMD[T, W](1), b)
+        var q = a // d
+        comptime if T.is_integral():
+            var inexact = (a - q * d).ne(0) & (a.lt(0) ^ d.lt(0))
+            return inexact.select(q + 1, q)
+        else:
+            return q
 
 
 struct ModKernel(BinaryNumericKernel):
@@ -285,7 +335,21 @@ struct ModKernel(BinaryNumericKernel):
     @always_inline
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return a % b.eq(0).select(SIMD[T, W](1), b)
+        """`%`: on integers the remainder takes the sign of the **dividend**.
+
+        `FloordivKernel.core` documents both corrections and the reason floats
+        are excluded from the second; stepping the remainder back by one
+        divisor is what keeps `a == (a // b) * b + a % b` true under the
+        truncating rule, so the two must be conditional together or the
+        identity breaks.
+        """
+        var d = b.eq(0).select(SIMD[T, W](1), b)
+        var r = a % d
+        comptime if T.is_integral():
+            var inexact = r.ne(0) & (a.lt(0) ^ d.lt(0))
+            return inexact.select(r - d, r)
+        else:
+            return r
 
 
 struct MinKernel(BinaryNumericKernel):

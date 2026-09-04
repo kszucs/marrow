@@ -62,6 +62,53 @@ def test_bufferview_contains() raises:
     assert_false(99 in view)
 
 
+def _filled(n: Int, positions: List[Int]) raises -> Buffer[mut=True]:
+    """`n` int32s of 1, with 7 written at each of `positions`."""
+    var buf = Buffer.alloc_zeroed[DType.int32](n)
+    for i in range(n):
+        buf.unsafe_set[DType.int32](i, Int32(1))
+    for p in positions:
+        buf.unsafe_set[DType.int32](p, Int32(7))
+    return buf^
+
+
+def test_bufferview_contains_covers_both_loops() raises:
+    """`__contains__` is a SIMD loop plus a scalar tail, so the value has to be
+    found from either — and `not in` has to survive both.
+
+    The pre-existing case is four int32s, which is exactly one vector on this
+    machine and never enters the tail. These lengths are deliberately not
+    multiples of the width: 37 leaves a tail under any width up to 8, and 3 is
+    shorter than one vector so the SIMD loop never runs at all.
+    """
+    var only_tail = _filled(3, [2])
+    assert_true(7 in only_tail.view[DType.int32]())
+    assert_false(9 in only_tail.view[DType.int32]())
+
+    var in_first_chunk = _filled(37, [0])
+    assert_true(7 in in_first_chunk.view[DType.int32]())
+
+    var in_tail = _filled(37, [36])
+    assert_true(7 in in_tail.view[DType.int32]())
+
+    var absent = _filled(37, List[Int]())
+    assert_false(7 in absent.view[DType.int32]())
+
+    var empty = Buffer.alloc_zeroed[DType.int32](0)
+    assert_false(0 in empty.view[DType.int32]())
+
+
+def test_bufferview_contains_nan_is_never_found() raises:
+    """IEEE, not a quirk of the loop: NaN compares unequal to itself, so a view
+    full of NaN does not contain NaN. Worth pinning because the vectorised
+    `eq` and the scalar `==` must agree about it, and a reader reaching for
+    `nan in values` deserves to find this rather than discover it."""
+    var buf = Buffer.alloc_zeroed[DType.float64](9)
+    for i in range(9):
+        buf.unsafe_set[DType.float64](i, math.nan[DType.float64]())
+    assert_false(math.nan[DType.float64]() in buf.view[DType.float64]())
+
+
 def test_bufferview_slice() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):

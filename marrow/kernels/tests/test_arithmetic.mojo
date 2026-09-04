@@ -270,6 +270,93 @@ def test_mod_typed() raises:
     assert_equal(result[3].value(), 3)
 
 
+def test_floordiv_truncates_toward_zero() raises:
+    """SQL truncates toward zero where Mojo's `//` floors.
+
+    The two agree on every operand pair whose signs match; they differ by one
+    exactly when the signs differ and the division is inexact.
+    """
+    var a = array([-1, -9, 7, -7], int32)
+    var b = array([3, 3, -2, -2], int32)
+    var result = FloordivKernel.apply[Int32Type](a, b)
+    assert_true(result == array([0, -3, -3, 3], int32))
+
+
+def test_mod_sign_follows_dividend() raises:
+    """SQL's remainder takes the sign of the dividend, Mojo's of the divisor.
+
+    The companion to `test_floordiv_truncates_toward_zero`: one rounding rule,
+    two operators, so `a == (a // b) * b + a % b` still holds.
+    """
+    var a = array([-1, -9, 7, -7], int32)
+    var b = array([3, 3, -2, -2], int32)
+    var result = ModKernel.apply[Int32Type](a, b)
+    assert_true(result == array([-1, 0, 1, -1], int32))
+
+
+def test_floordiv_and_mod_on_floats_keep_pythons_floor() raises:
+    """The toward-zero correction is integers-only, and this pins that.
+
+    Neither convention is SQL's here: DuckDB's `//` on DOUBLE is plain
+    division, so `-7.5 // 2.0` is -3.75 there (measured 2026-09-04) against
+    Python's -4.0 and C's -3.0. Truncating would trade one divergence for
+    another while breaking what `//` means, so floats keep the floor and the
+    identity `a == (a // b) * b + a % b` with them.
+    """
+    var a = array([-7.5, 7.5], float64)
+    var b = array([2.0, -2.0], float64)
+    var q = FloordivKernel.apply[Float64Type](a, b)
+    assert_equal(q[0].value(), Float64(-4.0))
+    assert_equal(q[1].value(), Float64(-4.0))
+    var r = ModKernel.apply[Float64Type](a, b)
+    assert_equal(r[0].value(), Float64(0.5))
+    assert_equal(r[1].value(), Float64(-0.5))
+
+
+def test_floordiv_and_mod_by_zero_divide_by_one_instead() raises:
+    """The kernels do **not** null a zero divisor, and that is deliberate.
+
+    A SIMD lane can neither raise nor produce a null, so `core` substitutes 1
+    and answers with a value. SQL's NULL is an expression-layer semantic —
+    `pyarrow.compute`, whose names these mirror, does not null either — and
+    both lanes apply it themselves: see `DivisionBinary` and
+    `RuntimeValue._null_zeros`, and the cases in
+    `expr/comptime/tests/test_arithmetic.mojo`.
+
+    Pinned here so the substitution is a documented answer rather than an
+    accident nobody notices when it changes.
+    """
+    var a = array([10, 10], int32)
+    var b = array([0, 5], int32)
+    var q = FloordivKernel.apply[Int32Type](a, b)
+    assert_true(q.is_valid(0))
+    assert_equal(q[0].value(), 10)  # 10 // 1
+    assert_equal(q[1].value(), 2)
+    var r = ModKernel.apply[Int32Type](a, b)
+    assert_equal(r[0].value(), 0)  # 10 % 1
+    assert_equal(r[1].value(), 0)
+
+
+def test_floordiv_null_divisor_stays_null() raises:
+    """A *null* divisor propagates like any other operand null — the ordinary
+    rule, and the one thing about `//`'s validity the kernel does decide.
+
+    The row beside it is the contrast: a *zero* divisor is not null here, and
+    the two are only made to agree one layer up, where `RuntimeValue.
+    _null_zeros` turns the zero into a null and lets this same rule carry it.
+    """
+    var a = array([10, 10, 10], int32)
+    var b = Int32Builder(3)
+    b.append(0)
+    b.append_null()
+    b.append(4)
+    var result = FloordivKernel.apply[Int32Type](a, b.finish())
+    assert_true(result.is_valid(0))
+    assert_equal(result[0].value(), 10)
+    assert_false(result.is_valid(1))
+    assert_equal(result[2].value(), 2)
+
+
 # ---------------------------------------------------------------------------
 # minimum / maximum
 # ---------------------------------------------------------------------------

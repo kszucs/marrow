@@ -22,7 +22,7 @@ all of them.
 
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
-| 1 | **Float `/` by zero answers the dividend** — `10.0 / 0.0` is `10.0`, not NULL, not `inf` | `//` and `%` mask the zero-divisor rows and `/` does not, so the three operators disagree about the same divisor. Open deliberately: it is a choice about float division, and whichever answer is picked should be pinned by a case | **S** | — |
+| 1 | **Division by zero answers the dividend** — `10.0 / 0.0` is `10.0`, where IEEE 754 and DuckDB both say `inf` | Not a judgement call: `/` by zero has a value and integer `//`/`%` by zero do not, which is why the reference nulls one and not the other. The fix is deleting the substitute-1 hack, not adding a validity mask | **S** | — |
 | 2 | **CI is dark** — no run since 2026-05-11, `test.yml` calls a deleted task, `binary_size` not wired in at all | Everything below is unverifiable in CI. A +55% size regression once survived ten commits for exactly this reason | **S** | — |
 | 3 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
 | 4 | **Error taxonomy** — 269 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 269 sites. Already a retrofit | **M** | — |
@@ -47,18 +47,35 @@ Ordered by value. Nothing below is started.
 
 ### 1.1 Correctness — known-wrong answers
 
-**Float `/` by zero answers the dividend.** `DivKernel.core` is `a / b` with a
-zero `b` replaced by 1, so `10.0 / 0.0` is `10.0` — not `inf`, not NULL, but
-the numerator. SQL says NULL. This is the last survivor of the family fixed on
-2026-09-04: `//` and `%` now mask the zero-divisor rows out, and `/` does not,
-so the three operators disagree with each other about the same divisor.
+**Division by zero answers the dividend.** `DivKernel.core` is `a / b` with a
+zero `b` replaced by 1, so `10.0 / 0.0` is `10.0` — the numerator, which is
+wrong under every convention.
 
-Nothing pins it — no golden case asks, and the covered-arithmetic section of
-`golden/COVERAGE.md` never named `/ 0`. The fix is mechanical on the erased
-side (`DivKernel.extra_validity` returning `Self.nonzero_validity(right)`,
-which already exists) and needs one more node on the fused side: `Div` is a
-`FloatBinary`, which has no third `Bound` slot, so it needs the treatment
-`DivisionBinary` gave `//` and `%`.
+The reference answers, measured against DuckDB 1.5.5 on 2026-09-04 rather than
+assumed:
+
+| expression | reference | marrow |
+|---|---|---|
+| `10.0 / 0.0` | `inf` | `10.0` |
+| `-10.0 / 0.0` | `-inf` | `-10.0` |
+| `0.0 / 0.0` | `nan` | `0.0` |
+| `10 / 0` | `inf` (`/` returns double) | — |
+| `10.0 // 0.0`, `10 // 0` | NULL | — |
+| `10.0 % 0.0`, `10 % 0` | NULL | — |
+
+**So `/` and `//`/`%` want different answers, and an earlier version of this
+entry had it wrong** — it said "SQL says NULL" for `/` and pointed the fix at
+the validity-mask treatment `//` and `%` get. `/` by zero has a value in the
+reals' completion and integer division by zero does not, which is why IEEE 754
+and DuckDB both give `inf` here and NULL there. Postgres raises, and is the
+outlier.
+
+That makes the fix a **deletion**, not an addition: stop substituting 1 for a
+zero divisor in the floating case and IEEE semantics fall out of the hardware.
+No validity mask, no extra pass over the divisor, and nothing needed from the
+fused lane — which is why this is `S` and the `//`/`%` work was `M`. Nothing
+pins it: no golden case asks, and the covered-arithmetic section of
+`golden/COVERAGE.md` never named `/ 0`.
 
 **SQL's null on a zero divisor costs 13-16% on `//` and `%`.** Measured
 2026-09-04 on `bench_{floordiv,mod}_int32_{10k,100k,1m}`, drift-corrected

@@ -21,7 +21,16 @@ from ...builders import (
     Int32Builder,
     Int64Builder,
 )
-from ...dtypes import PrimitiveType, int32, int64, Int32Type, Int64Type
+from ...arrays import Float64Array
+from ...builders import Float64Builder
+from ...dtypes import (
+    PrimitiveType,
+    float64,
+    int32,
+    int64,
+    Int32Type,
+    Int64Type,
+)
 from ...kernels.hashing import (
     AHashKernel,
     HashKernel,
@@ -43,6 +52,15 @@ def _make_int32(n: Int) raises -> Int32Array:
     var b = Int32Builder(capacity=n)
     for i in range(n):
         b.append(Scalar[int32.native](i))
+    return b.finish()
+
+
+def _make_float64(n: Int) raises -> Float64Array:
+    """Distinct floats with a fractional part, so the hash has to look below
+    the decimal point — the whole question the float arm answers."""
+    var b = Float64Builder(capacity=n)
+    for i in range(n):
+        b.append(Scalar[float64.native](Float64(i) * 0.25))
     return b.finish()
 
 
@@ -82,6 +100,44 @@ def bench_rapidhash_int64_100k(mut b: Benchmark) raises:
 
 def bench_rapidhash_int64_1m(mut b: Benchmark) raises:
     var keys = _make_int64(1_000_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(RapidHashKernel.apply(keys)))
+
+    b.iter(call)
+    keep(keys)
+
+
+# ---------------------------------------------------------------------------
+# float64 — the arm that canonicalises and bitcasts rather than converting
+# ---------------------------------------------------------------------------
+
+
+def bench_rapidhash_float64_10k(mut b: Benchmark) raises:
+    var keys = _make_float64(10_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(RapidHashKernel.apply(keys)))
+
+    b.iter(call)
+    keep(keys)
+
+
+def bench_rapidhash_float64_100k(mut b: Benchmark) raises:
+    var keys = _make_float64(100_000)
+
+    @always_inline
+    def call() raises {imm}:
+        keep(len(RapidHashKernel.apply(keys)))
+
+    b.iter(call)
+    keep(keys)
+
+
+def bench_rapidhash_float64_1m(mut b: Benchmark) raises:
+    var keys = _make_float64(1_000_000)
 
     @always_inline
     def call() raises {imm}:

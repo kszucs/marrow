@@ -165,8 +165,8 @@ from ...kernels.temporal import (
     WeekKernel,
     YearKernel,
 )
-from ...dtypes import DynType, bool_, float64, int64, string
-from ...scalars import BoolScalar, DynScalar
+from ...dtypes import DynType, NumericType, bool_, float64, int64, string
+from ...scalars import BoolScalar, DynScalar, PrimitiveScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, Value, merged
@@ -540,6 +540,37 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
         return K.dispatch(l^, cast_array(r^, to))
 
     @staticmethod
+    def _null_zeros(var divisor: DynArray) raises -> DynArray:
+        """`divisor` with its zeros marked null — SQL `NULLIF(divisor, 0)`.
+
+        A row divided by nothing and a row divided by zero have the same
+        answer in SQL, so this says the second in terms of the first and lets
+        the validity intersection `apply` already performs carry it. Both
+        conventions agree: polars and DuckDB null integer `//` and `%` by zero
+        exactly as they null a missing divisor (measured 2026-09-05).
+
+        It is `nullif` and a broadcast zero rather than a hand-written mask.
+        That version existed and was wrong: it rebuilt the array with a bitmap
+        indexed from 0 while keeping the column's `offset`, so a *sliced*
+        divisor got its nulls at the wrong rows. `nullif` already answers the
+        question this needs — nulled where equal, `a`'s own nulls kept — and
+        `DynScalar.repeat` is the same broadcast a literal operand takes.
+
+        `DivisionBinary` reaches the same result the other way, from the lane,
+        because a fused node has no array to hand to a kernel.
+        """
+        var n = divisor.length()
+
+        def zeros[T: NumericType](d: T) raises {imm} -> DynArray:
+            return (
+                PrimitiveScalar[T](Optional(Scalar[T.native](0)), d.copy())
+                .repeat(n)
+                .to_dyn()
+            )
+
+        return nullif_kernel(divisor, divisor.dtype().dispatch_numeric(zeros))
+
+    @staticmethod
     def _arith[
         K: BinaryKernel
     ](var l: DynArray, var r: DynArray) raises -> DynArray:
@@ -741,10 +772,15 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
             return Self._arith[SubKernel](l^, r^)
         if self._tag == "mul":
             return Self._arith[MulKernel](l^, r^)
+        # `//` and `%` are undefined on a zero divisor and SQL spells that
+        # NULL. The kernels cannot: a SIMD lane can neither raise nor produce
+        # a null, so it divides by a substituted 1. Nulling the *divisor*
+        # first is what makes the answer fall out of the null-in-null-out rule
+        # `apply` already applies, instead of a second masking path.
         if self._tag == "floordiv":
-            return Self._arith[FloordivKernel](l^, r^)
+            return Self._arith[FloordivKernel](l^, Self._null_zeros(r^))
         if self._tag == "mod":
-            return Self._arith[ModKernel](l^, r^)
+            return Self._arith[ModKernel](l^, Self._null_zeros(r^))
         if self._tag == "truediv":
             return Self._float_binary[DivKernel](l^, r^)
         if self._tag == "pow":

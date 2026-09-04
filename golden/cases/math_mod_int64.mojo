@@ -5,17 +5,14 @@ def plan() raises -> DynRelation:
     """
     SELECT ((n % 3) + 3) % 3 AS m FROM floats
 
-    A recorded divergence, and the twin is written to ask DuckDB marrow's
-    question. marrow's arithmetic operators are **Python's**, coherently: `/`
-    is true division returning a float, `//` floors, and `%` takes the sign of
-    the divisor, so `-1 % 3` is 2 and `a == (a // b) * b + a % b` holds. SQL,
-    PyArrow and arrow-rs instead truncate toward zero and answer -1, and
-    PyArrow's `divide` on integers returns 0 where marrow's `/` returns
-    -0.333.
+    Floored modulo spelled in SQL, and a three-level nested expression whose
+    intermediate value is negative — the shape a single `%` cannot ask.
 
-    So a bare `n % 3` twin would assert SQL's convention and report marrow's
-    deliberate one as a defect. `((n % 3) + 3) % 3` is floored modulo spelled
-    in SQL, valid because the divisor is positive.
+    It used to be here for the opposite reason: marrow's `%` was Python's, so
+    a bare `n % 3` twin would have asserted SQL's convention against marrow's
+    deliberate one. That divergence is gone — `%` takes the dividend's sign
+    now, and `math_modulo_sign_follows_dividend` asks the bare form directly —
+    so both sides of this case spell the same expression.
 
     -- expected
     m:int64
@@ -29,4 +26,7 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("floats")
-    return t.project(["m"], [col("n", int64) % lit(3, int64)])
+    var n = col("n", int64)
+    return t.project(
+        ["m"], [((n % lit(3, int64)) + lit(3, int64)) % lit(3, int64)]
+    )

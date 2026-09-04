@@ -916,6 +916,10 @@ Two project-specific traps, neither of which produces a diagnostic:
 
 - **The constraint solver will not evaluate a non-builtin function in a `where`
   clause**, ruling out pack-based schema surfaces that dispatch on column type.
+  Confirmed 2026-09-04 on a second shape: `where T.native.is_floating_point()`
+  overloads parse, then every *call site* reports "ambiguous call ... cannot
+  prove constraint". A comptime function *reference* also cannot name an
+  overload set. Use `comptime if` inside one method.
 
 - **A `VariadicPack` captured by one function's `*args` cannot be forwarded to
   another function's variadic parameter.** Take the pre-built collection instead.

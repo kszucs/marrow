@@ -44,6 +44,16 @@ def _ints() raises -> RecordBatch:
     )
 
 
+def _division() raises -> RecordBatch:
+    """Operands where floored and truncated division disagree: negative
+    dividends that do not divide exactly, a negative divisor, and a null."""
+    var n: List[Optional[Int]] = [-1, -9, 7, -7, None]
+    var d: List[Optional[Int]] = [3, 3, -2, -2, 3]
+    return record_batch(
+        [array(n, int64).to_dyn(), array(d, int64).to_dyn()], names=["n", "d"]
+    )
+
+
 def _floats() raises -> RecordBatch:
     var x: List[Optional[Float64]] = [-1.5, 2.25, 9.0, None]
     var y: List[Optional[Float64]] = [2.0, 4.0, 1.0, 2.0]
@@ -141,8 +151,8 @@ def test_true_division_of_integers_is_not_integer_division() raises:
     """`-9 / 3` is -3.0 and `4 / 3` is 1.333…, not 1.
 
     This is the divergence from PyArrow worth stating: `pc.divide` on two
-    integer arrays returns an integer. marrow follows Python so that `/`, `//`
-    and `%` agree with each other — `a == (a // b) * b + a % b`.
+    integer arrays returns an integer. marrow widens instead, so `/` never
+    silently truncates and the two integer operators keep that job.
     """
     var b = _ints()
     var got = _as_f64(col("n", int64) / col("d", int64), b)
@@ -151,22 +161,56 @@ def test_true_division_of_integers_is_not_integer_division() raises:
     assert_true(got.is_null(3))
 
 
-def test_floordiv_and_mod_take_the_sign_of_the_divisor() raises:
-    """`-9 // 3` is -3 and `-9 % 3` is 0; the interesting row is 4, where
-    floored and truncated division still agree. The identity
-    `a == (a // b) * b + a % b` is what these two are for, and it holds only
-    under one convention — SQL and arrow-rs pick the other."""
-    var b = _ints()
-    var quotients: List[Optional[Int]] = [-3, 0, 1, None]
+def test_floordiv_truncates_and_mod_follows_the_dividend() raises:
+    """SQL's convention, which is not Mojo's: `//` truncates toward zero and
+    `%` takes the sign of the **dividend**, so `-1 // 3` is 0 and `-1 % 3` is
+    -1. The identity `a == (a // b) * b + a % b` holds under both, which is why
+    the discriminating row has to be a negative dividend that does not divide
+    exactly — `_ints`'s -9 agrees under either rule."""
+    var b = _division()
+    var quotients: List[Optional[Int]] = [0, -3, -3, 3, None]
     assert_true(
         _as_i64(col("n", int64) // col("d", int64), b)
         == array(quotients, int64)
     )
-    var remainders: List[Optional[Int]] = [0, 0, 1, None]
+    var remainders: List[Optional[Int]] = [-1, 0, 1, -1, None]
     assert_true(
         _as_i64(col("n", int64) % col("d", int64), b)
         == array(remainders, int64)
     )
+
+
+def test_division_by_zero_is_null() raises:
+    """A zero divisor answers NULL, as SQL does — the one arithmetic null that
+    is decided by a *value* rather than by an operand's validity, and the
+    reason `//` and `%` are their own node."""
+    var b = _division()
+    var quotient = _as_i64(col("n", int64) // lit(0, int64), b)
+    assert_equal(quotient.null_count(), len(quotient))
+    var remainder = _as_i64(col("n", int64) % lit(0, int64), b)
+    assert_equal(remainder.null_count(), len(remainder))
+
+
+def test_division_by_zero_is_null_inside_a_fused_parent() raises:
+    """The null survives a parent node.
+
+    A node that decided its nulls during `evaluate` would answer correctly on
+    its own and lose them here, where the parent asks it for a bitmap through
+    `validity` and never runs its `evaluate` at all.
+    """
+    var mixed: List[Optional[Int]] = [3, 3, 3, 0, 3]
+    var batch = record_batch(
+        [
+            array([10, 10, 10, 10, 10], int64).to_dyn(),
+            array(mixed, int64).to_dyn(),
+        ],
+        names=["n", "d"],
+    )
+    var got = _as_i64(
+        (col("n", int64) // col("d", int64)) + lit(1, int64), batch
+    )
+    var expected: List[Optional[Int]] = [4, 4, 4, None, 4]
+    assert_true(got == array(expected, int64))
 
 
 def test_pow_and_the_float_unaries_answer_float64() raises:

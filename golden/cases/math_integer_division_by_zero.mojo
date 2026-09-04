@@ -5,17 +5,16 @@ def plan() raises -> DynRelation:
     """
     SELECT 10 // n AS q, 10 % n AS r FROM floats WHERE n >= 0
 
-    Division and modulo by zero. `FloordivKernel` and `ModKernel` both replace
-    a zero divisor with 1 — a lane cannot raise and cannot produce a null from
-    inside a SIMD loop — so marrow answers with the dividend and with zero
-    where SQL answers null.
+    Division and modulo by zero. A SIMD lane can neither raise nor produce a
+    null, so `FloordivKernel` and `ModKernel` still compute against a
+    substituted divisor of 1 — and the row is masked out afterwards, by
+    `BinaryKernel.domain` in the erased path and by `DivisionBinary`'s `Bound` in
+    the fused one. Both answer NULL, as SQL does.
 
     The predicate keeps only the non-negative divisors so that this case asks
-    *only* about zero: with negatives in the column the rounding divergence
-    (`math_floordiv_truncates_toward_zero`) would be mixed in and the failure
-    would no longer identify which rule is wrong.
-
-    -- xfail marrow substitutes 1 for a zero divisor, so 10 // 0 is 10 and 10 % 0 is 0; SQL says NULL for both
+    *only* about zero: with negatives in the column the rounding rule
+    (`math_floordiv_truncates_toward_zero`) would be mixed in and a failure
+    would no longer identify which one is wrong.
 
     -- expected
     q:int64	r:int64

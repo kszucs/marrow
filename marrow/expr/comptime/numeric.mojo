@@ -142,39 +142,134 @@ struct NumericBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
 comptime Add = NumericBinary[AddKernel, _, _]
 comptime Sub = NumericBinary[SubKernel, _, _]
 comptime Mul = NumericBinary[MulKernel, _, _]
-comptime Mod = NumericBinary[ModKernel, _, _]
-comptime Floordiv = NumericBinary[FloordivKernel, _, _]
-"""`%` and `//` — **Python's**, not SQL's, and coherently so.
-
-`ModKernel` takes the sign of the divisor, so `-1 % 3` is 2 and
-`a == (a // b) * b + a % b` holds. SQL, PyArrow and arrow-rs all truncate
-toward zero and answer -1. That divergence is deliberate and recorded in
-`golden/cases/math_mod_int64.mojo`, whose SQL twin spells floored modulo as
-`((n % 3) + 3) % 3` rather than asserting SQL's convention against marrow's.
-"""
 
 comptime Minimum = NumericBinary[MinKernel, _, _]
 comptime Maximum = NumericBinary[MaxKernel, _, _]
-"""The row-wise extrema, spelled as NumPy spells them.
+"""The row-wise extrema, spelled as NumPy spells them: `np.minimum(a, b)` is
+element-wise, `np.min(a)` reduces — and `min` is taken here by the aggregate
+`col("a", int64).min()`.
 
-`NumericBinary` and not a family of their own because they follow exactly its
-rules: the wider operand wins, and a null on either side makes the row null.
+Not `least`/`greatest`, because SQL's skip nulls (`LEAST(NULL, 3)` is 3) and
+so does PyArrow's `pc.min_element_wise`. These propagate, like every other
+`BinaryNumericKernel`, so the SQL names stay free for the skipping verbs that
+`golden/cases/math_greatest_and_least.mojo` pins.
+"""
 
-**Why `minimum` and not `min`.** `min` is taken: `col("a", int64).min()` is
-the aggregate that folds a whole column. NumPy draws exactly this line —
-`np.minimum(a, b)` is the element-wise binary, `np.min(a)` the reduction — so
-the name is borrowed rather than invented.
 
-**Why not `least` / `greatest`.** That is SQL's spelling, and SQL *skips*
-nulls: `LEAST(NULL, 3)` is 3, not NULL. So does PyArrow's
-`pc.min_element_wise`, whose `ElementWiseAggregateOptions` defaults
-`skip_nulls=True`. `MinKernel` intersects validity like every other
-`BinaryNumericKernel`
-(`kernels/tests/test_arithmetic.mojo::test_min_with_nulls`), so these are the
-propagating form and only that — and the NumPy parallel holds there too, where
-`minimum` propagates NaN and `fmin` skips it. `least` / `greatest` stay free
-for the skipping verbs; `golden/cases/math_greatest_and_least.mojo` pins those
-semantics and stays skipped until a kernel provides them.
+# ---------------------------------------------------------------------------
+# DivisionBinary — `//` and `%`, whose divisor decides a null
+# ---------------------------------------------------------------------------
+struct DivisionBinary[K: BinaryNumericKernel, L: NumericValue, R: NumericValue](
+    NumericValue, Unnamed
+):
+    """`//` and `%`: `NumericBinary` plus SQL's NULL on a zero divisor.
+
+    Its own node rather than a flag on `NumericBinary` because the difference
+    is in the `Bound`: this one carries a third slot, the bits whose divisor is
+    non-zero, and a flag would make every `Add` and `Mul` in the tree carry it
+    too.
+
+    **It still fuses.** `lane` is `NumericBinary`'s — both operands inline into
+    the one loop — and the only extra work is a pass over the divisor at bind
+    time. That is what a breaker like `ConditionalBinary` gives up: it
+    materialises both operands because its *values* come from a kernel, while
+    here only the *validity* does.
+    """
+
+    comptime Type = promote[Self.L.Type, Self.R.Type]
+
+    comptime shape = Shape.columnar
+    """Columnar regardless of the operands, as `ConditionalBinary` is.
+
+    `widest_shape` would answer `scalar` for `lit(10, int64) // lit(0, int64)`,
+    and the scalar path of `evaluate` builds a `PrimitiveScalar` that is always
+    valid — so the one expression whose whole point is the null would be the
+    one that could not express it.
+    """
+
+    comptime Bound = Tuple[
+        Self.L.Bound, Self.R.Bound, Optional[Bitmap[mut=False]]
+    ]
+    """The operands' bounds, plus the rows where the divisor is non-zero.
+
+    `None` in the third slot when none is zero, which is the common case and
+    the same answer `Bitmap.where_ne` gives the erased path: a validity bitmap
+    means "these rows *can* be null", so an all-set one would spend a bit per
+    row saying nothing."""
+
+    var l: Self.L
+    var r: Self.R
+
+    def __init__(out self, var l: Self.L, var r: Self.R):
+        self.l = l^
+        self.r = r^
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return merged(self.l.columns(), self.r.columns())
+
+    # -- ComptimeValue ------------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        """Bind both operands, and mark the rows whose divisor is non-zero.
+
+        One pass, and the bitmap is thrown away when nothing was zero — which
+        is the common case, and why the third slot is an `Optional` rather
+        than a bitmap that is all-ones most of the time. Scanning first to
+        find out whether to allocate would read the divisor twice to save a
+        bit per row.
+
+        The divisor is read in its own type, before the promotion `lane`
+        applies: promotion only ever widens, and no widening turns a zero into
+        anything else.
+        """
+        var lb = self.l.bind(batch, bindings)
+        var rb = self.r.bind(batch, bindings)
+        var length = len(batch)
+
+        var mask = Bitmap.alloc_zeroed(length)
+        var any_zero = False
+        for i in range(length):
+            if self.r.lane[1](rb, i)[0] == 0:
+                any_zero = True
+            else:
+                mask.unsafe_set(i)
+        if not any_zero:
+            return (lb^, rb^, None)
+        return (lb^, rb^, Optional(mask^.to_immutable()))
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        """Null where either operand is null **or** the divisor is zero."""
+        return Bitmap.intersect(
+            Bitmap.intersect(
+                self.l.validity(bound[0]), self.r.validity(bound[1])
+            ),
+            bound[2].copy(),
+        )
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return Self.K.core[Self.Type.native, W](
+            self.l.lane[W](bound[0], idx).cast[Self.Type.native](),
+            self.r.lane[W](bound[1], idx).cast[Self.Type.native](),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")
+
+
+comptime Mod = DivisionBinary[ModKernel, _, _]
+comptime Floordiv = DivisionBinary[FloordivKernel, _, _]
+"""`//` and `%` — SQL's, as of the fix to the three golden xfails.
+
+`//` truncates toward zero and `%` takes the sign of the **dividend**, so
+`-1 // 3` is 0 and `-1 % 3` is -1, and `a == (a // b) * b + a % b` still holds.
+A zero divisor is NULL rather than a number. Mojo's own operators are Python's
+on all three counts; the kernels correct for it in `core`, and this node
+supplies the validity a SIMD lane cannot.
 """
 
 

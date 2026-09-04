@@ -197,9 +197,30 @@ struct BufferView[
 
     @always_inline
     def __contains__(self, value: Scalar[Self.T]) -> Bool:
-        for i in range(self._length):
+        """Whether `value` appears anywhere in this view.
+
+        Vectorised, and the width is clamped: `simd_width_of` answers 0 for a
+        type wider than a register, which would leave the stride never
+        advancing — the shape that once hid a broken gather width in
+        `filter`/`take`.
+
+        The reduction is **per chunk** rather than into an accumulator
+        collapsed at the end. That is the opposite of the usual advice and it
+        is what measured faster here: ARM collapses a vector in one
+        instruction, while an accumulator sized to `T` spends the loop in
+        partial registers. Measured through `FloordivKernel`, where the
+        scalar version of this loop cost +45%.
+        """
+        comptime width = max(simd_width_of[Self.T](), 1)
+        var i = 0
+        while i + width <= self._length:
+            if self.load[width](i).eq(value).reduce_or():
+                return True
+            i += width
+        while i < self._length:
             if self._data[unsafe_offset=i] == value:
                 return True
+            i += 1
         return False
 
     @always_inline
