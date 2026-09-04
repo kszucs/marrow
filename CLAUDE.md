@@ -17,12 +17,15 @@ upgrade, https://docs.modular.com/mojo/changelog/.
 
 Dependencies (pinned in `pixi.toml`):
 
-- `mojo >=1.1.0.dev2026082305,<2` and `max ==26.6.0.dev2026082305` — MAX is
+- `mojo >=1.1.0.dev2026090305,<2` and `max ==26.6.0.dev2026090305` — MAX is
   pinned to the matching version line, and is **load-bearing**: GPU codegen
-  resolves `max.package_root`, *and* `DeviceContext`/`DeviceBuffer`/
-  `HostBuffer` live in the `max.gpu.host` Mojo package while
-  `sync_parallelize`/`elementwise`/`_reduce_generator` live in
-  `max.algorithm.*`. `get_gpu_target` and `vectorize` stayed in `std`.
+  resolves `max.package_root`, *and* **the whole `std.gpu` package went private
+  as `std._gpu` in the `dev2026090305` nightly** — `max.gpu` now mirrors it and
+  is the only public source. So `DeviceContext`/`DeviceBuffer`/`HostBuffer`
+  *and* `get_gpu_target` all come from `max.gpu.host`, and
+  `sync_parallelize`/`elementwise`/`_reduce_generator` from `max.algorithm.*`.
+  `vectorize` stayed in `std`. A failed `std.gpu` import carries a note
+  pointing at the new home.
 - `python >=3.14,<3.15` — Mojo nightlies are built against one CPython minor;
   bump it together with `mojo`.
 - `pyarrow >=23.0.1,<24` (dev/test only) — the PyPI wheel, not conda-forge; see

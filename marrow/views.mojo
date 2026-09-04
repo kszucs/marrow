@@ -31,7 +31,7 @@ from max.algorithm.reduction import _reduce_generator
 from std.math import ceildiv
 from std.utils.index import IndexList
 from std.utils.coord import Coord
-from std.gpu.host import get_gpu_target
+from max.gpu.host import get_gpu_target
 
 from .buffers import Buffer, Bitmap
 from .execution import ExecContext
