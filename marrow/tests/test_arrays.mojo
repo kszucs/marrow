@@ -2056,8 +2056,8 @@ def test_temporal_array_dtype_mismatch() raises:
     #
     # Dtype inequality is what this case is really about -- two temporal arrays
     # over the same logical values whose *types* differ -- and it is the part
-    # `DynArray.__eq__` would have checked first anyway. See
-    # `docs/alpha-findings/o2-cast-utf8.md` and CLAUDE.md's Mojo Gotchas.
+    # `DynArray.__eq__` would have checked first anyway. See CLAUDE.md's
+    # Mojo Gotchas.
     assert_false(arr_date32.type() == arr_date64.type())
     assert_true(arr_date32.type() == date32().to_dyn())
     assert_true(arr_date64.type() == date64().to_dyn())

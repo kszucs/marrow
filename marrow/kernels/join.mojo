@@ -26,12 +26,9 @@ algorithm, so a new one is a new struct, not a conformance:
   RadixHashJoin   — partitioned hash join (SwissHashTable + RadixPartitioner)
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)
 
-Profiling notes and the queued optimizations live in `docs/backlog.md`.
-
-See ``docs/backlog.md`` for the constraints this sits under, and
-``docs/backlog.md`` §8 for the designs this replaced — the original spec's
-``JoinHashTable`` with an intrusive ``_chain_next`` list was superseded by
-``SwissHashTable`` plus a CSR ``_offsets``/``_rows`` index.
+The original spec's ``JoinHashTable``, with an intrusive ``_chain_next``
+list, was superseded by ``SwissHashTable`` plus a CSR
+``_offsets``/``_rows`` index.
 """
 
 

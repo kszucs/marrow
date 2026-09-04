@@ -1,7 +1,7 @@
 """How much of a Parquet file each index kind could prune, per query predicate.
 
-Produces the table in `docs/superpowers/specs/2026-08-27-index-and-pruning-plan.md`
-§0, and exists because that table corrects an earlier one that did not
+Produces the prunability table, and exists because it corrects an earlier
+one that did not
 distinguish the two things this script prints side by side:
 
 - **real** — the file's own row groups. This is what any reader can prune today.

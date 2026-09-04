@@ -778,8 +778,7 @@ def test_runtime_minimum_and_maximum_pick_per_row() raises:
     `DynArray.__eq__` compares whole buffers, and a binary kernel computes
     every lane before masking, so the byte under `a`'s null holds `max(0, 30)`
     where a builder writes 0. Erased `==` fails on the max and *passes* on the
-    min purely because `min(0, 30)` happens to be 0 — the trap
-    `docs/backlog.md` §1.9 records, caught here.
+    min purely because `min(0, 30)` happens to be 0 — caught here.
     """
     var smaller = _ints(minimum(column("a"), column("b"))).as_int64().copy()
     assert_true(smaller == array([1, 2, None, 4], int64))

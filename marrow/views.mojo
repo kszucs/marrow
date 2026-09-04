@@ -715,8 +715,7 @@ struct BitmapView[
         - A FOREIGN buffer imported over the C Data Interface carries no
           padding guarantee at all: the spec makes alignment "recommended, but
           not required" and says nothing about padding. This bound is therefore
-          optimistic for imported data; see
-          docs/alpha-findings/g1-buffer-invariants.md.
+          optimistic for imported data.
         """
         debug_assert(
             0 <= byte_index
@@ -901,8 +900,7 @@ struct BitmapView[
         # `max(..., 0)` covers a view spanning fewer than 4 bytes, where there
         # is nothing to slide back to. A marrow-owned allocation is at least 64
         # bytes, so the load stays inside it; an imported FOREIGN buffer that
-        # small carries no such guarantee, and never did — see
-        # docs/alpha-findings/g1-buffer-invariants.md.
+        # small carries no such guarantee, and never did.
         var base = min(
             abs_pos >> 3, max(self._byte_extent() - size_of[UInt32](), 0)
         )
@@ -1017,8 +1015,7 @@ struct BitmapView[
 
         comptime if W % 8 == 0:
             # The whole-byte path is byte-addressed and, unlike the sub-byte
-            # path below, does *not* apply `_offset` — see the audit note in
-            # docs/alpha-findings/g1-buffer-invariants.md.
+            # path below, does *not* apply `_offset`.
             debug_assert(
                 self._offset == 0,
                 (

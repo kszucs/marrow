@@ -66,9 +66,8 @@ correctness-neutral by construction: delete every line of this module and
 obvious second field** -- and, at a measured 3.6x against pruning's 1.04x, the
 more valuable of the two. It is a field on this plain struct, not a slot on a
 box; it is left to its own change so the two measurements stay readable. The
-design and its one invariant (`needed` may only be *established* by a node that
-also replaces the schema, and only ever *widened* by pass-through nodes) are in
-`docs/backlog.md`.
+design has one invariant: `needed` may only be *established* by a node that
+also replaces the schema, and only ever *widened* by pass-through nodes.
 
 Also absent: conjunction splitting, to push half a predicate below a `Join`.
 `prune()` already handles a whole conjunction compositionally, so the only

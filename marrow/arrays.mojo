@@ -2663,8 +2663,7 @@ struct DynArray(
         naming this line and nothing else. Every array type shares this
         accessor, so that message identifies neither the type held nor the type
         asked for; from a `sync_parallelize` worker it also prints once per
-        thread. Diagnosing one costs an afternoon (see
-        `docs/alpha-findings/c1-binary-groupby.md`).
+        thread. Diagnosing one costs an afternoon.
 
         So: **only call this where the type has actually been proven** — inside
         a `dispatch_*` arm, or off a `comptime` type the caller owns. Deriving

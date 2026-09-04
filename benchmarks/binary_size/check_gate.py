@@ -23,7 +23,7 @@ a blanket "every number is stale" warning that outlived the re-record by a day
 and was then cited as evidence that the gate was meaningless.
 
 `threshold_pct` is 0.5, tighter than the 1% often used as a rule of thumb,
-because the regression that motivated this gate (B12, `docs/backlog.md`)
+because the regression that motivated this gate
 added 8,260 bytes to `query_streaming` -- 0.63% of its ~1.3M baseline -- and
 was caught only by a human re-running `pixi run binary_size` by hand. A 1%
 threshold would not have caught it. 0.5% still leaves well over an order of

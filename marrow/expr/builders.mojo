@@ -272,7 +272,7 @@ def is_in(var a: RuntimeValue, var value_set: DynArray) -> RuntimeValue:
 # `BinaryNumericKernel`, so this is the propagating form and only that, which
 # is what NumPy's name means as well: `minimum` propagates NaN where `fmin`
 # skips it. `least`/`greatest` stay free for the skipping verbs — see
-# `Minimum` and `docs/backlog.md`.
+# `Minimum`.
 
 
 def minimum[

@@ -459,8 +459,8 @@ struct Buffer[*, mut: Bool = False](
         an `int64` buffer of 8 elements is 64 bytes with nothing behind it. Any
         code that reads or writes past the logical end "because Arrow buffers
         are padded" is wrong, and one such write was a heap overflow that
-        corrupted tcmalloc's freelist (see `BufferView.compressed_store_dense`
-        and docs/alpha-findings/f1-distinct-segfault.md). The invariant this
+        corrupted tcmalloc's freelist (see `BufferView.compressed_store_dense`).
+        The invariant this
         upholds is *alignment of the size*, nothing more.
         """
         return math.align_up(length * size_of[T](), 64)
@@ -639,8 +639,7 @@ struct Buffer[*, mut: Bool = False](
         The C Data Interface spec makes even *alignment* "recommended, but not
         required" and says nothing at all about padding, so an imported buffer
         may end exactly at its logical last byte. Nothing may read or write
-        past `size` on a FOREIGN buffer on the strength of this rounding; see
-        docs/alpha-findings/g1-buffer-invariants.md.
+        past `size` on a FOREIGN buffer on the strength of this rounding.
 
         Precondition: `owner` must have been created with `Allocation.foreign(...)`.
         """
@@ -833,7 +832,7 @@ struct Buffer[*, mut: Bool = False](
         *allocated* element count, which `_aligned_size` rounds up to a 64-byte
         multiple, so it is looser than a logical row count by up to 63 bytes.
         Size a `view()` explicitly when the destination comes from a computed
-        count; see docs/alpha-findings/g1-buffer-invariants.md.
+        count.
         """
         self._check_bounds[T](index)
         comptime output = Scalar[T]

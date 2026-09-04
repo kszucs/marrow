@@ -46,8 +46,6 @@ at all.
 node types in one box makes every operator reachable from any plan; the
 trampoline design that avoided it could not let a rule read a node or build
 one, which left the rules scattered across the nodes themselves and unreadable.
-The trade is recorded in `docs/backlog.md`'s first architectural invariant,
-which this measurement amended.
 
 # What a rule may assume
 

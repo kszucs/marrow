@@ -29,8 +29,8 @@ lane never reaches it.
 
 **Do not replace the switch with a per-node function pointer.** That design
 existed, put a thin `fn` field in this self-referential struct, and the compiler
-miscompiled it. See `docs/backlog.md`; this docstring described that removed
-design, in the present tense, long after it was gone.
+miscompiled it. This docstring described that removed design, in the
+present tense, long after it was gone.
 """
 
 from std.memory import ArcPointer
@@ -1149,8 +1149,8 @@ def case_when(
     # appends into an unreserved list read back as `int64,null,int64,null,
     # int64`. Same reason `StructArray.__getitem__` pre-allocates
     # (`arrays.mojo:1930`), and it is necessary but *not* sufficient here --
-    # see `docs/backlog.md` on the separate temporary-lifetime miscompile that
-    # corrupts this function's arguments before it ever runs.
+    # a separate temporary-lifetime miscompile corrupts this function's
+    # arguments before it ever runs.
     var kids = List[RuntimeValue](
         capacity=len(conditions) + len(values) + (1 if else_ else 0)
     )
