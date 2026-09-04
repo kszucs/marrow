@@ -743,10 +743,11 @@ In addition:
   coverage.
 - **Conventional commits** (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`,
   `test:`), optional scope in parens: `feat(kernels): add concat`.
-- **`CHANGELOG.md` is a feature inventory, not a development log.** Nothing has
-  been released yet, so it carries `### Features`-style entries describing what
-  marrow *has*, grouped by area. Add an entry when a change gives a user
-  something new; refactors, fixes, tests and measurements do not belong there.
+- **There is no changelog.** The commit message is where a change is
+  described, and a release note will be generated from git history when there
+  is a release to make one for. Do not reintroduce `CHANGELOG.md`: it accreted
+  into a 6,000-line development log that described work already superseded, and
+  every entry was a second place to keep in sync with the code.
 
 ## Mojo Gotchas
 
