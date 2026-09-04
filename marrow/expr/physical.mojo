@@ -122,7 +122,7 @@ struct Datum(Copyable, Movable):
         conversion: a scalar does not know how many rows it is about to become,
         and only the caller holding the batch does.
 
-        **`n` binds the array case too** — backlog AG-2. It used to be read
+        **`n` binds the array case too.** It used to be read
         only on the scalar branch and ignored entirely on the array one, so a
         column of the wrong length passed straight through into
         `_struct_of(schema, cols, n)`, which trusts its `length` argument and

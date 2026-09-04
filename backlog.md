@@ -22,32 +22,22 @@ all of them.
 
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
-| 1 | ~~**Two wrong answers**: float `GROUP BY` keys collapse; integer `//`, `%` and `/0` follow Python, not SQL~~ — **done 2026-09-04** | The corpus now carries **no** `xfail`. Float keys hash their bit pattern; `//` and `%` follow SQL, and a zero divisor is NULL. Float `/` by zero is **not** fixed — see §1.1 | **S** | — |
+| 1 | **Float `/` by zero answers the dividend** — `10.0 / 0.0` is `10.0`, not NULL, not `inf` | `//` and `%` mask the zero-divisor rows and `/` does not, so the three operators disagree about the same divisor. Open deliberately: it is a choice about float division, and whichever answer is picked should be pinned by a case | **S** | — |
 | 2 | **CI is dark** — no run since 2026-05-11, `test.yml` calls a deleted task, `binary_size` not wired in at all | Everything below is unverifiable in CI. A +55% size regression once survived ten commits for exactly this reason | **S** | — |
 | 3 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
 | 4 | **Error taxonomy** — 269 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 269 sites. Already a retrofit | **M** | — |
 | 5 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 3 |
 | 6 | **Parallel group-by — landed 2026-09-01 and silently reverted the same day** | `f17045a9` took `groupby.mojo` 224 -> 517 lines with radix-partitioned placement. `bcbbd32e`, whose subject is *"delete StringArgs, one trait per string signature"*, put it back to 224 and deleted `test_groupby.mojo` (520 lines) and `bench_groupby.mojo` (157). 980 lines gone; nothing noticed, because the tests that would have caught it went in the same commit. `GROUP_RADIX`, `GROUP_THREAD_LOCAL` and `_choose_strategy` are zero grep hits today. Recover with `git show f17045a9:marrow/kernels/groupby.mojo` | **S** | — |
 | 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 8 | ~~**String and temporal surface**~~ — **done 2026-09-01**: 14 functions, `76257703` + `bcbbd32e` | Arguments are expressions, not constants, so `substr(s, col("from"), col("len"))` works and the family reaches the runtime lane. Every kernel states its real signature | **M** | — |
-| 9 | ~~**Cheap expression nodes over kernels that already exist**~~ — done 2026-08-31 | Nine kernels had no node. `is_in`, `array_contains`, `minimum`/`maximum` and six float unaries now reach both lanes; see §1.5 for what is left and why it is not cheap | **S** | — |
-| 10 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
-| 11 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 10, 12 |
-| 12 | **Statistics propagation and a cost model** | Feeds 11. Not urgent on its own — it is the last piece, after 10 | **L** | — |
-| 13 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
-| 14 | ~~**Window functions**~~ — **done**: `Window` node, `WindowOperator`, `kernels/window.mojo` | All seven golden cases pass. `NTILE`, `PERCENT_RANK`, `CUME_DIST` and `NTH_VALUE` landed 2026-09-03 (`287a11d0`) — 11 of SQL's 12. Remaining: bounded `RANGE`, `EXCLUDE`, `ROWS UNBOUNDED PRECEDING`, Python frontend | — |
-| 15 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 16 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 17 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
-| 18 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
-| 19 | ~~**AOT lane product**~~ — **done 2026-09-03**: `QueryCli`, `73d7c299` | Flags and arguments declared beside the plan, `--describe`, `-o`/`--format`, parameters bound at run time. Writers are comptime parameters of `run()`, so the source declares which formats its binary links | **M** | — |
-| 20 | **Seven files over 1,000 lines** | `logical.mojo` at 1,672. Seams identified; deliberately deferred so churn does not swamp behaviour review | **M** | — |
-
-**Not on this list, deliberately.** Limit pushdown into the scan — early
-termination already achieves it at row-group granularity. Merging stacked
-filters — the optimizer now deliberately *splits* them so each conjunct moves
-independently. A `Distinct`-specific operator — it is an `Aggregate` with no
-aggregates once the node exists.
+| 8 | **The string and temporal verbs cannot be reached from Python** | All 17 (`substr`, `lpad`, `replace`, `split_part`, `position`, `epoch`, `last_day`, `week`, …) exist in **both** lanes and evaluate: comptime methods, and runtime free functions in `runtime/values.mojo` with their tags handled in `evaluate`. What is missing is reach — they are not methods on `RuntimeValue`, `expr/__init__.mojo` re-exports only `RuntimeValue` and `RuntimeAggregate`, and **0 of 17** appear in `python/marrow/_expr.py`. The work is bindings and a re-export, not kernels or nodes | **S** | — |
+| 9 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
+| 10 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 9, 11 |
+| 11 | **Statistics propagation and a cost model** | Feeds 10. Not urgent on its own — it is the last piece, after 9 | **L** | — |
+| 12 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
+| 13 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 14 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 15 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
+| 16 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
 
 ---
 
@@ -127,7 +117,7 @@ The only user-visible item here, and now one guide rather than two.
 engine "pull-based" when `physical.mojo` is push/drain. This is on the
 rendered site.
 
-**`docs/guide/compile.qmd` came off this list on 2026-09-03** with item 19: it
+**`docs/guide/compile.qmd` came off this list on 2026-09-03** with the CLI work: it
 had documented `plan.execute_cli()`, deleted with the old CLI entry point, and
 the branch rewrote all 377 lines against the `QueryCli` that now exists.
 
@@ -172,7 +162,7 @@ Counted 2026-09-03, by prefix:
 | 1 | `DISTINCT ON` |
 
 **Fifteen came off between 2026-08-31 and 2026-09-03** — seven window cases
-(§14), `math_log_bases`, and the string and temporal surface of item 8, which
+(windows), `math_log_bases`, and the string and temporal surface, which
 landed `substr`, `replace`, `lpad`, `position`, `split_part`, `last_day` and
 `epoch`. `bool_and`/`bool_or` is still the odd one out among the aggregates:
 `AnyKernel`/`AllKernel` are `BoolReduceKernel`s rather than `FoldKernel`s and
@@ -191,30 +181,6 @@ and `nested_list_contains` needs `.contains` as a method on `ListValue`, where
 only the free `array_contains` exists. Re-checking a case by name is not enough
 to un-skip it; §1.12 records four that were claimed unblocked and were not.
 
-
-### 1.7 Structure
-
-**Seven files over 1,000 lines** (`expr/optimizer.mojo` joined at ~1,100, and
-is the one file that should stay whole — it exists so every rule is readable in
-one place), with seams identified: `kernels/aggregate.mojo`
-(1,573 — fold algebras | `AggState`, whose storage/driver/policy should split
-three ways | the `AggKernel` conformers), `expr/logical.mojo` (**1,672** — the value
-layer | `Relation`+`DynRelation`+the fluent verbs | the eight relation nodes),
-`kernels/cast.mojo` (1,246), `expr/physical.mojo` (1,281 — wire types |
-contract | `Pipeline` | the operators), `comptime/core.mojo` (1,212 — machinery
-| the family traits, ~85% fluent surface), `kernels/filter.mojo` (1,163 — two
-structs of ~520 lines each; split by layout, not by struct).
-
-Deliberately not done: the churn would swamp review of the behaviour changes it
-would ride alongside. `Groups` and the decimal casts were split out because
-they had hard internal boundaries.
-
-**`DynBounds`/`compare_dyn`/`PruneStats.dyn_bounds` stay in `pruning.mojo`.**
-Moving them to `runtime/` — their only consumer — means exposing
-`PruneStats._cols` or adding an accessor for one caller. `PruneStats` hosts
-three readings of itself; moving one and leaving two is arbitrary, and trading
-encapsulation for a file boundary is not a simplification.
-
 ### 1.8 Test and infrastructure gaps
 
 - **No cross-lane parity test.** "One engine, two drivers" was enforced by a
@@ -225,7 +191,6 @@ encapsulation for a file boundary is not a simplification.
 - **CI has not run since 2026-05-11.** `test.yml` calls a deleted task, the docs
   job cannot pass, and the binary-size gate is not in CI at all — which is how a
   +55% size regression once survived ten commits.
-
 
 ### 1.10 Python binding limits, measured 2026-08-30
 
@@ -295,7 +260,7 @@ feature".
 
 ---
 
-### 1.12 Found while landing items 6, 8, 9, 14 and 19 — 2026-09-03
+### 1.12 Found while landing the window, CLI and string/temporal work
 
 Five findings that were not on this list and are not covered by any row above.
 Ordered by what they cost.
@@ -309,7 +274,7 @@ integer-only ladder. A sorting binary went 4,510,744 -> 1,441,112 of `__text`,
 a 68% cut, and sorting now costs 12,440 bytes over a plan that does not sort.
 
 This is the third instance of the same shape — `kernels::cast` reachable from
-a plan that needs none — after the hashing fix (Q4.7) and `ParquetScan`. What
+a plan that needs none — after the hashing fix and `ParquetScan`. What
 let it survive is that **no gate program sorts**. Adding one is the actual
 task here; without it the next instance is equally invisible.
 
@@ -522,40 +487,6 @@ column when the demand is empty, because a `RecordBatch` carries its row count
 in its columns. The underlying desugaring (`lit(1, int64).count()` with empty
 `columns()`) is unchanged.
 
-#### 1.5 Window functions — **implemented**
-
-**What exists.** A `Window` node in `logical.mojo`, a blocking `WindowOperator`
-in `physical.mojo`, and `marrow/kernels/window.mojo`. All seven golden cases
-pass: `window_row_number`, `window_rank_and_dense_rank`, `window_lag_and_lead`,
-`window_partitioned_running_sum`, `window_explicit_rows_frame`,
-`window_first_and_last_value`, `window_qualify`.
-
-**`PARTITION BY` is a prefix of the sort key.** `PARTITION BY k ORDER BY v` is
-the ordering `[k, v]`, so one `SortIndices.multi` answers both questions and the
-kernel reads partition and peer boundaries off the result — no `HashGrouping`,
-no per-bucket gather, and no second null convention to keep consistent with
-`GROUP BY`'s. The prediction below that "marrow gets running sums for free once
-frames exist" held exactly: `WindowKind.aggregate` runs *any* aggregate through
-its own operator over a frame slice, so `SUM`, `MIN`, `AVG` and everything added
-later are window aggregates without a line each.
-
-**Still absent.** `RANGE` frames with explicit numeric bounds (only the default
-`UNBOUNDED PRECEDING TO CURRENT ROW` and explicit `ROWS` are implemented),
-`EXCLUDE`, `NTILE`/`PERCENT_RANK`/`CUME_DIST`/`NTH_VALUE`, and the Python
-frontend — the golden cases keep `-- skip python`. The framed aggregate builds
-**one operator per row**, which is the honest price of reusing the aggregate
-kernels rather than writing a running accumulator per aggregate per dtype; that
-is the thing to change when it shows up in a profile.
-
-Column pruning does not descend below a `Window` node — `ColumnPruning.apply`
-falls through to `return node.copy()`, which forgoes the optimization and is
-sound, not wrong.
-
-**What it would take.** A `Window` relation node, a blocking `WindowOperator`
-that partitions and sorts (both kernels exist), and a frame evaluator. The rank
-family and `lag`/`lead` need no new kernels. The golden cases already state the
-semantics, including the `last_value` default-frame trap.
-
 #### 1.6 String and temporal function coverage
 
 **What exists.** 20 string kernels (case, strip family, reverse, capitalize,
@@ -591,12 +522,14 @@ an entire query class.**
 
 #### 1.7 Known-wrong answers in core operations
 
-- ~~**`GROUP BY` on a float column merges distinct keys.**~~ Fixed 2026-09-04:
-  it was a hash bug, not a grouping one — the float lane was widened by value
-  instead of by bit pattern, and the table buckets on the hash alone.
-- ~~**Integer `//`, `%` and division by zero follow Python, not SQL.**~~ Fixed
-  2026-09-04, rounding inside `core` and the zero-divisor null outside the
-  lane. **Float `/` by zero is still wrong** — see §1.1.
+- **`GROUP BY` on a float column merges distinct keys.** A hash bug, not a
+  grouping one — the float lane widens by value instead of by bit pattern, and
+  the table buckets on the hash alone. **Fixed on `19a386e9`, which is not
+  merged**, so it is still wrong on `main`.
+- **Integer `//`, `%` and division by zero follow Python, not SQL.** Same
+  branch, same status: rounding inside `core` and the zero-divisor null outside
+  the lane, **not merged**. Float `/` by zero is not fixed even there — see
+  §1.1.
 - **Integer overflow wraps where SQL raises** (`golden/COVERAGE.md`). The
   `edges` fixture already carries int64 max/min for the day a checked-arithmetic
   mode exists.
@@ -652,7 +585,6 @@ canonical list; marrow has 8 of it.
 | `GROUPING SETS` / `ROLLUP` / `CUBE` | 3 | `Aggregate` carries one key list; `ROLLUP` also needs `GROUPING()`. Implementable as a rewrite into an aggregation cascade |
 | `explode` / `unnest` | 1 | Row-multiplying, so a new operator shape. ibis has a dedicated `TableUnnest` with `offset` and `keep_empty` |
 | `Sample`, `DropNull(how)`, `FillNull` as relations | — | ibis has all three as nodes |
-| pivot / unpivot / transpose | — | Out of scope per `golden/COVERAGE.md` |
 | `top_k` / `bottom_k` as first-class | — | A dedicated streaming node beats rewriting sort+limit; marrow has a *dead* `limit=` parameter (§2.10) |
 | `merge_sorted`, `rolling`, `group_by_dynamic`, `upsample` | — | Time-series reshaping — a common ask in that domain |
 

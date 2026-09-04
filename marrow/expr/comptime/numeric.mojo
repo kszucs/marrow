@@ -582,7 +582,7 @@ struct TemporalCompare[
     the dtypes are actually equal, which is what catches a *unit* mismatch that
     the widths agree on. Cross-unit comparison is deliberately not silently
     wrong — it raises, and adding it means choosing coercion rules (Arrow C++'s
-    `common_temporal_resolution` is the prior art). Backlog S21.
+    `common_temporal_resolution` is the prior art).
 
     **Merging this with `NumericCompare` into one node parameterised over the
     argument type was tried three ways and none is clean** (measured against

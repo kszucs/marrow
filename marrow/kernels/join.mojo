@@ -21,7 +21,7 @@ Supported strictness:
   JOIN_ALL    — default: return all matching pairs (Cartesian for multi-match)
   JOIN_ANY    — return at most one matching right row per left row
 
-Future join algorithms (see backlog M3.1); operators name the concrete
+Future join algorithms (see `backlog.md`); operators name the concrete
 algorithm, so a new one is a new struct, not a conformance:
   RadixHashJoin   — partitioned hash join (SwissHashTable + RadixPartitioner)
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)

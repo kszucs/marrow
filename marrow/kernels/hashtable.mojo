@@ -653,7 +653,7 @@ struct SwissHashTable[Hash: Hasher = RapidHash64](Copyable, Movable):
         # per-dtype ladder and makes it reachable from every binary that joins
         # (`marrow::kernels::filter` 98 -> 121 symbols, dragging `views`,
         # `arrays` and `execution` with it). That is the same reachability
-        # explosion as hashing reaching `cast`, which cost ~2.4 MB. Backlog S20.
+        # explosion as hashing reaching `cast`, which cost ~2.4 MB.
         var valid = mask.validity()
         if valid:
             var selected = mask.values() & valid.value()

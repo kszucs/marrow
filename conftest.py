@@ -113,7 +113,7 @@ def run_with_progress(config, cmd, cwd, label):
             # A hung Mojo process emits nothing and never exits, so it is
             # indistinguishable from a slow compile until the deadline passes.
             # Kill it and turn the hang into an ordinary failure -- otherwise
-            # this call blocks forever and takes CI with it (backlog B23).
+            # this call blocks forever and takes CI with it.
             timed_out = True
             proc.kill()
             out, err = proc.communicate()
@@ -691,7 +691,7 @@ def pytest_addoption(parser):
             "failure (default: 1800). 0 disables the timeout. The harness "
             "already recovers from a compiler *crash* by splitting the "
             "selection, because a crash produces a signal; a hang produces "
-            "none, so without this the run blocks forever -- see backlog B23."
+            "none, so without this the run blocks forever."
         ),
     )
     parser.addoption(
