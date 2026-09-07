@@ -38,8 +38,8 @@ platforms = ["osx-arm64", "linux-64"]
 preview = ["pixi-build"]
 
 [tool.pixi.dependencies]
-mojo-compiler = "==1.0.0b2.dev2026051106"
-mojo = "==1.0.0b2.dev2026051106"
+mojo-compiler = "==1.1.0.dev2026090305"
+mojo = "==1.1.0.dev2026090305"
 python = ">=3.14,<3.15"
 
 [tool.pixi.pypi-dependencies]
@@ -49,7 +49,7 @@ marrow = { path = ".", editable = true }
 build = "cp314-*"
 skip = "*-musllinux*"
 enable = ["cpython-prerelease"]
-before-build = "pip install --pre 'mojo-compiler==1.0.0b2.dev2026051106' --extra-index-url https://whl.modular.com/nightly/simple/"
+before-build = "pip install --pre 'mojo-compiler==1.1.0.dev2026090305' --extra-index-url https://whl.modular.com/nightly/simple/"
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]

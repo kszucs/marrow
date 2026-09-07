@@ -9,21 +9,25 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   bench-linux-x86_64:
     name: bench (linux, x86_64)
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
-      MODULAR_HOME: "/home/runner/.modular"
       FORCE_COLOR: "1"
       PYTEST_ADDOPTS: "--color=yes"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: prefix-dev/setup-pixi@v0.9.4
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           frozen: true
           cache: true
@@ -31,22 +35,35 @@ jobs:
 
       - name: Checkout gh-pages
         if: github.ref == 'refs/heads/main'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: gh-pages
           path: gh-pages-out
 
+      # One selection is one compilation unit, and `bench_*.mojo` builds at -O3:
+      # all 283 benchmarks in a single `pytest` call was OOM-killed on the free
+      # runner 15 minutes into the compile, on every run since 2026-05-11.  The
+      # selections below are separate units, so each one fits.  Their results
+      # are merged rather than overwritten -- see `BenchmarkHistory`.
       - name: Run benchmarks (PR)
         if: github.ref != 'refs/heads/main'
-        run: >
-          pixi run -e bench pytest --benchmark -v --no-gpu
+        run: |
+          pixi run -e bench pytest --benchmark -v --no-gpu marrow/kernels/tests
+          pixi run -e bench pytest --benchmark -v --no-gpu \
+            marrow/tests marrow/utils/tests marrow/parquet/tests marrow/expr
+          pixi run -e bench pytest --benchmark -v --no-gpu python
 
       - name: Run benchmarks
         if: github.ref == 'refs/heads/main'
-        run: >
-          pixi run -e bench pytest --benchmark -v --no-gpu
-          --save-benchmarks results
-          --benchmark-history gh-pages-out/benchmarks/data.json
+        run: |
+          save() {
+            pixi run -e bench pytest --benchmark -v --no-gpu \
+              --save-benchmarks results \
+              --benchmark-history gh-pages-out/benchmarks/data.json "$@"
+          }
+          save marrow/kernels/tests
+          save marrow/tests marrow/utils/tests marrow/parquet/tests marrow/expr
+          save python
 
       - name: Prepare dashboard
         if: github.ref == 'refs/heads/main'

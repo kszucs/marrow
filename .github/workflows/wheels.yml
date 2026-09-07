@@ -1,10 +1,32 @@
 name: Wheels
 
+# Manual only, and unverified.  It last ran on 2026-05-11, when both legs
+# failed, and nothing has run it since: it fires on pull requests to main and on
+# tags, and there have been none.  Since then `python/build.py` was fixed to
+# build `python/bindings/lib.mojo`, which is what the macOS leg died on, so this
+# may be closer to working than the last run suggests -- but "may be" is the
+# point.  Two things are known to be wrong as of 2026-09-07:
+#
+#   - `python/pyproject.toml` pinned mojo `1.0.0b2.dev2026051106` in both
+#     `[tool.pixi.dependencies]` and the cibuildwheel `before-build`, four
+#     months behind the toolchain the tree compiles against.  Corrected in this
+#     change, untested.
+#   - Both legs install only `mojo-compiler` before building.  `marrow` imports
+#     `max.algorithm.*` and `max.gpu.host` unconditionally -- in `buffers.mojo`,
+#     `views.mojo`, `arrays.mojo`, `execution.mojo` and more -- so MAX is needed
+#     on the search path whether or not GPU codegen is on, and nothing here puts
+#     it there.
+#   - The Linux leg needs a mojo compiler inside the manylinux container; in
+#     2026-05 it could not even pull its image
+#     (`No such image: quay.io/pypa/manylinux_2_34_x86_64:2025.06.08-1`), which
+#     the cibuildwheel bump below may or may not settle.
+#
+# `pixi run -e wheel wheel` builds and tests a macOS wheel locally and is the
+# working path today; docs/backlog.md tracks the rest.  Restore the
+# `pull_request` and tag triggers in the same change that makes a leg pass on a
+# real run, not before.
+
 on:
-  push:
-    tags: ["v*"]
-  pull_request:
-    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -21,10 +43,10 @@ jobs:
         os: [macos-latest, ubuntu-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v3.0.0
+        uses: pypa/cibuildwheel@v3.2.1
         with:
           package-dir: python
 

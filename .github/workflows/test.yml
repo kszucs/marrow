@@ -7,86 +7,100 @@ on:
   pull_request:
   workflow_call:
 
+# A superseded push has nothing left to say; let the newer one have the runners.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  FORCE_COLOR: "1"
+  PYTEST_ADDOPTS: "--color=yes"
+
 jobs:
-  test-linux-x86_64:
-    name: test (linux, x86_64)
-    runs-on: ubuntu-latest
-    env:
-      MODULAR_HOME: "/home/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: dev
-    - name: tests
-      run: |
-        pixi run -e dev test --no-gpu
-        pixi run package
-
-  test-macos-arm64:
-    name: test (macos, arm64)
-    runs-on: macos-latest
-    env:
-      MODULAR_HOME: "/Users/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: dev
-    - name: tests
-      run: |
-        pixi run -e dev test --no-gpu
-        pixi run package
-
-  asan-linux-x86_64:
-    name: asan (linux, x86_64)
-    runs-on: ubuntu-latest
-    if: false
+  # One selection is one compilation unit, and almost all of that unit is
+  # elaborating marrow rather than the test bodies -- so the whole suite in a
+  # single `pytest` call is one 2,187-case compile that took 1,802 s (the
+  # `--mojo-timeout` default) on macOS and was OOM-killed on Linux, which is why
+  # no Tests run has passed since 2026-05-11.  Splitting by directory splits the
+  # unit: `marrow/tests` alone measures 121 s and 5.5 GB peak, well inside a
+  # free runner, and the suites run concurrently instead of end to end.
+  #
+  # Split by *directory*, never by file: fewer files in a selection barely moves
+  # the cost, so a finer split buys nothing and pays another full elaboration.
+  test:
+    name: ${{ matrix.suite.name }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      MODULAR_HOME: "/home/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        suite:
+          - name: core
+            paths: marrow/tests
+          - name: kernels
+            paths: marrow/kernels/tests
+          - name: expr
+            paths: marrow/expr
+          - name: parquet
+            paths: marrow/parquet/tests marrow/utils/tests
+          # `golden/` and `python/` are driven by Python test files, so these
+          # two are the only suites that build `python/marrow/libmarrow.so`
+          # (~13 min).  Every job used to pay for it.
+          - name: golden
+            paths: golden
+          - name: python
+            paths: python
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: asan
-    - name: asan tests
-      run: pixi run -e asan test_asan_core --no-gpu --no-python
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: dev
+      - name: tests
+        run: pixi run -e dev pytest -v --no-gpu ${{ matrix.suite.paths }}
 
-  asan-macos-arm64:
-    name: asan (macos, arm64)
-    runs-on: macos-latest
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      MODULAR_HOME: "/Users/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: asan
-    - name: asan tests
-      run: pixi run -e asan test_asan_core --no-gpu --no-python
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: dev
+      - name: package
+        run: pixi run package
+
+  # Scoped to the types that own memory -- allocation, offsets, foreign buffers
+  # and release callbacks.  Everything else computes over views these produce,
+  # so this is where a lifetime or bounds bug originates.  See the
+  # `test_asan_core` comment in pixi.toml for why this is scoped rather than
+  # parallelised.
+  asan:
+    name: asan (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: asan
+      - name: asan tests
+        run: pixi run -e asan test_asan_core --no-gpu --no-python

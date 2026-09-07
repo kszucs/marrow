@@ -1187,14 +1187,39 @@ class BenchmarkHistory:
     # -- persistence --------------------------------------------------------
 
     def _write_envelope(self, envelope):
-        """Write per-commit result file and latest.json."""
+        """Write per-commit result file and latest.json.
+
+        A commit's results arrive in several pieces: one selection is one
+        compilation unit, so CI runs the benchmarks as a handful of `pytest`
+        calls rather than one, and each call saves what it measured. An
+        existing file for the same commit is therefore *merged into*, not
+        replaced -- overwriting left the dashboard holding whichever selection
+        happened to run last.
+        """
         self._results_dir.mkdir(parents=True, exist_ok=True)
         out_file = self._results_dir / f"{envelope['commit']}.json"
+        envelope = self._merge_envelope(out_file, envelope)
         for path in [out_file, self._results_dir / "latest.json"]:
             with path.open("w") as f:
                 json.dump(envelope, f, indent=2)
                 f.write("\n")
         return out_file
+
+    @staticmethod
+    def _merge_envelope(out_file, envelope):
+        """Fold `envelope` into any envelope already recorded for its commit."""
+        if not out_file.exists():
+            return envelope
+        with out_file.open() as f:
+            previous = json.load(f)
+        if previous.get("commit") != envelope["commit"]:
+            return envelope
+        by_name = {r["name"]: r for r in previous.get("results", [])}
+        for r in envelope["results"]:
+            by_name[r["name"]] = r
+        merged = dict(envelope)
+        merged["results"] = list(by_name.values())
+        return merged
 
     def _update_history(self, envelope):
         """Merge envelope into the rolling history JSON file."""
@@ -1205,26 +1230,35 @@ class BenchmarkHistory:
         else:
             history = {"runs": [], "operations": []}
 
-        existing_commits = {r["commit"] for r in history["runs"]}
-        if envelope["commit"] not in existing_commits:
-            run_results = {}
-            for r in envelope["results"]:
-                entry = {
-                    "mean_ns": r["mean_ns"],
-                    "throughput_gelems_s": r["throughput_gelems_s"],
-                }
-                for key in (
-                    "file",
-                    "min_ns",
-                    "max_ns",
-                    "median_ns",
-                    "stddev_ns",
-                    "rounds",
-                    "extra_info",
-                ):
-                    if key in r:
-                        entry[key] = r[key]
-                run_results[r["name"]] = entry
+        run_results = {}
+        for r in envelope["results"]:
+            entry = {
+                "mean_ns": r["mean_ns"],
+                "throughput_gelems_s": r["throughput_gelems_s"],
+            }
+            for key in (
+                "file",
+                "min_ns",
+                "max_ns",
+                "median_ns",
+                "stddev_ns",
+                "rounds",
+                "extra_info",
+            ):
+                if key in r:
+                    entry[key] = r[key]
+            run_results[r["name"]] = entry
+
+        # Same reason as `_write_envelope`: a commit's benchmarks arrive in
+        # several `pytest` calls, so a run already recorded for this commit is
+        # extended rather than left alone.
+        for run in history["runs"]:
+            if run["commit"] == envelope["commit"]:
+                run["timestamp"] = envelope["timestamp"]
+                run["ref"] = envelope["ref"]
+                run.setdefault("results", {}).update(run_results)
+                break
+        else:
             history["runs"].append(
                 {
                     "commit": envelope["commit"],
@@ -1399,6 +1433,33 @@ def test_update_history_idempotent(tmp):
     h._update_history(envelope)
     total = h._update_history(envelope)
     assert total == 1
+
+
+def _selection_envelope(h, name, commit="abc123def456"):
+    """One CI selection's worth of results for `commit`."""
+    envelope = h._make_envelope([_FakeBenchmark(name, 0.001)])
+    envelope["commit"] = commit
+    envelope["timestamp"] = "2026-04-16T00:00:00Z"
+    return envelope
+
+
+def test_a_commit_measured_in_several_selections_accumulates(tmp):
+    # CI benchmarks the tree as several `pytest` calls, one per compilation
+    # unit; each saves only what it measured, under the same commit.
+    h = _make_history(tmp)
+    first = h._write_envelope(_selection_envelope(h, "bench_kernels"))
+    h._update_history(_selection_envelope(h, "bench_kernels"))
+    h._write_envelope(_selection_envelope(h, "bench_parquet"))
+    total = h._update_history(_selection_envelope(h, "bench_parquet"))
+
+    assert total == 1
+    with first.open() as f:
+        names = {r["name"] for r in json.load(f)["results"]}
+    assert names == {"bench_kernels", "bench_parquet"}
+    with (h._history_file).open() as f:
+        history = json.load(f)
+    assert set(history["runs"][0]["results"]) == {"bench_kernels", "bench_parquet"}
+    assert set(history["operations"]) == {"bench_kernels", "bench_parquet"}
 
 
 def test_update_history_appends(tmp):

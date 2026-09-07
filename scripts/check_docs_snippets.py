@@ -17,6 +17,15 @@ surrounding program -- opts out with ```` ```{.mojo .fragment} ````. Opting out
 is a claim that the block is illustrative, not runnable; prefer moving a real
 example into `docs/snippets/` over marking it a fragment.
 
+A block that needs a *device* to compile -- anything naming `DeviceContext` --
+declares that with ```` ```{.mojo .gpu} ````. `DeviceContext()` is instantiated
+at compile time against the host's accelerator, so on a CPU-only machine the
+build fails with `function instantiation failed` no matter how correct the
+source is.  Those blocks are compiled where an accelerator exists and skipped
+where none does, which is the difference between "this listing is wrong" and
+"this runner has no GPU" -- a distinction the docs job on `ubuntu-latest` could
+not previously make, and failed on for every run.
+
 **Judged by grep, not by exit status.** `mojo build` reports a parse failure on
 stdout and still exits 0 -- see CLAUDE.md.
 """
@@ -48,6 +57,17 @@ def compile_source(source: str, label: str, tmp: Path) -> tuple[int, str]:
     return (proc.stdout + proc.stderr).count("error:"), proc.stdout + proc.stderr
 
 
+def has_accelerator(tmp: Path) -> bool:
+    """Can this machine compile a `DeviceContext`?
+
+    Asked by compiling a three-line probe rather than by inspecting the host,
+    because that is the exact question a `.gpu` listing poses to `mojo build`.
+    """
+    probe = "from max.gpu.host import DeviceContext\n\n\ndef main() raises:\n    var ctx = DeviceContext()\n"
+    errors, _ = compile_source(probe, "gpu_probe", tmp)
+    return errors == 0
+
+
 def as_program(body: str) -> str:
     """Lift imports to module scope and wrap the remainder in `main()`."""
     if re.search(r"^def main\(", body, re.M):
@@ -68,6 +88,7 @@ def main() -> int:
         checks.append((str(src.relative_to(REPO)), src.read_text()))
 
     fragments = 0
+    gpu: list[tuple[str, str]] = []
     for page in sorted(DOCS.rglob("*.qmd")):
         for i, (attrs, body) in enumerate(FENCE.findall(page.read_text())):
             if ".fragment" in (attrs or ""):
@@ -76,10 +97,19 @@ def main() -> int:
             if "{{<" in body:  # an `include` -- the real file is checked above
                 continue
             label = f"{page.relative_to(DOCS)}#{i}"
-            checks.append((label, as_program(body)))
+            target = gpu if ".gpu" in (attrs or "") else checks
+            target.append((label, as_program(body)))
 
     failed = []
+    skipped = 0
     with tempfile.TemporaryDirectory() as tmp:
+        if gpu and has_accelerator(Path(tmp)):
+            checks.extend(gpu)
+        else:
+            skipped = len(gpu)
+            for label, _ in gpu:
+                print(f"skip {label} -- .gpu, and this machine has no accelerator")
+
         for n, (label, source) in enumerate(checks):
             errors, log = compile_source(source, f"snippet_{n}", Path(tmp))
             if errors:
@@ -91,7 +121,7 @@ def main() -> int:
 
     print(
         f"\n{len(checks) - len(failed)}/{len(checks)} Mojo listings compiled"
-        f" ({fragments} marked .fragment)"
+        f" ({fragments} marked .fragment, {skipped} skipped as .gpu)"
     )
     return 1 if failed else 0
 

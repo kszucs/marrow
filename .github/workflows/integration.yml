@@ -6,21 +6,24 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   archery:
     name: archery (linux, x86_64)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      MODULAR_HOME: "/home/runner/.modular"
       FORCE_COLOR: "1"
 
     steps:
       - name: Checkout marrow
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up pixi
-        uses: prefix-dev/setup-pixi@v0.9.4
+        uses: prefix-dev/setup-pixi@v0.10.2
         with:
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
@@ -31,6 +34,9 @@ jobs:
       # HEAD SHAs of the three repos so rebuilds only happen on upstream changes.
       # The clone + SHA capture must happen before the cache restore so the key
       # is always known — the clone tasks are idempotent (test -d guard).
+      # `pixi.lock` is in the key too: the C++ build links against the
+      # environment's compiler and boost, so a change there invalidates the
+      # artifacts as surely as a change upstream does.
       - name: Clone reference implementations
         run: |
           pixi run -e integration clone_arrow
@@ -46,10 +52,10 @@ jobs:
 
       - name: Cache Arrow reference implementation builds
         id: arrow-build-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: integration/arrow/build
-          key: arrow-build-${{ runner.os }}-${{ steps.shas.outputs.arrow }}-${{ steps.shas.outputs.arrow_rs }}-${{ steps.shas.outputs.arrow_go }}
+          key: arrow-build-${{ runner.os }}-${{ hashFiles('pixi.lock') }}-${{ steps.shas.outputs.arrow }}-${{ steps.shas.outputs.arrow_rs }}-${{ steps.shas.outputs.arrow_go }}
 
       - name: Run integration tests
         run: pixi run -e integration integration

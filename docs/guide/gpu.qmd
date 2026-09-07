@@ -60,7 +60,7 @@ Two different types, and the distinction matters:
 - **`DeviceContext`** is Mojo's handle on the device itself, and it is what
   *transfers* take.
 
-```mojo
+```{.mojo .gpu}
 from marrow.execution import ExecContext
 from max.gpu.host import DeviceContext
 
@@ -76,7 +76,7 @@ Data movement is explicit and is a *kind change*, not a shadow copy — a buffer
 is either host-resident or device-resident. Upload the inputs, run the kernel,
 download the result:
 
-```mojo
+```{.mojo .gpu}
 from max.gpu.host import DeviceContext
 from marrow.builders import array
 from marrow.dtypes import int32, Int32Type

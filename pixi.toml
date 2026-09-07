@@ -105,7 +105,14 @@ cmake = ">=3.20"
 ninja = "*"
 cxx-compiler = "*"
 # C++ Arrow build deps (used via ARROW_DEPENDENCY_SOURCE=AUTO)
-libboost-devel = "*"
+# Boost is pinned below 1.88: Arrow C++ needs explicit per-release support for
+# Boost.Process (apache/arrow#43746 for 1.86, #45121 for 1.87), and the
+# apache-arrow-24.0.0 tree cloned below predates conda-forge's current 1.91.
+# Against 1.91 the build got as far as linking and then failed with
+# `libarrow_testing.so: undefined reference to boost::process::v2::...` and
+# boost::filesystem, taking the integration job down on every run.  Raise this
+# together with the `clone_arrow` tag, not on its own.
+libboost-devel = ">=1.86,<1.88"
 gflags = "*"
 flatbuffers = "*"
 xsimd = "*"

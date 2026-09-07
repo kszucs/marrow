@@ -96,9 +96,22 @@ def run(cmd: list[str], **kwargs) -> str:
     ).stdout
 
 
-def build_and_strip(name: str) -> None:
-    binary = HERE / name
-    stripped = HERE / f"{name}_stripped"
+def gates_dir(root: Path = REPO_ROOT) -> Path:
+    """Where the gate programs live inside a checkout of the repo.
+
+    Takes a root so `check_gate.py` can build a *second* checkout -- the commit
+    a change is being measured against -- with this checkout's script. The
+    baseline has to be measured on the machine doing the checking: the same
+    source builds 0.5-1.6% larger on a macOS runner than on a developer's Mac,
+    which is enough to trip a 0.5% gate on its own.
+    """
+    return root / HERE.relative_to(REPO_ROOT)
+
+
+def build_and_strip(name: str, root: Path = REPO_ROOT) -> None:
+    here = gates_dir(root)
+    binary = here / name
+    stripped = here / f"{name}_stripped"
     # Remove the previous run's artifacts first: `mojo build` leaves them in
     # place when it fails, so measuring without this reports a stale binary's
     # size as if the failed build had succeeded.
@@ -112,11 +125,11 @@ def build_and_strip(name: str) -> None:
             "-g0",
             "-I",
             ".",
-            str(HERE / f"{name}.mojo"),
+            str(here / f"{name}.mojo"),
             "-o",
             str(binary),
         ],
-        cwd=REPO_ROOT,
+        cwd=root,
         check=True,
     )
     stripped.write_bytes(binary.read_bytes())
