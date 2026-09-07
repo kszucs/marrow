@@ -1,0 +1,62 @@
+name: _diag
+
+# TEMPORARY -- delete before merging.  Answers why `mojo run` on ubuntu-latest
+# warns `could not locate shared library for '-lm'` and then segfaults every
+# case, while the same selection passes on macOS.
+on:
+  push:
+    branches: [ci]
+  workflow_dispatch:
+
+jobs:
+  linux-jit:
+    name: linux jit diag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          frozen: true
+          environments: dev
+
+      - name: What the linker can see
+        run: |
+          echo "::group::os"
+          cat /etc/os-release
+          echo "::endgroup::"
+          echo "::group::system libm"
+          ls -l /usr/lib/x86_64-linux-gnu/libm.* || echo "no /usr/lib libm"
+          ls -l /lib/x86_64-linux-gnu/libm.* || echo "no /lib libm"
+          dpkg -l libc6-dev 2>/dev/null | tail -2 || echo "libc6-dev not installed"
+          gcc -print-file-name=libm.so || echo "no gcc"
+          echo "::endgroup::"
+          echo "::group::pixi env libs"
+          ls .pixi/envs/dev/lib | grep -iE '^libm|^libc' || echo "none"
+          echo "::endgroup::"
+          echo "::group::env inside pixi"
+          pixi run -e dev bash -c 'echo "LIBRARY_PATH=$LIBRARY_PATH"; echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; echo "CONDA_PREFIX=$CONDA_PREFIX"'
+          echo "::endgroup::"
+
+      - name: Does a trivial mojo program run at all
+        run: |
+          printf 'def main():\n    print("hello")\n' > /tmp/hello.mojo
+          echo "::group::plain"
+          pixi run -e dev mojo run /tmp/hello.mojo || echo "PLAIN FAILED rc=$?"
+          echo "::endgroup::"
+          echo "::group::with LIBRARY_PATH"
+          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu mojo run /tmp/hello.mojo' || echo "LIBRARY_PATH FAILED rc=$?"
+          echo "::endgroup::"
+          echo "::group::mojo build then execute"
+          pixi run -e dev mojo build /tmp/hello.mojo -o /tmp/hello && /tmp/hello || echo "BUILD PATH FAILED rc=$?"
+          echo "::endgroup::"
+
+      - name: Does one marrow case run
+        run: |
+          echo "::group::single case, mojo run"
+          pixi run -e dev pytest -v --no-gpu marrow/tests/test_dtypes.mojo 2>&1 | tail -30 || true
+          echo "::endgroup::"
+          echo "::group::single case, LIBRARY_PATH set"
+          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu pytest -v --no-gpu marrow/tests/test_dtypes.mojo' 2>&1 | tail -30 || true
+          echo "::endgroup::"
