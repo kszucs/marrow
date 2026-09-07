@@ -3,28 +3,31 @@ name: _diag
 # TEMPORARY -- lives on the `ci-diag` branch only, deleted before merging.
 #
 # Round 1: libm.so is present, libc6-dev installed, a trivial mojo program runs,
-#          and marrow/tests/test_dtypes.mojo alone passes in 7 s.
+#          marrow/tests/test_dtypes.mojo alone passes in 7 s.
 # Round 2: LIBRARY_PATH makes no difference.
-# Round 3: neither does symlinking libm into $CONDA_PREFIX/lib.
-# Round 4: the selections that crash are exactly the ones that import
-#          `marrow.utils.compression`:
-#              crash  marrow/tests (test_ipc), marrow/parquet/tests
-#              pass   marrow/kernels/tests, golden (via a `mojo build` .so)
-#          That module opens the codec libraries in a process global whose
-#          candidate list is built from `argv()[0]` (`_exe_dir`).  Under
-#          `mojo run` the program is JIT-executed, so argv is whatever the
-#          driver process has -- which is the one thing that differs between
-#          `mojo run` (crashes) and `mojo build` (does not).
+# Round 3: nor does symlinking libm into $CONDA_PREFIX/lib.
+# Round 4: argv is identical under `mojo run` and `mojo build`, and
+#          marrow/parquet/tests/test_codecs.mojo -- which does use
+#          `marrow.utils.compression` -- passes alone.  Both hypotheses dead.
+# Round 5: stop guessing.  Run every file in the two crashing selections on its
+#          own and let the runner name the culprit.  A single aborting case
+#          takes the whole shared driver down and reports every case in the
+#          selection as failed, so the selection's own output cannot identify
+#          it -- only a per-file sweep can.
 on:
   push:
     branches: [ci-diag]
   workflow_dispatch:
 
 jobs:
-  compression:
-    name: does compression divide pass from crash
+  sweep:
+    name: per-file sweep (${{ matrix.dir }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [marrow/tests, marrow/parquet/tests, marrow/utils/tests]
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -32,30 +35,15 @@ jobs:
           cache: true
           frozen: true
           environments: dev
-
-      - name: What argv looks like under mojo run vs mojo build
+      - name: One file at a time
         run: |
-          cat > /tmp/argv.mojo <<'EOF'
-          from std.sys import argv
-
-
-          def main():
-              var a = argv()
-              print("argc =", len(a))
-              for i in range(len(a)):
-                  print("argv[", i, "] = <", a[i], ">")
-          EOF
-          echo "::group::mojo run"
-          pixi run -e dev mojo run /tmp/argv.mojo || echo "rc=$?"
-          echo "::endgroup::"
-          echo "::group::mojo build"
-          pixi run -e dev mojo build /tmp/argv.mojo -o /tmp/argvbin && /tmp/argvbin || echo "rc=$?"
-          echo "::endgroup::"
-
-      - name: One small file that uses compression
-        run: |
-          pixi run -e dev pytest -q --no-gpu marrow/parquet/tests/test_codecs.mojo 2>&1 | tail -8 || true
-
-      - name: One small file that does not
-        run: |
-          pixi run -e dev pytest -q --no-gpu marrow/utils/tests/test_byteorder.mojo 2>&1 | tail -8 || true
+          for f in ${{ matrix.dir }}/test_*.mojo; do
+            echo "::group::$f"
+            if pixi run -e dev pytest -q --no-gpu "$f" > /tmp/out.txt 2>&1; then
+              echo "PASS $f -- $(tail -2 /tmp/out.txt | head -1)"
+            else
+              echo "CRASH-OR-FAIL $f"
+              tail -25 /tmp/out.txt
+            fi
+            echo "::endgroup::"
+          done
