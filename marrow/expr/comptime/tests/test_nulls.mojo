@@ -217,3 +217,40 @@ def test_coalesce_null_survives_a_fused_parent() raises:
     assert_equal(got.as_int64()[1].value(), 21)
     assert_true(got.is_null(3), "both operands null, so the sum is null")
     assert_equal(got.null_count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# The method spellings
+# ---------------------------------------------------------------------------
+
+
+def test_null_predicate_methods_build_the_same_nodes() raises:
+    """`x.is_null()` / `x.is_valid()` are what both lanes and the Python
+    frontend call these, and they must build the fused nodes.
+
+    Declared on `ComptimeValue` rather than on `Value`: a trait default whose
+    return type a conformer must change cannot be overridden, and `Value`'s
+    `isnull` returning `NullPredicate` is exactly what made
+    `DynValue.is_null() -> Self` unwritable. `DynValue` does not conform to
+    `ComptimeValue`, so the two never meet."""
+    assert_equal(
+        String(IsNull(col("v", int64))), String(col("v", int64).is_null())
+    )
+    assert_equal(
+        String(NotNull(col("v", int64))), String(col("v", int64).is_valid())
+    )
+
+
+def test_conditional_methods_build_the_same_nodes() raises:
+    assert_equal(
+        String(Coalesce(col("v", int64), col("w", int64))),
+        String(col("v", int64).coalesce(col("w", int64))),
+    )
+    assert_equal(
+        String(Nullif(col("v", int64), lit(3, int64))),
+        String(col("v", int64).nullif(lit(3, int64))),
+    )
+    assert_equal(
+        String(FillNull(col("v", int64), lit(0, int64))),
+        String(col("v", int64).fill_null(lit(0, int64))),
+    )

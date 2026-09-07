@@ -83,11 +83,13 @@ from .numeric import (
     Abs,
     Add,
     Ceil,
+    Coalesce,
     Cos,
     Div,
     Eq,
     Exp,
     Exp2,
+    FillNull,
     Floor,
     Floordiv,
     Ge,
@@ -102,6 +104,7 @@ from .numeric import (
     Mul,
     Ne,
     Neg,
+    Nullif,
     Pow,
     Round,
     Sign,
@@ -116,7 +119,14 @@ from .numeric import (
     TemporalNe,
     Trunc,
 )
-from .boolean import And, IsInf, IsNan, Not, Or, Xor
+from .boolean import And, IsInf, IsNan, IsNull, Not, NotNull, Or, Xor
+from .casts import (
+    BoolToNum,
+    NumToBool,
+    NumToString,
+    NumericCast,
+    StringToNum,
+)
 from .strings import (
     Ascii,
     Capitalize,
@@ -179,6 +189,18 @@ from ..physical import Evaluable, DynOperator, EvalOperator
 # ---------------------------------------------------------------------------
 # ComptimeValue — what every node in this lane shares
 # ---------------------------------------------------------------------------
+def _reject_checked_cast(safe: Bool) raises:
+    """The comptime lane has no checked cast, so `safe=True` cannot be served.
+
+    Refused rather than ignored: a caller who asked for a checked conversion
+    and got a wrapping one has a wrong answer, not a slow one."""
+    if safe:
+        raise Error(
+            "cast: the comptime lane has no checked cast; pass safe=False for"
+            " the wrapping conversion, or build the expression at run time"
+        )
+
+
 trait ComptimeValue(Evaluable, Value):
     """A `Value` whose type states its output type and its per-batch state.
 
@@ -291,6 +313,24 @@ trait ComptimeValue(Evaluable, Value):
 
     def __invert__(self) -> Not[Self]:
         return Not(self.copy())
+
+    # Null predicates. Declared here rather than on `Value`, which is what
+    # `DynValue` erases: a trait default whose return type a conformer must
+    # change cannot be overridden -- the two become competing overloads and
+    # every call reports `ambiguous call`. `Value.isnull` returning the fused
+    # `NullPredicate` is precisely what made `DynValue.is_null() -> Self`
+    # unwritable, and `DynValue` does not conform to `ComptimeValue`.
+    #
+    # Named as Arrow names them, which is also what the runtime lane and the
+    # Python frontend call them, so `x.is_null()` is one spelling everywhere.
+
+    def is_null(self) -> IsNull[Self]:
+        """True where this is null. Never null itself."""
+        return IsNull[Self](self.copy())
+
+    def is_valid(self) -> NotNull[Self]:
+        """True where this is *not* null — Arrow's spelling of `~is_null`."""
+        return NotNull[Self](self.copy())
 
 
 trait PrimitiveValue(ComptimeValue):
@@ -870,6 +910,27 @@ trait StringValue(ComptimeValue):
     # there is no `FoldKernel` to parameterise a fused node on. The **operand**
     # stays typed, so `min(upper(name))` still fuses `upper(name)`.
 
+    def cast[Target: NumericType](
+        self, dtype: Target, safe: Bool = False
+    ) raises -> StringToNum[Target, Self]:
+        """Parse to `dtype` — `x.cast(int64)`.
+
+        The target comes from the *argument's* type, the way `col("a", int64)`
+        already takes its own, so both lanes spell a cast the same way. The
+        parameter is `Target` rather than `To` because `To` is a parameter of
+        every cast node, and a trait default's parameter name may not collide
+        with a conformer's.
+
+        Unparseable input answers null.
+        `safe` exists to make the two lanes' *text* mean the same thing, not
+        because this lane can honour both settings: a fused cast is a SIMD
+        lane, so it wraps and truncates, which is what SQL's `CAST` does and
+        what `safe=False` asks for. `safe=True` is PyArrow's default and the
+        runtime lane's, and is refused here rather than silently ignored.
+        """
+        _reject_checked_cast(safe)
+        return StringToNum[Target, Self](self.copy())
+
     def min(self) -> StringMin[Self]:
         """`MIN(self)` — lexicographic (bytewise), matching Arrow's
         `hash_min`. Keeps the input's type."""
@@ -1023,6 +1084,47 @@ trait NumericValue(PrimitiveValue):
     # rather than `Gt(...)` by hand. `Rhs`, not `R`, because a trait default's
     # parameter must not collide with a conformer's struct parameter — the
     # binary nodes already bind `L`/`R`.
+
+    def coalesce[Rhs: NumericValue](self, o: Rhs) -> Coalesce[Self, Rhs]:
+        """This where it is valid, `o` where it is null."""
+        return Coalesce(self.copy(), o.copy())
+
+    def nullif[Rhs: NumericValue](self, o: Rhs) -> Nullif[Self, Rhs]:
+        """Null wherever this equals `o`, otherwise unchanged."""
+        return Nullif(self.copy(), o.copy())
+
+    def fill_null[Rhs: NumericValue](self, o: Rhs) -> FillNull[Self, Rhs]:
+        """`o` wherever this is null, this elsewhere."""
+        return FillNull(self.copy(), o.copy())
+
+    def cast[Target: NumericType](
+        self, dtype: Target, safe: Bool = False
+    ) raises -> NumericCast[Target, Self]:
+        """Convert to another numeric type — `x.cast(float64)`.
+
+        Wrapping and truncating, as SQL's `CAST` is.
+        `safe` exists to make the two lanes' *text* mean the same thing, not
+        because this lane can honour both settings: a fused cast is a SIMD
+        lane, so it wraps and truncates, which is what SQL's `CAST` does and
+        what `safe=False` asks for. `safe=True` is PyArrow's default and the
+        runtime lane's, and is refused here rather than silently ignored.
+        """
+        _reject_checked_cast(safe)
+        return NumericCast[Target, Self](self.copy())
+
+    def cast[Target: StringLikeType](
+        self, dtype: Target, safe: Bool = False
+    ) raises -> NumToString[Target, Self]:
+        """Render to text — `x.cast(string)`."""
+        _reject_checked_cast(safe)
+        return NumToString[Target, Self](self.copy())
+
+    def cast(self, dtype: BoolType, safe: Bool = False) raises -> NumToBool[
+        Self
+    ]:
+        """Nonzero is true — `x.cast(bool_)`."""
+        _reject_checked_cast(safe)
+        return NumToBool[Self](self.copy())
 
     def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
         return Add(self.copy(), o.copy())
@@ -1506,6 +1608,13 @@ trait BoolValue(ComptimeValue):
 # body per node for another. The two below are factorable precisely because
 # neither reads `self`: `Unnamed.name` reads nothing, and
 # `ColumnBound.validity` reads only its `bound` argument.
+
+    def cast[Target: NumericType](
+        self, dtype: Target, safe: Bool = False
+    ) raises -> BoolToNum[Target, Self]:
+        """True is 1 — `x.cast(int64)`."""
+        _reject_checked_cast(safe)
+        return BoolToNum[Target, Self](self.copy())
 
 
 trait Unnamed(ComptimeValue):

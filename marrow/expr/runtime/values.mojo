@@ -460,6 +460,37 @@ struct RuntimeValue(Evaluable, Movable, Value):
             out = merged(out^, kid[].columns())
         return out^
 
+    def conjuncts(self) -> List[DynValue]:
+        """This predicate split on `and`, or `[self]` when it is not one.
+
+        The comptime lane's `BoolBinary` has answered this since it was
+        written; the runtime lane inherited `Value`'s "I am one conjunct"
+        default, which is sound but leaves `SplitConjunction` nothing to do.
+        That was invisible while the Python frontend also erased its predicate
+        on the way to `.filter()` -- with the type gone, the verb never asked.
+        Both halves had to be fixed for either to matter.
+
+        Recursive, so `a AND b AND c` yields three conjuncts however it nested.
+        Each is boxed whole, exactly as the comptime override does: this moves
+        the erasure boundary rather than crossing it.
+        """
+        if self._tag != "and":
+            return [DynValue(self.copy())]
+        var out = List[DynValue]()
+        for ref kid in self._kids:
+            for ref c in kid[].conjuncts():
+                out.append(c.copy())
+        return out^
+
+    def tag(self) -> String:
+        """This node's discriminant — `"column"`, `"literal"`, `"add"`, ...
+
+        The same string `evaluate` switches on, exposed because a frontend
+        needs to tell a literal from a column and `name()` answers with the
+        payload text for both. Public so nothing outside the struct has to
+        reach for `_tag`."""
+        return self._tag.copy()
+
     def constant_bool(self) -> Optional[Bool]:
         """A non-null boolean literal answers; everything else does not.
 
@@ -1828,3 +1859,193 @@ def array_contains(
     elements only and says so itself when it does not.
     """
     return RuntimeValue("array_contains", list, elem)
+
+
+# ---------------------------------------------------------------------------
+# The verb vocabulary
+# ---------------------------------------------------------------------------
+#
+# Every free function above whose whole body is `RuntimeValue(tag, ...)` is
+# listed here by name and arity, and `call` builds exactly the node that
+# function builds. That is what lets a frontend reach the runtime lane without
+# one binding per verb: `RuntimeValue` already dispatches `evaluate` on a
+# `String` tag, so a table of tags is the honest interface to it.
+#
+# **Three lists rather than one of pairs**, because arity is the only other
+# thing a caller needs and a verb's list *is* its arity — there is no state to
+# get out of sync.
+#
+# What is deliberately absent is every verb whose construction does work:
+# `column` and `literal` carry payloads; `and`/`or`/`not` constant-fold, which
+# `PropagateEmpty` depends on; `coalesce` and `case_when` are n-ary; `like`,
+# `ilike`, `date_trunc`, `isin` and `cast` carry typed payloads, and
+# `date_trunc` validates its unit. Those keep their own constructors, and a
+# frontend calls them by name.
+
+comptime UNARY_VERBS = [
+    # arithmetic and elementwise math
+    StaticString("neg"),
+    StaticString("abs"),
+    StaticString("sign"),
+    StaticString("floor"),
+    StaticString("ceil"),
+    StaticString("round"),
+    StaticString("trunc"),
+    StaticString("sqrt"),
+    StaticString("exp"),
+    StaticString("ln"),
+    StaticString("exp2"),
+    StaticString("log2"),
+    StaticString("log10"),
+    StaticString("log1p"),
+    StaticString("sin"),
+    StaticString("cos"),
+    # null and value predicates
+    StaticString("is_null"),
+    StaticString("is_valid"),
+    StaticString("is_nan"),
+    StaticString("is_inf"),
+    # strings
+    StaticString("upper"),
+    StaticString("lower"),
+    StaticString("strip"),
+    StaticString("lstrip"),
+    StaticString("rstrip"),
+    StaticString("reverse"),
+    StaticString("capitalize"),
+    StaticString("length"),
+    StaticString("char_length"),
+    StaticString("ascii"),
+    # nested
+    StaticString("array_length"),
+    # temporal
+    StaticString("year"),
+    StaticString("month"),
+    StaticString("day"),
+    StaticString("hour"),
+    StaticString("minute"),
+    StaticString("second"),
+    StaticString("quarter"),
+    StaticString("day_of_week"),
+    StaticString("day_of_year"),
+    StaticString("week"),
+    StaticString("iso_year"),
+    StaticString("epoch"),
+    StaticString("last_day"),
+    StaticString("day_name"),
+    StaticString("month_name"),
+]
+
+comptime BINARY_VERBS = [
+    # arithmetic
+    StaticString("add"),
+    StaticString("sub"),
+    StaticString("mul"),
+    StaticString("truediv"),
+    StaticString("floordiv"),
+    StaticString("mod"),
+    StaticString("pow"),
+    StaticString("minimum"),
+    StaticString("maximum"),
+    # comparison
+    StaticString("eq"),
+    StaticString("ne"),
+    StaticString("lt"),
+    StaticString("le"),
+    StaticString("gt"),
+    StaticString("ge"),
+    # boolean. `and`, `or` and `not` are absent: they fold at construction.
+    StaticString("xor"),
+    # strings
+    StaticString("startswith"),
+    StaticString("endswith"),
+    StaticString("contains"),
+    StaticString("left"),
+    StaticString("right"),
+    StaticString("repeat"),
+    StaticString("trim_chars"),
+    StaticString("position"),
+    # conditional
+    StaticString("nullif"),
+    StaticString("fill_null"),
+    # nested
+    StaticString("array_contains"),
+]
+
+comptime TERNARY_VERBS = [
+    StaticString("substr"),
+    StaticString("lpad"),
+    StaticString("rpad"),
+    StaticString("replace"),
+    StaticString("split_part"),
+]
+
+
+def unary_verbs() -> List[String]:
+    """`UNARY_VERBS` as owned strings, for a frontend enumerating them."""
+    var names = materialize[UNARY_VERBS]()
+    var out = List[String](capacity=len(names))
+    for ref name in names:
+        out.append(String(name))
+    return out^
+
+
+def binary_verbs() -> List[String]:
+    """`BINARY_VERBS` as owned strings."""
+    var names = materialize[BINARY_VERBS]()
+    var out = List[String](capacity=len(names))
+    for ref name in names:
+        out.append(String(name))
+    return out^
+
+
+def ternary_verbs() -> List[String]:
+    """`TERNARY_VERBS` as owned strings."""
+    var names = materialize[TERNARY_VERBS]()
+    var out = List[String](capacity=len(names))
+    for ref name in names:
+        out.append(String(name))
+    return out^
+
+
+def _arity_of(tag: String) -> Int:
+    """`tag`'s operand count, or -1 if it is not a listed verb."""
+    for ref known in materialize[UNARY_VERBS]():
+        if tag == known:
+            return 1
+    for ref known in materialize[BINARY_VERBS]():
+        if tag == known:
+            return 2
+    for ref known in materialize[TERNARY_VERBS]():
+        if tag == known:
+            return 3
+    return -1
+
+
+def call(var tag: String, var args: List[RuntimeValue]) raises -> RuntimeValue:
+    """Build the node `tag` names, from `args`.
+
+    The gate runs *here*, at construction, for the same reason
+    `RuntimeAggregate.__init__` validates its own name: an unlisted tag would
+    otherwise reach `evaluate` and fail on the first morsel of a long scan
+    rather than on the line that wrote it. Arity is checked for the same
+    reason -- `RuntimeValue` has a constructor for one, two and n children, so
+    a two-operand call to a one-operand verb is otherwise a silently
+    well-formed node that raises much later.
+    """
+    var arity = _arity_of(tag)
+    if arity == -1:
+        raise Error("unknown expression verb '", tag, "'")
+    if arity != len(args):
+        raise Error(
+            "'",
+            tag,
+            "' takes ",
+            arity,
+            " operand(s), got ",
+            len(args),
+        )
+    # One constructor for all three arities: the fixed-arity ones build the
+    # same `_kids` and the same empty `Payload` this does, and going through
+    # them would copy each operand a second time.
+    return RuntimeValue(tag^, args^)

@@ -15,6 +15,7 @@ from std.testing import (
 
 from ....arrays import StructArray, DynArray
 from ...bindings import Bindings
+from .. import values as rv
 from ...builders import array_contains as build_array_contains
 from ...builders import array_length as build_array_length
 from ...builders import col as build_col
@@ -847,3 +848,125 @@ def test_builder_minimum_and_maximum_select_the_runtime_overload() raises:
     var g: RuntimeValue = build_maximum(build_col("a"), build_col("b"))
     assert_true(_ints(l).as_int64().copy() == array([1, 2, None, 4], int64))
     assert_true(_ints(g).as_int64().copy() == array([10, 20, None, 40], int64))
+
+
+# ---------------------------------------------------------------------------
+# The verb vocabulary
+# ---------------------------------------------------------------------------
+
+
+def test_verb_call_matches_the_free_function() raises:
+    """`call` must build the node the named constructor builds, not merely a
+    similar one — it is the same interpreter tag either way, so a divergence
+    here would be invisible until a plan rendered differently."""
+    var direct = rv.upper(rv.column("s"))
+    var generic = rv.call("upper", [rv.column("s")])
+    assert_equal(String(direct), String(generic))
+
+    var direct2 = rv.add(rv.column("a"), rv.column("b"))
+    var generic2 = rv.call("add", [rv.column("a"), rv.column("b")])
+    assert_equal(String(direct2), String(generic2))
+
+    var direct3 = rv.substr(
+        rv.column("s"), rv.column("i"), rv.column("n")
+    )
+    var generic3 = rv.call(
+        "substr", [rv.column("s"), rv.column("i"), rv.column("n")]
+    )
+    assert_equal(String(direct3), String(generic3))
+
+
+def test_verb_call_rejects_an_unknown_verb() raises:
+    var raised = False
+    try:
+        _ = rv.call("uppercase", [rv.column("s")])
+    except e:
+        raised = True
+        assert_true("unknown expression verb 'uppercase'" in String(e))
+    assert_true(raised, "an unlisted verb must raise where it is written")
+
+
+def test_verb_call_rejects_the_wrong_arity() raises:
+    var raised = False
+    try:
+        _ = rv.call("upper", [rv.column("s"), rv.column("t")])
+    except e:
+        raised = True
+        assert_true("'upper' takes 1 operand(s), got 2" in String(e))
+    assert_true(raised, "arity is checked at construction")
+
+
+def test_verb_vocabulary_is_constructible() raises:
+    """Every listed verb builds through `call` at its declared arity.
+
+    The lists and `evaluate`'s tag ladder are two places naming the same set,
+    so this is the cheapest guard against a name being listed that the
+    interpreter has never heard of — it would otherwise surface as a verb that
+    a frontend offers and that fails on the first row.
+    """
+    var a = rv.column("a")
+    for ref name in rv.unary_verbs():
+        _ = rv.call(name.copy(), [a.copy()])
+    for ref name in rv.binary_verbs():
+        _ = rv.call(name.copy(), [a.copy(), a.copy()])
+    for ref name in rv.ternary_verbs():
+        _ = rv.call(name.copy(), [a.copy(), a.copy(), a.copy()])
+
+    assert_equal(len(rv.unary_verbs()), 46)
+    assert_equal(len(rv.binary_verbs()), 27)
+    assert_equal(len(rv.ternary_verbs()), 5)
+
+
+def test_verb_vocabulary_excludes_the_constructors_that_do_work() raises:
+    """The folding, payload-carrying and n-ary verbs must *not* be reachable
+    through `call`: routing `and` through it would skip the constant folding
+    `PropagateEmpty` depends on, and `date_trunc` would skip its unit check."""
+    var excluded = [
+        String("column"),
+        String("literal"),
+        String("and"),
+        String("or"),
+        String("not"),
+        String("coalesce"),
+        String("case_when"),
+        String("like"),
+        String("ilike"),
+        String("date_trunc"),
+        String("isin"),
+        String("cast"),
+        String("cast_unsafe"),
+    ]
+    for ref name in excluded:
+        assert_equal(rv._arity_of(name), -1)
+
+
+def test_conjuncts_splits_an_and_chain() raises:
+    """`SplitConjunction` reads this, and reads nothing when it answers one.
+
+    The comptime lane has answered it since `BoolBinary` was written; the
+    runtime lane inherited the sound-but-inert default, so a runtime `AND`
+    predicate pruned only as well as its weaker half and could not be pushed
+    into either side of a join.
+    """
+    var a = rv.gt(rv.column("a"), rv.literal(DynScalar(Int64Scalar(1))))
+    var b = rv.lt(rv.column("b"), rv.literal(DynScalar(Int64Scalar(9))))
+    var c = rv.eq(rv.column("c"), rv.literal(DynScalar(Int64Scalar(3))))
+
+    assert_equal(len(a.conjuncts()), 1)
+    assert_equal(len(rv.and_(a.copy(), b.copy()).conjuncts()), 2)
+    # Left-nested and right-nested must both flatten to three.
+    assert_equal(
+        len(rv.and_(rv.and_(a.copy(), b.copy()), c.copy()).conjuncts()), 3
+    )
+    assert_equal(
+        len(rv.and_(a.copy(), rv.and_(b.copy(), c.copy())).conjuncts()), 3
+    )
+
+
+def test_conjuncts_does_not_split_or_or_xor() raises:
+    """`a OR b` keeps every row either half keeps; splitting it would be a
+    different query, not a tidier one."""
+    var a = rv.gt(rv.column("a"), rv.literal(DynScalar(Int64Scalar(1))))
+    var b = rv.lt(rv.column("b"), rv.literal(DynScalar(Int64Scalar(9))))
+    assert_equal(len(rv.or_(a.copy(), b.copy()).conjuncts()), 1)
+    assert_equal(len(rv.xor(a.copy(), b.copy()).conjuncts()), 1)
