@@ -44,6 +44,7 @@ from expressions import unwrap as _unwrap_expr, unwrap_agg as _unwrap_agg
 from marrow.kernels.join import JoinKind
 from marrow.parquet import ParquetFile
 from marrow.schema import Schema
+from marrow.expr.sql import Catalog, sql as _sql
 from marrow.tabular import RecordBatch
 
 
@@ -360,6 +361,26 @@ def in_memory_table(batch: PythonObject) raises -> PythonObject:
     return _wrap(_table(RecordBatch(py=batch)))
 
 
+def sql_plan(
+    query: PythonObject, names: PythonObject, batches: PythonObject
+) raises -> PythonObject:
+    """A plan parsed from a SQL string against named in-memory tables.
+
+    A third leaf constructor beside `in_memory_table` and `parquet_scan`, and
+    it belongs with them: what it answers is an ordinary `Plan`, so everything
+    downstream — `filter`, `aggregate`, `execute`, the optimizer — applies to a
+    parsed query exactly as it does to a built one.
+
+    The catalogue arrives as two parallel sequences rather than a dict because
+    `Dict` marshalling would have to decide an iteration order that the Mojo
+    side then has to keep; the Python wrapper splits the dict once.
+    """
+    var catalog = Catalog()
+    for i in range(len(names)):
+        catalog.add(String(py=names[i]), RecordBatch(py=batches[i]))
+    return _wrap(_sql(String(py=query), catalog^))
+
+
 def parquet_scan(
     path: PythonObject, schema: PythonObject
 ) raises -> PythonObject:
@@ -402,3 +423,4 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
 
     mb.def_function[in_memory_table]("in_memory_table")
     mb.def_function[parquet_scan]("parquet_scan")
+    mb.def_function[sql_plan]("sql_plan")

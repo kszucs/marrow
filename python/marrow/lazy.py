@@ -33,7 +33,7 @@ from . import libmarrow as _ma
 from . import RecordBatch, _Wrapper
 from ._expr import Column, col
 
-__all__ = ["LazyTable", "memtable", "read_parquet"]
+__all__ = ["LazyTable", "memtable", "read_parquet", "sql"]
 
 
 def _unwrap_expr(value):
@@ -385,3 +385,29 @@ def memtable(batch):
     return LazyTable.wrap(
         _ma.in_memory_table(batch.unwrap() if hasattr(batch, "unwrap") else batch)
     )
+
+
+def sql(query, tables=None, **named):
+    """A lazy table from a SQL query over named in-memory tables.
+
+    ``tables`` is a mapping of name to :class:`marrow.RecordBatch`; the same
+    thing can be passed as keywords, which reads better for the one-table case
+    that most queries are::
+
+        marrow.sql("SELECT k, SUM(v) AS total FROM basic GROUP BY k",
+                   basic=batch)
+
+    The result is an ordinary :class:`LazyTable`, so a parsed query composes
+    with the built verbs and with ``collect()`` exactly as any other plan does.
+    Nothing is executed here — this parses and plans only.
+    """
+    sources = dict(tables or {})
+    sources.update(named)
+    if not sources:
+        raise ValueError("sql() needs at least one table")
+    names = list(sources)
+    batches = [
+        sources[name].unwrap() if hasattr(sources[name], "unwrap") else sources[name]
+        for name in names
+    ]
+    return LazyTable.wrap(_ma.sql_plan(str(query), names, batches))

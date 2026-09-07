@@ -433,5 +433,5 @@ from ._expr import (  # noqa: E402
     if_else,
     lit,
 )
-from .lazy import LazyTable, memtable, read_parquet  # noqa: E402
+from .lazy import LazyTable, memtable, read_parquet, sql  # noqa: E402
 from . import lazy  # noqa: E402
