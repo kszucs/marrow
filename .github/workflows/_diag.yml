@@ -1,16 +1,23 @@
 name: _diag
 
-# TEMPORARY -- delete before merging.
+# TEMPORARY -- lives on the `ci-diag` branch only, deleted before merging.
 #
-# Round 1 established: /usr/lib/x86_64-linux-gnu/libm.so exists and libc6-dev is
-# installed; a trivial mojo program runs; `marrow/tests/test_dtypes.mojo` alone
-# passes in 7 s.  Only the larger `marrow/tests` driver warns
-# `could not locate shared library for '-lm'` and then segfaults.  `mojo build`
-# works on this runner (build_python, --asan), `mojo run` is what fails -- so the
-# question is whether the JIT can be pointed at libm.
+# Round 1: /usr/lib/x86_64-linux-gnu/libm.so exists, libc6-dev is installed, a
+#          trivial mojo program runs, and marrow/tests/test_dtypes.mojo alone
+#          passes in 7 s.  Only the larger `marrow/tests` driver warns
+#          `could not locate shared library for '-lm'` and then segfaults.
+# Round 2: LIBRARY_PATH makes no difference -- 575 failed either way.  So this
+#          is not a linker search path the environment can widen.
+# Round 3: two candidate explanations.
+#          (a) `mojo run` JIT-links, `mojo build` shells out to a real linker;
+#              build_python and --asan both use `mojo build` and both work on
+#              this runner.  If test_asan_core passes here, the JIT is the
+#              difference and the harness should build.
+#          (b) the JIT wants libm inside the environment rather than on the
+#              system path.  A symlink settles that in one run.
 on:
   push:
-    branches: [ci]
+    branches: [ci-diag]
   workflow_dispatch:
 
 jobs:
@@ -26,24 +33,24 @@ jobs:
           frozen: true
           environments: dev
 
-      # Does anything that actually needs libm reproduce it in seconds?
-      - name: A program that needs libm
+      # (b) -- does the JIT want libm inside CONDA_PREFIX/lib?
+      - name: The crashing selection, with libm linked into the env
         run: |
-          printf 'from math import sqrt\n\n\ndef main():\n    print(sqrt(2.0))\n' > /tmp/m.mojo
-          echo "::group::mojo run, plain"
-          pixi run -e dev mojo run /tmp/m.mojo || echo "rc=$?"
-          echo "::endgroup::"
-          echo "::group::mojo run, LIBRARY_PATH"
-          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu mojo run /tmp/m.mojo' || echo "rc=$?"
-          echo "::endgroup::"
-          echo "::group::mojo build then execute"
-          pixi run -e dev mojo build /tmp/m.mojo -o /tmp/m && /tmp/m || echo "rc=$?"
-          echo "::endgroup::"
+          ln -sfn /lib/x86_64-linux-gnu/libm.so.6 .pixi/envs/dev/lib/libm.so
+          ls -l .pixi/envs/dev/lib/libm.so
+          pixi run -e dev pytest -q --no-gpu marrow/tests 2>&1 | tail -8 || true
+          rm -f .pixi/envs/dev/lib/libm.so
 
-      - name: The selection that crashes, plain
-        run: |
-          pixi run -e dev pytest -q --no-gpu marrow/tests 2>&1 | tail -12 || true
-
-      - name: The selection that crashes, with LIBRARY_PATH
-        run: |
-          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu pytest -q --no-gpu marrow/tests' 2>&1 | tail -12 || true
+  linux-asan:
+    # (a) -- the same layer of the tree, through `mojo build` instead of the JIT.
+    name: linux mojo-build path
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          frozen: true
+          environments: asan
+      - run: pixi run -e asan test_asan_core --no-gpu --no-python 2>&1 | tail -12
