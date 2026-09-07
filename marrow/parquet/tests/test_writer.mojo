@@ -22,6 +22,27 @@ def _to_marrow(py: PythonObject) raises -> Table:
     ).to_table()
 
 
+def _ints(n: Int) raises -> PythonObject:
+    """`0 .. n-1` as a Python list, for building a PyArrow array from.
+
+    Deliberately not `numpy.arange`. PyArrow wraps a numpy array's buffer
+    zero-copy, and numpy aligns to 16 bytes where `Buffer.from_foreign`
+    asserts 64 -- so every `_to_marrow` of a numpy-backed column aborts the
+    whole shared test binary, reporting all 54 cases in this file as failed
+    with no hint of which one did it. A list-backed array gets a PyArrow
+    allocation, which is 64-aligned. macOS survived it on alignment luck;
+    Linux did not, on any run.
+
+    The underlying gap is marrow's, not this file's: the C Data Interface
+    calls alignment "recommended, but not required", so the import should
+    copy a buffer it cannot use rather than assert. Tracked in
+    docs/backlog.md."""
+    var out = Python.list()
+    for i in range(n):
+        out.append(i)
+    return out^
+
+
 def _one_col(col: PythonObject) raises -> Table:
     """Single-column ("x") marrow Table from a PyArrow array."""
     var pa = Python.import_module("pyarrow")
@@ -72,9 +93,7 @@ def test_write_v2_uncompressed() raises:
 def test_multiple_row_groups() raises:
     # 2500 rows, row_group_size 1000 -> 3 row groups
     var pa = Python.import_module("pyarrow")
-    var t = _one_col(
-        pa.array(Python.import_module("numpy").arange(2500), type=pa.int64())
-    )
+    var t = _one_col(pa.array(_ints(2500), type=pa.int64()))
     var path = String("/tmp/marrow_rg.parquet")
     var w = FileWriter(Compression.SNAPPY)
     w.write(t, path, row_group_size=1000)
@@ -592,7 +611,7 @@ def test_write_delta_binary_packed_int() raises:
 def test_write_delta_int32_narrow() raises:
     var pa = Python.import_module("pyarrow")
     _encoding_check(
-        pa.array(Python.import_module("numpy").arange(200), type=pa.int32()),
+        pa.array(_ints(200), type=pa.int32()),
         Encoding.DELTA_BINARY_PACKED,
         "DELTA_BINARY_PACKED",
     )
@@ -669,9 +688,7 @@ def test_write_dictionary_high_cardinality_falls_back() raises:
     # > 131072 distinct int64 makes the dictionary page exceed 1 MB, so the
     # column falls back to PLAIN instead of a dictionary larger than the data.
     var pa = Python.import_module("pyarrow")
-    var t = _one_col(
-        pa.array(Python.import_module("numpy").arange(140000), type=pa.int64())
-    )
+    var t = _one_col(pa.array(_ints(140000), type=pa.int64()))
     var path = String("/tmp/marrow_hicard.parquet")
     write_table(t, path, Compression.UNCOMPRESSED)  # dictionary requested
     assert_false(
@@ -1150,9 +1167,7 @@ def test_page_checksum() raises:
 
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var t = _one_col(
-        pa.array(Python.import_module("numpy").arange(200), type=pa.int64())
-    )
+    var t = _one_col(pa.array(_ints(200), type=pa.int64()))
     for ver in [1, 2]:
         var path = String("/tmp/marrow_crc.parquet")
         var w = FileWriter(
