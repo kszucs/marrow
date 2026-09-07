@@ -1,33 +1,25 @@
 name: _diag
 
-# TEMPORARY -- lives on the `ci-diag` branch only, deleted before merging.
+# TEMPORARY -- `ci-diag` branch only.
 #
-# Round 1: libm.so is present, libc6-dev installed, a trivial mojo program runs,
-#          marrow/tests/test_dtypes.mojo alone passes in 7 s.
-# Round 2: LIBRARY_PATH makes no difference.
-# Round 3: nor does symlinking libm into $CONDA_PREFIX/lib.
-# Round 4: argv is identical under `mojo run` and `mojo build`, and
-#          marrow/parquet/tests/test_codecs.mojo -- which does use
-#          `marrow.utils.compression` -- passes alone.  Both hypotheses dead.
-# Round 5: stop guessing.  Run every file in the two crashing selections on its
-#          own and let the runner name the culprit.  A single aborting case
-#          takes the whole shared driver down and reports every case in the
-#          selection as failed, so the selection's own output cannot identify
-#          it -- only a per-file sweep can.
+# Round 5 named the files: marrow/parquet/tests/test_writer.mojo (fixed: a
+# numpy-backed PyArrow buffer failing marrow's 64-byte alignment assert),
+# marrow/tests/test_scalars.mojo (segfault) and marrow/tests/test_ipc.mojo
+# (hangs -- killed at 1,800 s having produced no output).
+#
+# Round 6 asks the two remaining ones what they are actually doing: the whole
+# error for test_scalars rather than the last 25 lines of it, and, for
+# test_ipc, one case at a time so the hang has a name.
 on:
   push:
     branches: [ci-diag]
   workflow_dispatch:
 
 jobs:
-  sweep:
-    name: per-file sweep (${{ matrix.dir }})
+  scalars:
+    name: test_scalars, in full
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        dir: [marrow/tests, marrow/parquet/tests, marrow/utils/tests]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -35,15 +27,30 @@ jobs:
           cache: true
           frozen: true
           environments: dev
-      - name: One file at a time
+      - run: pixi run -e dev pytest -q --no-gpu marrow/tests/test_scalars.mojo 2>&1 | head -120 || true
+
+  ipc:
+    name: test_ipc, one case at a time
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          frozen: true
+          environments: dev
+      - name: Which case hangs
         run: |
-          for f in ${{ matrix.dir }}/test_*.mojo; do
-            echo "::group::$f"
-            if pixi run -e dev pytest -q --no-gpu "$f" > /tmp/out.txt 2>&1; then
-              echo "PASS $f -- $(tail -2 /tmp/out.txt | head -1)"
+          pixi run -e dev pytest -q --no-gpu --collect-only marrow/tests/test_ipc.mojo \
+            | grep '::' > /tmp/cases.txt
+          echo "$(wc -l < /tmp/cases.txt) cases"
+          while read -r c; do
+            start=$SECONDS
+            if timeout 400 pixi run -e dev pytest -q --no-gpu --mojo-timeout 300 "$c" > /tmp/o.txt 2>&1; then
+              echo "PASS $((SECONDS-start))s $c"
             else
-              echo "CRASH-OR-FAIL $f"
-              tail -25 /tmp/out.txt
+              echo "FAIL $((SECONDS-start))s $c"
+              grep -E 'TIMEOUT|Assert|error|crashed' /tmp/o.txt | head -4
             fi
-            echo "::endgroup::"
-          done
+          done < /tmp/cases.txt
