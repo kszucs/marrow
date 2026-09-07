@@ -2,29 +2,29 @@ name: _diag
 
 # TEMPORARY -- lives on the `ci-diag` branch only, deleted before merging.
 #
-# Round 1: /usr/lib/x86_64-linux-gnu/libm.so exists, libc6-dev is installed, a
-#          trivial mojo program runs, and marrow/tests/test_dtypes.mojo alone
-#          passes in 7 s.  Only the larger `marrow/tests` driver warns
-#          `could not locate shared library for '-lm'` and then segfaults.
-# Round 2: LIBRARY_PATH makes no difference -- 575 failed either way.  So this
-#          is not a linker search path the environment can widen.
-# Round 3: two candidate explanations.
-#          (a) `mojo run` JIT-links, `mojo build` shells out to a real linker;
-#              build_python and --asan both use `mojo build` and both work on
-#              this runner.  If test_asan_core passes here, the JIT is the
-#              difference and the harness should build.
-#          (b) the JIT wants libm inside the environment rather than on the
-#              system path.  A symlink settles that in one run.
+# Round 1: libm.so is present, libc6-dev installed, a trivial mojo program runs,
+#          and marrow/tests/test_dtypes.mojo alone passes in 7 s.
+# Round 2: LIBRARY_PATH makes no difference.
+# Round 3: neither does symlinking libm into $CONDA_PREFIX/lib.
+# Round 4: the selections that crash are exactly the ones that import
+#          `marrow.utils.compression`:
+#              crash  marrow/tests (test_ipc), marrow/parquet/tests
+#              pass   marrow/kernels/tests, golden (via a `mojo build` .so)
+#          That module opens the codec libraries in a process global whose
+#          candidate list is built from `argv()[0]` (`_exe_dir`).  Under
+#          `mojo run` the program is JIT-executed, so argv is whatever the
+#          driver process has -- which is the one thing that differs between
+#          `mojo run` (crashes) and `mojo build` (does not).
 on:
   push:
     branches: [ci-diag]
   workflow_dispatch:
 
 jobs:
-  linux-jit:
-    name: linux jit diag
+  compression:
+    name: does compression divide pass from crash
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -33,24 +33,29 @@ jobs:
           frozen: true
           environments: dev
 
-      # (b) -- does the JIT want libm inside CONDA_PREFIX/lib?
-      - name: The crashing selection, with libm linked into the env
+      - name: What argv looks like under mojo run vs mojo build
         run: |
-          ln -sfn /lib/x86_64-linux-gnu/libm.so.6 .pixi/envs/dev/lib/libm.so
-          ls -l .pixi/envs/dev/lib/libm.so
-          pixi run -e dev pytest -q --no-gpu marrow/tests 2>&1 | tail -8 || true
-          rm -f .pixi/envs/dev/lib/libm.so
+          cat > /tmp/argv.mojo <<'EOF'
+          from std.sys import argv
 
-  linux-asan:
-    # (a) -- the same layer of the tree, through `mojo build` instead of the JIT.
-    name: linux mojo-build path
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
-        with:
-          cache: true
-          frozen: true
-          environments: asan
-      - run: pixi run -e asan test_asan_core --no-gpu --no-python 2>&1 | tail -12
+
+          def main():
+              var a = argv()
+              print("argc =", len(a))
+              for i in range(len(a)):
+                  print("argv[", i, "] = <", a[i], ">")
+          EOF
+          echo "::group::mojo run"
+          pixi run -e dev mojo run /tmp/argv.mojo || echo "rc=$?"
+          echo "::endgroup::"
+          echo "::group::mojo build"
+          pixi run -e dev mojo build /tmp/argv.mojo -o /tmp/argvbin && /tmp/argvbin || echo "rc=$?"
+          echo "::endgroup::"
+
+      - name: One small file that uses compression
+        run: |
+          pixi run -e dev pytest -q --no-gpu marrow/parquet/tests/test_codecs.mojo 2>&1 | tail -8 || true
+
+      - name: One small file that does not
+        run: |
+          pixi run -e dev pytest -q --no-gpu marrow/utils/tests/test_byteorder.mojo 2>&1 | tail -8 || true
