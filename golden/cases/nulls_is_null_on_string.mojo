@@ -15,4 +15,4 @@ def plan() raises -> DynRelation:
     NULL	7	70
     """
     var t = table("basic")
-    return t.filter(IsNull(col("k", string)))
+    return t.filter(col("k", string).is_null())

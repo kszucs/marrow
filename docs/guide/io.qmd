@@ -44,7 +44,7 @@ nulls and types exactly:
 
 ```{python}
 print("null preserved:", restored[0].column("name"))
-print("schema matches: ", restored[0].schema())
+print("schema matches: ", restored[0].schema)
 ```
 
 ### Reading just the schema
@@ -54,8 +54,8 @@ and returns a zero-row batch:
 
 ```{python}
 header = ma.read_ipc_file_schema(path)
-print(header.schema())
-print("rows:", header.num_rows())
+print(header.schema)
+print("rows:", header.num_rows)
 ```
 
 ### File vs. stream
@@ -105,7 +105,7 @@ order) — the reader skips the others entirely:
 
 ```{python}
 subset = pq.read_table(pq_path, columns=["city", "id"])
-print(subset.column_names())
+print(subset.column_names)
 ```
 
 ### Compression and page version
@@ -114,7 +114,7 @@ print(subset.column_names())
 
 ```{python}
 pq.write_table(table, pq_path, compression="zstd", data_page_version="2.0")
-print(pq.read_table(pq_path).num_rows())
+print(pq.read_table(pq_path).num_rows)
 ```
 
 | Argument | Values | Default |

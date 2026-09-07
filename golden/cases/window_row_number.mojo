@@ -9,7 +9,6 @@ def plan() raises -> DynRelation:
     and no frame. The second sort key makes the numbering deterministic, which
     a window over a non-total order would not be.
 
-    -- skip python
 
     -- expected
     k:string	v:int64	rn:int64

@@ -7,8 +7,9 @@
 Reads and writes Arrow only; no PyArrow at runtime.
 """
 
-from . import Table
 from . import libmarrow as _ma
+from ._wrapper import unwrap
+from .tabular import Table
 
 
 def read_table(source, columns=None):

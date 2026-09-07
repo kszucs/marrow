@@ -18,7 +18,7 @@ def test_add_int64():
     b = ma.array([10, 20, 30])
     result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_add_float64():
@@ -26,7 +26,7 @@ def test_add_float64():
     b = ma.array([0.5, 1.5, 2.5])
     result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_add_propagates_nulls():
@@ -34,7 +34,7 @@ def test_add_propagates_nulls():
     b = ma.array([10, 20, 30])
     result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 1
+    assert result.null_count == 1
 
 
 def test_add_both_null():
@@ -42,7 +42,7 @@ def test_add_both_null():
     b = ma.array([10, None, 30])
     result = ma.compute.add(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 3
+    assert result.null_count == 3
 
 
 # ── sum ──────────────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ def test_sub_int64():
     b = ma.array([1, 2, 3])
     result = ma.compute.subtract(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_sub_float64():
@@ -124,7 +124,7 @@ def test_sub_float64():
     b = ma.array([1.0, 1.0, 1.0])
     result = ma.compute.subtract(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_sub_propagates_nulls():
@@ -132,7 +132,7 @@ def test_sub_propagates_nulls():
     b = ma.array([1, 2, 3])
     result = ma.compute.subtract(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 1
+    assert result.null_count == 1
 
 
 # ── multiply ─────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ def test_mul_int64():
     b = ma.array([5, 6, 7])
     result = ma.compute.multiply(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_mul_float64():
@@ -151,7 +151,7 @@ def test_mul_float64():
     b = ma.array([2.0, 2.0, 2.0])
     result = ma.compute.multiply(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_mul_propagates_nulls():
@@ -159,7 +159,7 @@ def test_mul_propagates_nulls():
     b = ma.array([5, 6, None])
     result = ma.compute.multiply(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 2
+    assert result.null_count == 2
 
 
 # ── divide ───────────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ def test_div_int64():
     b = ma.array([2, 4, 5])
     result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_div_float64():
@@ -178,7 +178,7 @@ def test_div_float64():
     b = ma.array([3.0, 2.0, 1.0])
     result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_div_propagates_nulls():
@@ -186,7 +186,7 @@ def test_div_propagates_nulls():
     b = ma.array([2, 4, None])
     result = ma.compute.divide(a, b, ctx=ma.ExecContext.serial())
     assert result.__len__() == 3
-    assert result.null_count() == 2
+    assert result.null_count == 2
 
 
 # ── filter ───────────────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ def test_filter_int64_keeps_selected():
     mask = ma.array([True, False, True, False, True])
     result = ma.compute.filter(a, mask)
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_filter_float64():
@@ -205,7 +205,7 @@ def test_filter_float64():
     mask = ma.array([False, True, True])
     result = ma.compute.filter(a, mask)
     assert result.__len__() == 2
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_filter_preserves_nulls():
@@ -213,7 +213,7 @@ def test_filter_preserves_nulls():
     mask = ma.array([True, True, True, False, True])
     result = ma.compute.filter(a, mask)
     assert result.__len__() == 4
-    assert result.null_count() == 1
+    assert result.null_count == 1
 
 
 def test_filter_all_false_returns_empty():
@@ -228,7 +228,7 @@ def test_filter_string_array():
     mask = ma.array([True, False, True])
     result = ma.compute.filter(a, mask)
     assert result.__len__() == 2
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 # ── drop_null ────────────────────────────────────────────────────────────────
@@ -238,28 +238,28 @@ def test_drop_nulls_int64():
     a = ma.array([1, None, 3, None, 5])
     result = ma.compute.drop_null(a)
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_drop_nulls_no_nulls():
     a = ma.array([1, 2, 3])
     result = ma.compute.drop_null(a)
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_drop_nulls_all_null():
     a = ma.array([None, None, None], type=ma.int64())
     result = ma.compute.drop_null(a)
     assert result.__len__() == 0
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_drop_nulls_float64():
     a = ma.array([1.0, None, 3.0])
     result = ma.compute.drop_null(a)
     assert result.__len__() == 2
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 # ── GPU ──────────────────────────────────────────────────────────────────────
@@ -278,7 +278,7 @@ def test_array_to_device_and_back():
     a_gpu = a.to_device(device)
     a_cpu = a_gpu.to_cpu(device)
     assert a_cpu.__len__() == 3
-    assert a_cpu.null_count() == 0
+    assert a_cpu.null_count == 0
 
 
 @pytest.mark.gpu
@@ -290,7 +290,7 @@ def test_add_gpu():
         a.to_device(device), b.to_device(device), ctx=device
     ).to_cpu(device)
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 @pytest.mark.gpu
@@ -302,7 +302,7 @@ def test_sub_gpu():
         a.to_device(device), b.to_device(device), ctx=device
     ).to_cpu(device)
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 @pytest.mark.gpu
@@ -314,7 +314,7 @@ def test_mul_gpu():
         a.to_device(device), b.to_device(device), ctx=device
     ).to_cpu(device)
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 @pytest.mark.gpu
@@ -350,7 +350,7 @@ def test_equal_gpu():
         a.to_device(device), b.to_device(device), ctx=device
     ).to_cpu(device)
     assert result.__len__() == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
 
 
 def test_filter_null_mask_entry_is_not_selected():
@@ -376,7 +376,7 @@ def test_filter_null_mask_entry_is_not_selected():
 
     mask = ma.compute.less(values, bound)
     assert mask.to_pylist() == [True, True, True, False, None, False, False]
-    assert mask.null_count() == 1
+    assert mask.null_count == 1
 
     assert ma.compute.filter(values, mask).to_pylist() == [1, 2, 3]
 

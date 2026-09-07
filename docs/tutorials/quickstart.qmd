@@ -47,8 +47,8 @@ a single pass, and `None` marks a null position:
 a = ma.array([1, 2, 3, None, 5])
 print(a)
 print("length:    ", len(a))
-print("null count:", a.null_count())
-print("type:      ", a.type())
+print("null count:", a.null_count)
+print("type:      ", a.type)
 ```
 
 Pass `type=` to skip inference and coerce the data to a specific type — this is
@@ -119,7 +119,7 @@ people = ma.record_batch({
     "salary": ma.array([95_000, 72_000, 120_000, 88_000]),
 })
 print(people)
-print("shape:", people.shape())
+print("shape:", people.shape)
 ```
 
 Inspect it as native Python with `to_pydict()` (column-oriented) or

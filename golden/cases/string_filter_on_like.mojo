@@ -11,4 +11,4 @@ def plan() raises -> DynRelation:
     'héllo'
     """
     var t = table("words")
-    return t.filter(Like(col("s", string), lit("%o%", string)))
+    return t.filter(col("s", string).like(lit("%o%", string)))

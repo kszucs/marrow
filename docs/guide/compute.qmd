@@ -73,7 +73,7 @@ b = ma.array([10, 20, 30, 40])
 
 result = mc.add(a, b)
 print(result)    # index 1 and 3 are null
-print("null count:", result.null_count())
+print("null count:", result.null_count)
 ```
 
 ```{python}
@@ -128,8 +128,8 @@ own width. `mean` is always `float64`:
 ```{python}
 ints = ma.record_batch({"v": ma.array([10, 20, 30], type=ma.int32())})
 res  = ma.memtable(ints).aggregate(total=("sum", "v"), avg=("mean", "v")).collect()
-print("sum of int32 ->", res.column("total").type())
-print("mean         ->", res.column("avg").type())
+print("sum of int32 ->", res.column("total").type)
+print("mean         ->", res.column("avg").type)
 ```
 
 ### Counting
@@ -236,7 +236,7 @@ The null at index 3 propagates to all output arrays:
 
 ```{python}
 result = mc.equal(a, b)
-print("null count:", result.null_count())      # 1
+print("null count:", result.null_count)      # 1
 print("is_valid(3):", result[3].is_valid())     # False
 ```
 

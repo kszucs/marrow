@@ -17,7 +17,7 @@ def plan() raises -> DynRelation:
     """
     var t = table("sales")
     var agg = t.aggregate(
-        keys=[Upper(col("region", string))], aggs=[count_star().alias("n")]
+        keys=[col("region", string).upper()], aggs=[count_star().alias("n")]
     )
     var named = agg.rename(["key0"], ["r"])
     return named.sort_by([col("r", string)], [True])

@@ -14,7 +14,6 @@ def plan() raises -> DynRelation:
     Nulls sort last so the constant `first_value` is a real value rather than a
     null, which would have made the two columns harder to tell apart.
 
-    -- skip python
 
     -- expected
     v:int64	f:int64	l:int64

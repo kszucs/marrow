@@ -83,7 +83,7 @@ Pass `None` to mark a position as null. The validity bitmap tracks which positio
 ```{python}
 arr = ma.array([1, None, 3, None, 5])
 print(arr)
-print("null count:", arr.null_count())
+print("null count:", arr.null_count)
 print("is_valid:  ", arr.is_valid())     # elementwise BoolArray
 print("is_valid(0):", arr[0].is_valid())   # True
 print("is_valid(1):", arr[1].is_valid())   # False — null
@@ -99,8 +99,8 @@ print("is_valid(1):", arr[1].is_valid())   # False — null
 arr = ma.array([10, 20, 30, None, 50], type=ma.int32())
 
 print("length:    ", len(arr))
-print("null count:", arr.null_count())
-print("type:      ", arr.type())
+print("null count:", arr.null_count)
+print("type:      ", arr.type)
 ```
 
 ## String arrays
@@ -110,7 +110,7 @@ String arrays store variable-length UTF-8 strings.
 ```{python}
 s = ma.array(["hello", None, "world", "mañana"])
 print(s)
-print("null count:", s.null_count())
+print("null count:", s.null_count)
 print("is_valid(1):", s[1].is_valid())
 ```
 
@@ -121,7 +121,7 @@ List arrays store variable-length sequences. Each element is itself a list.
 ```{python}
 nested = ma.array([[1, 2], [3, 4, 5], [6]])
 print(nested)
-print("type:", nested.type())
+print("type:", nested.type)
 ```
 
 ### Nulls in list arrays
@@ -129,7 +129,7 @@ print("type:", nested.type())
 ```{python}
 with_null = ma.array([[1, 2], None, [3, 4, 5]])
 print(with_null)
-print("null count:", with_null.null_count())
+print("null count:", with_null.null_count)
 ```
 
 ## Struct arrays
@@ -143,7 +143,7 @@ people = ma.array([
     {"name": None,    "age": 40},   # null name
 ])
 print(people)
-print("type:", people.type())
+print("type:", people.type)
 ```
 
 ## Slicing
@@ -176,7 +176,7 @@ happens to be the same length:
 ```{python}
 # inference sees lists — the result is list<float64>, not a fixed-size list
 coords = ma.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-print(coords.type())   # list<float64>
+print(coords.type)   # list<float64>
 ```
 
 To get a genuine `fixed_size_list`, pass the type explicitly with
@@ -189,7 +189,7 @@ coords = ma.array(
     type=ma.fixed_size_list_(ma.float64(), 2),
 )
 print(coords)
-print("type:", coords.type())   # fixed_size_list<item: float64>
+print("type:", coords.type)   # fixed_size_list<item: float64>
 ```
 
 ## Building arrays in Mojo

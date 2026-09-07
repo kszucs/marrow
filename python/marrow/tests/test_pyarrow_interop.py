@@ -137,7 +137,7 @@ def test_schema_from_pyarrow():
 
 
 def test_schema_from_marrow_schema():
-    """Passing a marrow Schema to ma.schema() should return an equal copy."""
+    """Passing a marrow Schema to ma.schema should return an equal copy."""
     original = ma.schema(
         [
             ma.field("a", ma.int64(), True, {}),
@@ -186,7 +186,7 @@ def test_array_roundtrip_with_nulls():
     assert pyarr[1].as_py() is None
     reimported = ma.array(pyarr)
     assert len(reimported) == 4
-    assert reimported.null_count() == 2
+    assert reimported.null_count == 2
 
 
 def test_array_from_pyarrow_int():
@@ -260,7 +260,7 @@ def test_array_roundtrip_dictionary_with_nulls():
     pa_arr = pa.array(["cat", None, "cat", "fish", None]).dictionary_encode()
     ma_arr = ma.array(pa_arr)
     assert len(ma_arr) == 5
-    assert ma_arr.null_count() == 2
+    assert ma_arr.null_count == 2
     assert pa.array(ma_arr).equals(pa_arr)
 
 
@@ -314,9 +314,9 @@ def test_record_batch_from_pyarrow():
         ),
     )
     ma_rb = ma.record_batch(pa_rb)
-    assert ma_rb.num_rows() == 3
-    assert ma_rb.num_columns() == 3
-    assert ma_rb.column_names() == ["x", "y", "z"]
+    assert ma_rb.num_rows == 3
+    assert ma_rb.num_columns == 3
+    assert ma_rb.column_names == ["x", "y", "z"]
 
 
 def test_record_batch_to_pyarrow():
@@ -335,9 +335,9 @@ def test_record_batch_roundtrip():
     )
     pa_rb = pa.record_batch(ma_rb)
     ma_rb2 = ma.record_batch(pa_rb)
-    assert ma_rb2.num_rows() == 2
-    assert ma_rb2.num_columns() == 2
-    assert ma_rb2.column_names() == ["a", "b"]
+    assert ma_rb2.num_rows == 2
+    assert ma_rb2.num_columns == 2
+    assert ma_rb2.column_names == ["a", "b"]
 
 
 def test_record_batch_roundtrip_with_nulls():
@@ -351,7 +351,7 @@ def test_record_batch_roundtrip_with_nulls():
     assert pa_batch.column("a").to_pylist() == [1, None, 3]
     assert pa_batch.column("b").to_pylist() == ["x", None, "z"]
     ma_batch2 = ma.record_batch(pa_batch)
-    assert ma_batch2.num_rows() == 3
+    assert ma_batch2.num_rows == 3
 
 
 def test_record_batch_with_list_column():
@@ -359,7 +359,7 @@ def test_record_batch_with_list_column():
         {"vals": pa.array([[1, 2], [3]], type=pa.list_(pa.int32()))},
     )
     ma_rb = ma.record_batch(pa_rb)
-    assert ma_rb.num_rows() == 2
+    assert ma_rb.num_rows == 2
     pa_rb2 = pa.record_batch(ma_rb)
     assert pa_rb2.column("vals").equals(pa_rb.column("vals"))
 
@@ -367,7 +367,7 @@ def test_record_batch_with_list_column():
 def test_record_batch_with_dictionary_column():
     pa_rb = pa.record_batch({"cat": pa.array(["x", "y", "x", "z"]).dictionary_encode()})
     ma_rb = ma.record_batch(pa_rb)
-    assert ma_rb.num_rows() == 4
+    assert ma_rb.num_rows == 4
     assert pa.record_batch(ma_rb).column("cat").equals(pa_rb.column("cat"))
 
 
@@ -401,9 +401,9 @@ def test_table_from_pyarrow():
         ),
     )
     ma_table = ma.table(pa_table)
-    assert ma_table.num_rows() == 3
-    assert ma_table.num_columns() == 2
-    assert ma_table.column_names() == ["x", "y"]
+    assert ma_table.num_rows == 3
+    assert ma_table.num_columns == 2
+    assert ma_table.column_names == ["x", "y"]
 
 
 def test_table_to_pyarrow():
@@ -428,9 +428,9 @@ def test_table_roundtrip():
     )
     pa_table = pa.table(ma_table)
     ma_table2 = ma.table(pa_table)
-    assert ma_table2.num_rows() == 2
-    assert ma_table2.num_columns() == 2
-    assert ma_table2.column_names() == ["a", "b"]
+    assert ma_table2.num_rows == 2
+    assert ma_table2.num_columns == 2
+    assert ma_table2.column_names == ["a", "b"]
 
 
 def test_table_roundtrip_with_nulls():
@@ -444,7 +444,7 @@ def test_table_roundtrip_with_nulls():
     assert pa_table.column("a").to_pylist() == [1, None, 3]
     assert pa_table.column("b").to_pylist() == ["x", None, "z"]
     ma_table2 = ma.table(pa_table)
-    assert ma_table2.num_rows() == 3
+    assert ma_table2.num_rows == 3
 
 
 def test_table_with_struct_column():
@@ -462,7 +462,7 @@ def test_table_with_struct_column():
         }
     )
     ma_table = ma.table(pa_table)
-    assert ma_table.num_rows() == 2
+    assert ma_table.num_rows == 2
     pa_table2 = pa.table(ma_table)
     assert pa_table2.column("s").equals(pa_table.column("s"))
 
@@ -470,9 +470,9 @@ def test_table_with_struct_column():
 def test_table_arrow_c_stream_import():
     pa_table = pa.table({"a": [1, 2, 3], "b": ["x", "y", "z"]})
     t = ma.table(pa_table)
-    assert t.num_rows() == 3
-    assert t.num_columns() == 2
-    assert list(t.column_names()) == ["a", "b"]
+    assert t.num_rows == 3
+    assert t.num_columns == 2
+    assert list(t.column_names) == ["a", "b"]
 
 
 # ===========================================================================
@@ -491,7 +491,7 @@ def test_mojo_add_pyarrow_arrays(pa_type: pa.DType) -> None:
     b = ma.array(pa_b)
     result = ma.compute.add(a, b, ctx=None)
     assert len(result) == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
     out = pa.array(result)
     assert out[0].as_py() == 11
     assert out[1].as_py() == 22
@@ -518,7 +518,7 @@ def test_mojo_add_pyarrow_nulls_propagate(pa_type: pa.DType) -> None:
     pa_b = pa.array([10, 20, 30], type=pa_type())
     result = ma.compute.add(ma.array(pa_a), ma.array(pa_b), ctx=None)
     assert len(result) == 3
-    assert result.null_count() == 1
+    assert result.null_count == 1
     out = pa.array(result)
     assert out[0].as_py() == 11
     assert out[1].as_py() is None
@@ -546,7 +546,7 @@ def test_mojo_sub_pyarrow_nulls_propagate(pa_type: pa.DType) -> None:
     pa_b = pa.array([1, 2, None], type=pa_type())
     result = ma.compute.subtract(ma.array(pa_a), ma.array(pa_b), ctx=None)
     assert len(result) == 3
-    assert result.null_count() == 2
+    assert result.null_count == 2
 
 
 # ── multiply ─────────────────────────────────────────────────────────────────
@@ -603,7 +603,7 @@ def test_mojo_filter_pyarrow_preserves_nulls(pa_type: pa.DType) -> None:
     pa_mask = pa.array([True, True, True, False, True])
     result = ma.compute.filter(ma.array(pa_a), ma.array(pa_mask))
     assert len(result) == 4
-    assert result.null_count() == 1
+    assert result.null_count == 1
 
 
 @pytest.mark.parametrize("pa_type", INT_TYPES)
@@ -647,7 +647,7 @@ def test_pyarrow_to_mojo_drop_nulls(pa_type: pa.DType) -> None:
     pa_a = pa.array([1, None, 3, None, 5], type=pa_type())
     result = ma.compute.drop_null(ma.array(pa_a))
     assert len(result) == 3
-    assert result.null_count() == 0
+    assert result.null_count == 0
     out = pa.array(result)
     assert out[0].as_py() == 1
     assert out[1].as_py() == 3

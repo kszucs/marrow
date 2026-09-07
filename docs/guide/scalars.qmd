@@ -25,7 +25,7 @@ a = ma.array([10, None, 30])
 first = a[0]
 print(first)              # the scalar
 print(first.as_py())      # 10 — as a native Python value
-print(first.type())       # int64
+print(first.type)       # int64
 ```
 
 Slicing an array and taking an element gives a scalar the same way — the
@@ -33,7 +33,7 @@ underlying buffer is shared, so neither step copies:
 
 ```{python}
 tail = a.slice(2)
-print(tail[0], "|", tail[0].as_py(), "|", tail[0].type())
+print(tail[0], "|", tail[0].as_py(), "|", tail[0].type)
 ```
 
 ## Null scalars

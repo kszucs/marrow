@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     "the value there was null" — which the null `v` in the middle of the
     ordering does.
 
-    -- skip python
 
     -- expected
     v:int64	prev:int64	next:int64

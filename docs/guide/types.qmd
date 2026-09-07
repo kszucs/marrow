@@ -97,7 +97,7 @@ ma.array([None, None])
 # Provide an explicit type instead
 arr = ma.array([None, None], type=ma.int64())
 print(arr)
-print("null count:", arr.null_count())
+print("null count:", arr.null_count)
 ```
 
 Mixing incompatible Python types also raises:
@@ -152,10 +152,10 @@ List arrays hold variable-length sequences. Type inference handles the common ca
 
 ```{python}
 nested = ma.array([[1, 2, 3], [4, 5]])
-print(nested.type())   # list<int64>
+print(nested.type)   # list<int64>
 
 nested_f = ma.array([[1.0, 2.0], [3.0]])
-print(nested_f.type())  # list<float64>
+print(nested_f.type)  # list<float64>
 ```
 
 For full control, build the nested type explicitly with `ma.list_(value_type)`
@@ -163,17 +163,17 @@ or `ma.fixed_size_list_(value_type, size)` and pass it as `type=`:
 
 ```{python}
 lst = ma.array([[1, 2], [3, 4, 5]], type=ma.list_(ma.int32()))
-print(lst.type())   # list<int32>
+print(lst.type)   # list<int32>
 
 fsl = ma.array([[1.0, 2.0], [3.0, 4.0]], type=ma.fixed_size_list_(ma.float64(), 2))
-print(fsl.type())   # fixed_size_list<item: float64>
+print(fsl.type)   # fixed_size_list<item: float64>
 ```
 
 ## Checking types at runtime
 
 ```{python}
 arr = ma.array([1, 2, 3])
-t = arr.type()
+t = arr.type
 print(t)
 print(type(t).__name__)   # DataType
 ```

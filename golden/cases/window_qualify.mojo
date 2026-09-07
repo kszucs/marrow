@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     chosen by an order" — the same answer `DISTINCT ON` gives, reached the
     other way.
 
-    -- skip python
 
     -- expected
     k:string	v:int64

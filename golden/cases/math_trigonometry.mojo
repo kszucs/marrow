@@ -26,7 +26,7 @@ def plan() raises -> DynRelation:
     0.9092974268256817	-0.4161468365471424	2.0344439357957027
     """
     var t = table("floats")
-    var defined = t.filter(NotNull(col("n", int64)))
+    var defined = t.filter(col("n", int64).is_valid())
     return defined.project(
         ["s", "c", "a"],
         [

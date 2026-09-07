@@ -23,4 +23,4 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("nums")
-    return t.project(["c"], [NumericCast[Int64Type](col("f", float64))])
+    return t.project(["c"], [col("f", float64).cast(int64, safe=False)])

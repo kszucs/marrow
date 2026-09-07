@@ -27,7 +27,7 @@ def plan() raises -> DynRelation:
     )
     return d.aggregate(
         aggs=[
-            NumToString[StringType](col("d", decimal128(10, 2)).sum()).alias(
+            col("d", decimal128(10, 2)).sum().cast(string, safe=False).alias(
                 "total"
             )
         ]

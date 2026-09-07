@@ -26,11 +26,6 @@ silently.
 
 from golden.helpers import table
 from marrow.dtypes import (
-    BoolType,
-    Float64Type,
-    Int32Type,
-    Int64Type,
-    StringType,
     bool_,
     date32,
     float64,
@@ -41,28 +36,9 @@ from marrow.dtypes import (
     string,
     timestamp,
 )
-from marrow.expr import array_length, col, count_star, lit
+from marrow.expr import array_length, col, count_star, if_else, lit
 from marrow.expr import dense_rank, rank, row_number
 from marrow.expr import DynRelation
-from marrow.expr import IsNull, NotNull
-from marrow.expr import (
-    BoolToNum,
-    NumToBool,
-    NumToString,
-    NumericCast,
-    StringToNum,
-)
-from marrow.expr import CaseWhen, Coalesce, FillNull, Nullif
-from marrow.expr import (
-    EndsWith,
-    ILike,
-    Like,
-    Lower,
-    StartsWith,
-    StringLength,
-    Strip,
-    Upper,
-)
 from marrow.kernels.join import (
     JOIN_ALL,
     JOIN_ANTI,

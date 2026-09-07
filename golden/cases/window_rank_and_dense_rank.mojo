@@ -9,7 +9,6 @@ def plan() raises -> DynRelation:
     `rank` leaves gaps after a tied run and `dense_rank` does not. `basic.k`
     has three `a`s and two `b`s, so the two columns separate immediately.
 
-    -- skip python
 
     -- expected
     k:string	r:int64	d:int64

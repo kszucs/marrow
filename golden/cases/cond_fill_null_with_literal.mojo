@@ -16,4 +16,4 @@ def plan() raises -> DynRelation:
     7
     """
     var t = table("basic")
-    return t.project(["c"], [FillNull(col("v", int64), lit(0, int64))])
+    return t.project(["c"], [col("v", int64).fill_null(lit(0, int64))])

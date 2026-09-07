@@ -20,7 +20,7 @@ def plan() raises -> DynRelation:
     1
     """
     var t = table("basic")
-    var lengths = t.project(["k"], [StringLength(col("k", string))])
+    var lengths = t.project(["k"], [col("k", string).length()])
     return lengths.aggregate(
         aggs=[col("k", int32).sum(distinct=True).alias("n")]
     )

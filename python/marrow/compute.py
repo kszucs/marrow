@@ -9,7 +9,8 @@ return :class:`~marrow.Array` or :class:`~marrow.Scalar` as appropriate.
 """
 
 from . import libmarrow as _ma
-from . import Array, _serial
+from ._wrapper import unwrap
+from .arrays import Array, _serial
 
 
 # ── Arithmetic ────────────────────────────────────────────────────────────────
@@ -185,7 +186,7 @@ def cast(arr, target_type, *, safe=True, memory_pool=None, ctx=None):
 
     Equivalent to ``pyarrow.compute.cast``.
     """
-    return Array.wrap(_ma.cast(arr.unwrap(), target_type, safe, (ctx or _serial())))
+    return Array.wrap(_ma.cast(arr.unwrap(), unwrap(target_type), safe, (ctx or _serial())))
 
 
 # ── Sorting ───────────────────────────────────────────────────────────────────

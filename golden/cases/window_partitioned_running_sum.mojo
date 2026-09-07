@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     ROW` applies and the column is a running total that restarts at each `k`.
     The NULL partition is its own group, exactly as in `GROUP BY`.
 
-    -- skip python
 
     -- expected
     k:string	v:int64	running:int64

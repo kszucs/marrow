@@ -1,12 +1,19 @@
 """Free-standing compute functions exposed to Python.
 
-All GPU-capable functions accept an ``ExecContext`` as their last positional argument.
+All GPU-capable functions accept an ``ExecContext`` as their last positional
+argument.
+
+**Three shapes cover every kernel here**, so the wrappers below are written out
+once each rather than reached for from a general-purpose helper module. This is
+the same arrangement `expressions.mojo` uses for `Expr`, and for the same
+reason: a binding is easier to read when the conversion it performs is visible
+in the file that performs it.
 """
 
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import DynArray
-from marrow.dtypes import DynType
+from marrow.dtypes import DynType, int32
 import marrow.kernels as mk
 
 # ``mk.filter`` collides with the like-named submodule, so the package alias
@@ -15,94 +22,171 @@ from marrow.kernels.filter import filter as _filter_kernel
 from marrow.kernels.boolean import IsNullKernel, NotNullKernel
 from marrow.execution import ExecContext
 
-from helpers import pyfunction
-
 
 # ---------------------------------------------------------------------------
-# ExecContext factory functions
+# The three kernel shapes
 # ---------------------------------------------------------------------------
+#
+# Each pins the full signature, which is also what lets Mojo resolve the
+# `DynArray` runtime overload from a kernel reference like `mk.AddKernel.dispatch`
+# when the kernel carries parametric and concrete-type overloads besides.
 
 
-# ---------------------------------------------------------------------------
-# sort_indices / sort — composite kernels built from sort_indices + take
-# ---------------------------------------------------------------------------
-
-
-def sort_indices(
-    array: DynArray, ascending: Bool, nulls_first: Bool, ctx: ExecContext
-) raises -> DynArray:
-    return mk.sort_indices(array, ascending, nulls_first, ctx=ctx)
-
-
-def sort(
-    array: DynArray, ascending: Bool, nulls_first: Bool, ctx: ExecContext
-) raises -> DynArray:
-    var indices = mk.sort_indices(array, ascending, nulls_first, ctx=ctx)
-    return mk.take(array, indices, ctx)
-
-
-def take(
-    array: DynArray, indices: DynArray, ctx: ExecContext
-) raises -> DynArray:
-    return mk.take(array, indices.as_int32().copy(), ctx)
-
-
-def cast(
-    array: DynArray, target: DynType, safe: Bool, ctx: ExecContext
-) raises -> DynArray:
-    return mk.cast(array, target, safe, ctx)
-
-
-# ``pykernel`` — wrap a marrow kernel of uniform shape
-# ``(DynArray..., ExecContext) -> R`` as a Python-callable. Each overload
-# pins the full signature so Mojo can resolve the DynArray runtime overload
-# from a kernel reference like ``mk.equal`` even when the kernel has
-# additional parametric or concrete-type overloads.
-
-
-def pykernel[
-    func: def(DynArray, ExecContext) raises thin -> Bool,
+def _unary[
+    f: def(DynArray, ExecContext) raises thin -> DynArray,
 ]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
-    return pyfunction[func]()
+    """``(array, ctx) -> array``."""
+
+    def wrapper(array: PythonObject, ctx: PythonObject) raises -> PythonObject:
+        return f(DynArray(py=array), ExecContext(py=ctx)).to_python_object()
+
+    return wrapper
 
 
-def pykernel[
-    func: def(DynArray, ExecContext) raises thin -> DynArray,
-]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
-    return pyfunction[func]()
-
-
-def pykernel[
-    func: def(DynArray, DynArray, ExecContext) raises thin -> DynArray,
+def _binary[
+    f: def(DynArray, DynArray, ExecContext) raises thin -> DynArray,
 ]() -> def(
     PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
-    return pyfunction[func]()
+    """``(array, array, ctx) -> array``."""
+
+    def wrapper(
+        left: PythonObject, right: PythonObject, ctx: PythonObject
+    ) raises -> PythonObject:
+        return f(
+            DynArray(py=left), DynArray(py=right), ExecContext(py=ctx)
+        ).to_python_object()
+
+    return wrapper
+
+
+def _reduce[
+    f: def(DynArray, ExecContext) raises thin -> Bool,
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
+    """``(array, ctx) -> bool`` — the boolean reductions."""
+
+    def wrapper(array: PythonObject, ctx: PythonObject) raises -> PythonObject:
+        return PythonObject(f(DynArray(py=array), ExecContext(py=ctx)))
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# ExecContext
+# ---------------------------------------------------------------------------
+
+
+def _ctx_serial() raises -> PythonObject:
+    return ExecContext.serial().to_python_object()
+
+
+def _ctx_parallel() raises -> PythonObject:
+    return ExecContext.parallel().to_python_object()
+
+
+# ---------------------------------------------------------------------------
+# Composite and argument-carrying kernels — one signature each
+# ---------------------------------------------------------------------------
+
+
+def _sort_indices(
+    array: PythonObject,
+    ascending: PythonObject,
+    nulls_first: PythonObject,
+    ctx: PythonObject,
+) raises -> PythonObject:
+    return (
+        mk.sort_indices(
+            DynArray(py=array),
+            Bool(py=ascending),
+            Bool(py=nulls_first),
+            ctx=ExecContext(py=ctx),
+        )
+        .to_dyn()
+        .to_python_object()
+    )
+
+
+def _sort(
+    array: PythonObject,
+    ascending: PythonObject,
+    nulls_first: PythonObject,
+    ctx: PythonObject,
+) raises -> PythonObject:
+    """`sort_indices` then `take` — marrow has no fused sort kernel."""
+    var values = DynArray(py=array)
+    var context = ExecContext(py=ctx)
+    var indices = mk.sort_indices(
+        values, Bool(py=ascending), Bool(py=nulls_first), ctx=context
+    )
+    # `sort_indices` answers a *typed* `Int32Array`, so it needs `to_dyn`
+    # above; `take` over an erased input already answers a `DynArray`.
+    return mk.take(values, indices, context).to_python_object()
+
+
+def _take(
+    array: PythonObject, indices: PythonObject, ctx: PythonObject
+) raises -> PythonObject:
+    var context = ExecContext(py=ctx)
+    var idx = DynArray(py=indices)
+    # `as_int32()` asserts the variant rather than converting, so an `int64`
+    # index array -- what `array([2, 0])` infers -- used to abort the process
+    # rather than raise. Cast instead: PyArrow's `take` accepts any integer
+    # index type, and an abort is not a diagnosis.
+    if not idx.dtype().is_int32():
+        idx = mk.cast(idx, DynType(int32), True, context)
+    return mk.take(
+        DynArray(py=array), idx.as_int32().copy(), context
+    ).to_python_object()
+
+
+def _cast(
+    array: PythonObject,
+    target: PythonObject,
+    safe: PythonObject,
+    ctx: PythonObject,
+) raises -> PythonObject:
+    return mk.cast(
+        DynArray(py=array),
+        DynType(py=target),
+        Bool(py=safe),
+        ExecContext(py=ctx),
+    ).to_python_object()
+
+
+def _concat(arrays: PythonObject, ctx: PythonObject) raises -> PythonObject:
+    """Concatenate arrays of one dtype into a single array."""
+    var n = Int(py=arrays.__len__())
+    var out = List[DynArray](capacity=n)
+    for i in range(n):
+        out.append(DynArray(py=arrays[i]))
+    return mk.concat(out, ExecContext(py=ctx)).to_python_object()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = (
         mb.add_type[ExecContext]("ExecContext")
-        .def_staticmethod[pyfunction[ExecContext.serial]()]("serial")
-        .def_staticmethod[pyfunction[ExecContext.parallel]()]("parallel")
+        .def_staticmethod[_ctx_serial]("serial")
+        .def_staticmethod[_ctx_parallel]("parallel")
     )
-    mb.def_function[pykernel[mk.AddKernel.dispatch]()]("add")
-    mb.def_function[pykernel[mk.SubKernel.dispatch]()]("subtract")
-    mb.def_function[pykernel[mk.MulKernel.dispatch]()]("multiply")
-    mb.def_function[pykernel[mk.DivKernel.dispatch]()]("divide")
-    mb.def_function[pykernel[mk.AnyKernel.dispatch]()]("any")
-    mb.def_function[pykernel[mk.AllKernel.dispatch]()]("all")
-    mb.def_function[pykernel[IsNullKernel.dispatch]()]("is_null")
-    mb.def_function[pykernel[NotNullKernel.dispatch]()]("is_valid")
-    mb.def_function[pykernel[mk.drop_null]()]("drop_null")
-    mb.def_function[pykernel[_filter_kernel]()]("filter")
-    mb.def_function[pykernel[mk.EqKernel.dispatch]()]("equal")
-    mb.def_function[pykernel[mk.NeKernel.dispatch]()]("not_equal")
-    mb.def_function[pykernel[mk.LtKernel.dispatch]()]("less")
-    mb.def_function[pykernel[mk.LeKernel.dispatch]()]("less_equal")
-    mb.def_function[pykernel[mk.GtKernel.dispatch]()]("greater")
-    mb.def_function[pykernel[mk.GeKernel.dispatch]()]("greater_equal")
-    mb.def_function[pyfunction[sort_indices]()]("sort_indices")
-    mb.def_function[pyfunction[sort]()]("sort")
-    mb.def_function[pyfunction[take]()]("take")
-    mb.def_function[pyfunction[cast]()]("cast")
+    mb.def_function[_binary[mk.AddKernel.dispatch]()]("add")
+    mb.def_function[_binary[mk.SubKernel.dispatch]()]("subtract")
+    mb.def_function[_binary[mk.MulKernel.dispatch]()]("multiply")
+    mb.def_function[_binary[mk.DivKernel.dispatch]()]("divide")
+    mb.def_function[_reduce[mk.AnyKernel.dispatch]()]("any")
+    mb.def_function[_reduce[mk.AllKernel.dispatch]()]("all")
+    mb.def_function[_unary[IsNullKernel.dispatch]()]("is_null")
+    mb.def_function[_unary[NotNullKernel.dispatch]()]("is_valid")
+    mb.def_function[_unary[mk.drop_null]()]("drop_null")
+    mb.def_function[_binary[_filter_kernel]()]("filter")
+    mb.def_function[_binary[mk.EqKernel.dispatch]()]("equal")
+    mb.def_function[_binary[mk.NeKernel.dispatch]()]("not_equal")
+    mb.def_function[_binary[mk.LtKernel.dispatch]()]("less")
+    mb.def_function[_binary[mk.LeKernel.dispatch]()]("less_equal")
+    mb.def_function[_binary[mk.GtKernel.dispatch]()]("greater")
+    mb.def_function[_binary[mk.GeKernel.dispatch]()]("greater_equal")
+    mb.def_function[_sort_indices]("sort_indices")
+    mb.def_function[_sort]("sort")
+    mb.def_function[_take]("take")
+    mb.def_function[_cast]("cast")
+    mb.def_function[_concat]("concat")

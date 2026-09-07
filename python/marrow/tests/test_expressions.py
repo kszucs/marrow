@@ -230,7 +230,7 @@ def test_temporal_extraction(dates):
 
 def test_date_trunc_keeps_the_input_type(dates):
     truncated = col("d").date_trunc("year").execute(dates)
-    assert str(truncated.type()) == "date32"
+    assert str(truncated.type) == "date32"
 
 
 def test_date_trunc_rejects_a_bad_unit_when_the_expression_is_built():
@@ -323,7 +323,7 @@ def test_cast_changes_the_type(batch):
     # Compared by name: the bound `DataType` registers no `__eq__`, so
     # `ma.int32() == ma.int32()` is an identity test and answers False.
     # The rest of the Python suite compares dtypes the same way.
-    assert str(col("b").cast(ma.int32()).execute(batch).type()) == "int32"
+    assert str(col("b").cast(ma.int32()).execute(batch).type) == "int32"
 
 
 def test_unsafe_cast_nulls_an_unparseable_string():

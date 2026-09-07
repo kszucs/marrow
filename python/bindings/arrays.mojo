@@ -46,8 +46,6 @@ from marrow.builders import (
 from marrow.scalars import DynScalar
 import marrow.dtypes as dt
 
-from helpers import pymethod
-
 
 # int PyBytes_AsStringAndSize(PyObject *obj, char **buffer, Py_ssize_t *length)
 comptime _PyBytesAsStringAndSizeFn = ExternalFunction[
@@ -1167,12 +1165,46 @@ def _any_array_str(py_self: PythonObject) raises -> PythonObject:
     return PythonObject(String(ptr[]))
 
 
-def _array_to_device(self: DynArray, ctx: ExecContext) raises -> DynArray:
-    return self.to_device(ctx.device.value())
+def _array_len(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(len(py_self.downcast_value_ptr[DynArray]()[]))
 
 
-def _array_to_cpu(self: DynArray, ctx: ExecContext) raises -> DynArray:
-    return self.to_cpu(ctx.device.value())
+def _array_null_count(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(py_self.downcast_value_ptr[DynArray]()[].null_count())
+
+
+def _array_type(py_self: PythonObject) raises -> PythonObject:
+    return py_self.downcast_value_ptr[DynArray]()[].dtype().to_python_object()
+
+
+def _array_is_valid(
+    py_self: PythonObject, index: PythonObject
+) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[DynArray]()
+    return PythonObject(ptr[].is_valid(Int(py=index)))
+
+
+def _array_slice(
+    py_self: PythonObject, offset: PythonObject, length: PythonObject
+) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[DynArray]()
+    return ptr[].slice(Int(py=offset), Int(py=length)).to_python_object()
+
+
+def _array_to_device(
+    py_self: PythonObject, ctx: PythonObject
+) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[DynArray]()
+    return ptr[].to_device(
+        ExecContext(py=ctx).device.value()
+    ).to_python_object()
+
+
+def _array_to_cpu(
+    py_self: PythonObject, ctx: PythonObject
+) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[DynArray]()
+    return ptr[].to_cpu(ExecContext(py=ctx).device.value()).to_python_object()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
@@ -1181,14 +1213,14 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     # --- Array (type-erased DynArray) ---
     ref array_py = mb.add_type[DynArray]("Array")
     _ = (
-        array_py.def_method[pymethod[DynArray.__len__]()]("__len__")
+        array_py.def_method[_array_len]("__len__")
         .def_method[_any_array_getitem_py]("__getitem__")
-        .def_method[pymethod[DynArray.null_count]()]("null_count")
-        .def_method[pymethod[DynArray.dtype]()]("type")
-        .def_method[pymethod[DynArray.is_valid]()]("is_valid")
-        .def_method[pymethod[DynArray.slice]()]("slice")
-        .def_method[pymethod[_array_to_device]()]("to_device")
-        .def_method[pymethod[_array_to_cpu]()]("to_cpu")
+        .def_method[_array_null_count]("null_count")
+        .def_method[_array_type]("type")
+        .def_method[_array_is_valid]("is_valid")
+        .def_method[_array_slice]("slice")
+        .def_method[_array_to_device]("to_device")
+        .def_method[_array_to_cpu]("to_cpu")
         .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[_any_dtype]]("__arrow_c_schema__")
     )

@@ -19,4 +19,4 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("words")
-    return t.project(["n"], [StringLength(col("s", string))])
+    return t.project(["n"], [col("s", string).length()])

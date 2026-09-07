@@ -21,5 +21,5 @@ def plan() raises -> DynRelation:
     """
     var t = table("words")
     return t.project(
-        ["b"], [StartsWith(col("s", string), Lower(col("s", string)))]
+        ["b"], [col("s", string).startswith(col("s", string).lower())]
     )

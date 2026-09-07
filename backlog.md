@@ -430,13 +430,12 @@ A user rejects the library outright without these.
 
 #### 1.1 A query API from Python
 
-**What exists.** Nothing. `python/marrow/__init__.py` exposes `Array`, `Scalar`,
-`RecordBatch`, `Table`, IPC read/write and `parquet.read_table`/`write_table`;
-`python/marrow/compute.py` has 21 functions (`add`, `subtract`, `multiply`,
-`divide`, six comparisons, `any`/`all`, `filter`, `take`, `cast`, `is_null`,
-`is_valid`, `drop_null`, `sort_indices`, `sort`). `python/bindings/lib.mojo`
-registers `dtypes, scalars, arrays, compute, schema, tabular, ipc, parquet` —
-no expression module.
+**What exists.** The frontend, and this paragraph used to say "Nothing" —
+written while it was deleted, left standing after it was rebuilt, and
+contradicted two paragraphs later by its own "Done, 2026-08-30". The
+description below of a `python/` with no expression module has been wrong
+since `ee16f5a4`; it is kept only because the history after it is worth
+reading.
 
 The frontend existed and was deleted on 2026-08-29 in commit `b2de85a0`
 (message: "e"):

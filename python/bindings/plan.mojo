@@ -38,9 +38,19 @@ from marrow.execution import ExecContext
 from marrow.expr.bindings import Bindings
 from marrow.expr.builders import scan as _scan, table as _table
 from marrow.expr.logical import DynRelation, DynValue
+from marrow.expr.optimizer import AllRules
+from marrow.expr.physical import Pipeline
 from marrow.expr.runtime.aggregates import RuntimeAggregate
-from marrow.expr.runtime.values import column as _column
-from expressions import unwrap as _unwrap_expr, unwrap_agg as _unwrap_agg
+from marrow.expr.runtime.values import RuntimeValue, column as _column
+from expressions import (
+    bool_list as _bool_list,
+    boxed as _boxed,
+    boxed_list as _boxed_list,
+    unwrap as _unwrap_expr,
+    unwrap_agg as _unwrap_agg,
+    unwrap_window as _unwrap_window,
+)
+from marrow.expr.logical import WindowExpr
 from marrow.kernels.join import JoinKind
 from marrow.parquet import ParquetFile
 from marrow.schema import Schema
@@ -53,24 +63,25 @@ from marrow.tabular import RecordBatch
 # ---------------------------------------------------------------------------
 
 
-def _boxed(obj: PythonObject) raises -> DynValue:
-    """One expression: a bound ``Expr``, or a ``str`` naming a column."""
+
+def _unboxed(obj: PythonObject) raises -> RuntimeValue:
+    """One expression at its **concrete** type, not behind `DynValue`.
+
+    `DynRelation.filter` has two overloads and they are not equivalent:
+    `filter[V: Value]` captures the type and gives the `Filter` node its
+    `constant` and `conjuncts`, which is what `EliminateFilter` and
+    `SplitConjunction` read. The erased one cannot answer either -- both are
+    decisions a box cannot make -- though it does still prune, since `mask` is
+    a slot on `DynValue`.
+
+    The type was never actually lost at this boundary. `Expr` is a one-field
+    box holding a `RuntimeValue`, and `downcast_value_ptr` recovers it at that
+    type -- so all that was needed was to stop boxing it on the way past."""
     var builtins = Python.import_module("builtins")
     if Bool(py=builtins.isinstance(obj, builtins.str)):
-        return DynValue(_column(String(py=obj)))
-    # `Expr` is a one-field box owned by `expressions.mojo` -- a bare
-    # `RuntimeValue` cannot be registered, since deriving `write_repr_to` for
-    # it reflects through its own recursion. Cross the box through its
-    # accessor.
-    return DynValue(_unwrap_expr(obj))
+        return _column(String(py=obj))
+    return _unwrap_expr(obj)
 
-
-def _boxed_list(obj: PythonObject) raises -> List[DynValue]:
-    """A Python sequence of expressions / column names."""
-    var out = List[DynValue]()
-    for i in range(Int(py=obj.__len__())):
-        out.append(_boxed(obj[i]))
-    return out^
 
 
 def _agg(obj: PythonObject) raises -> DynValue:
@@ -106,12 +117,6 @@ def _string_list(obj: PythonObject) raises -> List[String]:
         out.append(String(py=obj[i]))
     return out^
 
-
-def _bool_list(obj: PythonObject) raises -> List[Bool]:
-    var out = List[Bool]()
-    for i in range(Int(py=obj.__len__())):
-        out.append(Bool(py=obj[i]))
-    return out^
 
 
 def _int_list(obj: PythonObject) raises -> List[Int]:
@@ -252,6 +257,21 @@ def _plan_with_columns(
     )
 
 
+def _plan_with_window_columns(
+    py_self: PythonObject, names: PythonObject, exprs: PythonObject
+) raises -> PythonObject:
+    """`SELECT *, <window functions> AS <names>`.
+
+    A separate entry point rather than a branch inside `with_columns`, because
+    the two are separate overloads on `DynRelation` for a reason: a
+    `List[WindowExpr]` cannot convert to a `List[DynValue]`, so the plan layer
+    cannot confuse them and neither can this."""
+    var out = List[WindowExpr]()
+    for i in range(Int(py=exprs.__len__())):
+        out.append(_unwrap_window(exprs[i]))
+    return _wrap(_plan(py_self).with_columns(_string_list(names), out^))
+
+
 def _plan_drop(
     py_self: PythonObject, names: PythonObject
 ) raises -> PythonObject:
@@ -273,14 +293,14 @@ def _plan_filter(
 ) raises -> PythonObject:
     """Keep rows where `predicate` is true.
 
-    This reaches `DynRelation.filter(DynValue)`, the **erased** overload, and
-    that no longer costs pruning: `mask` is a slot on `DynValue`, so a boxed
-    predicate prunes exactly as well as a typed one. What the erased overload
-    still loses is `constant_bool` and `conjuncts` — analysis only the concrete
-    type can answer — so `EliminateFilter` and `SplitConjunction` do not fire
-    on a filter built from Python.
-    """
-    return _wrap(_plan(py_self).filter(_boxed(predicate)))
+    Reaches `DynRelation.filter[V: Value & Prunable]` -- the overload that
+    keeps the predicate's concrete type.
+
+    Pruning alone no longer needs it: `mask` is a slot on `DynValue`, so a
+    boxed predicate prunes as well as a typed one. What only the concrete type
+    can answer is `constant_bool` and `conjuncts`, so it is `EliminateFilter`
+    and `SplitConjunction` that this buys. See `_unboxed`."""
+    return _wrap(_plan(py_self).filter(_unboxed(predicate)))
 
 
 def _plan_aggregate(
@@ -340,6 +360,51 @@ def _plan_join(
             JoinKind.parse(String(py=how)),
         )
     )
+
+
+def _plan_optimize(py_self: PythonObject) raises -> PythonObject:
+    """The plan the rewriter would run — fifteen rules plus column pruning.
+
+    `optimize` takes its rule set as a **comptime** parameter, which fixes it
+    at *this module's* compile time rather than the caller's; `AllRules` is
+    the only set a Python caller can want, since choosing rules at run time is
+    what the comptime parameter exists to avoid. `execute()` alone optimizes
+    nothing, so this is opt-in on both sides.
+
+    The result is an ordinary plan: print it, diff it against the input, keep
+    composing it, or run it."""
+    return _wrap(_plan(py_self).optimize[AllRules]())
+
+
+def _plan_batches(
+    py_self: PythonObject, num_threads: PythonObject
+) raises -> PythonObject:
+    """The result as its natural batches, rather than concatenated into one.
+
+    `execute()` calls `Pipeline.collect`, which drains the chain and concatenates
+    everything into a single `StructArray`. That is the wrong shape for a
+    multi-row-group scan: the batch boundaries the engine already produced are
+    thrown away and then paid for again in one large allocation. `drain` is
+    resumable and answers one batch at a time, so this walks it instead.
+
+    The list is still materialised here. Handing back a live iterator would
+    mean registering a Python type holding the `Pipeline`, and an `Operator` is
+    `Movable` but not `Copyable` — so that is a separate change, not a
+    parameter to this one."""
+    var rel = _plan(py_self)
+    var pipeline = rel.to_operator(ExecContext.parallel(Int(py=num_threads)))
+    var builtins = Python.import_module("builtins")
+    var out = builtins.list()
+    while True:
+        var datum = pipeline.drain()
+        if not datum:
+            break
+        _ = out.append(
+            RecordBatch.from_struct_array(
+                datum.value().struct_array()
+            ).to_python_object()
+        )
+    return out
 
 
 def _plan_str(py_self: PythonObject) raises -> PythonObject:
@@ -409,6 +474,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_select]("select")
         .def_method[_plan_project]("project")
         .def_method[_plan_with_columns]("with_columns")
+        .def_method[_plan_with_window_columns]("with_window_columns")
         .def_method[_plan_drop]("drop")
         .def_method[_plan_rename]("rename")
         .def_method[_plan_filter]("filter")
@@ -416,6 +482,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_plan_sort]("sort")
         .def_method[_plan_limit]("limit")
         .def_method[_plan_join]("join")
+        .def_method[_plan_optimize]("optimize")
+        .def_method[_plan_batches]("batches")
         .def_method[_plan_str]("__str__")
         .def_method[_plan_repr]("__repr__")
     )

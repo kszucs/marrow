@@ -10,7 +10,6 @@ def plan() raises -> DynRelation:
     agree only when the order key has no duplicates. A two-row sliding sum is
     the smallest frame that shows the window moving.
 
-    -- skip python
 
     -- expected
     v:int64	s:int64

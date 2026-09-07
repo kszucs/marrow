@@ -27,14 +27,6 @@ def plan() raises -> DynRelation:
     return t.project(
         ["c"],
         [
-            CaseWhen(
-                col("v", int64) > lit(4, int64),
-                lit(1, int64),
-                CaseWhen(
-                    col("v", int64) > lit(2, int64),
-                    lit(2, int64),
-                    lit(3, int64),
-                ),
-            )
+            if_else(col("v", int64) > lit(4, int64), lit(1, int64), if_else(col("v", int64) > lit(2, int64), lit(2, int64), lit(3, int64)))
         ],
     )

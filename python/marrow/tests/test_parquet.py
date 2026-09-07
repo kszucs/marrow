@@ -56,16 +56,16 @@ def test_read_returns_marrow_table(tmp_path):
     p = tmp_path / "t.parquet"
     pq.write_table(_sample(), p)
     t = mpq.read_table(p)
-    assert t.num_rows() == 5
-    assert t.num_columns() == 4
-    assert t.column_names() == ["i", "f", "b", "s"]
+    assert t.num_rows == 5
+    assert t.num_columns == 4
+    assert t.column_names == ["i", "f", "b", "s"]
 
 
 def test_column_projection(tmp_path):
     p = tmp_path / "t.parquet"
     pq.write_table(_sample(), p)
     t = mpq.read_table(p, columns=["s", "i"])
-    assert t.column_names() == ["s", "i"]
+    assert t.column_names == ["s", "i"]
     got = _to_pa(t)
     assert got.column("i").to_pylist() == [1, 2, None, 4, 5]
     assert got.column("s").to_pylist() == ["a", "bb", None, "dddd", "e"]

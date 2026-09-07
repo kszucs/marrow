@@ -298,7 +298,7 @@ def test_collect_returns_an_eager_record_batch(table):
     out = table.collect()
     assert isinstance(out, ma.RecordBatch)
     # `num_rows` is a method here, not a PyArrow-style property.
-    assert out.num_rows() == 4
+    assert out.num_rows == 4
 
 
 @pytest.mark.parametrize("num_threads", [0, 1, 4])
@@ -362,3 +362,153 @@ def test_read_parquet_accepts_a_path_string(parquet_file):
         "region",
         "price",
     ]
+
+
+# ---------------------------------------------------------------------------
+# optimize() and batches()
+# ---------------------------------------------------------------------------
+
+
+def test_optimize_eliminates_a_constant_true_filter(table):
+    plan = table.filter(ma.lit(True))
+    assert "Filter" in plan.explain()
+    assert "Filter" not in plan.optimize().explain()
+
+
+def test_optimize_splits_a_conjunction(table):
+    """Needs both halves of the predicate fix: ``Plan.filter`` keeping the
+    concrete ``RuntimeValue``, and ``RuntimeValue.conjuncts`` splitting on
+    ``and``. With either missing this comes back as one compound Filter."""
+    plan = table.filter((col("qty") > 1) & (col("price") < 50))
+    assert plan.optimize().explain().count("Filter") == 2
+
+
+def test_optimize_splits_a_three_way_conjunction(table):
+    plan = table.filter((col("qty") > 1) & (col("price") < 50) & (col("qty") < 4))
+    assert plan.optimize().explain().count("Filter") == 3
+
+
+def test_optimize_does_not_change_the_answer(table):
+    plan = table.filter((col("qty") > 1) & (col("price") < 50))
+    assert rows(plan.optimize()) == rows(plan)
+
+
+def test_optimize_removes_a_no_op_projection(table):
+    plan = table.select("region", "qty", "price").filter(col("qty") > 2)
+    assert "Project" in plan.explain()
+    assert "Project" not in plan.optimize().explain()
+
+
+def test_optimize_returns_a_composable_plan(table):
+    """The result is an ordinary plan, not a terminal — you can keep going."""
+    plan = table.filter(col("qty") > 1).optimize().select("region")
+    # qty is [1, 2, None, 4]; only rows 1 and 3 pass, and both are "west".
+    assert rows(plan) == [{"region": "west"}, {"region": "west"}]
+
+
+def test_batches_returns_the_engines_own_batches(table):
+    assert sum(b.num_rows for b in table.batches()) == table.collect().num_rows
+
+
+def test_batches_agrees_with_collect_under_a_filter(table):
+    plan = table.filter(col("qty") > 1)
+    assert sum(b.num_rows for b in plan.batches()) == plan.collect().num_rows
+
+
+def test_to_table_keeps_one_chunk_per_batch(table):
+    out = table.to_table()
+    assert out.num_rows == table.collect().num_rows
+    assert out.column(0).num_chunks == len(table.batches())
+
+
+# ---------------------------------------------------------------------------
+# Window functions
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def windowed():
+    """Two partitions of two rows, no ties, so every window verb is legible."""
+    return ma.memtable(
+        ma.record_batch(
+            {
+                "k": ma.array(["a", "a", "b", "b"]),
+                "v": ma.array([1, 2, 3, 4], type=ma.int64()),
+            }
+        )
+    )
+
+
+def test_row_number_numbers_the_ordering(windowed):
+    out = windowed.with_columns(rn=ma.row_number().over(order_by=[col("v")]))
+    assert [r["rn"] for r in rows(out)] == [1, 2, 3, 4]
+
+
+def test_rank_skips_a_gap_and_dense_rank_does_not(windowed):
+    out = windowed.with_columns(
+        r=ma.rank().over(order_by=[col("k")]),
+        d=ma.dense_rank().over(order_by=[col("k")]),
+    )
+    assert [x["r"] for x in rows(out)] == [1, 1, 3, 3]
+    assert [x["d"] for x in rows(out)] == [1, 1, 2, 2]
+
+
+def test_lag_and_lead_read_neighbouring_rows(windowed):
+    out = windowed.with_columns(
+        prev=col("v").lag().over(order_by=[col("v")]),
+        nxt=col("v").lead().over(order_by=[col("v")]),
+    )
+    assert [x["prev"] for x in rows(out)] == [None, 1, 2, 3]
+    assert [x["nxt"] for x in rows(out)] == [2, 3, 4, None]
+
+
+def test_first_value_is_constant_and_last_value_is_the_current_row(windowed):
+    """The frame gotcha: under the default frame `last_value` is the *current*
+    row, because the frame ends there."""
+    out = windowed.with_columns(
+        f=col("v").first_value().over(order_by=[col("v")]),
+        l=col("v").last_value().over(order_by=[col("v")]),
+    )
+    assert [x["f"] for x in rows(out)] == [1, 1, 1, 1]
+    assert [x["l"] for x in rows(out)] == [1, 2, 3, 4]
+
+
+def test_an_aggregate_windows_per_partition(windowed):
+    out = windowed.with_columns(
+        running=col("v").sum().over(partition_by=[col("k")], order_by=[col("v")])
+    )
+    assert [x["running"] for x in rows(out)] == [1, 3, 3, 7]
+
+
+def test_an_explicit_rows_frame_slides(windowed):
+    """`ROWS` counts rows where the default `RANGE` counts peers."""
+    out = windowed.with_columns(
+        s=col("v").sum().over(order_by=[col("v")], rows=(-1, 0))
+    )
+    assert [x["s"] for x in rows(out)] == [1, 3, 5, 7]
+
+
+def test_a_window_builds_a_window_node(windowed):
+    plan = windowed.with_columns(rn=ma.row_number().over(order_by=[col("v")]))
+    assert "Window(" in plan.explain()
+
+
+def test_windowing_a_per_row_value_says_what_to_do_instead(windowed):
+    with pytest.raises(TypeError, match="aggregate first"):
+        col("v").over(order_by=[col("v")])
+
+
+def test_windows_and_ordinary_expressions_cannot_share_a_call(windowed):
+    """They are two different plan nodes, and which ran first would change the
+    answer."""
+    with pytest.raises(TypeError, match="not both in one call"):
+        windowed.with_columns(
+            a=col("v") + 1, rn=ma.row_number().over(order_by=[col("v")])
+        )
+
+
+def test_window_renders_readably(windowed):
+    w = ma.row_number().over(partition_by=[col("k")], order_by=[col("v")])
+    assert "row_number()" in w.render()
+    assert "partition k" in w.render()
+    assert w.referenced_columns() == ["k", "v"]

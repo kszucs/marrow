@@ -61,7 +61,7 @@ The **eager kernels** work a column at a time, so the same thing by hand is a
 mask plus a `filter` per column. Reach for this when you already hold a mask:
 
 ```{python}
-threshold = ma.array([80_000] * employees.num_rows())
+threshold = ma.array([80_000] * employees.num_rows)
 well_paid = mc.greater(employees.column("salary"), threshold)
 print("mask:", well_paid)
 

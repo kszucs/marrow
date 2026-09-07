@@ -107,7 +107,7 @@ def test_array_bool():
     arr = ma.array([True, None, False, None])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 4
-    assert arr.null_count() == 2
+    assert arr.null_count == 2
     assert arr[0] == True
     assert arr[2] == False
 
@@ -116,21 +116,21 @@ def test_array_int64():
     arr = ma.array([1, None, 3, None])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 4
-    assert arr.null_count() == 2
+    assert arr.null_count == 2
 
 
 def test_array_float64():
     arr = ma.array([1.5, None, 2.5, None, None])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 5
-    assert arr.null_count() == 3
+    assert arr.null_count == 3
 
 
 def test_array_string():
     arr = ma.array(["foo", "bar", None, "mañana"])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 4
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_explicit_type_int32():
@@ -146,7 +146,7 @@ def test_array_explicit_type_float32():
 def test_array_explicit_type_bool():
     arr = ma.array([True, False, None], type=ma.bool_())
     assert type(arr).__name__ == "Array"
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_mixed_int_float():
@@ -180,46 +180,46 @@ def test_array_bytes():
     arr = ma.array([b"foo", b"bar"], type=ma.binary())
     assert type(arr).__name__ == "Array"
     assert len(arr) == 2
-    assert arr.null_count() == 0
+    assert arr.null_count == 0
 
     arr = ma.array([b"foo", None, b""], type=ma.binary())
     assert len(arr) == 3
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_nested_list_int():
     arr = ma.array([[1, 2], [3, 4]])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 2
-    assert arr.null_count() == 0
+    assert arr.null_count == 0
 
 
 def test_array_nested_list_with_null_outer():
     arr = ma.array([[1, 2], None, [3]])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 3
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_nested_list_string():
     arr = ma.array([["foo", "bar"], None, ["baz"]])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 3
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_struct_basic():
     arr = ma.array([{"a": 5, "b": "foo", "c": True}, {"a": 6, "b": "bar", "c": False}])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 2
-    assert arr.null_count() == 0
+    assert arr.null_count == 0
 
 
 def test_array_struct_null_row():
     arr = ma.array([{"a": 1}, None, {"a": 3}])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 3
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_struct_missing_key():
@@ -227,7 +227,7 @@ def test_array_struct_missing_key():
     arr = ma.array([{"a": 5, "b": "foo"}, {"a": 6}])
     assert type(arr).__name__ == "Array"
     assert len(arr) == 2
-    assert arr.null_count() == 0
+    assert arr.null_count == 0
 
 
 def test_array_struct_explicit_type():
@@ -337,7 +337,7 @@ def test_array_struct_wrong_field_type():
 def test_array_int8_boundaries():
     arr = ma.array([-128, 127, None], type=ma.int8())
     assert arr.__len__() == 3
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_int16_boundaries():
@@ -353,7 +353,7 @@ def test_array_int32_boundaries():
 def test_array_uint8_boundaries():
     arr = ma.array([0, 255, None], type=ma.uint8())
     assert arr.__len__() == 3
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_uint16_boundaries():
@@ -432,7 +432,7 @@ def test_array_bool_as_int():
     arr = ma.array([True, False, None], type=ma.int64())
     assert type(arr).__name__ == "Array"
     assert arr.__len__() == 3
-    assert arr.null_count() == 1
+    assert arr.null_count == 1
 
 
 def test_array_int_in_float64_explicit():

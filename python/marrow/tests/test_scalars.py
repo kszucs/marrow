@@ -62,7 +62,7 @@ def test_scalar_is_valid():
 
 def test_scalar_type():
     s = ma.array([1, 2, 3], type=ma.int64())[0]
-    assert str(s.type()) == "int64"
+    assert str(s.type) == "int64"
 
 
 # -- comparison operators ----------------------------------------------------

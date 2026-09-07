@@ -9,6 +9,20 @@ and `Column[Float64Type]` are different Mojo types and there is no single one a
 Python object could hold. That is not a gap in the bindings — it is the lane's
 defining property, and the reason `marrow/expr/runtime/` exists.
 
+**One entry point, not one per verb.** `RuntimeValue.evaluate` dispatches on a
+`String` tag, and 78 of its verbs are constructed by a free function whose
+whole body is `RuntimeValue(tag, kids)`. Registering a method apiece restated
+that table in a second place, and the two drifted: 27 verbs — the entire SQL
+string surface, half the temporal one — existed in Mojo and were unreachable
+from Python for no reason anyone had decided. So the binding is `expr_call`,
+and `marrow/expr/runtime/values.mojo` owns the one list of what may be called.
+
+The verbs whose construction does real work keep their own entry points, and
+they are the ones a table cannot express: `and`/`or`/`not` constant-fold, which
+`PropagateEmpty` depends on; `coalesce` and `case_when` are n-ary; `cast`,
+`isin`, `like`, `ilike` and `date_trunc` carry typed payloads, and `date_trunc`
+parses its unit at construction.
+
 **The two boxes.** `add_type[T]` installs a default `tp_repr` that calls
 `repr(value)`, i.e. `Writable.write_repr_to`, which has a **reflection-based
 default that walks every field at comptime**. `RuntimeValue` is recursive
@@ -18,28 +32,17 @@ only `write_to` inherits a `write_repr_to` whose walk is a monomorphization
 cycle. So this module owns two one-field boxes that override `write_repr_to`
 and thereby skip the reflection.
 
-*(The earlier bindings needed the same two boxes for a different reason -- the
-runtime node then had a `_eval_fn` function-pointer field, which `Writable`
-cannot be derived for at all. That field is gone: `evaluate` switches on a tag
-because the fn-pointer design was miscompiled. The boxes survive because the
-recursion outlived the pointer.)*
-
-**Named methods, not operators.** ``Expr`` exposes ``add`` / ``lt`` / ``and_``
-rather than ``__add__`` / ``__lt__`` / ``__and__``. Two reasons, in order:
+**Named methods, not operators.** ``Expr`` exposes no dunders. Two reasons, in
+order:
 
 1. The project rule -- the Mojo binding stays minimal and strict, the sugar
-   lives in pure Python. ``marrow._expr.Column`` is the user-facing type and it
+   lives in pure Python. ``marrow.expr.Column`` is the user-facing type and it
    owns the dunders.
 2. It would not work anyway. `PythonTypeBuilder.bind` installs exactly four
    slots -- `tp_new`, `tp_init`, `tp_dealloc`, `tp_repr` -- and `def_method`
    fills the type's ``tp_dict``, not a CPython slot. So an ``__add__``
    registered here would never fire for ``+``, and an ``__eq__`` would never
    fire for ``==``.
-
-That second point also decides ``__eq__``'s return type: on an expression it
-must answer an ``Expr``, not a ``Bool``, and wiring that at the C level would
-make the binding object unusable as a dict key for no gain -- nothing but
-``Column`` ever holds one.
 
 References:
 - https://arrow.apache.org/docs/python/generated/pyarrow.compute.Expression.html
@@ -53,73 +56,35 @@ from marrow.dtypes import DynType
 from marrow.scalars import DynScalar, Int64Scalar
 from marrow.tabular import RecordBatch
 from marrow.expr.bindings import Bindings
+from marrow.expr.builders import (
+    cume_dist as _cume_dist,
+    dense_rank as _dense_rank,
+    ntile as _ntile,
+    percent_rank as _percent_rank,
+    rank as _rank,
+    row_number as _row_number,
+)
+from marrow.expr.logical import DynValue, WindowExpr
 from marrow.expr.runtime.aggregates import RuntimeAggregate
 from marrow.expr.runtime.values import (
     RuntimeValue,
-    abs as _abs,
-    add as _add,
     and_ as _and,
-    array_length as _array_length,
-    capitalize as _capitalize,
+    binary_verbs as _binary_verbs,
+    call as _call,
     case_when as _case_when,
     cast as _cast,
-    ceil as _ceil,
     coalesce as _coalesce,
     column as _column,
-    contains as _contains,
     date_trunc as _date_trunc,
-    day as _day,
-    day_of_week as _day_of_week,
-    day_of_year as _day_of_year,
-    endswith as _endswith,
-    eq as _eq,
-    exp as _exp,
-    fill_null as _fill_null,
-    floor as _floor,
-    floordiv as _floordiv,
-    ge as _ge,
-    gt as _gt,
-    hour as _hour,
     if_else as _if_else,
     ilike as _ilike,
-    is_inf as _is_inf,
-    is_nan as _is_nan,
-    is_null as _is_null,
-    is_valid as _is_valid,
     isin as _isin,
-    le as _le,
-    length as _length,
     like as _like,
     literal as _literal,
-    ln as _ln,
-    lower as _lower,
-    lstrip as _lstrip,
-    lt as _lt,
-    minute as _minute,
-    mod as _mod,
-    month as _month,
-    mul as _mul,
-    ne as _ne,
-    neg as _neg,
     not_ as _not,
-    nullif as _nullif,
     or_ as _or,
-    pow as _pow,
-    quarter as _quarter,
-    reverse as _reverse,
-    round as _round,
-    rstrip as _rstrip,
-    second as _second,
-    sign as _sign,
-    sqrt as _sqrt,
-    startswith as _startswith,
-    strip as _strip,
-    sub as _sub,
-    trunc as _trunc,
-    truediv as _truediv,
-    upper as _upper,
-    xor as _xor,
-    year as _year,
+    ternary_verbs as _ternary_verbs,
+    unary_verbs as _unary_verbs,
 )
 
 
@@ -166,6 +131,28 @@ struct Agg(Copyable, Movable, Writable):
         writer.write("<marrow.Agg: ", self.value, ">")
 
 
+struct Window(Copyable, Movable, Writable):
+    """The Python type ``Window`` — a `WindowExpr` under an explicit
+    `write_repr_to`.
+
+    Boxed for the same reason `Plan` is: `WindowExpr` holds its function as an
+    `Optional[fn]` slot -- which is what keeps an unnamed window function out
+    of an AOT binary -- and a derived `repr` cannot see through a function
+    pointer."""
+
+    var value: WindowExpr
+
+    @implicit
+    def __init__(out self, var value: WindowExpr):
+        self.value = value^
+
+    def write_to[W: Writer](self, mut writer: W):
+        self.value.write_to(writer)
+
+    def write_repr_to(self, mut writer: Some[Writer]):
+        writer.write("<marrow.Window: ", self.value, ">")
+
+
 # ---------------------------------------------------------------------------
 # The seam — what another binding module uses to cross the box
 # ---------------------------------------------------------------------------
@@ -193,145 +180,110 @@ def wrap_agg(var value: RuntimeAggregate) raises -> PythonObject:
     return PythonObject(alloc=box^)
 
 
-# ---------------------------------------------------------------------------
-# Boxing helpers — the three shapes that cover most of the surface
-# ---------------------------------------------------------------------------
+def unwrap_window(py: PythonObject) raises -> WindowExpr:
+    """The `WindowExpr` inside a Python ``Window``."""
+    return py.downcast_value_ptr[Window]()[].value.copy()
 
 
-def _unary[
-    m: def(var RuntimeValue) raises thin -> RuntimeValue,
-]() -> def(PythonObject) raises thin -> PythonObject:
-    """Wrap ``Expr -> Expr``."""
-
-    def wrapper(py_self: PythonObject) raises -> PythonObject:
-        return wrap_expr(m(unwrap(py_self)))
-
-    return wrapper
+def wrap_window(var value: WindowExpr) raises -> PythonObject:
+    """A Python ``Window`` holding `value`."""
+    var box = Window(value^)
+    return PythonObject(alloc=box^)
 
 
-def _binary[
-    m: def(var RuntimeValue, var RuntimeValue) raises thin -> RuntimeValue,
-]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
-    """Wrap ``(Expr, Expr) -> Expr``.
+def boxed(obj: PythonObject) raises -> DynValue:
+    """One expression: a bound ``Expr``, or a ``str`` naming a column.
 
-    Strict: the right operand must already be an ``Expr``. Coercing a Python
-    scalar is ``Column``'s job — it knows the ``lit()`` rules and this does
-    not."""
-
-    def wrapper(
-        py_self: PythonObject, other: PythonObject
-    ) raises -> PythonObject:
-        return wrap_expr(m(unwrap(py_self), unwrap(other)))
-
-    return wrapper
+    Lives here rather than in `plan.mojo` because both modules need it and
+    `plan.mojo` already imports this one -- the "a bare string means
+    `col(name)`" convention should have exactly one authority."""
+    var builtins = Python.import_module("builtins")
+    if Bool(py=builtins.isinstance(obj, builtins.str)):
+        return DynValue(_column(String(py=obj)))
+    return DynValue(unwrap(obj))
 
 
-def _reduce[
-    m: def(RuntimeValue) raises thin -> RuntimeAggregate,
-]() -> def(PythonObject) raises thin -> PythonObject:
-    """Wrap ``Expr -> Agg``."""
-
-    def wrapper(py_self: PythonObject) raises -> PythonObject:
-        var ptr = py_self.downcast_value_ptr[Expr]()
-        return wrap_agg(m(ptr[].value))
-
-    return wrapper
+def boxed_list(obj: PythonObject) raises -> List[DynValue]:
+    """A Python sequence of expressions / column names."""
+    var out = List[DynValue]()
+    for i in range(Int(py=obj.__len__())):
+        out.append(boxed(obj[i]))
+    return out^
 
 
-# ---------------------------------------------------------------------------
-# Methods that carry a payload — spelled out, since the payload type varies
-# ---------------------------------------------------------------------------
+def bool_list(obj: PythonObject) raises -> List[Bool]:
+    var out = List[Bool]()
+    for i in range(Int(py=obj.__len__())):
+        out.append(Bool(py=obj[i]))
+    return out^
 
 
-def _expr_cast(
-    py_self: PythonObject, to: PythonObject, safe: PythonObject
-) raises -> PythonObject:
-    return wrap_expr(_cast(unwrap(py_self), DynType(py=to), Bool(py=safe)))
-
-
-def _expr_isin(
-    py_self: PythonObject, value_set: PythonObject
-) raises -> PythonObject:
-    return wrap_expr(_isin(unwrap(py_self), DynArray(py=value_set)))
-
-
-def _expr_like(
-    py_self: PythonObject, pattern: PythonObject
-) raises -> PythonObject:
-    return wrap_expr(_like(unwrap(py_self), String(py=pattern)))
-
-
-def _expr_ilike(
-    py_self: PythonObject, pattern: PythonObject
-) raises -> PythonObject:
-    return wrap_expr(_ilike(unwrap(py_self), String(py=pattern)))
-
-
-def _expr_date_trunc(
-    py_self: PythonObject, unit: PythonObject
-) raises -> PythonObject:
-    return wrap_expr(_date_trunc(unwrap(py_self), String(py=unit)))
-
-
-def _expr_aggregate(
-    py_self: PythonObject, func: PythonObject
-) raises -> PythonObject:
-    """Aggregate by name — the one entry point a `(func, column)` pair needs.
-
-    `RuntimeAggregate.__init__` validates the name against its own vocabulary,
-    so an unknown aggregate cannot be built from here and the check lives in
-    exactly one place."""
-    return wrap_agg(RuntimeAggregate(unwrap(py_self), String(py=func)))
-
-
-# ---------------------------------------------------------------------------
-# Evaluation and plan analysis
-# ---------------------------------------------------------------------------
-
-
-def _expr_execute(
-    py_self: PythonObject, batch: PythonObject
-) raises -> PythonObject:
-    """Evaluate this expression over one ``RecordBatch`` — the eager escape
-    hatch, and what lets a test check that a tree computes rather than merely
-    renders."""
-    var b = RecordBatch(py=batch)
-    return (
-        unwrap(py_self)
-        .evaluate(b.to_struct_array(), Bindings())
-        .to_array(b.num_rows())
-        .to_python_object()
-    )
-
-
-def _expr_render(py_self: PythonObject) raises -> PythonObject:
-    return PythonObject(String(unwrap(py_self)))
-
-
-def _expr_name(py_self: PythonObject) raises -> PythonObject:
-    """This expression's column name, or ``""`` if it is not a bare column."""
-    return PythonObject(unwrap(py_self).name())
-
-
-def _expr_referenced_columns(py_self: PythonObject) raises -> PythonObject:
-    var names = unwrap(py_self).columns()
+def py_str_list(names: List[String]) raises -> PythonObject:
+    """A Mojo ``List[String]`` as a Python list."""
     var builtins = Python.import_module("builtins")
     var out = builtins.list()
-    for ref n in names:
-        _ = out.append(PythonObject(n.copy()))
+    for ref name in names:
+        _ = out.append(PythonObject(name.copy()))
     return out
 
 
-def _expr_str(py_self: PythonObject) raises -> PythonObject:
-    return PythonObject(String(unwrap(py_self)))
+def _rows(obj: PythonObject) raises -> Optional[Tuple[Int, Int]]:
+    """``None``, or a ``(preceding, following)`` pair for an explicit frame."""
+    var builtins = Python.import_module("builtins")
+    if obj.__is__(builtins.None):
+        return None
+    if Int(py=obj.__len__()) != 2:
+        raise Error("over: rows= expects a (preceding, following) pair")
+    return Tuple(Int(py=obj[0]), Int(py=obj[1]))
 
 
-def _expr_repr(py_self: PythonObject) raises -> PythonObject:
-    return PythonObject(repr(py_self.downcast_value_ptr[Expr]()[]))
+def _operands(args: PythonObject) raises -> List[RuntimeValue]:
+    """A Python sequence of ``Expr`` as `RuntimeValue`s.
+
+    Strict: every element must already be an ``Expr``. Coercing a Python
+    scalar is `Column`'s job — it knows the `lit()` rules and this does not."""
+    var n = Int(py=args.__len__())
+    var out = List[RuntimeValue](capacity=n)
+    for i in range(n):
+        out.append(unwrap(args[i]))
+    return out^
 
 
 # ---------------------------------------------------------------------------
-# Leaves — the module-level constructors
+# The one entry point
+# ---------------------------------------------------------------------------
+
+
+def expr_call(tag: PythonObject, args: PythonObject) raises -> PythonObject:
+    """Build the node `tag` names. Unknown verbs and wrong arities raise here,
+    in `values.call`, rather than on the first morsel that evaluates them."""
+    return wrap_expr(_call(String(py=tag), _operands(args)))
+
+
+def expr_verbs() raises -> PythonObject:
+    """``{verb: arity}`` for everything `expr_call` accepts.
+
+    The Python layer generates its methods from this rather than restating the
+    list, which is the whole point: a verb added to `values.mojo` is reachable
+    from Python without touching either this file or `marrow/expr.py`."""
+    var builtins = Python.import_module("builtins")
+    var out = builtins.dict()
+    for ref name in _unary_verbs():
+        out[PythonObject(name.copy())] = PythonObject(1)
+    for ref name in _binary_verbs():
+        out[PythonObject(name.copy())] = PythonObject(2)
+    for ref name in _ternary_verbs():
+        out[PythonObject(name.copy())] = PythonObject(3)
+    return out
+
+
+def agg_verbs() raises -> PythonObject:
+    """The aggregate vocabulary, for the same reason."""
+    return py_str_list(RuntimeAggregate.vocabulary())
+
+
+# ---------------------------------------------------------------------------
+# Constructors that do work — the ones a table cannot express
 # ---------------------------------------------------------------------------
 
 
@@ -354,6 +306,54 @@ def expr_literal(value: PythonObject) raises -> PythonObject:
     return wrap_expr(_literal(arr[0]))
 
 
+def expr_and(left: PythonObject, right: PythonObject) raises -> PythonObject:
+    """Kleene AND, folded at construction — `Filter(FALSE)` is what lets
+    `PropagateEmpty` collapse a subtree, so the fold is load-bearing."""
+    return wrap_expr(_and(unwrap(left), unwrap(right)))
+
+
+def expr_or(left: PythonObject, right: PythonObject) raises -> PythonObject:
+    """Kleene OR, folded at construction."""
+    return wrap_expr(_or(unwrap(left), unwrap(right)))
+
+
+def expr_not(value: PythonObject) raises -> PythonObject:
+    """Kleene NOT, folded at construction."""
+    return wrap_expr(_not(unwrap(value)))
+
+
+def expr_cast(
+    value: PythonObject, to: PythonObject, safe: PythonObject
+) raises -> PythonObject:
+    return wrap_expr(_cast(unwrap(value), DynType(py=to), Bool(py=safe)))
+
+
+def expr_isin(
+    value: PythonObject, value_set: PythonObject
+) raises -> PythonObject:
+    return wrap_expr(_isin(unwrap(value), DynArray(py=value_set)))
+
+
+def expr_like(
+    value: PythonObject, pattern: PythonObject
+) raises -> PythonObject:
+    return wrap_expr(_like(unwrap(value), String(py=pattern)))
+
+
+def expr_ilike(
+    value: PythonObject, pattern: PythonObject
+) raises -> PythonObject:
+    return wrap_expr(_ilike(unwrap(value), String(py=pattern)))
+
+
+def expr_date_trunc(
+    value: PythonObject, unit: PythonObject
+) raises -> PythonObject:
+    """The unit is parsed here, so a bad spelling fails when the plan is built
+    rather than on the row that first evaluates it."""
+    return wrap_expr(_date_trunc(unwrap(value), String(py=unit)))
+
+
 def expr_if_else(
     cond: PythonObject, then_: PythonObject, else_: PythonObject
 ) raises -> PythonObject:
@@ -367,27 +367,20 @@ def expr_coalesce(values: PythonObject) raises -> PythonObject:
     N-ary rather than a fold of binary nodes, because `CoalesceKernel` is
     already n-ary — folding would materialise one intermediate column per
     extra operand."""
-    var out = List[RuntimeValue]()
-    for i in range(Int(py=values.__len__())):
-        out.append(unwrap(values[i]))
-    return wrap_expr(_coalesce(out^))
+    return wrap_expr(_coalesce(_operands(values)))
 
 
 def expr_case_when(
     conditions: PythonObject, values: PythonObject, else_: PythonObject
 ) raises -> PythonObject:
     """Multi-branch ``CASE WHEN``. ``else_`` may be ``None``."""
-    var conds = List[RuntimeValue]()
-    for i in range(Int(py=conditions.__len__())):
-        conds.append(unwrap(conditions[i]))
-    var vals = List[RuntimeValue]()
-    for i in range(Int(py=values.__len__())):
-        vals.append(unwrap(values[i]))
     var builtins = Python.import_module("builtins")
     var otherwise = Optional[RuntimeValue](None)
     if not else_.__is__(builtins.None):
         otherwise = unwrap(else_)
-    return wrap_expr(_case_when(conds^, vals^, otherwise^))
+    return wrap_expr(
+        _case_when(_operands(conditions), _operands(values), otherwise^)
+    )
 
 
 def expr_count_star() raises -> PythonObject:
@@ -407,9 +400,168 @@ def expr_count_star() raises -> PythonObject:
     )
 
 
+def expr_aggregate(
+    value: PythonObject, func: PythonObject
+) raises -> PythonObject:
+    """Aggregate by name — the one entry point every reduction goes through.
+
+    `RuntimeAggregate.__init__` validates the name against its own vocabulary,
+    so an unknown aggregate cannot be built from here and the check lives in
+    exactly one place. The twelve reductions used to be twelve registered
+    methods restating that vocabulary; `agg_verbs` hands Python the list
+    instead."""
+    return wrap_agg(RuntimeAggregate(unwrap(value), String(py=func)))
+
+
 # ---------------------------------------------------------------------------
-# Agg — an aggregate applied to a runtime expression
+# Window functions
 # ---------------------------------------------------------------------------
+#
+# The ranking verbs read no column, so they are module functions in both lanes.
+# Everything else is a method on what it reads: `lag`/`lead`/`first_value`/
+# `last_value`/`nth_value` on an expression, and `over` on an aggregate --
+# `Value.over` raises unless its receiver aggregates, because a per-row value
+# has nothing to do with a frame.
+
+
+def window_row_number() raises -> PythonObject:
+    return wrap_window(_row_number())
+
+
+def window_rank() raises -> PythonObject:
+    return wrap_window(_rank())
+
+
+def window_dense_rank() raises -> PythonObject:
+    return wrap_window(_dense_rank())
+
+
+def window_percent_rank() raises -> PythonObject:
+    return wrap_window(_percent_rank())
+
+
+def window_cume_dist() raises -> PythonObject:
+    return wrap_window(_cume_dist())
+
+
+def window_ntile(buckets: PythonObject) raises -> PythonObject:
+    return wrap_window(_ntile(Int(py=buckets)))
+
+
+def _expr_lag(py_self: PythonObject, offset: PythonObject) raises -> PythonObject:
+    return wrap_window(unwrap(py_self).lag(Int(py=offset)))
+
+
+def _expr_lead(
+    py_self: PythonObject, offset: PythonObject
+) raises -> PythonObject:
+    return wrap_window(unwrap(py_self).lead(Int(py=offset)))
+
+
+def _expr_first_value(py_self: PythonObject) raises -> PythonObject:
+    return wrap_window(unwrap(py_self).first_value())
+
+
+def _expr_last_value(py_self: PythonObject) raises -> PythonObject:
+    return wrap_window(unwrap(py_self).last_value())
+
+
+def _expr_nth_value(py_self: PythonObject, n: PythonObject) raises -> PythonObject:
+    return wrap_window(unwrap(py_self).nth_value(Int(py=n)))
+
+
+def _agg_over(
+    py_self: PythonObject,
+    partition_by: PythonObject,
+    order_by: PythonObject,
+    ascending: PythonObject,
+    nulls_first: PythonObject,
+    rows: PythonObject,
+) raises -> PythonObject:
+    """`SUM(x) OVER (...)` — the aggregate evaluated over each frame."""
+    return wrap_window(
+        unwrap_agg(py_self).over(
+            boxed_list(partition_by),
+            boxed_list(order_by),
+            bool_list(ascending),
+            Bool(py=nulls_first),
+            _rows(rows),
+        )
+    )
+
+
+def _window_over(
+    py_self: PythonObject,
+    partition_by: PythonObject,
+    order_by: PythonObject,
+    ascending: PythonObject,
+    nulls_first: PythonObject,
+    rows: PythonObject,
+) raises -> PythonObject:
+    """The window this function runs in. Returns a copy with it replaced."""
+    return wrap_window(
+        unwrap_window(py_self).over(
+            boxed_list(partition_by),
+            boxed_list(order_by),
+            bool_list(ascending),
+            Bool(py=nulls_first),
+            _rows(rows),
+        )
+    )
+
+
+def _window_referenced_columns(py_self: PythonObject) raises -> PythonObject:
+    return py_str_list(unwrap_window(py_self).columns())
+
+
+def _window_str(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(String(unwrap_window(py_self)))
+
+
+def _window_repr(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(repr(py_self.downcast_value_ptr[Window]()[]))
+
+
+# ---------------------------------------------------------------------------
+# Evaluation and analysis — what is genuinely a method on a node
+# ---------------------------------------------------------------------------
+
+
+def _expr_execute(
+    py_self: PythonObject, batch: PythonObject
+) raises -> PythonObject:
+    """Evaluate this expression over one ``RecordBatch`` — the eager escape
+    hatch, and what lets a test check that a tree computes rather than merely
+    renders."""
+    var b = RecordBatch(py=batch)
+    return (
+        unwrap(py_self)
+        .evaluate(b.to_struct_array(), Bindings())
+        .to_array(b.num_rows())
+        .to_python_object()
+    )
+
+
+def _expr_tag(py_self: PythonObject) raises -> PythonObject:
+    """The node's discriminant — what tells a literal from a column."""
+    return PythonObject(unwrap(py_self).tag())
+
+
+def _expr_name(py_self: PythonObject) raises -> PythonObject:
+    """This expression's column name, or ``""`` if it is not a bare column."""
+    return PythonObject(unwrap(py_self).name())
+
+
+def _expr_referenced_columns(py_self: PythonObject) raises -> PythonObject:
+    return py_str_list(unwrap(py_self).columns())
+
+
+def _expr_str(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(String(unwrap(py_self)))
+
+
+def _expr_repr(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(repr(py_self.downcast_value_ptr[Expr]()[]))
 
 
 def _agg_alias(
@@ -424,12 +576,7 @@ def _agg_name(py_self: PythonObject) raises -> PythonObject:
 
 
 def _agg_referenced_columns(py_self: PythonObject) raises -> PythonObject:
-    var names = unwrap_agg(py_self).columns()
-    var builtins = Python.import_module("builtins")
-    var out = builtins.list()
-    for ref n in names:
-        _ = out.append(PythonObject(n.copy()))
-    return out
+    return py_str_list(unwrap_agg(py_self).columns())
 
 
 def _agg_str(py_self: PythonObject) raises -> PythonObject:
@@ -448,125 +595,16 @@ def _agg_repr(py_self: PythonObject) raises -> PythonObject:
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Register the ``Expr`` and ``Agg`` Python types."""
     ref expr_py = mb.add_type[Expr]("Expr")
-
-    # arithmetic
-    _ = (
-        expr_py.def_method[_binary[_add]()]("add")
-        .def_method[_binary[_sub]()]("sub")
-        .def_method[_binary[_mul]()]("mul")
-        .def_method[_binary[_truediv]()]("truediv")
-        .def_method[_binary[_floordiv]()]("floordiv")
-        .def_method[_binary[_mod]()]("mod")
-        .def_method[_binary[_pow]()]("pow")
-        .def_method[_unary[_neg]()]("neg")
-    )
-
-    # comparison — named, never `__eq__`; see the module docstring.
-    _ = (
-        expr_py.def_method[_binary[_lt]()]("lt")
-        .def_method[_binary[_le]()]("le")
-        .def_method[_binary[_gt]()]("gt")
-        .def_method[_binary[_ge]()]("ge")
-        .def_method[_binary[_eq]()]("eq")
-        .def_method[_binary[_ne]()]("ne")
-    )
-
-    # boolean
-    _ = (
-        expr_py.def_method[_binary[_and]()]("and_")
-        .def_method[_binary[_or]()]("or_")
-        .def_method[_binary[_xor]()]("xor")
-        .def_method[_unary[_not]()]("invert")
-    )
-
-    # math
-    _ = (
-        expr_py.def_method[_unary[_abs]()]("abs")
-        .def_method[_unary[_sign]()]("sign")
-        .def_method[_unary[_floor]()]("floor")
-        .def_method[_unary[_ceil]()]("ceil")
-        .def_method[_unary[_round]()]("round")
-        .def_method[_unary[_trunc]()]("trunc")
-        .def_method[_unary[_sqrt]()]("sqrt")
-        .def_method[_unary[_exp]()]("exp")
-        .def_method[_unary[_ln]()]("ln")
-    )
-
-    # string
-    _ = (
-        expr_py.def_method[_unary[_upper]()]("upper")
-        .def_method[_unary[_lower]()]("lower")
-        .def_method[_unary[_strip]()]("strip")
-        .def_method[_unary[_lstrip]()]("lstrip")
-        .def_method[_unary[_rstrip]()]("rstrip")
-        .def_method[_unary[_reverse]()]("reverse")
-        .def_method[_unary[_capitalize]()]("capitalize")
-        .def_method[_unary[_length]()]("length")
-        .def_method[_binary[_startswith]()]("startswith")
-        .def_method[_binary[_endswith]()]("endswith")
-        .def_method[_binary[_contains]()]("contains")
-        .def_method[_expr_like]("like")
-        .def_method[_expr_ilike]("ilike")
-    )
-
-    # temporal
-    _ = (
-        expr_py.def_method[_unary[_year]()]("year")
-        .def_method[_unary[_month]()]("month")
-        .def_method[_unary[_day]()]("day")
-        .def_method[_unary[_hour]()]("hour")
-        .def_method[_unary[_minute]()]("minute")
-        .def_method[_unary[_second]()]("second")
-        .def_method[_unary[_day_of_week]()]("day_of_week")
-        .def_method[_unary[_quarter]()]("quarter")
-        .def_method[_unary[_day_of_year]()]("day_of_year")
-        .def_method[_expr_date_trunc]("date_trunc")
-    )
-
-    # conditional / membership / casting / nested
-    _ = (
-        expr_py.def_method[_binary[_nullif]()]("nullif")
-        .def_method[_binary[_fill_null]()]("fill_null")
-        .def_method[_unary[_array_length]()]("array_length")
-        .def_method[_expr_isin]("isin")
-        .def_method[_expr_cast]("cast")
-    )
-
-    # null / value predicates. `is_null` / `is_valid` read the validity bitmap
-    # and are never null themselves; `is_nan` / `is_inf` read the values and
-    # are null where the input is. Binding all four is what makes ``Expr``
-    # closed under the boolean combinators.
-    _ = (
-        expr_py.def_method[_unary[_is_null]()]("is_null")
-        .def_method[_unary[_is_valid]()]("is_valid")
-        .def_method[_unary[_is_nan]()]("is_nan")
-        .def_method[_unary[_is_inf]()]("is_inf")
-    )
-
-    # aggregations
-    _ = (
-        expr_py.def_method[_reduce[RuntimeValue.sum]()]("sum")
-        .def_method[_reduce[RuntimeValue.mean]()]("mean")
-        .def_method[_reduce[RuntimeValue.product]()]("product")
-        .def_method[_reduce[RuntimeValue.min]()]("min")
-        .def_method[_reduce[RuntimeValue.max]()]("max")
-        .def_method[_reduce[RuntimeValue.count]()]("count")
-        .def_method[_reduce[RuntimeValue.count_distinct]()]("count_distinct")
-        .def_method[_reduce[RuntimeValue.approx_count_distinct]()](
-            "approx_count_distinct"
-        )
-        .def_method[_reduce[RuntimeValue.variance]()]("variance")
-        .def_method[_reduce[RuntimeValue.var_samp]()]("var_samp")
-        .def_method[_reduce[RuntimeValue.stddev]()]("stddev")
-        .def_method[_reduce[RuntimeValue.stddev_samp]()]("stddev_samp")
-        .def_method[_expr_aggregate]("aggregate")
-    )
-
-    # evaluation, analysis, representation
     _ = (
         expr_py.def_method[_expr_execute]("execute")
-        .def_method[_expr_render]("render")
+        .def_method[_expr_str]("render")
         .def_method[_expr_name]("name")
+        .def_method[_expr_tag]("tag")
+        .def_method[_expr_lag]("lag")
+        .def_method[_expr_lead]("lead")
+        .def_method[_expr_first_value]("first_value")
+        .def_method[_expr_last_value]("last_value")
+        .def_method[_expr_nth_value]("nth_value")
         .def_method[_expr_referenced_columns]("referenced_columns")
         .def_method[_expr_str]("__str__")
         .def_method[_expr_repr]("__repr__")
@@ -580,11 +618,41 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_agg_str]("render")
         .def_method[_agg_str]("__str__")
         .def_method[_agg_repr]("__repr__")
+        .def_method[_agg_over]("over")
     )
 
+    # Registered last, and with no earlier `ref` still live: `add_type`
+    # reallocates the module builder's type list.
+    _ = (
+        mb.add_type[Window]("Window")
+        .def_method[_window_over]("over")
+        .def_method[_window_referenced_columns]("referenced_columns")
+        .def_method[_window_str]("render")
+        .def_method[_window_str]("__str__")
+        .def_method[_window_repr]("__repr__")
+    )
+
+    mb.def_function[window_row_number]("window_row_number")
+    mb.def_function[window_rank]("window_rank")
+    mb.def_function[window_dense_rank]("window_dense_rank")
+    mb.def_function[window_percent_rank]("window_percent_rank")
+    mb.def_function[window_cume_dist]("window_cume_dist")
+    mb.def_function[window_ntile]("window_ntile")
+    mb.def_function[expr_call]("expr_call")
+    mb.def_function[expr_verbs]("expr_verbs")
+    mb.def_function[agg_verbs]("agg_verbs")
     mb.def_function[expr_column]("expr_column")
     mb.def_function[expr_literal]("expr_literal")
+    mb.def_function[expr_and]("expr_and")
+    mb.def_function[expr_or]("expr_or")
+    mb.def_function[expr_not]("expr_not")
+    mb.def_function[expr_cast]("expr_cast")
+    mb.def_function[expr_isin]("expr_isin")
+    mb.def_function[expr_like]("expr_like")
+    mb.def_function[expr_ilike]("expr_ilike")
+    mb.def_function[expr_date_trunc]("expr_date_trunc")
     mb.def_function[expr_if_else]("expr_if_else")
     mb.def_function[expr_coalesce]("expr_coalesce")
     mb.def_function[expr_case_when]("expr_case_when")
     mb.def_function[expr_count_star]("expr_count_star")
+    mb.def_function[expr_aggregate]("expr_aggregate")

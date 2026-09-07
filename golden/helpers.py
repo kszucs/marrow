@@ -4,112 +4,52 @@
 imports it. Between them they are the convergence contract: a name a case can
 write is a name both lanes answer to.
 
-**Most of what is here is a shim, and that is the point.** A shim exists
-wherever the two lanes do not yet agree on a spelling — `Upper(x)` standing in
-for `x.upper()`, `NumericCast[Float64Type](x)` for `x.cast(float64)`. Marrow's
-*public* Python API is deliberately not grown to speak the fused lane's
-internal node vocabulary, so the bridge lives here, in the corpus, where it is
-countable.
+`SHIMS` is the convergence metric — one entry per spelling the two lanes still
+disagree about, and the goal is an empty set. It was forty-four names: the
+fused lane's node vocabulary (`Upper(x)` for `x.upper()`,
+`NumericCast[Float64Type](x)` for `x.cast(float64)`), the join-kind constants,
+and a `_Relation` adapter carrying four verb shapes. All of those went the way
+the file's own advice said they would — *check whether the nicer spelling
+already exists before designing one*: most of the string verbs were already
+methods on `StringValue`, and the rest converged when the comptime lane grew
+`is_null`, `cast`, `coalesce`, `fill_null` and `nullif`.
 
-The aggregates used to be the worst of it —
-`AggExpr.of[NumericAgg[SumFold, Int64Type]](x).alias("total")` — and needed
-nine shims. It turned out marrow already had `col("v", int64).sum()`, on
-`NumericValue`, documented in `Relation.aggregate` and used throughout the
-expression layer's own tests; the corpus was simply spelling it the long way. That is
-the shape of the remaining work: check whether the nicer spelling already
-exists before designing one.
-
-`SHIMS` is that count. It is the convergence metric: every name in it is a
-place the two lanes still disagree, and the goal is an empty set. Deleting a
-shim means the real APIs converged, which is the design target this corpus
-exists to hold marrow to.
+What is left is one genuine language difference, described at `SHIMS`.
 """
 
 import pyarrow as pa
 
 import marrow
-from marrow import Column, col, count_star, if_else
-from marrow import lit as _lit
+from marrow import col, count_star, if_else, lit
 
 import runner
 
 # Names that are *not* real marrow API — the outstanding convergence debt.
 # Keep this in sync with what is defined below; `test_cases.py` reports it.
 SHIMS = {
-    # dtype spellings. Mojo has `int64` as a dtype *value* and `Int64Type` as
-    # the type a fused node is parameterised on; Python has one constructor,
-    # `marrow.int64()`, and so must call it for both.
+    # dtype spellings, and the only disagreement left. Mojo has `int64` as a
+    # dtype *value*; Python has `marrow.int64()`, a constructor, because that
+    # is PyArrow's shape and a parameterised type (`timestamp("us")`,
+    # `list_(int64)`) has to be a call in any case. A case therefore writes
+    # `int64` and the two lanes bind it differently.
     "int64",
     "int32",
     "float64",
     "string",
     "bool_",
-    "Int64Type",
-    "Int32Type",
-    "Float64Type",
-    "StringType",
-    "BoolType",
-    # `timestamp(microsecond)` vs `marrow.timestamp("us")`: Mojo names the
-    # unit with a `TimeUnit` constant, Python with the string the Arrow spec
-    # uses. `date32` and `timestamp` themselves are *not* shims — both lanes
-    # call the same-named constructor — so only the unit is listed.
+    # `timestamp(microsecond)` vs `marrow.timestamp("us")`: the unit half of
+    # the same difference. Mojo names it with a `TimeUnit` constant, Python
+    # with the string the Arrow spec uses.
     "microsecond",
-    # Not a lane disagreement but a binding defect: `marrow.timestamp("us")`
-    # raises because the declared `tz=None` default is dropped by
-    # `def_function`. See the wrapper below.
-    "timestamp",
-    # fused string nodes vs. Python methods
-    "Upper",
-    "Lower",
-    "Strip",
-    "StringLength",
-    "StartsWith",
-    "EndsWith",
-    "Like",
-    "ILike",
-    # `lit("h%")` as a string kernel's operand: the fused lane takes a value
-    # node, Python takes a plain pattern (as PyArrow does).
-    "lit",
-    # fused null / conditional nodes vs. Python methods
-    "IsNull",
-    "NotNull",
-    "CaseWhen",
-    "Coalesce",
-    "FillNull",
-    "Nullif",
-    # `array_length(l)` — the fused lane's one list verb. Python's expression
-    # frontend had no list surface at all, so this is debt rather than a
-    # spelling difference.
-    "array_length",
-    # fused cast nodes vs. `.cast(type, safe=False)`
-    "NumericCast",
-    "NumToString",
-    "StringToNum",
-    "BoolToNum",
-    "NumToBool",
-    # join kinds: Mojo constants vs. Python strings
-    "JOIN_INNER",
-    "JOIN_LEFT",
-    "JOIN_RIGHT",
-    "JOIN_FULL",
-    "JOIN_SEMI",
-    "JOIN_ANTI",
-    "JOIN_ALL",
-    # relational verbs whose shapes differ (`sort`/`aggregate`/`join`) —
-    # carried by the `_Relation` adapter rather than by `LazyTable` itself.
-    "_Relation.rename",
-    "_Relation.sort",
-    "_Relation.aggregate",
-    "_Relation.join",
 }
 
 
 # ---------------------------------------------------------------------------
 # Types
 # ---------------------------------------------------------------------------
-# Mojo distinguishes the dtype *value* (`int64`) from the dtype *type*
-# (`Int64Type`); a fused node is parameterised on the latter. Python has one
-# spelling for both.
+# Mojo has `int64` as a dtype *value*; Python has `marrow.int64()`. The
+# `Int64Type` spellings are gone with the cast nodes that needed them: a cast
+# is `x.cast(float64)` in both lanes now, and takes the dtype value.
 
 int64 = marrow.int64()
 int32 = marrow.int32()
@@ -117,11 +57,6 @@ float64 = marrow.float64()
 string = marrow.string()
 bool_ = marrow.bool_()
 
-Int64Type = int64
-Int32Type = int32
-Float64Type = float64
-StringType = string
-BoolType = bool_
 
 # The temporal types are the other way round: `date32` and `timestamp` are
 # *constructors* in both lanes (`date32()`, `timestamp(microsecond)`), because
@@ -132,260 +67,18 @@ list_ = marrow.list_
 microsecond = "us"
 
 
-def timestamp(unit, tz=None):
-    """`marrow.timestamp` with its own declared default actually applied.
-
-    `python/bindings/dtypes.mojo` declares `tz: PythonObject = None`, but the
-    default does not survive `def_function`, so `marrow.timestamp("us")`
-    raises `TypeError: <mojo function>() missing 1 required positional
-    argument` while `marrow.timestamp("us", None)` works. PyArrow's
-    `pa.timestamp("us")` takes one argument, and the Mojo lane's
-    `timestamp(microsecond)` does too, so the corpus keeps the one-argument
-    spelling and this wrapper supplies what the binding drops. Delete it when
-    the binding honours its default.
-    """
-    return marrow.timestamp(unit, tz)
-
-
-# ---------------------------------------------------------------------------
-# Fused value nodes -> Python expression methods
-# ---------------------------------------------------------------------------
-
-
-class _Literal(Column):
-    """A literal that remembers the Python value it was built from.
-
-    The fused lane's string kernels take a value node — `Like(s, lit("h%"))`.
-    Python's take a plain pattern, as PyArrow's `match_like` does, and handing
-    them a `Column` matches nothing rather than raising. `Column` defines
-    `__slots__`, so the raw value cannot be tagged onto one; a subclass with
-    its own slot can carry it.
-    """
-
-    __slots__ = ("value",)
-
-
-def lit(value, type=None):
-    out = _Literal.wrap(_lit(value, type).unwrap())
-    out.value = value
-    return out
-
-
-def _pattern(value):
-    """The raw pattern behind a `lit(...)`, or the value itself."""
-    return value.value if isinstance(value, _Literal) else value
-
-
-def Upper(value):
-    return value.upper()
-
-
-def Lower(value):
-    return value.lower()
-
-
-def Strip(value):
-    return value.strip()
-
-
-def StringLength(value):
-    return value.length()
-
-
-def StartsWith(value, prefix):
-    return value.startswith(_pattern(prefix))
-
-
-def EndsWith(value, suffix):
-    return value.endswith(_pattern(suffix))
-
-
-def Like(value, pattern):
-    return value.like(_pattern(pattern))
-
-
-def ILike(value, pattern):
-    return value.ilike(_pattern(pattern))
-
-
-def IsNull(value):
-    return value.is_null()
-
-
-def NotNull(value):
-    return value.is_valid()
-
-
-def CaseWhen(condition, then, otherwise):
-    return if_else(condition, then, otherwise)
-
-
-def Coalesce(value, other):
-    return value.coalesce(other)
-
-
-def FillNull(value, other):
-    return value.fill_null(other)
-
-
-def Nullif(value, other):
-    return value.nullif(other)
-
-
-def array_length(value):
-    """The number of elements in each list.
-
-    `Column.array_length` is the Python spelling and `builders.array_length`
-    the Mojo one, so the shim only re-associates the call. It named
-    `list_length` for a while, which is neither lane's name and was invisible
-    while this lane was skipped.
-    """
-    return value.array_length()
-
-
-# ---------------------------------------------------------------------------
-# Casts
-# ---------------------------------------------------------------------------
-# Every case casts with `safe=False`: a lossy conversion under the default
-# `safe=True` raises, which is a different question from what a SQL CAST does.
-
-
-class _Cast:
-    """`NumericCast[Float64Type](x)` -> `x.cast(float64, safe=False)`."""
-
-    def __class_getitem__(cls, target):
-        return lambda value: value.cast(target, safe=False)
-
-
-class NumericCast(_Cast):
-    pass
-
-
-class NumToString(_Cast):
-    pass
-
-
-class StringToNum(_Cast):
-    pass
-
-
-class BoolToNum(_Cast):
-    pass
-
-
-def NumToBool(value):
-    """Unparameterised in the fused lane — the target is always `bool`."""
-    return value.cast(bool_, safe=False)
-
-
-# ---------------------------------------------------------------------------
-# Joins
-# ---------------------------------------------------------------------------
-
-JOIN_INNER = "inner"
-JOIN_LEFT = "left"
-JOIN_RIGHT = "right"
-JOIN_FULL = "full"
-JOIN_SEMI = "semi"
-JOIN_ANTI = "anti"
-JOIN_ALL = "all"
+timestamp = marrow.timestamp
 
 
 # ---------------------------------------------------------------------------
 # The relation surface
 # ---------------------------------------------------------------------------
-
-
-class _Relation:
-    """A `LazyTable` wearing the Mojo plan API's verb shapes.
-
-    `select`, `filter`, `project`, `with_columns` and `limit` pass straight
-    through — those already agree. `sort`, `aggregate` and `join` do not, so
-    they are adapted here rather than by growing `LazyTable` a second spelling
-    of each.
-    """
-
-    def __init__(self, lazy):
-        self._lazy = lazy
-
-    def select(self, *names):
-        return _Relation(self._lazy.select(*names))
-
-    def filter(self, predicate):
-        return _Relation(self._lazy.filter(predicate))
-
-    def project(self, names, values):
-        return _Relation(self._lazy.project(names, values))
-
-    def with_columns(self, names, values):
-        return _Relation(self._lazy.with_columns(names, values))
-
-    def drop(self, names):
-        return _Relation(self._lazy.drop(names))
-
-    def rename(self, names, new_names):
-        """Two parallel lists, as the plan node takes them.
-
-        `LazyTable.rename` spells this as a dict; the Mojo signature is
-        `rename(names, new_names)` because Mojo has no dict literal in this
-        position.
-        """
-        return _Relation(self._lazy.rename(dict(zip(names, new_names))))
-
-    def limit(self, length, offset=0):
-        return _Relation(self._lazy.limit(length, offset))
-
-    def sort(self, keys, ascending, nulls_first=True):
-        """Parallel key and direction lists, as the plan node takes them.
-
-        `LazyTable.order_by` spells this as `("k", "descending")` pairs. The
-        binding underneath already takes the parallel form, so this reaches
-        past the Python sugar rather than reconstructing it.
-        """
-        return _Relation(
-            marrow.lazy.LazyTable.wrap(
-                self._lazy.unwrap().sort(
-                    [k.unwrap() for k in keys], list(ascending), nulls_first
-                )
-            )
-        )
-
-    # `DynRelation`'s verb is `sort_by`; `sort` is what the *binding* calls it.
-    # Cases write the Mojo name, so the shim answers to both.
-    sort_by = sort
-
-    def aggregate(self, aggs, keys=()):
-        """`keys` is optional, matching the Mojo overload.
-
-        No-GROUP-BY is `t.aggregate(aggs=[col("v", int64).sum()])` in both
-        lanes — polars and ibis both let the key list be absent, and an empty
-        one carried no information.
-        """
-        return _Relation(self._lazy.aggregate(keys, *aggs))
-
-    def join(self, other, left_on, right_on, how):
-        """Keys are column **indices**, as `DynRelation.join` takes them.
-
-        This reaches past `LazyTable.join`, which takes *names* and resolves
-        them against each side's schema -- the friendlier spelling, and not the
-        one a case writes: the Mojo lane has no schema in hand at plan-build
-        time and names its keys positionally.
-
-        There is no `strictness` argument in either lane. `DynRelation.join`
-        carried one until the expression layer was rewritten; the shim still
-        required it, which made every join case a `TypeError` the moment this
-        lane was un-skipped.
-        """
-        return _Relation(
-            marrow.lazy.LazyTable.wrap(
-                self._lazy.unwrap().join(
-                    other._lazy.unwrap(), list(left_on), list(right_on), how
-                )
-            )
-        )
-
-    def to_pyarrow(self, num_threads=0):
-        return self._lazy.to_pyarrow(num_threads=num_threads)
+#
+# There is no adapter here any more. `LazyTable` accepts `DynRelation`'s own
+# argument shapes -- `sort_by(keys, ascending)`, `aggregate(aggs, keys)`,
+# `join(other, left_keys, right_keys, kind)` and `rename(names, new_names)` --
+# alongside its friendlier ones, so a case body is one text in both lanes
+# rather than one text and a translation.
 
 
 def table(name):
@@ -395,7 +88,7 @@ def table(name):
     lane; Parquet and IPC keep their own suites.
     """
     batch = marrow.read_ipc_file(str(runner.fixture_path(name)))[0]
-    return _Relation(marrow.memtable(batch))
+    return marrow.memtable(batch)
 
 
 def check(name, plan):
@@ -429,45 +122,25 @@ NAMESPACE = {
     "col": col,
     "lit": lit,
     "count_star": count_star,
+    "if_else": if_else,
+    "row_number": marrow.row_number,
+    "rank": marrow.rank,
+    "dense_rank": marrow.dense_rank,
+    "array_length": marrow.array_length,
     "int64": int64,
     "int32": int32,
     "float64": float64,
     "string": string,
     "bool_": bool_,
-    "Int64Type": Int64Type,
-    "Int32Type": Int32Type,
-    "Float64Type": Float64Type,
-    "StringType": StringType,
-    "BoolType": BoolType,
     "date32": date32,
     "list_": list_,
     "timestamp": timestamp,
     "microsecond": microsecond,
-    "Upper": Upper,
-    "Lower": Lower,
-    "Strip": Strip,
-    "StringLength": StringLength,
-    "StartsWith": StartsWith,
-    "EndsWith": EndsWith,
-    "Like": Like,
-    "ILike": ILike,
-    "IsNull": IsNull,
-    "NotNull": NotNull,
-    "CaseWhen": CaseWhen,
-    "Coalesce": Coalesce,
-    "Nullif": Nullif,
-    "array_length": array_length,
-    "FillNull": FillNull,
-    "NumericCast": NumericCast,
-    "NumToString": NumToString,
-    "StringToNum": StringToNum,
-    "BoolToNum": BoolToNum,
-    "NumToBool": NumToBool,
-    "JOIN_INNER": JOIN_INNER,
-    "JOIN_LEFT": JOIN_LEFT,
-    "JOIN_RIGHT": JOIN_RIGHT,
-    "JOIN_FULL": JOIN_FULL,
-    "JOIN_SEMI": JOIN_SEMI,
-    "JOIN_ANTI": JOIN_ANTI,
-    "JOIN_ALL": JOIN_ALL,
+    "JOIN_INNER": marrow.JOIN_INNER,
+    "JOIN_LEFT": marrow.JOIN_LEFT,
+    "JOIN_RIGHT": marrow.JOIN_RIGHT,
+    "JOIN_FULL": marrow.JOIN_FULL,
+    "JOIN_SEMI": marrow.JOIN_SEMI,
+    "JOIN_ANTI": marrow.JOIN_ANTI,
+    "JOIN_ALL": marrow.JOIN_ALL,
 }

@@ -19,4 +19,4 @@ def plan() raises -> DynRelation:
     NULL
     """
     var t = table("nums")
-    return t.project(["c"], [NumToString[StringType](col("f", float64))])
+    return t.project(["c"], [col("f", float64).cast(string, safe=False)])

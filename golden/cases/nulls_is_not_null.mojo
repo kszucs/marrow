@@ -13,4 +13,4 @@ def plan() raises -> DynRelation:
     NULL	8	'y'
     """
     var t = table("nulls")
-    return t.filter(NotNull(col("b", int64)))
+    return t.filter(col("b", int64).is_valid())

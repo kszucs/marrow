@@ -34,17 +34,17 @@ batch2 = ma.record_batch(
     [ma.array([1, 2, 3]), ma.array(["x", "y", "z"])],
     names=["id", "label"],
 )
-print(batch2.column_names())
+print(batch2.column_names)
 ```
 
 ## Inspecting a batch
 
 ```{python}
-print("shape:       ", batch.shape())        # (rows, columns)
-print("num_rows:    ", batch.num_rows())
-print("num_columns: ", batch.num_columns())
-print("column_names:", batch.column_names())
-print("schema:      ", batch.schema())
+print("shape:       ", batch.shape)        # (rows, columns)
+print("num_rows:    ", batch.num_rows)
+print("num_columns: ", batch.num_columns)
+print("column_names:", batch.column_names)
+print("schema:      ", batch.schema)
 ```
 
 Reach a single column by name or position — both return an array:
@@ -85,11 +85,11 @@ replaced      = batch.set_column(2, rank, ma.array([1, 2, 3, 4]))
 renamed       = batch.rename_columns(["ID", "NAME", "SCORE"])
 without_score = batch.remove_column(2)
 
-print("appended: ", with_rank.column_names())
-print("inserted: ", inserted.column_names())
-print("replaced: ", replaced.column_names())
-print("renamed:  ", renamed.column_names())
-print("removed:  ", without_score.column_names())
+print("appended: ", with_rank.column_names)
+print("inserted: ", inserted.column_names)
+print("replaced: ", replaced.column_names)
+print("renamed:  ", renamed.column_names)
+print("removed:  ", without_score.column_names)
 ```
 
 ## Sorting
@@ -138,7 +138,7 @@ The supported join types:
 ```{python}
 for kind in ["inner", "left", "right", "full", "semi", "anti"]:
     out = people.join(depts, ["dept_id"], join_type=kind)
-    print(f"{kind:>6}: {out.num_rows()} rows, columns={out.column_names()}")
+    print(f"{kind:>6}: {out.num_rows} rows, columns={out.column_names}")
 ```
 
 Columns whose names collide across the two inputs are suffixed with `_right`,
@@ -196,7 +196,7 @@ table = ma.table({
     "city": ma.array(["NYC", "LA", "SF", "CHI", "SEA"]),
 })
 print(table)
-print("shape:", table.shape())
+print("shape:", table.shape)
 ```
 
 Tables share the inspection API with batches — `schema`, `column_names`,

@@ -70,8 +70,8 @@ var dtype = CArrowSchema.from_pycapsule(capsules[0]).to_dtype()  # int64
 var data  = CArrowArray.from_pycapsule(capsules[1])^.to_array(dtype)
 ref typed = data.as_int64()
 
-print(typed.is_valid(0))     # True
-print(typed.is_valid(4))     # False — null
+print(typed[0].is_valid())   # True
+print(typed[4].is_valid())   # False — null
 print(typed[0].value())      # 1
 
 # Export from Mojo back to PyArrow — __arrow_c_array__ protocol is supported

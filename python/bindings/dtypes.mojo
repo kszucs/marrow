@@ -16,6 +16,54 @@ def _field_type(py_self: PythonObject) raises -> PythonObject:
     return ptr[].dtype.copy().to_python_object()
 
 
+def _field_nullable(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(py_self.downcast_value_ptr[dt.Field]()[].nullable)
+
+
+def _field_equals(
+    py_self: PythonObject, other: PythonObject
+) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[dt.Field]()
+    return PythonObject(ptr[] == other.downcast_value_ptr[dt.Field]()[])
+
+
+def _field_str(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(String(py_self.downcast_value_ptr[dt.Field]()[]))
+
+
+# ---------------------------------------------------------------------------
+# DataType
+# ---------------------------------------------------------------------------
+#
+# `DynType` had **no** registered methods at all, which is why `ma.int32() ==
+# ma.int32()` was `False` -- an identity comparison on two distinct binding
+# objects -- and why the golden corpus compares dtypes by `str()`. `__eq__`
+# cannot be registered usefully (`def_method` fills `tp_dict`, not
+# `tp_richcompare`), so `equals` is the binding and `marrow.DataType` in Python
+# turns it into `==`.
+
+
+def _dtype_equals(
+    py_self: PythonObject, other: PythonObject
+) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[dt.DynType]()
+    return PythonObject(ptr[] == other.downcast_value_ptr[dt.DynType]()[])
+
+
+def _dtype_str(py_self: PythonObject) raises -> PythonObject:
+    return PythonObject(String(py_self.downcast_value_ptr[dt.DynType]()[]))
+
+
+def _dtype_byte_width(py_self: PythonObject) raises -> PythonObject:
+    """Bytes per value for a fixed-width type, as PyArrow spells it.
+
+    `num_buffers` is deliberately *not* exposed alongside it: marrow counts
+    data buffers only, where Arrow C++ and arrow-rs put validity at
+    `buffers[0]`, so the number is one lower than a PyArrow reader expects and
+    means something a Python caller has no use for."""
+    return PythonObject(py_self.downcast_value_ptr[dt.DynType]()[].byte_width())
+
+
 def null() raises -> PythonObject:
     """Create a null DataType."""
     return dt.null.to_dyn().to_python_object()
@@ -117,7 +165,7 @@ def time64(unit: PythonObject) raises -> PythonObject:
 
 
 def timestamp(
-    unit: PythonObject, tz: PythonObject = None
+    unit: PythonObject, tz: PythonObject
 ) raises -> PythonObject:
     """Create a timestamp DataType."""
     var tz_str = "" if tz is None else String(py=tz)
@@ -163,8 +211,8 @@ def _parse_time_unit(unit: PythonObject) raises -> dt.TimeUnit:
 def field(
     name: PythonObject,
     type: PythonObject,
-    nullable: PythonObject = True,
-    metadata: PythonObject = None,
+    nullable: PythonObject,
+    metadata: PythonObject,
 ) raises -> PythonObject:
     """Create a Field with the given name, data type, and optional nullability.
 
@@ -214,8 +262,16 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         mb.add_type[dt.Field]("Field")
         .def_method[_field_name]("name")
         .def_method[_field_type]("type")
+        .def_method[_field_nullable]("nullable")
+        .def_method[_field_equals]("equals")
+        .def_method[_field_str]("__str__")
     )
-    _ = mb.add_type[dt.DynType]("DataType")
+    _ = (
+        mb.add_type[dt.DynType]("DataType")
+        .def_method[_dtype_equals]("equals")
+        .def_method[_dtype_str]("__str__")
+        .def_method[_dtype_byte_width]("byte_width")
+    )
 
     mb.def_function[null]("null")
     mb.def_function[bool_]("bool_")
