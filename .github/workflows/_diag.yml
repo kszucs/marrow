@@ -1,8 +1,13 @@
 name: _diag
 
-# TEMPORARY -- delete before merging.  Answers why `mojo run` on ubuntu-latest
-# warns `could not locate shared library for '-lm'` and then segfaults every
-# case, while the same selection passes on macOS.
+# TEMPORARY -- delete before merging.
+#
+# Round 1 established: /usr/lib/x86_64-linux-gnu/libm.so exists and libc6-dev is
+# installed; a trivial mojo program runs; `marrow/tests/test_dtypes.mojo` alone
+# passes in 7 s.  Only the larger `marrow/tests` driver warns
+# `could not locate shared library for '-lm'` and then segfaults.  `mojo build`
+# works on this runner (build_python, --asan), `mojo run` is what fails -- so the
+# question is whether the JIT can be pointed at libm.
 on:
   push:
     branches: [ci]
@@ -12,7 +17,7 @@ jobs:
   linux-jit:
     name: linux jit diag
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -21,42 +26,24 @@ jobs:
           frozen: true
           environments: dev
 
-      - name: What the linker can see
+      # Does anything that actually needs libm reproduce it in seconds?
+      - name: A program that needs libm
         run: |
-          echo "::group::os"
-          cat /etc/os-release
+          printf 'from math import sqrt\n\n\ndef main():\n    print(sqrt(2.0))\n' > /tmp/m.mojo
+          echo "::group::mojo run, plain"
+          pixi run -e dev mojo run /tmp/m.mojo || echo "rc=$?"
           echo "::endgroup::"
-          echo "::group::system libm"
-          ls -l /usr/lib/x86_64-linux-gnu/libm.* || echo "no /usr/lib libm"
-          ls -l /lib/x86_64-linux-gnu/libm.* || echo "no /lib libm"
-          dpkg -l libc6-dev 2>/dev/null | tail -2 || echo "libc6-dev not installed"
-          gcc -print-file-name=libm.so || echo "no gcc"
-          echo "::endgroup::"
-          echo "::group::pixi env libs"
-          ls .pixi/envs/dev/lib | grep -iE '^libm|^libc' || echo "none"
-          echo "::endgroup::"
-          echo "::group::env inside pixi"
-          pixi run -e dev bash -c 'echo "LIBRARY_PATH=$LIBRARY_PATH"; echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; echo "CONDA_PREFIX=$CONDA_PREFIX"'
-          echo "::endgroup::"
-
-      - name: Does a trivial mojo program run at all
-        run: |
-          printf 'def main():\n    print("hello")\n' > /tmp/hello.mojo
-          echo "::group::plain"
-          pixi run -e dev mojo run /tmp/hello.mojo || echo "PLAIN FAILED rc=$?"
-          echo "::endgroup::"
-          echo "::group::with LIBRARY_PATH"
-          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu mojo run /tmp/hello.mojo' || echo "LIBRARY_PATH FAILED rc=$?"
+          echo "::group::mojo run, LIBRARY_PATH"
+          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu mojo run /tmp/m.mojo' || echo "rc=$?"
           echo "::endgroup::"
           echo "::group::mojo build then execute"
-          pixi run -e dev mojo build /tmp/hello.mojo -o /tmp/hello && /tmp/hello || echo "BUILD PATH FAILED rc=$?"
+          pixi run -e dev mojo build /tmp/m.mojo -o /tmp/m && /tmp/m || echo "rc=$?"
           echo "::endgroup::"
 
-      - name: Does one marrow case run
+      - name: The selection that crashes, plain
         run: |
-          echo "::group::single case, mojo run"
-          pixi run -e dev pytest -v --no-gpu marrow/tests/test_dtypes.mojo 2>&1 | tail -30 || true
-          echo "::endgroup::"
-          echo "::group::single case, LIBRARY_PATH set"
-          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu pytest -v --no-gpu marrow/tests/test_dtypes.mojo' 2>&1 | tail -30 || true
-          echo "::endgroup::"
+          pixi run -e dev pytest -q --no-gpu marrow/tests 2>&1 | tail -12 || true
+
+      - name: The selection that crashes, with LIBRARY_PATH
+        run: |
+          pixi run -e dev bash -c 'LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu pytest -q --no-gpu marrow/tests' 2>&1 | tail -12 || true
