@@ -28,6 +28,7 @@ from .`comptime`.leaves import (
     ListColumn,
     Param,
     TemporalColumn,
+    TemporalLiteral,
     Literal,
     StringColumn,
     StringLiteral,
@@ -162,6 +163,19 @@ def lit[T: FloatingType](value: Float64, dtype: T) -> Literal[T]:
 def lit(var value: DynScalar) -> RuntimeValue:
     """An erased constant, broadcast on evaluation."""
     return literal(value^)
+
+
+def lit[T: TemporalType](value: Int, dtype: T) -> TemporalLiteral[T]:
+    """A typed temporal constant — `lit(19723, date32())` is a day number, and
+    a timestamp is its unit's ticks since the epoch.
+
+    Takes `Int` for the same reason the numeric overload does: `T` is not
+    resolved when the first argument is checked, and the dtype argument is what
+    resolves it. Without this overload `date_col > date_const` cannot be
+    written in the comptime lane at all, which is why every temporal predicate
+    used to keep every chunk.
+    """
+    return TemporalLiteral[T](Scalar[T.native](value), dtype)
 
 
 def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:

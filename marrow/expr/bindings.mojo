@@ -2,10 +2,10 @@
 
 Split out of `params.mojo`, which held two unrelated things: this alias, which
 depends on nothing in the package, and `Param[T]`, a comptime-lane leaf node.
-Sharing a file forced the alias to drag in `logical.Shape` and
-`pruning.param_bounds`, and both of those import it back -- two of the
-package's dependency cycles existed only because of the pairing. `Param` now
-lives beside the other comptime leaves; this is a genuine leaf module.
+Sharing a file forced the alias to drag in `logical.Shape`, which imports it
+back -- one of the package's dependency cycles existed only because of the
+pairing. `Param` now lives beside the other comptime leaves; this is a genuine
+leaf module.
 """
 
 from std.collections import Dict

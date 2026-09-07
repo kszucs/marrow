@@ -116,19 +116,19 @@ trait Rule(Copyable, Movable):
     A rule must be **semantics-preserving on its own**. The driver composes
     rules in listed order and to a fixpoint, so a rule that is only correct
     when another ran first is a rule that is not correct.
-    """
 
-    comptime NAME: String
-    """What this rule is called, for `explain` and for test assertions."""
+    **A rule has no name field.** There was one, declared on this trait and
+    spelled out by all sixteen conformers, and nothing ever read it; when a
+    rule does need naming, `reflect[Self].name()` derives it. A trait
+    requirement no caller consumes is sixteen places to keep in sync with
+    nothing.
+    """
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
         ...
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Rules — removals
 # ---------------------------------------------------------------------------
@@ -143,8 +143,6 @@ struct RemoveNoOpProject(Rule):
     identical fields in identical order are interchangeable however they spell
     themselves, and the child's schema is already computed and stored.
     """
-
-    comptime NAME = "RemoveNoOpProject"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -183,8 +181,6 @@ struct EliminateFilter(Rule):
     to select. `constant_bool` already answers `None` for it.
     """
 
-    comptime NAME = "EliminateFilter"
-
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
         if not node.isa[Filter]():
@@ -212,8 +208,6 @@ struct RemoveEmptyLimit(Rule):
     unwrapping anything.
     """
 
-    comptime NAME = "RemoveEmptyLimit"
-
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
         if not node.isa[Limit]():
@@ -234,8 +228,6 @@ struct MergeLimits(Rule):
     returns rows the query excluded, so the arithmetic is written out rather
     than folded into one expression.
     """
-
-    comptime NAME = "MergeLimits"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -276,8 +268,6 @@ struct RemoveRedundantSort(Rule):
     **Not applied when the inner sort carries a TopN bound**, which does drop
     rows and is load-bearing.
     """
-
-    comptime NAME = "RemoveRedundantSort"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -328,8 +318,6 @@ struct PropagateEmpty(Rule):
     Collapsing it would turn a valid answer into no answer at all.
     """
 
-    comptime NAME = "PropagateEmpty"
-
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
         if node.isa[Filter]():
@@ -373,8 +361,6 @@ struct MergeProjects(Rule):
     means rewriting inside a `DynValue` and would lower a fused comptime
     subtree into the runtime lane. Column selection needs no substitution.
     """
-
-    comptime NAME = "MergeProjects"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -434,8 +420,6 @@ struct RemoveSortBeforeAggregate(Rule):
     changes *which* rows are aggregated, not merely their order.
     """
 
-    comptime NAME = "RemoveSortBeforeAggregate"
-
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
         if not node.isa[Aggregate]():
@@ -469,8 +453,6 @@ struct PushFilterBelowSort(Rule):
     matching p", where filtering first yields ten *matching* rows — a different
     and larger answer. That rule is absent deliberately.
     """
-
-    comptime NAME = "PushFilterBelowSort"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -506,8 +488,6 @@ struct PushFilterBelowProject(Rule):
     renamed, cast or computed.
     """
 
-    comptime NAME = "PushFilterBelowProject"
-
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
         if not node.isa[Filter]():
@@ -535,20 +515,18 @@ struct SplitConjunction(Rule):
     `a` names the left side and `b` the right; split, it moves `a` into the
     left and `b` into the right. `PushFilterBelowProject` cannot move a
     predicate that mentions one computed column; split, it moves the half that
-    does not. And each conjunct carries its own `PrunePredicate`, where a
-    compound `AND` prunes only as well as its weaker half.
+    does not. And each conjunct prunes on its own, where a compound `AND`
+    prunes only as well as its weaker half.
 
     The split itself is decided at the `.filter()` verb, where the predicate's
     concrete type is visible, and each conjunct is boxed whole so a comptime
     subtree stays fused. Rebuilding through `.filter()` re-derives each
-    conjunct's own pruner and constant for free.
+    conjunct's own constant for free.
 
     Answers unchanged, nulls included: a row survives `a AND b` under Kleene
     semantics exactly when both are `TRUE`, which is the row set two stacked
     filters keep — a null selects in neither.
     """
-
-    comptime NAME = "SplitConjunction"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -589,8 +567,6 @@ struct PushFilterBelowJoin(Rule):
     independently. Only a genuinely inseparable predicate (`l.x + r.y > 5`)
     remains above the join.
     """
-
-    comptime NAME = "PushFilterBelowJoin"
 
     @staticmethod
     def _reads_only(names: List[String], schema: Schema) -> Bool:
@@ -664,8 +640,6 @@ struct PushFilterBelowAggregate(Rule):
     a different answer.
     """
 
-    comptime NAME = "PushFilterBelowAggregate"
-
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
         if not node.isa[Filter]():
@@ -701,6 +675,97 @@ struct PushFilterBelowAggregate(Rule):
         return out^
 
 
+struct PushFilterIntoScan(Rule):
+    """`Filter(ParquetScan)` -> the same filter over a scan that prunes.
+
+    **The filter stays.** Pruning is conservative — it answers "could any row
+    of this chunk match", never "every row matches" — so the exact predicate
+    must still run on every row the scan produces. This rule makes the scan
+    read less, and it is the `Filter` above that decides what survives. That is
+    what makes it safe to get wrong: a pruner that should not be here costs
+    time, and dropping one costs nothing but time either.
+
+    **Reachability is the correctness argument.** `Filter(p)` above `Limit(10)`
+    means "the first ten rows, then `p`" — a scan that skipped a row group
+    would hand `Limit` a *different* first ten, and rows the query should have
+    returned disappear. `_grown` descends through `Filter` and nothing else, so
+    `Limit`, `Window`, `Project`, `Aggregate` and `Join` stop it by *being
+    themselves*. The retired `to_operator` descent had to remember to clear at
+    each of the five, one arm at a time, and adding a node meant remembering
+    again; here a new node stops the predicate unless somebody deliberately
+    teaches this method to walk it.
+
+    The rules that legitimately move a filter closer to a scan —
+    `PushFilterBelowSort`, `PushFilterBelowProject`, `PushFilterBelowAggregate`,
+    `PushFilterBelowJoin` — each prove their own case first, and all four
+    rebuild with `with_input`, so the pruner they carry still names the columns
+    it named above. That is where this rule gets reach the descent never had:
+    the descent cleared at `Project`, `Aggregate` and `Join` unconditionally.
+
+    **Ordered after `SplitConjunction`** so it lands each conjunct separately:
+    a compound `AND` prunes only as well as its weaker half. The predicate it
+    reads is the `Filter`'s own `DynValue`, boxed or not, so a split's output
+    prunes exactly as well as the filter it came from.
+    """
+
+    @staticmethod
+    def _grown(
+        node: DynRelation, predicate: DynValue
+    ) raises -> Optional[DynRelation]:
+        """`node` with `predicate` added to the `ParquetScan` at the bottom of
+        its `Filter` chain, or `None` when there is no scan down there.
+
+        **`Filter` is the one node this descends through**, and it is what
+        keeps `Filter(a, Filter(b, scan))` pruning on both halves — the shape
+        the retired `to_operator` descent conjoined and plain adjacency would
+        miss. It is sound for the same reason the outer filter is: a chunk
+        that cannot match `predicate` holds no row this filter keeps, and the
+        filters in between only ever drop more.
+
+        Every other node stops it by not being a `Filter` — `Limit`, `Window`,
+        `Project`, `Aggregate` and `Join`, which is the whole of the table the
+        descent used to spell out arm by arm.
+
+        **A scan that already carries this predicate answers `None`**, which is
+        what makes the rule idempotent: the filter above stays, so without the
+        check a second pass would push the same predicate again and the driver
+        would never see two renderings agree.
+        """
+        if node.isa[ParquetScan]():
+            ref source = node.get[ParquetScan]()
+            for ref carried in source.pruners:
+                if String(carried) == String(predicate):
+                    return None
+            # A new list rather than a mutated one: the plan being rewritten
+            # still holds the scan this came from, and the driver compares the
+            # two renderings to decide it has converged.
+            var pruners = source.pruners.copy()
+            pruners.append(predicate.copy())
+            var grown = ParquetScan(
+                source.path.copy(), source.schema(), pruners^
+            )
+            var out: DynRelation = grown^
+            return out^
+        if node.isa[Filter]():
+            ref inner = node.get[Filter]()
+            var below = Self._grown(inner.input[].copy(), predicate)
+            if below:
+                var out: DynRelation = inner.with_input(below.value().copy())
+                return out^
+        return None
+
+    @staticmethod
+    def apply(node: DynRelation) raises -> DynRelation:
+        if not node.isa[Filter]():
+            return node.copy()
+        ref filtered = node.get[Filter]()
+        var below = Self._grown(filtered.input[].copy(), filtered.predicate)
+        if not below:
+            return node.copy()
+        var out: DynRelation = filtered.with_input(below.value().copy())
+        return out^
+
+
 struct PushLimitBelowProject(Rule):
     """`Limit(Project(x))` -> `Project(Limit(x))`.
 
@@ -713,8 +778,6 @@ struct PushLimitBelowProject(Rule):
     input to one row and make a limit below it bound the wrong thing. `Project`
     rejects aggregates at construction, so this is belt-and-braces.
     """
-
-    comptime NAME = "PushLimitBelowProject"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -759,8 +822,6 @@ struct TopN(Rule):
     unrepresentable rather than merely avoided — and `PushFilterBelowSort` runs
     first, moving the common offender out of the way.
     """
-
-    comptime NAME = "TopN"
 
     @staticmethod
     def apply(node: DynRelation) raises -> DynRelation:
@@ -867,9 +928,7 @@ struct ColumnPruning(Copyable, Movable):
             var fields = List[Field](capacity=len(keep))
             for ref name in keep:
                 fields.append(scan.schema().field(name=name).copy())
-            var out: DynRelation = ParquetScan(
-                scan.path.copy(), schema(fields^)
-            )
+            var out: DynRelation = scan.with_schema(schema(fields^))
             return out^
 
         if node.isa[InMemoryTable]():
@@ -997,6 +1056,40 @@ struct NoRules(RuleSet):
         return node.copy()
 
 
+struct ScanPruning(RuleSet):
+    """The smallest set that makes a scan skip row groups.
+
+    **What an AOT binary names when pruning is all it wants.** Row-group
+    pruning used to ride `Relation.to_operator`, so it happened whether or not
+    anything optimized; now it is a rewrite, and a plan nobody rewrites reads
+    every row group. Nothing applies this set behind the author's back — a plan
+    prunes because its author wrote `.optimize[ScanPruning]()`, exactly as it
+    merges projections because they wrote `.optimize[AllRules]()`.
+
+    Three rules, chosen to cover what the retired descent covered and no more:
+    `PushFilterBelowSort` puts a filter under an unbounded sort — the one node
+    the descent forwarded through besides `Filter` — `SplitConjunction` breaks
+    an `AND` into conjuncts the scan can use separately, and
+    `PushFilterIntoScan` walks the remaining `Filter` chain and lands them on
+    the scan.
+
+    `prepare` is the identity, so `ColumnPruning` is never mentioned and never
+    links. A binary that wants row-group pruning does not pay for the
+    projection pass it did not ask for, which is the whole point of the rule
+    set being a comptime parameter.
+    """
+
+    @staticmethod
+    def prepare(plan: DynRelation) raises -> DynRelation:
+        return plan.copy()
+
+    @staticmethod
+    def rewrite(node: DynRelation) raises -> DynRelation:
+        return PushFilterIntoScan.apply(
+            SplitConjunction.apply(PushFilterBelowSort.apply(node))
+        )
+
+
 struct AllRules(RuleSet):
     """Every rule in this file.
 
@@ -1004,6 +1097,15 @@ struct AllRules(RuleSet):
     rule bothers moving a node another is about to delete, and
     `PushFilterBelowSort` runs before `TopN` so a filter between a limit and a
     sort is relocated *before* `TopN` checks adjacency and gives up.
+
+    `SplitConjunction` runs before `PushFilterIntoScan` so the scan learns each
+    conjunct on its own. A compound `AND` prunes only as well as its weaker
+    half, so `a > 60 AND a < 140` reaching the scan whole would skip a chunk
+    only when *neither* bound can — where the two halves separately skip
+    everything outside `[60, 140]`. The reverse order was forced until `mask`
+    became a slot on `DynValue`: a split rebuilds its conjuncts through the
+    erased `.filter()` overload, and an erased predicate used to have no
+    pruning method at all.
     """
 
     @staticmethod
@@ -1035,6 +1137,7 @@ struct AllRules(RuleSet):
         out = MergeLimits.apply(out)
         out = RemoveRedundantSort.apply(out)
         out = SplitConjunction.apply(out)
+        out = PushFilterIntoScan.apply(out)
         out = PushFilterBelowProject.apply(out)
         out = PushFilterBelowSort.apply(out)
         out = PushFilterBelowJoin.apply(out)

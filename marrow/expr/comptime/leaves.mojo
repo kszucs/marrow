@@ -13,6 +13,7 @@ from ...arrays import (
     StructArray,
 )
 from ...buffers import Bitmap
+from ...builders import PrimitiveBuilder
 from ...dtypes import (
     BoolType,
     DynType,
@@ -26,8 +27,7 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import Shape
 from ..bindings import Bindings
-from ...kernels.bounds import Bounds
-from ..pruning import PruneStats, Truth, param_bounds
+from ..index import Index
 from ..physical import Datum
 from .core import (
     BoolValue,
@@ -86,16 +86,28 @@ struct Column[T: NumericType](ColumnBound, NumericValue):
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return bound.values().load[W](idx)
 
-    def bounds(
-        self, stats: PruneStats, bindings: Bindings
-    ) -> Bounds[Self.Type.native]:
-        """The typed unwrap of this column's statistic, guarded on dtype.
+    def defined(self, index: Index) raises -> BoolArray:
+        """Where this column holds at least one non-null value."""
+        return index.defined(self._name)
 
-        `stats.bounds[T]` compares `DynType(T())` against the stored scalar's
-        own type before unwrapping, because `as_primitive[T]` is a
-        `debug_assert` that *aborts the process* on a mismatch rather than
-        raising."""
-        return stats.bounds[Self.T](self._name)
+    def statistics[
+        Stat: NumericType
+    ](
+        self, index: Index, bindings: Bindings, upper: Bool
+    ) raises -> PrimitiveArray[Stat]:
+        """This column's per-chunk extremes, straight off the zone map.
+
+        Nothing is erased on this path and nothing is checked here: `Stat` is
+        what the reader asked for, and the index answers null for any chunk
+        whose recorded statistic is some other type. A column the plan declares
+        as `int64` in a file that wrote `int32` therefore prunes nothing rather
+        than reading a scalar at the wrong type -- which is not a raise but a
+        process abort, since `as_primitive` on the wrong type is unchecked in a
+        release build.
+        """
+        if upper:
+            return index.maxes[Stat](self._name, Stat())
+        return index.mins[Stat](self._name, Stat())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
@@ -225,10 +237,80 @@ struct Literal[T: NumericType](NumericValue):
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return SIMD[Self.Type.native, W](self._value)
 
-    def bounds(
-        self, stats: PruneStats, bindings: Bindings
-    ) -> Bounds[Self.Type.native]:
-        return Bounds[Self.Type.native].point(self._value)
+    def statistics[
+        Stat: NumericType
+    ](
+        self, index: Index, bindings: Bindings, upper: Bool
+    ) raises -> PrimitiveArray[Stat]:
+        """A literal is the same value in every chunk, so both extremes are
+        it — converted to `Stat` by a builtin SIMD cast, which is what makes a
+        promoting comparison prune without linking `kernels::cast`."""
+        return PrimitiveScalar[Stat](Scalar[Stat.native](self._value)).repeat(
+            index.chunks
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct TemporalLiteral[T: TemporalType](TemporalValue, Unnamed):
+    """A date/time/timestamp/duration constant, splatted into every lane.
+
+    **The leaf the comptime lane was missing, and pruning is why it exists.**
+    `TemporalCompare` compares two temporal operands, and until now the only
+    temporal operand was a column — so `date_col > date_const`, the shape a
+    zone map is most useful for, could not be written in this lane at all and
+    every temporal predicate kept every chunk.
+
+    It carries its dtype as well as its value, for the same reason
+    `TemporalColumn` does: a unit is a value, so `Self.T` cannot build one.
+    That is also what makes `lit(19000, date32())` read naturally — the dtype
+    argument is already there, exactly as the numeric overload has it.
+    """
+
+    comptime Type = Self.T
+    comptime shape = Shape.scalar
+    comptime Bound = NoneType
+    """Nothing to resolve — the value is in the node, so the lane splats it."""
+
+    var _value: Scalar[Self.Type.native]
+    var _dtype: Self.T
+
+    def __init__(out self, value: Scalar[Self.Type.native], dtype: Self.T):
+        self._value = value
+        self._dtype = dtype.copy()
+
+    # -- Value --------------------------------------------------------------
+
+    def columns(self) -> List[String]:
+        return List[String]()
+
+    def name(self) -> String:
+        return String(self._value)
+
+    def dtype(self, schema: Schema) raises -> DynType:
+        return DynType(self._dtype)
+
+    # -- Evaluable ----------------------------------------------------------
+
+    def evaluate(self, batch: StructArray, bindings: Bindings) raises -> Datum:
+        return PrimitiveScalar[Self.T](
+            Optional(self._value), self._dtype
+        ).to_dyn()
+
+    # -- PrimitiveValue -----------------------------------------------------
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        return NoneType()
+
+    def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
+        return None
+
+    @always_inline
+    def lane[
+        W: Int
+    ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
+        return SIMD[Self.Type.native, W](self._value)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("lit(", self._value, ")")
@@ -283,10 +365,6 @@ struct BoolColumn(BoolValue, ColumnBound):
     @always_inline
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         return bound.values().load[W](idx)
-
-    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
-        """A bare bool column: `never` when all-null or when `max` is False."""
-        return stats.bool_truth(self._name)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._name)
@@ -552,14 +630,13 @@ struct Param[T: NumericType](NumericValue):
 
     # -- PrimitiveValue -----------------------------------------------------
 
-    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
-        """Read this execution's value — the one leaf that reads `bindings`.
+    def _bound(self, bindings: Bindings) raises -> Self.Bound:
+        """This execution's value, or the default; raises **naming itself**
+        when there is neither.
 
-        **Here, rather than as a rewrite at `to_operator`.** Substituting at
-        lowering would need every composite node to rebuild itself with
-        resolved children, one method per node for a concern one node has.
-        `bind` already walks the whole tree and already carries per-execution
-        state, so this costs nothing that was not already being paid.
+        Split out because two callers need it: `bind`, once per batch, and
+        `statistics`, once per scan when this parameter sits in a predicate the
+        source is pruning with.
         """
         var got = bindings.get(self._name)
         if got:
@@ -573,6 +650,33 @@ struct Param[T: NumericType](NumericValue):
             (": " + self._help) if self._help else "",
         )
 
+    def statistics[
+        Stat: NumericType
+    ](
+        self, index: Index, bindings: Bindings, upper: Bool
+    ) raises -> PrimitiveArray[Stat]:
+        """One value for the whole execution, so both extremes are it — the
+        answer `Literal` gives, read from `bindings` rather than off the node.
+
+        This is what makes the AOT lane prune at all: its plans are written
+        `col("amount", int64) >= param("min-amount")`, and a parameter that
+        said nothing would leave every such query reading the whole file.
+        """
+        return PrimitiveScalar[Stat](
+            Scalar[Stat.native](self._bound(bindings))
+        ).repeat(index.chunks)
+
+    def bind(self, batch: StructArray, bindings: Bindings) raises -> Self.Bound:
+        """Read this execution's value — the one leaf that reads `bindings`.
+
+        **Here, rather than as a rewrite at `to_operator`.** Substituting at
+        lowering would need every composite node to rebuild itself with
+        resolved children, one method per node for a concern one node has.
+        `bind` already walks the whole tree and already carries per-execution
+        state, so this costs nothing that was not already being paid.
+        """
+        return self._bound(bindings)
+
     def validity(self, bound: Self.Bound) raises -> Optional[Bitmap[mut=False]]:
         return None
 
@@ -581,21 +685,6 @@ struct Param[T: NumericType](NumericValue):
         W: Int
     ](self, bound: Self.Bound, idx: Int) -> SIMD[Self.Type.native, W]:
         return SIMD[Self.Type.native, W](bound)
-
-    def bounds(
-        self, stats: PruneStats, bindings: Bindings
-    ) -> Bounds[Self.Type.native]:
-        """A bound parameter prunes exactly as well as a literal, because
-        pruning runs at *execution* time with the same `Bindings` `bind` will
-        see. the previous expression package needed a process-global registry
-        for this and still
-        regressed a parameterised date filter to reading every row group.
-
-        Unbound and undefaulted answers unknown and does not raise: the scan
-        reads everything and `bind` then raises naming the parameter. Pruning
-        degrades; binding raises.
-        """
-        return param_bounds[Self.T](bindings, self._name, self._default)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("param(", self._name, ")")

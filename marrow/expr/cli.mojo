@@ -547,6 +547,16 @@ struct QueryCli(Movable):
         rather than one per writer."""
         var path = self._args.get_or(String("output"), String())
         var fmt = self._resolve_format(path)
+        # **No optimizer here, and that is the author's call to make.** `run`
+        # used to apply `ScanPruning` behind the author's back so an AOT plan
+        # would prune whether or not it asked. That cost 1,467,352 bytes of
+        # `__text` -- 33% of this gate -- because `Optimizer.run` walks the
+        # plan through `DynRelation._dispatch`, whose ten arms each rebuild
+        # their node and so register `_to_operator_tramp[X]`: every physical
+        # operator and its kernels link into a binary whose plan names two node
+        # types. A plan prunes because its author wrote
+        # `.optimize[ScanPruning]()`, exactly as it merges projections because
+        # they wrote `.optimize[AllRules]()`.
         var batch = plan.execute(ctx, self.bindings())
         if fmt == "table":
             var rendered = render_table(

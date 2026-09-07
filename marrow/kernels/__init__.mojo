@@ -59,8 +59,7 @@ Submodules — element-wise first, then the ones that reshape or combine rows:
   - `core.mojo` — the `Kernel` root trait and `Groups`
   - *not re-exported* — `groupby.mojo` (`HashGrouper`/`HashGrouping`),
     `join.mojo` / `hashtable.mojo` / `hashing.mojo` / `partition.mojo` (the
-    hash machinery group-by, join and `is_in` share), `bounds.mojo` (the
-    interval algebra `expr/pruning.mojo` evaluates predicates in)
+    hash machinery group-by, join and `is_in` share)
 
 `ExecContext` is re-exported here for convenience but lives in
 `marrow/execution.mojo`: it is a thread-count/device policy object that imports

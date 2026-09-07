@@ -365,8 +365,9 @@ def test_large_string_ordering() raises:
 # widest family the typed leaf accepts" rule names, and already fixed in
 # `filter`/`take` and `sort`.
 #
-# The consequence reached well past comparison: `pruning.mojo` mirrors this
-# bound, so no row group or page was ever pruned on a date or decimal predicate.
+# The consequence reached well past comparison: statistics pruning is these very
+# kernels run over per-chunk extremes, so no row group was ever pruned on a date
+# or decimal predicate.
 # ---------------------------------------------------------------------------
 
 

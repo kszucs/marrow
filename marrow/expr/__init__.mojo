@@ -60,8 +60,7 @@ from .logical import (
     WindowFrame,
 )
 from .physical import Datum, DynOperator, Morsel, Operator, Pipeline
-from .pruning import PrunePredicate, PruneStats, Prunable, Truth
-from .pushdown import Pushdown
+from .index import ColumnZones, Index, ZoneMaps, keep_every
 
 # -- the comptime lane, spelled here so nothing else has to --------------------
 from .`comptime`.aggregates import (
@@ -102,6 +101,7 @@ from .`comptime`.leaves import (
     StringColumn,
     StringLiteral,
     TemporalColumn,
+    TemporalLiteral,
 )
 from .`comptime`.numeric import (
     Add,
@@ -152,9 +152,11 @@ from .optimizer import (
     NoRules,
     PushFilterBelowProject,
     PushFilterBelowSort,
+    PushFilterIntoScan,
     PushLimitBelowProject,
     RemoveNoOpProject,
     RemoveRedundantSort,
+    ScanPruning,
     Rule,
     RuleSet,
     TopN,

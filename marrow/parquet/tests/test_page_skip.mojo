@@ -9,7 +9,7 @@ from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.python import Python, PythonObject
 from std.os import remove
 from ...parquet import read_table
-from ...parquet.reader import RowSelection
+from ...parquet.reader import ParquetFile, RowSelection
 from ...tabular import Table
 
 
@@ -23,6 +23,43 @@ def _write(tbl: PythonObject) raises -> String:
         data_page_size=128,
         row_group_size=1000000,
         compression="none",
+    )
+    return path
+
+
+def _write_pages(
+    tbl: PythonObject,
+    page_rows: Int,
+    codec: String = "none",
+    version: String = "1.0",
+) raises -> String:
+    """`tbl` written in pages of exactly `page_rows` rows.
+
+    **`write_batch_size` is what sets the page length, not `data_page_size`.**
+    parquet-cpp only checks whether the current page is full at the end of each
+    write batch, so with the default batch of 1024 a small `data_page_size`
+    still yields one page for anything under 1024 rows -- and a page-skipping
+    test whose file has one page measures nothing. The cases above get many
+    pages only because they write 10,000 rows; the ones below need them at a
+    *known* offset, so this names both.
+
+    `codec` and `version` are parameters because page skipping is worth the
+    most on a *compressed* file -- a page never decoded is never decompressed --
+    and because a v2 data page keeps its rep/def levels outside the compressed
+    body, so its length is not the v1 arithmetic.
+    """
+    var pq = Python.import_module("pyarrow.parquet")
+    var path = String("/tmp/marrow_pageskip_boundary.parquet")
+    pq.write_table(
+        tbl,
+        path,
+        data_page_size=1,
+        write_batch_size=page_rows,
+        row_group_size=1000000,
+        write_page_index=True,
+        use_dictionary=False,
+        data_page_version=version,
+        compression=codec,
     )
     return path
 
@@ -176,6 +213,314 @@ def test_scattered_fixed_size_binary() raises:
         _col(pa.array(vals.astype("S4"), type=pa.binary(4))),
         _strided(5000, 6, 3),
     )
+
+
+def test_selection_across_every_page_boundary_case() raises:
+    """Every way a selection can sit against a page edge, in one file.
+
+    Ported from parquet-rs's `test_scan_ranges`
+    (`parquet/src/arrow/arrow_reader/selection/ranges.rs`), which pins the same
+    property one layer down: which *pages* a per-row selection forces a reader
+    to touch. Seven pages of ten rows, and the selection is built so that each
+    transition appears exactly once —
+
+    | rows | against the pages |
+    |---|---|
+    | 0-9 | a whole page skipped, at the start |
+    | 10-12, 16-19 | two disjoint runs *inside* one page |
+    | 25-29 | a run ending exactly on a page boundary |
+    | 30-41 | a whole page skipped, plus part of the next |
+    | 42-53 | a run spanning a page boundary |
+    | 54-69 | a whole page skipped, at the end |
+
+    The cases above this one sweep contiguous and strided patterns over ~10
+    pages, which is good at catching an off-by-one *inside* a page and blind to
+    one at its edge: a strided mask keeps something in every page, so no page
+    is ever skipped whole. Here pages 0, 3 and 6 must be skipped entirely and
+    pages 1, 2, 4 and 5 partially read, and the assertion is on the values.
+    """
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write_pages(_col(pa.array(np.arange(70), type=pa.int64())), 10)
+
+    var f = ParquetFile(path)
+    assert_equal(
+        len(f.page_bounds()[0][0]),
+        7,
+        "the fixture must write seven pages or this proves nothing",
+    )
+
+    var keep = List[Bool](capacity=70)
+    for i in range(70):
+        keep.append(
+            (10 <= i < 13) or (16 <= i < 20) or (25 <= i < 30) or (42 <= i < 54)
+        )
+    var sel = RowSelection(keep^)
+
+    var full = read_table(path)
+    var rs = List[RowSelection]()
+    rs.append(sel.copy())
+    var got = read_table(path, row_selections=rs^)
+    assert_equal(got.num_rows(), 24)
+    _assert_matches_full(got^, full^, sel)
+    remove(path)
+
+
+def _seventy_in_pages_of_ten() raises -> String:
+    """`0..69` in seven pages of ten — the shape parquet-rs's `test_scan_ranges`
+    reasons over, so the boundary cases below can be read straight across."""
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    return _write_pages(_col(pa.array(np.arange(70), type=pa.int64())), 10)
+
+
+def _mask(n: Int, runs: List[Tuple[Int, Int]]) -> RowSelection:
+    """A selection keeping each half-open `[start, end)` run and nothing else.
+    """
+    var keep = List[Bool](capacity=n)
+    for i in range(n):
+        var hit = False
+        for ref run in runs:
+            if run[0] <= i < run[1]:
+                hit = True
+                break
+        keep.append(hit)
+    return RowSelection(keep^)
+
+
+def _read_selected(path: String, sel: RowSelection) raises:
+    """Read `path` under `sel` and assert it equals a full read filtered the
+    same way."""
+    var full = read_table(path)
+    var rs = List[RowSelection]()
+    rs.append(sel.copy())
+    var got = read_table(path, row_selections=rs^)
+    _assert_matches_full(got^, full^, sel)
+
+
+def test_selection_spilling_one_row_into_the_next_page() raises:
+    """The minimal partial page: a run that ends one row past a boundary.
+
+    parquet-rs's `test_scan_ranges` calls this "select to remaining in page and
+    first row of next page" — pages 1, 2 and 3 are touched, and page 3
+    contributes exactly one row. A reader that rounds a partial page down drops
+    that row; one that rounds up returns nine extra.
+    """
+    var path = _seventy_in_pages_of_ten()
+    _read_selected(path, _mask(70, [(10, 13), (16, 20), (25, 31)]))
+    remove(path)
+
+
+def test_selection_running_to_the_last_row_of_the_group() raises:
+    """A run that ends on the final row, so the last page is partially read and
+    nothing follows it to catch an overrun."""
+    var path = _seventy_in_pages_of_ten()
+    _read_selected(path, _mask(70, [(10, 13), (42, 70)]))
+    remove(path)
+
+
+def test_selection_of_the_final_page_alone() raises:
+    """Everything before the last page skipped — the mirror of the first case
+    in the boundary matrix, where the skipped run is a prefix."""
+    var path = _seventy_in_pages_of_ten()
+    _read_selected(path, _mask(70, [(60, 70)]))
+    remove(path)
+
+
+def test_selection_of_one_row_per_page() raises:
+    """Every page partially read and none skipped, which is the case a
+    whole-page fast path gets wrong in the opposite direction from a mask that
+    skips whole pages."""
+    var path = _seventy_in_pages_of_ten()
+    _read_selected(
+        path,
+        _mask(
+            70,
+            [
+                (0, 1),
+                (10, 11),
+                (20, 21),
+                (30, 31),
+                (40, 41),
+                (50, 51),
+                (60, 61),
+            ],
+        ),
+    )
+    remove(path)
+
+
+def test_selection_over_compressed_pages() raises:
+    """A skipped page is skipped *before* decompression, and the kept ones
+    still decode.
+
+    Every other case here writes uncompressed pages, so the interaction
+    between the skip path and `PageReader._body` — which decompresses into a
+    reused scratch buffer — was never exercised. Snappy because it is the
+    codec marrow opens by default.
+    """
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write_pages(
+        _col(pa.array(np.arange(70), type=pa.int64())), 10, "snappy"
+    )
+    _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
+    remove(path)
+
+
+def test_selection_over_v2_data_pages() raises:
+    """A v2 data page puts its rep/def levels outside the compressed body, so
+    its length is not simply header plus compressed values. The seek steps by
+    the `OffsetIndex`'s size either way; this is what says so."""
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write_pages(
+        _col(pa.array(np.arange(70), type=pa.int64())), 10, "none", "2.0"
+    )
+    _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
+    remove(path)
+
+
+def test_selection_over_compressed_v2_data_pages() raises:
+    """Both at once, which is what a real file tends to be."""
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write_pages(
+        _col(pa.array(np.arange(70), type=pa.int64())), 10, "snappy", "2.0"
+    )
+    _read_selected(path, _mask(70, [(10, 13), (25, 31), (60, 70)]))
+    remove(path)
+
+
+def test_per_group_selections_are_positional() raises:
+    """Three row groups, three *different* selections, applied to the right
+    groups.
+
+    `read` takes one selection per entry of `row_groups`, in that order — an
+    invariant only its length is checked against. Giving each group a distinct
+    pattern is what makes a transposition visible: swapped selections keep the
+    right *number* of rows and the wrong ones.
+    """
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var pq = Python.import_module("pyarrow.parquet")
+    var path = String("/tmp/marrow_pageskip_groups.parquet")
+    pq.write_table(
+        _col(pa.array(np.arange(30), type=pa.int64())),
+        path,
+        row_group_size=10,
+        data_page_size=1,
+        write_batch_size=5,
+        write_page_index=True,
+        use_dictionary=False,
+        compression="none",
+    )
+
+    var groups = List[Int]()
+    groups.append(0)
+    groups.append(1)
+    groups.append(2)
+    var rs = List[RowSelection]()
+    rs.append(_mask(10, [(0, 2)]))  # group 0 -> 0, 1
+    rs.append(_mask(10, [(5, 6)]))  # group 1 -> 15
+    rs.append(_mask(10, [(7, 10)]))  # group 2 -> 27, 28, 29
+
+    var got = read_table(
+        path, row_groups=Optional(groups^), row_selections=Optional(rs^)
+    )
+    assert_equal(got.num_rows(), 6)
+    # One batch per row group, so the values are read across them rather than
+    # out of the first — a selection applied to the wrong group would keep the
+    # right count and the wrong rows, which is the whole point of this case.
+    var seen = List[Int]()
+    for ref batch in got.to_batches():
+        ref c = batch.columns[0].as_int64()
+        for i in range(len(c)):
+            seen.append(Int(c[i].value()))
+    assert_equal(seen, [0, 1, 15, 27, 28, 29])
+    remove(path)
+
+
+def test_selection_and_column_projection_together() raises:
+    """A projection narrows which columns are decoded and a selection narrows
+    which rows; both at once must still return aligned columns."""
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var pq = Python.import_module("pyarrow.parquet")
+    var path = String("/tmp/marrow_pageskip_project.parquet")
+    pq.write_table(
+        pa.table(
+            Python.dict(
+                a=pa.array(np.arange(70), type=pa.int64()),
+                b=pa.array(np.arange(70) * 2, type=pa.int64()),
+            )
+        ),
+        path,
+        row_group_size=1000000,
+        data_page_size=1,
+        write_batch_size=10,
+        write_page_index=True,
+        use_dictionary=False,
+        compression="none",
+    )
+
+    var sel = _mask(70, [(10, 13), (42, 54)])
+    var cols = List[String]()
+    cols.append(String("b"))
+    var rs = List[RowSelection]()
+    rs.append(sel.copy())
+    var got = read_table(
+        path, columns=Optional(cols^), row_selections=Optional(rs^)
+    )
+    assert_equal(got.num_rows(), sel.num_selected())
+    assert_equal(len(got.schema.fields), 1)
+    ref b = got.to_batches()[0].columns[0].as_int64()
+    assert_equal(Int(b[0].value()), 20)
+    assert_equal(Int(b[3].value()), 84)
+    remove(path)
+
+
+def test_row_selection_on_a_repeated_column_is_refused() raises:
+    """A selection the decoder cannot apply is an error, not a silent miss.
+
+    `ColumnReader.decode` picks the flat or the leveled path from the leaf's
+    max repetition and only the flat one consults the selection, so a repeated
+    column would decode *all* its rows while its flat neighbours decoded a
+    subset — columns of different lengths, which is a wrong answer rather than
+    a slow one. `read` refuses by name rather than leaving that as a rule every
+    caller has to know: a leaf count does not reveal it either, since
+    `list<int>` is a single leaf.
+    """
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var path = String("/tmp/marrow_pageskip_repeated.parquet")
+    pq.write_table(
+        pa.table(
+            Python.dict(
+                flat=pa.array(Python.list(1, 2, 3), type=pa.int64()),
+                items=pa.array(
+                    Python.list(
+                        Python.list(1, 2),
+                        Python.list(),
+                        Python.list(3),
+                    ),
+                    type=pa.list_(pa.int64()),
+                ),
+            )
+        ),
+        path,
+        compression="none",
+    )
+
+    var rs = List[RowSelection]()
+    rs.append(_selection(3, 0, 2))
+    with assert_raises(contains="repeated column"):
+        _ = read_table(path, row_selections=rs^)
+
+    # The same file reads fine without one -- the refusal is about the
+    # selection, not about the file.
+    assert_equal(read_table(path).num_rows(), 3)
+    remove(path)
 
 
 def test_select_none() raises:

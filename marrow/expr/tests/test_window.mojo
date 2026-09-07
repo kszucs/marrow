@@ -20,6 +20,7 @@ from std.testing import assert_almost_equal, assert_true
 from ...builders import array, nulls
 from ...dtypes import int64, string
 from ...tabular import record_batch
+from ..optimizer import AllRules
 from ..builders import (
     col,
     cume_dist,
@@ -358,14 +359,15 @@ def test_a_window_column_cannot_shadow_an_existing_one() raises:
 def test_a_filter_above_a_window_does_not_prune_the_window_s_input() raises:
     """A predicate above a window must not reach the scan beneath it.
 
-    `Relation.to_operator` threads a `Pushdown` down the plan so a
-    `ParquetScan` can skip row groups. Every node that decides *which rows
-    exist* has to stop it -- `Aggregate` and `Limit` already do -- because a
-    window function reads its whole partition: prune the scan and
-    `row_number()` counts a smaller population, silently.
+    `PushFilterIntoScan` moves a filter's predicate onto a `ParquetScan` so it
+    can skip row groups, descending through `Filter` and nothing else. A window function reads its whole partition, so a predicate
+    that got past one would have `row_number()` count a smaller population,
+    silently.
 
-    `Sort` forwards it and is right to; reordering never removes a row. This
-    node was written in that mould and belonged in the other one.
+    **Run through `optimize[AllRules]()`, not `execute()`.** Pruning is a
+    rewrite now, so an unoptimized plan skips nothing and this case would pass
+    without proving anything at all. Optimizing is what puts the rule in a
+    position to get it wrong.
 
     The file holds `a` in `[0, 100)` across four disjoint row groups, so
     `a > 74` can prove three of the four away. With the pushdown stopped, the
@@ -396,13 +398,18 @@ def test_a_filter_above_a_window_does_not_prune_the_window_s_input() raises:
         .with_columns(["rn"], [row_number().over(order_by=[col("a", int64)])])
         .filter(col("a", int64) > lit(74, int64))
     )
-    var out = plan.execute()
+    var optimized = plan.optimize[AllRules]()
+    assert_true(
+        "pruned by" not in String(optimized),
+        "a pruner reached the scan through a window: " + String(optimized),
+    )
+    var out = optimized.execute()
 
     assert_true(out.num_rows() == 25, "expected the 25 rows above 74")
     ref rn = out.column("rn").as_int64()
     assert_true(
         Int(rn[0].value()) == 76,
-        "row_number restarted -- the pushdown reached the scan: got "
+        "row_number restarted -- a pruner reached the scan: got "
         + String(rn[0].value()),
     )
     assert_true(Int(rn[24].value()) == 100, String(rn[24].value()))

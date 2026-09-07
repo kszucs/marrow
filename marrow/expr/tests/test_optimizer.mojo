@@ -15,23 +15,26 @@ variable: whether any rule was allowed to fire.
 from std.testing import assert_equal, assert_false, assert_true
 
 from ...builders import array
-from ...dtypes import int64, string
+from ...dtypes import field, int64, string
 from ...execution import ExecContext
 from ...tabular import RecordBatch, record_batch
 from ...scalars import BoolScalar, Int64Scalar
-from ..builders import col, count_star, lit, row_number, table
+from ..builders import col, count_star, lit, row_number, scan, table
 from ..runtime.values import and_, column, gt, literal, not_
 from ...kernels.join import JOIN_INNER, JOIN_LEFT
-from ..logical import DynRelation, DynValue
+from ..logical import DynRelation, DynValue, Filter, ParquetScan
+from ...schema import schema
 from ..optimizer import (
     AllRules,
     MergeLimits,
     NoRules,
     PushFilterBelowProject,
     PushFilterBelowSort,
+    PushFilterIntoScan,
     PushLimitBelowProject,
     RemoveNoOpProject,
     RemoveRedundantSort,
+    ScanPruning,
     TopN,
 )
 
@@ -897,3 +900,219 @@ def test_no_rule_rewrites_a_plan_containing_a_window() raises:
     assert_equal(
         _occurrences(optimized, "Window(InMemoryTable(3 rows)"), 1, optimized
     )
+
+
+# ---------------------------------------------------------------------------
+# PushFilterIntoScan
+# ---------------------------------------------------------------------------
+def _never_read() raises -> DynRelation:
+    """A scan of a file that does not exist.
+
+    Legal, and the reason plan-shape cases here need no fixture: a `Relation`
+    is a description, so building and optimizing a plan touches no I/O. The
+    end-to-end half — that the installed pruner really skips row groups — is in
+    `test_scan_pruning.mojo`, over a file pyarrow wrote.
+    """
+    return scan(
+        String("/tmp/marrow_optimizer_never_read.parquet"),
+        schema([field("a", int64), field("b", int64)]),
+    )
+
+
+def _pruners(plan: DynRelation) raises -> Int:
+    """How many pruners the scan under this plan's top `Filter` carries."""
+    assert_true(
+        plan.isa[Filter](), "expected a Filter on top of: " + String(plan)
+    )
+    ref below = plan.get[Filter]().input[]
+    assert_true(below.isa[ParquetScan](), "expected a scan under the Filter")
+    return len(below.get[ParquetScan]().pruners)
+
+
+def test_push_filter_into_scan_moves_the_pruner_onto_the_scan() raises:
+    """The scan gains the pruner **and keeps the filter above it** — pruning is
+    conservative, so the exact predicate still has to run."""
+    var plan = _never_read().filter(col("a", int64) > lit(150, int64))
+    assert_equal(_pruners(plan), 0)
+
+    var out = plan.optimize[AllRules]()
+    assert_equal(_pruners(out), 1)
+    assert_equal(_occurrences(String(out), String("pruned by 1")), 1)
+    assert_equal(_occurrences(String(out), String("Filter(")), 1)
+
+
+def test_push_filter_into_scan_is_idempotent() raises:
+    """Optimizing twice installs one pruner, not two.
+
+    The driver runs to a fixpoint, so a rule that leaves its own precondition
+    standing duplicates its work on every later pass — and this one does leave
+    it standing, deliberately: the `Filter` has to survive because pruning is
+    conservative. What stops it is the scan answering "already carried" to a
+    predicate it holds, which is also what keeps the two renderings equal so
+    the driver can see it has converged.
+    """
+    var plan = _never_read().filter(col("a", int64) > lit(150, int64))
+    var once = plan.optimize[AllRules]()
+    assert_equal(_pruners(once), 1)
+    assert_equal(_pruners(once.optimize[AllRules]()), 1)
+
+
+def test_push_filter_into_scan_reaches_a_scan_below_a_sort() raises:
+    """`Filter(Sort(scan))` prunes: `PushFilterBelowSort` moves the filter down
+    first, and it rebuilds with `with_input`, so the pruner arrives with it."""
+    var plan = (
+        _never_read()
+        .sort_by([col("b", int64)], [True])
+        .filter(col("a", int64) > lit(150, int64))
+    )
+    assert_equal(_occurrences(String(plan), String("pruned by")), 0)
+    assert_equal(
+        _occurrences(String(plan.optimize[AllRules]()), String("pruned by 1")),
+        1,
+    )
+
+
+def test_push_filter_into_scan_reaches_a_scan_below_a_project() raises:
+    """The reach the descent does not have.
+
+    The retired `to_operator` descent threaded a pushdown down the plan and
+    `Project` **cleared** it — a predicate names output columns, which may be computed, so
+    the descent cannot tell a pass-through from a rename and gives up on all of
+    them. `PushFilterBelowProject` can: it asks `passes_through_all` by name,
+    and once it has moved the filter the scan is adjacent and this rule fires.
+    The same argument covers `Aggregate` and `Join`, which the descent also
+    clears at.
+    """
+    var plan = (
+        _never_read()
+        .project(
+            ["a", "sum"], [col("a", int64), col("a", int64) + col("b", int64)]
+        )
+        .filter(col("a", int64) > lit(150, int64))
+    )
+    assert_equal(
+        _occurrences(String(plan.optimize[AllRules]()), String("pruned by 1")),
+        1,
+    )
+
+
+def test_push_filter_into_scan_conjoins_stacked_filters() raises:
+    """`Filter(a, Filter(b, scan))` lands **two** pruners, not one.
+
+    The parity case for the retired `to_operator` descent, which conjoined a
+    filter chain on the way down. Plain adjacency would prune only `b`: after
+    the inner filter is rewritten the outer one still has a `Filter` beneath
+    it, and never becomes adjacent to anything. `_grown` walks the chain for
+    exactly this shape.
+    """
+    var plan = (
+        _never_read()
+        .filter(col("a", int64) > lit(60, int64))
+        .filter(col("a", int64) < lit(140, int64))
+    )
+    var out = plan.optimize[AllRules]()
+    assert_equal(_occurrences(String(out), String("pruned by 2")), 1)
+
+
+def test_scan_pruning_rule_set_prunes_with_two_rules() raises:
+    """`ScanPruning` is what `QueryCli.run` applies, so it has to reach a scan
+    on its own — through a filter chain and under an unbounded sort, which is
+    the whole of what the descent it replaced could reach."""
+    var plan = (
+        _never_read()
+        .sort_by([col("b", int64)], [True])
+        .filter(col("a", int64) > lit(150, int64))
+    )
+    assert_equal(
+        _occurrences(
+            String(plan.optimize[ScanPruning]()), String("pruned by 1")
+        ),
+        1,
+    )
+
+
+def test_scan_pruning_rule_set_leaves_everything_else_alone() raises:
+    """It is two rules, not sixteen: a no-op `Project` that `AllRules` deletes
+    survives `ScanPruning` untouched. That is what keeps an AOT binary from
+    linking the other fourteen."""
+    var plan = _never_read().select(["a", "b"])
+    assert_equal(
+        _occurrences(String(plan.optimize[ScanPruning]()), String("Project(")),
+        1,
+    )
+    assert_equal(
+        _occurrences(String(plan.optimize[AllRules]()), String("Project(")), 0
+    )
+
+
+def test_push_filter_into_scan_does_not_reach_below_a_limit() raises:
+    """The one shape that would change the answer, and the reason the rule
+    matches on adjacency.
+
+    `filter(p)` above `limit(3)` means "the first three rows, then `p`". A scan
+    that skipped a row group would hand `Limit` a different first three, and
+    rows the correct query returns would disappear. No rule moves a filter
+    below a `Limit`, so the filter never becomes adjacent and this one never
+    matches.
+    """
+    var plan = _never_read().limit(3).filter(col("a", int64) > lit(150, int64))
+    assert_equal(
+        _occurrences(String(plan.optimize[AllRules]()), String("pruned by")), 0
+    )
+
+
+def test_push_filter_into_scan_prunes_a_boxed_predicate() raises:
+    """A predicate that arrived already boxed prunes exactly as well as a
+    typed one.
+
+    It did not, for a release: pruning lived in a second box built at
+    `.filter()` where the concrete type was still visible, so a predicate the
+    caller had already erased reached the scan with nothing to say. `mask` is a
+    slot on `DynValue` now, so the box carries it like any other method and
+    this case is ordinary rather than special.
+
+    Boxing has to be forced with a typed local: `.filter()` has two overloads
+    and the typed one wins wherever the concrete type is still visible.
+    """
+    var boxed: DynValue = col("a", int64) > lit(150, int64)
+    var plan = _never_read().filter(boxed^)
+    assert_equal(
+        _occurrences(String(plan.optimize[AllRules]()), String("pruned by 1")),
+        1,
+    )
+
+
+def test_push_filter_into_scan_prunes_a_runtime_lane_predicate() raises:
+    """The runtime lane prunes too — `RuntimeValue` implements `mask` itself,
+    reading the same zone maps through the erased comparison kernels.
+
+    Worth pinning: "runtime lane" and "erased" read as the same thing and are
+    not. A `RuntimeValue` is an interpreted node with its own `mask`; a
+    `DynValue` is a box that forwards to whatever it holds.
+    """
+    var plan = _never_read().filter(gt(column("a"), literal(Int64Scalar(150))))
+    assert_equal(
+        _occurrences(String(plan.optimize[AllRules]()), String("pruned by 1")),
+        1,
+    )
+
+
+def test_push_filter_into_scan_lands_each_conjunct_separately() raises:
+    """Ordering, made visible.
+
+    `SplitConjunction` runs first and `PushFilterIntoScan` lands **both**
+    halves: two filters above the scan, two pruners on it. That the halves are
+    `DynValue`s no longer costs anything, which is what reversed the order —
+    the compound predicate used to be the only one with a pruning method, so
+    the rule had to catch it before the split and settle for one blunt entry.
+
+    Two sharp bounds beat one blunt `AND`: `a > 60 AND a < 140` as a single
+    predicate skips a chunk only when neither bound can, where the halves
+    separately skip everything outside `[60, 140]`.
+    """
+    var plan = _never_read().filter(
+        (col("a", int64) > lit(60, int64)) & (col("a", int64) < lit(140, int64))
+    )
+    var out = plan.optimize[AllRules]()
+    assert_equal(_occurrences(String(out), String("Filter(")), 2)
+    assert_equal(_occurrences(String(out), String("pruned by 2")), 1)

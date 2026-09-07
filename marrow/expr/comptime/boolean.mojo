@@ -39,7 +39,7 @@ from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, merged
 from ..bindings import Bindings
-from ..pruning import PruneStats, Truth
+from ..index import Index, keep_every
 from ..physical import Datum
 from .core import (
     BoolValue,
@@ -138,17 +138,28 @@ struct BoolBinary[K: BoolBinaryKernel, L: ComptimeValue, R: ComptimeValue](
         var rhs = _as_bool(self.r.evaluate(batch, bindings), n)
         return Self.K.apply(lhs, rhs).to_dyn()
 
-    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
-        """`AND` is provably false as soon as either conjunct is; `OR` only
-        when both disjuncts are. `XOR` prunes nothing — both operands being
-        possible says nothing about them differing on any single row, and a
-        one-sided domain cannot say more."""
+    def mask(
+        self, index: Index, bindings: Bindings = Bindings()
+    ) raises -> BoolArray:
+        """`AND` and `OR` of the operands' masks — Kleene, and exactly right.
+
+        `AndKernel.apply` already implements three-valued logic, which is the
+        algebra this needs: `false AND unknown` is `false`, sound because one
+        conjunct proving a chunk empty proves the conjunction empty; and
+        `false OR unknown` is `unknown`, which keeps the chunk. `XOR` prunes
+        nothing — both operands being possible says nothing about them
+        differing on any row.
+        """
         comptime if Self.K.name == AndKernel.name:
-            return self.l.prune(stats, bindings) & self.r.prune(stats, bindings)
+            return AndKernel.apply(
+                self.l.mask(index, bindings), self.r.mask(index, bindings)
+            )
         elif Self.K.name == OrKernel.name:
-            return self.l.prune(stats, bindings) | self.r.prune(stats, bindings)
+            return OrKernel.apply(
+                self.l.mask(index, bindings), self.r.mask(index, bindings)
+            )
         else:
-            return Truth.maybe
+            return keep_every(index.chunks)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

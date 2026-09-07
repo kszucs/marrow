@@ -51,13 +51,13 @@ from ..kernels.filter import filter, take
 from ..kernels.groups import Groups
 from ..kernels.groupby import HashGrouping
 from ..dtypes import DynType
-from ..parquet.reader import LeafSet, ParquetFile
-from ..parquet.source import MappedFile
+from ..parquet.reader import LeafSet, ParquetFile, RowSelection
+from ..parquet.source import ByteSource, MappedFile
 from ..kernels.join import HashJoin, JoinKind
 from ..utils import RapidHash64
 from .bindings import Bindings
 from .logical import DynValue, WindowExpr
-from .pushdown import Pushdown, read_plan, row_group_stats
+from .index import Index, page_selections
 from ..kernels.sort import SortIndices, sort_indices
 from ..kernels.window import WindowExtents, mark_changes
 from ..schema import Schema, schema
@@ -1410,14 +1410,14 @@ struct ParquetScanOperator(Operator):
     **Pruning.** A predicate pushed down from a `Filter` is evaluated once per
     row group against its statistics, and a group proven to hold no matching
     row is never decoded. Speed only: the `Filter` above still applies the
-    predicate exactly, so an empty `Pushdown` and a full one return the same
+    predicate exactly, so an empty pruner list and a full one return the same
     rows. Row-group *windowing* is still absent and is a separate change.
     """
 
     var _path: String
     var _schema: Schema
     var _file: Optional[ParquetFile[MappedFile, LeafSet.all()]]
-    var _pushed: Pushdown
+    var _pushed: List[DynValue]
     var _bindings: Bindings
     var _plan: List[Int]
     """Row groups this scan will read, computed on the first `drain`.
@@ -1426,6 +1426,19 @@ struct ParquetScanOperator(Operator):
     must not touch the filesystem to exist — so the plan cannot be built where
     the operator is."""
 
+    var _selections: List[Optional[RowSelection]]
+    """Which rows of each planned group to decode, one entry per `_plan` entry.
+
+    Empty when nothing was pushed and when the file carries no page index; an
+    entry is `None` when that group's pages all survived. Both mean "read the
+    group whole", and both are decided **here, once**, so `drain` asks a
+    question rather than re-deriving one per morsel — `selects_all` walks every
+    row of the group, and a selection that removes nothing costs the decoder a
+    per-row check to answer what no selection answers.
+
+    The second granularity of the same decision: `_plan` skips groups, this
+    skips pages inside the ones that survive."""
+
     var _next: Int
     var _pending: List[StructArray]
 
@@ -1433,7 +1446,7 @@ struct ParquetScanOperator(Operator):
         out self,
         var path: String,
         var schema: Schema,
-        var pushed: Pushdown = Pushdown(),
+        var pushed: List[DynValue] = List[DynValue](),
         var bindings: Bindings = Bindings(),
     ):
         self._path = path^
@@ -1442,6 +1455,7 @@ struct ParquetScanOperator(Operator):
         self._pushed = pushed^
         self._bindings = bindings^
         self._plan = List[Int]()
+        self._selections = List[Optional[RowSelection]]()
         self._next = 0
         self._pending = List[StructArray]()
 
@@ -1457,11 +1471,34 @@ struct ParquetScanOperator(Operator):
                 self._file = ParquetFile[MappedFile, LeafSet.all()](
                     self._path.copy()
                 )
-                self._plan = read_plan(
-                    row_group_stats(self._file.value()),
-                    self._pushed,
-                    self._bindings,
-                )
+                if len(self._pushed) == 0:
+                    # Nothing to prove, so nothing to decode. Statistics are
+                    # per `(row group x leaf)`, so building an index nobody
+                    # queries is the most expensive way to read every group.
+                    self._plan = List[Int](
+                        capacity=self._file.value().num_row_groups()
+                    )
+                    for rg in range(self._file.value().num_row_groups()):
+                        self._plan.append(rg)
+                else:
+                    var index = Index.from_parquet(self._file.value())
+                    self._plan = index.read_plan(self._pushed, self._bindings)
+                    # Then again, one level down: a surviving group still
+                    # decodes every row unless its page index says otherwise.
+                    # The index is handed over rather than rebuilt -- it knows
+                    # the per-group row counts a selection has to match.
+                    var found = page_selections(
+                        self._file.value(),
+                        index,
+                        self._plan,
+                        self._pushed,
+                        self._bindings,
+                    )
+                    for ref sel in found:
+                        if sel.selects_all():
+                            self._selections.append(None)
+                        else:
+                            self._selections.append(Optional(sel.copy()))
             if self._next >= len(self._plan):
                 return None
 
@@ -1470,10 +1507,20 @@ struct ParquetScanOperator(Operator):
                 names.append(f.name.copy())
             var groups = List[Int](capacity=1)
             groups.append(self._plan[self._next])
+            var picked = Optional[List[RowSelection]](None)
+            if (
+                self._next < len(self._selections)
+                and self._selections[self._next]
+            ):
+                var one = List[RowSelection](capacity=1)
+                one.append(self._selections[self._next].value().copy())
+                picked = Optional(one^)
             self._next += 1
 
             var table = self._file.value().read(
-                columns=Optional(names^), row_groups=Optional(groups^)
+                columns=Optional(names^),
+                row_groups=Optional(groups^),
+                row_selections=picked^,
             )
             # A row group can decode to several chunks; each becomes a morsel
             # rather than being concatenated back together.

@@ -176,6 +176,12 @@ def test_something() raises:
   `unable to locate module 'marrow'` when compiled as part of the package.
 - **Case names must be unique across the entire suite**, not just per file — the
   runner reports by name, and that is how results map back to pytest items.
+- **Log to `stderr`, never `stdout`.** The harness runs the driver with
+  `--json` and parses its stdout, so a stray `print()` breaks the parse and
+  *every* case in the run fails with the raw text as its message — a symptom
+  that looks nothing like its cause. `conftest.py` passes stderr through
+  verbatim (`sys.stderr.write(result.stderr)`), so `std.sys.stderr` is the
+  working sink: visible under `pytest -s`, and shown anyway when a case fails.
 - Each tests directory needs an `__init__.mojo`.
 
 ### Writing Mojo benchmarks
@@ -436,22 +442,90 @@ share no node types**:
   omission, its runtime twin sitting unexposed at `runtime/values.mojo`.
 - **`bindings.mojo`** — `Bindings`, the values for one execution. `Param[T]` is a
   comptime-lane leaf and lives in `comptime/leaves.mojo`; sharing a file forced
-  the alias to drag in `logical.Shape` and `pruning.param_bounds`, both of which
-  import it back. A parameter's value is carried *through* an execution rather
-  than substituted into a copy of the plan, so two executions of one plan cannot
-  interfere.
+  the alias to drag in `logical.Shape`, which imports it back. A parameter's
+  value is carried *through* an execution rather than substituted into a copy of
+  the plan, so two executions of one plan cannot interfere.
 - **`optimizer.mojo`** — the plan rewriter. `plan.optimize[AllRules]()` returns a
-  new `DynRelation` you can print and diff: 15 rules (elimination, merging,
-  `SplitConjunction`, four pushdowns, `TopN`) run in a chosen order so each sees
-  the previous one's output, plus `ColumnPruning`, a preparatory downward pass
-  with a needed-column accumulator seeded from the plan's own output schema. The
-  rule set is a comptime parameter, so a binary links exactly the rules it names
-  and `execute()` alone optimizes nothing.
-- **`pruning.mojo`** — statistics-based predicate pruning, riding
-  `to_operator`'s descent. **`pushdown.mojo`** — projection pushdown into the
-  scan. **`cli.mojo`** — `QueryCli`, which turns a compiled plan into a program
-  with declared parameters, `--help`, `--describe` and output writers, the
-  writers being comptime parameters so a binary links only the formats it names.
+  new `DynRelation` you can print and diff: 16 rules (elimination, merging,
+  `SplitConjunction`, four filter pushdowns, `PushFilterIntoScan`, `TopN`) run
+  in a chosen order so each sees the previous one's output, plus
+  `ColumnPruning`, a preparatory downward pass with a needed-column accumulator
+  seeded from the plan's own output schema. The rule set is a comptime
+  parameter, so a binary links exactly the rules it names and `execute()` alone
+  optimizes nothing.
+- **`index.mojo`** — `Index`, what a source knows about its data before reading
+  it: `chunks`, rows per chunk, and `ZoneMaps` (per-chunk `[min, max]` and null
+  counts, by column). A **chunk** is whatever unit the source can skip whole —
+  a row group today, a page later. **Adding an index kind is adding a field**;
+  an index *trait* is unavailable because `DynValue._mask` is a `thin` pointer
+  with a concrete signature. Two members carry the traffic:
+  `Index.from_parquet(file)` builds one from a footer and
+  `index.read_plan(predicates, bindings)` answers which chunks are left to
+  read. A second source format adds a second constructor beside the first.
+- **Pruning is `Value.mask(index) -> BoolArray`**, one bit per chunk, and it is
+  the same computation over a different domain: one statistic per chunk instead
+  of one value per row, run through the *same* comparison kernels, so there is
+  one definition of `>` per dtype. **The comptime lane prunes numerics; the
+  runtime lane prunes every primitive**, temporal and decimal included, because
+  it recovers the dtype from the index and dispatches. The comptime lane stops
+  at numerics deliberately: `TemporalValue` would need a dtype *instance* to
+  prune with — a temporal type carries a unit, so `Stat()` does not exist where
+  `NumericType(Defaultable, …)` makes it free — and a required trait member for
+  one dtype family is not worth it. `statistics` is **typed** —
+  `statistics[Stat](index, bindings, upper) -> PrimitiveArray[Stat]`,
+  parameterised on what the *reader* wants — so a promoting comparison converts
+  in the leaf with a builtin SIMD cast instead of erasing and checking a dtype
+  at the call site. A node that cannot prune
+  answers all-true, an absent statistic answers null, and Kleene `AND` composes
+  them — so "cannot prove, read it" is a
+  property of the values rather than a branch anyone can forget. `mask` is the
+  sixth slot on `DynValue`, not a second box.
+  **There is one way in** — `PushFilterIntoScan`, in `optimizer.mojo` — so
+  pruning is visible in a printed plan, and a plan nobody optimized reads every
+  row group. The rule descends through `Filter` and nothing else, which is what
+  stops a predicate at a `Window`, `Limit`, `Project`, `Aggregate` or `Join`
+  without a per-node table saying so. `ParquetScanOperator.drain` builds the
+  index and the read plan on first use, with this execution's `Bindings` — a
+  predicate may name a `param`, which is the AOT lane's whole surface.
+  *Projection* pushdown is `ColumnPruning`, also in `optimizer.mojo`.
+- **Page pruning is the same decision one level down.** `page_selections`
+  reads the Parquet **page** index and returns a `RowSelection` per surviving
+  row group, so a group a predicate could not skip whole still decodes only the
+  pages that could match. A page is *not* a chunk every column shares — Parquet
+  pages are per column — so each column gets its own single-column `Index` and
+  the per-row selections are intersected. **Only flat files qualify**:
+  `ColumnReader.decode` ignores a selection for a leveled leaf, so a repeated
+  column would return misaligned columns rather than fewer rows, and `list<int>`
+  is a single leaf so counting leaves would wave it through.
+- **`cli.mojo`** — `QueryCli`, which turns a compiled plan
+  into a program with declared parameters, `--help`, `--describe` and output
+  writers, the writers being comptime parameters so a binary links only the
+  formats it names. **It applies no rules.** An earlier draft had `run` force
+  `ScanPruning` on every plan; that made `query_cli`'s `__text` 1,467,352 bytes
+  larger (+33%), because `Optimizer.run` walks the plan through
+  `DynRelation._dispatch`, whose ten arms each rebuild their node and so
+  register `_to_operator_tramp[X]` — linking every physical operator and its
+  kernels into a binary whose plan names two node types. A plan prunes because
+  its author wrote `.optimize[ScanPruning]()`.
+
+**What the index design costs.** Measured against `5a7e368c`, the last commit
+with the scalar `Truth`/`Bounds` interval algebra: `query_streaming` +14,196
+(+0.93%), `query_scan` +13,900 (+0.53%), `query_cli` +8,640 (+0.29%),
+`query_join` +984, `query_streaming_agg_fused` +388. The cost is that pruning
+now runs the *array* comparison kernels — `NumericCompare::mask`,
+`ZoneMaps::_stats`, `Index::defined` and the builders all link — where an
+interval comparison over two scalars inlined to nothing. It is paid by any
+binary that boxes a predicate, including one whose source cannot prune, since
+`DynValue._mask` is wired at construction.
+
+Roughly half of that was `statistics` returning `DynArray`: making it
+`statistics[Stat]` typed took `query_streaming` from +38,900 back to +14,196,
+`query_scan` from +32,724 to +13,900 and `query_cli` from +18,240 to +8,640.
+Page pruning then adds +62,028 to `query_scan` and +62,144 to `query_cli` and
+nothing to the rest, so those two land at +75,928 (+2.88%) and +70,784
+(+2.37%). What the design buys: one definition of each operator instead of eight,
+temporal and decimal columns that prune in the runtime lane, page granularity,
+and a `mask` that composes under Kleene `AND` rather than a bespoke `Truth`.
 
 **A cost model does not exist**, and join reordering and build-side selection
 are blocked by the join's positional output schema rather than by the optimizer.
@@ -494,6 +568,13 @@ and `CArrowArray.from_pycapsule()` + `.to_array(dtype)`; export via
 are implemented and invoked — four release paths plus three PyCapsule
 destructors, with the spec's null-release handshake as the double-free guard.
 
+**A `ByteSource` is not always a memory map**, so every read is potentially a
+round trip: `ParquetFile` opens a file by reading its last 64 KiB and parsing
+the footer out of that tail, never `read_at(0, size())`.
+`marrow/parquet/tests/test_page_io.mojo` pins that with a recording
+`ByteSource` — the only way to tell "returned the right rows" from "did less
+work".
+
 **Tabular** (`marrow/tabular.mojo`): `RecordBatch` (schema + column arrays) and
 `Table` (schema + chunked columns). `marrow/schema.mojo` holds `Schema`, `Field`
 and metadata. `marrow/ipc.mojo` is the Arrow IPC file/stream reader and writer.
@@ -533,7 +614,6 @@ marrow/
 │   ├── hashing.mojo      # rapidhash
 │   ├── partition.mojo    # radix partitioning
 │   ├── membership.mojo   # is_in
-│   ├── bounds.mojo       # comparisons over [lo, hi] intervals, for pruning
 │   ├── string.mojo       # string kernels incl. LIKE/ILIKE
 │   ├── temporal.mojo     # date/time field extraction, date_trunc
 │   ├── nested.mojo       # array_length, array_contains
@@ -547,9 +627,8 @@ marrow/
 │                         #   array_length/array_contains, param, count_star,
 │                         #   table, scan
 │   ├── bindings.mojo     # Bindings — parameter values for one execution
-│   ├── optimizer.mojo    # the plan rewriter: 15 rules + ColumnPruning
-│   ├── pruning.mojo      # statistics-based predicate pruning
-│   ├── pushdown.mojo     # projection pushdown into the scan
+│   ├── optimizer.mojo    # the plan rewriter: 16 rules + ColumnPruning
+│   ├── index.mojo        # Index / ZoneMaps — what a source knows unread
 │   ├── cli.mojo          # QueryCli — the AOT lane as a program
 │   ├── comptime/         # AOT lane: core, leaves, numeric, boolean, strings,
 │   │   └── tests/        #   temporal, nested, casts, aggregates, rules

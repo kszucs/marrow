@@ -273,13 +273,12 @@ def _plan_filter(
 ) raises -> PythonObject:
     """Keep rows where `predicate` is true.
 
-    This reaches `DynRelation.filter(DynValue)`, the **erased** overload, so
-    the plan filters exactly and reads every row group. The pruning overload
-    takes `V: Value & Prunable` and captures the concrete type, which a
-    `PythonObject` has already thrown away by the time it gets here — so
-    statistics pruning is not reachable from Python today. `RuntimeValue` does
-    conform to `Prunable`, so what is missing is a way to carry the unerased
-    value across the boundary, not the pruning itself.
+    This reaches `DynRelation.filter(DynValue)`, the **erased** overload, and
+    that no longer costs pruning: `mask` is a slot on `DynValue`, so a boxed
+    predicate prunes exactly as well as a typed one. What the erased overload
+    still loses is `constant_bool` and `conjuncts` — analysis only the concrete
+    type can answer — so `EliminateFilter` and `SplitConjunction` do not fire
+    on a filter built from Python.
     """
     return _wrap(_plan(py_self).filter(_boxed(predicate)))
 

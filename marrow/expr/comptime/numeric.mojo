@@ -11,6 +11,7 @@ kernel in every binary that builds any expression.
 """
 
 from ...dtypes import DataType, DynType, Float64Type, NumericType
+from ...kernels.boolean import AndKernel
 from ...kernels.numeric import (
     AbsKernel,
     AddKernel,
@@ -62,15 +63,7 @@ from ...tabular import RecordBatch
 from ...buffers import Bitmap
 from ..logical import Shape, merged
 from ..bindings import Bindings
-from ...kernels.bounds import (
-    EqBounds,
-    GeBounds,
-    GtBounds,
-    LeBounds,
-    LtBounds,
-    NeBounds,
-)
-from ..pruning import PruneStats, Truth
+from ..index import Index, keep_every
 from ..physical import Datum
 
 from .rules import promote, wider, widest_shape
@@ -539,34 +532,54 @@ struct NumericCompare[
             self.r.lane[W](bound[1], idx).cast[Self.ArgType.native](),
         )
 
-    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
-        """`prune` is `lane` in the interval domain, and reads the same way:
-        both operands cast to `ArgType`, then the kernel.
+    def mask(
+        self, index: Index, bindings: Bindings = Bindings()
+    ) raises -> BoolArray:
+        """Which chunks could hold a row this comparison keeps.
 
-        The reading is selected by a `comptime if` over `Self.K.name` rather
-        than by a second struct parameter. That keeps this purely additive —
-        no arity change, no alias change, no call site touched — and its
-        failure mode is conservative: an operator with no arm falls through to
-        `maybe`, which is always correct. Only the taken arm is emitted, so a
-        `Gt` node links `GtBounds.decide` and nothing else.
+        **The operator is never enumerated — `K.apply` *is* the operator**, the
+        same kernel that decides which rows match, run over one statistic per
+        chunk instead of one value per row. Only *which* statistic each side
+        reads is a choice, and it is the extreme pair that decides it: `l < r`
+        is possible exactly when `min(l) < max(r)`.
+
+        **Every operand answers in `ArgType`**, because that is what this asks
+        them for — so there is no unwrap here and no dtype check. An operand
+        that cannot answer in that type says null instead, and a null bit is
+        read as keep. Casting an operand would link `kernels::cast` into every
+        binary that filters; reading a few extra chunks is much the cheaper
+        trade, and the leaf makes it.
         """
-        comptime dt = Self.ArgType.native
-        var lb = self.l.bounds(stats, bindings).cast[dt]()
-        var rb = self.r.bounds(stats, bindings).cast[dt]()
-        comptime if Self.K.name == LtKernel.name:
-            return Truth(LtBounds.maybe[dt](lb, rb))
-        elif Self.K.name == LeKernel.name:
-            return Truth(LeBounds.maybe[dt](lb, rb))
-        elif Self.K.name == GtKernel.name:
-            return Truth(GtBounds.maybe[dt](lb, rb))
-        elif Self.K.name == GeKernel.name:
-            return Truth(GeBounds.maybe[dt](lb, rb))
+        # A chunk where either operand has no non-null value cannot produce a
+        # surviving row, whatever the bounds say — the one skip that needs no
+        # statistics at all.
+        var live = AndKernel.apply(self.l.defined(index), self.r.defined(index))
+        var lo = self.l.statistics[Self.ArgType](index, bindings, upper=False)
+        var hi = self.l.statistics[Self.ArgType](index, bindings, upper=True)
+        var rlo = self.r.statistics[Self.ArgType](index, bindings, upper=False)
+        var rhi = self.r.statistics[Self.ArgType](index, bindings, upper=True)
+
+        comptime if (
+            Self.K.name == LtKernel.name or Self.K.name == LeKernel.name
+        ):
+            return AndKernel.apply(
+                live,
+                Self.K.apply(lo, rhi),
+            )
+        elif Self.K.name == GtKernel.name or Self.K.name == GeKernel.name:
+            return AndKernel.apply(
+                live,
+                Self.K.apply(hi, rlo),
+            )
         elif Self.K.name == EqKernel.name:
-            return Truth(EqBounds.maybe[dt](lb, rb))
-        elif Self.K.name == NeKernel.name:
-            return Truth(NeBounds.maybe[dt](lb, rb))
+            # Equality is interval overlap: possible exactly when neither side
+            # lies wholly beyond the other. Two comparisons, not one, and both
+            # are the ordinary kernels.
+            var below = LeKernel.apply(lo, rhi)
+            var above = GeKernel.apply(hi, rlo)
+            return AndKernel.apply(live, AndKernel.apply(below^, above^))
         else:
-            return Truth.maybe
+            return keep_every(index.chunks)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.l, ", ", self.r, ")")

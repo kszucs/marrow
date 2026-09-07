@@ -755,12 +755,24 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
     @staticmethod
     def read_at[
         o: Origin[mut=False]
-    ](data: Span[UInt8, o], mut pos: Int) raises -> Self:
-        """Read the page header at `pos`, advancing `pos` to the page body."""
+    ](data: Span[UInt8, o], pos: Int) raises -> Tuple[Self, Int]:
+        """The page header at `pos`, and **its own byte length**.
+
+        The length is returned rather than folded into a mutated `pos`, which
+        is what this used to do. Two things made that a trap worth removing:
+        the mutation is invisible at the call site, and `compressed_page_size`
+        on a `PageHeader` is the *body* alone where the field of the same name
+        on a `PageLocation` covers header and body together. A caller that
+        stepped by `compressed_page_size` from an already-advanced `pos` landed
+        one header short of the next page and read whatever was there --
+        reported as "unexpected page type", a long way from the cause.
+
+        So a page occupies `header_length + compressed_page_size` bytes, and
+        that sum is now spelled at every call site.
+        """
         var r = ThriftCompactReader(data, pos)
         var ph = Self.read(r)
-        pos = r.pos
-        return ph^
+        return (ph^, r.pos - pos)
 
     @staticmethod
     def data_page(
@@ -1061,6 +1073,56 @@ struct OffsetIndex(Copyable, Movable, ThriftWritable):
 
     def __init__(out self):
         self.page_locations = List[PageLocation]()
+
+    def num_pages(self) -> Int:
+        return len(self.page_locations)
+
+    def page_rows(self, i: Int, num_rows: Int) -> Int:
+        """How many rows data page `i` holds.
+
+        The gap to the next page's first row, or to the end of the row group
+        for the last one — this records where each page *starts* and nothing
+        records where the final one ends, so the group's row count has to be
+        supplied. Stated here because three readers need it and the last-page
+        rule is the part that gets forgotten.
+        """
+        var first = self.page_locations[i].first_row_index
+        if i + 1 < len(self.page_locations):
+            return self.page_locations[i + 1].first_row_index - first
+        return num_rows - first
+
+    def tiles_chunk(self, start: Int, length: Int, num_rows: Int) -> Bool:
+        """Whether these locations actually describe the chunk at
+        `[start, start+length)` holding `num_rows` rows.
+
+        Every page must begin where the last one ended, in rows and in bytes:
+        the first at row zero, each inside the chunk, the last running to the
+        group's end. A short *final* page is ordinary and must pass — 25 rows
+        across three ten-row pages leaves five in the last — so the test is
+        "this page runs past the group", not "the pages are uneven".
+
+        A reader asks once, when it decodes the index, because everything
+        downstream needs the same answer: a fetch planner sizes byte ranges
+        from these numbers and a page walker seeks by them. Answering it at one
+        and not the other is how a planner came to reject an index that the
+        walker went on trusting.
+        """
+        if len(self.page_locations) == 0:
+            return False
+        if self.page_locations[0].first_row_index != 0:
+            return False
+        for i in range(len(self.page_locations)):
+            ref loc = self.page_locations[i]
+            var rows = self.page_rows(i, num_rows)
+            var at = loc.offset - start
+            if (
+                rows <= 0
+                or loc.first_row_index + rows > num_rows
+                or at < 0
+                or at + loc.compressed_page_size > length
+            ):
+                return False
+        return True
 
     @staticmethod
     def read[
@@ -1397,27 +1459,47 @@ struct FileMetaData(Copyable, Movable):
         out.append(0x31)
 
     @staticmethod
+    @staticmethod
+    def footer_length[o: Origin[mut=False]](tail: Span[UInt8, o]) raises -> Int:
+        """The thrift blob's length, from the 8 bytes that close the file.
+
+        Takes any span **ending at the end of the file** — the whole file, or
+        just its last few bytes. That is what lets a caller learn how much
+        footer there is before reading it, instead of reading everything.
+        """
+        var n = len(tail)
+        if n < 8:
+            raise Error("parquet: file too small")
+        if not (
+            tail[n - 4] == 0x50
+            and tail[n - 3] == 0x41
+            and tail[n - 2] == 0x52
+            and tail[n - 1] == 0x31
+        ):
+            raise Error("parquet: missing PAR1 footer magic")
+        return (
+            Int(tail[n - 8])
+            | (Int(tail[n - 7]) << 8)
+            | (Int(tail[n - 6]) << 16)
+            | (Int(tail[n - 5]) << 24)
+        )
+
+    @staticmethod
     def read_footer[o: Origin[mut=False]](data: Span[UInt8, o]) raises -> Self:
         """Parse the file footer: the trailing 8 bytes are a 4-byte LE metadata
-        length then the `PAR1` magic; the thrift blob precedes them."""
+        length then the `PAR1` magic; the thrift blob precedes them.
+
+        **`data` need only be a suffix of the file**, and every offset here is
+        taken from its end, so a caller that read just the tail gets the same
+        answer as one holding the whole file. `ParquetFile` reads the tail;
+        requiring the whole file made opening one download all of it.
+        """
         var n = len(data)
         if n < 12:
             raise Error("parquet: file too small")
-        if not (
-            data[n - 4] == 0x50
-            and data[n - 3] == 0x41
-            and data[n - 2] == 0x52
-            and data[n - 1] == 0x31
-        ):
-            raise Error("parquet: missing PAR1 footer magic")
-        var meta_len = (
-            Int(data[n - 8])
-            | (Int(data[n - 7]) << 8)
-            | (Int(data[n - 6]) << 16)
-            | (Int(data[n - 5]) << 24)
-        )
+        var meta_len = Self.footer_length(data)
         var start = n - 8 - meta_len
-        if start < 4:
+        if start < 0:
             raise Error("parquet: corrupt footer length")
         var r = ThriftCompactReader(data, start)
         return Self.read(r)

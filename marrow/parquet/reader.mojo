@@ -54,6 +54,7 @@ from .format import (
     OffsetIndex,
     ColumnMetaData,
     PageHeader,
+    PageLocation,
     PageType,
     PhysicalType,
 )
@@ -172,26 +173,101 @@ struct PageReader[o: Origin[mut=False]](Movable):
     as a whole. That is what lets a `ByteSource` fetch a chunk at a time instead
     of having to hand out a whole-file span."""
 
-    var data: Span[UInt8, Self.o]
+    var segs: List[Span[UInt8, Self.o]]
+    """The chunk's bytes, as the ranges the caller actually fetched.
+
+    One segment covering the whole chunk in the ordinary case. With a selection
+    and an `OffsetIndex` it is the dictionary page and the selected pages, and
+    the gaps between them were never read — which is only sound because a page
+    is skipped from the *index*, so stepping over one touches no bytes."""
+
+    var seg_at: List[Int]
+    """Each segment's chunk-relative start, parallel to `segs`."""
+
     var meta: ColumnMetaData
     var leaf: LeafColumn
     var pos: Int  # chunk-relative offset of the next page header
     var produced: Int  # data-page values yielded so far
     var scratch: List[UInt8]  # reused decompression buffer for compressed pages
 
+    var locs: OffsetIndex
+    """Where each *data* page starts, from the `OffsetIndex` — empty when the
+    file has none, or when the caller has no use for them.
+
+    **This is what the offset index is for.** Without it, stepping over a page
+    means parsing its header to learn its size, and asking how many rows it
+    holds means parsing that header a second time — for a page that is about to
+    be skipped, both parses exist only to compute two numbers the index already
+    wrote down. A dictionary page is *not* listed here (the index covers data
+    pages only), so a position before the first entry is one, and falls back to
+    the header."""
+
+    var page_i: Int
+    """Which entry of `locs` comes next. Only meaningful when `locs` is
+    non-empty, and only advanced past data pages."""
+
     def __init__(
         out self,
-        data: Span[UInt8, Self.o],
+        var segs: List[Span[UInt8, Self.o]],
+        var seg_at: List[Int],
         var meta: ColumnMetaData,
         var leaf: LeafColumn,
+        var locs: OffsetIndex = OffsetIndex(),
     ):
-        self.data = data
-        # The chunk starts at its first page, so the first header is at 0.
+        self.segs = segs^
+        self.seg_at = seg_at^
+        # Chunk-relative and always starting at the chunk, even when the first
+        # segment does not: an unfetched leading page is stepped over from the
+        # index, which touches none of its bytes, so the cursor has to walk the
+        # whole chunk logically while only ever *reading* inside a segment.
         self.pos = 0
+        # Rebased once, so every later comparison is `offset == pos` rather
+        # than a subtraction on the hot path.
+        var chunk_start = meta.byte_range()[0]
+        for i in range(locs.num_pages()):
+            locs.page_locations[i].offset -= chunk_start
         self.meta = meta^
         self.leaf = leaf^
         self.produced = 0
         self.scratch = List[UInt8]()
+        self.locs = locs^
+        self.page_i = 0
+
+    def _indexed(self) -> Bool:
+        """Whether the next page is a data page this reader can locate without
+        reading its header."""
+        return (
+            self.page_i < self.locs.num_pages()
+            and self.locs.page_locations[self.page_i].offset == self.pos
+        )
+
+    def _seg(self, at: Int) -> Tuple[Int, Int]:
+        """`(segment, offset within it)` for a chunk-relative position.
+
+        A page never straddles two segments — each is a whole number of pages —
+        so the segment holding a page's first byte holds all of it.
+        """
+        for i in range(len(self.segs) - 1, -1, -1):
+            if self.seg_at[i] <= at:
+                return (i, at - self.seg_at[i])
+        return (0, at)
+
+    def _sync(mut self):
+        """Point `pos` at the next data page.
+
+        In indexed mode the position comes from the index rather than from
+        accumulating page sizes, which is what lets the reader jump over pages
+        whose bytes are not present at all.
+        """
+        if self.page_i < self.locs.num_pages():
+            self.pos = self.locs.page_locations[self.page_i].offset
+
+    def _indexed_rows(self) -> Int:
+        """The current data page's row count, from the index."""
+        # `meta.num_values` is the row count for a flat leaf, and `locs` is
+        # cleared for a leveled one, so this only ever runs where they agree —
+        # the same equivalence `has_next` already relies on.
+        return self.locs.page_rows(self.page_i, self.meta.num_values)
 
     def _body(
         mut self,
@@ -282,11 +358,25 @@ struct PageReader[o: Origin[mut=False]](Movable):
     def next(
         mut self, mut codecs: CompressionLibs
     ) raises -> Page[origin_of(Self.o, origin_of(self.scratch))]:
-        var body_start = self.pos
-        # advances body_start to the page body
-        var ph = PageHeader.read_at(self.data, body_start)
-        var comp = self.data[body_start : body_start + ph.compressed_page_size]
-        self.pos = body_start + ph.compressed_page_size
+        # Consuming a data page advances the index cursor as well as `pos`;
+        # `_indexed` compares the two, so letting them drift would silently fall
+        # back to header parsing for the rest of the chunk.
+        var indexed = self._indexed()
+        if indexed:
+            self.page_i += 1
+        var si, off = self._seg(self.pos)
+        var read = PageHeader.read_at(self.segs[si], off)
+        ref ph = read[0]
+        var body = off + read[1]
+        var comp = self.segs[si][body : body + ph.compressed_page_size]
+        # A page is its header plus its body. `PageHeader.compressed_page_size`
+        # is the body alone, where the `OffsetIndex` field of the same name
+        # covers both -- which is why the seek path steps by that one directly.
+        self.pos += read[1] + ph.compressed_page_size
+        # A dictionary page is not in the index, so consuming one leaves `pos`
+        # at whatever follows it in the file — which need not be a page that was
+        # fetched. Re-point from the index either way.
+        self._sync()
 
         # Verify the optional page checksum: for both v1 and v2 the CRC covers
         # exactly the on-disk body (v1's compressed blob; v2's uncompressed
@@ -379,9 +469,16 @@ struct PageReader[o: Origin[mut=False]](Movable):
     def peek(self) raises -> Tuple[Bool, Int]:
         """Inspect the next page without consuming it: `(is_dictionary,
         num_values)`. Lets the caller decide, from the page's row count, whether
-        to decode, skip, or partially select it before paying the decode."""
-        var p = self.pos
-        var ph = PageHeader.read_at(self.data, p)
+        to decode, skip, or partially select it before paying the decode.
+
+        Answered from the `OffsetIndex` when there is one, which is the point of
+        having it: a page the caller then skips is never parsed at all.
+        """
+        if self._indexed():
+            return (False, self._indexed_rows())
+        var si, off = self._seg(self.pos)
+        var read = PageHeader.read_at(self.segs[si], off)
+        ref ph = read[0]
         if ph.type == PageType.DICTIONARY:
             return (True, ph.dictionary_page_header.value().num_values)
         elif ph.type == PageType.DATA:
@@ -393,10 +490,24 @@ struct PageReader[o: Origin[mut=False]](Movable):
 
     def skip_next(mut self) raises -> Int:
         """Advance past the next data page without decompressing or decoding it
-        (the row-skip fast path); return the number of rows skipped."""
-        var body_start = self.pos
-        var ph = PageHeader.read_at(self.data, body_start)
-        self.pos = body_start + ph.compressed_page_size
+        (the row-skip fast path); return the number of rows skipped.
+
+        With an `OffsetIndex` this is a seek: the page's size and row count are
+        both recorded, so nothing of the page is read. Without one it costs a
+        header parse — the second for this page, since `peek` already paid for
+        one.
+        """
+        if self._indexed():
+            var nv = self._indexed_rows()
+            self.produced += nv
+            self.page_i += 1
+            self._sync()
+            return nv
+
+        var si, off = self._seg(self.pos)
+        var read = PageHeader.read_at(self.segs[si], off)
+        ref ph = read[0]
+        self.pos += read[1] + ph.compressed_page_size
         var nv: Int
         if ph.type == PageType.DATA:
             nv = ph.data_page_header.value().num_values
@@ -1469,16 +1580,31 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
 
     def __init__(
         out self,
-        data: Span[UInt8, Self.o],
+        var segs: List[Span[UInt8, Self.o]],
         var meta: ColumnMetaData,
         var leaf: LeafColumn,
         num_rows: Int,
         var selection: Optional[RowSelection] = None,
+        var locs: OffsetIndex = OffsetIndex(),
+        var seg_at: List[Int] = [],
     ):
         """`data` is this column chunk's bytes — `meta.byte_range()`, not the
-        whole file."""
+        whole file.
+
+        `locs` is the column chunk's `OffsetIndex` entries when the caller has
+        them, which lets a skipped page be stepped over instead of parsed. They
+        are only useful alongside a `selection` — with nothing to skip, every
+        page is read anyway — and only on the flat path, where a page's row
+        count and its value count are the same number.
+        """
         var leveled = leaf.max_rep >= 1
-        self.pages = PageReader(data, meta^, leaf^)
+        if leveled:
+            locs = OffsetIndex()
+        if len(seg_at) != len(segs):
+            seg_at = List[Int]()
+            for _ in range(len(segs)):
+                seg_at.append(0)
+        self.pages = PageReader(segs^, seg_at^, meta^, leaf^, locs^)
         self.num_rows = num_rows
         self.leveled = leveled
         self.def_out = List[Int32]()
@@ -1524,7 +1650,14 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
         columns `pages.produced` is the row-group-relative index of the next data
         page's first row, so the page's rows are `[produced, produced + nv)`."""
         ref sel = self.selection.value()
+        var last = sel.last_selected()
         while self.pages.has_next():
+            if self.pages.produced > last:
+                # Nothing left to keep, so nothing left to read. Load-bearing
+                # rather than an optimisation: `read` trims the fetch to the
+                # page holding `last`, so walking on would step off the end of
+                # the bytes it was given.
+                break
             var is_dict, nv = self.pages.peek()
             if is_dict:
                 builder.consume(self.pages.next(codecs))  # build the dictionary
@@ -2019,6 +2152,50 @@ struct ColumnReader[o: Origin[mut=False], leaves: LeafSet = LeafSet.all()](
 comptime _PARALLEL_MIN_ROWS = 4096
 
 
+def _read_footer[S: ByteSource](ref source: S) raises -> FileMetaData:
+    """The file metadata, read from the **tail** rather than the whole file.
+
+    **A source is not always a memory map.** `ByteSource` exists so the
+    bytes can come from anywhere, and for anywhere-but-local a read is a
+    round trip: asking for `read_at(0, size())` to find a footer means
+    downloading the entire object to open it. That is what this used to do,
+    and it made every saving below it — column projection, row-group
+    pruning, page skipping — cost more than it saved.
+
+    One speculative read of the last `_FOOTER_READ_SIZE` bytes covers the
+    footer of essentially every real file, so opening one normally costs a
+    single round trip. A footer larger than that is read again at its exact
+    size, which is the only case that pays twice; `read_footer` indexes from
+    the end of whatever it is given, so both spans parse identically.
+    """
+    var size = source.size()
+    if size < 12:
+        raise Error("parquet: file too small")
+
+    var tail = _FOOTER_READ_SIZE if _FOOTER_READ_SIZE < size else size
+    var head = source.read_at(size - tail, tail)
+    var meta_len = FileMetaData.footer_length(head)
+    if meta_len + 8 <= tail:
+        # Parse what was already fetched. Measuring and then re-reading is one
+        # round trip too many, and on a remote source that is the whole cost.
+        return FileMetaData.read_footer(head)
+
+    var want = meta_len + 8
+    if want > size:
+        raise Error("parquet: corrupt footer length")
+    return FileMetaData.read_footer(source.read_at(size - want, want))
+
+
+comptime _FOOTER_READ_SIZE = 64 * 1024
+"""How much of a file's tail to read speculatively when opening it.
+
+Sized so one read gets the footer for essentially every real file — a footer
+runs to kilobytes, not megabytes, and the cost of overshooting on a local file
+is nil where the cost of a second round trip on a remote one is not. The same
+default parquet-rs uses.
+"""
+
+
 struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
     Movable
 ):
@@ -2050,18 +2227,14 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
     ) raises:
         # Convenience: open the local file as a memory map (S == MappedFile).
         self._source = MappedFile(path)
-        self._meta = FileMetaData.read_footer(
-            self._source.read_at(0, self._source.size())
-        )
+        self._meta = _read_footer(self._source)
         self._mapping = SchemaMapping.from_parquet(self._meta)
         self._codecs = ArcPointer(List[CompressionLibs]())
 
     def __init__(out self, var source: Self.S) raises:
         # Read from any byte source; everything downstream goes through it.
         self._source = source^
-        self._meta = FileMetaData.read_footer(
-            self._source.read_at(0, self._source.size())
-        )
+        self._meta = _read_footer(self._source)
         self._mapping = SchemaMapping.from_parquet(self._meta)
         self._codecs = ArcPointer(List[CompressionLibs]())
 
@@ -2147,6 +2320,26 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
                 "parquet: row_selections must match the selected row groups"
             )
 
+        # **A selection this reader cannot apply is refused, not ignored.**
+        # `ColumnReader.decode` picks the flat or the leveled path from the
+        # leaf's max repetition and only the flat one consults `selection`, so
+        # a repeated column would silently decode *all* its rows while its flat
+        # neighbours decoded a subset -- columns of different lengths, which is
+        # a wrong answer rather than a slow one. Leaving that as an unwritten
+        # rule made it every caller's job to know; a leaf count does not reveal
+        # it either, since `list<int>` is one leaf.
+        if row_selections:
+            for orig in plan.decode_order:
+                if self._mapping.leaves[orig].max_rep >= 1:
+                    raise Error(
+                        (
+                            "parquet: row_selections cannot be applied to a"
+                            " repeated column ('"
+                        ),
+                        self._mapping.leaves[orig].name,
+                        "'); read it without a selection",
+                    )
+
         var num_leaves = len(plan.decode_order)
         var num_rg = len(rg_list)
         var total = num_rg * num_leaves
@@ -2220,18 +2413,55 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
                     # columns), None when nothing is pushed down or the group is
                     # fully selected.
                     var sel: Optional[RowSelection] = None
+                    var locs = OffsetIndex()
                     if row_selections:
                         sel = row_selections.value()[slot].copy()
+                        # Only worth decoding when there is something to skip:
+                        # with no selection every page is read, and the index
+                        # would answer questions nobody asks. Offsets only --
+                        # the `ColumnIndex`'s per-page bounds are decode-time
+                        # dead weight here, and they are the bulky half.
+                        # Not for a leveled leaf: `ColumnReader` discards the
+                        # index there (page skipping is a flat-path
+                        # optimisation), so decoding one is pure waste.
+                        if self._mapping.leaves[orig].max_rep == 0:
+                            locs = self._chunk_offsets(
+                                rg.columns[orig], rg.num_rows
+                            )
                     # ColumnReader.decode picks the flat vs leveled path from the
                     # leaf's max repetition, so one call serves every column shape.
                     # Each worker fetches only its own chunk's bytes.
                     var start, length = rg.columns[orig].meta_data.byte_range()
+                    # **And only as far into the chunk as the selection reaches.**
+                    # The offset index says where the page holding the last
+                    # selected row ends; nothing after it will be decoded, so
+                    # nothing after it is worth asking the source for. A
+                    # `limit`-shaped selection reads the front of the chunk
+                    # and stops; a scattered one reads each run and skips the
+                    # gaps.
+                    var ranges = List[Tuple[Int, Int]]()
+                    if sel and locs.num_pages() > 0:
+                        ranges = sel.value().scan_ranges(
+                            locs, rg.columns[orig], rg.num_rows
+                        )
+                    else:
+                        ranges.append((0, length))
+
+                    var seg_at = List[Int](capacity=len(ranges))
+                    var segs = List[Span[UInt8, origin_of(self)]](
+                        capacity=len(ranges)
+                    )
+                    for ref r in ranges:
+                        seg_at.append(r[0])
+                        segs.append(self._read_at(start + r[0], r[1]))
                     var reader = ColumnReader[leaves=Self.leaves](
-                        self._read_at(start, length),
+                        segs^,
                         rg.columns[orig].meta_data.copy(),
                         self._mapping.leaves[orig].copy(),
                         rg.num_rows,
                         sel^,
+                        locs^,
+                        seg_at^,
                     )
                     grid[t] = reader.decode(codecs_w)
                     t += nt
@@ -2308,19 +2538,46 @@ struct ParquetFile[S: ByteSource = MappedFile, leaves: LeafSet = LeafSet.all()](
             out.append(row^)
         return out^
 
+    def _chunk_offsets(
+        ref self, cc: ColumnChunk, num_rows: Int = -1
+    ) raises -> OffsetIndex:
+        """One column chunk's page *locations*, and nothing else.
+
+        `_chunk_page_index` decodes both halves, and the `ColumnIndex` half is
+        the expensive one: per-page min and max as raw byte lists, for every
+        page of the chunk. A decoder wants only the offsets, so decoding the
+        bounds and dropping them costs a large allocation per (row group, leaf)
+        in the middle of the read loop.
+
+        **Given `num_rows`, the locations are checked here and nowhere else.**
+        An index that does not tile its chunk answers *empty*, which is already
+        the sentinel every consumer honours -- `RowSelection.scan_ranges` asks
+        for the whole chunk and `PageReader` walks page headers.
+        """
+        if cc.offset_index_offset < 0:
+            return OffsetIndex()
+        var r = ThriftCompactReader(
+            self._metadata_at(cc.offset_index_offset, cc.offset_index_length),
+            0,
+        )
+        # Copied rather than moved out: a field cannot be taken from a value
+        # that still has to be destroyed, and three ints per page is nothing
+        # beside the `ColumnIndex` this does not decode.
+        var oi = OffsetIndex.read(r)
+        if num_rows < 0:
+            return oi^
+        var start, length = cc.meta_data.byte_range()
+        if not oi.tiles_chunk(start, length, num_rows):
+            return OffsetIndex()
+        return oi^
+
     def _chunk_page_index(ref self, cc: ColumnChunk) raises -> PageIndex:
         """One column chunk's page index, each half absent when the writer
         stored none. The two readers below share this so the offsets are
         resolved in exactly one place."""
         var pi = PageIndex()
         if cc.offset_index_offset >= 0:
-            var r = ThriftCompactReader(
-                self._metadata_at(
-                    cc.offset_index_offset, cc.offset_index_length
-                ),
-                0,
-            )
-            pi.offset_index = OffsetIndex.read(r)
+            pi.offset_index = self._chunk_offsets(cc)
         if cc.column_index_offset >= 0:
             var r = ThriftCompactReader(
                 self._metadata_at(
@@ -2462,7 +2719,10 @@ struct RowSelection(Copyable, Movable):
     def from_pages(keep: List[Bool], page_rows: List[Int]) -> Self:
         """Expand per-page keep flags into per-row flags. `keep[i]` decides all
         `page_rows[i]` rows of page `i` (pages begin on row boundaries)."""
-        var s = List[Bool]()
+        var rows = 0
+        for p in range(len(page_rows)):
+            rows += page_rows[p]
+        var s = List[Bool](capacity=rows)
         for p in range(len(keep)):
             for _ in range(page_rows[p]):
                 s.append(keep[p])
@@ -2487,6 +2747,19 @@ struct RowSelection(Copyable, Movable):
                 return True
         return False
 
+    def last_selected(self) -> Int:
+        """The last selected row, or `-1` when nothing is selected.
+
+        What lets `_run_selected` stop walking: everything past this row is
+        skipped whatever the pages say, so once the cursor is beyond it there
+        is nothing left to decode — and, with a trimmed fetch, nothing left
+        that was even read.
+        """
+        for i in range(len(self._selected) - 1, -1, -1):
+            if self._selected[i]:
+                return i
+        return -1
+
     def selects_all(self) -> Bool:
         for i in range(len(self._selected)):
             if not self._selected[i]:
@@ -2502,6 +2775,82 @@ struct RowSelection(Copyable, Movable):
         for i in range(self.total_rows()):
             s.append(self._selected[i] and other._selected[i])
         return Self(s^)
+
+    def scan_ranges(
+        self, oi: OffsetIndex, cc: ColumnChunk, num_rows: Int
+    ) raises -> List[Tuple[Int, Int]]:
+        """The chunk-relative `(offset, length)` ranges this selection needs.
+
+        Named after parquet-rs's `RowSelection::scan_ranges`, and on the
+        selection for the same reason: mapping *rows* to the pages that hold
+        them is what a selection knows how to do, where `oi` only knows where
+        pages sit and `cc` only where the chunk does.
+
+        The dictionary page comes first when the chunk has one — it is the
+        chunk's first byte and every dictionary-encoded page is unreadable
+        without it — followed by each data page holding a selected row.
+        Adjacent ranges are merged, so a run of selected pages is one read;
+        parquet-rs leaves that to its IO layer, and marrow does it here because
+        `ByteSource` has no batch entry point.
+
+        Everything else is left unread, which is sound only because a page is
+        skipped from the index: `PageReader.skip_next` takes its row count and
+        its size from `oi`, so stepping over a page touches none of its bytes.
+
+        `oi` is assumed to tile the chunk — `OffsetIndex.tiles_chunk` is asked
+        when it is decoded, and an index that fails answers no pages at all —
+        so the only retreats here are the two this method owns: no pages, and a
+        chunk whose dictionary has nowhere to live.
+        """
+        var start, length = cc.meta_data.byte_range()
+        var out = List[Tuple[Int, Int]]()
+        if oi.num_pages() == 0:
+            out.append((0, length))
+            return out^
+
+        if cc.meta_data.dictionary_page_offset != -1:
+            var head = oi.page_locations[0].offset - start
+            if head <= 0:
+                out.append((0, length))
+                return out^
+            out.append((0, head))
+
+        for i in range(oi.num_pages()):
+            ref loc = oi.page_locations[i]
+            if not self.any_selected_in(
+                loc.first_row_index, oi.page_rows(i, num_rows)
+            ):
+                continue
+            var at = loc.offset - start
+            var n = loc.compressed_page_size
+            if (
+                len(out) > 0
+                and out[len(out) - 1][0] + out[len(out) - 1][1] == at
+            ):
+                out[len(out) - 1] = (
+                    out[len(out) - 1][0],
+                    out[len(out) - 1][1] + n,
+                )
+            else:
+                out.append((at, n))
+
+        if len(out) == 0:
+            # Nothing selected at all; the caller should not have asked, but a
+            # zero-length read is worse than a small one.
+            out.append((0, length))
+        return out^
+
+    def any_selected_in(self, start: Int, length: Int) -> Bool:
+        """Whether *any* row of `[start, start+length)` is selected.
+
+        `selected_in` counts, and a planner only ever asks whether the count is
+        zero -- over a page of a million-row group that is a million tests to
+        answer a question the first set bit settles.
+        """
+        for i in range(start, start + length):
+            if self._selected[i]:
+                return True
+        return False
 
     def selected_in(self, start: Int, length: Int) -> Int:
         """How many rows in the half-open range `[start, start+length)` are

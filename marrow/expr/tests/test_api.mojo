@@ -322,6 +322,32 @@ def test_a_temporal_column_can_be_filtered() raises:
     assert_equal(out.num_rows(), 1)
 
 
+def test_temporal_compares_against_a_literal() raises:
+    """`col("d", date32()) > lit(19002, date32())` — the shape the comptime
+    lane could not express at all.
+
+    Every temporal comparison here used to need a *second column* to compare
+    against, because `lit` had only numeric and string overloads and
+    `TemporalCompare` binds both operands on `TemporalValue`. Writing the
+    constant as `lit(19002, int64)` does not work either: a numeric literal is
+    a `NumericValue`, so the comparison does not typecheck.
+    """
+    var d = Date32Builder(date32(), 3)
+    d.append(Int32(19000))
+    d.append(Int32(19005))
+    d.append_null()
+    var batch = record_batch([d.finish().to_dyn()], names=["d"])
+
+    var out = (
+        table(batch^)
+        .filter(col("d", date32()) > lit(19002, date32()))
+        .execute()
+    )
+    # 19000 > 19002 false; 19005 > 19002 true; the null does not select
+    assert_equal(out.num_rows(), 1)
+    assert_equal(Int(out.column("d").as_date32()[0].value()), 19005)
+
+
 def test_temporal_less_than_filters_on_the_other_side() raises:
     """`TemporalLt` is the mirror of `TemporalGt` and shares its `bind`, so the
     only thing this pins that the `>` case does not is that the kernel

@@ -18,13 +18,14 @@ not run them.
     pixi run binary_size query_scan
 
 **Ported from the old expression package on 2026-08-29; the recorded baseline
-predates the port and is stale.** One thing it no longer links:
-**statistics-based pruning.** The old scan took the predicate pushed into it
-and skipped row groups and pages whose statistics proved no row could match.
-`marrow.expr` has no pruning module, no `PruneStats` and no pushdown — the
-`Filter` above the scan applies the predicate to every decoded row — so the
-pruning path is not in this binary and is not measured by anything. That is a
-smaller scan, not a wrong one; restore the measurement when pruning lands.
+predates the port and is stale.**
+
+**Pruning is not in this binary, and that is a property of the plan rather
+than a missing feature.** `execute()` runs no rules, and a `ParquetScan` only
+carries pruners if `PushFilterIntoScan` put them there. Neither this gate nor
+`query_cli` names a rule set, so the optimizer costs both of them nothing; what
+an AOT binary pays to prune is recorded in `query_cli`'s docstring and is not
+currently gated.
 """
 
 from marrow.dtypes import field, int64, string

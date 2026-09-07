@@ -635,8 +635,9 @@ trait NumericCompareKernel(Kernel):
         # the narrower `NumericType`: temporal, interval and decimal columns all
         # reach the same leaf. Narrowing here made runtime comparison raise on
         # those dtypes, took `equal` -- and with it hash-join key
-        # verification and `nullif` -- down too, and left `pruning.mojo` unable
-        # to prune a single row group on a date or decimal predicate. CLAUDE.md's
+        # verification and `nullif` -- down too, and left the runtime lane
+        # unable to prune a row group on a date or decimal predicate, which is
+        # still the only lane that can. CLAUDE.md's
         # "dispatch on the widest family the typed leaf accepts" rule is for
         # exactly this; `filter`/`take` and `sort` were already fixed.
         def leaf[T: PrimitiveType](d: T) raises {imm} -> DynArray:

@@ -20,6 +20,16 @@ runtime interpreter in behind it. `marrow::expr::runtime` must link 0 symbols:
 Arrow IPC *writers* are gated out and this binary prints or writes text. That
 is the default on purpose: the writers are the largest thing the CLI layer can
 pull in, and a query that pipes its result should not pay for them.
+
+**The plan names no rules, so this binary links no optimizer** — the same
+default `execute()` has. An earlier draft had `run` apply `ScanPruning` itself,
+and that single call measured 1,467,352 bytes (+33% of this gate):
+`Optimizer.run` walks the plan through `DynRelation._dispatch`, whose ten arms
+each rebuild their node and so register `_to_operator_tramp[X]`, linking every
+physical operator and its kernels into a binary whose plan names two node
+types. Adding `.optimize[ScanPruning]()` here is what it costs to make an AOT
+binary prune; no gate pays it today, so the figure is recorded rather than
+gated.
 """
 
 from marrow.dtypes import field, int64, string

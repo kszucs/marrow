@@ -38,6 +38,7 @@ all of them.
 | 14 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
 | 15 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
 | 16 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
+| 17 | **A `ByteSource` a plan can choose** — mmap a local file, stream a local file, stream a remote one | `MappedFile` is the only one and `ParquetScanOperator` hardcodes it, so a plan cannot read anything else. The kind is a *runtime* choice, so the comptime `S` is the wrong mechanism — see §1.9 for the erased shape and the origin spike that gates it. Page-level pruning already saves the I/O; this is what makes that saving reachable | **M** | — |
 
 ---
 
@@ -209,6 +210,83 @@ to un-skip it; §1.12 records four that were claimed unblocked and were not.
   job cannot pass, and the binary-size gate is not in CI at all — which is how a
   +55% size regression once survived ten commits.
 
+### 1.9 The Parquet reader, after page-level pruning landed
+
+A `RowSelection` now narrows what is *fetched*, not just what is decoded: the
+`OffsetIndex` plans the byte ranges, adjacent pages merge into one read, and a
+skipped page is stepped over from the index rather than by parsing its header.
+`marrow/parquet/tests/test_page_io.mojo` measures this with a recording
+`ByteSource` -- the only way to tell "returned the right rows" from "did less
+work". What is left:
+
+- **`MappedFile` is the only real `ByteSource`, and nothing can supply another.**
+  `ParquetScanOperator` hardcodes `ParquetFile[MappedFile, LeafSet.all()]` and
+  builds it from `ParquetScan`'s `path`, so a query plan cannot stream a local
+  file or read a remote one -- and the byte-level proof above stops at
+  `ParquetFile.read`, since a recorder cannot be injected through `execute()`.
+
+  **The source kind is a runtime choice** (mmap a local file, stream a local
+  file, stream a remote one -- decided from the URI, maybe from the file's
+  size), so a comptime `S` is the wrong mechanism: it fixes the choice at
+  compile time *and* links one copy of the reader per kind. The shape that fits
+  is an erased `DynByteSource` -- trampoline-based rather than a `Variant`, so
+  a caller can supply its own source, with the `_drop` trampoline every erased
+  box here needs. Erasure is cheap in this one place: `read_at` fires once for
+  the footer, once per (row group x leaf) for the offset index, and once per
+  fetch range, each followed by decoding a page.
+
+  Contained: `S: ByteSource` appears 4 times and `ParquetFile[...]` at ~7 sites;
+  `ColumnReader` and `PageReader` never mention it, they take spans. **Spike
+  first:** whether a trait method returning `Span[UInt8, origin_of(self)]`
+  survives trampoline erasure -- the origin has to end up tied to the box's
+  pointee, not the box, and that is the one thing that could sink the design.
+  parquet-rs's `object_store` and Apache OpenDAL are the shape to copy, and
+  instrumentation is then a wrapper source rather than a parameter.
+
+- **The Parquet reader has no batch-read entry point.** `ByteSource.read_at`
+  fetches one range, so a selection spanning several pages issues one call per
+  contiguous run. Adjacent ranges are merged first (`_selected_ranges`), which
+  is what parquet-rs delegates to `ObjectStore::get_ranges` instead -- for a
+  remote source those calls could go out in parallel, and here they are serial.
+
+- **The page index is fetched more than once.** `expr.page_selections` decodes
+  the whole file's page index to choose pages, and then `read` fetches and
+  decodes each chunk's `OffsetIndex` again (`_chunk_offsets`) to locate them --
+  one extra round trip per (selected row group, leaf) on top of one for the
+  file. Visible in `test_a_scattered_selection_fetches_one_range_per_run`,
+  which has to exclude it to count the data reads. The fix is for the selection
+  to carry the locations it already read, which `RowSelection` cannot do
+  without learning about Parquet; a `PageIndex` cache on `ParquetFile` is the
+  smaller change. It is coupled to hoisting the *planning* out of the parallel
+  decode loop -- `locs` and the byte ranges are pure functions of the footer,
+  so they can be computed once before dispatch while the fetches stay in the
+  workers, and every chunk's `OffsetIndex` lives in one contiguous page-index
+  region, so a hoisted plan is what makes one read replace N.
+
+- **`LIMIT` never becomes a `RowSelection`.** `LimitOperator.done()` stops the
+  driver, so row groups past the limit are never opened -- but within the first
+  surviving group every row is decoded. `limit 10` over a million-row group
+  reads the million. The `OffsetIndex` machinery to read ten rows' worth of
+  pages now exists; what is missing is the limit reaching the scan as a row
+  range, which is the same `row_limit` channel top-K needs.
+
+- **The comptime lane prunes numerics only.** Temporal and decimal predicates
+  prune through the runtime lane, which recovers the dtype from the index and
+  dispatches. In the fused lane `TemporalCompare` inherits `Value.mask`'s
+  default and keeps every chunk, and a decimal column cannot be named at all --
+  there is no decimal value family. Temporal would need a dtype *instance* to
+  prune with, since a temporal type carries a unit and `Stat()` does not exist
+  where `NumericType(Defaultable, ...)` makes it free; that was judged not worth
+  a required trait member for one dtype family.
+
+- **A `RowSelection` is copied per (row group x leaf) and walked per page.**
+  It is a `List[Bool]`, one byte per row, `.copy()`-ed into every
+  `ColumnReader` -- a megabyte per leaf on a million-row group -- and
+  `last_selected` rescans it per leaf. Sharing it behind an `ArcPointer` and
+  caching `last_selected`/`num_selected` at construction removes both; a prefix
+  sum would make `selected_in` O(1) as well. Nothing measured yet, so this is
+  a shape complaint rather than a profile.
+
 ### 1.10 Python binding limits, measured 2026-08-30
 
 Audited against the `std.python.bindings` surface at Mojo
@@ -256,21 +334,12 @@ bindings currently have.
   modules and belongs in its own change. The kwargs form is deliberately *not*
   adopted -- keyword sugar lives in pure Python by project rule.
 
-- **Statistics pruning is unreachable from Python.** `DynRelation.filter` has
-  two overloads: the erased one takes `DynValue` and reads every row group, and
-  the pruning one takes `V: Value & Prunable` and captures the concrete type.
-  A `PythonObject` has already erased that type by the time it crosses the
-  boundary, so `Plan.filter` can only reach the first. `RuntimeValue` *does*
-  conform to `Prunable`, so what is missing is a way to carry the unerased
-  value across, not the pruning itself -- the `Expr` box holds a
-  `RuntimeValue` and could call the pruning overload directly.
-
 ### 1.11 Undocumented subsystems
 
 Nine substantial pieces of the codebase have no design document and never did:
 the whole Parquet subsystem (nine modules, ~380 KB), the Arrow IPC layer, the C
 Data Interface, the GPU execution model, `utils/argparse.mojo` (769 lines),
-`kernels/groups.mojo`/`bounds.mojo`/`cast_decimal.mojo`, `Dispersion`, the
+`kernels/groups.mojo`/`cast_decimal.mojo`, `Dispersion`, the
 `comptime/temporal.mojo` nodes, and the `_drop` destructor trampoline on every
 erased box. Listed so that "there is no doc" is not mistaken for "there is no
 feature".
@@ -296,11 +365,14 @@ let it survive is that **no gate program sorts**. Adding one is the actual
 task here; without it the next instance is equally invisible.
 
 **Windows read a pruned population.** `Window.to_operator` forwarded its
-`Pushdown`, so a `Filter` above a window pushed its row-group predicate to the
-scan and every rank and running total was computed over fewer rows than the
-query selects — wrong numbers, no error. Fixed in `04d84cb8`. Nothing could
-have caught it: all 21 window tests and 7 golden cases use in-memory tables,
-and the bug needs a Parquet scan under a window under a filter.
+pushed-down predicate, so a `Filter` above a window pushed its row-group
+predicate to the scan and every rank and running total was computed over fewer
+rows than the query selects — wrong numbers, no error. Fixed in `04d84cb8`.
+Nothing could have caught it: all 21 window tests and 7 golden cases use
+in-memory tables, and the bug needs a Parquet scan under a window under a
+filter. It is designed out now rather than fixed: `PushFilterIntoScan` descends
+through `Filter` and nothing else, so a `Window` stops a predicate by not being
+a `Filter`.
 
 **A bounded sort forwarded the same predicate.** `Sort.to_operator` forwarded
 unconditionally while `PushFilterBelowSort` refused when `sort.limit` was set,
@@ -445,8 +517,9 @@ which returns an ordinary `DynRelation` that prints, diffs and executes:
 | reparameterization | `TopN` |
 | downward pass | `ColumnPruning` |
 
-plus constant folding in the `RuntimeValue` constructors, and the original
-Parquet statistics pushdown, which still rides `to_operator`'s descent unchanged.
+plus constant folding in the `RuntimeValue` constructors. Parquet statistics
+pushdown is `PushFilterIntoScan` in this same list now -- it rode
+`to_operator`'s descent when this was written.
 
 The rule set is a comptime parameter, so a binary links exactly the rules it
 names and `execute()` alone optimizes nothing. `DynRelation` became **a variant
@@ -457,13 +530,15 @@ per-type slot — routing it through the variant instead cost **+348%** of
 lowering and `ParquetScan.to_operator` reaches `kernels::cast` in a plan with no
 Parquet in it.
 
-**The design note this section used to cite is wrong and has been corrected.**
-`pushdown.mojo` claimed a rewrite was "not merely unnecessary but unavailable"
-given `DynRelation`'s layout. Trampolines returning `List[Self]`, `Self` and
-`Optional[Self]` all compile; what the compiler rejects is a by-value recursive
-*field*, which is a different thing. See
-`CLAUDE.md`'s Mojo gotchas, and `marrow/expr/pushdown.mojo`'s own
-corrected docstring.
+**The design note this section used to cite is wrong, and the module that
+carried it is gone.** `pushdown.mojo` claimed a rewrite was "not merely
+unnecessary but unavailable" given `DynRelation`'s layout. Trampolines
+returning `List[Self]`, `Self` and `Optional[Self]` all compile; what the
+compiler rejects is a by-value recursive *field*, which is a different thing.
+The rewrite it discouraged is now `PushFilterIntoScan`; the descent it
+described is deleted, `pruning.mojo` is gone, and what is left lives in
+`index.mojo` (`Index`, `ZoneMaps`) and `physical.mojo` (`row_group_index`,
+`read_plan`). See `CLAUDE.md`'s Mojo gotchas.
 
 **Still absent:** common-subexpression elimination, duplicate group/sort key
 elimination, statistics propagation, aggregate pushdown, and any cost model.
@@ -494,8 +569,8 @@ way.** This said projection pushdown was "a second field on the `Pushdown`
 struct", and that anything beyond it needed "a real plan representation — a
 structural change, not an increment." The structural change is what shipped:
 `DynRelation` is variant-backed, nodes carry `traverse`, and rules rewrite
-plans. Projection pushdown turned out **not** to fit the `Pushdown` struct at
-all — it needs a downward pass with an accumulator, where `Pushdown` carries
+plans. Projection pushdown turned out **not** to fit that struct at all — it
+needs a downward pass with an accumulator, where the retired `Pushdown` carried
 per-node facts.
 
 The `count_star()` hazard was real and is handled rather than fixed:
@@ -711,7 +786,7 @@ differentiator hiding inside a table-stakes item.
   parameter.** `sort_indices(..., limit=)` is passed non-`None` at exactly two
   sites, both tests; `SortOperator` never passes it, so
   `sort_by(...).limit(k)` performs a full sort and discards. Wiring it needs a
-  `row_limit` channel through `Pushdown` *and* a per-node rule table, because
+  `row_limit` channel down to the sort *and* a per-node rule table, because
   `Limit(Filter(Sort(x)))` may not take the top K — the filter runs after the
   sort, so a K-row sort silently returns fewer than K rows. - **Per-key null
   placement is missing on sort:** `Sort` carries one `nulls_first: Bool` for

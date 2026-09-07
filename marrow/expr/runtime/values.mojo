@@ -40,6 +40,7 @@ from ...arrays import (
     BoolArray,
     DynArray,
     Int64Array,
+    NullArray,
     StringArray,
     StructArray,
 )
@@ -165,21 +166,21 @@ from ...kernels.temporal import (
     WeekKernel,
     YearKernel,
 )
-from ...dtypes import DynType, NumericType, bool_, float64, int64, string
+from ...dtypes import (
+    DynType,
+    NumericType,
+    PrimitiveType,
+    bool_,
+    float64,
+    int64,
+    string,
+)
 from ...scalars import BoolScalar, DynScalar, PrimitiveScalar
 from ...schema import Schema
 from ...tabular import RecordBatch
 from ..logical import DynValue, Shape, Value, merged
 from ..bindings import Bindings
-from ...kernels.bounds import (
-    EqBounds,
-    GeBounds,
-    GtBounds,
-    LeBounds,
-    LtBounds,
-    NeBounds,
-)
-from ..pruning import DynBounds, PruneStats, Prunable, Truth, compare_dyn
+from ..index import Index, keep_every
 from ..physical import Datum
 from ..physical import Evaluable, DynOperator, EvalOperator
 from .aggregates import RuntimeAggregate
@@ -224,7 +225,7 @@ from outside.
 """
 
 
-struct RuntimeValue(Evaluable, Movable, Prunable, Value):
+struct RuntimeValue(Evaluable, Movable, Value):
     """A runtime-built expression.
 
     Satisfies `Value` — `Analyzable & Executable & Writable & Copyable &
@@ -297,50 +298,150 @@ struct RuntimeValue(Evaluable, Movable, Prunable, Value):
 
     # -- Value --------------------------------------------------------------
 
-    def prune(self, stats: PruneStats, bindings: Bindings) -> Truth:
-        """The runtime lane's half of the same contract.
+    def mask(
+        self, index: Index, bindings: Bindings = Bindings()
+    ) raises -> BoolArray:
+        """This lane's half of the same contract.
 
-        The tag selects between six one-line `decide` bodies, not between
-        kernels: no kernel code is linked by this, so the module's "a tag never
-        selects a kernel" rule is not what is at stake here. The dtype ladder
-        lives once, in `_ord`, and the readings are the same six the fused lane
-        runs — writing them twice is how two lanes drift into disagreeing about
-        which row groups to skip.
+        The tag selects an operator, and `dispatch` is the erased entry the
+        interpreter already links — so pruning here costs no kernel this lane
+        was not paying for. The one dtype ladder is `_statistics` below: a
+        runtime node learns its column's type from the data, where a comptime
+        node knows it and asks the index for that type directly.
+
+        Anything unrecognised keeps every chunk, which is always correct.
         """
-        if len(self._kids) == 2:
-            if self._tag == "and":
-                return self._kids[0][].prune(stats, bindings) & self._kids[
-                    1
-                ][].prune(stats, bindings)
-            if self._tag == "or":
-                return self._kids[0][].prune(stats, bindings) | self._kids[
-                    1
-                ][].prune(stats, bindings)
-            var l = self._kids[0][]._bounds(stats, bindings)
-            var r = self._kids[1][]._bounds(stats, bindings)
-            if self._tag == "lt":
-                return compare_dyn[LtBounds](l, r)
-            if self._tag == "le":
-                return compare_dyn[LeBounds](l, r)
-            if self._tag == "gt":
-                return compare_dyn[GtBounds](l, r)
-            if self._tag == "ge":
-                return compare_dyn[GeBounds](l, r)
-            if self._tag == "eq":
-                return compare_dyn[EqBounds](l, r)
-            if self._tag == "ne":
-                return compare_dyn[NeBounds](l, r)
-        return Truth.maybe
+        if len(self._kids) != 2:
+            return keep_every(index.chunks)
+        if self._tag == "and":
+            return AndKernel.apply(
+                self._kids[0][].mask(index, bindings),
+                self._kids[1][].mask(index, bindings),
+            )
+        if self._tag == "or":
+            return OrKernel.apply(
+                self._kids[0][].mask(index, bindings),
+                self._kids[1][].mask(index, bindings),
+            )
 
-    def _bounds(self, stats: PruneStats, bindings: Bindings) -> DynBounds:
-        """A leaf's bounds, left erased — this lane has no comptime type to
-        unwrap into. Anything composite answers unknown."""
+        # A comparison reads the extreme pair that decides it, and a chunk
+        # where either operand has no non-null value cannot match at all.
+        var live = AndKernel.apply(
+            self._kids[0][]._defined(index), self._kids[1][]._defined(index)
+        )
+        var lo = self._kids[0][]._statistics(index, bindings, upper=False)
+        var hi = self._kids[0][]._statistics(index, bindings, upper=True)
+        var rlo = self._kids[1][]._statistics(index, bindings, upper=False)
+        var rhi = self._kids[1][]._statistics(index, bindings, upper=True)
+
+        # **Both operands must already answer in the same primitive type.** The
+        # erased kernel entry *raises* on a dtype mismatch rather than answering
+        # null, and a raise here reaches `Index.read_plan`, whose single
+        # `except` gives up on the whole scan -- so one predicate naming a
+        # column the source never recorded would cost every *other* predicate
+        # its pruning. Answering `keep_every` instead keeps the failure local,
+        # which is the same trade the fused node makes against its `ArgType`.
+        var dt = lo.dtype()
+        if (
+            not dt.is_primitive()
+            or hi.dtype() != dt
+            or rlo.dtype() != dt
+            or rhi.dtype() != dt
+        ):
+            return keep_every(index.chunks)
+
+        if self._tag == "lt":
+            return self._decided(live.copy(), LtKernel.dispatch(lo, rhi))
+        if self._tag == "le":
+            return self._decided(live.copy(), LeKernel.dispatch(lo, rhi))
+        if self._tag == "gt":
+            return self._decided(live.copy(), GtKernel.dispatch(hi, rlo))
+        if self._tag == "ge":
+            return self._decided(live.copy(), GeKernel.dispatch(hi, rlo))
+        if self._tag == "eq":
+            # Interval overlap, read exactly as the fused node reads it: the
+            # value can only appear where neither side lies wholly beyond the
+            # other.
+            var below = LeKernel.dispatch(lo, rhi)
+            var above = GeKernel.dispatch(hi, rlo)
+            return AndKernel.apply(
+                live^, AndKernel.apply(below.as_bool(), above.as_bool())
+            )
+        return keep_every(index.chunks)
+
+    @staticmethod
+    def _decided(var live: BoolArray, var answer: DynArray) raises -> BoolArray:
+        """The comparison's answer, kept only where both operands are live."""
+        return AndKernel.apply(live^, answer.as_bool())
+
+    def _statistics(
+        self, index: Index, bindings: Bindings, upper: Bool
+    ) raises -> DynArray:
+        """A leaf's per-chunk extreme, erased. Composites say nothing.
+
+        **The lane's one dtype ladder, and it is dead in a fused binary.** The
+        index stores its statistics typed and hands them back in the type the
+        reader asks for, which is a single `as_primitive[T]` arm for a comptime
+        node. An interpreted node has no `T` to ask with, so it recovers one
+        from the index and dispatches — here, in the lane that needs it, rather
+        than in the index, which would then carry a ladder for a caller it may
+        not have.
+
+        **Both leaves dispatch, and the literal one is why a `date32` predicate
+        prunes here at all.** `DynScalar.repeat` covers numerics only — a
+        measured decision, since widening it costs 34,052 bytes on
+        `query_streaming`, an AOT gate that repeats nothing. Broadcasting here
+        instead keeps the temporal and decimal arms in the lane that already
+        accepted an interpreter.
+
+        A column with no statistics, a value that is not primitive, and a
+        statistic this build cannot decode all answer all-null — and a null
+        answer means "read it".
+        """
         if len(self._kids) == 0:
             if self._tag == "column" and self._payload.isa[String]():
-                return stats.dyn_bounds(self._payload[String])
+                var name = self._payload[String]
+                var dt = index.dtype_of(name)
+                if dt.is_primitive():
+
+                    def arm[T: PrimitiveType](w: T) raises {imm} -> DynArray:
+                        if upper:
+                            return index.maxes[T](name, w).to_dyn()
+                        return index.mins[T](name, w).to_dyn()
+
+                    try:
+                        return dt.dispatch_primitive(arm)
+                    except:
+                        return NullArray(length=index.chunks).to_dyn()
             if self._tag == "literal" and self._payload.isa[DynScalar]():
-                return DynBounds.point(self._payload[DynScalar].copy())
-        return DynBounds.unknown()
+                ref value = self._payload[DynScalar]
+                var vt = value.type()
+                if vt.is_primitive():
+
+                    def broadcast[
+                        T: PrimitiveType
+                    ](w: T) raises {imm} -> DynArray:
+                        return (
+                            value.as_primitive[T]()
+                            .repeat(index.chunks)
+                            .to_dyn()
+                        )
+
+                    try:
+                        return vt.dispatch_primitive(broadcast)
+                    except:
+                        return NullArray(length=index.chunks).to_dyn()
+        return NullArray(length=index.chunks).to_dyn()
+
+    def _defined(self, index: Index) raises -> BoolArray:
+        """Where a leaf could have a non-null value."""
+        if (
+            len(self._kids) == 0
+            and self._tag == "column"
+            and self._payload.isa[String]()
+        ):
+            return index.defined(self._payload[String])
+        return keep_every(index.chunks)
 
     def columns(self) -> List[String]:
         # The leaf case is spelled out rather than falling out of an empty

@@ -39,14 +39,14 @@ from ...dtypes import (
 from ...schema import Schema
 from ...arrays import (
     Array,
-    StructArray,
     BinaryLikeArray,
     BoolArray,
     ListLikeArray,
     PrimitiveArray,
+    StructArray,
 )
 from ...buffers import Bitmap, Buffer
-from ...builders import BinaryLikeBuilder
+from ...builders import BinaryLikeBuilder, PrimitiveBuilder
 from ...scalars import PrimitiveScalar
 from ...tabular import RecordBatch
 from ...views import apply
@@ -62,8 +62,7 @@ from ...kernels.aggregate import (
     SUM,
     VARIANCE,
 )
-from ...kernels.bounds import Bounds
-from ..pruning import PruneStats, Prunable, Truth
+from ..index import Index, keep_every
 from .aggregates import (
     ApproxCountDistinct,
     StringApproxCountDistinct,
@@ -180,7 +179,7 @@ from ..physical import Evaluable, DynOperator, EvalOperator
 # ---------------------------------------------------------------------------
 # ComptimeValue — what every node in this lane shares
 # ---------------------------------------------------------------------------
-trait ComptimeValue(Evaluable, Prunable, Value):
+trait ComptimeValue(Evaluable, Value):
     """A `Value` whose type states its output type and its per-batch state.
 
     This is where `evaluate` lives — **not** on `Value`. A logical node is
@@ -318,21 +317,6 @@ trait PrimitiveValue(ComptimeValue):
     """
 
     comptime Type: PrimitiveType
-
-    def bounds(
-        self, stats: PruneStats, bindings: Bindings
-    ) -> Bounds[Self.Type.native]:
-        """What this sub-expression's value can be over one granule. Default:
-        unknown.
-
-        `bounds` is to `prune` what `lane` is to `evaluate`: the typed half a
-        composite reads from its operands. `Bounds[Self.Type.native]` is the
-        same projection `lane`'s `SIMD[Self.Type.native, W]` already makes, and
-        a *defaulted body* at that return type reduces — verified, so the
-        fallback of declaring this abstract and writing a four-line body on
-        every conformer is not needed.
-        """
-        return Bounds[Self.Type.native].unknown()
 
     def count_distinct(self) -> CountDistinct[Self]:
         """`COUNT(DISTINCT self)` — exact, nulls excluded (SQL semantics).
@@ -905,6 +889,56 @@ trait NumericValue(PrimitiveValue):
     leaf cannot be numeric for `int64` and temporal for `date32`; the leaves
     therefore differ while everything above them is shared.
     """
+
+    def defined(self, index: Index) raises -> BoolArray:
+        """Where this operand could have a non-null value.
+
+        Separate from `statistics` because it proves something bounds cannot:
+        a chunk whose column is entirely null yields no surviving row for any
+        comparison, even though it has no min or max to compare. Default:
+        always defined, which proves nothing and so prunes nothing.
+        """
+        return keep_every(index.chunks)
+
+    def statistics[
+        Stat: NumericType
+    ](
+        self, index: Index, bindings: Bindings, upper: Bool
+    ) raises -> PrimitiveArray[Stat]:
+        """This sub-expression's smallest or largest value per chunk, in the
+        type the *reader* asks for.
+
+        `statistics` is to `mask` what `lane` is to `evaluate`: the typed half
+        a composite reads from its operands, one element per chunk.
+
+        **Parameterised on the answer type, not on `Self.Type`.** That is what
+        keeps this typed. A comparison promotes -- `NumericCompare.ArgType` is
+        `promote[L.Type, R.Type]` -- so for `col("a", int32) > lit(1, int64)`
+        the operands and the kernel disagree, and returning `Self.Type` would
+        need a bridge between two array representations that does not exist:
+        `rebind` refuses, and `cast` is the one thing this path will not link.
+        Letting the caller name `Stat` moves the conversion to where it is
+        free. A literal or a parameter converts its scalar with a builtin SIMD
+        cast, exactly as `lane` does; a column compares the recorded dtype and
+        answers all-null when it is not `Stat`, which is the same conservative
+        degradation, decided in the leaf instead of at the call site.
+
+        It also has to be a *method* parameter rather than the associated type:
+        a trait default cannot return `Self.AssocType` unless that type is
+        `ImplicitlyCopyable`, and marrow's arrays deliberately are not. `Stat`
+        is neither, so the default below is legal and a conformer that knows
+        nothing inherits it. The name is not `A` because a trait default's
+        parameter may not collide with a *conformer's* struct parameter, and
+        `A` is taken by `Cast`, `ArrayLength` and four others -- the same rule
+        that makes every binary operator name its parameter `Rhs`.
+
+        Default: all null, meaning "this operand says nothing about any
+        chunk". A comparison against null is null, and a null mask bit is read
+        as keep.
+        """
+        var out = PrimitiveBuilder[Stat](Stat(), capacity=index.chunks)
+        out.append_nulls(index.chunks)
+        return out.finish()
 
     comptime Type: NumericType
     """Narrowed from `PrimitiveValue`. A sub-trait *can* narrow an associated

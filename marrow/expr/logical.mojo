@@ -40,7 +40,7 @@ from std.memory import ArcPointer
 from std.os import abort
 from std.utils import Variant
 
-from ..arrays import DynArray
+from ..arrays import BoolArray, DynArray
 from ..execution import ExecContext
 from ..kernels.join import JoinKind, JOIN_INNER
 from ..kernels.window import (
@@ -61,8 +61,7 @@ from ..schema import Schema, schema
 from ..tabular import RecordBatch
 from ..dtypes import DynType, Field, field, int64
 from .bindings import Bindings
-from .pruning import PrunePredicate, Prunable
-from .pushdown import Pushdown
+from .index import Index, keep_every
 from .optimizer import RuleSet, optimize
 from .runtime.values import column
 from .physical import (
@@ -188,13 +187,37 @@ trait Value(Copyable, Deinitable, Writable):
         """
         return [DynValue(self.copy())]
 
+    def mask(
+        self, index: Index, bindings: Bindings = Bindings()
+    ) raises -> BoolArray:
+        """Which chunks of a source could contain a row this predicate keeps.
+
+        One bit per chunk, computed with the very kernels that filter rows —
+        pruning is the same comparison over a different domain, one statistic
+        per chunk instead of one value per row.
+
+        **The default keeps everything, and that is the only soundness rule in
+        the system.** A node added tomorrow cannot be forgotten by a predicate
+        written today, because forgetting it means answering all-true, which is
+        always correct. All-true is also the identity for `AND`, so a composite
+        needs no special case for an operand that cannot summarise itself.
+
+        A *null* bit means "cannot prove anything" and is read as keep, so an
+        absent statistic can never cause a skip.
+
+        `bindings` because a predicate may name a parameter, and a parameter
+        that cannot be read is a predicate that cannot prune: the AOT lane's
+        whole surface is `col("amount") >= param("min-amount")`.
+        """
+        return keep_every(index.chunks)
+
     def constant_bool(self) -> Optional[Bool]:
         """`True`/`False` if this is a constant boolean, else `None`.
 
         **A trait default, deliberately not a `DynValue` slot.** It is read at
         the `.filter()` verb, where the concrete type is still visible, and the
         answer is stored on the `Filter` node — the same placement argument
-        `PrunePredicate` makes, and for the same reason: a slot on `DynValue`
+        `mask` makes, and for the same reason: a slot on `DynValue`
         is paid for every projection value, every sort key and every aggregate
         input in the program, to serve the one caller that filters.
 
@@ -352,6 +375,20 @@ struct DynValue(Copyable, Movable, Writable):
     var _to_operator: def(
         ArcPointer[NoneType], Schema, Bool, Bindings
     ) thin raises -> DynOperator
+    var _mask: def(
+        ArcPointer[NoneType], Index, Bindings
+    ) thin raises -> BoolArray
+    """Which chunks of a source this value could keep.
+
+    A sixth slot rather than a second box. `Filter` used to carry its predicate
+    twice — once as a `DynValue` to evaluate and once as a `Pruner` to prune —
+    two allocations and two trampoline tables for one value, because a `mask`
+    slot here was assumed to cost what an extra slot on the old aggregate box
+    cost (+3.2 MB). It does not: `Value.mask` defaults to keeping everything,
+    so a projection value or a sort key wires a trampoline to `keep_every` and
+    drags in nothing. The cone belongs to predicates that actually read an
+    index, and those were paying for it anyway."""
+
     var _shape: Shape
     var _aggregates: Bool
     var _drop: def(var ArcPointer[NoneType]) thin
@@ -363,6 +400,14 @@ struct DynValue(Copyable, Movable, Writable):
     # One instantiation per boxed type, wired at construction. There is no
     # registry and nothing names every value type in one place, so a type that
     # is never boxed costs nothing in the binary.
+
+    @staticmethod
+    def _mask_tramp[
+        V: Value
+    ](
+        ptr: ArcPointer[NoneType], index: Index, bindings: Bindings
+    ) raises -> BoolArray:
+        return rebind[ArcPointer[V]](ptr)[].mask(index, bindings)
 
     @staticmethod
     def _columns_tramp[V: Value](ptr: ArcPointer[NoneType]) -> List[String]:
@@ -412,12 +457,24 @@ struct DynValue(Copyable, Movable, Writable):
         self._dtype = Self._dtype_tramp[V]
         self._write = Self._write_tramp[V]
         self._to_operator = Self._to_operator_tramp[V]
+        self._mask = Self._mask_tramp[V]
         self._shape = V.shape
 
     def __deinit__(deinit self):
         self._drop(self._boxed^)
 
     # -- the erased surface -------------------------------------------------
+
+    def mask(
+        self, index: Index, bindings: Bindings = Bindings()
+    ) raises -> BoolArray:
+        """Which chunks of a source could hold a row this value keeps.
+
+        The one indirect call on the pruning path, at the coarsest granularity
+        there is: a source calls it once per scan, and everything below is
+        monomorphic.
+        """
+        return self._mask(self._boxed, index, bindings)
 
     def columns(self) -> List[String]:
         return self._columns(self._boxed)
@@ -863,6 +920,11 @@ struct WindowExpr(Copyable, Movable, Writable):
         writer.write(" ", self.frame, ")")
 
 
+# ---------------------------------------------------------------------------
+# The conjunction a source is asked to prove
+# ---------------------------------------------------------------------------
+
+
 trait Relation(Copyable, Deinitable, Movable, Writable):
     """An immutable description of a query."""
 
@@ -896,7 +958,6 @@ trait Relation(Copyable, Deinitable, Movable, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The running operator for this description."""
         ...
@@ -950,7 +1011,7 @@ struct DynRelation(Copyable, Movable, Writable):
     var _v: Self.VariantType
 
     var _virt_to_operator: def(
-        Self.VariantType, ExecContext, Bindings, var Pushdown
+        Self.VariantType, ExecContext, Bindings
     ) thin raises -> Pipeline
     """Lowering, wired per **constructed** node type. See the struct docstring
     for the 348% this one slot is worth."""
@@ -962,9 +1023,8 @@ struct DynRelation(Copyable, Movable, Writable):
         v: Self.VariantType,
         ctx: ExecContext,
         bindings: Bindings,
-        var pushed: Pushdown,
     ) raises -> Pipeline:
-        return v[R].to_operator(ctx, bindings, pushed^)
+        return v[R].to_operator(ctx, bindings)
 
     @implicit
     def __init__[R: Relation](out self, var value: R):
@@ -1024,9 +1084,8 @@ struct DynRelation(Copyable, Movable, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        return self._virt_to_operator(self._v, ctx, bindings, pushed^)
+        return self._virt_to_operator(self._v, ctx, bindings)
 
     def write_to[W: Writer](self, mut writer: W):
         def job[T: Relation](node: T) raises {imm} -> String:
@@ -1052,25 +1111,26 @@ struct DynRelation(Copyable, Movable, Writable):
     def filter(self, var predicate: DynValue) raises -> DynRelation:
         """Rows where `predicate` is true. Schema-preserving.
 
-        The erased overload: an already-boxed predicate has lost the type
-        `prune` needs, so this plan filters exactly and reads every row group.
+        The erased overload. It still prunes — `mask` is a slot on `DynValue`,
+        so the box carries it like any other method — but `constant` and
+        `conjuncts` are left unanswered, because those are analysis only the
+        concrete type can do.
         """
         return Filter(self.copy(), predicate^)
 
-    def filter[
-        V: Value & Prunable
-    ](self, var predicate: V) raises -> DynRelation:
-        """Rows where `predicate` is true, **with statistics pruning**.
+    def filter[V: Value](self, var predicate: V) raises -> DynRelation:
+        """Rows where `predicate` is true, **with the predicate analysed**.
 
-        The concrete type is captured here because this is the last place it is
-        visible: `DynValue` erases it, and the box deliberately has no `prune`
-        slot. The two overloads are disjoint — `DynValue` does not conform to
-        the traits it erases — which is what lets both spellings coexist.
+        `constant_bool` and `conjuncts` are read here because this is the last
+        place the concrete type is visible, and both are decisions a box cannot
+        make: whether the predicate folds to a constant, and how it splits on
+        `AND` with each conjunct still fused. The two overloads are disjoint —
+        `DynValue` does not conform to the traits it erases — which is what
+        lets both spellings coexist.
         """
         return Filter(
             self.copy(),
             DynValue(predicate.copy()),
-            Optional(PrunePredicate(predicate.copy())),
             predicate.constant_bool(),
             predicate.conjuncts(),
         )
@@ -1389,7 +1449,6 @@ struct EmptyRelation(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         return Pipeline(BatchSourceOperator(self.batch.to_struct_array()))
 
@@ -1412,7 +1471,6 @@ struct InMemoryTable(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The one relation that *creates* a pipeline; every other appends."""
         return Pipeline(BatchSourceOperator(self.batch.to_struct_array()))
@@ -1444,24 +1502,13 @@ struct Filter(Relation, Writable):
     var constant: Optional[Bool]
     """Whether the predicate is a constant, decided at the verb.
 
-    `EliminateFilter` reads this. Like `pruner`, it is `Optional` because the
-    erased overload cannot answer — and like `pruner`, a `None` costs only an
-    optimization."""
-
-    var pruner: Optional[PrunePredicate]
-    """The predicate again, typed, for statistics pruning — `None` when it
-    arrived already boxed.
-
-    Never consulted for correctness: the `DynValue` above is what actually
-    filters, and this only ever makes the scan smaller. That is what lets it be
-    `Optional` without a soundness caveat — a missing pruner reads every row
-    group, which is the answer the engine gave before pruning existed."""
+    `EliminateFilter` reads this. `Optional` because the erased overload cannot
+    answer, and a `None` costs only an optimization."""
 
     def __init__(
         out self,
         var input: DynRelation,
         var predicate: DynValue,
-        var pruner: Optional[PrunePredicate] = None,
         constant: Optional[Bool] = None,
         var conjuncts: List[DynValue] = [],
     ) raises:
@@ -1473,7 +1520,6 @@ struct Filter(Relation, Writable):
         )
         self.input = ArcPointer(input^)
         self.predicate = predicate^
-        self.pruner = pruner^
         self.constant = constant
         self.conjuncts = conjuncts^
 
@@ -1485,11 +1531,11 @@ struct Filter(Relation, Writable):
     def with_input(self, var input: DynRelation) raises -> Filter:
         """This filter over a different input, carrying everything else.
 
-        **The only way a rule should move a filter.** A `Filter` holds five
-        things — input, predicate, pruner, constant, conjuncts — and the last
-        three are analysis decided at the verb, where the predicate's concrete
-        type was still visible. A rule that rebuilds with
-        `Filter(new_input, predicate, pruner)` silently drops the other two,
+        **The only way a rule should move a filter.** A `Filter` holds four
+        things — input, predicate, constant, conjuncts — and the last two are
+        analysis decided at the verb, where the predicate's concrete type was
+        still visible. A rule that rebuilds with
+        `Filter(new_input, predicate)` silently drops them,
         which does not fail: the filter still filters, `EliminateFilter` and
         `SplitConjunction` just stop firing. That is exactly what happened when
         `constant` and `conjuncts` were added and six call sites were not
@@ -1498,7 +1544,6 @@ struct Filter(Relation, Writable):
         return Filter(
             input^,
             self.predicate.copy(),
-            self.pruner.copy(),
             self.constant,
             self.conjuncts.copy(),
         )
@@ -1510,13 +1555,8 @@ struct Filter(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(
-            ctx,
-            bindings,
-            (pushed.conjoined(self.pruner.value()) if self.pruner else pushed^),
-        )
+        var pipe = self.input[].to_operator(ctx, bindings)
         pipe.append(
             FilterOperator(
                 self.predicate.to_operator(
@@ -1653,9 +1693,8 @@ struct Project(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        var pipe = self.input[].to_operator(ctx, bindings)
         var values = List[DynOperator](capacity=len(self.values))
         for ref v in self.values:
             values.append(v.to_operator(self.input[].schema(), False, bindings))
@@ -1746,7 +1785,6 @@ struct Aggregate(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         var grouped = len(self.keys) > 0
         var folds = List[DynOperator](capacity=len(self.aggs))
@@ -1754,7 +1792,7 @@ struct Aggregate(Relation, Writable):
             folds.append(
                 a.to_operator(self.input[].schema(), grouped, bindings)
             )
-        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        var pipe = self.input[].to_operator(ctx, bindings)
         var keys = List[DynOperator](capacity=len(self.keys))
         for ref k in self.keys:
             keys.append(k.to_operator(self.input[].schema(), False, bindings))
@@ -1801,9 +1839,8 @@ struct Limit(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        var pipe = self.input[].to_operator(ctx, bindings)
         pipe.append(LimitOperator(self.offset, self.length))
         return pipe^
 
@@ -1893,17 +1930,8 @@ struct Sort(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        # **A bounded sort clears the pushdown.** Reordering removes no rows,
-        # so a plain sort forwards; a `TopN` sort keeps only `limit` of them,
-        # and pruning below it would change which rows survive the bound.
-        # Unreachable today only because `TopN` leaves the `Limit` above and
-        # `Limit` clears -- stated here so it stays true if that changes, and
-        # so this agrees with `PushFilterBelowSort`, which already refuses.
-        var pipe = self.input[].to_operator(
-            ctx, bindings, Pushdown() if self.limit else pushed^
-        )
+        var pipe = self.input[].to_operator(ctx, bindings)
 
         # The key operators are built **once**, here, where the plan becomes
         # physical -- not per batch. Anything a key needs to resolve or cache
@@ -2022,23 +2050,17 @@ struct Window(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
-        # **The pushdown stops here**, exactly as it does at `Aggregate` and
-        # `Limit`. A window function reads its whole partition, so a predicate
-        # that reached the scan would prune row groups *before* this operator
-        # counts them and every rank, row number and running total would be
-        # computed over the wrong population -- a wrong answer, not an error.
+        # **No predicate may reach a scan through this node.** A window
+        # function reads its whole partition, so pruning row groups below it
+        # would have every rank, row number and running total computed over the
+        # wrong population -- a wrong answer, not an error.
         #
-        # `Sort` forwards `pushed`, which is safe *for a sort with no bound*:
-        # reordering rows never removes any. A `Sort` carrying `TopN`'s limit
-        # does drop rows, and the tree guards that case by case rather than in
-        # `Sort.to_operator` -- `PushFilterBelowSort` and `RemoveRedundantSort`
-        # both bail on `sort.limit`, and `TopN` keeps the `Limit` above, which
-        # clears. So the general law is narrower than "sorts may forward"; what
-        # matters here is that this node decides *which rows exist*, which puts
-        # it with `Aggregate` and `Limit`.
-        var pipe = self.input[].to_operator(ctx, bindings, Pushdown())
+        # Nothing here enforces that any more, and nothing needs to:
+        # `PushFilterIntoScan` is the only way a predicate reaches a scan, and
+        # it descends through `Filter` alone. `Window` is not a `Filter`, so a
+        # predicate above one cannot pass. `test_window.mojo` pins it.
+        var pipe = self.input[].to_operator(ctx, bindings)
         pipe.append(
             WindowOperator(
                 self.names.copy(),
@@ -2233,13 +2255,12 @@ struct Join(Relation, Writable):
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         """The probe side is the pipeline; the build side is a stage's cargo."""
-        var probe = self.right[].to_operator(ctx, bindings, Pushdown())
+        var probe = self.right[].to_operator(ctx, bindings)
         probe.append(
             JoinOperator(
-                self.left[].to_operator(ctx, bindings, Pushdown()),
+                self.left[].to_operator(ctx, bindings),
                 Self._indices_for(self.left[].schema(), self.left_keys, "left"),
                 Self._indices_for(
                     self.right[].schema(), self.right_keys, "right"
@@ -2275,28 +2296,55 @@ struct ParquetScan(Relation, Writable):
 
     var path: String
     var _schema: Schema
+    var pruners: List[DynValue]
+    """Predicates this scan may use to skip row groups, put here by
+    `PushFilterIntoScan`.
 
-    def __init__(out self, var path: String, var schema: Schema):
+    Empty on a plan nobody optimized, which reads every row group — the answer
+    the engine gave before pruning existed. **Never consulted for
+    correctness:** the `Filter` these came from is still above this scan and
+    still evaluates the exact predicate on every row it produces, so an entry
+    here costs time and never an answer.
+    """
+
+    def __init__(
+        out self,
+        var path: String,
+        var schema: Schema,
+        var pruners: List[DynValue] = [],
+    ):
         self.path = path^
         self._schema = schema^
+        self.pruners = pruners^
 
     def schema(self) -> Schema:
         return self._schema.copy()
+
+    def with_schema(self, var schema: Schema) -> ParquetScan:
+        """This scan over a narrower schema, carrying its pruners.
+
+        The rule `Filter.with_input` states, on the node that grew a third
+        field: `ColumnPruning` rebuilding a scan as `ParquetScan(path, schema)`
+        drops the pruners silently, and dropping them costs an optimization
+        rather than an answer — so no test would have failed.
+        """
+        return ParquetScan(self.path.copy(), schema^, self.pruners.copy())
 
     def to_operator(
         self,
         ctx: ExecContext,
         bindings: Bindings = Bindings(),
-        var pushed: Pushdown = Pushdown(),
     ) raises -> Pipeline:
         return Pipeline(
             ParquetScanOperator(
                 self.path.copy(),
                 self._schema.copy(),
-                pushed^,
+                self.pruners.copy(),
                 bindings.copy(),
             )
         )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("ParquetScan(", self.path, ")")
+        if len(self.pruners):
+            writer.write(" pruned by ", len(self.pruners))
