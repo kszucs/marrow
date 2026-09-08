@@ -6,7 +6,14 @@ channels = [
   "conda-forge",
   "https://prefix.dev/pixi-build-backends",
 ]
-platforms = ["osx-arm64", "linux-64"]
+# `linux-aarch64` is here so an Apple Silicon machine can run a *native* Linux
+# container and reproduce what CI sees on Linux -- glibc, ELF/JIT linking, and
+# the allocator alignment that decides whether a foreign buffer import aborts.
+# The alternative was emulating linux-64, and Docker's qemu CPU stops at SSE4.2:
+# the mojo binary dies with `Illegal instruction` before printing its version.
+# Rosetta would supply AVX2 and is the better path when it is switched on.
+# Nothing is *shipped* for this platform -- see `Dockerfile.arm64`.
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 preview = ["pixi-build"]
 
 [package]
@@ -228,9 +235,19 @@ datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = [
 ], env = { PYTHONPATH = "python" } }
 
 # Docker — x86_64 Linux container for reproducing CI failures locally.
+# Anything after the task name is passed to pytest, so a selection works the
+# same as it does on the host:
+#
+#   pixi run -e docker test_arm64 marrow/tests/test_ipc.mojo
+#
+# `arm64` is native on Apple Silicon and is the loop that found the IPC
+# dictionary deadlock; `x86` is the platform CI runs and needs Rosetta on a Mac.
+# See Dockerfile.linux.
 [feature.docker.tasks]
-build = { cmd = "docker compose build x86" }
-test = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build"] }
+build_x86 = { cmd = "docker compose build x86" }
+build_arm64 = { cmd = "docker compose build arm64" }
+test_x86 = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build_x86"] }
+test_arm64 = { cmd = "docker compose run --rm arm64 pixi run -e dev pytest", depends-on = ["build_arm64"] }
 
 # Wheel — local wheel building for macOS development.
 [feature.wheel.dependencies]

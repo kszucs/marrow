@@ -1,12 +1,27 @@
+# Two services, one Dockerfile: the image is platform-neutral and the platform
+# is set here. See Dockerfile.linux for which one runs where.
 services:
   x86:
     platform: linux/amd64
     build:
       context: .
-      dockerfile: Dockerfile.x86
+      dockerfile: Dockerfile.linux
     volumes:
-      - .:/marrow          # source bind-mount
-      - pixi_x86:/marrow/.pixi  # x86 pixi env persisted across runs
+      - .:/marrow                # source bind-mount
+      - pixi_x86:/marrow/.pixi   # linux-64 pixi env, persisted across runs
+
+  arm64:
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.linux
+    volumes:
+      - .:/marrow
+      # A separate volume per platform: the two environments hold different
+      # binaries under the same path, and sharing one would leave whichever ran
+      # second executing the other's.
+      - pixi_arm64:/marrow/.pixi
 
 volumes:
   pixi_x86:
+  pixi_arm64:
