@@ -51,7 +51,14 @@ docs_check = { cmd = "python3 scripts/check_docs_snippets.py" }
 # Dev — dependencies and tasks for development and testing.
 [feature.dev.dependencies]
 pytest = ">=9.0.2,<10"
-pytest-benchmark = ">=5.2.3,<6"
+# `<5.3`, not `<6`: `conftest.py` constructs a `BenchmarkFixture` directly, with
+# pytest-benchmark's own keyword API, and 5.3.0 added required arguments to that
+# constructor -- every benchmark then fails with `BenchmarkFixture.__init__()
+# missing 2 required positional arguments` before anything is compiled. The old
+# `<6` bound was satisfied by both, so which one you got depended on the solve:
+# adding `linux-aarch64` picked 5.3.0 there and 5.2.3 everywhere else. Raise this
+# in the same change that updates the fixture construction.
+pytest-benchmark = ">=5.2.3,<5.3"
 pytest-xdist = ">=3,<4"
 # XXH64 oracle for `marrow/utils/tests/test_hashing.mojo`. The Parquet spec
 # mandates this exact hash for bloom filters, so the tests check marrow against
