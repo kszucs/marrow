@@ -1,35 +1,38 @@
 """Pytest wiring for the golden corpus.
 
-A shim. Everything it does lives in `runner.py`; this file exists only because
-pytest requires hooks to be in a file called `conftest.py`.
+The machinery lives in `devkit.golden`; this file exists only because pytest
+requires hooks to be in a file called `conftest.py`.
 
-`prepare()` runs at **import**, not from a hook, because the artefacts it
-writes are what collection reads: `golden/test_cases.mojo` has to exist before
-`pytest_collect_file` reaches it, and a subdirectory conftest is imported
+`prepare()` runs at **import**, not from a hook, because the artefacts it writes
+are what collection reads: `golden/generated/test_cases.mojo` has to exist
+before `pytest_collect_file` reaches it, and a subdirectory conftest is imported
 before the files beside it are collected.
 """
 
 import sys
 from pathlib import Path
 
+import pytest
+
+# `helpers` and `test_cases` import each other as top-level modules, and a
+# traceback out of a case has to point at `golden/cases/<name>.mojo`.
 sys.path.insert(0, str(Path(__file__).parent))
 
-import runner  # noqa: E402 — must follow the path insertion
+from devkit.golden import corpus  # noqa: E402 - follows the path insertion
+from devkit.runner import RunnerOptions  # noqa: E402
 
-runner.prepare()
+corpus().prepare()
 
 
 def pytest_collection_modifyitems(items):
     """Apply each case's `-- xfail` to *both* lanes.
 
-    Done here rather than in `runner.install` because a Mojo case's item is
+    Done here rather than in `install_python_lane` because a Mojo case's item is
     built by the repository conftest's collector, which golden has no hand in.
     Marking by item name reaches both, and the name is identical in the two
     lanes by construction.
     """
-    import pytest
-
-    reasons = {c.name: c.xfail for c in runner.load_cases() if c.xfail}
+    reasons = corpus().xfail_reasons()
     for item in items:
         reason = reasons.get(item.name)
         if reason is not None:
@@ -37,5 +40,6 @@ def pytest_collection_modifyitems(items):
 
 
 def pytest_configure(config):
-    runner.MORSEL_SIZE = config.getoption("--morsel-size")
-    runner.NUM_THREADS = config.getoption("--num-threads")
+    # Through `RunnerOptions` rather than a second `getoption`, so the option
+    # has exactly one reader and cannot drift from its declaration.
+    corpus().num_threads = RunnerOptions.from_config(config).num_threads

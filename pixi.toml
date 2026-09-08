@@ -26,14 +26,17 @@ mojo = "==1.1.0.dev2026090305"
 python = ">=3.14,<3.15"
 
 [tasks]
-build_python = { cmd = "mojo build -O3 -g0 -I . python/bindings/lib.mojo --emit shared-lib -o python/marrow/libmarrow.so" }
-profile = "python scripts/profile.py"
-package = "mkdir -p package && mojo precompile marrow -o package/marrow.mojoc"
+build_python = { cmd = "python -m devkit build lib --bench" }
+profile = "python -m devkit profile"
+package = "python -m devkit build package"
 publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
 # Builds the same SELECT/WHERE query via the comptime (AOT), hybrid, and
 # runtime (type-erased) relational layers, strips each, and compares sizes +
 # symbol counts -- see benchmarks/binary_size/README.md.
-binary_size = { cmd = "python3 benchmarks/binary_size/compare.py" }
+binary_size = { cmd = "python -m devkit size compare" }
+# The CI gate: build the recorded gates and fail if any grew past its
+# baseline `__text` size. `--update` re-records after an intentional change.
+binary_size_check = { cmd = "python -m devkit size check" }
 
 # Compiles every Mojo snippet the docs include, so the guides cannot rot.
 # Quarto executes the docs' Python cells at render time, which keeps that half
@@ -82,10 +85,13 @@ cffi = "*"
 # `marrow/` source tree for every subsequent pytest run, which then resolves
 # imports against the stale package instead of the files you just edited.  Only
 # the diagnostics matter here; the artifact itself is never consumed.
-precompile = { cmd = "mkdir -p .precompile && mojo precompile marrow -o .precompile/marrow.mojoc" }
-# Harness selftests — the pure-Python parts of conftest (flag handling, driver
-# generation, result mapping).  No Mojo compilation, runs in well under a second.
-selftest = { cmd = "python conftest.py selftest" }
+precompile = { cmd = "python -m devkit build precompile" }
+# The devkit suite — flag handling, driver generation, result mapping, the
+# golden case format, the size gate.  No Mojo compilation; about a second.
+selftest = { cmd = "pytest devkit/tests -q" }
+# How much of the golden corpus the SQL front end answers, and what the
+# declined cases trip over -- the list to work down when widening the grammar.
+golden_sql = { cmd = "python -m devkit golden sql", depends-on = ["build_python"] }
 test_mojo = { cmd = "pytest --mojo -v" }
 test_python = { cmd = "pytest --python -v" }
 test_gpu = { cmd = "pytest --gpu -v" }
@@ -133,7 +139,7 @@ build_arrow = { cmd = "CONDA_PREFIX= integration/arrow/ci/scripts/integration_ar
 ], env = { ARCHERY_INTEGRATION_WITH_RUST = "1", ARCHERY_INTEGRATION_WITH_GO = "1", ARCHERY_INTEGRATION_WITH_NANOARROW = "0", ARCHERY_INTEGRATION_WITH_DOTNET = "0", ARCHERY_INTEGRATION_WITH_JAVA = "0", ARCHERY_INTEGRATION_WITH_JS = "0", ARCHERY_INTEGRATION_WITH_RUBY = "0", ARROW_INTEGRATION_CPP = "ON", ARROW_BUILD_INTEGRATION = "ON", ARROW_BUILD_STATIC = "OFF", ARROW_BUILD_TESTS = "OFF", ARROW_BUILD_TYPE = "release", ARROW_USE_CCACHE = "OFF", ARROW_DEPENDENCY_SOURCE = "AUTO", ARROW_HDFS = "OFF", ARROW_MIMALLOC = "OFF", ARROW_WITH_UTF8PROC = "OFF", CMAKE_UNITY_BUILD = "ON", ARROW_ACERO = "OFF", ARROW_AZURE = "OFF", ARROW_COMPUTE = "OFF", ARROW_CSV = "OFF", ARROW_DATASET = "OFF", ARROW_FILESYSTEM = "OFF", ARROW_FLIGHT = "OFF", ARROW_FLIGHT_SQL = "OFF", ARROW_GANDIVA = "OFF", ARROW_GCS = "OFF", ARROW_JEMALLOC = "OFF", ARROW_JSON = "OFF", ARROW_ORC = "OFF", ARROW_PARQUET = "OFF", ARROW_S3 = "OFF", ARROW_SUBSTRAIT = "OFF", ARROW_USE_GLOG = "OFF", ARROW_WITH_BROTLI = "OFF", ARROW_WITH_BZ2 = "OFF", ARROW_WITH_LZ4 = "OFF", ARROW_WITH_SNAPPY = "OFF", ARROW_WITH_ZLIB = "OFF", ARROW_WITH_ZSTD = "OFF", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", ARROW_HOME = "$PIXI_PROJECT_ROOT/integration/arrow/install" } }
 
 # --- run all integration tests ---
-integration = { cmd = "python -m integration.run --run-ipc --run-c-data --with-rust --with-go --with-cpp", depends-on = [
+integration = { cmd = "python -m devkit integration run --run-ipc --run-c-data --with-rust --with-go --with-cpp", depends-on = [
   "build_python",
   "install_archery",
   "build_arrow",
@@ -164,10 +170,11 @@ test_asan_core = { cmd = "pytest --mojo --asan -v marrow/tests/test_buffers.mojo
 # Bench — benchmark dependencies and tasks (polars/duckdb for comparison benches).
 [feature.bench.dependencies]
 polars = ">=1.39.2,<2"
-rich = ">=13,<15"
 duckdb = ">=1.5.1,<2"
 
 [feature.bench.tasks]
+# Recompute every golden expectation from DuckDB, which only this feature has.
+golden_regenerate = { cmd = "python -m devkit golden regenerate" }
 bench_mojo = { cmd = "pytest --benchmark --mojo -v" }
 bench_python = { cmd = "pytest --benchmark --python -v" }
 bench = { cmd = "pytest --benchmark -v" }
@@ -178,7 +185,7 @@ ruff = ">=0.14.14,<0.15"
 
 [feature.format.tasks]
 fmt_mojo = { cmd = "mojo format marrow python benchmarks golden/cases golden/helpers.mojo" }
-fmt_python = { cmd = "ruff format python conftest.py benchmarks golden" }
+fmt_python = { cmd = "ruff format devkit python conftest.py benchmarks golden" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
 fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 
@@ -267,6 +274,17 @@ max = "==26.6.0.dev2026090305"
 # Mojo builds are compiled against a specific CPython minor version; update the
 # minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"
+# `devkit`, the developer tooling behind every task: click is its CLI, rich its
+# progress display and tables, psutil the compiler's resident-size sampler.
+# Declared here rather than under `dev` because `build_python`, `package` and
+# `profile` are root tasks, and `docs`, `examples` and `wheel` all reach devkit
+# through `build_python`.  All three were already installed in every
+# environment as transitive dependencies, so this changes no solve -- it stops
+# that being an accident, which is how `rich` came to be imported from
+# environments that never declared it.
+click = ">=8,<9"
+rich = ">=13,<15"
+psutil = ">=5,<8"
 # The mojo-community channel ships a zlib 0.1.0 stub that satisfies no real
 # version constraint; pin to the real conda-forge zlib so that pyarrow's
 # libopentelemetry-cpp → prometheus-cpp → zlib chain can resolve on linux-64.

@@ -3,7 +3,7 @@
 A user writes a ``.mojo`` file that builds a plan against a known schema,
 declares its late-bound values with ``QueryCli.param``/``.argument``, and ends
 in ``cli.run(plan)``. This module builds that file with the same recipe
-``benchmarks/binary_size/compare.py:build_and_strip`` uses to measure gate
+``devkit.footprint.Gates.build`` uses to measure gate
 binaries: ``mojo build -O3 -g0 -I <marrow> <src> -o <out>``, then ``strip``.
 
 See ``benchmarks/binary_size/query_cli.mojo`` for a complete example, and
@@ -59,7 +59,7 @@ def build_command(
 ) -> list[str]:
     """The `mojo build` invocation for compiling `src` into `out`.
 
-    Mirrors `benchmarks/binary_size/compare.py:build_and_strip`'s recipe:
+    Mirrors `devkit.footprint.Gates.build`'s recipe:
     `mojo build -O3 -g0 -I <marrow_path> <src> -o <out>`, so a compiled
     query's size is directly comparable to the gate numbers.
     """

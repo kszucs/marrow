@@ -17,35 +17,53 @@ surrounding program -- opts out with ```` ```{.mojo .fragment} ````. Opting out
 is a claim that the block is illustrative, not runnable; prefer moving a real
 example into `docs/snippets/` over marking it a fragment.
 
-**Judged by grep, not by exit status.** `mojo build` reports a parse failure on
-stdout and still exits 0 -- see CLAUDE.md.
+**Judged by its output, not by its exit status alone.** `mojo build` reports a
+parse failure and still exits 0 -- see CLAUDE.md. Grepping for `error:` is
+therefore necessary but *not* sufficient: a compiler crash prints `Stack dump:`
+and no `error:` at all, and a link failure need not print one either, so a
+build that died would be reported as ok. `MojoToolchain.reports_errors` reads
+the status *and* the output, which is why this goes through devkit rather than
+calling `subprocess` itself -- and it inherits the timeout with it, which a CI
+job compiling ~22 programs with no deadline otherwise lacks.
 """
 
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from devkit.mojo import (  # noqa: E402 - must follow the path insertion
+    BuildOptions,
+    MojoToolchain,
+    ProcessRunner,
+    Repo,
+)
+from devkit.progress import ConsoleProgress  # noqa: E402
+
 SNIPPETS = REPO / "docs" / "snippets"
 DOCS = REPO / "docs"
+
+#: A listing is a few hundred lines at most; anything past this is a hang.
+TIMEOUT = 600
 
 # ```mojo / ```{.mojo ...}  -- captures the attribute string and the body.
 FENCE = re.compile(r"^```(?:\{\.mojo([^}]*)\}|mojo)\s*\n(.*?)^```", re.M | re.S)
 
 
-def compile_source(source: str, label: str, tmp: Path) -> tuple[int, str]:
-    """Build one Mojo source; return (error count, combined output)."""
+def toolchain() -> MojoToolchain:
+    repo = Repo.locate(REPO)
+    return MojoToolchain(ProcessRunner(repo.root, ConsoleProgress(), timeout=TIMEOUT))
+
+
+def compile_source(mojo: MojoToolchain, source: str, label: str, tmp: Path):
+    """Build one Mojo source; return `(failed, combined output)`."""
     src = tmp / f"{label}.mojo"
     src.write_text(source)
-    proc = subprocess.run(
-        ["mojo", "build", "-I", str(REPO), str(src), "-o", str(tmp / label)],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-    )
-    return (proc.stdout + proc.stderr).count("error:"), proc.stdout + proc.stderr
+    result = mojo.build(src, tmp / label, BuildOptions.for_docs(), f"building {label}")
+    return mojo.reports_errors(result), result.output
 
 
 def as_program(body: str) -> str:
@@ -79,13 +97,19 @@ def main() -> int:
             checks.append((label, as_program(body)))
 
     failed = []
+    mojo = toolchain()
     with tempfile.TemporaryDirectory() as tmp:
         for n, (label, source) in enumerate(checks):
-            errors, log = compile_source(source, f"snippet_{n}", Path(tmp))
-            if errors:
+            broke, log = compile_source(mojo, source, f"snippet_{n}", Path(tmp))
+            if broke:
                 failed.append(label)
-                print(f"FAIL {label} -- {errors} error(s)")
-                print("\n".join(f"     {ln}" for ln in log.splitlines() if "error:" in ln))
+                diagnostics = [ln for ln in log.splitlines() if "error:" in ln]
+                print(f"FAIL {label} -- {len(diagnostics) or 'no'} error(s)")
+                # A crash or a link failure carries no `error:` line at all, so
+                # fall back to the whole log rather than printing nothing.
+                print(
+                    "\n".join(f"     {ln}" for ln in (diagnostics or log.splitlines()))
+                )
             else:
                 print(f"ok   {label}")
 

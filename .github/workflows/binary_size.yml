@@ -24,4 +24,4 @@ jobs:
         frozen: true
         environments: dev
     - name: Check binary-size gate
-      run: pixi run -e dev python3 benchmarks/binary_size/check_gate.py
+      run: pixi run -e dev binary_size_check

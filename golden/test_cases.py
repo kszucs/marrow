@@ -7,7 +7,7 @@ import, so the file holds one line of wiring; the Mojo lane needs a real
 generated module and this one does not.
 
 The cases are Mojo source. What runs here is the *same body* with `var`
-dropped — the only rule, since `runner.transpile` writes the `def` line rather
+dropped — the only rule, since `PythonTranspiler` writes the `def` line rather
 than transcribing it — executed against `helpers.NAMESPACE`. A traceback
 points into `golden/cases/<name>.mojo`, the file you edit.
 """
@@ -21,9 +21,9 @@ import marrow
 # `if not hasattr(marrow, "col"): pytest.skip(...)` guard that stood here in
 # between is gone with it, as its own comment asked.
 import helpers
-import runner
+from devkit.golden import corpus
 
-runner.install(helpers.NAMESPACE, helpers.check, globals())
+corpus().install_python_lane(helpers.NAMESPACE, helpers.check, globals())
 
 # Infrastructure, not vocabulary: `table` is not marrow API, and it is not a
 # place the two lanes disagree about how to spell an expression. `check` is no

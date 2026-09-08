@@ -219,7 +219,7 @@ skills-lock.json
 golden/.exp/
 golden/generated/
 
-# Profiler output from scripts/profile.py
+# Profiler output from `devkit profile`
 *.sample.txt
 
 # Working documents and history notes, kept out of version control

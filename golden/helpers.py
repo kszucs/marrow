@@ -1,8 +1,8 @@
 """The vocabulary a golden case body may use, on the Python side.
 
-`helpers.mojo` is the same list for the Mojo lane, and `runner.MOJO_HEADER`
-imports it. Between them they are the convergence contract: a name a case can
-write is a name both lanes answer to.
+`helpers.mojo` is the same list for the Mojo lane, and the generated module
+`devkit.golden.MojoCodegen` writes imports it. Between them they are the
+convergence contract: a name a case can write is a name both lanes answer to.
 
 `SHIMS` is the convergence metric — one entry per spelling the two lanes still
 disagree about, and the goal is an empty set. It was forty-four names: the
@@ -20,9 +20,8 @@ What is left is one genuine language difference, described at `SHIMS`.
 import pyarrow as pa
 
 import marrow
+from devkit.golden import corpus
 from marrow import col, count_star, if_else, lit
-
-import runner
 
 # Names that are *not* real marrow API — the outstanding convergence debt.
 # Keep this in sync with what is defined below; `test_cases.py` reports it.
@@ -87,31 +86,29 @@ def table(name):
     What is under test is the engine, so the source is a memtable in every
     lane; Parquet and IPC keep their own suites.
     """
-    batch = marrow.read_ipc_file(str(runner.fixture_path(name)))[0]
+    batch = marrow.read_ipc_file(str(corpus().fixtures.path(name)))[0]
     return marrow.memtable(batch)
 
 
 def check(name, plan):
     """Run the plan and hold it to the shared expectation."""
-    expected = _expectations()[name]
-    actual = pa.table(plan.to_pyarrow(num_threads=runner.NUM_THREADS))
-    if actual.equals(expected):
+    case = _cases()[name]
+    actual = pa.table(plan.to_pyarrow(num_threads=corpus().num_threads))
+    if actual.equals(case.expected):
         return
     raise AssertionError(
-        f"{name} does not match its expectation\n\n"
-        f"--- expected (duckdb) ---\n{expected}\n"
-        f"--- actual (marrow) ---\n{actual}\n"
+        f"{name} does not match its expectation\n{case.mismatch(actual)}"
     )
 
 
-_EXPECTED = None
+_CASES = None
 
 
-def _expectations():
-    global _EXPECTED
-    if _EXPECTED is None:
-        _EXPECTED = {case.name: case.expected for case in runner.load_cases()}
-    return _EXPECTED
+def _cases():
+    global _CASES
+    if _CASES is None:
+        _CASES = {case.name: case for case in corpus().cases()}
+    return _CASES
 
 
 # The namespace a case body executes in. Built explicitly rather than from

@@ -9,7 +9,7 @@ Counts are of files in `golden/cases/`. Regenerate the expectations — always
 from DuckDB, never from marrow — with:
 
 ```bash
-pixi run -e bench python golden/runner.py
+pixi run -e bench golden_regenerate
 pixi run -e dev pytest golden
 ```
 
@@ -36,7 +36,7 @@ implementing the feature and then deleting one line.
 ## Fixtures
 
 Ten tables, each with a stated reason for every value it holds
-(`runner.TABLES`). Nulls appear in every column that can carry one; float
+(`devkit.fixtures.TABLES`). Nulls appear in every column that can carry one; float
 columns hold only exactly-representable values so a float aggregate compares
 two implementations rather than two roundings.
 
@@ -300,9 +300,9 @@ Not gaps in the corpus — questions it cannot or should not ask.
   values are still reachable as *inputs*, and `math_is_nan` / `math_is_inf`
   assert them as booleans.
 - **List-, struct- and map-valued results.** The expectation block is typed TSV
-  over `runner.TYPES`, which holds seven flat types. Every nested case projects
-  something flat instead — which is why `array_agg` is absent while
-  `string_agg` is present.
+  over `devkit.golden.ExpectedTable.TYPES`, which holds seven flat types. Every
+  nested case projects something flat instead — which is why `array_agg` is
+  absent while `string_agg` is present.
 - **Integer overflow.** DuckDB *raises*; marrow wraps. A golden case cannot
   express "raises", and `TRY(...)` would assert DuckDB's null against marrow's
   wrapped value — a divergence better recorded here in prose than as a case
