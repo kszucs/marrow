@@ -47,7 +47,7 @@ def test_the_integration_task_flags_reach_the_suite(monkeypatch):
     """The exact command line `pixi run integration` uses, against a stub.
 
     The suite itself needs archery, which only the `integration` environment
-    has, so `devkit.conformance` is replaced by a module that records what it
+    has, so `devkit.integration` is replaced by a module that records what it
     was asked to run.  That is what makes the assertion worth making: parsing
     alone would still pass if a flag reached `ArcherySuite.run` under the wrong
     keyword, or reached it inverted -- `--no-stop-on-error` is passed as
@@ -64,9 +64,9 @@ def test_the_integration_task_flags_reach_the_suite(monkeypatch):
             asked.update(kwargs)
             return True
 
-    stub = types.ModuleType("devkit.conformance")
+    stub = types.ModuleType("devkit.integration")
     stub.ArcherySuite = RecordingSuite
-    monkeypatch.setitem(sys.modules, "devkit.conformance", stub)
+    monkeypatch.setitem(sys.modules, "devkit.integration", stub)
 
     result = CliRunner().invoke(
         cli,

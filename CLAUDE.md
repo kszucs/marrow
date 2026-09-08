@@ -286,7 +286,7 @@ Four rules hold, each of which the tooling got wrong at least once:
 - **Judge `precompile` by its output, never by its exit status** —
   `MojoToolchain.reports_errors` exists because a parse failure exits 0.
 - **Nothing under `devkit/` imports `marrow` at module scope.**
-  `devkit/conformance.py` reaches it through `_LazyMarrow`, so importing the
+  `devkit/integration.py` reaches it through `_LazyMarrow`, so importing the
   module does not load `libmarrow.so`. A plain `import marrow` there would put
   a shared-library build in front of `pixi run -e dev selftest` and make its
   unit tests pass or fail on whether a stale `.so` is on disk.
@@ -704,7 +704,8 @@ devkit/                   # the developer tooling; `python -m devkit --help`
 ├── runner.py             # RunnerOptions, LaneSelector, Selection, SuiteRunner
 ├── benches.py            # injection, competition table, rolling history
 ├── golden.py             # the corpus: case format, codegen, transpile
-├── conformance.py        # the archery suite
+├── docs.py               # compiles the site's Mojo listings
+├── integration.py        # the archery suite
 ├── footprint.py          # the AOT size gate
 ├── profiling.py          # Instruments and macOS `sample`
 ├── cli.py                # the click CLI -- the only click import

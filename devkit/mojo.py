@@ -179,6 +179,16 @@ class Repo:
         """Where the binary-size gate programs live."""
         return self.benchmarks_dir / "binary_size"
 
+    @property
+    def docs_dir(self):
+        return self.root / "docs"
+
+    @property
+    def snippets_dir(self):
+        """Mojo listings kept as real files, so a page including one renders
+        exactly the bytes that were compiled."""
+        return self.docs_dir / "snippets"
+
     # -- Mojo namespaces ----------------------------------------------------
 
     @property

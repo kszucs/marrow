@@ -10,7 +10,8 @@ where one side must stay free of something the other needs:
 * `runner`      -- options, lanes, selections, drivers, suites.  No pytest.
 * `benches`     -- Mojo timings into pytest-benchmark; its one importer.
 * `golden`      -- the cross-lane query corpus; reaches duckdb when regenerating.
-* `conformance` -- the Arrow archery suite; reaches archery.
+* `docs`        -- the site's Mojo listings, compiled so the guides cannot rot.
+* `integration` -- the Arrow archery suite; reaches archery.
 * `footprint`   -- the AOT size gate: nm, size -m, strip.
 * `profiling`   -- Instruments and macOS `sample`.
 * `cli`         -- the only module that imports click.

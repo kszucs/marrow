@@ -36,9 +36,16 @@ class Context:
     def asan_toolchain(self):
         return MojoToolchain(self._runner(ConsoleProgress()), AsanRuntime.locate())
 
-    def _runner(self, progress):
+    def timed_toolchain(self, timeout):
+        """A toolchain with a deadline, for a command that compiles many
+        programs in a row and would otherwise hang a CI job on one of them."""
+        return MojoToolchain(self._runner(ConsoleProgress(), timeout))
+
+    def _runner(self, progress, timeout=0):
         return ProcessRunner(
-            self.repo.root, SilentProgress() if self.quiet else progress
+            self.repo.root,
+            SilentProgress() if self.quiet else progress,
+            timeout=timeout,
         )
 
     def fail(self, message):
@@ -288,6 +295,31 @@ def golden_regenerate(ctx):
 
 
 # ---------------------------------------------------------------------------
+# docs
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def docs():
+    """The documentation site's Mojo listings."""
+
+
+@docs.command("check")
+@pass_context
+def docs_check(ctx):
+    """Compile every Mojo listing under docs/, so the guides cannot rot.
+
+    Judged by its output, never by its exit status: `mojo build` reports a
+    parse failure and still exits 0.
+    """
+    from .docs import Report, SnippetCheck
+
+    check = SnippetCheck(ctx.repo, ctx.timed_toolchain(SnippetCheck.TIMEOUT))
+    if not check.run(Report()):
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # integration
 # ---------------------------------------------------------------------------
 
@@ -327,7 +359,7 @@ def integration_run(
     if not (run_ipc or run_c_data):
         ctx.fail("specify at least one of --run-ipc or --run-c-data")
 
-    from .conformance import ArcherySuite
+    from .integration import ArcherySuite
 
     suite = ArcherySuite()
     ok = suite.run(

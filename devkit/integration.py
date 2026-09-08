@@ -16,7 +16,7 @@ never at module scope.
 The `_json_*` conversion functions below are the Arrow JSON integration format
 read into pyarrow.  Neither archery nor pyarrow exposes that conversion, so it
 is written out here; it is the one part of the suite that is pure pyarrow and
-has its own unit tests in `devkit/tests/test_conformance.py`.
+has its own unit tests in `devkit/tests/test_integration.py`.
 """
 
 import contextlib

@@ -19,7 +19,7 @@ import pytest
 
 @pytest.fixture(scope="module")
 def integration():
-    """Import `devkit.conformance` against stubbed archery base classes.
+    """Import `devkit.integration` against stubbed archery base classes.
 
     The stubs come back out afterwards.  Left in `sys.modules` they outlive this
     file and tell every later test in the session that archery is installed,
@@ -43,7 +43,7 @@ def integration():
         }
         sys.modules.update(installed)
     import devkit
-    import devkit.conformance as module
+    import devkit.integration as module
 
     yield module
 
@@ -52,9 +52,9 @@ def integration():
             del sys.modules[name]
         # Both halves: `devkit` keeps its own attribute for the submodule, so
         # dropping only the `sys.modules` entry still hands a later
-        # `devkit.conformance` the module that was built on the stubs.
-        del sys.modules["devkit.conformance"]
-        del devkit.conformance
+        # `devkit.integration` the module that was built on the stubs.
+        del sys.modules["devkit.integration"]
+        del devkit.integration
 
 
 def test_the_module_imports_and_exposes_the_participants(integration):

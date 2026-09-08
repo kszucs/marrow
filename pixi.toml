@@ -42,7 +42,7 @@ binary_size_check = { cmd = "python -m devkit size check" }
 # Quarto executes the docs' Python cells at render time, which keeps that half
 # honest; Mojo has no such engine, and this stands in for it. Judged by grep,
 # not by exit status -- `mojo build` reports a parse failure and still exits 0.
-docs_check = { cmd = "python3 scripts/check_docs_snippets.py" }
+docs_check = { cmd = "python -m devkit docs check" }
 
 # Dev — dependencies and tasks for development and testing.
 [feature.dev.dependencies]
