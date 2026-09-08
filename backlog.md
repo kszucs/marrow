@@ -7,7 +7,7 @@ traps. This file is only what is missing, what is wrong, and what it would take.
 
 Untracked (`notes/` is gitignored). Two things are recorded per item: why a
 user cares, and what standing in the way is real rather than assumed. Claims
-were re-verified against the tree on 2026-09-04; where a claim did not survive
+were re-verified against the tree on 2026-09-08; where a claim did not survive
 that check it says so inline.
 
 ## What is missing, in priority order
@@ -23,22 +23,21 @@ all of them.
 | # | Missing | Why it matters | Cx | Blocked by |
 |---|---|---|---|---|
 | 1 | **Division by zero answers the dividend** — `10.0 / 0.0` is `10.0`, where IEEE 754 and DuckDB both say `inf` | Not a judgement call: `/` by zero has a value and integer `//`/`%` by zero do not, which is why the reference nulls one and not the other. The fix is deleting the substitute-1 hack, not adding a validity mask | **S** | — |
-| 2 | **CI is dark** — no run since 2026-05-11, `test.yml` calls a deleted task, `binary_size` not wired in at all | Everything below is unverifiable in CI. A +55% size regression once survived ten commits for exactly this reason | **S** | — |
+| 2 | **CI is red on Linux.** PR #124 (`ci`) has Lint, Docs, Binary size and Integration passing — the first green jobs since 2026-05-11 — and **Tests and Benchmarks still fail**. Round 6 of `ci-diag` named both: `marrow/tests/test_scalars.mojo` reports `mojo: error: execution crashed` for every case, and `marrow/tests/test_ipc.mojo` is killed at 1,800 s | The scalars crash is a **new known-wrong answer**, not a harness defect: `DynScalar` is the one variant CLAUDE.md flags for the `List`-growth bug, and Linux is where it fires. The IPC "hang" is not one — all 37 cases pass individually at 57-89 s each, so it is 40 minutes of repeated compilation against a 30-minute cap, i.e. suite sharding. Note PR #124 forked at `cb296c82` and predates the devkit consolidation, so it needs rebasing before its workflows mean anything | **M** | — |
 | 3 | **CSV reader**, then NDJSON | A first user arrives with a CSV, not a Parquet file. `find marrow -iname '*csv*'` is empty | **M** | — |
-| 4 | **Error taxonomy** — 269 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 269 sites. Already a retrofit | **M** | — |
+| 4 | **Error taxonomy** — 337 `raise Error` sites, zero typed exceptions | Cheap while the Python boundary is fresh, expensive to retrofit across 337 sites. Already a retrofit, and growing: 269 on 2026-09-04, 337 on 2026-09-08 | **M** | — |
 | 5 | **`scan(path)` without a hand-written schema**, then globs, directories, hive partitions | `scan()` takes one path *and* demands the schema by hand. Every real Parquet dataset is a directory | **M** | 3 |
 | 6 | **Parallel group-by — landed 2026-09-01 and silently reverted the same day** | `f17045a9` took `groupby.mojo` 224 -> 517 lines with radix-partitioned placement. `bcbbd32e`, whose subject is *"delete StringArgs, one trait per string signature"*, put it back to 224 and deleted `test_groupby.mojo` (520 lines) and `bench_groupby.mojo` (157). 980 lines gone; nothing noticed, because the tests that would have caught it went in the same commit. `GROUP_RADIX`, `GROUP_THREAD_LOCAL` and `_choose_strategy` are zero grep hits today. Recover with `git show f17045a9:marrow/kernels/groupby.mojo` | **S** | — |
 | 7 | **`distinct`, `union`, `except`, `intersect`** — no node exists for any of them | Table stakes for a SQL-shaped frontend, and `ReplaceDistinctWithAggregate` is a rule nobody can write without the node | **M** | — |
-| 8 | **The string and temporal verbs cannot be reached from Python** | All 17 (`substr`, `lpad`, `replace`, `split_part`, `position`, `epoch`, `last_day`, `week`, …) exist in **both** lanes and evaluate: comptime methods, and runtime free functions in `runtime/values.mojo` with their tags handled in `evaluate`. What is missing is reach — they are not methods on `RuntimeValue`, `expr/__init__.mojo` re-exports only `RuntimeValue` and `RuntimeAggregate`, and **0 of 17** appear in `python/marrow/_expr.py`. The work is bindings and a re-export, not kernels or nodes | **S** | — |
-| 9 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
-| 10 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 9, 11 |
-| 11 | **Statistics propagation and a cost model** | Feeds 10. Not urgent on its own — it is the last piece, after 9 | **L** | — |
-| 12 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
-| 13 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
-| 14 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
-| 15 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
-| 16 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
-| 17 | **A `ByteSource` a plan can choose** — mmap a local file, stream a local file, stream a remote one | `MappedFile` is the only one and `ParquetScanOperator` hardcodes it, so a plan cannot read anything else. The kind is a *runtime* choice, so the comptime `S` is the wrong mechanism — see §1.9 for the erased shape and the origin spike that gates it. Page-level pruning already saves the I/O; this is what makes that saving reachable | **M** | — |
+| 8 | **Join output ordering** — `JoinOperator` hardcodes build=left, `_output_schema` is positional | Blocks *both* remaining optimizer rules. Not an optimizer change: the kernel must accept an output ordering | **M** | — |
+| 9 | **Join reordering + build-side selection** | The largest TPC-H win available, and the only genuinely cost-based pass in any incumbent | **L** | 8, 10 |
+| 10 | **Statistics propagation and a cost model** | Feeds 9. Not urgent on its own — it is the last piece, after 8 | **L** | — |
+| 11 | **CSE and duplicate group/sort key elimination** | Both need `DynValue` equality — likely solvable at the verb, as `constant_bool` and `conjuncts` were, rather than with a box slot | **M** | — |
+| 12 | **Larger-than-memory execution** — no spilling anywhere | Every aggregate and join is bounded by RAM. Changes the operator contract | **XL** | — |
+| 13 | **Nested-loop / range joins** | Only equijoins exist, so a non-equi predicate has no plan at all | **M** | — |
+| 14 | **UDFs** | The escape hatch that makes a missing kernel survivable rather than fatal | **M** | 4 |
+| 15 | **A row format** | Needed by sort-merge join, spilling, and any wire protocol | **L** | — |
+| 16 | **A `ByteSource` a plan can choose** — mmap a local file, stream a local file, stream a remote one | `MappedFile` is the only one and `ParquetScanOperator` hardcodes it, so a plan cannot read anything else. The kind is a *runtime* choice, so the comptime `S` is the wrong mechanism — see §1.9 for the erased shape and the origin spike that gates it. Page-level pruning already saves the I/O; this is what makes that saving reachable | **M** | — |
 
 ---
 
@@ -126,25 +125,6 @@ kernel that decides validity from a *value* cannot do it in the lane — the
 mask belongs outside, in `BinaryKernel.extra_validity` and in the fused node's
 `Bound`.
 
-### 1.2 The published guides document APIs that do not exist
-
-The only user-visible item here, and now one guide rather than two.
-`docs/guide/expressions.qmd` documents `from marrow.expr import col, lit`
-(lines 26 and 56) — there is no such Python module; the names are
-`marrow.col` / `marrow.lit` / `marrow.read_parquet` — and line 5 calls the
-engine "pull-based" when `physical.mojo` is push/drain. This is on the
-rendered site.
-
-**`docs/guide/compile.qmd` came off this list on 2026-09-03** with the CLI work: it
-had documented `plan.execute_cli()`, deleted with the old CLI entry point, and
-the branch rewrote all 377 lines against the `QueryCli` that now exists.
-
-**`README.md` came off this list on 2026-08-30**, when the Python query API was
-restored: its lazy-query section had described `morsel_size` and `strictness`
-arguments that no longer exist, claimed `explain()` "renders one node, not the
-tree" when plans render recursively, cited two deleted docs, and carried a
-40/43 ClickBench claim whose harness went with them.
-
 ### 1.3 Latent compiler hazards
 
 **~15 more `t"…{dtype}"` sites under `marrow/kernels/`.** A t-string
@@ -192,12 +172,19 @@ kernel change.
 fails on one row. Un-skipping it is a change to the case (`CAST(FLOOR(...))`
 and a regenerated expectation), not to marrow.
 
-Three of the remaining skips are **not** missing API. `math_greatest_and_least`
-and `filter_not_in_list_with_null` encode SQL null semantics marrow does not
-implement — skip-nulls extrema, and `NOT IN` with a NULL matching nothing —
-and `nested_list_contains` needs `.contains` as a method on `ListValue`, where
-only the free `array_contains` exists. Re-checking a case by name is not enough
-to un-skip it; §1.12 records four that were claimed unblocked and were not.
+Three of the remaining skips are **not** missing API, and two of those three
+changed on 2026-09-07 without the skip count moving. `math_greatest_and_least`
+and `filter_not_in_list_with_null` encode SQL null semantics — skip-nulls
+extrema, and `NOT IN` with a NULL matching nothing — which the **SQL front end
+now desugars**: `GREATEST`/`LEAST` become `coalesce(extremum, a, b)` and
+`x IN (a, b)` becomes an `=` chain with NULLs lifted out, both documented in
+`marrow/expr/sql.mojo`'s header. So the semantics exist through `Sql.plan` and
+**not** through the expression API the cases are written against; closing them
+means either the verbs or rewriting the cases in SQL. The third,
+`nested_list_contains`, still needs `.contains` as a method on `ListValue`,
+where only the free `array_contains` exists. Re-checking a case by name is not
+enough to un-skip it; §1.12 records four that were claimed unblocked and were
+not.
 
 ### 1.8 Test and infrastructure gaps
 
@@ -206,9 +193,11 @@ to un-skip it; §1.12 records four that were claimed unblocked and were not.
   package and has no replacement. The invariant is currently unenforced.
 - **`HashGrouper` has no dedicated test** — `kernels/tests/test_groupby.mojo`
   was deleted without replacement.
-- **CI has not run since 2026-05-11.** `test.yml` calls a deleted task, the docs
-  job cannot pass, and the binary-size gate is not in CI at all — which is how a
-  +55% size regression once survived ten commits.
+- **CI runs again, and Linux fails it.** The workflow defects are gone — every
+  job resolves its task and the binary-size gate is wired in — so what is left
+  is two real failures on `ubuntu-latest`, both named in the row 2 entry above:
+  a `test_scalars` execution crash and a `test_ipc` run that outlives its cap.
+  Until those close, the +55%-size-regression class of miss is still possible.
 
 ### 1.9 The Parquet reader, after page-level pruning landed
 
@@ -360,9 +349,14 @@ integer-only ladder. A sorting binary went 4,510,744 -> 1,441,112 of `__text`,
 a 68% cut, and sorting now costs 12,440 bytes over a plan that does not sort.
 
 This is the third instance of the same shape — `kernels::cast` reachable from
-a plan that needs none — after the hashing fix and `ParquetScan`. What
-let it survive is that **no gate program sorts**. Adding one is the actual
-task here; without it the next instance is equally invisible.
+a plan that needs none — after the hashing fix and `ParquetScan`. What let it
+survive is that **no gate program sorts**, and that is still true: the source
+`benchmarks/binary_size/query_sort.mojo` now exists, but `baseline.json` has no
+`query_sort` entry, so the gate never builds or compares it. The baseline grew
+from six programs to eight (`query_expr2_agg_fused`, `query_expr2_streaming`)
+and there are fourteen sources — `query_arith`, `query_exprs`, `query_param`,
+`query_runtime`, `query_scan`, `query_scan_typed` and `query_sort` are all
+ungated. Adding the baseline entry, not the program, is the task.
 
 **Windows read a pruned population.** `Window.to_operator` forwarded its
 pushed-down predicate, so a `Filter` above a window pushed its row-group
@@ -585,18 +579,29 @@ byte length, starts/ends/contains, six comparisons, `LIKE`/`ILIKE`, and a
 `ConcatKernel` wired to no expression node) and 11 temporal extractors plus
 `date_trunc`.
 
-**Absent — 16 string cases:** `substr`, `replace`, `split_part`, `concat` and
-`concat_ws` (the kernel exists; the node does not), `lpad`, `position`,
-`repeat`, `left`/`right`, `trim(characters)`, character-length as distinct from
-byte-length, `ascii`, and the whole regex family.
+**Most of what this section listed landed on 2026-09-07** in `c9d93911`, and it
+landed *reachably*: `UNARY_VERBS`/`BINARY_VERBS`/`TERNARY_VERBS`
+(`marrow/expr/runtime/values.mojo:1885`) is now the single vocabulary, and
+`expr_verbs()` hands it to Python, where `_install_verbs()` generates a method
+per entry. **A verb added to `values.mojo` is reachable from Python without
+touching the bindings or `python/marrow/expr.py`** — which is why "the string
+and temporal verbs cannot be reached from Python" came off the table entirely
+rather than being reworded: the class of gap is closed, not just its instances.
 
-**Absent — 13 temporal cases**, of which the smallest is the most damaging: `lit`
-has numeric and string-like overloads only (`marrow/expr/builders.mojo:123-153`),
-so **no date or timestamp constant can be written**. `WHERE ts > TIMESTAMP
-'2024-01-01'` is not expressible at all. Also missing: `date_diff`, interval
-arithmetic, `last_day`, `epoch`, ISO week/year, `strftime`/`strptime`,
-`make_date`, day/month names, `age`, timezone attachment. Timezones are carried
-on the type (`dtypes.mojo:394`) and **ignored by every kernel** —
+So `substr`, `replace`, `split_part`, `lpad`/`rpad`, `position`, `repeat`,
+`left`/`right`, `trim_chars`, `char_length`, `ascii`, `last_day`, `epoch`,
+`week`, `iso_year`, `day_name` and `month_name` all exist and are callable from
+both lanes and from Python. `lit[T: TemporalType]`
+(`marrow/expr/builders.mojo:168`) also landed, so `WHERE ts > TIMESTAMP
+'2024-01-01'` — described here as the most damaging absence on the page — is
+expressible.
+
+**Still absent — strings:** `concat` and `concat_ws` (the kernel exists; the
+node does not) and the whole regex family.
+
+**Still absent — temporal:** `date_diff`, interval arithmetic,
+`strftime`/`strptime`, `make_date`, `age`, and timezone attachment. Timezones
+are carried on the type (`dtypes.mojo:394`) and **ignored by every kernel** —
 `marrow/kernels/temporal.mojo:37` states a non-UTC timestamp is decomposed in
 UTC.
 
@@ -604,23 +609,19 @@ ibis's `strings.py` is the engine-level expectation: case, trim/pad,
 substring/slice, find/predicate, pattern match, regex (extract/split/
 replace), replace/split/join, and URL parsing.
 
-**What it would take.** Most are ordinary kernels over machinery that exists.
-Two are not: regex needs a real engine — `mojo-regex` was evaluated and rejected
-on *correctness*, not availability (it never enters an optional group, so
-`(?:www\.)?` is skipped) — and timezone conversion needs a
-tz database. **Temporal literals are the cheapest fix on this page and unblock
-an entire query class.**
+**What it would take.** What remains is the hard half. Regex needs a real
+engine — `mojo-regex` was evaluated and rejected on *correctness*, not
+availability (it never enters an optional group, so `(?:www\.)?` is skipped) —
+and timezone conversion needs a tz database. `concat`/`concat_ws` is the one
+cheap item left: the kernel exists and only the node is missing.
 
 #### 1.7 Known-wrong answers in core operations
 
-- **`GROUP BY` on a float column merges distinct keys.** A hash bug, not a
-  grouping one — the float lane widens by value instead of by bit pattern, and
-  the table buckets on the hash alone. **Fixed on `19a386e9`, which is not
-  merged**, so it is still wrong on `main`.
-- **Integer `//`, `%` and division by zero follow Python, not SQL.** Same
-  branch, same status: rounding inside `core` and the zero-divisor null outside
-  the lane, **not merged**. Float `/` by zero is not fixed even there — see
-  §1.1.
+The float group-key and integer `//`/`%` entries that stood here are **merged**,
+in `136b3529`, and the golden corpus now carries **zero `xfail`s** — every case
+it compiles, marrow answers the way DuckDB does. Float `/` by zero was not part
+of that fix and remains row 1 of the table; see §1.1.
+
 - **Integer overflow wraps where SQL raises** (`golden/COVERAGE.md`). The
   `edges` fixture already carries int64 max/min for the day a checked-arithmetic
   mode exists.
@@ -672,7 +673,7 @@ canonical list; marrow has 8 of it.
 | Missing | Golden cases | Note |
 |---|---|---|
 | `UNION ALL` / `UNION` / `EXCEPT` / `INTERSECT` | 4 | ibis models these as one `Set(left, right, distinct: bool)`. They also treat NULL as equal to itself, which nothing else in marrow does |
-| `Distinct` / `.unique()` | 1 (`DISTINCT ON`) | Expressible today as `aggregate(keys=[...], aggs=[])` (`logical.mojo:938` accepts empty aggs), but there is no verb and no `unique` kernel |
+| `Distinct` / `.unique()` | 1 (`DISTINCT ON`) | Expressible today as `aggregate(keys=[...], aggs=[])` (`logical.mojo:938` accepts empty aggs), which is exactly what the SQL front end desugars `SELECT DISTINCT` into — so the semantics are reachable through `Sql.plan` and there is still no verb and no `unique` kernel |
 | `GROUPING SETS` / `ROLLUP` / `CUBE` | 3 | `Aggregate` carries one key list; `ROLLUP` also needs `GROUPING()`. Implementable as a rewrite into an aggregation cascade |
 | `explode` / `unnest` | 1 | Row-multiplying, so a new operator shape. ibis has a dedicated `TableUnnest` with `offset` and `keep_empty` |
 | `Sample`, `DropNull(how)`, `FillNull` as relations | — | ibis has all three as nodes |
@@ -764,20 +765,17 @@ differentiator hiding inside a table-stakes item.
 
 - **Compressed Arrow IPC bodies are unsupported.** `marrow/ipc.mojo:1409`
   raises on LZ4_FRAME/ZSTD bodies. Marked *unverified* as to how much it would
-  buy on marrow's reader. - **No SQL frontend.** No parser anywhere. The
-  golden corpus is *written in SQL* and translated to marrow by hand, which is
-  itself evidence of the impedance. - **No `__dataframe__` protocol**, though
+  buy on marrow's reader. - **No `__dataframe__` protocol**, though
   the PyCapsule/C Stream path marrow already has is the better-supported
   modern route.
 
 #### 2.10 Operability
 
-- **No `explain()` verb**, though plans render recursively through `Writable`
-  (`Filter.write_to`, `logical.mojo:816`), so the string exists and only needs
-  a name. `README.md:238`'s "explain() renders one node" is stale. - **No
-  `EXPLAIN ANALYZE`, no per-operator metrics, no profiling hook, no progress,
-  no cancellation.** An operator cannot be interrupted mid-`drain`. - **No
-  error taxonomy.** 244 `raise Error(...)` sites across `marrow/` produce
+- **No `EXPLAIN ANALYZE`, no per-operator metrics, no profiling hook, no
+  progress, no cancellation.** An operator cannot be interrupted mid-`drain`.
+  Plain `explain()` came off this list on 2026-09-07 and is now
+  `LazyTable.explain` (`python/marrow/lazy.py:499`). - **No
+  error taxonomy.** 337 `raise Error(...)` sites across `marrow/` produce
   plain strings with no type. The messages themselves are good — they name the
   verb and the column (`"drop: column 'x' not found in schema"`) — but a
   Python frontend cannot map them to distinct exception classes. That is cheap
@@ -844,14 +842,14 @@ at parity — a point the project already holds as an architectural invariant
 enforce, since `test_parity.mojo` was deleted with the old package and has no
 replacement.
 
-**What it would take to be a product.** The engine is done; the wrapper is not.
-`execute_cli()` does not exist, nor the generated `--help`/`--describe` surface,
-nor the Parquet/Arrow output writers — all lived in the deleted package
-(`python/marrow/compile.py:9`, `marrow/utils/argparse.mojo:39`).
-`python/marrow/compile.py` still builds a `.mojo` file and still passes
-`-D MARROW_CLI_WRITERS=true`, a define that currently gates nothing. Restoring
-that tail and promoting the schema handle from spike to public API is a small,
-well-scoped amount of work for the only story here that is genuinely
+**What it would take to be a product — the wrapper landed on 2026-09-03.**
+This said `execute_cli()`, the generated `--help`/`--describe` surface and the
+Parquet/Arrow output writers were all missing with the deleted package. They
+are `marrow/expr/cli.mojo` now: `QueryCli` turns a plan into a program with
+late-bound parameters, `--describe`, and writers that stay comptime-gated
+(`run[parquet=True]()`, `run[ipc=True]()`) so a binary links only the formats
+it names. What is left of this item is **promoting the schema handle from spike
+to public API** — the smaller half, and the only story here that is genuinely
 unavailable elsewhere.
 
 **Honest counterweights.** 1.48 MB of `__text` is small for a query engine and
