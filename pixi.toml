@@ -6,7 +6,14 @@ channels = [
   "conda-forge",
   "https://prefix.dev/pixi-build-backends",
 ]
-platforms = ["osx-arm64", "linux-64"]
+# `linux-aarch64` is here so an Apple Silicon machine can run a *native* Linux
+# container and reproduce what CI sees on Linux -- glibc, ELF/JIT linking, and
+# the allocator alignment that decides whether a foreign buffer import aborts.
+# The alternative was emulating linux-64, and Docker's qemu CPU stops at SSE4.2:
+# the mojo binary dies with `Illegal instruction` before printing its version.
+# Rosetta would supply AVX2 and is the better path when it is switched on.
+# Nothing is *shipped* for this platform -- see `Dockerfile.arm64`.
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 preview = ["pixi-build"]
 
 [package]
@@ -44,7 +51,14 @@ docs_check = { cmd = "python3 scripts/check_docs_snippets.py" }
 # Dev — dependencies and tasks for development and testing.
 [feature.dev.dependencies]
 pytest = ">=9.0.2,<10"
-pytest-benchmark = ">=5.2.3,<6"
+# `<5.3`, not `<6`: `conftest.py` constructs a `BenchmarkFixture` directly, with
+# pytest-benchmark's own keyword API, and 5.3.0 added required arguments to that
+# constructor -- every benchmark then fails with `BenchmarkFixture.__init__()
+# missing 2 required positional arguments` before anything is compiled. The old
+# `<6` bound was satisfied by both, so which one you got depended on the solve:
+# adding `linux-aarch64` picked 5.3.0 there and 5.2.3 everywhere else. Raise this
+# in the same change that updates the fixture construction.
+pytest-benchmark = ">=5.2.3,<5.3"
 pytest-xdist = ">=3,<4"
 # XXH64 oracle for `marrow/utils/tests/test_hashing.mojo`. The Parquet spec
 # mandates this exact hash for bloom filters, so the tests check marrow against
@@ -105,7 +119,14 @@ cmake = ">=3.20"
 ninja = "*"
 cxx-compiler = "*"
 # C++ Arrow build deps (used via ARROW_DEPENDENCY_SOURCE=AUTO)
-libboost-devel = "*"
+# Boost is pinned below 1.88: Arrow C++ needs explicit per-release support for
+# Boost.Process (apache/arrow#43746 for 1.86, #45121 for 1.87), and the
+# apache-arrow-24.0.0 tree cloned below predates conda-forge's current 1.91.
+# Against 1.91 the build got as far as linking and then failed with
+# `libarrow_testing.so: undefined reference to boost::process::v2::...` and
+# boost::filesystem, taking the integration job down on every run.  Raise this
+# together with the `clone_arrow` tag, not on its own.
+libboost-devel = ">=1.86,<1.88"
 gflags = "*"
 flatbuffers = "*"
 xsimd = "*"
@@ -127,10 +148,18 @@ install_archery = { cmd = "test -d integration/arrow/dev/archery", depends-on = 
 # non-empty CONDA_PREFIX as a signal to invoke `conda list` for diagnostics, and
 # pixi does not ship a `conda` binary.  Pixi's task schema rejects empty-string
 # env values, so the unset is done inline at the start of the cmd.
+#
+# `LDFLAGS` has to name the environment's lib directory explicitly, and that is
+# a consequence of the line above: clearing CONDA_PREFIX also loses the search
+# path the conda compiler activation would have contributed.  `libarrow_testing`
+# records a DT_NEEDED on `libboost_filesystem.so.1.87.0`, and linking
+# `arrow-json-integration-test` against it then failed with
+# `not found (try using -rpath or -rpath-link)` followed by a screen of
+# undefined `boost::filesystem` and `boost::process::v2` references.
 build_arrow = { cmd = "CONDA_PREFIX= integration/arrow/ci/scripts/integration_arrow_build.sh $PIXI_PROJECT_ROOT/integration/arrow $PIXI_PROJECT_ROOT/integration/arrow/build", depends-on = [
   "clone_arrow_rs",
   "clone_arrow_go",
-], env = { ARCHERY_INTEGRATION_WITH_RUST = "1", ARCHERY_INTEGRATION_WITH_GO = "1", ARCHERY_INTEGRATION_WITH_NANOARROW = "0", ARCHERY_INTEGRATION_WITH_DOTNET = "0", ARCHERY_INTEGRATION_WITH_JAVA = "0", ARCHERY_INTEGRATION_WITH_JS = "0", ARCHERY_INTEGRATION_WITH_RUBY = "0", ARROW_INTEGRATION_CPP = "ON", ARROW_BUILD_INTEGRATION = "ON", ARROW_BUILD_STATIC = "OFF", ARROW_BUILD_TESTS = "OFF", ARROW_BUILD_TYPE = "release", ARROW_USE_CCACHE = "OFF", ARROW_DEPENDENCY_SOURCE = "AUTO", ARROW_HDFS = "OFF", ARROW_MIMALLOC = "OFF", ARROW_WITH_UTF8PROC = "OFF", CMAKE_UNITY_BUILD = "ON", ARROW_ACERO = "OFF", ARROW_AZURE = "OFF", ARROW_COMPUTE = "OFF", ARROW_CSV = "OFF", ARROW_DATASET = "OFF", ARROW_FILESYSTEM = "OFF", ARROW_FLIGHT = "OFF", ARROW_FLIGHT_SQL = "OFF", ARROW_GANDIVA = "OFF", ARROW_GCS = "OFF", ARROW_JEMALLOC = "OFF", ARROW_JSON = "OFF", ARROW_ORC = "OFF", ARROW_PARQUET = "OFF", ARROW_S3 = "OFF", ARROW_SUBSTRAIT = "OFF", ARROW_USE_GLOG = "OFF", ARROW_WITH_BROTLI = "OFF", ARROW_WITH_BZ2 = "OFF", ARROW_WITH_LZ4 = "OFF", ARROW_WITH_SNAPPY = "OFF", ARROW_WITH_ZLIB = "OFF", ARROW_WITH_ZSTD = "OFF", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", ARROW_HOME = "$PIXI_PROJECT_ROOT/integration/arrow/install" } }
+], env = { ARCHERY_INTEGRATION_WITH_RUST = "1", ARCHERY_INTEGRATION_WITH_GO = "1", ARCHERY_INTEGRATION_WITH_NANOARROW = "0", ARCHERY_INTEGRATION_WITH_DOTNET = "0", ARCHERY_INTEGRATION_WITH_JAVA = "0", ARCHERY_INTEGRATION_WITH_JS = "0", ARCHERY_INTEGRATION_WITH_RUBY = "0", ARROW_INTEGRATION_CPP = "ON", ARROW_BUILD_INTEGRATION = "ON", ARROW_BUILD_STATIC = "OFF", ARROW_BUILD_TESTS = "OFF", ARROW_BUILD_TYPE = "release", ARROW_USE_CCACHE = "OFF", ARROW_DEPENDENCY_SOURCE = "AUTO", ARROW_HDFS = "OFF", ARROW_MIMALLOC = "OFF", ARROW_WITH_UTF8PROC = "OFF", CMAKE_UNITY_BUILD = "ON", ARROW_ACERO = "OFF", ARROW_AZURE = "OFF", ARROW_COMPUTE = "OFF", ARROW_CSV = "OFF", ARROW_DATASET = "OFF", ARROW_FILESYSTEM = "OFF", ARROW_FLIGHT = "OFF", ARROW_FLIGHT_SQL = "OFF", ARROW_GANDIVA = "OFF", ARROW_GCS = "OFF", ARROW_JEMALLOC = "OFF", ARROW_JSON = "OFF", ARROW_ORC = "OFF", ARROW_PARQUET = "OFF", ARROW_S3 = "OFF", ARROW_SUBSTRAIT = "OFF", ARROW_USE_GLOG = "OFF", ARROW_WITH_BROTLI = "OFF", ARROW_WITH_BZ2 = "OFF", ARROW_WITH_LZ4 = "OFF", ARROW_WITH_SNAPPY = "OFF", ARROW_WITH_ZLIB = "OFF", ARROW_WITH_ZSTD = "OFF", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", ARROW_HOME = "$PIXI_PROJECT_ROOT/integration/arrow/install", LDFLAGS = "-L$PIXI_PROJECT_ROOT/.pixi/envs/integration/lib -Wl,-rpath,$PIXI_PROJECT_ROOT/.pixi/envs/integration/lib -Wl,-rpath-link,$PIXI_PROJECT_ROOT/.pixi/envs/integration/lib" } }
 
 # --- run all integration tests ---
 integration = { cmd = "python -m integration.run --run-ipc --run-c-data --with-rust --with-go --with-cpp", depends-on = [
@@ -213,9 +242,19 @@ datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = [
 ], env = { PYTHONPATH = "python" } }
 
 # Docker — x86_64 Linux container for reproducing CI failures locally.
+# Anything after the task name is passed to pytest, so a selection works the
+# same as it does on the host:
+#
+#   pixi run -e docker test_arm64 marrow/tests/test_ipc.mojo
+#
+# `arm64` is native on Apple Silicon and is the loop that found the IPC
+# dictionary deadlock; `x86` is the platform CI runs and needs Rosetta on a Mac.
+# See Dockerfile.linux.
 [feature.docker.tasks]
-build = { cmd = "docker compose build x86" }
-test = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build"] }
+build_x86 = { cmd = "docker compose build x86" }
+build_arm64 = { cmd = "docker compose build arm64" }
+test_x86 = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build_x86"] }
+test_arm64 = { cmd = "docker compose run --rm arm64 pixi run -e dev pytest", depends-on = ["build_arm64"] }
 
 # Wheel — local wheel building for macOS development.
 [feature.wheel.dependencies]

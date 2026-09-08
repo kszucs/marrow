@@ -7,86 +7,148 @@ on:
   pull_request:
   workflow_call:
 
+# A superseded push has nothing left to say; let the newer one have the runners.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  FORCE_COLOR: "1"
+  PYTEST_ADDOPTS: "--color=yes"
+
 jobs:
-  test-linux-x86_64:
-    name: test (linux, x86_64)
-    runs-on: ubuntu-latest
-    env:
-      MODULAR_HOME: "/home/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
+  # One selection is one compilation unit, and almost all of that unit is
+  # elaborating marrow rather than the test bodies -- so the whole suite in a
+  # single `pytest` call is one 2,187-case compile that took 1,802 s (the
+  # `--mojo-timeout` default) on macOS and was OOM-killed on Linux, which is why
+  # no Tests run has passed since 2026-05-11.  Splitting by directory splits the
+  # unit: `marrow/tests` alone measures 121 s and 5.5 GB peak, well inside a
+  # free runner, and the suites run concurrently instead of end to end.
+  #
+  # Split by *directory* wherever a directory fits; peak memory follows the
+  # heaviest instantiations in the unit, not the file count, so a finer split
+  # usually buys nothing and pays another full elaboration.  Measured 2026-09-07
+  # on an unloaded Apple Silicon machine:
+  #
+  #   marrow/tests               13 files   5.5 GB    2m01
+  #   marrow/expr/comptime/tests 10 files   6.4 GB    2m31
+  #   marrow/expr/tests          13 files  17.5 GB    6m38
+  #     ... 6 of those 13         6 files  17.3 GB    5m52
+  #     ... test_optimizer alone   1 file  15.4 GB    5m11
+  #
+  # `test_optimizer.mojo` is ~88% of its directory's peak on its own, and one
+  # file is the floor -- so that directory cannot be split under a 16 GB runner
+  # and gets swap instead, below.
+  test:
+    name: ${{ matrix.suite.name }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        suite:
+          - name: core
+            select: marrow/tests
+          - name: kernels
+            select: marrow/kernels/tests
+          # `marrow/expr` as one selection is 485 cases from 25 files: OOM-killed
+          # on Linux at 10 minutes, and 1,802 s (timed out) on macOS.  The three
+          # lanes are separate units; `test_optimizer.mojo` is separate again,
+          # because on its own it accounts for nearly all of its directory's
+          # 17.5 GB and would drag the rest through swap with it.
+          - name: expr-optimizer
+            select: marrow/expr/tests/test_optimizer.mojo
+          - name: expr
+            select: marrow/expr/tests --ignore marrow/expr/tests/test_optimizer.mojo
+          - name: expr-comptime
+            select: marrow/expr/comptime/tests
+          - name: expr-runtime
+            select: marrow/expr/runtime/tests
+          - name: parquet
+            select: marrow/parquet/tests marrow/utils/tests
+          # `golden/` and `python/` are driven by Python test files, so these
+          # two are the only suites that build `python/marrow/libmarrow.so`
+          # (~13 min).  Every job used to pay for it.
+          - name: golden
+            select: golden
+          - name: python
+            select: python
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: dev
-    - name: tests
-      run: |
-        pixi run -e dev test --no-gpu
-        pixi run package
+      - uses: actions/checkout@v7
+      # A free Linux runner has 16 GB and a 4 GB swapfile, and elaborating
+      # `test_optimizer.mojo` peaks at 15.4 GB -- close enough that the job was
+      # OOM-killed rather than slowed down.  /mnt is the runner's ~70 GB scratch
+      # disk; 24 GB there costs nothing when it is not touched, and is the
+      # difference between a suite that finishes and a suite that cannot run at
+      # all.  macOS grows its swap on its own.
+      - name: More swap
+        if: runner.os == 'Linux'
+        run: |
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: dev
+      # `--mojo-timeout 3600`: the default 1,800 s is a compile budget sized for
+      # a developer's machine, and a suite that swaps needs longer.  The job
+      # timeout above is what actually bounds a hang.
+      - name: tests
+        run: pixi run -e dev pytest -v --no-gpu --mojo-timeout 3600 ${{ matrix.suite.select }}
 
-  test-macos-arm64:
-    name: test (macos, arm64)
-    runs-on: macos-latest
-    env:
-      MODULAR_HOME: "/Users/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: dev
-    - name: tests
-      run: |
-        pixi run -e dev test --no-gpu
-        pixi run package
-
-  asan-linux-x86_64:
-    name: asan (linux, x86_64)
-    runs-on: ubuntu-latest
-    if: false
-    timeout-minutes: 60
-    env:
-      MODULAR_HOME: "/home/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: asan
-    - name: asan tests
-      run: pixi run -e asan test_asan_core --no-gpu --no-python
-
-  asan-macos-arm64:
-    name: asan (macos, arm64)
-    runs-on: macos-latest
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      MODULAR_HOME: "/Users/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: asan
-    - name: asan tests
-      run: pixi run -e asan test_asan_core --no-gpu --no-python
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: dev
+      - name: package
+        run: pixi run package
+
+  # Scoped to the types that own memory -- allocation, offsets, foreign buffers
+  # and release callbacks.  Everything else computes over views these produce,
+  # so this is where a lifetime or bounds bug originates.  See the
+  # `test_asan_core` comment in pixi.toml for why this is scoped rather than
+  # parallelised.
+  #
+  # **macOS only, and that is a measurement rather than a preference.** The
+  # same selection takes 5m15s on a macOS runner and had not finished after
+  # 60 minutes on a Linux one (2026-09-07, twice) -- which is presumably why
+  # the Linux job carried a bare `if: false` before this, though it said so
+  # nowhere.  The cases are identical on both, so the coverage is not lost,
+  # only the second platform's view of it.  docs/backlog.md tracks getting it
+  # back.
+  asan:
+    name: asan (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: asan
+      - name: asan tests
+        run: pixi run -e asan test_asan_core --no-gpu --no-python

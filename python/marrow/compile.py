@@ -90,11 +90,29 @@ def _is_system_dep(path: str) -> bool:
     )
 
 
-def _otool_lines(flag: str, path: Path) -> list[str]:
-    result = subprocess.run(
-        ["otool", flag, str(path)], capture_output=True, text=True, check=True
-    )
+def _inspect(cmd: list[str], path: Path) -> list[str]:
+    """Run a shared-library inspector over `path`, or warn and answer nothing.
+
+    A file the inspector cannot read is not a reason to abandon the bundle --
+    the same judgement `stage_codec_libs` already makes about a codec that is
+    not installed. `otool` reports "is not an object file" and still exits 0,
+    so on macOS this only ever fired on a genuinely broken file; `ldd` exits 1,
+    which took the whole `--bundle` down (and, on Linux CI, one test with it).
+    """
+    result = subprocess.run(cmd + [str(path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(
+            f"marrow: warning: {cmd[0]} could not read {path} "
+            f"({result.stderr.strip() or 'exit ' + str(result.returncode)}); "
+            "treating it as having no dependencies",
+            file=sys.stderr,
+        )
+        return []
     return result.stdout.splitlines()
+
+
+def _otool_lines(flag: str, path: Path) -> list[str]:
+    return _inspect(["otool", flag], path)
 
 
 def _otool_deps(path: Path) -> list[str]:
@@ -179,11 +197,8 @@ def _dylib_closure_macos(binary: Path) -> list[Path]:
 
 
 def _ldd_deps(path: Path) -> list[str]:
-    result = subprocess.run(
-        ["ldd", str(path)], capture_output=True, text=True, check=True
-    )
     deps = []
-    for line in result.stdout.splitlines():
+    for line in _inspect(["ldd"], path):
         line = line.strip()
         if "=>" in line:
             target = line.split("=>", 1)[1].strip().split(" (")[0].strip()
