@@ -35,15 +35,19 @@ FILES="${FILES:-marrow/kernels/tests}"
 REPEATS="${REPEATS:-2}"
 
 start_ref=$(git symbolic-ref --quiet --short HEAD || git rev-parse HEAD)
-restore() { git checkout -q "$start_ref" 2>/dev/null; }
-trap restore EXIT
+scratch=$(mktemp -d)
+cleanup() {
+    git checkout -q "$start_ref" 2>/dev/null
+    rm -rf "$scratch"
+}
+trap cleanup EXIT
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
     echo "history.sh: working tree is dirty — commit or stash first" >&2
     exit 1
 fi
 
-printf 'commit\tdate\tsubject\tbenchmark\trun\tmedian\tmin\n'
+printf 'commit\tdate\tsubject\tbenchmark\trun\tmedian_ns\tmin_ns\n'
 
 for run in $(seq 1 "$REPEATS"); do
     for ref in "$@"; do
@@ -53,22 +57,59 @@ for run in $(seq 1 "$REPEATS"); do
 
         git checkout -q "$sha" 2>/dev/null || { echo "SKIP $sha (checkout)" >&2; continue; }
 
-        # pytest-benchmark's table columns are: Name Min Max Mean StdDev Median ...
-        # Units vary per row (ns/us/ms), so carry the unit from the group header.
+        # The numbers come from `--save-benchmarks`, which writes every
+        # statistic as JSON, and not from the terminal table. That table is
+        # scraped by column position, and its columns are configurable
+        # (`--benchmark-columns`) and its unit is per-row (ns/us/ms) — so a
+        # scraper reports the wrong statistic, in the wrong unit, without ever
+        # looking wrong. `--benchmark-history` points the rolling series at the
+        # scratch directory: without it every ref in the sweep would be appended
+        # to `benchmarks/data.json`, which is the dashboard's series and is
+        # meant to hold one entry per commit of the branch, not a re-measurement
+        # of ten old ones.
+        #
         # $FILES is intentionally unquoted: it may name several bench files, and
         # each must reach pytest as its own argument. Quoting it passes one
         # argument containing spaces, which matches no path — pytest then
-        # collects nothing, prints no benchmark table, and this loop silently
-        # emits zero rows. Point it at `bench_*.mojo` files rather than a
-        # directory, too: a directory drags in test files, and one that fails to
-        # build takes the whole run down with the same empty-output symptom.
+        # collects nothing and this ref contributes no rows. Point it at
+        # `bench_*.mojo` files rather than a directory, too: a directory drags in
+        # test files, and one that fails to build takes the whole run down with
+        # the same symptom.
+        rm -f "$scratch/latest.json"
         # shellcheck disable=SC2086
-        pixi run -e dev pytest --benchmark $FILES -k "$SELECT" 2>/dev/null \
-        | awk -v c="$sha" -v d="$date" -v s="$subject" -v r="$run" '
-            /^Name \(time in/ { unit = $4; sub(/\)$/, "", unit); next }
-            /^bench_/ {
-                mult = (unit == "ns") ? 1e-3 : (unit == "ms") ? 1e3 : 1
-                printf "%s\t%s\t%s\t%s\t%s\t%.3f\t%.3f\n", c, d, s, $1, r, $6*mult, $2*mult
-            }'
+        pixi run -e dev pytest --benchmark $FILES -k "$SELECT" \
+            --save-benchmarks "$scratch" \
+            --benchmark-history "$scratch/data.json" >"$scratch/run.log" 2>&1
+
+        if [ ! -f "$scratch/latest.json" ]; then
+            # Nothing was measured: a build failure, a selection that matched
+            # nothing, or a ref predating `--save-benchmarks`. Say so — the
+            # previous version of this script emitted zero rows in silence, and
+            # a missing ref reads as a gap in the curve rather than as an error.
+            echo "SKIP $sha (no benchmarks ran; see below)" >&2
+            tail -5 "$scratch/run.log" >&2
+            continue
+        fi
+
+        # `python3`, not the checked-out tree's tooling: this reads one JSON
+        # file and must behave the same for every ref in the sweep, including
+        # ones whose `devkit/` differs from the working branch's.
+        python3 -c '
+import json, sys
+
+path, commit, date, subject, run = sys.argv[1:]
+for result in json.load(open(path))["results"]:
+    if "median_ns" not in result:
+        continue  # no stats: a benchmark that never completed a round
+    print(
+        "\t".join(
+            [
+                commit, date, subject, result["name"], run,
+                "%.3f" % result["median_ns"],
+                "%.3f" % result["min_ns"],
+            ]
+        )
+    )
+' "$scratch/latest.json" "$sha" "$date" "$subject" "$run"
     done
 done

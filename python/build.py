@@ -1,25 +1,38 @@
+"""The hatchling build hook: compile `libmarrow.so` and lay out the wheel.
+
+The shared library is built by `devkit`, not by a recipe of its own -- the flags
+and the paths have exactly one definition, in `BuildOptions.for_shared_lib` and
+`Repo`, and this hook is one more caller of them.  That is why `devkit.mojo`
+imports nothing but the standard library: cibuildwheel builds each wheel in a
+fresh environment holding `hatchling` and the Mojo compiler and nothing else, so
+anything reaching for `rich` or `psutil` at import time could not be used here.
+
+The repository root is available because cibuildwheel copies the whole checkout
+and builds `python/` inside it -- the same reason `mojo build -I <root>` can find
+marrow's Mojo sources at all.
+"""
+
 import shutil
-import subprocess
+import sys
 import sysconfig
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 ROOT = Path(__file__).parent.parent
-SO = Path(__file__).parent / "marrow" / "libmarrow.so"
-BUILD_CMD = [
-    "mojo",
-    "build",
-    "-O3",
-    "-g0",
-    "-I",
-    str(ROOT),
-    str(Path(__file__).parent / "bindings" / "lib.mojo"),
-    "--emit",
-    "shared-lib",
-    "-o",
-    str(SO),
-]
+sys.path.insert(0, str(ROOT))
+
+from devkit.mojo import (  # noqa: E402 - must follow the path insertion
+    BuildOptions,
+    MojoToolchain,
+    ProcessRunner,
+    Repo,
+)
+
+try:
+    from devkit.progress import ConsoleProgress as Progress  # noqa: E402
+except ImportError:  # no rich, no psutil -- the cibuildwheel environment
+    from devkit.mojo import SilentProgress as Progress  # noqa: E402
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -29,23 +42,18 @@ class CustomBuildHook(BuildHookInterface):
         build_data["pure_python"] = False
         build_data["infer_tag"] = True
 
-        if not SO.exists():
-            if shutil.which("mojo"):
-                subprocess.check_call(BUILD_CMD)
-            else:
-                raise RuntimeError(
-                    f"{SO} not found and mojo not in PATH. "
-                    "Run `pixi run build_python` first, or install mojo-compiler."
-                )
+        repo = Repo(ROOT)
+        if not repo.libmarrow.exists():
+            self._build(repo)
 
         suffix = sysconfig.get_config_var("EXT_SUFFIX")
         # Every module in the package, not just `__init__.py`: it ends with
         # `from . import compute`, so shipping it alone made `import marrow`
         # raise ImportError in the built wheel. Globbing keeps a new module from
         # being forgotten the same way.
-        for module in sorted(SO.parent.glob("*.py")):
+        for module in sorted(repo.libmarrow.parent.glob("*.py")):
             build_data["force_include"][str(module)] = f"marrow/{module.name}"
-        build_data["force_include"][str(SO)] = f"marrow/libmarrow{suffix}"
+        build_data["force_include"][str(repo.libmarrow)] = f"marrow/libmarrow{suffix}"
 
         # `marrow compile` needs marrow's own Mojo source to pass as `-I` to
         # `mojo build` for an installed (pip) user — resolve_marrow_path()'s
@@ -55,11 +63,33 @@ class CustomBuildHook(BuildHookInterface):
         # `.mojoc`, tolerates a compiler version that has drifted from the
         # exact pin. Tests, benchmarks and profiles are excluded — they are
         # not needed to build a user's query and only add weight.
-        mojo_root = ROOT / "marrow"
-        for source in sorted(mojo_root.rglob("*.mojo")):
-            rel = source.relative_to(ROOT)
+        for source in sorted(repo.package_dir.rglob("*.mojo")):
+            rel = source.relative_to(repo.root)
             if "tests" in rel.parts:
                 continue
             if source.name.startswith("bench_") or source.name.startswith("profile_"):
                 continue
             build_data["force_include"][str(source)] = f"marrow/_mojo/{rel}"
+
+    @staticmethod
+    def _build(repo):
+        """Compile the bindings, the same way `devkit build lib` does.
+
+        `bench=True` because a published wheel is the optimized artifact: the
+        development build takes -O1 to keep the edit-compile loop short, and
+        that trade is wrong for something a user installs.
+        """
+        if not shutil.which("mojo"):
+            raise RuntimeError(
+                f"{repo.libmarrow} not found and mojo not in PATH. "
+                "Run `pixi run build_python` first, or install mojo-compiler."
+            )
+        toolchain = MojoToolchain(ProcessRunner(repo.root, Progress()))
+        result = toolchain.build_shared_lib(
+            repo.bindings_entry,
+            repo.libmarrow,
+            BuildOptions.for_shared_lib(bench=True),
+            "building libmarrow.so",
+        )
+        if not result.ok:
+            raise RuntimeError(result.failure(f"Failed to build {repo.libmarrow}"))
