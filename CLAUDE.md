@@ -51,7 +51,16 @@ pixi run -e dev test         # everything (pytest -v)
 pixi run -e dev fmt          # mojo format + ruff format
 pixi run package             # package/marrow.mojoc
 pixi run binary_size         # AOT/hybrid/runtime binary-size gate
+pixi run binary_size_check   # the same gate against its recorded baseline
+pixi run -e dev selftest     # the devkit suite, ~1 s, no Mojo compilation
 ```
+
+Every one of those is a thin wrapper over **`devkit`**, the developer tooling
+package: `pixi run -e dev python -m devkit --help` is the same surface with more
+of it exposed (`build`, `size`, `profile`, `golden`, `integration`). It is where
+the compiler flags, the driver generation, the benchmark history and the golden
+case format all live; `conftest.py` is nothing but pytest hooks over it. See
+"Developer tooling" below.
 
 ### While the tree does not compile — `precompile`
 
@@ -121,8 +130,11 @@ pixi run -e dev pytest marrow/expr/tests marrow/kernels/tests   # after editing 
 pixi run -e dev pytest marrow/kernels/tests/test_aggregate.mojo # narrower still
 ```
 
-`python/marrow/libmarrow.so` is rebuilt automatically by `conftest.py` before any
-session that runs Python tests — no manual `build_python` step needed.
+`python/marrow/libmarrow.so` is rebuilt automatically before any session that
+runs something importing `marrow` — no manual `build_python` step needed. The
+rule is `LaneSelector.needs_libmarrow`, and it is narrower than "the Python lane
+is selected": a selection entirely under `devkit/` is pure Python and skips the
+build, so `pixi run -e dev selftest` stays a one-second command.
 
 **Only `pytest` rebuilds it.** `pixi run -e dev python some_script.py` imports
 whatever `.so` is on disk. So the obvious way to measure a change (`git
@@ -236,6 +248,53 @@ def bench_kernel_10k(mut b: Benchmark) raises: _bench_kernel(b, 10_000)
 def bench_kernel_100k(mut b: Benchmark) raises: _bench_kernel(b, 100_000)
 def bench_kernel_1m(mut b: Benchmark) raises: _bench_kernel(b, 1_000_000)
 ```
+
+### Developer tooling — `devkit/`
+
+Everything that builds, tests, benchmarks, profiles or measures the tree lives
+in one package, behind one CLI: `pixi run -e dev python -m devkit --help`. Every
+pixi task is a thin wrapper over it, so a task and the CLI cannot drift.
+
+**`conftest.py` is the entire pytest boundary.** It holds the eleven hooks, the
+four `.mojo` collector classes and one `Harness`; every decision they make lives
+in `devkit`. Only two modules there reach into pytest, both from inside a
+function: `benches.py` for `pytest_benchmark`, and `golden.py` for
+`pytest.mark.skip`. That is what makes the harness testable without a fake
+pytest config — `pixi run -e dev selftest` is ~150 cases in about a second, and
+it never compiles anything.
+
+**The devkit suite is exempt from lane gating** (`LaneSelector.owns`). It tests
+`skip_reason`, so subjecting it to `skip_reason` lets a bug there skip the very
+tests that would catch it — and an all-skipped pytest run exits 0. A
+one-character mutation that skipped every item in every session survived the
+suite until this exemption existed.
+
+Four rules hold, each of which the tooling got wrong at least once:
+
+- **`MojoToolchain` is the only place `mojo` is invoked**, and it resolves the
+  compiler from `PATH`. Naming an absolute path under `.pixi/envs/default/bin`
+  silently compiles with the wrong environment's compiler under `-e bench` or
+  `-e asan`.
+- **`BuildOptions` names a compilation by what it is for** — `for_tests`,
+  `for_benches`, `for_shared_lib`, `for_size_gate`, `for_profiling`. The
+  opt-level policy is load-bearing (see "One selection = one compilation unit")
+  and has exactly one definition.
+- **`cli.py` is the only module that imports click**, and it imports duckdb,
+  archery, pyarrow and marrow *inside* the command that needs them. The `dev`
+  environment has neither duckdb nor archery, so a module-scope import there
+  breaks every other command.
+- **Judge `precompile` by its output, never by its exit status** —
+  `MojoToolchain.reports_errors` exists because a parse failure exits 0.
+- **Nothing under `devkit/` imports `marrow` at module scope.**
+  `devkit/conformance.py` reaches it through `_LazyMarrow`, so importing the
+  module does not load `libmarrow.so`. A plain `import marrow` there would put
+  a shared-library build in front of `pixi run -e dev selftest` and make its
+  unit tests pass or fail on whether a stale `.so` is on disk.
+
+`devkit/tests/` is a package (it carries an `__init__.py`, unlike the
+repository's other test directories) because pytest's rootless import mode would
+otherwise collide a bare test module name with `python/marrow/tests/`'s.
+
 
 ## Architecture
 
@@ -640,9 +699,20 @@ marrow/
 └── tests/                # test_*.mojo + bench_*.mojo for the core modules
 python/                   # Python package + bindings (python/marrow/libmarrow.so)
 └── marrow/tests/         # Python test_*.py and bench_*.py
+devkit/                   # the developer tooling; `python -m devkit --help`
+├── mojo.py               # Repo, ProcessRunner, BuildOptions, MojoToolchain
+├── runner.py             # RunnerOptions, LaneSelector, Selection, SuiteRunner
+├── benches.py            # injection, competition table, rolling history
+├── golden.py             # the corpus: case format, codegen, transpile
+├── conformance.py        # the archery suite
+├── footprint.py          # the AOT size gate
+├── profiling.py          # Instruments and macOS `sample`
+├── cli.py                # the click CLI -- the only click import
+└── tests/                # the devkit suite (`pixi run -e dev selftest`)
 benchmarks/               # standalone programs (they own a `main()`, so they
                           # cannot live inside the package) + binary_size gate
-golden/                   # cross-lane golden query corpus (see COVERAGE.md)
+golden/                   # cross-lane golden query corpus (see COVERAGE.md);
+                          # cases, fixtures and the case vocabulary only
 docs/                     # Quarto site sources and reproducers
 backlog.md                # the open work: epics, tasks and known-wrong answers
 ```
