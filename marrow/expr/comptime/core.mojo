@@ -910,9 +910,11 @@ trait StringValue(ComptimeValue):
     # there is no `FoldKernel` to parameterise a fused node on. The **operand**
     # stays typed, so `min(upper(name))` still fuses `upper(name)`.
 
-    def cast[Target: NumericType](
-        self, dtype: Target, safe: Bool = False
-    ) raises -> StringToNum[Target, Self]:
+    def cast[
+        Target: NumericType
+    ](self, dtype: Target, safe: Bool = False) raises -> StringToNum[
+        Target, Self
+    ]:
         """Parse to `dtype` — `x.cast(int64)`.
 
         The target comes from the *argument's* type, the way `col("a", int64)`
@@ -1097,9 +1099,11 @@ trait NumericValue(PrimitiveValue):
         """`o` wherever this is null, this elsewhere."""
         return FillNull(self.copy(), o.copy())
 
-    def cast[Target: NumericType](
-        self, dtype: Target, safe: Bool = False
-    ) raises -> NumericCast[Target, Self]:
+    def cast[
+        Target: NumericType
+    ](self, dtype: Target, safe: Bool = False) raises -> NumericCast[
+        Target, Self
+    ]:
         """Convert to another numeric type — `x.cast(float64)`.
 
         Wrapping and truncating, as SQL's `CAST` is.
@@ -1112,16 +1116,18 @@ trait NumericValue(PrimitiveValue):
         _reject_checked_cast(safe)
         return NumericCast[Target, Self](self.copy())
 
-    def cast[Target: StringLikeType](
-        self, dtype: Target, safe: Bool = False
-    ) raises -> NumToString[Target, Self]:
+    def cast[
+        Target: StringLikeType
+    ](self, dtype: Target, safe: Bool = False) raises -> NumToString[
+        Target, Self
+    ]:
         """Render to text — `x.cast(string)`."""
         _reject_checked_cast(safe)
         return NumToString[Target, Self](self.copy())
 
-    def cast(self, dtype: BoolType, safe: Bool = False) raises -> NumToBool[
-        Self
-    ]:
+    def cast(
+        self, dtype: BoolType, safe: Bool = False
+    ) raises -> NumToBool[Self]:
         """Nonzero is true — `x.cast(bool_)`."""
         _reject_checked_cast(safe)
         return NumToBool[Self](self.copy())
@@ -1582,36 +1588,37 @@ trait BoolValue(ComptimeValue):
     def lane[W: Int](self, bound: Self.Bound, idx: Int) -> SIMD[DType.bool, W]:
         ...
 
+    # ---------------------------------------------------------------------------
+    # Unnamed, ColumnBound — what the families cut across
+    # ---------------------------------------------------------------------------
+    # The two traits below are **not** families. A family answers "what shape does
+    # this produce" and every node belongs to exactly one; these answer two
+    # narrower questions that recur *across* families, and a node opts into each
+    # independently. `NumericCompare` is a `BoolValue` and `Unnamed`; `ListLength`
+    # is a `NumericValue`, `Unnamed` *and* `ColumnBound`.
+    #
+    # They exist because the answers were copied: nine nodes across four files
+    # spelled `return String()`, and seven spelled
+    # `return bound.to_data().owned_validity()` — byte-identical bodies a reader
+    # has to diff to know are the same. A trait default states it once, and the
+    # conformance list says which nodes mean it.
+    #
+    # **What could not be factored, and why.** `columns()` duplicates just as
+    # widely — five nodes spell `[self._name.copy()]`, five spell
+    # `merged(self.l.columns(), self.r.columns())` — and it stays duplicated,
+    # because both bodies read a *field*. Mojo rejects a `var` requirement on a
+    # trait outright ("traits do not support 'var' fields; use 'comptime' to
+    # declare associated types"), so no default can reach `self._name` or
+    # `self.l`; routing through an abstract accessor would only trade one one-line
+    # body per node for another. The two below are factorable precisely because
+    # neither reads `self`: `Unnamed.name` reads nothing, and
+    # `ColumnBound.validity` reads only its `bound` argument.
 
-# ---------------------------------------------------------------------------
-# Unnamed, ColumnBound — what the families cut across
-# ---------------------------------------------------------------------------
-# The two traits below are **not** families. A family answers "what shape does
-# this produce" and every node belongs to exactly one; these answer two
-# narrower questions that recur *across* families, and a node opts into each
-# independently. `NumericCompare` is a `BoolValue` and `Unnamed`; `ListLength`
-# is a `NumericValue`, `Unnamed` *and* `ColumnBound`.
-#
-# They exist because the answers were copied: nine nodes across four files
-# spelled `return String()`, and seven spelled
-# `return bound.to_data().owned_validity()` — byte-identical bodies a reader
-# has to diff to know are the same. A trait default states it once, and the
-# conformance list says which nodes mean it.
-#
-# **What could not be factored, and why.** `columns()` duplicates just as
-# widely — five nodes spell `[self._name.copy()]`, five spell
-# `merged(self.l.columns(), self.r.columns())` — and it stays duplicated,
-# because both bodies read a *field*. Mojo rejects a `var` requirement on a
-# trait outright ("traits do not support 'var' fields; use 'comptime' to
-# declare associated types"), so no default can reach `self._name` or
-# `self.l`; routing through an abstract accessor would only trade one one-line
-# body per node for another. The two below are factorable precisely because
-# neither reads `self`: `Unnamed.name` reads nothing, and
-# `ColumnBound.validity` reads only its `bound` argument.
-
-    def cast[Target: NumericType](
-        self, dtype: Target, safe: Bool = False
-    ) raises -> BoolToNum[Target, Self]:
+    def cast[
+        Target: NumericType
+    ](self, dtype: Target, safe: Bool = False) raises -> BoolToNum[
+        Target, Self
+    ]:
         """True is 1 — `x.cast(int64)`."""
         _reject_checked_cast(safe)
         return BoolToNum[Target, Self](self.copy())

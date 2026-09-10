@@ -148,9 +148,7 @@ class Array(_Wrapper):
 
     def argsort(self, order="ascending", null_placement="at_end"):
         asc, nulls_first = _sort_flags(order, null_placement)
-        return Array.wrap(
-            _ma.sort_indices(self._binding, asc, nulls_first, _serial())
-        )
+        return Array.wrap(_ma.sort_indices(self._binding, asc, nulls_first, _serial()))
 
     def sort(self, order="ascending", null_placement="at_end"):
         asc, nulls_first = _sort_flags(order, null_placement)
@@ -163,9 +161,7 @@ class Array(_Wrapper):
         )
 
     def filter(self, mask):
-        return Array.wrap(
-            _ma.filter(self._binding, _as_binding_array(mask), _serial())
-        )
+        return Array.wrap(_ma.filter(self._binding, _as_binding_array(mask), _serial()))
 
     def drop_null(self):
         return Array.wrap(_ma.drop_null(self._binding, _serial()))
@@ -185,9 +181,7 @@ def _as_binding_array(value):
 
 def _sort_flags(order, null_placement):
     asc = order != "descending" if order is not None else True
-    nulls_first = (
-        null_placement != "at_end" if null_placement is not None else False
-    )
+    nulls_first = null_placement != "at_end" if null_placement is not None else False
     return asc, nulls_first
 
 

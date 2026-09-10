@@ -204,9 +204,7 @@ class LazyTable(_Wrapper):
         lanes can share.
         """
         names, values = _projection(positional, named, "project")
-        return LazyTable.wrap(
-            self._binding.project(names, [unwrap(v) for v in values])
-        )
+        return LazyTable.wrap(self._binding.project(names, [unwrap(v) for v in values]))
 
     def with_columns(self, *positional, **named):
         """Add or replace computed columns, keeping every other one.
@@ -241,9 +239,7 @@ class LazyTable(_Wrapper):
                     "with_columns: pass window functions or ordinary "
                     "expressions, not both in one call — chain two calls"
                 )
-            return LazyTable.wrap(
-                self._binding.with_window_columns(names, bindings)
-            )
+            return LazyTable.wrap(self._binding.with_window_columns(names, bindings))
         return LazyTable.wrap(self._binding.with_columns(names, bindings))
 
     # ibis spells `with_columns` as `mutate`. Both work.
@@ -346,14 +342,11 @@ class LazyTable(_Wrapper):
             if not key_list:
                 raise ValueError("sort_by: needs at least one key")
             directions = (
-                list(ascending)
-                if ascending is not None
-                else [True] * len(key_list)
+                list(ascending) if ascending is not None else [True] * len(key_list)
             )
             if len(directions) != len(key_list):
                 raise ValueError(
-                    f"sort_by: {len(key_list)} keys but "
-                    f"{len(directions)} directions"
+                    f"sort_by: {len(key_list)} keys but {len(directions)} directions"
                 )
             # Normalised into `order_by`'s `(key, bool)` pairs rather than
             # reaching the binding separately: one sorting path, so the two
@@ -422,9 +415,7 @@ class LazyTable(_Wrapper):
             if on is not None:
                 left_on = right_on = on
             if left_on is None or right_on is None:
-                raise ValueError(
-                    "join: pass `on`, or both `left_on` and `right_on`"
-                )
+                raise ValueError("join: pass `on`, or both `left_on` and `right_on`")
             if isinstance(left_on, (str, bytes)):
                 left_on = [left_on]
             if isinstance(right_on, (str, bytes)):
@@ -432,9 +423,7 @@ class LazyTable(_Wrapper):
             left = _key_indices(self.column_names, left_on, "left")
             right = _key_indices(other.column_names, right_on, "right")
         if len(left) != len(right):
-            raise ValueError(
-                f"join: {len(left)} left keys but {len(right)} right keys"
-            )
+            raise ValueError(f"join: {len(left)} left keys but {len(right)} right keys")
         return LazyTable.wrap(
             self._binding.join(
                 other.unwrap(), left, right, kind if kind is not None else how
@@ -472,9 +461,7 @@ class LazyTable(_Wrapper):
         `collect()` calls `Pipeline.collect`, which drains the chain and
         concatenates into one batch; this keeps the boundaries the engine
         already produced, which is the shape `Table.from_batches` wants."""
-        return [
-            RecordBatch.wrap(b) for b in self._binding.batches(num_threads)
-        ]
+        return [RecordBatch.wrap(b) for b in self._binding.batches(num_threads)]
 
     def to_table(self, num_threads=0):
         """Run the plan and return an eager :class:`~marrow.Table`."""

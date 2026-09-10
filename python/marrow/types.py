@@ -268,9 +268,7 @@ def schema(fields):
     Also accepts anything implementing the Arrow PyCapsule schema protocol."""
     if hasattr(fields, "__arrow_c_schema__") or isinstance(fields, Schema):
         return Schema.wrap(_ma.Schema(unwrap(fields)))
-    return Schema.wrap(
-        _ma.Schema([unwrap(f) for f in _coerce_fields(fields)])
-    )
+    return Schema.wrap(_ma.Schema([unwrap(f) for f in _coerce_fields(fields)]))
 
 
 def infer_type(obj):

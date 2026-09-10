@@ -26,7 +26,8 @@ def plan() raises -> DynRelation:
     var agg = t.aggregate(
         keys=[col("k", string)],
         aggs=[
-            col("v", int64).cast(string, safe=False)
+            col("v", int64)
+            .cast(string, safe=False)
             .string_agg(",", order_by=[col("v", int64)])
             .alias("s")
         ],

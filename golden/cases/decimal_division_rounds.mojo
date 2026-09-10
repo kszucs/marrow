@@ -29,6 +29,7 @@ def plan() raises -> DynRelation:
     return d.project(
         ["d"],
         [
-            col("a", decimal128(10, 2)) / lit(3, decimal128(10, 2)).cast(string, safe=False)
+            col("a", decimal128(10, 2))
+            / lit(3, decimal128(10, 2)).cast(string, safe=False)
         ],
     )

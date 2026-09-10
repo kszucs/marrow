@@ -84,8 +84,7 @@ class _Tabular(_Wrapper):
 
     def to_pydict(self):
         return {
-            name: col.to_pylist()
-            for name, col in zip(self.column_names, self.columns)
+            name: col.to_pylist() for name, col in zip(self.column_names, self.columns)
         }
 
     def to_pylist(self):
@@ -161,9 +160,7 @@ class RecordBatch(_Tabular):
         )
 
     def sort_by(self, by, null_placement=None, num_threads=0):
-        return RecordBatch.wrap(
-            self._binding.sort_by(by, null_placement, num_threads)
-        )
+        return RecordBatch.wrap(self._binding.sort_by(by, null_placement, num_threads))
 
     def rename_columns(self, names):
         return RecordBatch.wrap(self._binding.rename_columns(list(names)))
@@ -192,9 +189,7 @@ class RecordBatch(_Tabular):
         if isinstance(right_keys, str):
             right_keys = [right_keys]
         return RecordBatch.wrap(
-            self._binding.join(
-                unwrap(right), keys, right_keys, join_type, num_threads
-            )
+            self._binding.join(unwrap(right), keys, right_keys, join_type, num_threads)
         )
 
     # ── constructors ───────────────────────────────────────────────────────
@@ -203,9 +198,7 @@ class RecordBatch(_Tabular):
     def from_pydict(cls, mapping, schema=None):
         """``{name: values}`` — values may be lists or arrays."""
         names = list(mapping)
-        return cls.from_arrays(
-            [mapping[n] for n in names], names=names, schema=schema
-        )
+        return cls.from_arrays([mapping[n] for n in names], names=names, schema=schema)
 
     @classmethod
     def from_pylist(cls, rows, schema=None):
@@ -226,13 +219,9 @@ class RecordBatch(_Tabular):
         if schema is None and names is None:
             raise ValueError("from_arrays: pass `names` or `schema`")
         if schema is None:
-            schema = _schema(
-                [_field(n, c.type) for n, c in zip(names, columns)]
-            )
+            schema = _schema([_field(n, c.type) for n, c in zip(names, columns)])
         return cls.wrap(
-            _ma.record_batch(
-                [unwrap(c) for c in columns], unwrap(schema), None
-            )
+            _ma.record_batch([unwrap(c) for c in columns], unwrap(schema), None)
         )
 
 

@@ -292,9 +292,7 @@ class Column(_Wrapper):
         for string parsing, which nulls the unparseable value. Same flag,
         default and meaning as :func:`marrow.compute.cast`, which casts an
         array rather than an expression."""
-        return Column.wrap(
-            _ma.expr_cast(self._binding, unwrap(target_type), safe)
-        )
+        return Column.wrap(_ma.expr_cast(self._binding, unwrap(target_type), safe))
 
     def isin(self, values):
         """Membership against a value set — a list or a :class:`~marrow.Array`.
@@ -302,9 +300,7 @@ class Column(_Wrapper):
         The set is hashed once per batch rather than per row, which is why it
         is a value set and not an expression: ``col("a").isin(col("b"))`` is a
         different question and is not this one."""
-        return Column.wrap(
-            _ma.expr_isin(self._binding, _as_binding_array(values))
-        )
+        return Column.wrap(_ma.expr_isin(self._binding, _as_binding_array(values)))
 
     # ── n-ary conditionals ──────────────────────────────────────────────────
 
@@ -409,9 +405,7 @@ def _make_verb(verb, arity):
 
     def method(self, *args):
         if len(args) != extra:
-            raise TypeError(
-                f"{verb}() takes {extra} argument(s), got {len(args)}"
-            )
+            raise TypeError(f"{verb}() takes {extra} argument(s), got {len(args)}")
         return _call(verb, self, *args)
 
     method.__name__ = verb
@@ -511,8 +505,9 @@ class Aggregate(_Wrapper):
         Only an aggregate may be windowed: a per-row value has nothing to do
         with a frame, and `col("v").over(...)` is a mistake worth a diagnostic
         rather than a silent column of copies."""
-        return _over(self._binding, partition_by, order_by, ascending,
-                     nulls_first, rows)
+        return _over(
+            self._binding, partition_by, order_by, ascending, nulls_first, rows
+        )
 
     def __str__(self):
         return self.render()
@@ -545,8 +540,9 @@ class Window(_Wrapper):
         as ``(preceding, following)``; without it the default ``RANGE`` frame
         applies, and the two agree only when the order key has no duplicates.
         """
-        return _over(self._binding, partition_by, order_by, ascending,
-                     nulls_first, rows)
+        return _over(
+            self._binding, partition_by, order_by, ascending, nulls_first, rows
+        )
 
     def referenced_columns(self):
         """Every column name this window function reads."""
@@ -661,9 +657,7 @@ def case_when(*pairs, else_=None):
         conditions.append(_expr(condition))
         values.append(_expr(value))
     return Column.wrap(
-        _ma.expr_case_when(
-            conditions, values, None if else_ is None else _expr(else_)
-        )
+        _ma.expr_case_when(conditions, values, None if else_ is None else _expr(else_))
     )
 
 

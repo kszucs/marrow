@@ -1195,9 +1195,9 @@ def _array_to_device(
     py_self: PythonObject, ctx: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[DynArray]()
-    return ptr[].to_device(
-        ExecContext(py=ctx).device.value()
-    ).to_python_object()
+    return (
+        ptr[].to_device(ExecContext(py=ctx).device.value()).to_python_object()
+    )
 
 
 def _array_to_cpu(

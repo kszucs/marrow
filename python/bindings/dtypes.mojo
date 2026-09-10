@@ -164,9 +164,7 @@ def time64(unit: PythonObject) raises -> PythonObject:
     return dt.time64(_parse_time_unit(unit)).to_dyn().to_python_object()
 
 
-def timestamp(
-    unit: PythonObject, tz: PythonObject
-) raises -> PythonObject:
+def timestamp(unit: PythonObject, tz: PythonObject) raises -> PythonObject:
     """Create a timestamp DataType."""
     var tz_str = "" if tz is None else String(py=tz)
     return (

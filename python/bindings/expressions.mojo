@@ -448,7 +448,9 @@ def window_ntile(buckets: PythonObject) raises -> PythonObject:
     return wrap_window(_ntile(Int(py=buckets)))
 
 
-def _expr_lag(py_self: PythonObject, offset: PythonObject) raises -> PythonObject:
+def _expr_lag(
+    py_self: PythonObject, offset: PythonObject
+) raises -> PythonObject:
     return wrap_window(unwrap(py_self).lag(Int(py=offset)))
 
 
@@ -466,7 +468,9 @@ def _expr_last_value(py_self: PythonObject) raises -> PythonObject:
     return wrap_window(unwrap(py_self).last_value())
 
 
-def _expr_nth_value(py_self: PythonObject, n: PythonObject) raises -> PythonObject:
+def _expr_nth_value(
+    py_self: PythonObject, n: PythonObject
+) raises -> PythonObject:
     return wrap_window(unwrap(py_self).nth_value(Int(py=n)))
 
 

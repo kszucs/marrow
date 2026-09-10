@@ -25,8 +25,6 @@ from marrow.arrays import Int32Array
 # ---------------------------------------------------------------------------
 
 
-
-
 def _export_c_array(
     schema: Schema, columns: List[DynArray]
 ) raises -> PythonObject:
@@ -163,8 +161,6 @@ def _record_batch_select(
         return ptr[].select(names).to_python_object()
 
 
-
-
 def _record_batch_arrow_c_array(
     py_self: PythonObject,
     requested_schema: PythonObject,
@@ -275,8 +271,6 @@ def _table_equals(
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     return PythonObject(ptr[] == other.downcast_value_ptr[Table]()[])
-
-
 
 
 def _table_arrow_c_stream(
@@ -465,18 +459,22 @@ def _record_batch_add_column(
     column: PythonObject,
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return ptr[].add_column(
-        Int(py=index), Field(py=field), DynArray(py=column)
-    ).to_python_object()
+    return (
+        ptr[]
+        .add_column(Int(py=index), Field(py=field), DynArray(py=column))
+        .to_python_object()
+    )
 
 
 def _record_batch_append_column(
     py_self: PythonObject, field: PythonObject, column: PythonObject
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return ptr[].append_column(
-        Field(py=field), DynArray(py=column)
-    ).to_python_object()
+    return (
+        ptr[]
+        .append_column(Field(py=field), DynArray(py=column))
+        .to_python_object()
+    )
 
 
 def _record_batch_remove_column(
@@ -493,9 +491,11 @@ def _record_batch_set_column(
     column: PythonObject,
 ) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
-    return ptr[].set_column(
-        Int(py=index), Field(py=field), DynArray(py=column)
-    ).to_python_object()
+    return (
+        ptr[]
+        .set_column(Int(py=index), Field(py=field), DynArray(py=column))
+        .to_python_object()
+    )
 
 
 # ---------------------------------------------------------------------------

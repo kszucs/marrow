@@ -63,7 +63,6 @@ from marrow.tabular import RecordBatch
 # ---------------------------------------------------------------------------
 
 
-
 def _unboxed(obj: PythonObject) raises -> RuntimeValue:
     """One expression at its **concrete** type, not behind `DynValue`.
 
@@ -81,7 +80,6 @@ def _unboxed(obj: PythonObject) raises -> RuntimeValue:
     if Bool(py=builtins.isinstance(obj, builtins.str)):
         return _column(String(py=obj))
     return _unwrap_expr(obj)
-
 
 
 def _agg(obj: PythonObject) raises -> DynValue:
@@ -116,7 +114,6 @@ def _string_list(obj: PythonObject) raises -> List[String]:
     for i in range(Int(py=obj.__len__())):
         out.append(String(py=obj[i]))
     return out^
-
 
 
 def _int_list(obj: PythonObject) raises -> List[Int]:

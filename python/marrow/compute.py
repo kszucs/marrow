@@ -186,7 +186,9 @@ def cast(arr, target_type, *, safe=True, memory_pool=None, ctx=None):
 
     Equivalent to ``pyarrow.compute.cast``.
     """
-    return Array.wrap(_ma.cast(arr.unwrap(), unwrap(target_type), safe, (ctx or _serial())))
+    return Array.wrap(
+        _ma.cast(arr.unwrap(), unwrap(target_type), safe, (ctx or _serial()))
+    )
 
 
 # ── Sorting ───────────────────────────────────────────────────────────────────

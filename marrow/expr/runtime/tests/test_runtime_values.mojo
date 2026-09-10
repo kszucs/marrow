@@ -867,9 +867,7 @@ def test_verb_call_matches_the_free_function() raises:
     var generic2 = rv.call("add", [rv.column("a"), rv.column("b")])
     assert_equal(String(direct2), String(generic2))
 
-    var direct3 = rv.substr(
-        rv.column("s"), rv.column("i"), rv.column("n")
-    )
+    var direct3 = rv.substr(rv.column("s"), rv.column("i"), rv.column("n"))
     var generic3 = rv.call(
         "substr", [rv.column("s"), rv.column("i"), rv.column("n")]
     )
