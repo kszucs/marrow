@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.9.37">
+<meta name="generator" content="quarto-1.9.38">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -62,22 +62,26 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <script src="../site_libs/quarto-nav/quarto-nav.js"></script>
-<script src="../site_libs/quarto-nav/headroom.min.js"></script>
 <script src="../site_libs/clipboard/clipboard.min.js"></script>
 <script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
+<link href="../guide/types.html" rel="next">
+<link href="../tutorials/data-pipeline.html" rel="prev">
+<link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="../site_libs/quarto-html/popper.min.js"></script>
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-acf12a64177840b8d86f2d4f01b2e9fb.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-3802eb58874adc8d310cd233d50b5c6f.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -105,11 +109,183 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
 
 
+<link rel="stylesheet" href="../theme/marrow.css">
+<meta property="og:title" content="Arrays – Marrow">
+<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta property="og:site_name" content="Marrow">
+<meta name="twitter:title" content="Arrays – Marrow">
+<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta name="twitter:card" content="summary_large_image">
 </head>
 
-<body class="nav-fixed quarto-light">
+<body class="nav-sidebar floating nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top">
@@ -117,8 +293,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
     <a href="../index.html" class="navbar-brand navbar-brand-logo">
-    <img src="../../logo.png" alt="marrow" class="navbar-logo light-content">
-    <img src="../../logo.png" alt="marrow" class="navbar-logo dark-content">
+    <img src="../assets/logo.png" alt="marrow" class="navbar-logo light-content">
+    <img src="../assets/logo.png" alt="marrow" class="navbar-logo dark-content">
     </a>
     <a class="navbar-brand" href="../index.html">
     <span class="navbar-title">Marrow</span>
@@ -132,46 +308,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
             <ul class="navbar-nav navbar-nav-scroll me-auto">
   <li class="nav-item">
     <a class="nav-link" href="../index.html"> 
-<span class="menu-text">Quickstart</span></a>
+<span class="menu-text">Home</span></a>
   </li>  
-  <li class="nav-item dropdown ">
-    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-guides" role="link" data-bs-toggle="dropdown" aria-expanded="false">
- <span class="menu-text">Guides</span>
-    </a>
-    <ul class="dropdown-menu" aria-labelledby="nav-menu-guides">    
-        <li>
-    <a class="dropdown-item" href="../guide/arrays.html">
- <span class="dropdown-text">Arrays</span></a>
+  <li class="nav-item">
+    <a class="nav-link active" href="../tutorials/quickstart.html" aria-current="page"> 
+<span class="menu-text">Tutorials</span></a>
   </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/compute.html">
- <span class="dropdown-text">Compute</span></a>
+  <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html"> 
+<span class="menu-text">Guide</span></a>
   </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/expressions.html">
- <span class="dropdown-text">Expressions</span></a>
+  <li class="nav-item">
+    <a class="nav-link" href="../reference/architecture.html"> 
+<span class="menu-text">Reference</span></a>
   </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/types.html">
- <span class="dropdown-text">Type System</span></a>
-  </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/interop.html">
- <span class="dropdown-text">PyArrow Interop</span></a>
-  </li>  
-    </ul>
-  </li>
-  <li class="nav-item dropdown ">
-    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-examples" role="link" data-bs-toggle="dropdown" aria-expanded="false">
- <span class="menu-text">Examples</span>
-    </a>
-    <ul class="dropdown-menu" aria-labelledby="nav-menu-examples">    
-        <li>
-    <a class="dropdown-item" href="../examples/datafusion.html">
- <span class="dropdown-text">DataFusion UDFs</span></a>
-  </li>  
-    </ul>
-  </li>
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
   <li class="nav-item">
@@ -179,20 +329,206 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span class="menu-text">Benchmarks</span></a>
   </li>  
   <li class="nav-item compact">
-    <a class="nav-link" href="https://github.com/kszucs/marrow"> <i class="bi bi-github" role="img">
+    <a class="nav-link" href="https://github.com/kszucs/marrow"> <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
 <span class="menu-text"></span></a>
   </li>  
 </ul>
           </div> <!-- /navcollapse -->
             <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
 </div>
       </div> <!-- /container-fluid -->
     </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/arrays.html">Data</a></li><li class="breadcrumb-item"><a href="../guide/arrays.html">Arrays</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
 </header>
 <!-- content -->
 <div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">Start here</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">10-minute quickstart</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../tutorials/data-pipeline.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Build a data pipeline</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+ <span class="menu-text">Data</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/arrays.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Arrays</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/types.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Type system</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/scalars.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scalars</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/tables.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Tables &amp; joins</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
+ <span class="menu-text">Compute</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/compute.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Compute kernels</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/sorting.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Sorting</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/gpu.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">GPU execution</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+ <span class="menu-text">Queries</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/queries-lazy.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Lazy queries (Python)</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/expressions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Queries in Mojo</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/compile.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Compile a query</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
+ <span class="menu-text">I/O &amp; interop</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/io.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Parquet &amp; Arrow IPC</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/interop.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">PyArrow interop</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">DataFusion UDFs</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="true">
+ <span class="menu-text">Reference</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../reference/architecture.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Architecture</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../reference/status.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Status &amp; limitations</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
 <!-- margin-sidebar -->
     <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
         <nav id="TOC" role="doc-toc" class="toc-active">
@@ -212,13 +548,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#struct-arrays" id="toc-struct-arrays" class="nav-link" data-scroll-target="#struct-arrays">Struct arrays</a></li>
   <li><a href="#slicing" id="toc-slicing" class="nav-link" data-scroll-target="#slicing">Slicing</a></li>
   <li><a href="#fixedsizelist-arrays" id="toc-fixedsizelist-arrays" class="nav-link" data-scroll-target="#fixedsizelist-arrays">FixedSizeList arrays</a></li>
+  <li><a href="#building-arrays-in-mojo" id="toc-building-arrays-in-mojo" class="nav-link" data-scroll-target="#building-arrays-in-mojo">Building arrays in Mojo</a>
+  <ul class="collapse">
+  <li><a href="#nested-builders" id="toc-nested-builders" class="nav-link" data-scroll-target="#nested-builders">Nested builders</a></li>
+  <li><a href="#type-erased-builders" id="toc-type-erased-builders" class="nav-link" data-scroll-target="#type-erased-builders">Type-erased builders</a></li>
+  </ul></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/arrays.html">Data</a></li><li class="breadcrumb-item"><a href="../guide/arrays.html">Arrays</a></li></ol></nav>
 <div class="quarto-title">
 <h1 class="title">Arrays</h1>
 </div>
@@ -237,40 +579,61 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>Arrays are the core data structure in Marrow. They are <strong>immutable</strong> and <strong>columnar</strong> — values are stored contiguously in memory with a separate validity bitmap that tracks null positions.</p>
+<p>Arrays are the core data structure in marrow. They are <strong>immutable</strong> and <strong>columnar</strong> — values sit contiguously in memory with a separate validity bitmap tracking null positions. Immutability is what makes a copy O(1): every array holds its data behind ref-counted buffers, so sharing one costs a refcount bump, never a memcpy.</p>
+<div class="tabset-margin-container"></div><div class="panel-tabset">
+<ul class="nav nav-tabs" role="tablist"><li class="nav-item" role="presentation"><a class="nav-link active" id="tabset-1-1-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-1" role="tab" aria-controls="tabset-1-1" aria-selected="true" href="">Python</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-2-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-2" role="tab" aria-controls="tabset-1-2" aria-selected="false" href="">Mojo</a></li></ul>
+<div class="tab-content">
+<div id="tabset-1-1" class="tab-pane active" role="tabpanel" aria-labelledby="tabset-1-1-tab">
+<p><code>ma.array()</code> turns a Python list into a columnar array, inferring the type in one pass. <code>None</code> marks a null.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<div id="tabset-1-2" class="tab-pane" role="tabpanel" aria-labelledby="tabset-1-2-tab">
+<p><code>array()</code> takes the dtype as an <strong>argument</strong>, not a parameter, and lives in <code>marrow.builders</code>:</p>
+<pre class="mojo"><code>from marrow.builders import array, arange, nulls
+from marrow.dtypes import int32, int64, Int32Type
+
+var a = array([1, 2, 3, None, 5], int64)   # nulls at index 3
+var b = array([True, False, True])          # BoolArray — no dtype needed
+var c = array(["hello", None, "world"])     # StringArray
+var d = arange[Int32Type](0, 10)</code></pre>
+</div>
+</div>
+</div>
+<p>The rest of this page is the Python API; <a href="#building-arrays-in-mojo">Building arrays in Mojo</a> at the end covers the native builder API.</p>
 <section id="primitive-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="primitive-arrays">Primitive arrays</h2>
 <p>Primitive arrays hold fixed-size scalar values: booleans, integers, and floats.</p>
-<div id="6df6f453" class="cell" data-execution_count="2">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Integer arrays</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>i64 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>])</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>i32 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>u8  <span class="op">=</span> ma.array([<span class="dv">0</span>, <span class="dv">127</span>, <span class="dv">255</span>],   <span class="bu">type</span><span class="op">=</span>ma.uint8())</span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(i64)</span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(i32)</span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(u8)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="5b428ed1" class="cell" data-execution_count="2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Integer arrays</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>i64 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>])</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>i32 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>u8  <span class="op">=</span> ma.array([<span class="dv">0</span>, <span class="dv">127</span>, <span class="dv">255</span>],   <span class="bu">type</span><span class="op">=</span>ma.uint8())</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(i64)</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(i32)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(u8)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([1, 2, 3, 4, 5])
 PrimitiveArray[int32]([1, 2, 3, 4, 5])
 PrimitiveArray[uint8]([0, 127, 255])</code></pre>
 </div>
 </div>
-<div id="e0001258" class="cell" data-execution_count="3">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Floating point</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>f32 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>], <span class="bu">type</span><span class="op">=</span>ma.float32())</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>f64 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>])   <span class="co"># float64 inferred</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(f32)</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(f64)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="c0809bf2" class="cell" data-execution_count="3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Floating point</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>f32 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>], <span class="bu">type</span><span class="op">=</span>ma.float32())</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>f64 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>])   <span class="co"># float64 inferred</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(f32)</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(f64)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[float32]([1.0, 2.5, 3.14])
 PrimitiveArray[float64]([1.0, 2.5, 3.14])</code></pre>
 </div>
 </div>
-<div id="acd4faa6" class="cell" data-execution_count="4">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Boolean</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>])</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(b)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="37a8a0f5" class="cell" data-execution_count="4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Boolean</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>])</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(b)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>BoolArray([True, False, True, False])</code></pre>
 </div>
@@ -278,15 +641,17 @@ PrimitiveArray[float64]([1.0, 2.5, 3.14])</code></pre>
 <section id="null-values" class="level3">
 <h3 class="anchored" data-anchor-id="null-values">Null values</h3>
 <p>Pass <code>None</code> to mark a position as null. The validity bitmap tracks which positions are valid.</p>
-<div id="af7cf37e" class="cell" data-execution_count="5">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(arr)</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, arr.null_count())</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(0):"</span>, arr.is_valid(<span class="dv">0</span>))   <span class="co"># True</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(1):"</span>, arr.is_valid(<span class="dv">1</span>))   <span class="co"># False — null</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="9dea2e2c" class="cell" data-execution_count="5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(arr)</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, arr.null_count)</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid:  "</span>, arr.is_valid())     <span class="co"># elementwise BoolArray</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(0):"</span>, arr[<span class="dv">0</span>].is_valid())   <span class="co"># True</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(1):"</span>, arr[<span class="dv">1</span>].is_valid())   <span class="co"># False — null</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([1, NULL, 3, NULL, 5])
 null count: 2
+is_valid:   BoolArray([True, False, True, False, True])
 is_valid(0): True
 is_valid(1): False</code></pre>
 </div>
@@ -301,18 +666,18 @@ Note
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p><strong>Null is not zero.</strong> <code>is_valid(1)</code> is <code>False</code> — the value at index 1 is absent entirely, not 0 or empty.</p>
+<p><strong>Null is not zero.</strong> <code>is_valid()</code> reports <code>False</code> at index 1 — the value there is absent entirely, not 0 or empty. <code>Array.is_valid()</code> returns an elementwise <code>BoolArray</code> (like <code>pyarrow.compute.is_valid</code>); index into the array first (<code>arr[1]</code>) to check a single position.</p>
 </div>
 </div>
 </section>
 <section id="inspecting-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="inspecting-arrays">Inspecting arrays</h3>
-<div id="a44f2008" class="cell" data-execution_count="6">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, <span class="bu">len</span>(arr))</span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, arr.null_count())</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:      "</span>, arr.<span class="bu">type</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="920b75fb" class="cell" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, <span class="bu">len</span>(arr))</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, arr.null_count)</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:      "</span>, arr.<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>length:     5
 null count: 1
@@ -324,11 +689,11 @@ type:       int32</code></pre>
 <section id="string-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="string-arrays">String arrays</h2>
 <p>String arrays store variable-length UTF-8 strings.</p>
-<div id="efad9ab9" class="cell" data-execution_count="7">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"hello"</span>, <span class="va">None</span>, <span class="st">"world"</span>, <span class="st">"mañana"</span>])</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s)</span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, s.null_count())</span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(1):"</span>, s.is_valid(<span class="dv">1</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="2444f7d3" class="cell" data-execution_count="7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"hello"</span>, <span class="va">None</span>, <span class="st">"world"</span>, <span class="st">"mañana"</span>])</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s)</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, s.null_count)</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(1):"</span>, s[<span class="dv">1</span>].is_valid())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>StringArray([hello, NULL, world, mañana])
 null count: 1
@@ -339,10 +704,10 @@ is_valid(1): False</code></pre>
 <section id="list-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="list-arrays">List arrays</h2>
 <p>List arrays store variable-length sequences. Each element is itself a list.</p>
-<div id="0122aad9" class="cell" data-execution_count="8">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>nested <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], [<span class="dv">6</span>]])</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(nested)</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, nested.<span class="bu">type</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="e1fcc5c9" class="cell" data-execution_count="8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>nested <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], [<span class="dv">6</span>]])</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(nested)</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, nested.<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>ListArray([PrimitiveArray[int64]([1, 2]), PrimitiveArray[int64]([3, 4, 5]), PrimitiveArray[int64]([6])])
 type: list&lt;int64&gt;</code></pre>
@@ -350,10 +715,10 @@ type: list&lt;int64&gt;</code></pre>
 </div>
 <section id="nulls-in-list-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="nulls-in-list-arrays">Nulls in list arrays</h3>
-<div id="975f8a40" class="cell" data-execution_count="9">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>with_null <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], <span class="va">None</span>, [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]])</span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(with_null)</span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, with_null.null_count())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="ab2f4734" class="cell" data-execution_count="9">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>with_null <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], <span class="va">None</span>, [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]])</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(with_null)</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, with_null.null_count)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>ListArray([PrimitiveArray[int64]([1, 2]), NULL, PrimitiveArray[int64]([3, 4, 5])])
 null count: 1</code></pre>
@@ -364,14 +729,14 @@ null count: 1</code></pre>
 <section id="struct-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="struct-arrays">Struct arrays</h2>
 <p>Struct arrays store rows of named fields — like a table with one row per element.</p>
-<div id="41ddff6a" class="cell" data-execution_count="10">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.array([</span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Alice"</span>, <span class="st">"age"</span>: <span class="dv">30</span>},</span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Bob"</span>,   <span class="st">"age"</span>: <span class="dv">25</span>},</span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="va">None</span>,    <span class="st">"age"</span>: <span class="dv">40</span>},   <span class="co"># null name</span></span>
-<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>])</span>
-<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people)</span>
-<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, people.<span class="bu">type</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="a1c0fc1f" class="cell" data-execution_count="10">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.array([</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Alice"</span>, <span class="st">"age"</span>: <span class="dv">30</span>},</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Bob"</span>,   <span class="st">"age"</span>: <span class="dv">25</span>},</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="va">None</span>,    <span class="st">"age"</span>: <span class="dv">40</span>},   <span class="co"># null name</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>])</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people)</span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, people.<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>StructArray({'name': StringArray([Alice, Bob, NULL]), 'age': PrimitiveArray[int64]([30, 25, 40])})
 type: struct&lt;name: string, age: int64&gt;</code></pre>
@@ -381,11 +746,11 @@ type: struct&lt;name: string, age: int64&gt;</code></pre>
 <section id="slicing" class="level2">
 <h2 class="anchored" data-anchor-id="slicing">Slicing</h2>
 <p><code>slice(offset, length)</code> returns a zero-copy view of a sub-range. No data is copied.</p>
-<div id="cab0b239" class="cell" data-execution_count="11">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>, <span class="dv">60</span>])</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"original: "</span>, arr)</span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"slice(2, 3):"</span>, arr.<span class="bu">slice</span>(<span class="dv">2</span>, <span class="dv">3</span>))   <span class="co"># [30, NULL, 50]</span></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"slice(0, 4):"</span>, arr.<span class="bu">slice</span>(<span class="dv">0</span>, <span class="dv">4</span>))   <span class="co"># [10, 20, 30, NULL]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="08e6876a" class="cell" data-execution_count="11">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>, <span class="dv">60</span>])</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"original: "</span>, arr)</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"slice(2, 3):"</span>, arr.<span class="bu">slice</span>(<span class="dv">2</span>, <span class="dv">3</span>))   <span class="co"># [30, NULL, 50]</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"slice(0, 4):"</span>, arr.<span class="bu">slice</span>(<span class="dv">0</span>, <span class="dv">4</span>))   <span class="co"># [10, 20, 30, NULL]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>original:  PrimitiveArray[int64]([10, 20, 30, NULL, 50, 60])
 slice(2, 3): PrimitiveArray[int64]([30, NULL, 50])
@@ -393,9 +758,9 @@ slice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])</code></pre>
 </div>
 </div>
 <p>Slicing works on all array types:</p>
-<div id="5aa41c04" class="cell" data-execution_count="12">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>, <span class="st">"d"</span>, <span class="st">"e"</span>])</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s.<span class="bu">slice</span>(<span class="dv">1</span>, <span class="dv">3</span>))   <span class="co"># ["b", "c", "d"]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="a0e93aec" class="cell" data-execution_count="12">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>, <span class="st">"d"</span>, <span class="st">"e"</span>])</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s.<span class="bu">slice</span>(<span class="dv">1</span>, <span class="dv">3</span>))   <span class="co"># ["b", "c", "d"]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>StringArray([b, c, d])</code></pre>
 </div>
@@ -403,24 +768,107 @@ slice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])</code></pre>
 </section>
 <section id="fixedsizelist-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="fixedsizelist-arrays">FixedSizeList arrays</h2>
-<p>FixedSizeList arrays store sequences of a fixed length per element — useful for embedding vectors or coordinates.</p>
-<div id="d9045d4f" class="cell" data-execution_count="13">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 2D coordinates: each element has exactly 2 values</span></span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>coords <span class="op">=</span> ma.array([[<span class="fl">1.0</span>, <span class="fl">2.0</span>], [<span class="fl">3.0</span>, <span class="fl">4.0</span>], [<span class="fl">5.0</span>, <span class="fl">6.0</span>]])</span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(coords)</span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, coords.<span class="bu">type</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>FixedSizeList arrays store sequences of a <em>fixed</em> length per element — the natural layout for embedding vectors or coordinates, where every row has the same width.</p>
+<p>Type inference always produces a variable-length <code>list</code>, even when every row happens to be the same length:</p>
+<div id="773323d9" class="cell" data-execution_count="13">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co"># inference sees lists — the result is list&lt;float64&gt;, not a fixed-size list</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>coords <span class="op">=</span> ma.array([[<span class="fl">1.0</span>, <span class="fl">2.0</span>], [<span class="fl">3.0</span>, <span class="fl">4.0</span>], [<span class="fl">5.0</span>, <span class="fl">6.0</span>]])</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(coords.<span class="bu">type</span>)   <span class="co"># list&lt;float64&gt;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>ListArray([PrimitiveArray[float64]([1.0, 2.0]), PrimitiveArray[float64]([3.0, 4.0]), PrimitiveArray[float64]([5.0, 6.0])])
-type: list&lt;float64&gt;</code></pre>
+<pre><code>list&lt;float64&gt;</code></pre>
 </div>
 </div>
+<p>To get a genuine <code>fixed_size_list</code>, pass the type explicitly with <code>fixed_size_list_(value_type, size)</code>. The fixed width is part of the type, which lets kernels skip per-row offset lookups:</p>
+<div id="376866ff" class="cell" data-execution_count="14">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>coords <span class="op">=</span> ma.array(</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    [[<span class="fl">1.0</span>, <span class="fl">2.0</span>], [<span class="fl">3.0</span>, <span class="fl">4.0</span>], [<span class="fl">5.0</span>, <span class="fl">6.0</span>]],</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">type</span><span class="op">=</span>ma.fixed_size_list_(ma.float64(), <span class="dv">2</span>),</span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(coords)</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, coords.<span class="bu">type</span>)   <span class="co"># fixed_size_list&lt;item: float64&gt;</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>FixedSizeListArray([PrimitiveArray[float64]([1.0, 2.0]), PrimitiveArray[float64]([3.0, 4.0]), PrimitiveArray[float64]([5.0, 6.0])])
+type: fixed_size_list&lt;item: float64&gt;</code></pre>
+</div>
+</div>
+</section>
+<section id="building-arrays-in-mojo" class="level2">
+<h2 class="anchored" data-anchor-id="building-arrays-in-mojo">Building arrays in Mojo</h2>
+<p><code>ma.array()</code> is a convenience over the native <strong>builder</strong> API — the mutable staging area you accumulate values in before freezing them with <code>finish()</code>. Reach for it in Mojo when values arrive one at a time.</p>
+<pre class="mojo"><code>from marrow.builders import Int64Builder
+from marrow.arrays import Int64Array
+
+var b = Int64Builder(capacity=4)
+b.append(10)
+b.append(20)
+b.append_null()
+b.append(40)
+
+var arr: Int64Array = b.finish()
+print(arr)               # PrimitiveArray[int64]([10, 20, NULL, 40])</code></pre>
+<p><code>capacity</code> pre-allocates the backing buffer; it is optional but avoids reallocation when the size is known.</p>
+<p><code>StringBuilder</code> tracks offsets for you:</p>
+<pre class="mojo"><code>from marrow.builders import StringBuilder
+from marrow.arrays import StringArray
+
+var sb = StringBuilder()
+sb.append("hello")
+sb.append_null()
+sb.append("world")
+var strs: StringArray = sb.finish()   # StringArray([hello, NULL, world])</code></pre>
+<section id="nested-builders" class="level3">
+<h3 class="anchored" data-anchor-id="nested-builders">Nested builders</h3>
+<p>A <code>ListBuilder</code> wraps a child builder. Append child values, then <strong>commit</strong> each list element with <code>append_valid()</code> — or <code>append_null()</code> for a null list:</p>
+<pre class="mojo"><code>from marrow.builders import ListBuilder, Int64Builder
+
+var lists = ListBuilder(Int64Builder())
+var child_any = lists.values()      # a DynBuilder over the child
+ref child = child_any.as_int64()    # borrow it at its real type
+
+child.append(1)
+child.append(2)
+lists.append_valid()                # [1, 2]
+
+child.append(3)
+lists.append_valid()                # [3]
+
+lists.append_null()                 # a null list
+var arr = lists.finish()</code></pre>
+<p><code>values()</code> hands back a <strong><code>DynBuilder</code></strong>, which has no <code>append</code> of its own — narrow it with <code>.as_int64()</code> / <code>.as_string()</code> / … first. <code>StructBuilder</code> and <code>FixedSizeListBuilder</code> follow the same build-children-then-commit shape.</p>
+</section>
+<section id="type-erased-builders" class="level3">
+<h3 class="anchored" data-anchor-id="type-erased-builders">Type-erased builders</h3>
+<p><code>DynBuilder</code> is the runtime-typed builder. Construct one from a <code>DataType</code> when the type is only known at run time; typed builders convert to it implicitly:</p>
+<pre class="mojo"><code>from marrow.builders import DynBuilder, Int64Builder
+from marrow.dtypes import int64
+
+var dyn = DynBuilder(int64)      # int64 is already an instance — not int64()
+
+var typed = Int64Builder()
+var erased: DynBuilder = typed^  # move it in -- no explicit wrapper needed</code></pre>
+<p>The conversion is implicit, so no <code>DynBuilder(...)</code> wrapper is needed, but the typed builder is <strong>moved</strong> (<code>typed^</code>) rather than copied: builders are not <code>ImplicitlyCopyable</code>, which keeps ownership visible at the call site.</p>
+<p><code>finish()</code> on a <code>DynBuilder</code> returns a <code>DynArray</code>, the type-erased array container.</p>
 
 
 </section>
+</section>
 
-</main> <!-- /main -->
+<a onclick="window.scrollTo(0, 0); return false;" role="button" id="quarto-back-to-top"><i class="bi bi-arrow-up"></i> Back to top</a></main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">
   window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
     const icon = "";
     const anchorJS = new window.AnchorJS();
     anchorJS.options = {
@@ -492,7 +940,7 @@ type: list&lt;float64&gt;</code></pre>
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/marrow\.kszucs\.dev");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }
@@ -506,6 +954,11 @@ type: list&lt;float64&gt;</code></pre>
           if (link.dataset.originalHref !== undefined) {
             link.href = link.dataset.originalHref;
           }
+            // target, if specified
+            link.setAttribute("target", "_blank");
+            if (link.getAttribute("rel") === null) {
+              link.setAttribute("rel", "noopener");
+            }
         }
       }
     function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
@@ -819,7 +1272,39 @@ type: list&lt;float64&gt;</code></pre>
     }
   });
   </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="../tutorials/data-pipeline.html" class="pagination-link" aria-label="Build a data pipeline">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Build a data pipeline</span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="../guide/types.html" class="pagination-link" aria-label="Type system">
+        <span class="nav-page-text">Type system</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
 </div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+</div>   
+    <div class="nav-footer-center">
+      &nbsp;
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kszucs/marrow">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
 
 
 

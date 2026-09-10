@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>DataFusion UDFs – Marrow</title>
+<title>Architecture – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -23,41 +23,6 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
-/* CSS for syntax highlighting */
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-  { counter-reset: source-line 0; }
-pre.numberSource code > span
-  { position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-  { content: counter(source-line);
-    position: relative; left: -1em; text-align: right; vertical-align: baseline;
-    border: none; display: inline-block;
-    -webkit-touch-callout: none; -webkit-user-select: none;
-    -khtml-user-select: none; -moz-user-select: none;
-    -ms-user-select: none; user-select: none;
-    padding: 0 4px; width: 4em;
-  }
-pre.numberSource { margin-left: 3em;  padding-left: 4px; }
-div.sourceCode
-  {   }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
-}
 </style>
 
 
@@ -67,8 +32,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/architecture.html" rel="next">
-<link href="../guide/interop.html" rel="prev">
+<link href="../reference/status.html" rel="next">
+<link href="../examples/datafusion.html" rel="prev">
 <link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -115,13 +80,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="DataFusion UDFs – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta property="og:title" content="Architecture – Marrow">
+<meta property="og:description" content="How marrow is put together, and why">
+<meta property="og:image" content="https://marrow.kszucs.dev/reference/assets/logo.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="DataFusion UDFs – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta name="twitter:title" content="Architecture – Marrow">
+<meta name="twitter:description" content="How marrow is put together, and why">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/reference/assets/logo.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -345,7 +310,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/architecture.html">Architecture</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -496,7 +461,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link active">
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">DataFusion UDFs</span></a>
   </div>
 </li>
@@ -513,7 +478,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../reference/architecture.html" class="sidebar-item-text sidebar-link">
+  <a href="../reference/architecture.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Architecture</span></a>
   </div>
 </li>
@@ -535,11 +500,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#setup" id="toc-setup" class="nav-link active" data-scroll-target="#setup">Setup</a></li>
-  <li><a href="#register-a-mojo-kernel-as-a-udf" id="toc-register-a-mojo-kernel-as-a-udf" class="nav-link" data-scroll-target="#register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</a></li>
-  <li><a href="#query-a-table" id="toc-query-a-table" class="nav-link" data-scroll-target="#query-a-table">Query a table</a></li>
-  <li><a href="#null-propagation" id="toc-null-propagation" class="nav-link" data-scroll-target="#null-propagation">Null propagation</a></li>
-  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#type-erasure-without-virtual-calls" id="toc-type-erasure-without-virtual-calls" class="nav-link active" data-scroll-target="#type-erasure-without-virtual-calls">Type erasure without virtual calls</a></li>
+  <li><a href="#buffers-and-views" id="toc-buffers-and-views" class="nav-link" data-scroll-target="#buffers-and-views">Buffers and views</a></li>
+  <li><a href="#kernels-typed-first-erased-on-top" id="toc-kernels-typed-first-erased-on-top" class="nav-link" data-scroll-target="#kernels-typed-first-erased-on-top">Kernels: typed first, erased on top</a></li>
+  <li><a href="#the-query-engine-one-plan-ir-two-lanes" id="toc-the-query-engine-one-plan-ir-two-lanes" class="nav-link" data-scroll-target="#the-query-engine-one-plan-ir-two-lanes">The query engine: one plan IR, two lanes</a></li>
+  <li><a href="#why-the-compiled-binary-is-small" id="toc-why-the-compiled-binary-is-small" class="nav-link" data-scroll-target="#why-the-compiled-binary-is-small">Why the compiled binary is small</a></li>
+  <li><a href="#what-this-costs" id="toc-what-this-costs" class="nav-link" data-scroll-target="#what-this-costs">What this costs</a></li>
   </ul>
 </nav>
     </div>
@@ -547,9 +513,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/architecture.html">Architecture</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">DataFusion UDFs</h1>
+<h1 class="title">Architecture</h1>
+<p class="subtitle lead">How marrow is put together, and why</p>
 </div>
 
 
@@ -566,76 +533,132 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><a href="https://datafusion.apache.org">Apache Arrow DataFusion</a> is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.</p>
-<section id="setup" class="level2">
-<h2 class="anchored" data-anchor-id="setup">Setup</h2>
-<p>DataFusion is an optional dependency in the <code>examples</code> pixi feature. Install it with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> examples datafusion_udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Or add it to an existing environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datafusion <span class="im">import</span> SessionContext, udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Mojo has no dynamic dispatch. That single constraint shapes everything below — and it turns out to be an advantage, because what replaces dispatch is a <strong>closed world the compiler can delete from</strong>.</p>
+<section id="type-erasure-without-virtual-calls" class="level2">
+<h2 class="anchored" data-anchor-id="type-erasure-without-virtual-calls">Type erasure without virtual calls</h2>
+<p>Every layer has a typed form and one erased box:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Trait</th>
+<th>Erased box</th>
+<th>Concrete types</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>Array</code></td>
+<td><code>DynArray</code></td>
+<td><code>PrimitiveArray[T]</code>, <code>StringArray</code>, <code>ListArray</code>, <code>StructArray</code>, …</td>
+</tr>
+<tr class="even">
+<td><code>ArrowScalar</code></td>
+<td><code>DynScalar</code></td>
+<td><code>PrimitiveScalar[T]</code>, <code>StringScalar</code>, …</td>
+</tr>
+<tr class="odd">
+<td><code>Builder</code></td>
+<td><code>DynBuilder</code></td>
+<td><code>PrimitiveBuilder[T]</code>, <code>ListBuilder</code>, …</td>
+</tr>
+<tr class="even">
+<td><code>DataType</code></td>
+<td><code>DynType</code></td>
+<td><code>Int64Type</code>, <code>StringType</code>, <code>ListType</code>, …</td>
+</tr>
+<tr class="odd">
+<td><code>Value</code></td>
+<td><code>DynValue</code></td>
+<td>the expression nodes of <strong>both</strong> lanes</td>
+</tr>
+</tbody>
+</table>
+<p>A box is an inline <code>Variant</code>. Runtime dispatch iterates the variant’s members at comptime and selects the active one with <code>isa[T]()</code> — a discriminant compare, no function-pointer trampoline. Erasure is cheap because every typed value already holds its data behind ref-counted <code>Buffer</code>/<code>Bitmap</code> handles, so a conversion is O(1) refcount bumps, and conversions are implicit both ways.</p>
+<p><strong>The erased containers deliberately do not conform to the traits they erase.</strong> They expose the same surface as their own API, but they are not substitutable in generic code. A box may <em>hold</em> trait-bound values; it should not <em>be</em> one.</p>
+<p>Runtime → comptime dispatch is the <code>DynType.dispatch_*</code> family — <code>dispatch_primitive</code>, <code>dispatch_numeric</code>, <code>dispatch_integer</code>, <code>dispatch_floating</code>, <code>dispatch_temporal</code>, <code>dispatch_decimal</code>, <code>dispatch_stringlike</code>, <code>dispatch_binarylike</code>, <code>dispatch_listlike</code> — each resolving a runtime <code>DataType</code> to a comptime type parameter and running a job passed <strong>as a value</strong>.</p>
 </section>
-<section id="register-a-mojo-kernel-as-a-udf" class="level2">
-<h2 class="anchored" data-anchor-id="register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</h2>
-<p>Any Marrow compute function can be wrapped as a DataFusion UDF. The two conversions — <code>ma.array(pa_arr)</code> in and <code>pa.array(ma_arr)</code> out — are zero-copy pointer exchanges over the Arrow C Data Interface, not serialization, so the wrapper costs nothing beyond the kernel itself.</p>
-<div id="2d2ad646" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> mojo_add(a: pa.Array, b: pa.Array) <span class="op">-&gt;</span> pa.Array:</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> pa.array(mc.add(ma.array(a), ma.array(b)))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>add_udf <span class="op">=</span> udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), <span class="st">"immutable"</span>, name<span class="op">=</span><span class="st">"mojo_add"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="buffers-and-views" class="level2">
+<h2 class="anchored" data-anchor-id="buffers-and-views">Buffers and views</h2>
+<p><code>Buffer</code> is ref-counted and immutable by default (<code>Buffer[mut=True]</code> is the building form, frozen by <code>finish()</code>). An allocation is CPU, FOREIGN, MAPPED, HOST or DEVICE — data movement is a <em>kind change</em>, not a shadow copy.</p>
+<p><code>BufferView</code> / <code>BitmapView</code> are borrowed, offset-applied spans, and they are what kernels actually compute over. Naked pointer arithmetic is confined to five files; everything else goes through the views.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Note
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Buffers are 64-byte aligned and their <strong>size</strong> is rounded up to a multiple of 64 — the same rule as Arrow C++’s <code>PoolBuffer::RoundCapacity</code>. <strong>That is not slack.</strong> When the logical byte count is already a multiple of 64 the allocation ends at the last live byte, so nothing may read past a buffer’s logical end “because Arrow buffers are padded”. Imported (FOREIGN) buffers carry no padding guarantee at all.</p>
+</div>
 </div>
 </section>
-<section id="query-a-table" class="level2">
-<h2 class="anchored" data-anchor-id="query-a-table">Query a table</h2>
-<div id="59dd3478" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ctx <span class="op">=</span> SessionContext()</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>ctx.register_udf(add_udf)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> pa.record_batch(</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"price"</span>:    pa.array([<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>, <span class="dv">400</span>, <span class="dv">500</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"quantity"</span>: pa.array([<span class="dv">3</span>,   <span class="dv">1</span>,   <span class="dv">4</span>,   <span class="dv">1</span>,   <span class="dv">5</span>  ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>ctx.register_record_batches(<span class="st">"orders"</span>, [[batch]])</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> pa.Table.from_batches(</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    ctx.sql(<span class="st">"SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"</span>).collect()</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>result</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
-</section>
-<section id="null-propagation" class="level2">
-<h2 class="anchored" data-anchor-id="null-propagation">Null propagation</h2>
-<p>Marrow kernels propagate nulls according to the Arrow specification. Rows where either operand is null produce a null result — DataFusion preserves this behaviour transparently.</p>
-<div id="9888325d" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ctx2 <span class="op">=</span> SessionContext()</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ctx2.register_udf(add_udf)</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> pa.record_batch(</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"a"</span>: pa.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>   ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"b"</span>: pa.array([<span class="dv">10</span>, <span class="dv">20</span>,  <span class="va">None</span>, <span class="dv">40</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>ctx2.register_record_batches(<span class="st">"t"</span>, [[batch2]])</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>pa.Table.from_batches(</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    ctx2.sql(<span class="st">"SELECT a, b, mojo_add(a, b) AS result FROM t"</span>).collect()</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
-</section>
-<section id="how-it-works" class="level2">
-<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
-<p>Each call to <code>mojo_add</code> inside a DataFusion query goes through these steps:</p>
+<section id="kernels-typed-first-erased-on-top" class="level2">
+<h2 class="anchored" data-anchor-id="kernels-typed-first-erased-on-top">Kernels: typed first, erased on top</h2>
+<p>Each kernel is a struct with three tiers:</p>
 <ol type="1">
-<li>DataFusion evaluates the query plan and produces a <code>pyarrow.Array</code> chunk for each argument column.</li>
-<li><code>mc.add(a, b)</code> imports each argument into Marrow via <code>__arrow_c_array__</code> — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.</li>
-<li><code>pa.array(result)</code> exports the result back to PyArrow via <code>__arrow_c_array__</code> — again, no copy.</li>
+<li><strong><code>core[T, W]</code></strong> — the raw SIMD functor. No allocation. This is what expression fusion inlines.</li>
+<li><strong><code>apply[T]</code></strong> — allocates the output, propagates null bitmaps, and picks CPU or GPU.</li>
+<li><strong><code>dispatch(DynArray)</code></strong> — the runtime-typed entry point, resolving the dtype to the typed <code>apply</code>.</li>
 </ol>
-<p>The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.</p>
+<p>One kernel serves CPU and GPU: every <code>apply</code> writes a <strong>lane</strong> — <code>def lane[W: Int](i: Int)</code> — and hands it to one of five drivers in <code>views.mojo</code>, which own striping, vectorization and device launch. Dispatch on the widest family a leaf accepts; two arms differing only by trait bound usually means the narrower bound is masking a defect.</p>
+</section>
+<section id="the-query-engine-one-plan-ir-two-lanes" class="level2">
+<h2 class="anchored" data-anchor-id="the-query-engine-one-plan-ir-two-lanes">The query engine: one plan IR, two lanes</h2>
+<p>The logical side (<code>expr/logical.mojo</code>) is pure, immutable <code>Relation</code> nodes — <code>InMemoryTable</code>, <code>ParquetScan</code>, <code>Filter</code>, <code>Project</code>, <code>Aggregate</code>, <code>Limit</code>, <code>Sort</code>, <code>Window</code>, <code>Join</code> — erased by <code>DynRelation</code>.</p>
+<p>The physical side (<code>expr/physical.mojo</code>) is the executing counterpart. <strong>The engine pushes</strong>: <code>push(batch)</code> answers with what it produced, <code>drain()</code> with what is left. One operator per plan node.</p>
+<p>Underneath sit two expression lanes that share no node types:</p>
+<ul>
+<li><strong>The comptime lane</strong> (<code>expr/comptime/</code>) — every node’s operands are bound on a family trait, its output dtype is a comptime type, and a subtree <strong>fuses into one SIMD loop</strong>. Nothing is erased.</li>
+<li><strong>The runtime lane</strong> (<code>expr/runtime/</code>) — one struct holding a tag, children behind <code>ArcPointer</code>, and an optional payload. It interprets by switching on the tag. What stays runtime is the <em>dtype</em> of the operands, not the operation.</li>
+</ul>
+<p>Both erase into <code>DynValue</code>, so each relational operator compiles exactly once. A plan mixes lanes <strong>at the box, never inside a node</strong> — a runtime operand inside a comptime node would discard the fusion the lane exists for.</p>
+</section>
+<section id="why-the-compiled-binary-is-small" class="level2">
+<h2 class="anchored" data-anchor-id="why-the-compiled-binary-is-small">Why the compiled binary is small</h2>
+<p>This is the payoff for having no dynamic dispatch. The comptime lane is a <strong>closed world</strong>: no open dispatchers, no function-pointer tables, and value boxes that only ever hold fused nodes. So the linker can prove which kernels a program can reach, and delete the rest.</p>
+<p>Concretely, from the CI-gated <code>benchmarks/binary_size/</code> suite:</p>
+<p><code>SELECT name, sum(a), min(b) FROM orders GROUP BY name</code>, built two ways:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 42%">
+<col style="width: 57%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>binary</th>
+<th style="text-align: right;"><code>__text</code></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>every value comptime — the plan holds a direct kernel</td>
+<td style="text-align: right;"><strong>1,478,768</strong></td>
+</tr>
+<tr class="even">
+<td>the aggregate resolved from a function <em>name</em> at run time, as the Python frontend does</td>
+<td style="text-align: right;">12,024,976</td>
+</tr>
+</tbody>
+</table>
+<p>Same query, same answer, <strong>8× the code</strong> — because the second one cannot prove which kernels it will not call.</p>
+<p>The rule set is itself a comptime parameter — <code>plan.optimize[AllRules]()</code> — so a binary links exactly the rules it names, and <code>execute()</code> alone links none. Output writers are comptime parameters for the same reason: <code>cli.run[parquet=True]</code> costs 656,576 bytes that <code>cli.run</code> does not pay.</p>
+<p><code>benchmarks/binary_size/</code> is the live gate, at a 0.5% threshold. Trust it over any ratio quoted in prose, including this one.</p>
+</section>
+<section id="what-this-costs" class="level2">
+<h2 class="anchored" data-anchor-id="what-this-costs">What this costs</h2>
+<p>The design is not free, and two costs are worth naming:</p>
+<ul>
+<li><strong>Compile time.</strong> Monomorphization is the mechanism, so a <code>marrow compile</code> build takes 1-2 minutes and elaborates the whole library at <code>-O3</code>. There is no incremental build.</li>
+<li><strong>Duplication on purpose.</strong> Each erased box writes its own <code>isa</code> ladder rather than sharing a generic dispatch helper. Factoring them together needs an adapter closure that inlines into <em>every</em> arm of <em>every</em> instantiation — it measured at <strong>+662,740 bytes (+31.9% of <code>__text</code>)</strong> on one gate. The duplication is cheaper than the abstraction.</li>
+</ul>
 
 
 </section>
@@ -1061,13 +1084,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../guide/interop.html" class="pagination-link" aria-label="PyArrow interop">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">PyArrow interop</span>
+      <a href="../examples/datafusion.html" class="pagination-link" aria-label="DataFusion UDFs">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">DataFusion UDFs</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
-        <span class="nav-page-text">Architecture</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="../reference/status.html" class="pagination-link" aria-label="Status &amp; limitations">
+        <span class="nav-page-text">Status &amp; limitations</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

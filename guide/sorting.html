@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>DataFusion UDFs – Marrow</title>
+<title>Sorting – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -67,8 +67,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/architecture.html" rel="next">
-<link href="../guide/interop.html" rel="prev">
+<link href="../guide/gpu.html" rel="next">
+<link href="../guide/compute.html" rel="prev">
 <link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -115,13 +115,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="DataFusion UDFs – Marrow">
+<meta property="og:title" content="Sorting – Marrow">
 <meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="DataFusion UDFs – Marrow">
+<meta name="twitter:title" content="Sorting – Marrow">
 <meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -345,7 +345,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/compute.html">Compute</a></li><li class="breadcrumb-item"><a href="../guide/sorting.html">Sorting</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -432,7 +432,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../guide/sorting.html" class="sidebar-item-text sidebar-link">
+  <a href="../guide/sorting.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Sorting</span></a>
   </div>
 </li>
@@ -496,7 +496,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link active">
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">DataFusion UDFs</span></a>
   </div>
 </li>
@@ -535,11 +535,15 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#setup" id="toc-setup" class="nav-link active" data-scroll-target="#setup">Setup</a></li>
-  <li><a href="#register-a-mojo-kernel-as-a-udf" id="toc-register-a-mojo-kernel-as-a-udf" class="nav-link" data-scroll-target="#register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</a></li>
-  <li><a href="#query-a-table" id="toc-query-a-table" class="nav-link" data-scroll-target="#query-a-table">Query a table</a></li>
-  <li><a href="#null-propagation" id="toc-null-propagation" class="nav-link" data-scroll-target="#null-propagation">Null propagation</a></li>
-  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#sorting-an-array" id="toc-sorting-an-array" class="nav-link active" data-scroll-target="#sorting-an-array">Sorting an array</a>
+  <ul class="collapse">
+  <li><a href="#direction-and-null-placement" id="toc-direction-and-null-placement" class="nav-link" data-scroll-target="#direction-and-null-placement">Direction and null placement</a></li>
+  </ul></li>
+  <li><a href="#sorting-a-table" id="toc-sorting-a-table" class="nav-link" data-scroll-target="#sorting-a-table">Sorting a table</a></li>
+  <li><a href="#under-the-hood-the-mojo-sort-kernel" id="toc-under-the-hood-the-mojo-sort-kernel" class="nav-link" data-scroll-target="#under-the-hood-the-mojo-sort-kernel">Under the hood — the Mojo sort kernel</a>
+  <ul class="collapse">
+  <li><a href="#algorithm-selection" id="toc-algorithm-selection" class="nav-link" data-scroll-target="#algorithm-selection">Algorithm selection</a></li>
+  </ul></li>
   </ul>
 </nav>
     </div>
@@ -547,9 +551,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/compute.html">Compute</a></li><li class="breadcrumb-item"><a href="../guide/sorting.html">Sorting</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">DataFusion UDFs</h1>
+<h1 class="title">Sorting</h1>
 </div>
 
 
@@ -566,78 +570,143 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><a href="https://datafusion.apache.org">Apache Arrow DataFusion</a> is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.</p>
-<section id="setup" class="level2">
-<h2 class="anchored" data-anchor-id="setup">Setup</h2>
-<p>DataFusion is an optional dependency in the <code>examples</code> pixi feature. Install it with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> examples datafusion_udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Or add it to an existing environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datafusion <span class="im">import</span> SessionContext, udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</section>
-<section id="register-a-mojo-kernel-as-a-udf" class="level2">
-<h2 class="anchored" data-anchor-id="register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</h2>
-<p>Any Marrow compute function can be wrapped as a DataFusion UDF. The two conversions — <code>ma.array(pa_arr)</code> in and <code>pa.array(ma_arr)</code> out — are zero-copy pointer exchanges over the Arrow C Data Interface, not serialization, so the wrapper costs nothing beyond the kernel itself.</p>
-<div id="2d2ad646" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> mojo_add(a: pa.Array, b: pa.Array) <span class="op">-&gt;</span> pa.Array:</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> pa.array(mc.add(ma.array(a), ma.array(b)))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>add_udf <span class="op">=</span> udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), <span class="st">"immutable"</span>, name<span class="op">=</span><span class="st">"mojo_add"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Marrow sorts arrays and tables with an adaptive strategy: a pattern-defeating quicksort for small inputs, an LSD radix sort for large ones, and a parallel radix sort at scale. Nulls are ordered explicitly — you choose whether they sort to the front or the back.</p>
+<section id="sorting-an-array" class="level2">
+<h2 class="anchored" data-anchor-id="sorting-an-array">Sorting an array</h2>
+<p><code>mc.sort</code> returns a sorted copy; the array’s <code>.argsort()</code> method (or <code>mc.sort_indices</code>) returns the indices that would sort it (an <code>int32</code> array), leaving the input untouched:</p>
+<div id="935728bf" class="cell" data-execution_count="2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">3</span>, <span class="dv">1</span>, <span class="va">None</span>, <span class="dv">2</span>, <span class="dv">5</span>])</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sorted:      "</span>, mc.sort(a))</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"argsort:     "</span>, a.argsort())</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sort_indices:"</span>, mc.sort_indices(a))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>sorted:       PrimitiveArray[int64]([1, 2, 3, 5, NULL])
+argsort:      PrimitiveArray[int32]([1, 3, 0, 4, 2])
+sort_indices: PrimitiveArray[int32]([1, 3, 0, 4, 2])</code></pre>
+</div>
+</div>
+<section id="direction-and-null-placement" class="level3">
+<h3 class="anchored" data-anchor-id="direction-and-null-placement">Direction and null placement</h3>
+<p><code>sort</code> and <code>sort_indices</code> take a <code>sort_keys</code> sequence of <code>(column, order)</code> pairs — ignored for a plain array, since there is only one column — and a <code>null_placement</code> keyword argument:</p>
+<div id="d4e45198" class="cell" data-execution_count="3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"ascending"</span>)],  null_placement<span class="op">=</span><span class="st">"at_start"</span>))</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"ascending"</span>)],  null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(a, [(<span class="st">""</span>, <span class="st">"descending"</span>)], null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>PrimitiveArray[int64]([NULL, 1, 2, 3, 5])
+PrimitiveArray[int64]([1, 2, 3, 5, NULL])
+PrimitiveArray[int64]([5, 3, 2, 1, NULL])</code></pre>
+</div>
+</div>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 37%">
+<col style="width: 29%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Argument</th>
+<th>Values</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>sort_keys</code></td>
+<td><code>[(column, "ascending" \| "descending")]</code></td>
+<td><code>()</code> (ascending)</td>
+</tr>
+<tr class="even">
+<td><code>null_placement</code></td>
+<td><code>"at_start"</code> / <code>"at_end"</code></td>
+<td><code>"at_end"</code></td>
+</tr>
+</tbody>
+</table>
+<p>Sorting works across types — strings order lexicographically:</p>
+<div id="211e53e2" class="cell" data-execution_count="4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>words <span class="op">=</span> ma.array([<span class="st">"pear"</span>, <span class="st">"apple"</span>, <span class="va">None</span>, <span class="st">"cherry"</span>])</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.sort(words, null_placement<span class="op">=</span><span class="st">"at_end"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>StringArray([apple, cherry, pear, NULL])</code></pre>
+</div>
 </div>
 </section>
-<section id="query-a-table" class="level2">
-<h2 class="anchored" data-anchor-id="query-a-table">Query a table</h2>
-<div id="59dd3478" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ctx <span class="op">=</span> SessionContext()</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>ctx.register_udf(add_udf)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> pa.record_batch(</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"price"</span>:    pa.array([<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>, <span class="dv">400</span>, <span class="dv">500</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"quantity"</span>: pa.array([<span class="dv">3</span>,   <span class="dv">1</span>,   <span class="dv">4</span>,   <span class="dv">1</span>,   <span class="dv">5</span>  ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>ctx.register_record_batches(<span class="st">"orders"</span>, [[batch]])</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> pa.Table.from_batches(</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    ctx.sql(<span class="st">"SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"</span>).collect()</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>result</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
 </section>
-<section id="null-propagation" class="level2">
-<h2 class="anchored" data-anchor-id="null-propagation">Null propagation</h2>
-<p>Marrow kernels propagate nulls according to the Arrow specification. Rows where either operand is null produce a null result — DataFusion preserves this behaviour transparently.</p>
-<div id="9888325d" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ctx2 <span class="op">=</span> SessionContext()</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ctx2.register_udf(add_udf)</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> pa.record_batch(</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"a"</span>: pa.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>   ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"b"</span>: pa.array([<span class="dv">10</span>, <span class="dv">20</span>,  <span class="va">None</span>, <span class="dv">40</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>ctx2.register_record_batches(<span class="st">"t"</span>, [[batch2]])</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>pa.Table.from_batches(</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    ctx2.sql(<span class="st">"SELECT a, b, mojo_add(a, b) AS result FROM t"</span>).collect()</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="sorting-a-table" class="level2">
+<h2 class="anchored" data-anchor-id="sorting-a-table">Sorting a table</h2>
+<p><code>RecordBatch.sort_by</code> reorders whole rows by a key column. Pass a list of <code>(column, "ascending" | "descending")</code> tuples and a null-placement argument (<code>None</code> for the default):</p>
+<div id="11ab2af4" class="cell" data-execution_count="5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.record_batch({</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>: ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>]),</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"age"</span>:  ma.array([<span class="dv">34</span>, <span class="dv">28</span>, <span class="dv">45</span>, <span class="dv">28</span>]),</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"ascending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'name': 'Bob', 'age': 28}, {'name': 'Dave', 'age': 28}, {'name': 'Alice', 'age': 34}, {'name': 'Carol', 'age': 45}]</code></pre>
 </div>
+</div>
+<p>Multi-column keys work from Python too — ties on the first key break on the next, and each key carries its own direction:</p>
+<div id="3c359fa8" class="cell" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(people.sort_by([(<span class="st">"age"</span>, <span class="st">"ascending"</span>), (<span class="st">"name"</span>, <span class="st">"descending"</span>)]).to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'name': 'Dave', 'age': 28}, {'name': 'Bob', 'age': 28}, {'name': 'Alice', 'age': 34}, {'name': 'Carol', 'age': 45}]</code></pre>
+</div>
+</div>
+<p><code>sort_by</code> also accepts a <code>num_threads</code> argument (<code>0</code> auto-selects cores, <code>1</code> forces the serial path) for large batches.</p>
 </section>
-<section id="how-it-works" class="level2">
-<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
-<p>Each call to <code>mojo_add</code> inside a DataFusion query goes through these steps:</p>
-<ol type="1">
-<li>DataFusion evaluates the query plan and produces a <code>pyarrow.Array</code> chunk for each argument column.</li>
-<li><code>mc.add(a, b)</code> imports each argument into Marrow via <code>__arrow_c_array__</code> — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.</li>
-<li><code>pa.array(result)</code> exports the result back to PyArrow via <code>__arrow_c_array__</code> — again, no copy.</li>
-</ol>
-<p>The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.</p>
+<section id="under-the-hood-the-mojo-sort-kernel" class="level2">
+<h2 class="anchored" data-anchor-id="under-the-hood-the-mojo-sort-kernel">Under the hood — the Mojo sort kernel</h2>
+<p>At the Mojo level, <code>sort_indices</code> returns the permutation for a single array and <code>take</code> applies it to get a sorted copy. Both take a type-erased <code>DynArray</code>; call <code>SortIndices.apply</code> / <code>TakeKernel.apply</code> when you already hold a typed array.</p>
+<pre class="mojo"><code>from marrow.kernels.sort import sort_indices
+from marrow.kernels.filter import take
+from marrow.builders import array
+from marrow.dtypes import int64
+
+var values = array([3, 1, 4, 1, 5, 9, 2, 6], int64)
+
+# Indices that would sort the array
+var idx = sort_indices(values.copy(), ascending=True, nulls_first=True)
+
+# A sorted copy
+var ordered = take(values.copy(), idx)</code></pre>
+<p>Multi-column sort operates on a <code>StructArray</code>, ordering rows by a list of key column indices with a per-key ascending flag:</p>
+<pre class="mojo fragment"><code>from marrow.kernels.sort import sort
+
+# rows sorted by column 0 ascending, ties broken by column 1 descending
+var ordered = sort(struct_array, key_indices=[0, 1], ascending=[True, False])</code></pre>
+<section id="algorithm-selection" class="level3">
+<h3 class="anchored" data-anchor-id="algorithm-selection">Algorithm selection</h3>
+<p>The kernel adapts to the input size automatically:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Input size</th>
+<th>Strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>N &lt; 32,768</code></td>
+<td>PDQsort (pattern-defeating quicksort)</td>
+</tr>
+<tr class="even">
+<td><code>N ≥ 32,768</code></td>
+<td>LSD radix sort</td>
+</tr>
+<tr class="odd">
+<td><code>N ≥ 524,288</code></td>
+<td>Parallel radix sort</td>
+</tr>
+</tbody>
+</table>
+<p>You never choose the algorithm — the kernel picks the fastest one for the data in front of it.</p>
 
 
+</section>
 </section>
 
 <a onclick="window.scrollTo(0, 0); return false;" role="button" id="quarto-back-to-top"><i class="bi bi-arrow-up"></i> Back to top</a></main> <!-- /main -->
@@ -1061,13 +1130,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../guide/interop.html" class="pagination-link" aria-label="PyArrow interop">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">PyArrow interop</span>
+      <a href="../guide/compute.html" class="pagination-link" aria-label="Compute kernels">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Compute kernels</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
-        <span class="nav-page-text">Architecture</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="../guide/gpu.html" class="pagination-link" aria-label="GPU execution">
+        <span class="nav-page-text">GPU execution</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

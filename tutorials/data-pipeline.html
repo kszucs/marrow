@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>DataFusion UDFs – Marrow</title>
+<title>Build a data pipeline – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -67,8 +67,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/architecture.html" rel="next">
-<link href="../guide/interop.html" rel="prev">
+<link href="../guide/arrays.html" rel="next">
+<link href="../tutorials/quickstart.html" rel="prev">
 <link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -115,13 +115,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="DataFusion UDFs – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta property="og:title" content="Build a data pipeline – Marrow">
+<meta property="og:description" content="Filter, sort and join two datasets end to end">
+<meta property="og:image" content="https://marrow.kszucs.dev/tutorials/assets/logo.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="DataFusion UDFs – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta name="twitter:title" content="Build a data pipeline – Marrow">
+<meta name="twitter:description" content="Filter, sort and join two datasets end to end">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/tutorials/assets/logo.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -345,7 +345,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Start here</a></li><li class="breadcrumb-item"><a href="../tutorials/data-pipeline.html">Build a data pipeline</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -374,7 +374,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../tutorials/data-pipeline.html" class="sidebar-item-text sidebar-link">
+  <a href="../tutorials/data-pipeline.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Build a data pipeline</span></a>
   </div>
 </li>
@@ -496,7 +496,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link active">
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">DataFusion UDFs</span></a>
   </div>
 </li>
@@ -535,11 +535,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#setup" id="toc-setup" class="nav-link active" data-scroll-target="#setup">Setup</a></li>
-  <li><a href="#register-a-mojo-kernel-as-a-udf" id="toc-register-a-mojo-kernel-as-a-udf" class="nav-link" data-scroll-target="#register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</a></li>
-  <li><a href="#query-a-table" id="toc-query-a-table" class="nav-link" data-scroll-target="#query-a-table">Query a table</a></li>
-  <li><a href="#null-propagation" id="toc-null-propagation" class="nav-link" data-scroll-target="#null-propagation">Null propagation</a></li>
-  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#the-data" id="toc-the-data" class="nav-link active" data-scroll-target="#the-data">The data</a></li>
+  <li><a href="#step-1-filter-rows" id="toc-step-1-filter-rows" class="nav-link" data-scroll-target="#step-1-filter-rows">Step 1 — filter rows</a></li>
+  <li><a href="#step-2-sort" id="toc-step-2-sort" class="nav-link" data-scroll-target="#step-2-sort">Step 2 — sort</a></li>
+  <li><a href="#step-3-join" id="toc-step-3-join" class="nav-link" data-scroll-target="#step-3-join">Step 3 — join</a></li>
+  <li><a href="#step-4-put-it-together" id="toc-step-4-put-it-together" class="nav-link" data-scroll-target="#step-4-put-it-together">Step 4 — put it together</a></li>
+  <li><a href="#step-5-aggregate" id="toc-step-5-aggregate" class="nav-link" data-scroll-target="#step-5-aggregate">Step 5 — aggregate</a></li>
+  <li><a href="#where-to-go-next" id="toc-where-to-go-next" class="nav-link" data-scroll-target="#where-to-go-next">Where to go next</a></li>
   </ul>
 </nav>
     </div>
@@ -547,9 +549,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../tutorials/quickstart.html">Start here</a></li><li class="breadcrumb-item"><a href="../tutorials/data-pipeline.html">Build a data pipeline</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">DataFusion UDFs</h1>
+<h1 class="title">Build a data pipeline</h1>
+<p class="subtitle lead">Filter, sort and join two datasets end to end</p>
 </div>
 
 
@@ -566,76 +569,162 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><a href="https://datafusion.apache.org">Apache Arrow DataFusion</a> is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.</p>
-<section id="setup" class="level2">
-<h2 class="anchored" data-anchor-id="setup">Setup</h2>
-<p>DataFusion is an optional dependency in the <code>examples</code> pixi feature. Install it with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> examples datafusion_udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Or add it to an existing environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datafusion <span class="im">import</span> SessionContext, udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</section>
-<section id="register-a-mojo-kernel-as-a-udf" class="level2">
-<h2 class="anchored" data-anchor-id="register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</h2>
-<p>Any Marrow compute function can be wrapped as a DataFusion UDF. The two conversions — <code>ma.array(pa_arr)</code> in and <code>pa.array(ma_arr)</code> out — are zero-copy pointer exchanges over the Arrow C Data Interface, not serialization, so the wrapper costs nothing beyond the kernel itself.</p>
-<div id="2d2ad646" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> mojo_add(a: pa.Array, b: pa.Array) <span class="op">-&gt;</span> pa.Array:</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> pa.array(mc.add(ma.array(a), ma.array(b)))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>add_udf <span class="op">=</span> udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), <span class="st">"immutable"</span>, name<span class="op">=</span><span class="st">"mojo_add"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>This tutorial builds a small analytics pipeline over two related datasets — employees and the departments they belong to. Along the way you’ll use array construction, compute kernels, row filtering, sorting and a hash join. Every cell runs when the docs are built.</p>
+<section id="the-data" class="level2">
+<h2 class="anchored" data-anchor-id="the-data">The data</h2>
+<p>We start with two <code>RecordBatch</code>es. The first holds employees; the second maps department ids to names.</p>
+<div id="19a4caaf" class="cell" data-execution_count="2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>employees <span class="op">=</span> ma.record_batch({</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"name"</span>:    ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="st">"Carol"</span>, <span class="st">"Dave"</span>, <span class="st">"Eve"</span>, <span class="st">"Frank"</span>]),</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dept_id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">1</span>]),</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"salary"</span>:  ma.array([<span class="dv">95_000</span>, <span class="dv">72_000</span>, <span class="dv">120_000</span>, <span class="dv">88_000</span>, <span class="dv">61_000</span>, <span class="dv">105_000</span>]),</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"age"</span>:     ma.array([<span class="dv">34</span>, <span class="dv">28</span>, <span class="dv">45</span>, <span class="dv">52</span>, <span class="dv">24</span>, <span class="dv">39</span>]),</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>departments <span class="op">=</span> ma.record_batch({</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dept_id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>]),</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="st">"dept"</span>:    ma.array([<span class="st">"Engineering"</span>, <span class="st">"Sales"</span>, <span class="st">"Marketing"</span>]),</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(employees)</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(departments)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>RecordBatch(num_rows=6, schema=Schema(fields=[name: string, dept_id: int64, salary: int64, age: int64]))
+RecordBatch(num_rows=3, schema=Schema(fields=[dept_id: int64, dept: string]))</code></pre>
+</div>
 </div>
 </section>
-<section id="query-a-table" class="level2">
-<h2 class="anchored" data-anchor-id="query-a-table">Query a table</h2>
-<div id="59dd3478" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ctx <span class="op">=</span> SessionContext()</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>ctx.register_udf(add_udf)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> pa.record_batch(</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"price"</span>:    pa.array([<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>, <span class="dv">400</span>, <span class="dv">500</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"quantity"</span>: pa.array([<span class="dv">3</span>,   <span class="dv">1</span>,   <span class="dv">4</span>,   <span class="dv">1</span>,   <span class="dv">5</span>  ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>ctx.register_record_batches(<span class="st">"orders"</span>, [[batch]])</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> pa.Table.from_batches(</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    ctx.sql(<span class="st">"SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"</span>).collect()</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>result</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="step-1-filter-rows" class="level2">
+<h2 class="anchored" data-anchor-id="step-1-filter-rows">Step 1 — filter rows</h2>
+<p>Filtering <em>rows</em> has two spellings, and it is worth seeing both.</p>
+<p>The <strong>query layer</strong> is the one you will reach for. <code>col(...)</code> names a column, comparison operators build a predicate, and the engine applies it to every column for you:</p>
+<div id="6c1bf7c2" class="cell" data-execution_count="3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> col, lit</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>top_earners <span class="op">=</span> (</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    ma.memtable(employees)</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>      .<span class="bu">filter</span>(col(<span class="st">"salary"</span>) <span class="op">&gt;</span> lit(<span class="dv">80_000</span>))</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>      .collect()</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(top_earners.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34}, {'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39}]</code></pre>
+</div>
+</div>
+<p>The <strong>eager kernels</strong> work a column at a time, so the same thing by hand is a mask plus a <code>filter</code> per column. Reach for this when you already hold a mask:</p>
+<div id="c37ccbfa" class="cell" data-execution_count="4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>threshold <span class="op">=</span> ma.array([<span class="dv">80_000</span>] <span class="op">*</span> employees.num_rows)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>well_paid <span class="op">=</span> mc.greater(employees.column(<span class="st">"salary"</span>), threshold)</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"mask:"</span>, well_paid)</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>kept <span class="op">=</span> mc.<span class="bu">filter</span>(employees.column(<span class="st">"name"</span>), well_paid)</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"names:"</span>, kept)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>mask: BoolArray([True, False, True, True, False, True])
+names: StringArray([Alice, Carol, Dave, Frank])</code></pre>
+</div>
+</div>
+<p>Note the comparison needs both operands to share a dtype — hence the array of thresholds. The query layer handles that for you, which is most of why it is the shorter spelling.</p>
+</section>
+<section id="step-2-sort" class="level2">
+<h2 class="anchored" data-anchor-id="step-2-sort">Step 2 — sort</h2>
+<p><code>sort_by</code> orders a batch by one or more keys. Pass a list of <code>(column, "ascending" | "descending")</code> tuples; the second argument controls null placement (<code>None</code> uses the default). Multi-column keys are honoured — ties on the first key break on the next:</p>
+<div id="4f4dd5bc" class="cell" data-execution_count="5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>by_salary <span class="op">=</span> top_earners.sort_by([(<span class="st">"dept_id"</span>, <span class="st">"ascending"</span>), (<span class="st">"salary"</span>, <span class="st">"descending"</span>)])</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_salary.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39}, {'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52}]</code></pre>
+</div>
 </div>
 </section>
-<section id="null-propagation" class="level2">
-<h2 class="anchored" data-anchor-id="null-propagation">Null propagation</h2>
-<p>Marrow kernels propagate nulls according to the Arrow specification. Rows where either operand is null produce a null result — DataFusion preserves this behaviour transparently.</p>
-<div id="9888325d" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ctx2 <span class="op">=</span> SessionContext()</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ctx2.register_udf(add_udf)</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> pa.record_batch(</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"a"</span>: pa.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>   ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"b"</span>: pa.array([<span class="dv">10</span>, <span class="dv">20</span>,  <span class="va">None</span>, <span class="dv">40</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>ctx2.register_record_batches(<span class="st">"t"</span>, [[batch2]])</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>pa.Table.from_batches(</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    ctx2.sql(<span class="st">"SELECT a, b, mojo_add(a, b) AS result FROM t"</span>).collect()</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="step-3-join" class="level2">
+<h2 class="anchored" data-anchor-id="step-3-join">Step 3 — join</h2>
+<p><code>join</code> performs a hash join between two record batches on named key columns. The signature is <code>join(right, keys, right_keys=None, join_type="inner", num_threads=0)</code>:</p>
+<ul>
+<li><code>keys</code> — list of left-side key column names,</li>
+<li><code>right_keys</code> — right-side names, or <code>None</code> to reuse <code>keys</code>,</li>
+<li><code>join_type</code> — <code>"inner"</code>, <code>"left"</code>, <code>"right"</code>, <code>"full"</code>, <code>"semi"</code> or <code>"anti"</code>,</li>
+<li><code>num_threads</code> — <code>0</code> auto-selects cores, <code>1</code> forces the serial path.</li>
+</ul>
+<p>Enrich each employee with their department name:</p>
+<div id="33378aa6" class="cell" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>enriched <span class="op">=</span> employees.join(departments, [<span class="st">"dept_id"</span>], join_type<span class="op">=</span><span class="st">"inner"</span>)</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(enriched.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'name': 'Alice', 'dept_id': 1, 'salary': 95000, 'age': 34, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Carol', 'dept_id': 1, 'salary': 120000, 'age': 45, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Frank', 'dept_id': 1, 'salary': 105000, 'age': 39, 'dept_id_right': 1, 'dept': 'Engineering'}, {'name': 'Bob', 'dept_id': 2, 'salary': 72000, 'age': 28, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Eve', 'dept_id': 2, 'salary': 61000, 'age': 24, 'dept_id_right': 2, 'dept': 'Sales'}, {'name': 'Dave', 'dept_id': 3, 'salary': 88000, 'age': 52, 'dept_id_right': 3, 'dept': 'Marketing'}]</code></pre>
+</div>
+</div>
+<p>Columns that collide between the two sides are suffixed with <code>_right</code>, matching PyArrow’s behaviour.</p>
+</section>
+<section id="step-4-put-it-together" class="level2">
+<h2 class="anchored" data-anchor-id="step-4-put-it-together">Step 4 — put it together</h2>
+<p>The whole pipeline reads as a short sequence of transformations: join, filter, sort, project.</p>
+<div id="f766a1e1" class="cell" data-execution_count="7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 1. join employees to their departments</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>joined <span class="op">=</span> employees.join(departments, [<span class="st">"dept_id"</span>], join_type<span class="op">=</span><span class="st">"inner"</span>)</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co"># 2-4. filter, sort and project as one plan</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>report <span class="op">=</span> (</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    ma.memtable(joined)</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>      .<span class="bu">filter</span>(col(<span class="st">"salary"</span>) <span class="op">&gt;</span> lit(<span class="dv">80_000</span>))</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>      .order_by((<span class="st">"salary"</span>, <span class="st">"descending"</span>))</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>      .select(<span class="st">"name"</span>, <span class="st">"dept"</span>, <span class="st">"salary"</span>)</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>      .collect()</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(report.to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'name': 'Carol', 'dept': 'Engineering', 'salary': 120000}, {'name': 'Frank', 'dept': 'Engineering', 'salary': 105000}, {'name': 'Alice', 'dept': 'Engineering', 'salary': 95000}, {'name': 'Dave', 'dept': 'Marketing', 'salary': 88000}]</code></pre>
+</div>
+</div>
+<p>Only the join is eager here — it is a <code>RecordBatch</code> method. Everything after it is one plan, so the engine sees the filter, the sort and the projection together instead of materializing an intermediate batch per step.</p>
+</section>
+<section id="step-5-aggregate" class="level2">
+<h2 class="anchored" data-anchor-id="step-5-aggregate">Step 5 — aggregate</h2>
+<p>Aggregation is not an eager kernel call — it happens inside a <strong>query plan</strong>. Wrap the batch with <code>ma.memtable()</code> to get a lazy table, describe what you want, and call <code>.collect()</code> to run it. Nulls are skipped:</p>
+<div id="ff421afc" class="cell" data-execution_count="8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>q <span class="op">=</span> ma.memtable(joined)</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>totals <span class="op">=</span> q.aggregate(</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    headcount<span class="op">=</span>(<span class="st">"count"</span>, <span class="st">"salary"</span>),</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    total_spend<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"salary"</span>),</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    top_salary<span class="op">=</span>(<span class="st">"max"</span>, <span class="st">"salary"</span>),</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(totals.collect().to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'headcount': 6, 'total_spend': 541000, 'top_salary': 120000}]</code></pre>
+</div>
+</div>
+<p>The same call with a <code>by=</code> key groups instead of reducing to one row — one code path for both:</p>
+<div id="08bf0f7e" class="cell" data-execution_count="9">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>by_dept <span class="op">=</span> (</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    q.aggregate(</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>        by<span class="op">=</span>[<span class="st">"dept"</span>],</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>        headcount<span class="op">=</span>(<span class="st">"count"</span>, <span class="st">"salary"</span>),</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>        avg_salary<span class="op">=</span>(<span class="st">"mean"</span>, <span class="st">"salary"</span>),</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    .order_by(<span class="st">"dept"</span>)</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_dept.collect().to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[{'dept': 'Engineering', 'headcount': 3, 'avg_salary': 106666.66666666667}, {'dept': 'Marketing', 'headcount': 1, 'avg_salary': 88000.0}, {'dept': 'Sales', 'headcount': 2, 'avg_salary': 66500.0}]</code></pre>
+</div>
+</div>
+<p>Nothing has run until <code>.collect()</code>, so a plan is a reusable template — and <code>explain()</code> shows what will happen:</p>
+<div id="b520fb9b" class="cell" data-execution_count="10">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_dept.explain())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Sort(Aggregate(InMemoryTable(6 rows), by=dept, count(salary), mean(salary)), dept asc)</code></pre>
+</div>
 </div>
 </section>
-<section id="how-it-works" class="level2">
-<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
-<p>Each call to <code>mojo_add</code> inside a DataFusion query goes through these steps:</p>
-<ol type="1">
-<li>DataFusion evaluates the query plan and produces a <code>pyarrow.Array</code> chunk for each argument column.</li>
-<li><code>mc.add(a, b)</code> imports each argument into Marrow via <code>__arrow_c_array__</code> — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.</li>
-<li><code>pa.array(result)</code> exports the result back to PyArrow via <code>__arrow_c_array__</code> — again, no copy.</li>
-</ol>
-<p>The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.</p>
+<section id="where-to-go-next" class="level2">
+<h2 class="anchored" data-anchor-id="where-to-go-next">Where to go next</h2>
+<ul>
+<li><strong><a href="../guide/tables.html">Tables &amp; joins</a></strong> — the full <code>RecordBatch</code> / <code>Table</code> API.</li>
+<li><strong><a href="../guide/compute.html">Compute kernels</a></strong> — every kernel and its null rules.</li>
+<li><strong><a href="../guide/expressions.html">Expressions</a></strong> — the query layer this tutorial reached for in step 5, in full.</li>
+<li><strong><a href="../guide/io.html">File I/O</a></strong> — read and write Parquet and Arrow IPC.</li>
+</ul>
 
 
 </section>
@@ -1061,13 +1150,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../guide/interop.html" class="pagination-link" aria-label="PyArrow interop">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">PyArrow interop</span>
+      <a href="../tutorials/quickstart.html" class="pagination-link" aria-label="10-minute quickstart">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">10-minute quickstart</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
-        <span class="nav-page-text">Architecture</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="../guide/arrays.html" class="pagination-link" aria-label="Arrays">
+        <span class="nav-page-text">Arrays</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

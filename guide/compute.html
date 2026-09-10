@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.9.37">
+<meta name="generator" content="quarto-1.9.38">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -62,22 +62,26 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <script src="../site_libs/quarto-nav/quarto-nav.js"></script>
-<script src="../site_libs/quarto-nav/headroom.min.js"></script>
 <script src="../site_libs/clipboard/clipboard.min.js"></script>
 <script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
+<link href="../guide/sorting.html" rel="next">
+<link href="../guide/tables.html" rel="prev">
+<link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="../site_libs/quarto-html/popper.min.js"></script>
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-acf12a64177840b8d86f2d4f01b2e9fb.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-96ebe82b8db4e1070ca8c51563aaef74.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-dark-1380b502faf4413009b5096ef82a1b9d.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-3802eb58874adc8d310cd233d50b5c6f.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-1475a5012ac5a41541b8dd01a697f454.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-dark-d51ae914eebfccb2db40ed768cb997c7.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -105,11 +109,183 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
 
 
+<link rel="stylesheet" href="../theme/marrow.css">
+<meta property="og:title" content="Compute – Marrow">
+<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta property="og:site_name" content="Marrow">
+<meta name="twitter:title" content="Compute – Marrow">
+<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
+<meta name="twitter:card" content="summary_large_image">
 </head>
 
-<body class="nav-fixed quarto-light">
+<body class="nav-sidebar floating nav-fixed quarto-dark"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = true;
+    const darkModeDefault = authorPrefersDark;
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top">
@@ -117,8 +293,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
     <a href="../index.html" class="navbar-brand navbar-brand-logo">
-    <img src="../../logo.png" alt="marrow" class="navbar-logo light-content">
-    <img src="../../logo.png" alt="marrow" class="navbar-logo dark-content">
+    <img src="../assets/logo.png" alt="marrow" class="navbar-logo light-content">
+    <img src="../assets/logo.png" alt="marrow" class="navbar-logo dark-content">
     </a>
     <a class="navbar-brand" href="../index.html">
     <span class="navbar-title">Marrow</span>
@@ -132,46 +308,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
             <ul class="navbar-nav navbar-nav-scroll me-auto">
   <li class="nav-item">
     <a class="nav-link" href="../index.html"> 
-<span class="menu-text">Quickstart</span></a>
+<span class="menu-text">Home</span></a>
   </li>  
-  <li class="nav-item dropdown ">
-    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-guides" role="link" data-bs-toggle="dropdown" aria-expanded="false">
- <span class="menu-text">Guides</span>
-    </a>
-    <ul class="dropdown-menu" aria-labelledby="nav-menu-guides">    
-        <li>
-    <a class="dropdown-item" href="../guide/arrays.html">
- <span class="dropdown-text">Arrays</span></a>
+  <li class="nav-item">
+    <a class="nav-link active" href="../tutorials/quickstart.html" aria-current="page"> 
+<span class="menu-text">Tutorials</span></a>
   </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/compute.html">
- <span class="dropdown-text">Compute</span></a>
+  <li class="nav-item">
+    <a class="nav-link" href="../guide/arrays.html"> 
+<span class="menu-text">Guide</span></a>
   </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/expressions.html">
- <span class="dropdown-text">Expressions</span></a>
+  <li class="nav-item">
+    <a class="nav-link" href="../reference/architecture.html"> 
+<span class="menu-text">Reference</span></a>
   </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/types.html">
- <span class="dropdown-text">Type System</span></a>
-  </li>  
-        <li>
-    <a class="dropdown-item" href="../guide/interop.html">
- <span class="dropdown-text">PyArrow Interop</span></a>
-  </li>  
-    </ul>
-  </li>
-  <li class="nav-item dropdown ">
-    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-examples" role="link" data-bs-toggle="dropdown" aria-expanded="false">
- <span class="menu-text">Examples</span>
-    </a>
-    <ul class="dropdown-menu" aria-labelledby="nav-menu-examples">    
-        <li>
-    <a class="dropdown-item" href="../examples/datafusion.html">
- <span class="dropdown-text">DataFusion UDFs</span></a>
-  </li>  
-    </ul>
-  </li>
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
   <li class="nav-item">
@@ -179,20 +329,206 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span class="menu-text">Benchmarks</span></a>
   </li>  
   <li class="nav-item compact">
-    <a class="nav-link" href="https://github.com/kszucs/marrow"> <i class="bi bi-github" role="img">
+    <a class="nav-link" href="https://github.com/kszucs/marrow"> <i class="bi bi-github" role="img" aria-label="GitHub">
 </i> 
 <span class="menu-text"></span></a>
   </li>  
 </ul>
           </div> <!-- /navcollapse -->
             <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
 </div>
       </div> <!-- /container-fluid -->
     </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/compute.html">Compute</a></li><li class="breadcrumb-item"><a href="../guide/compute.html">Compute kernels</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
 </header>
 <!-- content -->
 <div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">Start here</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../tutorials/quickstart.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">10-minute quickstart</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../tutorials/data-pipeline.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Build a data pipeline</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+ <span class="menu-text">Data</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/arrays.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Arrays</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/types.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Type system</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/scalars.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scalars</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/tables.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Tables &amp; joins</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
+ <span class="menu-text">Compute</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/compute.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Compute kernels</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/sorting.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Sorting</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/gpu.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">GPU execution</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+ <span class="menu-text">Queries</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/queries-lazy.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Lazy queries (Python)</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/expressions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Queries in Mojo</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/compile.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Compile a query</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
+ <span class="menu-text">I/O &amp; interop</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/io.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Parquet &amp; Arrow IPC</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../guide/interop.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">PyArrow interop</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">DataFusion UDFs</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="true">
+ <span class="menu-text">Reference</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../reference/architecture.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Architecture</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../reference/status.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Status &amp; limitations</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
 <!-- margin-sidebar -->
     <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
         <nav id="TOC" role="doc-toc" class="toc-active">
@@ -205,16 +541,17 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </ul></li>
   <li><a href="#aggregates" id="toc-aggregates" class="nav-link" data-scroll-target="#aggregates">Aggregates</a>
   <ul class="collapse">
-  <li><a href="#numeric-aggregates" id="toc-numeric-aggregates" class="nav-link" data-scroll-target="#numeric-aggregates">Numeric aggregates</a></li>
-  <li><a href="#identity-values-for-empty-all-null-input" id="toc-identity-values-for-empty-all-null-input" class="nav-link" data-scroll-target="#identity-values-for-empty-all-null-input">Identity values for empty / all-null input</a></li>
+  <li><a href="#accumulator-types-widen" id="toc-accumulator-types-widen" class="nav-link" data-scroll-target="#accumulator-types-widen">Accumulator types widen</a></li>
+  <li><a href="#counting" id="toc-counting" class="nav-link" data-scroll-target="#counting">Counting</a></li>
   <li><a href="#boolean-aggregates" id="toc-boolean-aggregates" class="nav-link" data-scroll-target="#boolean-aggregates">Boolean aggregates</a></li>
   </ul></li>
   <li><a href="#selection" id="toc-selection" class="nav-link" data-scroll-target="#selection">Selection</a>
   <ul class="collapse">
-  <li><a href="#filter_" id="toc-filter_" class="nav-link" data-scroll-target="#filter_">filter_</a></li>
-  <li><a href="#drop_nulls" id="toc-drop_nulls" class="nav-link" data-scroll-target="#drop_nulls">drop_nulls</a></li>
+  <li><a href="#filter" id="toc-filter" class="nav-link" data-scroll-target="#filter">filter</a></li>
+  <li><a href="#drop_null" id="toc-drop_null" class="nav-link" data-scroll-target="#drop_null">drop_null</a></li>
   </ul></li>
   <li><a href="#comparisons" id="toc-comparisons" class="nav-link" data-scroll-target="#comparisons">Comparisons</a></li>
+  <li><a href="#casting" id="toc-casting" class="nav-link" data-scroll-target="#casting">Casting</a></li>
   <li><a href="#null-behaviour-summary" id="toc-null-behaviour-summary" class="nav-link" data-scroll-target="#null-behaviour-summary">Null behaviour summary</a></li>
   </ul>
 </nav>
@@ -222,7 +559,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/compute.html">Compute</a></li><li class="breadcrumb-item"><a href="../guide/compute.html">Compute kernels</a></li></ol></nav>
 <div class="quarto-title">
 <h1 class="title">Compute</h1>
 </div>
@@ -241,57 +579,99 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons, aggregation, selection, and strings. All kernels are null-aware: the exact null handling behaviour depends on the operation.</p>
+<p>Marrow provides SIMD-vectorized compute kernels for arithmetic, comparisons, selection and casting. All kernels are null-aware; the exact null handling depends on the operation.</p>
+<p>String, temporal, boolean and conditional kernels are implemented in Mojo but not yet bound to Python — they are reachable from a query plan instead.</p>
+<p>The compute functions live in <code>marrow.compute</code>, whose names mirror <code>pyarrow.compute</code> — <code>mc.add</code>, <code>mc.subtract</code>, <code>mc.cast</code>, <code>mc.filter</code> behave like their PyArrow counterparts (<code>import marrow.compute as mc; mc.add(a, b)</code>), for drop-in <code>pyarrow.compute</code> compatibility.</p>
 <section id="arithmetic" class="level2">
 <h2 class="anchored" data-anchor-id="arithmetic">Arithmetic</h2>
-<p>Element-wise binary operations: <code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>.</p>
-<div id="c0de82a2" class="cell" data-execution_count="2">
+<p>Element-wise binary operations: <code>add</code>, <code>subtract</code>, <code>multiply</code>, <code>divide</code>.</p>
+<div id="cc0a6aa2" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"add:"</span>, ma.add(a, b, <span class="va">None</span>))</span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sub:"</span>, ma.sub(b, a, <span class="va">None</span>))</span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"mul:"</span>, ma.mul(a, b, <span class="va">None</span>))</span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"div:"</span>, ma.div(b, a, <span class="va">None</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"add:     "</span>, mc.add(a, b))</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"subtract:"</span>, mc.subtract(b, a))</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"multiply:"</span>, mc.multiply(a, b))</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"divide:  "</span>, mc.divide(b, a))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>add: PrimitiveArray[int64]([11, 22, 33, 44, 55])
-sub: PrimitiveArray[int64]([9, 18, 27, 36, 45])
-mul: PrimitiveArray[int64]([10, 40, 90, 160, 250])
-div: PrimitiveArray[int64]([10, 10, 10, 10, 10])</code></pre>
+<pre><code>add:      PrimitiveArray[int64]([11, 22, 33, 44, 55])
+subtract: PrimitiveArray[int64]([9, 18, 27, 36, 45])
+multiply: PrimitiveArray[int64]([10, 40, 90, 160, 250])
+divide:   PrimitiveArray[int64]([10, 10, 10, 10, 10])</code></pre>
 </div>
 </div>
 <p>Floats work the same way:</p>
-<div id="521f83e8" class="cell" data-execution_count="3">
+<div id="b1a8c2ec" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>x <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.0</span>, <span class="fl">3.0</span>])</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>y <span class="op">=</span> ma.array([<span class="fl">0.5</span>, <span class="fl">1.5</span>, <span class="fl">2.5</span>])</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"add:"</span>, ma.add(x, y, <span class="va">None</span>))</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"div:"</span>, ma.div(x, y, <span class="va">None</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"add:   "</span>, mc.add(x, y))</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"divide:"</span>, mc.divide(x, y))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>add: PrimitiveArray[float64]([1.5, 3.5, 5.5])
-div: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])</code></pre>
+<pre><code>add:    PrimitiveArray[float64]([1.5, 3.5, 5.5])
+divide: PrimitiveArray[float64]([2.0, 1.3333333333333333, 1.2])</code></pre>
+</div>
+</div>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Warning</span>Float division by zero answers the dividend
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><code>DivKernel</code> substitutes a <code>1</code> divisor so the SIMD lane cannot trap, so <code>10.0 / 0.0</code> is <code>10.0</code> rather than <code>inf</code>:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>expression</th>
+<th>DuckDB</th>
+<th>marrow</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>10.0 / 0.0</code></td>
+<td><code>inf</code></td>
+<td><code>10.0</code></td>
+</tr>
+<tr class="even">
+<td><code>-10.0 / 0.0</code></td>
+<td><code>-inf</code></td>
+<td><code>-10.0</code></td>
+</tr>
+<tr class="odd">
+<td><code>0.0 / 0.0</code></td>
+<td><code>nan</code></td>
+<td><code>0.0</code></td>
+</tr>
+</tbody>
+</table>
+<p>Integer <code>//</code> and <code>%</code> by zero are <strong>not</strong> affected — they answer NULL, as SQL does. The two genuinely want different answers: division by zero has a value in the reals’ completion and integer division by zero does not.</p>
 </div>
 </div>
 <section id="null-propagation" class="level3">
 <h3 class="anchored" data-anchor-id="null-propagation">Null propagation</h3>
 <p>If <strong>either</strong> operand at a position is null, the result at that position is null. This mirrors SQL’s three-valued logic.</p>
-<div id="575f07c2" class="cell" data-execution_count="4">
+<div id="92e2cb65" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>])</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>])</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> ma.add(a, b, <span class="va">None</span>)</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> mc.add(a, b)</span>
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(result)    <span class="co"># index 1 and 3 are null</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, result.null_count())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, result.null_count)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([11, NULL, 33, NULL])
 null count: 2</code></pre>
 </div>
 </div>
-<div id="de4a239b" class="cell" data-execution_count="5">
+<div id="efa25f03" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Both inputs can contribute nulls</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="va">None</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>])</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="va">None</span>, <span class="dv">30</span>, <span class="va">None</span>])</span>
 <span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.add(a, b, <span class="va">None</span>))   <span class="co"># null at 0, 1, and 3</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.add(a, b))   <span class="co"># null at 0, 1, and 3</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([NULL, NULL, 33, NULL])</code></pre>
 </div>
@@ -300,129 +680,142 @@ null count: 2</code></pre>
 </section>
 <section id="aggregates" class="level2">
 <h2 class="anchored" data-anchor-id="aggregates">Aggregates</h2>
-<p>Aggregates reduce an array to a single scalar. They <strong>skip null values</strong> by default — an all-null or empty array returns the identity value.</p>
-<section id="numeric-aggregates" class="level3">
-<h3 class="anchored" data-anchor-id="numeric-aggregates">Numeric aggregates</h3>
-<div id="15a40d71" class="cell" data-execution_count="6">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum:    "</span>, ma.sum_(arr, <span class="va">None</span>))     <span class="co"># 1+3+5 = 9</span></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"product:"</span>, ma.product(arr, <span class="va">None</span>))  <span class="co"># 1*3*5 = 15</span></span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"min:    "</span>, ma.min_(arr, <span class="va">None</span>))</span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"max:    "</span>, ma.max_(arr, <span class="va">None</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Aggregates are <strong>not</strong> eager kernel calls. <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>, <code>product</code>, <code>count</code>, <code>count_distinct</code> and the rest reduce a column inside a <strong>query plan</strong>, so that a whole-table reduction and a <code>GROUP BY</code> are the same code path. Wrap a batch with <code>ma.memtable()</code>, describe the reduction, and <code>.collect()</code> runs it:</p>
+<div id="5a9be7a1" class="cell" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> ma.record_batch({<span class="st">"v"</span>: ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])})</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>q <span class="op">=</span> ma.memtable(batch)</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>out <span class="op">=</span> q.aggregate(</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"v"</span>),</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    smallest<span class="op">=</span>(<span class="st">"min"</span>, <span class="st">"v"</span>),</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    largest<span class="op">=</span>(<span class="st">"max"</span>, <span class="st">"v"</span>),</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    average<span class="op">=</span>(<span class="st">"mean"</span>, <span class="st">"v"</span>),</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(out.collect().to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>sum:     9
-product: 15
-min:     1
-max:     5</code></pre>
+<pre><code>[{'total': 9, 'smallest': 1, 'largest': 5, 'average': 3.0}]</code></pre>
 </div>
 </div>
-<p>Aggregates always return <code>float64</code> regardless of input type:</p>
-<div id="e86ce746" class="cell" data-execution_count="7">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>ints <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> ma.sum_(ints, <span class="va">None</span>)</span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(result, <span class="bu">type</span>(result))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Nulls are skipped, so <code>sum</code> above is <code>1 + 3 + 5</code>. Adding a <code>by=</code> key groups rather than reducing to one row — the only change is the argument:</p>
+<div id="4a99b5c7" class="cell" data-execution_count="7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>sales <span class="op">=</span> ma.record_batch({</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"region"</span>: ma.array([<span class="st">"east"</span>, <span class="st">"west"</span>, <span class="st">"east"</span>, <span class="st">"west"</span>]),</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"amount"</span>: ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>]),</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>by_region <span class="op">=</span> ma.memtable(sales).aggregate(</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    by<span class="op">=</span>[<span class="st">"region"</span>], total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"amount"</span>),</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>).order_by(<span class="st">"region"</span>)</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(by_region.collect().to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>60 &lt;class 'Scalar'&gt;</code></pre>
+<pre><code>[{'region': 'east', 'total': 40}, {'region': 'west', 'total': 60}]</code></pre>
+</div>
+</div>
+<section id="accumulator-types-widen" class="level3">
+<h3 class="anchored" data-anchor-id="accumulator-types-widen">Accumulator types widen</h3>
+<p><code>sum</code> and <code>product</code> do <strong>not</strong> preserve the input type — integers accumulate in <code>int64</code> and floats in <code>float64</code>, so a long column cannot silently overflow its own width. <code>mean</code> is always <code>float64</code>:</p>
+<div id="75ae1890" class="cell" data-execution_count="8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>ints <span class="op">=</span> ma.record_batch({<span class="st">"v"</span>: ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())})</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>res  <span class="op">=</span> ma.memtable(ints).aggregate(total<span class="op">=</span>(<span class="st">"sum"</span>, <span class="st">"v"</span>), avg<span class="op">=</span>(<span class="st">"mean"</span>, <span class="st">"v"</span>)).collect()</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum of int32 -&gt;"</span>, res.column(<span class="st">"total"</span>).<span class="bu">type</span>)</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"mean         -&gt;"</span>, res.column(<span class="st">"avg"</span>).<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>sum of int32 -&gt; int64
+mean         -&gt; float64</code></pre>
 </div>
 </div>
 </section>
-<section id="identity-values-for-empty-all-null-input" class="level3">
-<h3 class="anchored" data-anchor-id="identity-values-for-empty-all-null-input">Identity values for empty / all-null input</h3>
-<div id="26d53e45" class="cell" data-execution_count="8">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>empty    <span class="op">=</span> ma.array([], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>all_null <span class="op">=</span> ma.array([<span class="va">None</span>, <span class="va">None</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum of empty:      "</span>, ma.sum_(empty, <span class="va">None</span>))      <span class="co"># 0.0</span></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum of all-null:   "</span>, ma.sum_(all_null, <span class="va">None</span>))    <span class="co"># 0.0</span></span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"product of empty:  "</span>, ma.product(empty, <span class="va">None</span>))    <span class="co"># 1.0</span></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"min of empty:      "</span>, ma.min_(empty, <span class="va">None</span>))       <span class="co"># inf</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"max of empty:      "</span>, ma.max_(empty, <span class="va">None</span>))       <span class="co"># -inf</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="counting" class="level3">
+<h3 class="anchored" data-anchor-id="counting">Counting</h3>
+<p><code>count</code> counts non-null values; <code>ma.count_star()</code> counts <strong>rows</strong>, which differs on a nullable column. <code>count_distinct</code> is exact, while <code>approx_count_distinct</code> uses a fixed-size HyperLogLog sketch — far cheaper in memory on a high-cardinality column:</p>
+<div id="826a1b59" class="cell" data-execution_count="9">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>ids <span class="op">=</span> ma.record_batch({<span class="st">"id"</span>: ma.array([<span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">4</span>])})</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.memtable(ids).aggregate(</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    rows<span class="op">=</span>ma.count_star(),</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    values<span class="op">=</span>(<span class="st">"count"</span>, <span class="st">"id"</span>),</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    distinct<span class="op">=</span>(<span class="st">"count_distinct"</span>, <span class="st">"id"</span>),</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    approx<span class="op">=</span>(<span class="st">"approx_count_distinct"</span>, <span class="st">"id"</span>),</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>).collect().to_pylist())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>sum of empty:       0
-sum of all-null:    0
-product of empty:   1
-min of empty:       9223372036854775807
-max of empty:       -9223372036854775808</code></pre>
+<pre><code>[{'rows': 8, 'values': 7, 'distinct': 4, 'approx': 4}]</code></pre>
 </div>
 </div>
 </section>
 <section id="boolean-aggregates" class="level3">
 <h3 class="anchored" data-anchor-id="boolean-aggregates">Boolean aggregates</h3>
-<p><code>any_</code> and <code>all_</code> operate on boolean arrays. Nulls are skipped.</p>
-<div id="0f06f7fb" class="cell" data-execution_count="9">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>flags <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">None</span>, <span class="va">True</span>])</span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"any_:"</span>, ma.any_(flags))   <span class="co"># True  — at least one True</span></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all_:"</span>, ma.all_(flags))   <span class="co"># False — False is present</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>any</code> and <code>all</code> operate on boolean arrays. Nulls are skipped.</p>
+<div id="6cfeb534" class="cell" data-execution_count="10">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>flags <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">None</span>, <span class="va">True</span>])</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"any:"</span>, mc.<span class="bu">any</span>(flags))   <span class="co"># True  — at least one True</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all:"</span>, mc.<span class="bu">all</span>(flags))   <span class="co"># False — False is present</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>any_: True
-all_: False</code></pre>
+<pre><code>any: True
+all: False</code></pre>
 </div>
 </div>
-<div id="9e572226" class="cell" data-execution_count="10">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>all_true <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all_ with nulls:"</span>, ma.all_(all_true))   <span class="co"># True — only True values</span></span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>all_false <span class="op">=</span> ma.array([<span class="va">None</span>, <span class="va">None</span>], <span class="bu">type</span><span class="op">=</span>ma.bool_())</span>
-<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all_ empty/null:"</span>, ma.all_(all_false))   <span class="co"># True (identity)</span></span>
-<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"any_ empty/null:"</span>, ma.any_(all_false))   <span class="co"># False (identity)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="a94681bc" class="cell" data-execution_count="11">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>all_true <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all with nulls:"</span>, mc.<span class="bu">all</span>(all_true))   <span class="co"># True — only True values</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>all_false <span class="op">=</span> ma.array([<span class="va">None</span>, <span class="va">None</span>], <span class="bu">type</span><span class="op">=</span>ma.bool_())</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"all empty/null:"</span>, mc.<span class="bu">all</span>(all_false))   <span class="co"># True (identity)</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"any empty/null:"</span>, mc.<span class="bu">any</span>(all_false))   <span class="co"># False (identity)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>all_ with nulls: True
-all_ empty/null: True
-any_ empty/null: False</code></pre>
+<pre><code>all with nulls: True
+all empty/null: True
+any empty/null: False</code></pre>
 </div>
 </div>
 </section>
 </section>
 <section id="selection" class="level2">
 <h2 class="anchored" data-anchor-id="selection">Selection</h2>
-<section id="filter_" class="level3">
-<h3 class="anchored" data-anchor-id="filter_">filter_</h3>
-<p><code>filter_(array, mask)</code> keeps elements where the boolean mask is <code>True</code>. The mask must be a <code>BoolArray</code> of the same length.</p>
-<div id="210c8acf" class="cell" data-execution_count="11">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>])</span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.filter_(arr, mask))   <span class="co"># [10, 30, 50]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="filter" class="level3">
+<h3 class="anchored" data-anchor-id="filter">filter</h3>
+<p><code>filter(array, mask)</code> keeps elements where the boolean mask is <code>True</code>. The mask must be a <code>BoolArray</code> of the same length.</p>
+<div id="182393dd" class="cell" data-execution_count="12">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>])</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.<span class="bu">filter</span>(arr, mask))   <span class="co"># [10, 30, 50]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([10, 30, 50])</code></pre>
 </div>
 </div>
 <p>Nulls in the source array are preserved through the filter:</p>
-<div id="99a8c1f7" class="cell" data-execution_count="12">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="va">None</span>])</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">True</span>])</span>
-<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.filter_(arr, mask))   <span class="co"># [1, NULL, 4, NULL]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="bd881966" class="cell" data-execution_count="13">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="va">None</span>])</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">True</span>])</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.<span class="bu">filter</span>(arr, mask))   <span class="co"># [1, NULL, 4, NULL]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([1, NULL, 4, NULL])</code></pre>
 </div>
 </div>
 <p>Nulls in the mask are treated as <code>False</code> (the element is excluded):</p>
-<div id="81f296e8" class="cell" data-execution_count="13">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>])</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">None</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.filter_(arr, mask))   <span class="co"># [1, 3]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="12b7da1c" class="cell" data-execution_count="14">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>arr  <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>])</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">None</span>, <span class="va">True</span>, <span class="va">None</span>])</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.<span class="bu">filter</span>(arr, mask))   <span class="co"># [1, 3]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([1, 3])</code></pre>
 </div>
 </div>
 </section>
-<section id="drop_nulls" class="level3">
-<h3 class="anchored" data-anchor-id="drop_nulls">drop_nulls</h3>
-<p><code>drop_nulls(array)</code> removes all null positions. Equivalent to <code>filter_(array, validity_bitmap)</code>.</p>
-<div id="72d0ff9b" class="cell" data-execution_count="14">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.drop_nulls(arr))   <span class="co"># [1, 3, 5]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="drop_null" class="level3">
+<h3 class="anchored" data-anchor-id="drop_null">drop_null</h3>
+<p><code>drop_null(array)</code> removes all null positions. Equivalent to filtering by the array’s own validity bitmap.</p>
+<div id="c6c2612b" class="cell" data-execution_count="15">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.drop_null(arr))   <span class="co"># [1, 3, 5]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([1, 3, 5])</code></pre>
 </div>
 </div>
 <p>Works on numeric array types:</p>
-<div id="3f07a7f5" class="cell" data-execution_count="15">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="va">None</span>, <span class="fl">3.0</span>, <span class="va">None</span>, <span class="fl">5.0</span>])</span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.drop_nulls(f))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="bc305541" class="cell" data-execution_count="16">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>f <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="va">None</span>, <span class="fl">3.0</span>, <span class="va">None</span>, <span class="fl">5.0</span>])</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(mc.drop_null(f))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[float64]([1.0, 3.0, 5.0])</code></pre>
 </div>
@@ -432,16 +825,16 @@ any_ empty/null: False</code></pre>
 <section id="comparisons" class="level2">
 <h2 class="anchored" data-anchor-id="comparisons">Comparisons</h2>
 <p>Element-wise comparison kernels return a boolean array. Nulls propagate: if either input at a position is null, the output is null.</p>
-<div id="35636978" class="cell" data-execution_count="16">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">4</span>,    <span class="dv">5</span>])</span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"equal:        "</span>, ma.equal(a, b, <span class="va">None</span>))</span>
-<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"not_equal:    "</span>, ma.not_equal(a, b, <span class="va">None</span>))</span>
-<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"less:         "</span>, ma.less(a, b, <span class="va">None</span>))</span>
-<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"less_equal:   "</span>, ma.less_equal(a, b, <span class="va">None</span>))</span>
-<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"greater:      "</span>, ma.greater(a, b, <span class="va">None</span>))</span>
-<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"greater_equal:"</span>, ma.greater_equal(a, b, <span class="va">None</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="cd9bc00b" class="cell" data-execution_count="17">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">4</span>,    <span class="dv">5</span>])</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"equal:        "</span>, mc.equal(a, b))</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"not_equal:    "</span>, mc.not_equal(a, b))</span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"less:         "</span>, mc.less(a, b))</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"less_equal:   "</span>, mc.less_equal(a, b))</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"greater:      "</span>, mc.greater(a, b))</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"greater_equal:"</span>, mc.greater_equal(a, b))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>equal:         BoolArray([True, False, False, NULL, True])
 not_equal:     BoolArray([False, True, True, NULL, False])
@@ -452,15 +845,32 @@ greater_equal: BoolArray([True, False, True, NULL, True])</code></pre>
 </div>
 </div>
 <p>The null at index 3 propagates to all output arrays:</p>
-<div id="f7f65405" class="cell" data-execution_count="17">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> ma.equal(a, b, <span class="va">None</span>)</span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, result.null_count())   <span class="co"># 1</span></span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(3):"</span>, result.is_valid(<span class="dv">3</span>))   <span class="co"># False</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div id="f9a0ef77" class="cell" data-execution_count="18">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb33"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> mc.equal(a, b)</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, result.null_count)      <span class="co"># 1</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(3):"</span>, result[<span class="dv">3</span>].is_valid())     <span class="co"># False</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>null count: 1
 is_valid(3): False</code></pre>
 </div>
 </div>
+</section>
+<section id="casting" class="level2">
+<h2 class="anchored" data-anchor-id="casting">Casting</h2>
+<p><code>cast</code> converts an array to another type. By default a lossy conversion raises; pass <code>safe=False</code> for the raw truncating/wrapping conversion.</p>
+<div id="6beb2acc" class="cell" data-execution_count="19">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb35"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>ints <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"to float64:"</span>, mc.cast(ints, ma.float64()))</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a><span class="co"># safe=False truncates toward zero instead of raising</span></span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>floats <span class="op">=</span> ma.array([<span class="fl">1.9</span>, <span class="op">-</span><span class="fl">1.9</span>, <span class="fl">2.5</span>], <span class="bu">type</span><span class="op">=</span>ma.float64())</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"truncated: "</span>, mc.cast(floats, ma.int32(), safe<span class="op">=</span><span class="va">False</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>to float64: PrimitiveArray[float64]([1.0, 2.0, 3.0])
+truncated:  PrimitiveArray[int32]([1, -1, 2])</code></pre>
+</div>
+</div>
+<p>Casts cover the numeric, boolean, string/binary and temporal families, including decimal rescaling and dictionary decode at the Mojo level.</p>
 </section>
 <section id="null-behaviour-summary" class="level2">
 <h2 class="anchored" data-anchor-id="null-behaviour-summary">Null behaviour summary</h2>
@@ -479,7 +889,7 @@ is_valid(3): False</code></pre>
 </thead>
 <tbody>
 <tr class="odd">
-<td><code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code></td>
+<td><code>add</code>, <code>subtract</code>, <code>multiply</code>, <code>divide</code></td>
 <td>either operand null</td>
 <td>null propagates</td>
 </tr>
@@ -489,29 +899,39 @@ is_valid(3): False</code></pre>
 <td>null propagates</td>
 </tr>
 <tr class="odd">
-<td><code>sum_</code>, <code>product</code>, <code>min_</code>, <code>max_</code></td>
+<td><code>sum</code>, <code>product</code>, <code>min</code>, <code>max</code>, <code>mean</code></td>
 <td>element null</td>
 <td>element skipped</td>
 </tr>
 <tr class="even">
-<td><code>any_</code>, <code>all_</code></td>
+<td><code>count_distinct</code>, <code>approx_count_distinct</code></td>
 <td>element null</td>
 <td>element skipped</td>
 </tr>
 <tr class="odd">
-<td><code>filter_</code> (source null)</td>
+<td><code>any</code>, <code>all</code></td>
+<td>element null</td>
+<td>element skipped</td>
+</tr>
+<tr class="even">
+<td><code>filter</code> (source null)</td>
 <td>source element null</td>
 <td>null preserved in output</td>
 </tr>
-<tr class="even">
-<td><code>filter_</code> (mask null)</td>
+<tr class="odd">
+<td><code>filter</code> (mask null)</td>
 <td>mask element null</td>
 <td>element excluded</td>
 </tr>
-<tr class="odd">
-<td><code>drop_nulls</code></td>
+<tr class="even">
+<td><code>drop_null</code></td>
 <td>element null</td>
 <td>element removed</td>
+</tr>
+<tr class="odd">
+<td><code>cast</code></td>
+<td>element null</td>
+<td>null preserved</td>
 </tr>
 </tbody>
 </table>
@@ -519,9 +939,22 @@ is_valid(3): False</code></pre>
 
 </section>
 
-</main> <!-- /main -->
+<a onclick="window.scrollTo(0, 0); return false;" role="button" id="quarto-back-to-top"><i class="bi bi-arrow-up"></i> Back to top</a></main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">
   window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
     const icon = "";
     const anchorJS = new window.AnchorJS();
     anchorJS.options = {
@@ -593,7 +1026,7 @@ is_valid(3): False</code></pre>
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/marrow\.kszucs\.dev");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }
@@ -607,6 +1040,11 @@ is_valid(3): False</code></pre>
           if (link.dataset.originalHref !== undefined) {
             link.href = link.dataset.originalHref;
           }
+            // target, if specified
+            link.setAttribute("target", "_blank");
+            if (link.getAttribute("rel") === null) {
+              link.setAttribute("rel", "noopener");
+            }
         }
       }
     function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
@@ -920,7 +1358,39 @@ is_valid(3): False</code></pre>
     }
   });
   </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="../guide/tables.html" class="pagination-link" aria-label="Tables &amp; joins">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Tables &amp; joins</span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="../guide/sorting.html" class="pagination-link" aria-label="Sorting">
+        <span class="nav-page-text">Sorting</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
 </div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>Marrow — Apache Arrow in Mojo. Built with <a href="https://quarto.org">Quarto</a>.</p>
+</div>   
+    <div class="nav-footer-center">
+      &nbsp;
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kszucs/marrow">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
 
 
 

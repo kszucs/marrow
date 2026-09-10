@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>DataFusion UDFs – Marrow</title>
+<title>Status &amp; limitations – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -23,41 +23,6 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
-/* CSS for syntax highlighting */
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-  { counter-reset: source-line 0; }
-pre.numberSource code > span
-  { position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-  { content: counter(source-line);
-    position: relative; left: -1em; text-align: right; vertical-align: baseline;
-    border: none; display: inline-block;
-    -webkit-touch-callout: none; -webkit-user-select: none;
-    -khtml-user-select: none; -moz-user-select: none;
-    -ms-user-select: none; user-select: none;
-    padding: 0 4px; width: 4em;
-  }
-pre.numberSource { margin-left: 3em;  padding-left: 4px; }
-div.sourceCode
-  {   }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
-}
 </style>
 
 
@@ -67,8 +32,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/architecture.html" rel="next">
-<link href="../guide/interop.html" rel="prev">
+<link href="../reference/architecture.html" rel="prev">
 <link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -115,13 +79,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="DataFusion UDFs – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta property="og:title" content="Status &amp; limitations – Marrow">
+<meta property="og:description" content="What works, what doesn’t, and what is known to be wrong">
+<meta property="og:image" content="https://marrow.kszucs.dev/reference/assets/logo.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="DataFusion UDFs – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta name="twitter:title" content="Status &amp; limitations – Marrow">
+<meta name="twitter:description" content="What works, what doesn’t, and what is known to be wrong">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/reference/assets/logo.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -345,7 +309,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/status.html">Status &amp; limitations</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -496,7 +460,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link active">
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">DataFusion UDFs</span></a>
   </div>
 </li>
@@ -519,7 +483,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../reference/status.html" class="sidebar-item-text sidebar-link">
+  <a href="../reference/status.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Status &amp; limitations</span></a>
   </div>
 </li>
@@ -535,11 +499,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#setup" id="toc-setup" class="nav-link active" data-scroll-target="#setup">Setup</a></li>
-  <li><a href="#register-a-mojo-kernel-as-a-udf" id="toc-register-a-mojo-kernel-as-a-udf" class="nav-link" data-scroll-target="#register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</a></li>
-  <li><a href="#query-a-table" id="toc-query-a-table" class="nav-link" data-scroll-target="#query-a-table">Query a table</a></li>
-  <li><a href="#null-propagation" id="toc-null-propagation" class="nav-link" data-scroll-target="#null-propagation">Null propagation</a></li>
-  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#how-correctness-is-measured" id="toc-how-correctness-is-measured" class="nav-link active" data-scroll-target="#how-correctness-is-measured">How correctness is measured</a></li>
+  <li><a href="#known-wrong-answers" id="toc-known-wrong-answers" class="nav-link" data-scroll-target="#known-wrong-answers">Known-wrong answers</a></li>
+  <li><a href="#what-the-corpus-measures-as-missing" id="toc-what-the-corpus-measures-as-missing" class="nav-link" data-scroll-target="#what-the-corpus-measures-as-missing">What the corpus measures as missing</a></li>
+  <li><a href="#capability-by-layer" id="toc-capability-by-layer" class="nav-link" data-scroll-target="#capability-by-layer">Capability by layer</a></li>
+  <li><a href="#python-specific-limits" id="toc-python-specific-limits" class="nav-link" data-scroll-target="#python-specific-limits">Python-specific limits</a></li>
+  <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">Errors</a></li>
   </ul>
 </nav>
     </div>
@@ -547,9 +512,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/architecture.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/status.html">Status &amp; limitations</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">DataFusion UDFs</h1>
+<h1 class="title">Status &amp; limitations</h1>
+<p class="subtitle lead">What works, what doesn’t, and what is known to be wrong</p>
 </div>
 
 
@@ -566,76 +532,166 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><a href="https://datafusion.apache.org">Apache Arrow DataFusion</a> is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.</p>
-<section id="setup" class="level2">
-<h2 class="anchored" data-anchor-id="setup">Setup</h2>
-<p>DataFusion is an optional dependency in the <code>examples</code> pixi feature. Install it with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> examples datafusion_udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Or add it to an existing environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datafusion <span class="im">import</span> SessionContext, udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>marrow is <strong>alpha</strong>. Both Apache Arrow and Mojo are moving targets, and this page is the honest inventory — kept next to the machine-checked sources it is derived from, so it can be re-verified rather than believed.</p>
+<section id="how-correctness-is-measured" class="level2">
+<h2 class="anchored" data-anchor-id="how-correctness-is-measured">How correctness is measured</h2>
+<p>Two independent checks, neither of which grades marrow against itself:</p>
+<ul>
+<li><strong>The golden corpus</strong> — <code>golden/</code>, <strong>278 query cases</strong>. Each records a SQL query, the answer <strong>generated from DuckDB</strong>, and the marrow spelling. The expectations are <em>never</em> regenerated from marrow. The corpus currently carries <strong>zero <code>xfail</code>s</strong>: every case that compiles, passes.</li>
+<li><strong>Arrow archery integration</strong> — the official cross-implementation suite, run against the <strong>C++, Rust and Go</strong> implementations in both directions (<code>pixi run -e integration integration</code>).</li>
+</ul>
 </section>
-<section id="register-a-mojo-kernel-as-a-udf" class="level2">
-<h2 class="anchored" data-anchor-id="register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</h2>
-<p>Any Marrow compute function can be wrapped as a DataFusion UDF. The two conversions — <code>ma.array(pa_arr)</code> in and <code>pa.array(ma_arr)</code> out — are zero-copy pointer exchanges over the Arrow C Data Interface, not serialization, so the wrapper costs nothing beyond the kernel itself.</p>
-<div id="2d2ad646" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> mojo_add(a: pa.Array, b: pa.Array) <span class="op">-&gt;</span> pa.Array:</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> pa.array(mc.add(ma.array(a), ma.array(b)))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>add_udf <span class="op">=</span> udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), <span class="st">"immutable"</span>, name<span class="op">=</span><span class="st">"mojo_add"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="known-wrong-answers" class="level2">
+<h2 class="anchored" data-anchor-id="known-wrong-answers">Known-wrong answers</h2>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
 </div>
-</section>
-<section id="query-a-table" class="level2">
-<h2 class="anchored" data-anchor-id="query-a-table">Query a table</h2>
-<div id="59dd3478" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ctx <span class="op">=</span> SessionContext()</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>ctx.register_udf(add_udf)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> pa.record_batch(</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"price"</span>:    pa.array([<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>, <span class="dv">400</span>, <span class="dv">500</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"quantity"</span>: pa.array([<span class="dv">3</span>,   <span class="dv">1</span>,   <span class="dv">4</span>,   <span class="dv">1</span>,   <span class="dv">5</span>  ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>ctx.register_record_batches(<span class="st">"orders"</span>, [[batch]])</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> pa.Table.from_batches(</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    ctx.sql(<span class="st">"SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"</span>).collect()</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>result</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Warning</span>Float division by zero answers the dividend
 </div>
-</section>
-<section id="null-propagation" class="level2">
-<h2 class="anchored" data-anchor-id="null-propagation">Null propagation</h2>
-<p>Marrow kernels propagate nulls according to the Arrow specification. Rows where either operand is null produce a null result — DataFusion preserves this behaviour transparently.</p>
-<div id="9888325d" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ctx2 <span class="op">=</span> SessionContext()</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ctx2.register_udf(add_udf)</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> pa.record_batch(</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"a"</span>: pa.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>   ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"b"</span>: pa.array([<span class="dv">10</span>, <span class="dv">20</span>,  <span class="va">None</span>, <span class="dv">40</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>ctx2.register_record_batches(<span class="st">"t"</span>, [[batch2]])</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>pa.Table.from_batches(</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    ctx2.sql(<span class="st">"SELECT a, b, mojo_add(a, b) AS result FROM t"</span>).collect()</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
+<div class="callout-body-container callout-body">
+<p><code>DivKernel</code> substitutes a <code>1</code> divisor so the SIMD lane cannot trap, so <code>10.0 / 0.0</code> is <code>10.0</code> where IEEE 754 and DuckDB both say <code>inf</code>; <code>-10.0 / 0.0</code> is <code>-10.0</code>, and <code>0.0 / 0.0</code> is <code>0.0</code>.</p>
+<p><strong>No golden case pins it</strong>, which is how it survived — so it is the one known-wrong answer the corpus does not currently catch. Integer <code>//</code> and <code>%</code> by zero are unaffected and answer NULL, as SQL does.</p>
+</div>
+</div>
+<p>One latent trap is worth knowing too: <code>count(*)</code> desugars to <code>count(lit(1))</code>, whose referenced-column set is empty, so anything that prunes by “what does this read” would prune every column. Column pruning handles it by never narrowing a source to zero columns.</p>
 </section>
-<section id="how-it-works" class="level2">
-<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
-<p>Each call to <code>mojo_add</code> inside a DataFusion query goes through these steps:</p>
-<ol type="1">
-<li>DataFusion evaluates the query plan and produces a <code>pyarrow.Array</code> chunk for each argument column.</li>
-<li><code>mc.add(a, b)</code> imports each argument into Marrow via <code>__arrow_c_array__</code> — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.</li>
-<li><code>pa.array(result)</code> exports the result back to PyArrow via <code>__arrow_c_array__</code> — again, no copy.</li>
-</ol>
-<p>The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.</p>
+<section id="what-the-corpus-measures-as-missing" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-corpus-measures-as-missing">What the corpus measures as missing</h2>
+<p>63 of the 278 cases carry <code>-- skip mojo</code>: marrow has no API for them, so the SQL and the DuckDB answer are recorded and the marrow body is a <em>proposal</em> rather than a verified spelling.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 57%">
+<col style="width: 42%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: right;">cases</th>
+<th>area</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">13</td>
+<td>aggregates — median, quantile, first/last, arg_min/arg_max, string_agg, corr/covar, mode, skewness, <code>bool_and</code>/<code>bool_or</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">10</td>
+<td>temporal — date_diff, age, strftime/strptime, make_date, iso_week</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">8</td>
+<td>nested — struct field, map lookup, list element/slice, unnest</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">7</td>
+<td>math — atan2 and the rest of the trigonometric family</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">5</td>
+<td>string — regexp, concat_ws</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">4</td>
+<td>set operations — UNION / EXCEPT / INTERSECT</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">4</td>
+<td>joins — cross, non-equi, asof</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">3</td>
+<td>GROUPING SETS / ROLLUP / CUBE</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">3</td>
+<td>filters — SQL <code>NOT IN</code> null semantics, <code>.is_in</code> as a method</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">3</td>
+<td>decimals in expressions</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2</td>
+<td>subqueries</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">1</td>
+<td><code>DISTINCT ON</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>golden/COVERAGE.md</code> is the authoritative, machine-checked version of this table.</p>
+</section>
+<section id="capability-by-layer" class="level2">
+<h2 class="anchored" data-anchor-id="capability-by-layer">Capability by layer</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Layouts</strong></td>
+<td>bool, numeric, string/large_string, binary/large_binary, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), temporal — <strong>implemented</strong>. Union, run-end-encoded and view layouts — <strong>not</strong></td>
+</tr>
+<tr class="even">
+<td><strong>Sources</strong></td>
+<td>Parquet and Arrow IPC only. <strong>No CSV, no JSON.</strong> <code>scan</code>/<code>read_parquet</code> takes <strong>one file</strong> — no globs, directories, hive partitions or object storage</td>
+</tr>
+<tr class="odd">
+<td><strong>Parquet</strong></td>
+<td>native reader and writer, snappy/zstd/lz4, data page v1 &amp; v2, statistics, page index. Bloom filters are implemented but <strong>off by default</strong> and unreachable from Python. No modular encryption</td>
+</tr>
+<tr class="even">
+<td><strong>Optimizer</strong></td>
+<td>15 rules plus column pruning. <strong>No cost model</strong>, so no join reordering and no build-side selection</td>
+</tr>
+<tr class="odd">
+<td><strong>Execution</strong></td>
+<td>in-memory only — <strong>no spilling anywhere</strong>, so every aggregate and join is bounded by RAM</td>
+</tr>
+<tr class="even">
+<td><strong>Joins</strong></td>
+<td>equijoins only: inner, left, right, full, semi, anti. No nested-loop, range or asof joins</td>
+</tr>
+<tr class="odd">
+<td><strong>GPU</strong></td>
+<td>element-wise kernels only (arithmetic, comparison, boolean, cast, hashing), and <strong>off unless built with <code>-D MARROW_GPU=true</code></strong></td>
+</tr>
+<tr class="even">
+<td><strong>UDFs</strong></td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="python-specific-limits" class="level2">
+<h2 class="anchored" data-anchor-id="python-specific-limits">Python-specific limits</h2>
+<p>The Python bindings are narrower than the Mojo core, and some of the gaps are CPython-binding limits rather than missing features:</p>
+<ul>
+<li><strong>Aggregates are not on the eager surface.</strong> <code>marrow.compute</code> has no <code>sum</code> / <code>min</code> / <code>max</code> / <code>mean</code>; reductions live in the query layer.</li>
+<li><strong>String and temporal verbs are unbound.</strong> All 17 (<code>substr</code>, <code>lpad</code>, <code>replace</code>, <code>split_part</code>, <code>position</code>, <code>epoch</code>, <code>last_day</code>, <code>week</code>, …) exist and evaluate in <strong>both</strong> Mojo lanes; none is reachable from Python.</li>
+<li><strong>No window functions from Python.</strong> They exist in the Mojo lane only.</li>
+<li><strong>Statistics pruning is unreachable from Python</strong> — a <code>PythonObject</code> has already erased the type the pruning overload needs, so a filtered scan reads every row group.</li>
+<li><strong><code>==</code> on a dtype or an array is identity comparison.</strong> <code>tp_richcompare</code> is not reachable through the binding API, so <code>ma.int32() == ma.int32()</code> is <code>False</code>. Compare <code>str()</code> instead.</li>
+<li><strong>Methods where PyArrow has properties</strong> — <code>Array.type()</code>, <code>RecordBatch.num_rows()</code>. The <code>tp_getset</code> slot is unexposed.</li>
+</ul>
+</section>
+<section id="errors" class="level2">
+<h2 class="anchored" data-anchor-id="errors">Errors</h2>
+<p>There are 300+ <code>raise Error</code> sites and <strong>zero typed exceptions</strong>, so failures cannot yet be caught by kind.</p>
+<hr>
+<p>The open work, with complexity estimates and what blocks what, is tracked in <code>backlog.md</code> at the repository root.</p>
 
 
 </section>
@@ -1061,14 +1117,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../guide/interop.html" class="pagination-link" aria-label="PyArrow interop">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">PyArrow interop</span>
+      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Architecture</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
-        <span class="nav-page-text">Architecture</span> <i class="bi bi-arrow-right-short"></i>
-      </a>
   </div>
 </nav>
 </div> <!-- /content -->

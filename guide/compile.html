@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>DataFusion UDFs – Marrow</title>
+<title>Compiling a query to a standalone binary – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -67,8 +67,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/architecture.html" rel="next">
-<link href="../guide/interop.html" rel="prev">
+<link href="../guide/io.html" rel="next">
+<link href="../guide/expressions.html" rel="prev">
 <link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -115,13 +115,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="DataFusion UDFs – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta property="og:title" content="Compiling a query to a standalone binary – Marrow">
+<meta property="og:description" content="marrow compile — the AOT lane, exposed to users">
+<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="DataFusion UDFs – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta name="twitter:title" content="Compiling a query to a standalone binary – Marrow">
+<meta name="twitter:description" content="marrow compile — the AOT lane, exposed to users">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -345,7 +345,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/queries-lazy.html">Queries</a></li><li class="breadcrumb-item"><a href="../guide/compile.html">Compile a query</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -467,7 +467,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../guide/compile.html" class="sidebar-item-text sidebar-link">
+  <a href="../guide/compile.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Compile a query</span></a>
   </div>
 </li>
@@ -496,7 +496,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link active">
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">DataFusion UDFs</span></a>
   </div>
 </li>
@@ -535,11 +535,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#setup" id="toc-setup" class="nav-link active" data-scroll-target="#setup">Setup</a></li>
-  <li><a href="#register-a-mojo-kernel-as-a-udf" id="toc-register-a-mojo-kernel-as-a-udf" class="nav-link" data-scroll-target="#register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</a></li>
-  <li><a href="#query-a-table" id="toc-query-a-table" class="nav-link" data-scroll-target="#query-a-table">Query a table</a></li>
-  <li><a href="#null-propagation" id="toc-null-propagation" class="nav-link" data-scroll-target="#null-propagation">Null propagation</a></li>
-  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#when-to-reach-for-this-instead-of-the-lazy-frontend" id="toc-when-to-reach-for-this-instead-of-the-lazy-frontend" class="nav-link active" data-scroll-target="#when-to-reach-for-this-instead-of-the-lazy-frontend">When to reach for this instead of the lazy frontend</a></li>
+  <li><a href="#what-you-write" id="toc-what-you-write" class="nav-link" data-scroll-target="#what-you-write">What you write</a>
+  <ul class="collapse">
+  <li><a href="#param-the-late-bound-value" id="toc-param-the-late-bound-value" class="nav-link" data-scroll-target="#param-the-late-bound-value"><code>param()</code> — the late-bound value</a></li>
+  </ul></li>
+  <li><a href="#what-the-compiled-binary-does" id="toc-what-the-compiled-binary-does" class="nav-link" data-scroll-target="#what-the-compiled-binary-does">What the compiled binary does</a>
+  <ul class="collapse">
+  <li><a href="#output-formats" id="toc-output-formats" class="nav-link" data-scroll-target="#output-formats">Output formats</a></li>
+  <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">Errors</a></li>
+  <li><a href="#column-names-are-checked-against-the-schema-not-the-compiler" id="toc-column-names-are-checked-against-the-schema-not-the-compiler" class="nav-link" data-scroll-target="#column-names-are-checked-against-the-schema-not-the-compiler">Column names are checked against the schema, not the compiler</a></li>
+  </ul></li>
+  <li><a href="#marrow-compile-building-the-binary" id="toc-marrow-compile-building-the-binary" class="nav-link" data-scroll-target="#marrow-compile-building-the-binary"><code>marrow compile</code> — building the binary</a></li>
+  <li><a href="#bundle-a-relocatable-self-contained-directory" id="toc-bundle-a-relocatable-self-contained-directory" class="nav-link" data-scroll-target="#bundle-a-relocatable-self-contained-directory"><code>--bundle</code> — a relocatable, self-contained directory</a></li>
+  <li><a href="#why-this-is-small" id="toc-why-this-is-small" class="nav-link" data-scroll-target="#why-this-is-small">Why this is small</a></li>
   </ul>
 </nav>
     </div>
@@ -547,9 +556,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/queries-lazy.html">Queries</a></li><li class="breadcrumb-item"><a href="../guide/compile.html">Compile a query</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">DataFusion UDFs</h1>
+<h1 class="title">Compiling a query to a standalone binary</h1>
+<p class="subtitle lead">marrow compile — the AOT lane, exposed to users</p>
 </div>
 
 
@@ -566,76 +576,251 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><a href="https://datafusion.apache.org">Apache Arrow DataFusion</a> is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.</p>
-<section id="setup" class="level2">
-<h2 class="anchored" data-anchor-id="setup">Setup</h2>
-<p>DataFusion is an optional dependency in the <code>examples</code> pixi feature. Install it with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> examples datafusion_udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Or add it to an existing environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datafusion <span class="im">import</span> SessionContext, udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</section>
-<section id="register-a-mojo-kernel-as-a-udf" class="level2">
-<h2 class="anchored" data-anchor-id="register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</h2>
-<p>Any Marrow compute function can be wrapped as a DataFusion UDF. The two conversions — <code>ma.array(pa_arr)</code> in and <code>pa.array(ma_arr)</code> out — are zero-copy pointer exchanges over the Arrow C Data Interface, not serialization, so the wrapper costs nothing beyond the kernel itself.</p>
-<div id="2d2ad646" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> mojo_add(a: pa.Array, b: pa.Array) <span class="op">-&gt;</span> pa.Array:</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> pa.array(mc.add(ma.array(a), ma.array(b)))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>add_udf <span class="op">=</span> udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), <span class="st">"immutable"</span>, name<span class="op">=</span><span class="st">"mojo_add"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Everything else in this guide runs through the Python bindings: build a plan, call <code>.execute()</code>, get a <code>RecordBatch</code> back, in the same process that built the plan. <code>marrow compile</code> is a different thing entirely — it turns a Mojo source file into a standalone binary that runs the query later, from the command line, with no marrow, no Mojo toolchain and no Python interpreter installed on the machine that runs it.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
 </div>
-</section>
-<section id="query-a-table" class="level2">
-<h2 class="anchored" data-anchor-id="query-a-table">Query a table</h2>
-<div id="59dd3478" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ctx <span class="op">=</span> SessionContext()</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>ctx.register_udf(add_udf)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> pa.record_batch(</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"price"</span>:    pa.array([<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>, <span class="dv">400</span>, <span class="dv">500</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"quantity"</span>: pa.array([<span class="dv">3</span>,   <span class="dv">1</span>,   <span class="dv">4</span>,   <span class="dv">1</span>,   <span class="dv">5</span>  ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>ctx.register_record_batches(<span class="st">"orders"</span>, [[batch]])</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> pa.Table.from_batches(</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    ctx.sql(<span class="st">"SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"</span>).collect()</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>result</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="callout-title-container flex-fill">
+Note
 </div>
-</section>
-<section id="null-propagation" class="level2">
-<h2 class="anchored" data-anchor-id="null-propagation">Null propagation</h2>
-<p>Marrow kernels propagate nulls according to the Arrow specification. Rows where either operand is null produce a null result — DataFusion preserves this behaviour transparently.</p>
-<div id="9888325d" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ctx2 <span class="op">=</span> SessionContext()</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ctx2.register_udf(add_udf)</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> pa.record_batch(</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"a"</span>: pa.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>   ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"b"</span>: pa.array([<span class="dv">10</span>, <span class="dv">20</span>,  <span class="va">None</span>, <span class="dv">40</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>ctx2.register_record_batches(<span class="st">"t"</span>, [[batch2]])</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>pa.Table.from_batches(</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    ctx2.sql(<span class="st">"SELECT a, b, mojo_add(a, b) AS result FROM t"</span>).collect()</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
+<div class="callout-body-container callout-body">
+<p>The code on this page is Mojo, compiled ahead of time — not the Python <code>marrow.expr</code> API the rest of this guide uses. See <a href="../guide/expressions.html">Expression execution</a> for the lazy Python frontend.</p>
+</div>
+</div>
+<section id="when-to-reach-for-this-instead-of-the-lazy-frontend" class="level2">
+<h2 class="anchored" data-anchor-id="when-to-reach-for-this-instead-of-the-lazy-frontend">When to reach for this instead of the lazy frontend</h2>
+<p>The query <em>shape</em> — which relation nodes, in what order, over which columns — is frozen at compile time. Only <strong>scalars and paths</strong> are late-bound. That is the whole trade:</p>
+<ul>
+<li>A fixed report that runs against a different file and a different threshold every day — <code>marrow compile</code> fits well. Ship one binary, run it with different <code>--flag</code> values, no marrow install required on the target machine.</li>
+<li>A query whose <em>shape</em> varies — a different filter, a different set of group-by keys, an ad hoc notebook session — wants the <a href="../guide/expressions.html">Python lazy frontend</a> instead. Reshaping a plan there is a line of Python; reshaping a compiled binary is a rebuild.</li>
+</ul>
+<p><strong>State the cost up front, because it will not announce itself:</strong> a <code>marrow compile</code> build takes roughly <strong>1-2 minutes per invocation</strong>, because <code>mojo build</code> elaborates the whole of <code>marrow</code> at <code>-O3</code> for every compile — there is no incremental build. That is fine for a binary you build once and run many times; it is a bad fit for an edit-compile-run loop.</p>
 </section>
-<section id="how-it-works" class="level2">
-<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
-<p>Each call to <code>mojo_add</code> inside a DataFusion query goes through these steps:</p>
-<ol type="1">
-<li>DataFusion evaluates the query plan and produces a <code>pyarrow.Array</code> chunk for each argument column.</li>
-<li><code>mc.add(a, b)</code> imports each argument into Marrow via <code>__arrow_c_array__</code> — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.</li>
-<li><code>pa.array(result)</code> exports the result back to PyArrow via <code>__arrow_c_array__</code> — again, no copy.</li>
-</ol>
-<p>The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.</p>
+<section id="what-you-write" class="level2">
+<h2 class="anchored" data-anchor-id="what-you-write">What you write</h2>
+<p>A query file is an ordinary Mojo program with a <code>main()</code>. It declares its command-line surface, parses it, builds a plan, and runs it:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>benchmarks/binary_size/query_cli.mojo</strong></pre>
+</div>
+<pre class="mojo" data-filename="benchmarks/binary_size/query_cli.mojo"><code>"""The AOT lane's product surface, end to end — and the gate that keeps it cheap.
+
+This is what a user of `marrow compile` actually writes: a fused plan over a
+known schema, a late-bound threshold, a late-bound input path, and `cli.run()`.
+Compiled it is a standalone `SELECT` over a Parquet file with `--help`,
+`--describe`, `-o` and `--format`:
+
+    marrow compile benchmarks/binary_size/query_cli.mojo -o orders
+    ./orders orders.parquet --min-amount 250
+    ./orders orders.parquet --format csv | head
+
+Every expression here is comptime — `col("amount", int64)` is a
+`Column[Int64Type]`, the predicate fuses into one SIMD loop — so the gate's job
+is to show that wrapping a plan in a command-line surface does **not** drag the
+runtime interpreter in behind it. `marrow::expr::runtime` must link 0 symbols:
+
+    pixi run binary_size query_cli query_scan
+
+`run()` is called without `[parquet=True]` / `[ipc=True]`, so the Parquet and
+Arrow IPC *writers* are gated out and this binary prints or writes text. That
+is the default on purpose: the writers are the largest thing the CLI layer can
+pull in, and a query that pipes its result should not pay for them.
+
+**The plan names no rules, so this binary links no optimizer** — the same
+default `execute()` has. An earlier draft had `run` apply `ScanPruning` itself,
+and that single call measured 1,467,352 bytes (+33% of this gate):
+`Optimizer.run` walks the plan through `DynRelation._dispatch`, whose ten arms
+each rebuild their node and so register `_to_operator_tramp[X]`, linking every
+physical operator and its kernels into a binary whose plan names two node
+types. Adding `.optimize[ScanPruning]()` here is what it costs to make an AOT
+binary prune; no gate pays it today, so the figure is recorded rather than
+gated.
+"""
+
+from marrow.dtypes import field, int64, string
+from marrow.expr import QueryCli, col, scan
+from marrow.schema import schema
+
+
+def main() raises:
+    var cli = QueryCli(
+        String("orders"),
+        description=String("Orders at or above a minimum amount."),
+    )
+    var min_amount = cli.param(
+        String("min-amount"),
+        int64,
+        default=Int64(0),
+        help=String("keep orders whose amount is at least this"),
+    )
+    cli.argument(String("src"), help=String("input Parquet file"))
+
+    if cli.parse():
+        var sch = schema(
+            [
+                field("id", int64),
+                field("amount", int64),
+                field("name", string),
+            ]
+        )
+        cli.run(
+            scan(cli.get(String("src")), sch^).filter(
+                col("amount", int64) &gt;= min_amount
+            )
+        )
+</code></pre>
+</div>
+<p>Four calls carry the whole surface:</p>
+<ul>
+<li><strong><code>QueryCli(prog, description=...)</code></strong> — the program’s name and its <code>--help</code> blurb.</li>
+<li><strong><code>cli.param(name, dtype, default=..., help=...)</code></strong> — a late-bound scalar. It returns the plan node <em>and</em> declares the option, which is the point: one line produces <code>--min-amount</code>, its <code>--help</code> entry, the string-to-<code>int64</code> coercion and the <code>Param[Int64Type]</code> the predicate is built from, so the parser and the plan cannot drift apart. Required unless it has a <code>default</code>.</li>
+<li><strong><code>cli.argument(name, help=...)</code></strong> — a positional, read back with <code>cli.get(name)</code>. Paths are the usual case.</li>
+<li><strong><code>cli.run(plan)</code></strong> — execute and write the result.</li>
+</ul>
+<p><code>cli.option(...)</code> and <code>cli.flag(...)</code> are there too, for a string or boolean the plan does not consume as a scalar.</p>
+<section id="param-the-late-bound-value" class="level3">
+<h3 class="anchored" data-anchor-id="param-the-late-bound-value"><code>param()</code> — the late-bound value</h3>
+<p><code>cli.param(name, dtype)</code> returns a node structurally identical to <code>lit(value)</code>, except the scalar behind it arrives from the command line. It composes with everything a literal does — comparisons, arithmetic — and costs nothing extra per row: the value is resolved once per batch, not once per element.</p>
+<p>A plan is immutable and stateless, so the value does not live <em>in</em> the node. It travels through the execution as a <code>Bindings</code> map, which <code>cli.run()</code> assembles from the parsed arguments. Two executions of the same plan with different values cannot interfere.</p>
+<p><code>param()</code> is also available directly, without a <code>QueryCli</code> — <code>param("min-a", int64, default=0)</code> — for a plan that binds its own values through <code>plan.execute(bindings=...)</code>. It is numeric-only today; there is no string or temporal parameter, so a late-bound <strong>path</strong> is an ordinary <code>cli.argument()</code>/<code>cli.option()</code> string rather than a node.</p>
+</section>
+</section>
+<section id="what-the-compiled-binary-does" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-compiled-binary-does">What the compiled binary does</h2>
+<p>Every <code>QueryCli</code> binary gets five arguments without the author declaring them: <code>-h/--help</code>, <code>--describe</code>, <code>-o/--output</code>, <code>--format</code> and <code>--max-rows</code>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders <span class="at">--help</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">usage:</span> orders <span class="pp">[-</span><span class="ss">h</span><span class="pp">]</span> <span class="pp">[--</span><span class="ss">describe</span><span class="pp">]</span> [--output PATH] [--format FMT] [--max-rows N] [--min-amount N] <span class="op">&lt;</span>src<span class="op">&gt;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Orders</span> at or above a minimum amount.</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="ex">options:</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  <span class="ex">-h,</span> <span class="at">--help</span>          show this help message</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>      <span class="ex">--describe</span>      print the query plan and exit</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  <span class="ex">-o,</span> <span class="at">--output</span> PATH   write results here <span class="er">(</span><span class="ex">default:</span> stdout<span class="kw">)</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>      <span class="ex">--format</span> FMT    output format: table <span class="kw">|</span> <span class="ex">csv</span> <span class="kw">|</span> <span class="ex">parquet</span> <span class="kw">|</span> <span class="ex">ipc</span> <span class="er">(</span><span class="ex">default:</span> inferred from <span class="at">--output</span><span class="st">'s extension, else table)</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="st">      --max-rows N    rows to print for `table` output, 0 for all (default: 20)</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="st">      --min-amount N  keep orders whose amount is at least this (default: 0)</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="st">arguments:</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="st">  src                 input Parquet file (required)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Running it against a seven-row Parquet file whose <code>amount</code> column is <code>[100, 250, 90, 1000, 250, null, 42]</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders orders.parquet <span class="at">--min-amount</span> 250</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">id</span>  amount  name</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="ex">--</span>  <span class="at">------</span>  <span class="at">----</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="ex">2</span>   250     bob</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="ex">4</span>   1000    dave</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="ex">5</span>   250     erin</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">3</span> rows<span class="kw">)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>--describe</code> prints the plan and exits, which is the only way to ask a shipped binary what query is baked into it. It short-circuits the required-argument check, so it needs no input file:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders <span class="at">--describe</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Filter</span><span class="er">(</span><span class="fu">ParquetScan()</span><span class="ex">,</span> greater_equal<span class="er">(</span><span class="fu">col</span><span class="er">(</span><span class="ex">amount</span><span class="kw">)</span><span class="ex">,</span> param<span class="er">(</span><span class="ex">min-amount</span><span class="kw">)))</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="output-formats" class="level3">
+<h3 class="anchored" data-anchor-id="output-formats">Output formats</h3>
+<p>The default is an aligned text table, capped at <code>--max-rows</code> (20) with a footer that says so — <code>print(batch)</code> alone prints <code>RecordBatch(num_rows=3, schema=...)</code> and no data, which is fine as a repr and useless as a report. <code>--format csv</code> writes RFC 4180 CSV and is <strong>never</strong> truncated, because a silently capped pipe is a data-loss bug:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders orders.parquet <span class="at">--format</span> csv</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">id</span>,amount,name</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">1,100,alice</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ex">2,250,bob</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="ex">3,90,carol</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="ex">4,1000,dave</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="ex">5,250,erin</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="ex">7,42,grace</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>-o PATH</code> writes to a file instead of stdout and picks the format from the extension — <code>.csv</code> for CSV, <code>.parquet</code> for Parquet, <code>.arrow</code>/<code>.ipc</code> for Arrow IPC, anything else CSV. <code>--format</code> overrides the guess.</p>
+<p><strong>Parquet and Arrow IPC are opt-in at compile time.</strong> They are the largest thing this layer can pull into a binary, and a query that prints or pipes its result should not carry them, so <code>run()</code> takes them as comptime parameters:</p>
+<pre class="mojo fragment"><code>cli.run(plan)                  # text only — table and csv
+cli.run[parquet=True](plan)    # + the Parquet writer
+cli.run[ipc=True](plan)        # + the Arrow IPC writer</code></pre>
+<p>A binary built without one says so, and names the fix, rather than failing obscurely:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders orders.parquet <span class="at">-o</span> out.parquet</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">orders:</span> error: <span class="at">--format</span> parquet: this binary was built without the Parquet writer<span class="kw">;</span> <span class="ex">build</span> it with <span class="kw">`</span><span class="ex">cli.run[parquet=True]</span><span class="er">(</span><span class="ex">plan</span><span class="kw">)`</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>This replaces the old <code>-D MARROW_CLI_WRITERS=true</code> build flag. Putting the choice in the source means the query file states which formats its binary supports, and no build invocation can disagree with it.</p>
+<p>Measured on the <code>query_cli</code> program, <code>__text</code>, same machine and same invocation:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Build</th>
+<th style="text-align: right;"><code>__text</code></th>
+<th>vs.&nbsp;text-only</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>cli.run(plan)</code> — table and CSV</td>
+<td style="text-align: right;">2,965,016</td>
+<td>—</td>
+</tr>
+<tr class="even">
+<td><code>cli.run[parquet=True, ipc=True](plan)</code></td>
+<td style="text-align: right;">3,621,592</td>
+<td><strong>+656,576</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>nm -C</code> on the two: <code>marrow::parquet::writer</code> is <strong>0</strong> symbols in the first and 7 in the second, and <code>marrow::expr::runtime</code> is 0 in both.</p>
+</section>
+<section id="errors" class="level3">
+<h3 class="anchored" data-anchor-id="errors">Errors</h3>
+<p>A usage error prints the usage line and exits <strong>2</strong>; an execution error exits <strong>1</strong>. Neither surfaces a Mojo traceback:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders <span class="at">--min-amont</span> 5 orders.parquet</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">usage:</span> orders <span class="pp">[-</span><span class="ss">h</span><span class="pp">]</span> <span class="pp">[--</span><span class="ss">describe</span><span class="pp">]</span> [--output PATH] [--format FMT] [--max-rows N] [--min-amount N] <span class="op">&lt;</span>src<span class="op">&gt;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">orders:</span> error: unrecognized option <span class="st">'--min-amont'</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./orders <span class="at">--min-amount</span> abc orders.parquet</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="ex">orders:</span> error: <span class="at">--min-amount</span> expects an integer, got <span class="st">'abc'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="column-names-are-checked-against-the-schema-not-the-compiler" class="level3">
+<h3 class="anchored" data-anchor-id="column-names-are-checked-against-the-schema-not-the-compiler">Column names are checked against the schema, not the compiler</h3>
+<p><code>col("amount", int64)</code> fixes the column’s <em>dtype</em> at compile time — that is what makes the predicate fuse — but the <em>name</em> is resolved against the schema when the plan is built, so a typo is a run-time error naming the column, not a compile error — <code>marrow/schema.mojo</code>’s <code>field(name=...)</code> raises <code>Field with name `amont` not found.</code>, which <code>run()</code> reports as <code>orders: error: Field with name \</code>amont` not found.`.</p>
+<p><strong>It could be a compile error, and that is the obvious next step for this surface.</strong> <code>marrow/expr/comptime/tests/test_schema_handle.mojo</code> pins the four compiler contracts it needs — a struct with heap-allocated fields <em>is</em> a valid comptime parameter, <code>__getattr_param__</code> fires for a missing attribute, its return type may depend on the attribute name and still satisfy <code>Column</code>’s <code>NumericType</code> bound, and <code>comptime assert</code> turns an unknown name into a build failure carrying its own message. With a schema as a comptime parameter, <code>t.amount</code> resolves to <code>Column[Float64Type]</code> and <code>t.amont</code> fails the build with <code>constraint failed: unknown column: amont</code>.</p>
+<p>What does not exist yet is the production side of it: the handle and the comptime schema in that file are defined <em>in the test</em>, and nothing derives one from a Parquet footer at build time. Until that lands, <code>col(name, dtype)</code> is the working spelling and a bad name is caught when the plan is built.</p>
+</section>
+</section>
+<section id="marrow-compile-building-the-binary" class="level2">
+<h2 class="anchored" data-anchor-id="marrow-compile-building-the-binary"><code>marrow compile</code> — building the binary</h2>
+<p>Installing marrow with the <code>compile</code> extra (<code>pip install marrow[compile]</code>) registers a <code>marrow</code> console script backed by <code>python/marrow/compile.py</code>. <code>compile</code> is a subcommand of it, so more subcommands can join it later:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> marrow compile benchmarks/binary_size/query_cli.mojo <span class="at">-o</span> orders</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Inside a checkout, the equivalent without the wrapper is the recipe <code>marrow compile</code> runs for you:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> pixi run <span class="at">-e</span> dev mojo build <span class="at">-O3</span> <span class="at">-g0</span> <span class="at">-I</span> . benchmarks/binary_size/query_cli.mojo <span class="at">-o</span> orders</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Warning</span>The <code>compile</code> extra does not resolve on PyPI today
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>The extra pins <code>mojo&gt;=1.1,&lt;2</code>, and marrow needs a <strong>nightly</strong> Mojo build; PyPI’s stable <code>mojo</code> package tops out at 1.0.0, so <code>pip install marrow[compile]</code> cannot satisfy it from PyPI alone. Install the nightly explicitly first — <code>pip install --pre mojo --extra-index-url https://whl.modular.com/nightly/simple/</code> — or work inside marrow’s own pixi environment, which already has the pinned nightly. <code>check_mojo_version</code> reports the same thing at run time if the stable wheel is what got installed.</p>
+</div>
+</div>
+<p><code>marrow</code> resolves the <code>mojo</code> compiler on <code>PATH</code> (raising a named error, including the nightly-vs-stable-PyPI distinction, if it is missing or out of range) and the <code>marrow/</code> Mojo package to pass as <code>mojo build</code>’s <code>-I</code> — via <code>--marrow-path</code>, the <code>MARROW_MOJO_PATH</code> environment variable, the copy bundled into the wheel, or by walking up from the current directory looking for a <code>marrow/</code> + <code>pixi.toml</code> pair, in that order. Then it runs <code>mojo build -O3 -g0 -I &lt;marrow&gt; &lt;src&gt; -o &lt;out&gt;</code> followed by <code>strip</code>, so a compiled query’s size is directly comparable to the numbers in <code>benchmarks/binary_size/</code>.</p>
+<p>Useful flags:</p>
+<ul>
+<li><strong><code>-o OUTPUT</code></strong> (or the positional form, <code>marrow compile query.mojo out</code>) — where to write the binary. Defaults to the source file’s name without <code>.mojo</code>, in the current directory.</li>
+<li><strong><code>--fast</code></strong> — build with <code>-O1</code> instead of <code>-O3</code>: a faster compile, a slower binary. Still on the order of a minute, since elaborating <code>marrow</code> dominates either way.</li>
+<li><strong><code>--bundle DIR</code></strong> — see below.</li>
+<li><strong><code>--marrow-path</code>, <code>-v</code>, <code>--no-strip</code></strong> — override package resolution, print the underlying <code>mojo build</code> command, or skip stripping debug symbols.</li>
+</ul>
+</section>
+<section id="bundle-a-relocatable-self-contained-directory" class="level2">
+<h2 class="anchored" data-anchor-id="bundle-a-relocatable-self-contained-directory"><code>--bundle</code> — a relocatable, self-contained directory</h2>
+<p>A compiled binary still dynamically links a handful of Mojo/MAX runtime <code>.dylib</code>/<code>.so</code> files, resolved through the local pixi environment’s rpath — copying the bare binary to another machine will not run there. <code>marrow compile query.mojo -o query --bundle DIR</code> copies the binary plus the <strong>transitive</strong> closure of its non-system shared-library dependencies into <code>DIR</code> and rewrites the rpath to <code>@loader_path</code> (macOS) / <code>$ORIGIN</code> (Linux), so <code>DIR</code> runs standalone — no pixi environment, no marrow install:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> marrow compile query.mojo <span class="at">-o</span> query <span class="at">--bundle</span> ./dist</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./dist/query data.parquet <span class="at">--min-amount</span> 5</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The closure walks <code>otool -L</code> / <code>ldd</code> recursively rather than hardcoding a dylib list, because the set is not fixed — a <code>-D MARROW_GPU=true</code> build pulls in an additional GPU runtime library that a CPU-only build does not link.</p>
+<p><strong>The bundle also includes marrow’s Parquet compression codecs</strong> — zstd, snappy, lz4, zlib and brotli. Those are <code>dlopen</code>-ed at runtime rather than linked (see <code>marrow/utils/compression.mojo</code>), so they are invisible to <code>otool -L</code>/<code>ldd</code> and need their own step: <code>--bundle</code> resolves the active pixi/conda environment’s <code>lib/</code> directory (<code>$CONDA_PREFIX</code>, or two directories up from <code>mojo</code> on <code>PATH</code> — never a hardcoded pixi path) and copies whichever of the five it finds there, plus their own transitive dependencies (<code>libbrotlienc</code>/<code>libbrotlidec</code> each pull in <code>libbrotlicommon</code>). A codec that is not installed is skipped with a warning rather than failing the bundle. This matters because snappy is pyarrow’s default Parquet compression — without it, the bundle could only read uncompressed files. <code>compression.mojo</code> tries an executable-relative path before the bare soname it otherwise <code>dlopen</code>s, which is what makes the staged copy actually get found at runtime; copying alone is not enough, since a bare <code>dlopen("libsnappy.dylib")</code> never searches <code>@loader_path</code>.</p>
+<p><strong>Zipping the bundle: use <code>zip -ry</code>, not <code>zip -r</code>.</strong> A plain <code>zip -r</code> dereferences symlinks, turning each deduplicated alias back into a full copy of the same bytes. <code>zip -ry DIR.zip DIR</code> (the <code>-y</code> stores symlinks as symlinks) preserves the dedup; unzip on a machine of the same OS/arch to get the directory back exactly as built.</p>
+<p><strong>What “self-contained” has and has not been verified to mean.</strong> The bundle’s own binary has its rpath rewritten to <code>@loader_path</code>, and that path has been verified end to end: a snappy-compressed Parquet file reads correctly from a freshly built bundle run with no <code>DYLD_LIBRARY_PATH</code> or <code>CONDA_PREFIX</code> set, from a different working directory, via both a relative (<code>./query</code>) and an absolute-path invocation. What is <strong>not</strong> rewritten is the codec libraries’ <em>own</em> <code>@rpath</code> entries — <code>bundle()</code> only rewrites the main binary’s rpath. In practice that means a codec with its own dependency (<code>libbrotlienc</code> depends on <code>libbrotlicommon</code>) resolves it via the codec library’s rpath as recorded on the <em>build</em> machine, which is not verified to carry over elsewhere. This mirrors the existing behaviour for the runtime-dylib closure, so it is not a new gap — full cross-machine portability of every codec remains an open question, not a claim this page makes.</p>
+<p>Static linking is not on the table on macOS — there is no <code>libSystem.a</code> to link against. It may be possible on Linux; that is untested here.</p>
+</section>
+<section id="why-this-is-small" class="level2">
+<h2 class="anchored" data-anchor-id="why-this-is-small">Why this is small</h2>
+<p>The point of the AOT lane is that the binary contains the query and nothing else. <code>col("amount", int64)</code> is a <code>Column[Int64Type]</code>, so the predicate’s structure lives in its type and fuses into one SIMD loop; no interpreter is reachable, and the kernels the query does not name are never linked.</p>
+<p>The command-line surface preserves that. Parameter coercion is monomorphic — <code>cli.param("min-amount", int64)</code> instantiates one coercion function for <code>int64</code> and stores it behind a thin function pointer, rather than dispatching on a runtime dtype and dragging in all eleven numeric widths — and the file writers are behind the comptime gate described above. The <code>benchmarks/binary_size/query_cli</code> gate exists to keep it that way, and measures <code>marrow::expr::runtime</code> at <strong>0 symbols</strong>.</p>
 
 
 </section>
@@ -1061,13 +1246,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../guide/interop.html" class="pagination-link" aria-label="PyArrow interop">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">PyArrow interop</span>
+      <a href="../guide/expressions.html" class="pagination-link" aria-label="Queries in Mojo">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Queries in Mojo</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
-        <span class="nav-page-text">Architecture</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="../guide/io.html" class="pagination-link" aria-label="Parquet &amp; Arrow IPC">
+        <span class="nav-page-text">Parquet &amp; Arrow IPC</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

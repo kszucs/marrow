@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>DataFusion UDFs – Marrow</title>
+<title>GPU execution – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -67,8 +67,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../reference/architecture.html" rel="next">
-<link href="../guide/interop.html" rel="prev">
+<link href="../guide/queries-lazy.html" rel="next">
+<link href="../guide/sorting.html" rel="prev">
 <link href="../assets/logo.png" rel="icon" type="image/png">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -115,13 +115,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <link rel="stylesheet" href="../theme/marrow.css">
-<meta property="og:title" content="DataFusion UDFs – Marrow">
-<meta property="og:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta property="og:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta property="og:title" content="GPU execution – Marrow">
+<meta property="og:description" content="Experimental device dispatch, from the same kernel source as the CPU">
+<meta property="og:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
 <meta property="og:site_name" content="Marrow">
-<meta name="twitter:title" content="DataFusion UDFs – Marrow">
-<meta name="twitter:description" content="Apache Arrow in Mojo — one query engine with three frontends: eager Python, lazy Python, and queries compiled ahead of time into a standalone binary.">
-<meta name="twitter:image" content="https://marrow.kszucs.dev/examples/assets/logo.png">
+<meta name="twitter:title" content="GPU execution – Marrow">
+<meta name="twitter:description" content="Experimental device dispatch, from the same kernel source as the CPU">
+<meta name="twitter:image" content="https://marrow.kszucs.dev/guide/assets/logo.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -345,7 +345,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/compute.html">Compute</a></li><li class="breadcrumb-item"><a href="../guide/gpu.html">GPU execution</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -438,7 +438,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../guide/gpu.html" class="sidebar-item-text sidebar-link">
+  <a href="../guide/gpu.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">GPU execution</span></a>
   </div>
 </li>
@@ -496,7 +496,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link active">
+  <a href="../examples/datafusion.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">DataFusion UDFs</span></a>
   </div>
 </li>
@@ -535,11 +535,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#setup" id="toc-setup" class="nav-link active" data-scroll-target="#setup">Setup</a></li>
-  <li><a href="#register-a-mojo-kernel-as-a-udf" id="toc-register-a-mojo-kernel-as-a-udf" class="nav-link" data-scroll-target="#register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</a></li>
-  <li><a href="#query-a-table" id="toc-query-a-table" class="nav-link" data-scroll-target="#query-a-table">Query a table</a></li>
-  <li><a href="#null-propagation" id="toc-null-propagation" class="nav-link" data-scroll-target="#null-propagation">Null propagation</a></li>
-  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#what-can-run-on-the-gpu" id="toc-what-can-run-on-the-gpu" class="nav-link active" data-scroll-target="#what-can-run-on-the-gpu">What can run on the GPU</a></li>
+  <li><a href="#execcontext-and-devicecontext" id="toc-execcontext-and-devicecontext" class="nav-link" data-scroll-target="#execcontext-and-devicecontext"><code>ExecContext</code> and <code>DeviceContext</code></a></li>
+  <li><a href="#a-kernel-on-the-device-end-to-end" id="toc-a-kernel-on-the-device-end-to-end" class="nav-link" data-scroll-target="#a-kernel-on-the-device-end-to-end">A kernel on the device, end to end</a></li>
+  <li><a href="#when-it-is-and-isnt-worth-it" id="toc-when-it-is-and-isnt-worth-it" class="nav-link" data-scroll-target="#when-it-is-and-isnt-worth-it">When it is (and isn’t) worth it</a></li>
+  <li><a href="#caveats" id="toc-caveats" class="nav-link" data-scroll-target="#caveats">Caveats</a></li>
   </ul>
 </nav>
     </div>
@@ -547,9 +547,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <main class="content" id="quarto-document-content">
 
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/io.html">I/O &amp; interop</a></li><li class="breadcrumb-item"><a href="../examples/datafusion.html">DataFusion UDFs</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../guide/compute.html">Compute</a></li><li class="breadcrumb-item"><a href="../guide/gpu.html">GPU execution</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">DataFusion UDFs</h1>
+<h1 class="title">GPU execution</h1>
+<p class="subtitle lead">Experimental device dispatch, from the same kernel source as the CPU</p>
 </div>
 
 
@@ -566,76 +567,171 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><a href="https://datafusion.apache.org">Apache Arrow DataFusion</a> is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.</p>
-<section id="setup" class="level2">
-<h2 class="anchored" data-anchor-id="setup">Setup</h2>
-<p>DataFusion is an optional dependency in the <code>examples</code> pixi feature. Install it with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> examples datafusion_udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Or add it to an existing environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> marrow <span class="im">import</span> compute <span class="im">as</span> mc</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datafusion <span class="im">import</span> SessionContext, udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</section>
-<section id="register-a-mojo-kernel-as-a-udf" class="level2">
-<h2 class="anchored" data-anchor-id="register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</h2>
-<p>Any Marrow compute function can be wrapped as a DataFusion UDF. The two conversions — <code>ma.array(pa_arr)</code> in and <code>pa.array(ma_arr)</code> out — are zero-copy pointer exchanges over the Arrow C Data Interface, not serialization, so the wrapper costs nothing beyond the kernel itself.</p>
-<div id="2d2ad646" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> mojo_add(a: pa.Array, b: pa.Array) <span class="op">-&gt;</span> pa.Array:</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> pa.array(mc.add(ma.array(a), ma.array(b)))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>add_udf <span class="op">=</span> udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), <span class="st">"immutable"</span>, name<span class="op">=</span><span class="st">"mojo_add"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Some of marrow’s kernels run on the GPU — Metal on Apple Silicon, CUDA on NVIDIA — through Mojo’s <code>DeviceContext</code>. The GPU and CPU paths are <strong>the same kernel source</strong>: every <code>apply</code> overload writes one lane function and hands it to a dispatcher that picks the target. This is experimental infrastructure to build on, not a turnkey speed-up — read <a href="#when-it-is-and-isnt-worth-it">When it is worth it</a> before reaching for it.</p>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
 </div>
-</section>
-<section id="query-a-table" class="level2">
-<h2 class="anchored" data-anchor-id="query-a-table">Query a table</h2>
-<div id="59dd3478" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ctx <span class="op">=</span> SessionContext()</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>ctx.register_udf(add_udf)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> pa.record_batch(</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"price"</span>:    pa.array([<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>, <span class="dv">400</span>, <span class="dv">500</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"quantity"</span>: pa.array([<span class="dv">3</span>,   <span class="dv">1</span>,   <span class="dv">4</span>,   <span class="dv">1</span>,   <span class="dv">5</span>  ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>ctx.register_record_batches(<span class="st">"orders"</span>, [[batch]])</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> pa.Table.from_batches(</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    ctx.sql(<span class="st">"SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"</span>).collect()</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>result</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Important</span>GPU codegen is off unless you ask for it
 </div>
-</section>
-<section id="null-propagation" class="level2">
-<h2 class="anchored" data-anchor-id="null-propagation">Null propagation</h2>
-<p>Marrow kernels propagate nulls according to the Arrow specification. Rows where either operand is null produce a null result — DataFusion preserves this behaviour transparently.</p>
-<div id="9888325d" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ctx2 <span class="op">=</span> SessionContext()</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ctx2.register_udf(add_udf)</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> pa.record_batch(</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"a"</span>: pa.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>   ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"b"</span>: pa.array([<span class="dv">10</span>, <span class="dv">20</span>,  <span class="va">None</span>, <span class="dv">40</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>ctx2.register_record_batches(<span class="st">"t"</span>, [[batch2]])</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>pa.Table.from_batches(</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    ctx2.sql(<span class="st">"SELECT a, b, mojo_add(a, b) AS result FROM t"</span>).collect()</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
+<div class="callout-body-container callout-body">
+<p>Every device path is compiled out by default. <code>marrow.execution.GPU_ENABLED</code> is <code>get_defined_bool["MARROW_GPU", False]()</code>, and it gates all of it:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">mojo</span> build <span class="at">-D</span> MARROW_GPU=true ...     <span class="co"># opt in</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> dev pytest <span class="at">--gpu</span>          <span class="co"># the harness passes it for you</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Without the flag, <code>has_accelerator_support</code> answers <code>False</code> and a GPU <code>ExecContext</code> <strong>raises</strong> at the dispatch site rather than silently taking a CPU path. This is also the single largest compile-time lever in the tree: a cold <code>cast</code> + <code>sort_indices</code> build is 43.7 s with GPU off versus 85.0 s with it on.</p>
+</div>
+</div>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Note
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>The code on this page is Mojo. GPU dispatch is a native-level capability; it is not exposed as a distinct mode in the Python bindings.</p>
+</div>
+</div>
+<section id="what-can-run-on-the-gpu" class="level2">
+<h2 class="anchored" data-anchor-id="what-can-run-on-the-gpu">What can run on the GPU</h2>
+<p>Device dispatch is implemented for <strong>element-wise</strong> kernels — the ones whose work is one output element per input element:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 27%">
+<col style="width: 45%">
+<col style="width: 27%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Kernel group</th>
+<th style="text-align: center;">GPU path</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Arithmetic — <code>AddKernel</code>, <code>SubKernel</code>, …</td>
+<td style="text-align: center;">yes</td>
+<td><code>kernels/numeric.mojo</code></td>
+</tr>
+<tr class="even">
+<td>Comparisons — <code>EqKernel</code>, <code>LtKernel</code>, …</td>
+<td style="text-align: center;">yes</td>
+<td><code>kernels/numeric.mojo</code></td>
+</tr>
+<tr class="odd">
+<td>Boolean — and/or/not/xor</td>
+<td style="text-align: center;">yes</td>
+<td><code>kernels/boolean.mojo</code></td>
+</tr>
+<tr class="even">
+<td>Casts</td>
+<td style="text-align: center;">yes</td>
+<td><code>kernels/cast.mojo</code></td>
+</tr>
+<tr class="odd">
+<td>Hashing</td>
+<td style="text-align: center;">yes</td>
+<td><code>kernels/hashing.mojo</code></td>
+</tr>
+<tr class="even">
+<td>Sort, join, group-by, filter</td>
+<td style="text-align: center;">no</td>
+<td>CPU only</td>
+</tr>
+</tbody>
+</table>
+<p>Anything that reorders or reduces rows — sort, join, aggregate, filter — is CPU only.</p>
 </section>
-<section id="how-it-works" class="level2">
-<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
-<p>Each call to <code>mojo_add</code> inside a DataFusion query goes through these steps:</p>
-<ol type="1">
-<li>DataFusion evaluates the query plan and produces a <code>pyarrow.Array</code> chunk for each argument column.</li>
-<li><code>mc.add(a, b)</code> imports each argument into Marrow via <code>__arrow_c_array__</code> — a pointer exchange, no copy — and runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.</li>
-<li><code>pa.array(result)</code> exports the result back to PyArrow via <code>__arrow_c_array__</code> — again, no copy.</li>
-</ol>
-<p>The data layout is identical in both libraries, so the import and export are O(1) pointer operations regardless of array length.</p>
+<section id="execcontext-and-devicecontext" class="level2">
+<h2 class="anchored" data-anchor-id="execcontext-and-devicecontext"><code>ExecContext</code> and <code>DeviceContext</code></h2>
+<p>Two different types, and the distinction matters:</p>
+<ul>
+<li><strong><code>ExecContext</code></strong> is what <em>kernels</em> take. It bundles a CPU worker count and an optional device.</li>
+<li><strong><code>DeviceContext</code></strong> is Mojo’s handle on the device itself, and it is what <em>transfers</em> take.</li>
+</ul>
+<pre class="mojo gpu"><code>from marrow.execution import ExecContext
+from max.gpu.host import DeviceContext
+
+var cpu       = ExecContext.serial()                 # single-threaded CPU
+var threaded  = ExecContext.parallel(num_threads=0)  # 0 = all cores
+var automatic = ExecContext.auto()                   # the default
+var on_device = ExecContext.gpu(DeviceContext())     # run on the GPU</code></pre>
+</section>
+<section id="a-kernel-on-the-device-end-to-end" class="level2">
+<h2 class="anchored" data-anchor-id="a-kernel-on-the-device-end-to-end">A kernel on the device, end to end</h2>
+<p>Data movement is explicit and is a <em>kind change</em>, not a shadow copy — a buffer is either host-resident or device-resident. Upload the inputs, run the kernel, download the result:</p>
+<pre class="mojo gpu"><code>from max.gpu.host import DeviceContext
+from marrow.builders import array
+from marrow.dtypes import int32, Int32Type
+from marrow.kernels.numeric import AddKernel
+
+var ctx = DeviceContext()
+var a = array([1, 2, 3, 4], int32).to_device(ctx)
+var b = array([10, 20, 30, 40], int32).to_device(ctx)
+
+var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)</code></pre>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Method</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>Array.to_device(ctx)</code></td>
+<td>upload — implemented for <code>BoolArray</code>, <code>PrimitiveArray[T]</code>, <code>FixedSizeListArray</code>, <code>DynArray</code></td>
+</tr>
+<tr class="even">
+<td><code>Array.to_cpu(ctx)</code></td>
+<td>download it back</td>
+</tr>
+<tr class="odd">
+<td><code>Buffer.to_device(ctx)</code> / <code>Bitmap.to_device(ctx)</code></td>
+<td>the low-level transfers</td>
+</tr>
+</tbody>
+</table>
+<p>A kernel result produced on the device <strong>stays</strong> device-resident; call <code>.to_cpu(ctx)</code> before reading it on the CPU. The trait default raises for array types that have no device implementation.</p>
+<p>Null handling is not a caveat here: <code>apply</code> intersects the input validity bitmaps and attaches the result <em>before</em> choosing CPU or GPU for the values buffer, so a device result carries the same nulls a host result would.</p>
+</section>
+<section id="when-it-is-and-isnt-worth-it" class="level2">
+<h2 class="anchored" data-anchor-id="when-it-is-and-isnt-worth-it">When it is (and isn’t) worth it</h2>
+<p><strong>Transfer cost dominates.</strong> The kernels wired to the GPU are all low arithmetic intensity — roughly one operation per element — so for most workloads CPU SIMD is competitive or faster.</p>
+<p>Measured on Apple Silicon (Metal, unified memory): uploading per call is <strong>2-3× slower than the CPU</strong> even for compute-heavy kernels, and the crossover was around 10K vectors at dimension ≥ 384.</p>
+<p>The rule that follows: <strong>upload once, run several kernels device-resident, and download at the end.</strong> Treat GPU dispatch as infrastructure for data that is already on the device, never as a per-call accelerator.</p>
+</section>
+<section id="caveats" class="level2">
+<h2 class="anchored" data-anchor-id="caveats">Caveats</h2>
+<ul>
+<li>Coverage is narrow — sort, join, aggregation and filtering have no GPU path.</li>
+<li>A GPU-off binary still links the <code>libmax</code>/AsyncRT runtime; the flag sheds codegen and compile time, not the runtime dependency.</li>
+</ul>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Warning</span>macOS needs the Metal toolchain installed separately
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Xcode 26 moved the Metal compiler out of the default install, so every GPU test dies at compile time with <em>“Metal Compiler failed to compile metallib”</em> — which reads like a Mojo bug and is not one. Fix it with:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">xcodebuild</span> <span class="at">-downloadComponent</span> MetalToolchain</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>To tell the two apart, compile a marrow-free three-line <code>elementwise</code> program; it fails identically when the toolchain is missing.</p>
+</div>
+</div>
 
 
 </section>
@@ -1061,13 +1157,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../guide/interop.html" class="pagination-link" aria-label="PyArrow interop">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">PyArrow interop</span>
+      <a href="../guide/sorting.html" class="pagination-link" aria-label="Sorting">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Sorting</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="../reference/architecture.html" class="pagination-link" aria-label="Architecture">
-        <span class="nav-page-text">Architecture</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="../guide/queries-lazy.html" class="pagination-link" aria-label="Lazy queries (Python)">
+        <span class="nav-page-text">Lazy queries (Python)</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>
