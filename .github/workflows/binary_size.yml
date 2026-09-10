@@ -7,21 +7,79 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: binary-size-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   binary-size:
     name: binary size (macos, arm64)
     runs-on: macos-latest
+    # A cache miss on the base measurement means building the gates twice, at
+    # roughly 20 minutes a pass.
+    timeout-minutes: 90
     env:
-      MODULAR_HOME: "/Users/runner/.modular"
       FORCE_COLOR: "1"
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - uses: prefix-dev/setup-pixi@v0.10.2
       with:
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: dev
+
+    # The gate compares two commits measured on *this* runner, never against
+    # numbers recorded on a developer's machine -- the same source builds
+    # 0.5-1.6% larger here, which trips a 0.5% threshold on its own and reported
+    # six REGRESSIONs against a baseline re-recorded the same day.  See
+    # `devkit size check --help`.
+    - name: Resolve the commit to measure against
+      id: base
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          sha="${{ github.event.pull_request.base.sha }}"
+        else
+          sha="$(git rev-parse HEAD^)"
+        fi
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
+        echo "measuring against $sha"
+
+    - name: Restore the base measurement
+      id: base-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: base-size.json
+        key: binary-size-${{ runner.os }}-${{ steps.base.outputs.sha }}
+
+    - name: Measure the base commit
+      if: steps.base-cache.outputs.cache-hit != 'true'
+      run: |
+        git worktree add ../base "${{ steps.base.outputs.sha }}"
+        pixi run -e dev python -m devkit size check \
+          --repo ../base --out base-size.json --measure-only
+
+    - name: Cache the base measurement
+      if: steps.base-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: base-size.json
+        key: binary-size-${{ runner.os }}-${{ steps.base.outputs.sha }}
+
     - name: Check binary-size gate
-      run: pixi run -e dev binary_size_check
+      run: |
+        pixi run -e dev python -m devkit size check \
+          --baseline base-size.json --out head-size.json
+
+    # Saved so the next commit on this branch finds its own base already
+    # measured and only has to build once.
+    - name: Cache this commit's measurement
+      if: always()
+      uses: actions/cache/save@v6
+      continue-on-error: true
+      with:
+        path: head-size.json
+        key: binary-size-${{ runner.os }}-${{ github.sha }}

@@ -7,86 +7,127 @@ on:
   pull_request:
   workflow_call:
 
+# A superseded push has nothing left to say; let the newer one have the runners.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  FORCE_COLOR: "1"
+  PYTEST_ADDOPTS: "--color=yes"
+
 jobs:
-  test-linux-x86_64:
-    name: test (linux, x86_64)
-    runs-on: ubuntu-latest
-    env:
-      MODULAR_HOME: "/home/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
+  # **One build per platform, several compilation units inside it.** Those are
+  # separate concerns: one `pytest` selection is one `mojo build`, and the whole
+  # tree in a single call is a 2,187-case compile that took 1,802 s (the
+  # `--mojo-timeout` default) on macOS and was OOM-killed on Linux -- which is
+  # why no Tests run passed between 2026-05-11 and this change. Splitting the
+  # *selections* is what fixes that; splitting them across *jobs* was only ever
+  # a way to spend more runners on it.
+  #
+  # Every minute here is `mojo build`. Measured on the Linux runner 2026-09-08:
+  # `python`'s 503 cases run in 1.56 s after a 853 s compile, and `expr-runtime`
+  # spends 1,300 s compiling two files. So the ordering below is cheapest first
+  # -- an ordinary breakage surfaces in the first few minutes rather than the
+  # last -- and `golden` and `python` share one call, because each would
+  # otherwise build `libmarrow.so` for itself at ~14 minutes a time.
+  #
+  # Peak memory per unit, measured on an unloaded Apple Silicon machine:
+  #
+  #   marrow/tests                13 files   5.5 GB
+  #   marrow/expr/comptime/tests  10 files   6.4 GB
+  #   marrow/expr/tests           13 files  17.5 GB
+  #     ... test_optimizer alone   1 file   15.4 GB
+  #   marrow/expr/runtime/tests    2 files  23.8 GB
+  #
+  # Sequential calls do not stack, so the job needs to fit the largest one, not
+  # their sum -- and the largest is `expr/runtime`, at 8 minutes locally and 22
+  # on a 16 GB runner, where it swaps for most of them. That is what the
+  # swapfile below is for; without it the job cannot run at all.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: dev
-    - name: tests
-      run: |
-        pixi run -e dev test --no-gpu
-        pixi run package
+      - uses: actions/checkout@v7
 
-  test-macos-arm64:
-    name: test (macos, arm64)
-    runs-on: macos-latest
-    env:
-      MODULAR_HOME: "/Users/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: dev
-    - name: tests
-      run: |
-        pixi run -e dev test --no-gpu
-        pixi run package
+      # /mnt is the runner's ~70 GB scratch disk, and 24 GB there costs nothing
+      # when it is not touched. macOS grows its swap on its own.
+      - name: More swap
+        if: runner.os == 'Linux'
+        run: |
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
 
-  asan-linux-x86_64:
-    name: asan (linux, x86_64)
-    runs-on: ubuntu-latest
-    if: false
-    timeout-minutes: 60
-    env:
-      MODULAR_HOME: "/home/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: asan
-    - name: asan tests
-      run: pixi run -e asan test_asan_core --no-gpu --no-python
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: >-
+            dev
+            ${{ runner.os == 'macOS' && 'asan' || '' }}
 
-  asan-macos-arm64:
-    name: asan (macos, arm64)
-    runs-on: macos-latest
-    timeout-minutes: 30
-    env:
-      MODULAR_HOME: "/Users/runner/.modular"
-      FORCE_COLOR: "1"
-      PYTEST_ADDOPTS: "--color=yes"
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v6
-    - uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        cache: true
-        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-        frozen: true
-        environments: asan
-    - name: asan tests
-      run: pixi run -e asan test_asan_core --no-gpu --no-python
+      # Every selection runs even after one fails, and the job reports which
+      # ones did at the end. One job per platform would otherwise mean one
+      # failure per platform per run: the first red selection would hide the
+      # state of every selection after it, and each round trip here costs
+      # upwards of an hour.
+      - name: tests
+        run: |
+          failed=()
+          run() {
+            echo "::group::pytest $*"
+            if pixi run -e dev pytest -v --no-gpu --mojo-timeout 3600 "$@"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::failed: pytest $*"
+              failed+=("$*")
+            fi
+          }
+
+          run marrow/tests
+          run marrow/parquet/tests marrow/utils/tests
+          run marrow/expr/comptime/tests
+          run marrow/kernels/tests
+          run marrow/expr/tests/test_optimizer.mojo
+          run marrow/expr/tests --ignore marrow/expr/tests/test_optimizer.mojo
+          run marrow/expr/runtime/tests
+          # One call, so `libmarrow.so` is built once rather than twice.
+          run golden python
+
+          echo "::group::package"
+          pixi run package || failed+=("package")
+          echo "::endgroup::"
+
+          if [ ${#failed[@]} -ne 0 ]; then
+            printf '\n%s selection(s) failed:\n' "${#failed[@]}"
+            printf '  %s\n' "${failed[@]}"
+            exit 1
+          fi
+          echo "all selections passed"
+
+      # Scoped to the types that own memory -- allocation, offsets, foreign
+      # buffers and release callbacks. Everything else computes over views these
+      # produce, so this is where a lifetime or bounds bug originates. See the
+      # `test_asan_core` comment in pixi.toml for why it is scoped rather than
+      # parallelised.
+      #
+      # **macOS only, and that is a measurement rather than a preference.** The
+      # same selection takes 5m15s on a macOS runner and had not finished after
+      # 60 minutes on a Linux one (2026-09-07, twice) -- which is presumably why
+      # the Linux job carried a bare `if: false` before this, though it said so
+      # nowhere. The cases are identical on both, so the coverage is not lost,
+      # only the second platform's view of it. docs/backlog.md tracks getting it
+      # back.
+      - name: asan tests
+        if: runner.os == 'macOS'
+        run: pixi run -e asan test_asan_core --no-gpu --no-python

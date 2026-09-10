@@ -6,7 +6,9 @@ the golden corpus, archery for the Arrow conformance suite -- are imported
 inside the command that needs them, because the `dev` environment has neither.
 """
 
+import json
 import sys
+from pathlib import Path
 
 import click
 
@@ -180,25 +182,73 @@ def size_compare(ctx, gates_wanted):
 
 @size.command("check")
 @click.option("--update", is_flag=True, help="Re-record the baseline instead.")
+@click.option(
+    "--repo",
+    "repo_path",
+    type=click.Path(exists=True, file_okay=False),
+    help="Build the gates from this checkout rather than this one.",
+)
+@click.option(
+    "--baseline",
+    "baseline_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="Measurements to compare against, instead of baseline.json.",
+)
+@click.option(
+    "--out", "out_path", type=click.Path(), help="Also write the measurements here."
+)
+@click.option(
+    "--measure-only",
+    is_flag=True,
+    help="Measure and write --out, without comparing.",
+)
 @pass_context
-def size_check(ctx, update):
-    """Fail if any recorded gate grew past its baseline `__text` size."""
+def size_check(ctx, update, repo_path, baseline_path, out_path, measure_only):
+    """Fail if any recorded gate grew past its baseline `__text` size.
+
+    The committed floor is a developer-machine record and is what a local run
+    compares against. CI cannot: the same source builds 0.5-1.6% larger on a
+    runner, which trips the threshold on its own and reported six REGRESSIONs
+    against a baseline re-recorded the same day. It measures both ends on one
+    machine instead --
+
+        devkit size check --repo ../base --out base.json --measure-only
+        devkit size check --baseline base.json
+
+    -- so what is compared is the change, not the machine.
+    """
     from .footprint import Baseline, Report
 
     gates = _gates(ctx)
-    baseline = Baseline(gates.directory / "baseline.json")
-    names = list(baseline.gates)
+    # The gate *list* always comes from this checkout: a gate this commit adds
+    # is absent from the commit it descends from, and has nothing to compare to
+    # yet rather than being a failure.
+    reference = Baseline(gates.directory / "baseline.json")
+    names = list(reference.gates)
+
+    if repo_path:
+        gates = _gates(Context(repo=Repo(repo_path), quiet=ctx.quiet))
+        names = [name for name in names if gates.source(name).exists()]
 
     failed = gates.build_all(names)
     if failed:
         ctx.fail(f"{', '.join(failed)} did not build")
 
     measured = {name: gates.text_size(name) for name in names}
-    if update:
-        baseline.update(measured)
-        click.echo(f"wrote new baseline to {baseline.path}")
+    if out_path:
+        Path(out_path).write_text(json.dumps(measured, indent=2) + "\n")
+        click.echo(f"wrote {len(measured)} measurements to {out_path}")
+    if measure_only:
         return
-    if Report().gate(baseline.check(measured), baseline.threshold_pct):
+    if update:
+        reference.update(measured)
+        click.echo(f"wrote new baseline to {reference.path}")
+        return
+
+    against = reference
+    if baseline_path:
+        against = Baseline(baseline_path, threshold_pct=reference.threshold_pct)
+    if Report().gate(against.check(measured), against.threshold_pct):
         sys.exit(1)
 
 

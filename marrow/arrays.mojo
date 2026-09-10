@@ -2197,35 +2197,42 @@ struct DictionaryArray(Array):
         """
         return self._values[].copy()
 
+    def _index_at(self, index: Int) raises -> Int:
+        """Where logical row `index` points into `_values`.
+
+        Split out of `__getitem__` so `__eq__` can decode a position without
+        also materialising the value there -- see that method for why touching
+        an erased element is the thing to avoid.
+        """
+        var idx_scalar = self._indices[][self._offset + index]
+        ref index_type = self._dtype.as_dictionary().index_type()
+        if index_type.is_int8():
+            return Int(idx_scalar.as_int8().value())
+        elif index_type.is_int16():
+            return Int(idx_scalar.as_int16().value())
+        elif index_type.is_int32():
+            return Int(idx_scalar.as_int32().value())
+        elif index_type.is_int64():
+            return Int(idx_scalar.as_int64().value())
+        elif index_type.is_uint8():
+            return Int(idx_scalar.as_uint8().value())
+        elif index_type.is_uint16():
+            return Int(idx_scalar.as_uint16().value())
+        elif index_type.is_uint32():
+            return Int(idx_scalar.as_uint32().value())
+        elif index_type.is_uint64():
+            return Int(idx_scalar.as_uint64().value())
+        else:
+            raise Error("DictionaryArray: unexpected index type: ", index_type)
+
     def __getitem__(self, index: Int) raises -> DictionaryScalar:
         if index < 0 or index >= self._length:
             raise Error(
                 t"index {index} out of bounds for length {self._length}"
             )
-        var adj = self._offset + index
-        if not self._indices[].is_valid(adj):
+        if not self._indices[].is_valid(self._offset + index):
             return DictionaryScalar.null(self._dtype.copy())
-        var idx_scalar = self._indices[][adj]
-        ref index_type = self._dtype.as_dictionary().index_type()
-        var dict_idx: Int
-        if index_type.is_int8():
-            dict_idx = Int(idx_scalar.as_int8().value())
-        elif index_type.is_int16():
-            dict_idx = Int(idx_scalar.as_int16().value())
-        elif index_type.is_int32():
-            dict_idx = Int(idx_scalar.as_int32().value())
-        elif index_type.is_int64():
-            dict_idx = Int(idx_scalar.as_int64().value())
-        elif index_type.is_uint8():
-            dict_idx = Int(idx_scalar.as_uint8().value())
-        elif index_type.is_uint16():
-            dict_idx = Int(idx_scalar.as_uint16().value())
-        elif index_type.is_uint32():
-            dict_idx = Int(idx_scalar.as_uint32().value())
-        elif index_type.is_uint64():
-            dict_idx = Int(idx_scalar.as_uint64().value())
-        else:
-            raise Error("DictionaryArray: unexpected index type: ", index_type)
+        var dict_idx = self._index_at(index)
         var decoded = self._values[][dict_idx]
         return DictionaryScalar(
             dtype=self._dtype.copy(), index=dict_idx, decoded=decoded^
@@ -2272,6 +2279,18 @@ struct DictionaryArray(Array):
 
         Compares decoded values, not the encoding: two arrays holding the same
         column against differently ordered dictionaries are equal.
+
+        **The comparison is typed, and that is not a performance choice.** This
+        loop used to read `self[i].value() != other[i].value()`, comparing two
+        `DynScalar`s -- and comparing *elements* of an erased container is the
+        thing `ArrayData.__eq__`'s docstring warns about two thousand lines up:
+        the elaborator parks at 0% CPU with no diagnostic. It did not fire from
+        `marrow/tests/test_arrays.mojo`, which is why it survived; reached from
+        `test_ipc.mojo` it deadlocked `mojo build` -- 6m40s of wall clock for
+        11.9s of user CPU -- on Linux (both architectures), while macOS
+        compiled it. Resolving the values dtype to a concrete array type first
+        means no typed `__eq__` is ever named through an erased one, and the
+        same case then compiles in 26s.
         """
         if self._dtype != other._dtype:
             return False
@@ -2279,18 +2298,64 @@ struct DictionaryArray(Array):
             return False
         if self.null_count() != other.null_count():
             return False
-        for i in range(self._length):
-            var lv = self.is_valid(i)
-            var rv = other.is_valid(i)
-            if lv != rv:
-                return False
-            if lv:
-                try:
-                    if self[i].value() != other[i].value():
-                        return False
-                except:
+        try:
+            return self._decoded_equals(other)
+        except:
+            return False
+
+    def _decoded_equals(self, other: Self) raises -> Bool:
+        """Row-by-row decoded comparison, against a concrete values type."""
+        ref value_type = self._dtype.as_dictionary().value_type()
+
+        def rows[A: Array](lhs: A, rhs: A) raises {imm} -> Bool:
+            for i in range(self._length):
+                var lv = self.is_valid(i)
+                if lv != other.is_valid(i):
                     return False
-        return True
+                if lv:
+                    if lhs[self._index_at(i)] != rhs[other._index_at(i)]:
+                        return False
+            return True
+
+        def on_binary_like[T: BinaryLikeType](t: T) raises {imm} -> Bool:
+            return rows(
+                self._values[].as_type[BinaryLikeArray[T]](),
+                other._values[].as_type[BinaryLikeArray[T]](),
+            )
+
+        def on_primitive[T: PrimitiveType](t: T) raises {imm} -> Bool:
+            return rows(
+                self._values[].as_type[PrimitiveArray[T]](),
+                other._values[].as_type[PrimitiveArray[T]](),
+            )
+
+        # `is_bool` and `is_fixed_size_binary` are named on their own because
+        # neither belongs to a `dispatch_*` family -- bool is bit-packed rather
+        # than fixed-byte-width, so `is_primitive` deliberately excludes it, and
+        # `FixedSizeBinaryArray` takes no type parameter. Both are flat, so both
+        # can be compared row by row like the rest.
+        if value_type.is_bool():
+            return rows(self._values[].as_bool(), other._values[].as_bool())
+        elif value_type.is_fixed_size_binary():
+            return rows(
+                self._values[].as_fixed_size_binary(),
+                other._values[].as_fixed_size_binary(),
+            )
+        elif value_type.is_binary_like():
+            return value_type.dispatch_binarylike(on_binary_like)
+        elif value_type.is_primitive():
+            return value_type.dispatch_primitive(on_primitive)
+        else:
+            # A dictionary over a nested type. Decoding one of those needs the
+            # element comparison this method exists to avoid, so answer on the
+            # representation instead: equal encodings are equal columns, and a
+            # permuted one reads as unequal rather than as a hang. Arrow allows
+            # it; nothing in marrow builds one.
+            return (
+                self._values[] == other._values[]
+                and self._indices[] == other._indices[]
+                and self._offset == other._offset
+            )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(

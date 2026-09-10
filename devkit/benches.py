@@ -462,19 +462,52 @@ class BenchmarkHistory:
         return written, len(envelope.results), runs
 
     def write_envelope(self, envelope):
+        """Write the snapshot, folding into whatever this commit already has.
+
+        A commit's results arrive in several pieces: one `pytest` selection is
+        one compilation unit, so CI benchmarks the tree as a series of calls
+        rather than one, and each call saves only what it measured.  Replacing
+        the file left the dashboard holding whichever selection happened to run
+        last.
+        """
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        payload = envelope.to_dict()
         out = self.results_dir / f"{envelope.commit}.json"
+        payload = self._merge_snapshot(out, envelope)
         # `latest.json` is a stable URL for the dashboard; the commit file is
         # the archive.  Same bytes, two names.
         for path in (out, self.results_dir / "latest.json"):
             path.write_text(json.dumps(payload, indent=2) + "\n")
         return out
 
+    @staticmethod
+    def _merge_snapshot(out, envelope):
+        """`envelope` as a dict, carrying forward any results already on disk
+        for the same commit."""
+        payload = envelope.to_dict()
+        if not out.exists():
+            return payload
+        previous = json.loads(out.read_text())
+        if previous.get("commit") != envelope.commit:
+            return payload
+        by_name = {result["name"]: result for result in previous.get("results", [])}
+        for result in payload["results"]:
+            by_name[result["name"]] = result
+        payload["results"] = list(by_name.values())
+        return payload
+
     def update_history(self, envelope):
         history = self._load()
-        commits = {run["commit"] for run in history["runs"]}
-        if envelope.commit not in commits:
+        # Same reason as `write_envelope`: a commit's benchmarks arrive in
+        # several calls, so a run already recorded for it is extended rather
+        # than left alone.
+        for run in history["runs"]:
+            if run["commit"] == envelope.commit:
+                entry = self._run_entry(envelope)
+                run["timestamp"] = entry["timestamp"]
+                run["ref"] = entry["ref"]
+                run.setdefault("results", {}).update(entry["results"])
+                break
+        else:
             history["runs"].append(self._run_entry(envelope))
 
         history["runs"].sort(key=lambda run: run.get("timestamp", ""), reverse=True)

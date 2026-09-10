@@ -157,6 +157,32 @@ def test_history_is_idempotent_per_commit(tmp_path):
     assert keeper.update_history(envelope()) == 1
 
 
+def selection(name, commit="abc123def456"):
+    """One CI selection's worth of results for `commit`."""
+    made = BenchmarkEnvelope.from_benchmarks(FakeVcs(), [FakeBenchmark(name, 0.001)])
+    return dataclasses.replace(made, commit=commit, timestamp="2026-04-16T00:00:00Z")
+
+
+def test_a_commit_measured_in_several_selections_accumulates(tmp_path):
+    """CI benchmarks the tree as a series of `pytest` calls, one per compilation
+    unit, each saving only what it measured -- all under the same commit."""
+    keeper = history(tmp_path)
+    written = keeper.write_envelope(selection("bench_kernels"))
+    keeper.update_history(selection("bench_kernels"))
+    keeper.write_envelope(selection("bench_parquet"))
+    runs = keeper.update_history(selection("bench_parquet"))
+
+    assert runs == 1  # one commit, not two
+    snapshot = json.loads(written.read_text())
+    assert {r["name"] for r in snapshot["results"]} == {
+        "bench_kernels",
+        "bench_parquet",
+    }
+    stored = json.loads(keeper.history_file.read_text())
+    assert set(stored["runs"][0]["results"]) == {"bench_kernels", "bench_parquet"}
+    assert set(stored["operations"]) == {"bench_kernels", "bench_parquet"}
+
+
 def test_history_appends_new_commits(tmp_path):
     keeper = history(tmp_path)
     keeper.update_history(envelope(commit="aaa"))

@@ -60,23 +60,42 @@ class SnippetCheck:
     #: A listing is a few hundred lines at most; anything past this is a hang.
     TIMEOUT = 600
 
-    def __init__(self, repo, toolchain):
+    #: A listing that needs a device to compile. `DeviceContext()` is
+    #: instantiated against the host's accelerator, so on a CPU-only machine the
+    #: build fails with `function instantiation failed` however correct the
+    #: source is -- which is what the docs job did on `ubuntu-latest`, on every
+    #: run, for the two blocks in `guide/gpu.qmd`.
+    GPU_PROBE = (
+        "from max.gpu.host import DeviceContext\n\n\n"
+        "def main() raises:\n    var ctx = DeviceContext()\n"
+    )
+
+    def __init__(self, repo, toolchain, gpu=None):
         self._repo = repo
         self._mojo = toolchain
+        #: True/False to force, None to ask the toolchain in `run`.
+        self._gpu = gpu
+        self._skipped = []
 
-    def listings(self):
+    def listings(self, gpu=False):
         """`([(label, source)], fragments)` -- everything to compile, in a
         stable order, and how many blocks opted out.
 
         The opt-outs are counted here rather than left implicit because the
         number going up is the guides drifting out of reach, and a caller that
         only sees what compiled cannot tell.
+
+        A ```` ```{.mojo .gpu} ```` block is collected only when `gpu`; the rest
+        are recorded on `self._skipped` so `run` can say so. That is a different
+        claim from `.fragment`: a fragment is not a program, while a `.gpu`
+        listing is one this machine cannot build.
         """
         found = [
             (str(src.relative_to(self._repo.root)), src.read_text())
             for src in sorted(self._repo.snippets_dir.glob("*.mojo"))
         ]
         fragments = 0
+        self._skipped = []
         for page in sorted(self._repo.docs_dir.rglob("*.qmd")):
             for i, (attrs, body) in enumerate(FENCE.findall(page.read_text())):
                 if ".fragment" in (attrs or ""):
@@ -85,8 +104,19 @@ class SnippetCheck:
                     # An `include` names a file already collected above, so
                     # compiling the fence too would just duplicate it.
                     label = f"{page.relative_to(self._repo.docs_dir)}#{i}"
-                    found.append((label, as_program(body)))
+                    if ".gpu" in (attrs or "") and not gpu:
+                        self._skipped.append(label)
+                    else:
+                        found.append((label, as_program(body)))
         return found, fragments
+
+    def has_accelerator(self, workdir):
+        """Can this machine compile a `DeviceContext`?
+
+        Asked by building a three-line probe rather than by inspecting the host,
+        because that is the exact question a `.gpu` listing puts to `mojo build`.
+        """
+        return self.compile("gpu_probe", self.GPU_PROBE, workdir) is None
 
     def compile(self, label, source, workdir):
         """Build one listing; return its output if it failed, else `None`."""
@@ -99,17 +129,23 @@ class SnippetCheck:
 
     def run(self, report):
         """Compile everything and report as it goes; True when all built."""
-        listings, fragments = self.listings()
         failed = []
         with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            gpu = self._gpu
+            if gpu is None:
+                gpu = self.has_accelerator(workdir)
+            listings, fragments = self.listings(gpu=gpu)
+            for label in self._skipped:
+                report.skipped(label)
             for n, (label, source) in enumerate(listings):
-                log = self.compile(f"snippet_{n}", source, Path(tmp))
+                log = self.compile(f"snippet_{n}", source, workdir)
                 if log is None:
                     report.ok(label)
                 else:
                     failed.append(label)
                     report.failure(label, log)
-        report.summary(len(listings), failed, fragments)
+        report.summary(len(listings), failed, fragments, self._skipped)
         return not failed
 
 
@@ -127,8 +163,11 @@ class Report:
         # back to the whole log rather than printing nothing.
         print("\n".join(f"     {ln}" for ln in (diagnostics or log.splitlines())))
 
-    def summary(self, total, failed, fragments):
-        print(
-            f"\n{total - len(failed)}/{total} Mojo listings compiled"
-            f" ({fragments} marked .fragment)"
-        )
+    def skipped(self, label):
+        print(f"skip {label} -- .gpu, and this machine has no accelerator")
+
+    def summary(self, total, failed, fragments, skipped=()):
+        note = f"{fragments} marked .fragment"
+        if skipped:
+            note += f", {len(skipped)} skipped as .gpu"
+        print(f"\n{total - len(failed)}/{total} Mojo listings compiled ({note})")

@@ -299,11 +299,25 @@ class Gates:
 
 
 class Baseline:
-    """The recorded `__text` floor each gate must stay under."""
+    """The recorded `__text` floor each gate must stay under.
 
-    def __init__(self, path):
+    Reads either shape: `baseline.json`, which wraps the floors in `gates`
+    alongside `threshold_pct`, or the bare `{gate: bytes}` a measurement run
+    writes. The second exists because **a floor is only comparable on the
+    machine that measured it** -- the same source builds 0.5-1.6% larger on a
+    macOS runner than on a developer's Mac, enough to trip a 0.5% threshold on
+    its own, so CI measures the commit under test and the commit it descends
+    from and compares those two rather than the committed numbers.
+    """
+
+    def __init__(self, path, threshold_pct=None):
         self.path = Path(path)
-        self._data = json.loads(self.path.read_text())
+        data = json.loads(self.path.read_text())
+        if "gates" not in data:
+            data = {"gates": data, "threshold_pct": threshold_pct}
+        elif threshold_pct is not None:
+            data["threshold_pct"] = threshold_pct
+        self._data = data
 
     @property
     def threshold_pct(self):

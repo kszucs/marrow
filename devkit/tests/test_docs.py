@@ -88,6 +88,32 @@ def test_a_fragment_opts_out_and_is_counted(tmp_path):
     assert fragments == 1
 
 
+def test_a_gpu_block_is_skipped_without_an_accelerator(tmp_path):
+    """`DeviceContext()` is instantiated against the host's accelerator, so a
+    CPU-only runner cannot build the listing however correct it is -- which is
+    a different claim from `.fragment`, and counted separately."""
+    page = "```{.mojo .gpu}\nvar ctx = DeviceContext()\n```\n"
+    repo = repo_with_docs(tmp_path, pages=[("guide.qmd", page)])
+    check = SnippetCheck(repo, toolchain=None)
+
+    listings, fragments = check.listings(gpu=False)
+
+    assert listings == []
+    assert fragments == 0  # not a fragment; the machine is the problem
+    assert check._skipped == ["guide.qmd#0"]
+
+
+def test_a_gpu_block_is_compiled_where_there_is_an_accelerator(tmp_path):
+    page = "```{.mojo .gpu}\nvar ctx = DeviceContext()\n```\n"
+    repo = repo_with_docs(tmp_path, pages=[("guide.qmd", page)])
+    check = SnippetCheck(repo, toolchain=None)
+
+    listings, _ = check.listings(gpu=True)
+
+    assert [label for label, _ in listings] == ["guide.qmd#0"]
+    assert check._skipped == []
+
+
 def test_an_include_fence_is_skipped_rather_than_compiled_twice(tmp_path):
     """`{{< include >}}` names a file already collected from the snippets
     directory; compiling the fence as well would report the same failure under
